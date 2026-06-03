@@ -2086,35 +2086,34 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 }
 
 func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
-	requestKinds := map[string]int{"deploy_request": KindControlPlaneDeployRequest, "rollback_request": KindControlPlaneRollbackRequest, "service_action": KindControlPlaneServiceAction, "service_create": KindControlPlaneServiceCreate, "environment_create": KindControlPlaneEnvironmentCreate, "deployment_approval": KindControlPlaneDeploymentApproval, "observation_submit": KindControlPlaneObservationSubmit, "drift_remediate": KindControlPlaneDriftRemediate}
-	statusKinds := map[string]int{"deployment_status": KindControlPlaneDeploymentStatus, "service_status": KindControlPlaneServiceStatus}
-	resultKinds := map[string]int{"deployment_result": KindControlPlaneDeploymentResult, "action_result": KindControlPlaneActionResult, "service_create_result": KindControlPlaneServiceCreateResult, "environment_create_result": KindControlPlaneEnvironmentCreateResult, "observation_result": KindControlPlaneObservationResult, "remediation_result": KindControlPlaneRemediationResult}
-	readModelKinds := map[string]int{"service_state": KindServiceState, "service_registry": KindServiceRegistry, "environment_registry": KindEnvironmentRegistry, "worker_state": KindWorkerState, "worker_assignment_state": KindWorkerAssignmentState, "worker_drain_status": KindWorkerDrainStatus, "worker_eligibility_preview": KindWorkerEligibilityPreview}
 	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models"}
+	methods := []string{
+		"service/deploy",
+		"service/rollback",
+		"worker/cordon",
+		"worker/uncordon",
+		"worker/drain",
+		"worker/undrain",
+		"worker/maintenance-enter",
+		"worker/maintenance-exit",
+		"worker/labels-update",
+		"worker/policy-apply",
+		"workload/pin",
+		"worker/cleanup",
+		"package/repository-apply",
+		"package/repository-delete",
+		"package/publish",
+		"package/promote",
+		"package/yank",
+		"package/drift-detect",
+		"approval/approve",
+		"tools/call",
+	}
 	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step"}
-	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "read_model_kinds"}
-	requestKinds["worker_cordon_request"] = KindControlPlaneWorkerCordonRequest
-	requestKinds["worker_uncordon_request"] = KindControlPlaneWorkerUncordonRequest
-	requestKinds["worker_drain_request"] = KindControlPlaneWorkerDrainRequest
-	requestKinds["worker_undrain_request"] = KindControlPlaneWorkerUndrainRequest
-	requestKinds["worker_maintenance_enter_request"] = KindControlPlaneWorkerMaintenanceEnter
-	requestKinds["worker_maintenance_exit_request"] = KindControlPlaneWorkerMaintenanceExit
-	requestKinds["worker_labels_update_request"] = KindControlPlaneWorkerLabelsUpdate
-	statusKinds["worker_status"] = KindControlPlaneWorkerStatus
-	resultKinds["worker_result"] = KindControlPlaneWorkerResult
+	mcpFields := []string{"request_event_id", "request_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "observable_kinds"}
 	if llmEnabled {
 		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")
-		requestKinds["llm_route_create"] = KindControlPlaneLLMRouteCreate
-		requestKinds["llm_release_register"] = KindControlPlaneLLMReleaseRegister
-		requestKinds["llm_deploy_request"] = KindControlPlaneLLMDeployRequest
-		requestKinds["llm_deployment_approval"] = KindControlPlaneLLMDeploymentApproval
-		requestKinds["llm_rollback_request"] = KindControlPlaneLLMRollbackRequest
-		statusKinds["llm_deployment_status"] = KindControlPlaneLLMDeploymentStatus
-		resultKinds["llm_route_create_result"] = KindControlPlaneLLMRouteCreateResult
-		resultKinds["llm_release_register_result"] = KindControlPlaneLLMReleaseRegisterResult
-		resultKinds["llm_deployment_result"] = KindControlPlaneLLMDeploymentResult
-		readModelKinds["llm_route_registry"] = KindLLMRouteRegistry
-		readModelKinds["llm_route_state"] = KindLLMRouteState
+		methods = append(methods, "llm/route-create", "llm/release-register", "llm/deploy", "llm/deployment-approval", "llm/rollback")
 		correlationTags = append(correlationTags, "route", "release")
 		mcpFields = append(mcpFields, "route_id", "release_id")
 	}
@@ -2123,31 +2122,56 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	}
 	if dnsEnabled {
 		capabilities = append(capabilities, "dns_endpoint_catalog")
-		readModelKinds["dns_zone_state"] = KindDNSZoneState
-		readModelKinds["dns_endpoint_state"] = KindDNSEndpointState
-		readModelKinds["dns_policy_state"] = KindDNSPolicyState
-		readModelKinds["dns_backend_state"] = KindDNSBackendState
+		methods = append(methods, "dns/zone-create", "dns/policy-apply", "dns/record-override", "dns/drift-remediate", "dns/backend-register")
+	}
+	aiMLMethods := []string{"ml/model-import", "ml/recipe-run", "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"}
+	methods = append(methods, aiMLMethods...)
+	transportKinds := map[string]int{
+		"contextvm_message":        kinds.ContextVMMessage,
+		"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
+		"contextvm_ephemeral_wrap": kinds.ContextVMEphemeralGiftWrap,
+	}
+	observableKinds := map[string]int{
+		"control_state": KindCASControlState,
+		"status":        KindNIP38Status,
+		"audit":         KindCASAudit,
+	}
+	announcementKinds := map[string]int{
+		"server":             kinds.ContextVMServerAnnouncement,
+		"tools":              kinds.ContextVMToolsList,
+		"resources":          kinds.ContextVMResourcesList,
+		"resource_templates": kinds.ContextVMResourceTemplatesList,
+		"prompts":            kinds.ContextVMPromptsList,
+	}
+	relayKinds := map[string]int{
+		"relay_set": kinds.RelaySetDiscovery,
+		"nip65":     kinds.NIP65RelayList,
 	}
 	aiML := map[string]any{
-		"enabled": true,
-		"transport_kinds": map[string]int{
-			"contextvm_message":        kinds.ContextVMMessage,
-			"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
-			"contextvm_ephemeral_wrap": kinds.ContextVMEphemeralGiftWrap,
-		},
-		"methods": []string{"ml/model-import", "ml/recipe-run", "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"},
-		"observable_kinds": map[string]int{
-			"control_state": KindCASControlState,
-			"audit":         KindCASAudit,
-			"status":        KindNIP38Status,
-		},
+		"enabled":               true,
+		"transport_kinds":       transportKinds,
+		"methods":               aiMLMethods,
+		"observable_kinds":      observableKinds,
 		"capabilities":          []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models", "ml_inference_deploy_requests", "ml_inference_approval_requests", "ml_inference_rollback_requests"},
 		"correlation_tags":      []string{"model", "model_version", "recipe", "run", "endpoint", "environment", "deployment", "artifact", "worker", "runtime", "e", "p", "status"},
 		"contextvm_commands":    true,
 		"canonical_observables": true,
 		"unsupported_in_d1":     []string{"recipe_execution", "model_import_orchestration", "dataset_import", "evaluation", "benchmark", "fine_tune"},
 	}
-	return map[string]any{"version": "bahia-controlplane-v1", "capabilities": capabilities, "request_kinds": requestKinds, "status_kinds": statusKinds, "result_kinds": resultKinds, "read_model_kinds": readModelKinds, "ai_ml": aiML, "correlation_tags": correlationTags, "mcp": map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields}}
+	return map[string]any{
+		"version":               "bahia-controlplane-v1",
+		"capabilities":          capabilities,
+		"transport_kinds":       transportKinds,
+		"methods":               methods,
+		"observable_kinds":      observableKinds,
+		"announcement_kinds":    announcementKinds,
+		"relay_kinds":           relayKinds,
+		"ai_ml":                 aiML,
+		"correlation_tags":      correlationTags,
+		"contextvm_commands":    true,
+		"canonical_observables": true,
+		"mcp":                   map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields},
+	}
 }
 
 func browserDiscoveryRelays(cfg config.NostrConfig) []string {

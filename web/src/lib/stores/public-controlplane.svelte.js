@@ -4,11 +4,19 @@ import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
 function operationResultEvent({ requestEventId, resultEvent, result }) {
+  if (result !== undefined) {
+    return {
+      id: resultEvent?.id || requestEventId || '',
+      kind: resultEvent?.kind || 25910,
+      tags: resultEvent?.tags || [['e', requestEventId || '']],
+      content: JSON.stringify(result ?? {})
+    };
+  }
   return resultEvent || {
     id: requestEventId || '',
     kind: 25910,
     tags: [['e', requestEventId || '']],
-    content: JSON.stringify(result ?? {})
+    content: JSON.stringify({})
   };
 }
 

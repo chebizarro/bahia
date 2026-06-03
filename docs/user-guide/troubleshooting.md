@@ -159,7 +159,7 @@ Common issues and solutions when using Bahia.
    bahia state list --service svc-123
    ```
 
-2. Deploy to correct the drift by publishing a signed `DeployRequest` event or using a UI flow backed by the Nostr control plane. The legacy REST-backed deploy command path is deprecated until the CLI publishes signed Nostr events directly.
+2. Deploy to correct the drift by publishing a ContextVM `service/deploy` intent or using a UI flow backed by the Nostr control plane. Legacy `DeployRequest` custom kinds are startup migration inputs only.
 
 3. Investigate why drift occurred (manual changes, crashes, etc.)
 
@@ -260,9 +260,9 @@ Common issues and solutions when using Bahia.
 - EOSE never arrives
 
 **Solutions:**
-1. Verify filter is correct:
+1. Verify the filter is scoped to canonical observables:
    ```json
-   {"kinds": [31961], "#service": ["svc-123"]}
+   {"kinds": [30900, 30315, 4903], "authors": ["<bahia-service-pubkey>"], "#service": ["svc-123"]}
    ```
 
 2. Check relay has the events (try different relay).
@@ -286,6 +286,19 @@ Common issues and solutions when using Bahia.
 2. Check encrypted request relays are configured.
 
 3. Verify correct service pubkey is used.
+
+### Migration App Fails at Startup
+
+**Symptoms:**
+- Startup logs mention legacy-kind migration failure
+- Canonical observables are missing after restart
+- Relay backfill does not complete
+
+**Solutions:**
+1. Verify the Bahia service private key and Nostr publisher are configured for non-dry-run migration.
+2. Check relay connectivity and require `EOSE` for legacy backfill before treating migration as complete.
+3. Rerun startup after fixing configuration. The migration app is idempotent: it skips canonical outputs already tagged with `migrated-from=<legacy_event_id>` and preserves `legacy-kind` metadata.
+4. Keep relay sidecar allowlists in place. The sidecar should route canonical outputs and migration publishes to configured allowlisted relays; do not re-enable legacy live subscribers as a workaround.
 
 ## Web UI Issues
 

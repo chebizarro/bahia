@@ -124,7 +124,7 @@ func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, 
 	if len(cmd.Metadata) > 0 {
 		content["metadata"] = cmd.Metadata
 	}
-	return p.publish(ctx, "llm/route-create", 0, KindCASControlState, nil, content)
+	return p.publish(ctx, "llm/route-create", KindNIP38Status, KindContextVMMessage, nil, content)
 }
 
 // PublishLLMReleaseRegisterRequest publishes a ContextVM release-register request and returns correlation metadata.
@@ -160,7 +160,7 @@ func (p *LLMCommandPublisher) PublishLLMReleaseRegisterRequest(ctx context.Conte
 		content["metadata"] = cmd.Metadata
 	}
 	tags := nostr.Tags{{"route", cmd.RouteID.String()}}
-	receipt, err := p.publish(ctx, "llm/release-register", 0, KindCASControlState, tags, content)
+	receipt, err := p.publish(ctx, "llm/release-register", KindNIP38Status, KindContextVMMessage, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 	}
@@ -186,7 +186,7 @@ func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd L
 		{"release", cmd.ReleaseID.String()},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, "llm/deploy", 0, KindCASControlState, tags, content)
+	receipt, err := p.publish(ctx, "llm/deploy", KindNIP38Status, KindContextVMMessage, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -206,7 +206,7 @@ func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd
 		{"decision", cmd.Decision},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, "llm/approval", 0, KindCASControlState, tags, content)
+	receipt, err := p.publish(ctx, "llm/approval", KindNIP38Status, KindContextVMMessage, tags, content)
 	if receipt != nil {
 		receipt.IntentID = cmd.IntentID.String()
 		receipt.Decision = cmd.Decision
@@ -228,7 +228,7 @@ func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd
 		{"environment", cmd.EnvironmentID.String()},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, "llm/rollback", 0, KindCASControlState, tags, content)
+	receipt, err := p.publish(ctx, "llm/rollback", KindNIP38Status, KindContextVMMessage, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()

@@ -71,13 +71,9 @@ func (r *MLResponder) publishRecipe(ctx context.Context, recipe *domain.MLRecipe
 	if r == nil || r.pool == nil || run == nil {
 		return nil
 	}
-	requestEventID, requestPubkey, requestKind := mlRecipeNostrCorrelation(run)
+	requestEventID, requestPubkey, _ := mlRecipeNostrCorrelation(run)
 	if requestEventID == "" || requestPubkey == "" {
 		return nil
-	}
-	kind, err := mlResultKindForRequest(requestKind)
-	if err != nil {
-		return err
 	}
 	recipeCoord := metadataString(run.Metadata, "nostr_recipe_coord")
 	if recipeCoord == "" && recipe != nil {
@@ -100,12 +96,17 @@ func (r *MLResponder) publishRecipe(ctx context.Context, recipe *domain.MLRecipe
 	if cause != nil {
 		content["error"] = map[string]any{"code": "recipe_error", "message": cause.Error()}
 	}
-	body, _ := json.Marshal(content)
-	tags := nostr.Tags{{"d", "result:" + requestEventID}, {"e", requestEventID, "", "reply"}, {"p", requestPubkey}, {"status", status}, {"run", run.ID.String()}, {"recipe_id", run.RecipeID.String()}}
+	tags := nostr.Tags{{"e", requestEventID, "", "reply"}, {"p", requestPubkey}, {"status", status}, {"run", run.ID.String()}, {"recipe_id", run.RecipeID.String()}, {ContextVMRoutingTag, ContextVMWireVersion}}
 	if recipeCoord != "" {
 		tags = append(tags, nostr.Tag{"recipe", recipeCoord})
 	}
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: mlContextVMReplyID(run.Metadata, requestEventID), Result: content}
+	if cause != nil {
+		response.Result = nil
+		response.Error = &JSONRPCError{Code: -32000, Message: cause.Error()}
+	}
+	body, _ := json.Marshal(response)
+	event := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return err
 	}
@@ -120,13 +121,9 @@ func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIn
 	if r == nil || r.pool == nil || intent == nil {
 		return nil
 	}
-	requestEventID, requestPubkey, requestKind := mlNostrCorrelation(intent)
+	requestEventID, requestPubkey, _ := mlNostrCorrelation(intent)
 	if requestEventID == "" || requestPubkey == "" {
 		return nil
-	}
-	kind, err := mlResultKindForRequest(requestKind)
-	if err != nil {
-		return err
 	}
 	endpointCoord := metadataString(intent.Metadata, "nostr_endpoint_coord")
 	modelVersionCoord := metadataString(intent.Metadata, "nostr_model_version_coord")
@@ -158,9 +155,7 @@ func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIn
 	if cause != nil {
 		content["error"] = map[string]any{"code": "provisioning_error", "message": cause.Error()}
 	}
-	body, _ := json.Marshal(content)
 	tags := nostr.Tags{
-		{"d", "result:" + requestEventID},
 		{"e", requestEventID, "", "reply"},
 		{"p", requestPubkey},
 		{"status", status},
@@ -169,6 +164,7 @@ func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIn
 		{"model_version_id", intent.ModelVersionID.String()},
 		{"deployment", intent.ID.String()},
 		{"intent", intent.ID.String()},
+		{ContextVMRoutingTag, ContextVMWireVersion},
 	}
 	if endpointCoord != "" {
 		tags = append(tags, nostr.Tag{"endpoint", endpointCoord})
@@ -188,7 +184,13 @@ func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIn
 			tags = append(tags, nostr.Tag{"worker", run.WorkerPubkey})
 		}
 	}
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: mlContextVMReplyID(intent.Metadata, requestEventID), Result: content}
+	if cause != nil {
+		response.Result = nil
+		response.Error = &JSONRPCError{Code: -32000, Message: cause.Error()}
+	}
+	body, _ := json.Marshal(response)
+	event := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return err
 	}
@@ -197,6 +199,15 @@ func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIn
 	}
 	r.record(ctx, event, intent)
 	return nil
+}
+
+func mlContextVMReplyID(metadata map[string]any, fallback string) json.RawMessage {
+	if dTag := metadataString(metadata, "nostr_d_tag"); dTag != "" {
+		body, _ := json.Marshal(dTag)
+		return body
+	}
+	body, _ := json.Marshal(fallback)
+	return body
 }
 
 func metadataString(metadata map[string]any, key string) string {

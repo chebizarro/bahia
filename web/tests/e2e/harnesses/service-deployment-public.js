@@ -11,6 +11,7 @@ export function createPublicSystemInfo({ publicRelay = PUBLIC_RELAY, servicePubk
     features: {
       relay_sidecar: true,
       relay_read_models: true,
+      encrypted_nostr_requests: true,
       legacy_sse: false,
       ...extraFeatures
     }
@@ -144,6 +145,21 @@ export async function installPublicServiceDeploymentHarness(
 
     window.__BAHIA_E2E_PUBLIC_STATE = loadPersistedState();
 
+    const KIND_CONTEXTVM = 25910;
+    const KIND_CONTROL_STATE = 30900;
+    const STATE_SCHEMAS = {
+      service: 'bahia.registry.service.v1',
+      environment: 'bahia.registry.environment.v1',
+      build: 'bahia.registry.build.v1',
+      artifact: 'bahia.registry.artifact.v1',
+      intent: 'bahia.registry.deployment-intent.v1',
+      run: 'bahia.registry.deployment-run.v1'
+    };
+
+    function isRelayUrl(url, expected) {
+      return String(url || '').replace(/\/$/, '') === String(expected || '').replace(/\/$/, '');
+    }
+
     function nostrEvent({ id, kind, pubkey = servicePubkey, created_at = nowSeconds, tags = [], content = {} }) {
       return {
         id,
@@ -154,6 +170,44 @@ export async function installPublicServiceDeploymentHarness(
         content: typeof content === 'string' ? content : JSON.stringify(content),
         sig: '0'.repeat(128)
       };
+    }
+
+    function stateEvent({ id, schema, tags = [], content = {} }) {
+      return nostrEvent({
+        id,
+        kind: KIND_CONTROL_STATE,
+        tags: [['domain', 'controlplane'], ['schema', schema], ...tags],
+        content: { schema, ...content }
+      });
+    }
+
+    function parseContextVMRequest(requestEvent) {
+      const content = String(requestEvent.content || '');
+      const plaintext = content.startsWith('mock-nip44:')
+        ? decodeURIComponent(escape(atob(content.replace(/^mock-nip44:/, ''))))
+        : content.replace(/^enc44:/, '');
+      const envelope = JSON.parse(plaintext || '{}');
+      const params = { ...(envelope.params || {}) };
+      delete params._meta;
+      return { envelope, operation: envelope.method, payload: params };
+    }
+
+    function encodeContextVMCiphertext(requestEvent, envelope) {
+      const plaintext = JSON.stringify(envelope);
+      if (String(requestEvent.content || '').startsWith('mock-nip44:')) {
+        return `mock-nip44:${btoa(unescape(encodeURIComponent(plaintext)))}`;
+      }
+      return `enc44:${plaintext}`;
+    }
+
+    function contextVMResultEvent(requestEvent, result) {
+      const { envelope } = parseContextVMRequest(requestEvent);
+      return nostrEvent({
+        id: `result-${requestEvent.id}`,
+        kind: KIND_CONTEXTVM,
+        tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['encrypted', 'contextvm-jsonrpc-v1'], ['method', envelope.method || '']],
+        content: encodeContextVMCiphertext(requestEvent, { jsonrpc: '2.0', id: envelope.id || requestEvent.id, result })
+      });
     }
 
     async function sha256Hex(input) {
@@ -202,39 +256,39 @@ export async function installPublicServiceDeploymentHarness(
       return [
         ...state.services.map((service, index) => nostrEvent({
           id: `svc-reg-${service.id}-${index}`,
-          kind: 31962,
-          tags: [['d', service.id], ['deleted', String(Boolean(service.deleted))], ['name', service.name]],
-          content: service
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', service.id], ['deleted', String(Boolean(service.deleted))], ['name', service.name]],
+          content: { schema: STATE_SCHEMAS.service, ...service }
         })),
         ...state.environments.map((environment, index) => nostrEvent({
           id: `env-reg-${environment.id}-${index}`,
-          kind: 31963,
-          tags: [['d', environment.id], ['deleted', String(Boolean(environment.deleted))], ['name', environment.name]],
-          content: environment
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.environment], ['d', environment.id], ['deleted', String(Boolean(environment.deleted))], ['name', environment.name]],
+          content: { schema: STATE_SCHEMAS.environment, ...environment }
         })),
         ...state.builds.map((build, index) => nostrEvent({
           id: `build-reg-${build.id}-${index}`,
-          kind: 31969,
-          tags: [['d', build.id], ['service', build.service_id]],
-          content: build
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.build], ['d', build.id], ['service', build.service_id]],
+          content: { schema: STATE_SCHEMAS.build, ...build }
         })),
         ...state.artifacts.map((artifact, index) => nostrEvent({
           id: `artifact-reg-${artifact.id}-${index}`,
-          kind: 31966,
-          tags: [['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
-          content: artifact
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.artifact], ['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
+          content: { schema: STATE_SCHEMAS.artifact, ...artifact }
         })),
         ...state.deploymentIntents.map((intent, index) => nostrEvent({
           id: `intent-reg-${intent.id}-${index}`,
-          kind: 31967,
-          tags: [['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
-          content: intent
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
+          content: { schema: STATE_SCHEMAS.intent, ...intent }
         })),
         ...state.deploymentRuns.map((run, index) => nostrEvent({
           id: `run-reg-${run.id}-${index}`,
-          kind: 31968,
-          tags: [['d', run.id], ['intent', run.deployment_intent_id || run.intent_id || '']],
-          content: run
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.run], ['d', run.id], ['intent', run.deployment_intent_id || run.intent_id || '']],
+          content: { schema: STATE_SCHEMAS.run, ...run }
         }))
       ];
     }
@@ -244,7 +298,7 @@ export async function installPublicServiceDeploymentHarness(
       let discoveryEvents = [];
       try {
         discoveryEvents = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]')
-          .filter((event) => [31974, 30002].includes(event?.kind));
+          .filter((event) => [11316, 30002].includes(event?.kind));
       } catch {}
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...discoveryEvents, ...currentReadModelEvents()]));
     }
@@ -325,13 +379,13 @@ export async function installPublicServiceDeploymentHarness(
       return {
         projections: emitCreateServiceProjection ? [nostrEvent({
           id: `svc-reg-live-${service.id}`,
-          kind: 31962,
-          tags: [['d', service.id], ['deleted', 'false'], ['name', service.name]],
-          content: service
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', service.id], ['deleted', 'false'], ['name', service.name]],
+          content: { schema: STATE_SCHEMAS.service, ...service }
         })] : [],
         resultEvent: (requestEvent) => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7963,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { id: service.id, service_id: service.id, status: 'ok', service }
         })
@@ -346,7 +400,7 @@ export async function installPublicServiceDeploymentHarness(
           projections: [],
           resultEvent: () => nostrEvent({
             id: `result-${requestEvent.id}`,
-            kind: 7962,
+            kind: KIND_CONTEXTVM,
             tags: [['e', requestEvent.id], ['status', 'failed'], ['error', 'service not found']],
             content: { status: 'failed', error: 'service not found' }
           })
@@ -359,13 +413,13 @@ export async function installPublicServiceDeploymentHarness(
       return {
         projections: [nostrEvent({
           id: `svc-reg-live-update-${next.id}`,
-          kind: 31962,
-          tags: [['d', next.id], ['deleted', String(Boolean(next.deleted))], ['name', next.name]],
-          content: next
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', next.id], ['deleted', String(Boolean(next.deleted))], ['name', next.name]],
+          content: { schema: STATE_SCHEMAS.service, ...next }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7962,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', service_id: next.id, service: next }
         })
@@ -380,7 +434,7 @@ export async function installPublicServiceDeploymentHarness(
           projections: [],
           resultEvent: () => nostrEvent({
             id: `result-${requestEvent.id}`,
-            kind: 7962,
+            kind: KIND_CONTEXTVM,
             tags: [['e', requestEvent.id], ['status', 'failed'], ['error', 'service not found']],
             content: { status: 'failed', error: 'service not found' }
           })
@@ -393,13 +447,13 @@ export async function installPublicServiceDeploymentHarness(
       return {
         projections: [nostrEvent({
           id: `svc-reg-live-delete-${tombstone.id}`,
-          kind: 31962,
-          tags: [['d', tombstone.id], ['deleted', 'true'], ['name', tombstone.name]],
-          content: tombstone
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', tombstone.id], ['deleted', 'true'], ['name', tombstone.name]],
+          content: { schema: STATE_SCHEMAS.service, ...tombstone }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7962,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', service_id: tombstone.id, deleted: true, force: Boolean(payload.force) }
         })
@@ -410,7 +464,7 @@ export async function installPublicServiceDeploymentHarness(
       if (mode === 'error') {
         return nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7962,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id], ['status', 'failed'], ['error', policyPreviewError]],
           content: { status: 'failed', error: policyPreviewError }
         });
@@ -418,7 +472,7 @@ export async function installPublicServiceDeploymentHarness(
       if (mode === 'block') {
         return nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7962,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: {
             status: 'ok',
@@ -439,7 +493,7 @@ export async function installPublicServiceDeploymentHarness(
       }
       return nostrEvent({
         id: `result-${requestEvent.id}`,
-        kind: 7962,
+        kind: KIND_CONTEXTVM,
         tags: [['e', requestEvent.id]],
         content: {
           status: 'ok',
@@ -482,13 +536,13 @@ export async function installPublicServiceDeploymentHarness(
       return {
         projections: [nostrEvent({
           id: `intent-reg-live-${intent.id}`,
-          kind: 31967,
-          tags: [['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id]],
-          content: intent
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id]],
+          content: { schema: STATE_SCHEMAS.intent, ...intent }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7961,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', intent_id: intent.id, intent }
         })
@@ -515,13 +569,13 @@ export async function installPublicServiceDeploymentHarness(
       return {
         projections: [nostrEvent({
           id: `intent-reg-live-rollback-${intent.id}`,
-          kind: 31967,
-          tags: [['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
-          content: intent
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
+          content: { schema: STATE_SCHEMAS.intent, ...intent }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7961,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', intent_id: intent.id, intent, source_kind: 'rollback' }
         })
@@ -536,7 +590,7 @@ export async function installPublicServiceDeploymentHarness(
           projections: [],
           resultEvent: () => nostrEvent({
             id: `result-${requestEvent.id}`,
-            kind: 7961,
+            kind: KIND_CONTEXTVM,
             tags: [['e', requestEvent.id], ['status', 'failed'], ['error', 'deployment intent not found']],
             content: { status: 'failed', error: 'deployment intent not found' }
           })
@@ -567,23 +621,23 @@ export async function installPublicServiceDeploymentHarness(
       persistReadModelEvents();
       const projections = [nostrEvent({
         id: `intent-reg-live-${approvedIntent.id}-${payload.decision}`,
-        kind: 31967,
-        tags: [['d', approvedIntent.id], ['service', approvedIntent.service_id], ['environment', approvedIntent.environment_id], ['artifact', approvedIntent.artifact_id || '']],
-        content: approvedIntent
+        kind: KIND_CONTROL_STATE,
+        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', approvedIntent.id], ['service', approvedIntent.service_id], ['environment', approvedIntent.environment_id], ['artifact', approvedIntent.artifact_id || '']],
+        content: { schema: STATE_SCHEMAS.intent, ...approvedIntent }
       })];
       if (run) {
         projections.push(nostrEvent({
           id: `run-reg-live-${run.id}`,
-          kind: 31968,
-          tags: [['d', run.id], ['intent', run.deployment_intent_id]],
-          content: run
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.run], ['d', run.id], ['intent', run.deployment_intent_id]],
+          content: { schema: STATE_SCHEMAS.run, ...run }
         }));
       }
       return {
         projections,
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7961,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', intent_id: approvedIntent.id, decision: payload.decision, run_id: run?.id || null }
         })
@@ -607,13 +661,13 @@ export async function installPublicServiceDeploymentHarness(
       return {
         projections: [nostrEvent({
           id: `artifact-reg-live-${artifact.id}`,
-          kind: 31966,
-          tags: [['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
-          content: artifact
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.artifact], ['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
+          content: { schema: STATE_SCHEMAS.artifact, ...artifact }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
-          kind: 7962,
+          kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', artifact_id: artifact.id, artifact }
         })
@@ -621,24 +675,25 @@ export async function installPublicServiceDeploymentHarness(
     }
 
     function handlePublicRequest(requestEvent) {
-      const payload = JSON.parse(requestEvent.content || '{}');
-      switch (requestEvent.kind) {
-        case 5961: return deployIntentResult(requestEvent, payload);
-        case 5962: return rollbackResult(requestEvent, payload);
-        case 5964: return serviceCreateResult(payload);
-        case 5966: return approvalResult(requestEvent, payload);
-        case 5981: return serviceUpdateResult(requestEvent, payload);
-        case 5982: return serviceDeleteResult(requestEvent, payload);
-        case 5985: return artifactRegisterResult(requestEvent, payload);
-        case 5989: return policyEvaluateResult(requestEvent, payload);
+      const { operation, payload } = parseContextVMRequest(requestEvent);
+      switch (operation) {
+        case 'service/deploy': return deployIntentResult(requestEvent, payload);
+        case 'service/rollback': return rollbackResult(requestEvent, payload);
+        case 'service/create': return serviceCreateResult(payload);
+        case 'approval/approve':
+        case 'approval/reject': return approvalResult(requestEvent, payload);
+        case 'service/update': return serviceUpdateResult(requestEvent, payload);
+        case 'service/delete': return serviceDeleteResult(requestEvent, payload);
+        case 'artifact/register': return artifactRegisterResult(requestEvent, payload);
+        case 'policy/evaluate': return policyEvaluateResult(requestEvent, payload);
         default:
           return {
             projections: [],
             resultEvent: () => nostrEvent({
               id: `result-${requestEvent.id}`,
-              kind: 7962,
-              tags: [['e', requestEvent.id], ['status', 'failed'], ['error', `unsupported request kind ${requestEvent.kind}`]],
-              content: { status: 'failed', error: `unsupported request kind ${requestEvent.kind}` }
+              kind: KIND_CONTEXTVM,
+              tags: [['e', requestEvent.id], ['status', 'failed'], ['error', `unsupported ContextVM method ${operation}`]],
+              content: { status: 'failed', error: `unsupported ContextVM method ${operation}` }
             })
           };
       }
@@ -685,11 +740,25 @@ export async function installPublicServiceDeploymentHarness(
         this.__bahiaSubs?.delete(message[1]);
         return originalSend.call(this, data);
       }
-      if (Array.isArray(message) && message[0] === 'EVENT' && [5961, 5962, 5964, 5966, 5981, 5982, 5985, 5989].includes(message[1]?.kind)) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM) {
         const requestEvent = message[1];
+        const decodedRequest = parseContextVMRequest(requestEvent);
+        if (![
+          'service/deploy',
+          'service/rollback',
+          'service/create',
+          'approval/approve',
+          'approval/reject',
+          'service/update',
+          'service/delete',
+          'artifact/register',
+          'policy/evaluate'
+        ].includes(decodedRequest.operation)) {
+          return originalSend.call(this, data);
+        }
         window.__BAHIA_E2E_PUBLIC_PUBLISHES.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind });
         window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(requestEvent.kind);
-        window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: requestEvent.kind, eventId: requestEvent.id, tags: requestEvent.tags || [], content: requestEvent.content || '' });
+        window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: requestEvent.kind, operation: decodedRequest.operation, eventId: requestEvent.id, tags: requestEvent.tags || [], content: requestEvent.content || '' });
         window.__BAHIA_E2E_PUBLIC_OKS.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind, sent: true, accepted: true, message: '' });
         persistPublicTrace();
         originalSend.call(this, data);
@@ -700,7 +769,7 @@ export async function installPublicServiceDeploymentHarness(
         if (delayedResultEvent) {
           window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.set(requestEvent.id, {
             requestEvent,
-            payload: JSON.parse(requestEvent.content || '{}')
+            payload: decodedRequest.payload || {}
           });
           window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW = (requestEventIdOrMode = 'allow', maybeMode = 'allow') => {
             let requestEventId = requestEventIdOrMode;
@@ -713,7 +782,7 @@ export async function installPublicServiceDeploymentHarness(
             if (!pending) {
               return false;
             }
-            queueRelayEvent(buildPolicyEvaluateResultEvent(pending.requestEvent, pending.payload, mode), {
+            queueRelayEvent(contextVMResultEvent(pending.requestEvent, JSON.parse(buildPolicyEvaluateResultEvent(pending.requestEvent, pending.payload, mode).content || '{}')), {
               requireCorrelationId: pending.requestEvent.id,
               traceAs: 'result'
             });
@@ -725,7 +794,7 @@ export async function installPublicServiceDeploymentHarness(
           };
           return;
         }
-        queueRelayEvent(resultEvent(requestEvent), { requireCorrelationId: requestEvent.id, traceAs: 'result' });
+        queueRelayEvent(contextVMResultEvent(requestEvent, JSON.parse(resultEvent(requestEvent).content || '{}')), { requireCorrelationId: requestEvent.id, traceAs: 'result' });
         return;
       }
       return originalSend.call(this, data);

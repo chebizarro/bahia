@@ -119,8 +119,8 @@ func TestMCPHandler_NostrCorrelationMetadataExtractsIDs(t *testing.T) {
 	if meta["intent_id"] != "intent-1" || meta["service_id"] != "svc-1" || meta["environment_id"] != "env-1" {
 		t.Fatalf("expected request/result identifiers in metadata, got %#v", meta)
 	}
-	if len(meta["status_kinds"].([]int)) == 0 || len(meta["result_kinds"].([]int)) == 0 {
-		t.Fatalf("expected follow-up kind catalogs in metadata: %#v", meta)
+	if len(meta["transport_kinds"].([]int)) == 0 || len(meta["observable_kinds"].([]int)) == 0 {
+		t.Fatalf("expected canonical transport/observable kind catalogs in metadata: %#v", meta)
 	}
 }
 

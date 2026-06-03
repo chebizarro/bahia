@@ -63,27 +63,27 @@ After deployment:
 
 ### CLI and MCP
 
-Deployment intent creation is signer-first. The legacy `POST /api/v1/deployments/intents` REST mutation has been removed. Legacy CLI/MCP mutation surfaces are being migrated to publish signed Nostr events; until that migration lands, publish the Nostr event directly or use a UI flow backed by the Nostr control plane.
+Deployment intent creation is signer-first. The legacy `POST /api/v1/deployments/intents` REST mutation has been removed. CLI, MCP, web, and agent flows use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) and then follow canonical observables for durable progress.
 
-### Nostr (Signer-First)
+### Nostr (ContextVM)
 
-Publish a `5961` DeployRequest event:
+Publish a ContextVM `service/deploy` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper:
 
 ```json
 {
-  "kind": 5961,
-  "content": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "artifact_id": "art-789"
-  },
+  "kind": 25910,
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-svc-123-env-456\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"artifact_id\":\"art-789\",\"_meta\":{\"progressToken\":\"deploy-svc-123-env-456\"}}}",
   "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "service/deploy"],
     ["service", "svc-123"],
     ["environment", "env-456"],
     ["artifact", "art-789"]
   ]
 }
 ```
+
+Require relay `OK` with `accepted=true`. Treat the ContextVM response as receipt only; deployment completion comes from canonical observables.
 
 ## Monitoring Deployments
 
@@ -115,17 +115,22 @@ bahia deployments logs run-456
 
 ### Nostr Subscriptions
 
-Subscribe to deployment events:
+Subscribe to canonical deployment observables:
 
 ```json
 {
-  "kinds": [6961, 7961],
-  "#e": ["<request-event-id>"]
+  "kinds": [30315, 4903, 30900],
+  "authors": ["<bahia-service-pubkey>"],
+  "#service": ["svc-123"],
+  "#environment": ["env-456"]
 }
 ```
 
-- **6961 DeploymentStatus**: Progress updates
-- **7961 DeploymentResult**: Terminal result
+- **30315**: NIP-38 operational status and progress
+- **4903**: immutable audit/provenance facts
+- **30900**: current desired/observed deployment state
+
+Add `#e=<ContextVM request event id>` when the emitted observable includes request correlation.
 
 ## Approving Deployments
 
@@ -139,21 +144,19 @@ When an intent requires approval:
 
 ### CLI and MCP
 
-Approval and rejection mutations are signer-first. Legacy CLI/MCP approval surfaces are being migrated to publish signed Nostr events directly; until that migration lands, publish the Nostr event below or use a UI flow backed by the Nostr control plane.
+Approval and rejection mutations are signer-first ContextVM intents. Use `deployment/approve` or `deployment/reject` and follow canonical status/audit/state observables.
 
 ### Nostr
 
-Publish a `5966` DeploymentApproval event:
+Publish a ContextVM approval request:
 
 ```json
 {
-  "kind": 5966,
-  "content": {
-    "intent_id": "intent-123",
-    "approved": true
-  },
+  "kind": 25910,
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"approve-intent-123\",\"method\":\"deployment/approve\",\"params\":{\"intent_id\":\"intent-123\",\"approved\":true,\"_meta\":{\"progressToken\":\"approve-intent-123\"}}}",
   "tags": [
-    ["e", "<intent-event-id>"],
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "deployment/approve"],
     ["intent", "intent-123"]
   ]
 }
@@ -171,16 +174,15 @@ Roll back to a previous artifact:
 
 ### Nostr
 
-Rollback is signer-first. The legacy `POST /api/v1/rollback` REST mutation has been removed; publish a signed `5962` RollbackRequest event:
+Rollback is signer-first. The legacy `POST /api/v1/rollback` REST mutation has been removed; publish a ContextVM `service/rollback` intent:
 
 ```json
 {
-  "kind": 5962,
-  "content": {
-    "service_id": "svc-123",
-    "environment_id": "env-456"
-  },
+  "kind": 25910,
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"rollback-svc-123-env-456\",\"method\":\"service/rollback\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"_meta\":{\"progressToken\":\"rollback-svc-123-env-456\"}}}",
   "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "service/rollback"],
     ["service", "svc-123"],
     ["environment", "env-456"]
   ]
@@ -253,15 +255,17 @@ bahia deployments list --service payment-api --limit 20
 
 Or in the web UI on the service detail page.
 
-## Read Models
+## Canonical Observables
 
-Deployment state is published as Nostr events:
+Deployment state is published as canonical Nostr observables:
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31967 | `intent_id` | Deployment intent |
-| 31968 | `run_id` | Deployment run |
-| 31961 | `service_id:environment_id` | Current state |
+| Kind | Tags | Content |
+|------|------|---------|
+| `30900` | `d`, `domain=deployment` or `domain=service`, `schema`, `service`, `environment`, optional `intent`/`run` | Current intent, run, and service/environment state projections |
+| `30315` | `status`, `service`, `environment`, optional `intent`/`run`, correlation `e` | Progress and operational status |
+| `4903` | requester `p`, resource tags, correlation `e` | Audit, policy, approval, and deployment facts |
+
+Historical `31961`/`31967`/`31968`, `6961`, and `7961` events are startup migration inputs only.
 
 ## Best Practices
 

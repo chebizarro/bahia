@@ -68,11 +68,12 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await expect(page.getByTestId('llm-activity-table')).toContainText('LLM rollback completed');
 
   const requestKinds = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUEST_KINDS') || '[]'));
-  expect(requestKinds).toEqual([5971, 5972, 5973, 5974, 5972, 5973, 5974, 5975]);
+  expect(requestKinds).toEqual([25910, 25910, 25910, 25910, 25910, 25910, 25910, 25910]);
 
   const requests = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUESTS') || '[]'));
   expect(requests).toHaveLength(8);
-  expect(requests[7].kind).toBe(5975);
+  expect(requests[7].kind).toBe(25910);
+  expect(requests[7].operation).toBe('llm/rollback');
   expect(requests[7].tags).toEqual(expect.arrayContaining([
     ['route', expect.any(String)],
     ['environment', 'env-prod']
@@ -88,14 +89,14 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   expect(routeState.drift_status).toBe('in_sync');
   expect(routeState.gateway_status).toBe('synced');
 
-  const rollbackAcceptedEvent = state.activity.find((event) => event.kind === 6973 && event.content?.message === 'LLM rollback intent accepted');
+  const rollbackAcceptedEvent = state.activity.find((event) => event.kind === 30315 && event.content?.message === 'LLM rollback intent accepted');
   expect(rollbackAcceptedEvent.tags).toEqual(expect.arrayContaining([
     ['e', requests[7].eventId],
     ['release', v1Release.id],
     ['step', 'accepted']
   ]));
 
-  const rollbackCompletionEvent = state.activity.find((event) => event.kind === 7973 && event.content?.message === 'LLM rollback completed');
+  const rollbackCompletionEvent = state.activity.find((event) => event.kind === 30315 && event.content?.message === 'LLM rollback completed');
   expect(rollbackCompletionEvent.tags).toEqual(expect.arrayContaining([
     ['e', requests[7].eventId],
     ['release', v1Release.id]
@@ -155,14 +156,14 @@ test('dedicated LLM browser rollback surfaces backend failure when no previous d
       activity: [
         {
           id: 'seed-release',
-          kind: 7972,
+          kind: 30315,
           tags: [['route', 'llm-route-1'], ['release', 'llm-release-1'], ['status', 'success']],
           content: { route_id: 'llm-route-1', release_id: 'llm-release-1', version: 'v1', status: 'success' },
           created_at: Math.floor(Date.parse('2026-05-04T00:05:00.000Z') / 1000)
         },
         {
           id: 'seed-complete',
-          kind: 7973,
+          kind: 30315,
           tags: [['route', 'llm-route-1'], ['environment', 'env-prod'], ['release', 'llm-release-1'], ['intent', 'llm-intent-1'], ['status', 'completed']],
           content: {
             route_id: 'llm-route-1',
@@ -185,11 +186,12 @@ test('dedicated LLM browser rollback surfaces backend failure when no previous d
   await expect(page.getByTestId('llm-notice')).toContainText('no previous successfully deployed LLM release to roll back to');
 
   const requestKinds = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUEST_KINDS') || '[]'));
-  expect(requestKinds).toEqual([5975]);
+  expect(requestKinds).toEqual([25910]);
 
   const requests = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUESTS') || '[]'));
   expect(requests).toHaveLength(1);
-  expect(requests[0].kind).toBe(5975);
+  expect(requests[0].kind).toBe(25910);
+  expect(requests[0].operation).toBe('llm/rollback');
   expect(requests[0].tags).toEqual(expect.arrayContaining([
     ['route', 'llm-route-1'],
     ['environment', 'env-prod']

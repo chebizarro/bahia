@@ -12,173 +12,91 @@ This document defines Milestone 1 protocol contracts only. It does not define or
 - Transport interruptions are not terminal business outcomes. Never infer `completed`, `failed`, or `rejected` from a timeout or missing event.
 - Phase 1 downstream commands are signed by the Bahia service key and carry an `agent` tag for assistant attribution.
 
-## Event kinds
+## Production event surfaces
 
-| Kind | Name | Author | Semantics |
+| Surface | Kind(s) | Author | Semantics |
 | --- | --- | --- | --- |
-| `31990` | Assistant session read model | Bahia service pubkey | Replaceable read model (`d=<session_id>`) for canonical session state |
-| `38420` | Assistant prompt request | Operator browser key | Addressable prompt turn request (`d=assistant-turn:<session_id>:<turn_id>`) |
-| `38421` | Assistant plan approval | Operator browser key | Addressable approval decision (`d=assistant-approval:<session_id>:<plan_hash>`) |
-| `38422` | Assistant status | Bahia service pubkey | Append-only progress/status event, correlated to a request with an `e` reply tag |
-| `38423` | Assistant result | Bahia service pubkey | Append-only terminal/result event, correlated to a request with an `e` reply tag |
+| Assistant prompt and approval intents | ContextVM `25910`, optionally wrapped in `1059`/`21059` | Operator browser key | JSON-RPC methods such as `assistant/prompt`, `assistant/approve`, `assistant/reject`, and `assistant/cancel` |
+| Assistant session state | `30900` or `30078` | Bahia service pubkey | Replaceable canonical projection keyed by `d=<assistant-session-coordinate>` |
+| Assistant status | `30315` | Bahia service pubkey | NIP-38 progress/status events correlated to the ContextVM request with `e` and resource tags |
+| Assistant audit/result facts | `4903` | Bahia service pubkey | Immutable terminal, approval, execution, and provenance facts |
+| Discovery and relay topology | `11316`-`11320`, `30002` | Bahia service pubkey | ContextVM tool/resource announcements and relay sidecar/bootstrap sets |
 
-## Common tags
+Legacy assistant custom kinds `31990` and `38420`-`38423` are migration inventory only. Active clients and agents must not publish or subscribe to those kinds as the live assistant protocol.
 
-All assistant events MUST include:
+## Common tags and JSON-RPC metadata
 
-| Tag | Format | Meaning |
+All assistant ContextVM requests and canonical observables MUST carry a session correlation value, either as a Nostr `session` tag, JSON-RPC metadata, or both:
+
+| Field/tag | Format | Meaning |
 | --- | --- | --- |
-| `session` | `["session", "<session_id>"]` | Assistant session correlation key |
+| `session` | `["session", "<session_id>"]` or `params.session_id` | Assistant session correlation key |
+| `agent` | `["agent", "<assistant_agent_id>"]` or `params.agent_id` | SoulFactory assistant identity used for attribution |
+| `e` | `["e", "<request_event_id>", "", "reply"]` | Correlation from service-authored observables back to the ContextVM request |
 
-Service-authored events SHOULD include:
+## ContextVM method contracts
 
-| Tag | Format | Meaning |
-| --- | --- | --- |
-| `agent` | `["agent", "<assistant_agent_id>"]` | SoulFactory assistant identity used for attribution |
-
-Events that reply to an operator request MUST include:
-
-| Tag | Format | Meaning |
-| --- | --- | --- |
-| `e` | `["e", "<request_event_id>", "", "reply"]` | NIP-01 event correlation to the prompt or approval event |
-
-## Kind-specific tag contracts
-
-### `31990` Assistant session read model
-
-Author: Bahia service pubkey.
-
-Semantics: replaceable read model. The newest valid event for `kind + pubkey + d` is the canonical session state.
-
-Required tags:
-
-| Tag | Format |
-| --- | --- |
-| `d` | `["d", "<session_id>"]` |
-| `session` | `["session", "<session_id>"]` |
-| `p` | `["p", "<operator_pubkey>", "", "operator"]` |
-| `agent` | `["agent", "<assistant_agent_id>"]` |
-| `status` | `["status", "idle|planning|awaiting_approval|executing|blocked|completed|failed"]` |
-
-Content JSON SHOULD follow `AssistantSession` from `internal/domain/assistant.go` and carry the current state, operator pubkey, assistant identity, last plan hash, pending steps, and transcript summary.
-
-### `38420` Assistant prompt request
+### `assistant/prompt`
 
 Author: operator browser key.
 
-Semantics: addressable prompt turn. Replaying the same `d` tag MUST NOT create a new plan; consumers should return or project the existing turn result.
+Semantics: prompt turn intent. Replaying the same JSON-RPC `id` or idempotency key MUST NOT create a duplicate plan; consumers should return or project the existing turn result.
 
-Required tags:
+Content JSON contract inside kind `25910`:
 
-| Tag | Format |
-| --- | --- |
-| `d` | `["d", "assistant-turn:<session_id>:<turn_id>"]` |
-| `session` | `["session", "<session_id>"]` |
-| `p` | `["p", "<service_pubkey>", "", "service"]` |
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "assistant-turn:<session_id>:<turn_id>",
+  "method": "assistant/prompt",
+  "params": {
+    "session_id": "<session_id>",
+    "turn_id": "<turn_id>",
+    "prompt": "natural-language operator request",
+    "route_context": {
+      "route": "/deployments/abc123",
+      "params": { "id": "abc123" },
+      "resource_type": "deployment",
+      "resource_id": "abc123"
+    },
+    "selected_refs": ["deployment:abc123"],
+    "_meta": { "progressToken": "assistant-turn:<session_id>:<turn_id>" }
+  }
+}
+```
 
-Optional tags:
+### `assistant/approve`, `assistant/reject`, and `assistant/cancel`
 
-| Tag | Format | Meaning |
-| --- | --- | --- |
-| `agent` | `["agent", "<assistant_agent_id>"]` | Preferred assistant identity when known |
-| `route` | `["route", "<current_route_path>"]` | UI route context hint |
-| `resource` | `["resource", "<resource_type>", "<resource_id>"]` | Explicit selected resource hint |
+Author: operator browser key.
+
+Semantics: approval/cancel decision. The decision is valid only for the latest session plan hash.
 
 Content JSON contract:
 
 ```json
 {
-  "session_id": "<session_id>",
-  "turn_id": "<turn_id>",
-  "prompt": "natural-language operator request",
-  "route_context": {
-    "route": "/deployments/abc123",
-    "params": { "id": "abc123" },
-    "resource_type": "deployment",
-    "resource_id": "abc123"
-  },
-  "selected_refs": ["deployment:abc123"]
+  "jsonrpc": "2.0",
+  "id": "assistant-approval:<session_id>:<plan_hash>",
+  "method": "assistant/approve",
+  "params": {
+    "session_id": "<session_id>",
+    "plan_hash": "<sha256_hex>",
+    "decision": "approve",
+    "reason": "operator-provided note",
+    "_meta": { "progressToken": "assistant-approval:<session_id>:<plan_hash>" }
+  }
 }
 ```
 
-### `38421` Assistant plan approval
-
-Author: operator browser key.
-
-Semantics: addressable approval/cancel decision. The decision is valid only for the latest session plan hash.
-
-Required tags:
-
-| Tag | Format |
-| --- | --- |
-| `d` | `["d", "assistant-approval:<session_id>:<plan_hash>"]` |
-| `session` | `["session", "<session_id>"]` |
-| `plan-hash` | `["plan-hash", "<sha256_hex>"]` |
-| `decision` | `["decision", "approve|reject|cancel"]` |
-| `e` | `["e", "<plan_or_prompt_event_id>", "", "reply"]` |
-
-Optional tags:
-
-| Tag | Format | Meaning |
-| --- | --- | --- |
-| `agent` | `["agent", "<assistant_agent_id>"]` | Preferred assistant identity when known |
-
-Content JSON MAY include a human-readable reason:
-
-```json
-{
-  "reason": "operator-provided approval/rejection/cancel note"
-}
-```
-
-### `38422` Assistant status
+### Assistant session/status/result observables
 
 Author: Bahia service pubkey.
 
-Semantics: append-only non-terminal progress. Status events are observable transcript entries and downstream correlation breadcrumbs.
+- `30900`/`30078` carries the latest assistant session projection with `d`, `session`, `p=<operator_pubkey>`, `agent`, `status`, `domain=assistant`, and `schema` tags.
+- `30315` carries non-terminal progress such as `planning`, `planned`, `awaiting_approval`, `executing`, `step_started`, `step_completed`, or `blocked`.
+- `4903` carries immutable approval, execution, and terminal facts such as `completed`, `blocked`, `failed`, `rejected`, `cancelled`, or `needs_clarification`.
 
-Required tags:
-
-| Tag | Format |
-| --- | --- |
-| `session` | `["session", "<session_id>"]` |
-| `agent` | `["agent", "<assistant_agent_id>"]` |
-| `status` | `["status", "planning|planned|awaiting_approval|executing|step_started|step_completed|blocked"]` |
-| `e` | `["e", "<request_event_id>", "", "reply"]` |
-
-Optional tags:
-
-| Tag | Format | Meaning |
-| --- | --- | --- |
-| `plan-hash` | `["plan-hash", "<sha256_hex>"]` | Plan being presented or executed |
-| `step` | `["step", "<step_id>"]` | Current plan step |
-| `downstream-request` | `["downstream-request", "<event_id>"]` | Published downstream command event |
-
-Content JSON is status-specific. Planned status events SHOULD include the full `AssistantPlan` and `plan_hash`.
-
-### `38423` Assistant result
-
-Author: Bahia service pubkey.
-
-Semantics: append-only terminal result for a turn or execution flow.
-
-Required tags:
-
-| Tag | Format |
-| --- | --- |
-| `session` | `["session", "<session_id>"]` |
-| `agent` | `["agent", "<assistant_agent_id>"]` |
-| `status` | `["status", "completed|blocked|failed|rejected|cancelled|needs_clarification"]` |
-| `e` | `["e", "<request_event_id>", "", "reply"]` |
-
-Optional tags:
-
-| Tag | Format | Meaning |
-| --- | --- | --- |
-| `plan-hash` | `["plan-hash", "<sha256_hex>"]` | Terminal plan hash |
-| `downstream-request` | `["downstream-request", "<event_id>"]` | Downstream command that produced the terminal outcome |
-
-Content JSON SHOULD include a concise human summary plus structured metadata such as downstream terminal event IDs, token/cost accounting, or error details. A final assistant result MUST accurately reflect the downstream terminal result when one exists.
+Observable content SHOULD include concise human summaries plus structured metadata such as `AssistantPlan`, `plan_hash`, downstream ContextVM request event IDs, token/cost accounting, or error details. Terminal facts MUST accurately reflect the downstream terminal result when one exists.
 
 ## Plan JSON schema
 
@@ -256,7 +174,7 @@ JSON Schema:
 sha256(canonical_json({"session_id": <session_id>, "plan": <AssistantPlan>}))
 ```
 
-The hash binds an operator approval to one exact session plan. A `38421` approval with a hash that does not match the latest session plan MUST be rejected as stale and MUST NOT publish downstream commands.
+The hash binds an operator approval to one exact session plan. An `assistant/approve` ContextVM request with a hash that does not match the latest session plan MUST be rejected as stale and MUST NOT publish downstream commands.
 
 At execution time, each step receives a derived idempotency key:
 

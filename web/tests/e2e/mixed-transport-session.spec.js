@@ -81,7 +81,7 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
     }));
 
     expect(trace.publicRequests).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 5964, relay: PUBLIC_RELAY })
+      expect.objectContaining({ kind: 25910, relay: PUBLIC_RELAY })
     ]));
     expect(trace.publicRequests.every((request) => request.relay === PUBLIC_RELAY)).toBe(true);
     expect(trace.publicRequests.some((request) => request.relay === ENCRYPTED_RELAY)).toBe(false);
@@ -95,18 +95,18 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
     }
 
     expect(trace.encryptedOperations).toEqual(expect.arrayContaining([
-      'notifications.channels.list',
-      'notifications.channels.test'
+      'notifications/channels-list',
+      'notifications/channels-test'
     ]));
     expect(trace.encryptedRequests.length).toBeGreaterThanOrEqual(2);
-    expect(trace.encryptedRequests.every((request) => request.kind === 5980 && request.relay === ENCRYPTED_RELAY)).toBe(true);
+    expect(trace.encryptedRequests.every((request) => request.kind === 25910 && request.relay === ENCRYPTED_RELAY)).toBe(true);
     expect(trace.encryptedRequests.some((request) => request.relay === PUBLIC_RELAY)).toBe(false);
     for (const request of trace.encryptedRequests) {
       expect(trace.encryptedOks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: 5980, accepted: true })
+        expect.objectContaining({ eventId: request.eventId, kind: 25910, accepted: true })
       ]));
       expect(trace.encryptedResults).toEqual(expect.arrayContaining([
-        expect.objectContaining({ requestEventId: request.eventId, kind: 7980, pubkey: SERVICE_PUBKEY })
+        expect.objectContaining({ requestEventId: request.eventId, kind: 25910, pubkey: SERVICE_PUBKEY })
       ]));
     }
   });

@@ -8,14 +8,18 @@ import (
 	"strings"
 )
 
-// Operator assistant Nostr event kinds. These values are the canonical protocol
-// constants for the LLM-enabled operator assistant namespace.
+// Operator assistant Nostr event kinds and schemas. Prompt and approval
+// mutation intents are carried by ContextVM JSON-RPC (kind 25910, optionally
+// wrapped by 1059/21059); durable assistant observables are projected here.
 const (
-	KindAssistantSession       = 31990
-	KindAssistantPromptRequest = 38420
-	KindAssistantApproval      = 38421
-	KindAssistantStatus        = 38422
-	KindAssistantResult        = 38423
+	KindAssistantSessionState = 30900
+	KindAssistantStatus       = 30315
+
+	AssistantSessionSchema = "bahia.assistant-session.v1"
+	AssistantStatusSchema  = "bahia.assistant-status.v1"
+
+	AssistantContextVMMethodPrompt   = "assistant/prompt"
+	AssistantContextVMMethodApproval = "assistant/approval"
 )
 
 // AssistantSessionState describes the canonical per-session lifecycle state.
@@ -41,8 +45,9 @@ func (s AssistantSessionState) Terminal() bool {
 	}
 }
 
-// AssistantSession is the content contract for the 31990 replaceable session
-// read model. The event must also carry d=<session_id>, session=<session_id>,
+// AssistantSession is the content contract for canonical assistant session
+// state projections. The event is a kind 30900 CAS read model with schema,
+// d=bahia.assistant-session.v1:<session_id>, session=<session_id>,
 // p=<operator pubkey>, agent=<assistant id>, and status=<state> tags.
 type AssistantSession struct {
 	SessionID         string                `json:"session_id"`
@@ -83,8 +88,8 @@ type AssistantPlanStep struct {
 	IdempotencyKey string         `json:"idempotency_key,omitempty"`
 }
 
-// AssistantPromptRequest is the content contract for 38420 prompt request
-// events authored by the operator browser key.
+// AssistantPromptRequest is the ContextVM params contract for assistant prompt
+// intents authored by the operator browser key.
 type AssistantPromptRequest struct {
 	SessionID    string         `json:"session_id"`
 	TurnID       string         `json:"turn_id"`
@@ -92,6 +97,17 @@ type AssistantPromptRequest struct {
 	RouteContext map[string]any `json:"route_context,omitempty"`
 	SelectedRefs []string       `json:"selected_refs,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
+// AssistantApprovalRequest is the ContextVM params contract for approving,
+// rejecting, or canceling the latest assistant plan for a session.
+type AssistantApprovalRequest struct {
+	SessionID    string         `json:"session_id"`
+	PlanHash     string         `json:"plan_hash"`
+	Decision     string         `json:"decision"`
+	Reason       string         `json:"reason,omitempty"`
+	Message      string         `json:"message,omitempty"`
+	ModifiedPlan *AssistantPlan `json:"modified_plan,omitempty"`
 }
 
 // AsyncToolReceipt normalizes event-native downstream tool dispatch metadata for

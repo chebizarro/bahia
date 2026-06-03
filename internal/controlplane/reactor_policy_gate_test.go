@@ -89,9 +89,10 @@ func TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState(t *te
 			t.Fatalf("run status = %q, want %q", deploymentRun.Status, domain.RunStatusSucceeded)
 		}
 	}
-	if len(capture.events) == 0 || capture.events[len(capture.events)-1].Kind != KindDeploymentResult {
-		t.Fatalf("expected final deployment result, got %#v", capture.events)
+	if len(capture.events) == 0 || capture.events[len(capture.events)-1].Kind != KindContextVMMessage {
+		t.Fatalf("expected final ContextVM deployment result, got %#v", capture.events)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, capture.events[len(capture.events)-1].Tags, "desired_hash", desired.DesiredHash)
 }
 
@@ -154,9 +155,10 @@ func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 	}
 
 	result := capture.events[0]
-	if result.Kind != KindDeploymentResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindDeploymentResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "e", request.ID)
 	assertReactorTag(t, result.Tags, "p", request.PubKey)
 	assertReactorTag(t, result.Tags, "status", "error")
@@ -166,11 +168,12 @@ func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 	assertReactorTag(t, result.Tags, "artifact", artifactID.String())
 	assertSignedEvent(t, result)
 
-	if result.Content == "" {
-		t.Fatal("expected policy-blocked result content")
+	var response ContextVMJSONRPCResponse
+	if err := json.Unmarshal([]byte(result.Content), &response); err != nil {
+		t.Fatalf("decode policy-blocked ContextVM response: %v", err)
 	}
-	if want := "deployment blocked by policy evaluation"; result.Content[:len(want)] != want {
-		t.Fatalf("result content = %q, want prefix %q", result.Content, want)
+	if response.Error == nil || response.Error.Message == "" {
+		t.Fatalf("expected policy-blocked ContextVM error, got %#v", response)
 	}
 }
 

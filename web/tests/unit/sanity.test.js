@@ -13,7 +13,7 @@ function eventId(event) {
 function validEvent(overrides = {}) {
   const unsigned = {
     created_at: Math.floor(Date.now() / 1000),
-    kind: 31962,
+    kind: 30900,
     tags: [['d', 'svc-1']],
     content: '{}'
   };
@@ -92,7 +92,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const warned = new Promise((resolve) => { resolveWarn = resolve; });
     const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => resolveWarn(args));
 
-    client.subscribe([{ kinds: [31962] }], { onEvent });
+    client.subscribe([{ kinds: [30900] }], { onEvent });
     await flushPromises();
     const good = validEvent();
     relay.subscriptions[0].params.onevent(good);
@@ -120,7 +120,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
 
-    const query = client.queryUntilEose([{ kinds: [31962] }]);
+    const query = client.queryUntilEose([{ kinds: [30900] }]);
     await flushPromises();
     relay.subscriptions[0].params.onevent(event);
     relay.subscriptions[0].params.oneose();
@@ -135,7 +135,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const client = createNostrPoolClient({ relays: ['wss://relay-a.example', 'wss://relay-b.example'], pool: createPool([relayA, relayB]) });
     const event = validEvent();
 
-    const query = client.queryUntilEose([{ kinds: [31962] }]);
+    const query = client.queryUntilEose([{ kinds: [30900] }]);
     await flushPromises();
     relayA.subscriptions[0].params.onevent(event);
     relayA.subscriptions[0].params.oneose();
@@ -156,7 +156,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const relay = createRelay('wss://relay.example');
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
 
-    const query = client.query([{ kinds: [31962] }], 1000);
+    const query = client.query([{ kinds: [30900] }], 1000);
     const assertion = expect(query).rejects.toMatchObject({
       name: 'NostrIncompleteEOSEError',
       reason: 'timeout',
@@ -172,7 +172,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const controller = new AbortController();
 
-    const query = client.queryUntilEose([{ kinds: [31962] }], { signal: controller.signal });
+    const query = client.queryUntilEose([{ kinds: [30900] }], { signal: controller.signal });
     const assertion = expect(query).rejects.toMatchObject({
       name: 'NostrIncompleteEOSEError',
       reason: 'aborted',
@@ -188,7 +188,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
 
-    const query = client.queryUntilEose([{ kinds: [31962] }]);
+    const query = client.queryUntilEose([{ kinds: [30900] }]);
     await flushPromises();
     relay.subscriptions[0].params.onevent(event);
 
@@ -207,7 +207,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
 
-    const query = client.queryUntilEose([{ kinds: [31962] }]);
+    const query = client.queryUntilEose([{ kinds: [30900] }]);
     await flushPromises();
     relay.subscriptions[0].params.onevent(event);
     relay.subscriptions[0].params.onclose('closed: relay shutdown');

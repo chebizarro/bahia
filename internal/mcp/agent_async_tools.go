@@ -184,13 +184,26 @@ func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[st
 }
 
 func serviceReceipt(tool, key string, r *controlplane.ServiceCommandReceipt) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, StatusKinds: []int{r.StatusKind}, ResultKinds: []int{r.ResultKind}, ReadModelKinds: []int{controlplane.KindServiceState}, DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: map[string]string{"service": r.ServiceID, "environment": r.EnvironmentID, "artifact": r.ArtifactID}}
+	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, StatusKinds: positiveKinds(r.StatusKind), ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: positiveKinds(controlplane.KindCASControlState), DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: map[string]string{"service": r.ServiceID, "environment": r.EnvironmentID, "artifact": r.ArtifactID}}
 }
 func llmReceipt(tool, key string, r *controlplane.LLMCommandReceipt) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, StatusKinds: []int{r.StatusKind}, ResultKinds: []int{r.ResultKind}, ReadModelKinds: []int{r.RegistryKind, r.StateKind}, DTag: key, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: map[string]string{"route": r.RouteID, "environment": r.EnvironmentID, "release": r.ReleaseID, "intent": r.IntentID}}
+	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, StatusKinds: positiveKinds(r.StatusKind), ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: positiveKinds(r.RegistryKind, r.StateKind), DTag: key, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: map[string]string{"route": r.RouteID, "environment": r.EnvironmentID, "release": r.ReleaseID, "intent": r.IntentID}}
 }
 func mlAsyncReceipt(tool, key string, r *controlplane.MLCommandReceipt) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, ResultKinds: []int{r.ResultKind}, ReadModelKinds: mapValues(r.ReadModelKinds), DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: mlResourceTags(r)}
+	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: mapValues(r.ReadModelKinds), DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: mlResourceTags(r)}
+}
+
+func positiveKinds(values ...int) []int {
+	out := []int{}
+	seen := map[int]bool{}
+	for _, value := range values {
+		if value <= 0 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func mapValues(m map[string]int) []int {

@@ -59,13 +59,13 @@ describe('controlplane request helpers', () => {
 
   it('signs and publishes a request, requiring at least one OK accepted relay', async () => {
     const result = await helper.publishRequest({
-      kind: 5964,
+      kind: 25910,
       tags: [['t', 'task-1'], ['p', 'b'.repeat(64)]],
       content: { service_id: 'svc-1' }
     });
 
     expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 5964,
+      kind: 25910,
       tags: [['t', 'task-1'], ['p', 'b'.repeat(64)]],
       content: JSON.stringify({ service_id: 'svc-1' })
     }));
@@ -80,7 +80,7 @@ describe('controlplane request helpers', () => {
       { relay: 'ws://relay.test', sent: true, accepted: false, message: 'auth-required: sign in' }
     ]);
 
-    await expect(helper.publishRequest({ kind: 5964 })).rejects.toThrow('auth-required');
+    await expect(helper.publishRequest({ kind: 25910 })).rejects.toThrow('auth-required');
   });
 
   it('requestResult subscribes for terminal results before publishing and preserves OK metadata', async () => {
@@ -96,7 +96,7 @@ describe('controlplane request helpers', () => {
       order.push('publish');
       handlers.onEvent({
         id: 'terminal-1',
-        kind: 7963,
+        kind: 25910,
         pubkey: 'b'.repeat(64),
         tags: [['e', event.id]],
         content: '{"status":"ok"}'
@@ -104,10 +104,10 @@ describe('controlplane request helpers', () => {
       return [{ relay: 'ws://relay.test', sent: true, accepted: true, message: 'duplicate: already have this event' }];
     });
 
-    await expect(helper.requestResult({ kind: 5964, content: { service_id: 'svc-1' }, resultKinds: [7963] }))
+    await expect(helper.requestResult({ kind: 25910, content: { service_id: 'svc-1' }, resultKinds: [25910] }))
       .resolves.toMatchObject({
         requestEventId: 'request-event-id',
-        resultEvent: { id: 'terminal-1', kind: 7963 },
+        resultEvent: { id: 'terminal-1', kind: 25910 },
         acceptedRelays: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: 'duplicate: already have this event' }]
       });
     expect(order).toEqual(['subscribe', 'publish']);
@@ -119,7 +119,7 @@ describe('controlplane request helpers', () => {
     nostrMock.subscribe.mockReturnValueOnce(unsubscribe);
     const controller = new AbortController();
 
-    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963], signal: controller.signal });
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [25910], signal: controller.signal });
     controller.abort(new Error('operator cancelled result wait'));
 
     await expect(promise).rejects.toThrow('operator cancelled result wait');
@@ -134,16 +134,16 @@ describe('controlplane request helpers', () => {
       return unsubscribe;
     });
 
-    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963] });
-    handlers.onEvent({ id: 'other', kind: 7963, pubkey: 'b'.repeat(64), tags: [['e', 'other-req']], content: '{}' });
-    handlers.onEvent({ id: 'spoofed', kind: 7963, pubkey: 'c'.repeat(64), tags: [['e', 'req-1']], content: '{}' });
-    handlers.onEvent({ id: 'result-1', kind: 7963, pubkey: 'b'.repeat(64), tags: [['e', 'req-1']], content: '{"ok":true}' });
-    handlers.onEvent({ id: 'result-1', kind: 7963, pubkey: 'b'.repeat(64), tags: [['e', 'req-1']], content: '{"ok":true}' });
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [25910] });
+    handlers.onEvent({ id: 'other', kind: 25910, pubkey: 'b'.repeat(64), tags: [['e', 'other-req']], content: '{}' });
+    handlers.onEvent({ id: 'spoofed', kind: 25910, pubkey: 'c'.repeat(64), tags: [['e', 'req-1']], content: '{}' });
+    handlers.onEvent({ id: 'result-1', kind: 25910, pubkey: 'b'.repeat(64), tags: [['e', 'req-1']], content: '{"ok":true}' });
+    handlers.onEvent({ id: 'result-1', kind: 25910, pubkey: 'b'.repeat(64), tags: [['e', 'req-1']], content: '{"ok":true}' });
 
     await expect(promise).resolves.toMatchObject({ id: 'result-1' });
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(nostrMock.subscribe).toHaveBeenCalledWith(
-      [{ kinds: [7963], '#e': ['req-1'], authors: ['b'.repeat(64)] }],
+      [{ kinds: [25910], '#e': ['req-1'], authors: ['b'.repeat(64)] }],
       expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
     );
   });
@@ -157,7 +157,7 @@ describe('controlplane request helpers', () => {
       return unsubscribe;
     });
 
-    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963] });
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [25910] });
     handlers.onClosed('auth-required: sign in', 'ws://relay-auth.test');
 
     await expect(promise).rejects.toThrow('Nostr result subscription auth closure: ws://relay-auth.test: auth-required: sign in');
@@ -172,7 +172,7 @@ describe('controlplane request helpers', () => {
       return vi.fn();
     });
 
-    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963] });
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [25910] });
     handlers.onClosed('closed: shard restarting', 'ws://relay-1.test');
     handlers.onClosed('closed: subscription limit', 'ws://relay-2.test');
 
@@ -187,10 +187,10 @@ describe('controlplane request helpers', () => {
     });
     const onStatus = vi.fn();
 
-    helper.subscribeStatus({ requestEventId: 'req-1', statusKinds: [6962], onStatus });
-    const status = { id: 'status-1', kind: 6962, pubkey: 'b'.repeat(64), tags: [['e', 'req-1']], content: '{}' };
-    handlers.onEvent({ id: 'status-other', kind: 6962, pubkey: 'b'.repeat(64), tags: [['e', 'req-2']], content: '{}' }, 'relay');
-    handlers.onEvent({ id: 'status-spoofed', kind: 6962, pubkey: 'c'.repeat(64), tags: [['e', 'req-1']], content: '{}' }, 'relay');
+    helper.subscribeStatus({ requestEventId: 'req-1', statusKinds: [30315], onStatus });
+    const status = { id: 'status-1', kind: 30315, pubkey: 'b'.repeat(64), tags: [['e', 'req-1']], content: '{}' };
+    handlers.onEvent({ id: 'status-other', kind: 30315, pubkey: 'b'.repeat(64), tags: [['e', 'req-2']], content: '{}' }, 'relay');
+    handlers.onEvent({ id: 'status-spoofed', kind: 30315, pubkey: 'c'.repeat(64), tags: [['e', 'req-1']], content: '{}' }, 'relay');
     handlers.onEvent(status, 'relay');
     handlers.onEvent(status, 'relay');
 

@@ -8,7 +8,7 @@ export const deploymentRunLogsState = $state({
 });
 
 export const DEPLOYMENT_RUN_LOG_ENCRYPTED_OPERATIONS = {
-  get: 'deployments.run_logs.get'
+  get: 'deployments/run-logs-get'
 };
 
 async function ensureEncryptedRunLogRequests() {

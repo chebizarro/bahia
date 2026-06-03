@@ -25,18 +25,16 @@ func TestAssistantOrchestratorPromptPublishesPlanWithoutSideEffects(t *testing.T
 	invoker := &assistantTestToolInvoker{}
 	orchestrator := newTestAssistantOrchestrator(t, publisher, invoker, &assistantTestChatClient{plan: plan}, nil, nil)
 
-	if err := orchestrator.HandlePrompt(ctx, assistantPromptEvent("session-1", "turn-1", "deploy api")); err != nil {
-		t.Fatalf("HandlePrompt: %v", err)
+	result, err := orchestrator.HandlePromptRequest(ctx, assistantPromptSource("session-1", "turn-1"), assistantPromptRequest("session-1", "turn-1", "deploy api"))
+	if err != nil {
+		t.Fatalf("HandlePromptRequest: %v", err)
 	}
 
-	result := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantResult))
-	if got := tagValue(result.Tags, "status"); got != "planned" {
+	if got := result["status"]; got != "planned" {
 		t.Fatalf("result status = %q, want planned", got)
 	}
-	var content map[string]any
-	mustUnmarshalEventContent(t, result, &content)
-	if content["plan_hash"] == "" {
-		t.Fatalf("planned result missing plan_hash: %#v", content)
+	if result["plan_hash"] == "" {
+		t.Fatalf("planned result missing plan_hash: %#v", result)
 	}
 	if invoker.callCount() != 0 {
 		t.Fatalf("tool invoker called during planning: %d", invoker.callCount())
@@ -58,15 +56,15 @@ func TestAssistantOrchestratorRejectsStaleApprovalAsFailed(t *testing.T) {
 		PendingSteps:   plan.Steps,
 	}})
 
-	if err := orchestrator.HandleApproval(ctx, assistantApprovalEvent("session-1", "stale-hash", "approve", "approval-1")); err != nil {
-		t.Fatalf("HandleApproval: %v", err)
+	result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-1"), assistantApprovalRequest("session-1", "stale-hash", "approve"))
+	if err != nil {
+		t.Fatalf("HandleApprovalRequest: %v", err)
 	}
 
-	result := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantResult))
-	if got := tagValue(result.Tags, "status"); got != "failed" {
+	if got := result["status"]; got != "failed" {
 		t.Fatalf("result status = %q, want failed", got)
 	}
-	if got := tagValue(result.Tags, "step"); got != "stale_approval" {
+	if got := result["step"]; got != "stale_approval" {
 		t.Fatalf("result step = %q, want stale_approval", got)
 	}
 	if invoker.callCount() != 0 {
@@ -92,13 +90,15 @@ func TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting(t *testi
 
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- orchestrator.HandleApproval(ctx, assistantApprovalEvent("session-1", planHash, "approve", "approval-1"))
+		_, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-1"), assistantApprovalRequest("session-1", planHash, "approve"))
+		firstDone <- err
 	}()
 	invoker.waitForCalls(t, 1)
 
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- orchestrator.HandleApproval(ctx, assistantApprovalEvent("session-1", planHash, "approve", "approval-2"))
+		_, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-2"), assistantApprovalRequest("session-1", planHash, "approve"))
+		secondDone <- err
 	}()
 
 	subscriber.publishResult(&nostr.Event{ID: "result-1", Kind: 7961, Tags: nostr.Tags{{"e", "downstream-1"}, {"status", "completed"}}, Content: `{"status":"completed"}`})
@@ -128,15 +128,15 @@ func TestAssistantOrchestratorCancelMovesExecutingSessionToFailed(t *testing.T) 
 		PendingSteps:   plan.Steps,
 	}})
 
-	if err := orchestrator.HandleApproval(ctx, assistantApprovalEvent("session-1", planHash, "cancel", "approval-1")); err != nil {
-		t.Fatalf("HandleApproval: %v", err)
+	result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-1"), assistantApprovalRequest("session-1", planHash, "cancel"))
+	if err != nil {
+		t.Fatalf("HandleApprovalRequest: %v", err)
 	}
 
-	result := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantResult))
-	if got := tagValue(result.Tags, "status"); got != "failed" {
+	if got := result["status"]; got != "failed" {
 		t.Fatalf("result status = %q, want failed", got)
 	}
-	session := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantSession))
+	session := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantSessionState))
 	if got := tagValue(session.Tags, "status"); got != string(domain.AssistantSessionStateFailed) {
 		t.Fatalf("session status = %q, want failed", got)
 	}
@@ -149,15 +149,15 @@ func TestAssistantOrchestratorReadOnlyPlanCompletesWithoutAwaitingApproval(t *te
 	invoker := &assistantTestToolInvoker{}
 	orchestrator := newTestAssistantOrchestrator(t, publisher, invoker, &assistantTestChatClient{plan: plan}, nil, nil)
 
-	if err := orchestrator.HandlePrompt(ctx, assistantPromptEvent("session-1", "turn-1", "what is happening?")); err != nil {
-		t.Fatalf("HandlePrompt: %v", err)
+	result, err := orchestrator.HandlePromptRequest(ctx, assistantPromptSource("session-1", "turn-1"), assistantPromptRequest("session-1", "turn-1", "what is happening?"))
+	if err != nil {
+		t.Fatalf("HandlePromptRequest: %v", err)
 	}
 
-	result := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantResult))
-	if got := tagValue(result.Tags, "status"); got != "completed" {
+	if got := result["status"]; got != "completed" {
 		t.Fatalf("result status = %q, want completed", got)
 	}
-	for _, ev := range publisher.eventsOfKind(domain.KindAssistantSession) {
+	for _, ev := range publisher.eventsOfKind(domain.KindAssistantSessionState) {
 		if got := tagValue(ev.Tags, "status"); got == string(domain.AssistantSessionStateAwaitingApproval) {
 			t.Fatalf("read-only turn published awaiting_approval session: %#v", ev.Tags)
 		}
@@ -174,15 +174,15 @@ func TestAssistantOrchestratorRejectsUnknownToolAtPlanningTime(t *testing.T) {
 	invoker := &assistantTestToolInvoker{}
 	orchestrator := newTestAssistantOrchestrator(t, publisher, invoker, &assistantTestChatClient{plan: plan}, nil, nil)
 
-	if err := orchestrator.HandlePrompt(ctx, assistantPromptEvent("session-1", "turn-1", "run a command")); err != nil {
-		t.Fatalf("HandlePrompt: %v", err)
+	result, err := orchestrator.HandlePromptRequest(ctx, assistantPromptSource("session-1", "turn-1"), assistantPromptRequest("session-1", "turn-1", "run a command"))
+	if err != nil {
+		t.Fatalf("HandlePromptRequest: %v", err)
 	}
 
-	result := lastAssistantEvent(t, publisher.eventsOfKind(domain.KindAssistantResult))
-	if got := tagValue(result.Tags, "status"); got != "failed" {
+	if got := result["status"]; got != "failed" {
 		t.Fatalf("result status = %q, want failed", got)
 	}
-	if got := tagValue(result.Tags, "step"); got != "plan_validation_error" {
+	if got := result["step"]; got != "plan_validation_error" {
 		t.Fatalf("result step = %q, want plan_validation_error", got)
 	}
 	if invoker.callCount() != 0 {
@@ -255,13 +255,22 @@ func executableTestPlan() *domain.AssistantPlan {
 	}
 }
 
-func assistantPromptEvent(sessionID, turnID, prompt string) *nostr.Event {
-	content, _ := json.Marshal(domain.AssistantPromptRequest{SessionID: sessionID, TurnID: turnID, Prompt: prompt})
-	return &nostr.Event{ID: "prompt-" + turnID, PubKey: "operator", Kind: domain.KindAssistantPromptRequest, Tags: nostr.Tags{{"d", "assistant-turn:" + sessionID + ":" + turnID}, {"session", sessionID}}, Content: string(content)}
+func assistantPromptRequest(sessionID, turnID, prompt string) domain.AssistantPromptRequest {
+	return domain.AssistantPromptRequest{SessionID: sessionID, TurnID: turnID, Prompt: prompt}
 }
 
-func assistantApprovalEvent(sessionID, planHash, decision, dSuffix string) *nostr.Event {
-	return &nostr.Event{ID: "approval-" + dSuffix, PubKey: "operator", Kind: domain.KindAssistantApproval, Tags: nostr.Tags{{"d", "assistant-approval:" + sessionID + ":" + dSuffix}, {"session", sessionID}, {"plan-hash", planHash}, {"decision", decision}}, Content: `{}`}
+func assistantPromptSource(sessionID, turnID string) AssistantRequestSource {
+	id := "prompt-" + turnID
+	return AssistantRequestSource{Event: &nostr.Event{ID: id, PubKey: "operator", Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-turn:" + sessionID + ":" + turnID}
+}
+
+func assistantApprovalRequest(sessionID, planHash, decision string) domain.AssistantApprovalRequest {
+	return domain.AssistantApprovalRequest{SessionID: sessionID, PlanHash: planHash, Decision: decision}
+}
+
+func assistantApprovalSource(sessionID, suffix string) AssistantRequestSource {
+	id := "approval-" + suffix
+	return AssistantRequestSource{Event: &nostr.Event{ID: id, PubKey: "operator", Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-approval:" + sessionID + ":" + suffix}
 }
 
 func testAssistantSigner(t *testing.T) canonicalnostr.Signer {

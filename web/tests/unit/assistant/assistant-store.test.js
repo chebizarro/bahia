@@ -75,7 +75,7 @@ describe('assistant store', () => {
     store.resetAssistantStore();
   });
 
-  it('bootstraps session state from 31990/38422/38423 relay backfill events', async () => {
+  it('bootstraps session state from 30900/30315 relay backfill events', async () => {
     const operator = authMock.authState.pubkey;
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-session-1';
@@ -95,7 +95,7 @@ describe('assistant store', () => {
         kind: ASSISTANT_KINDS.SESSION,
         pubkey: service,
         created_at: 100,
-        tags: [['d', sessionId], ['session', sessionId], ['p', operator, '', 'operator'], ['agent', 'assistant-agent'], ['status', 'awaiting_approval']],
+        tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['agent', 'assistant-agent'], ['status', 'awaiting_approval']],
         content: {
           state: 'awaiting_approval',
           operator_pubkey: operator,
@@ -111,16 +111,16 @@ describe('assistant store', () => {
         kind: ASSISTANT_KINDS.STATUS,
         pubkey: service,
         created_at: 110,
-        tags: [['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'planned'], ['plan-hash', planHash]],
+        tags: [['d', `bahia.assistant-status.v1:${sessionId}:planned`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'planned'], ['plan-hash', planHash]],
         content: { session_id: sessionId, status: 'planned', message: 'Plan ready', plan, plan_hash: planHash }
       }),
       event({
-        id: 'result-blocked',
-        kind: ASSISTANT_KINDS.RESULT,
+        id: 'status-blocked',
+        kind: ASSISTANT_KINDS.STATUS,
         pubkey: service,
         created_at: 120,
-        tags: [['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'blocked'], ['downstream-request', 'downstream-1']],
-        content: { session_id: sessionId, status: 'blocked', error: 'relay closed' }
+        tags: [['d', `bahia.assistant-status.v1:${sessionId}:blocked`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'blocked'], ['downstream-request', 'downstream-1']],
+        content: { session_id: sessionId, status: 'blocked', message: 'relay closed' }
       })
     ]);
 
@@ -133,11 +133,11 @@ describe('assistant store', () => {
     expect(session.state).toBe('awaiting_approval');
     expect(session.lastPlanHash).toBe(planHash);
     expect(session.currentPlan).toEqual(plan);
-    expect(session.transcript.map((item) => item.id)).toEqual(['status-planned', 'result-blocked']);
-    expect(session.transcript[1]).toMatchObject({ type: 'result', blocked: true, error: 'relay closed' });
+    expect(session.transcript.map((item) => item.id)).toEqual(['status-planned', 'status-blocked']);
+    expect(session.transcript[1]).toMatchObject({ type: 'status', status: 'blocked', message: 'relay closed' });
   });
 
-  it('applies a live 38422 status event to the active session transcript', async () => {
+  it('applies a live 30315 status event to the active session transcript', async () => {
     const operator = authMock.authState.pubkey;
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-live-session';
@@ -148,7 +148,7 @@ describe('assistant store', () => {
         kind: ASSISTANT_KINDS.SESSION,
         pubkey: service,
         created_at: 100,
-        tags: [['d', sessionId], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
+        tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
         content: { state: 'executing', operator_pubkey: operator, transcript_summary: 'Live session' }
       })
     ]);
@@ -164,7 +164,7 @@ describe('assistant store', () => {
       kind: ASSISTANT_KINDS.STATUS,
       pubkey: service,
       created_at: 130,
-      tags: [['session', sessionId], ['status', 'executing'], ['downstream-request', 'downstream-live']],
+      tags: [['d', `bahia.assistant-status.v1:${sessionId}:executing`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['status', 'executing'], ['downstream-request', 'downstream-live']],
       content: { session_id: sessionId, status: 'executing', message: 'Deploying route' }
     }));
 

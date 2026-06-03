@@ -154,7 +154,7 @@ describe('encrypted controlplane transport', () => {
     authMock.ensureEncryptedSignerReady.mockRejectedValueOnce(new Error('Failed to encrypt with NIP-44: signer bridge unavailable'));
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
-    await expect(transport.requestEncryptedResult({ operation: 'notifications.channels.list', payload: {} }))
+    await expect(transport.requestEncryptedResult({ operation: 'notifications/channels-list', payload: {} }))
       .rejects.toThrow('signer bridge unavailable');
 
     expect(client.publish).not.toHaveBeenCalled();

@@ -45,12 +45,12 @@ export async function installE2EMocks(
     const discoveryEvents = [
       {
         id: 'e2e-system-discovery',
-        kind: 31974,
+        kind: 11316,
         pubkey: servicePubkey,
         created_at: 1,
         tags: [['d', 'bahia-system-v1']],
         content: JSON.stringify({ ...systemInfo, schema: 'bahia.system-discovery.v1' }),
-        sig: 'e2e'
+        sig: '0'.repeat(128)
       },
       {
         id: 'e2e-browser-relays',
@@ -59,7 +59,7 @@ export async function installE2EMocks(
         created_at: 1,
         tags: [['d', 'bahia-browser-v1'], ...browserRelays.map((relay) => ['relay', relay])],
         content: '',
-        sig: 'e2e'
+        sig: '0'.repeat(128)
       }
     ];
     const serviceRelays = systemInfo?.nostr?.service_relays || browserRelays;
@@ -70,7 +70,7 @@ export async function installE2EMocks(
       created_at: 1,
       tags: [['d', 'bahia-service-v1'], ...serviceRelays.map((relay) => ['relay', relay])],
       content: '',
-      sig: 'e2e'
+      sig: '0'.repeat(128)
     });
     const existingNostrEvents = localStorage.getItem('__bahia_e2e_nostr_events');
     if (!existingNostrEvents || (Array.isArray(nostrEvents) && nostrEvents.length > 0)) {
@@ -194,27 +194,30 @@ export async function installE2EMocks(
     }
 
     function handleEncryptedServiceSecretRequest(event) {
-      if (event?.kind !== 5980 || !String(event.content || '').startsWith('mock-nip44:')) return null;
+      if (event?.kind !== 25910 || !String(event.content || '').startsWith('mock-nip44:')) return null;
       let envelope;
       try {
         envelope = JSON.parse(decodeURIComponent(escape(atob(String(event.content).replace(/^mock-nip44:/, '')))));
       } catch {
         return null;
       }
-      if (!String(envelope.operation || '').startsWith('services.secrets.')) return null;
+      const operation = String(envelope.method || envelope.operation || '');
+      const params = { ...(envelope.params || envelope.payload || {}) };
+      delete params._meta;
+      if (!operation.startsWith('services/secrets-') && !operation.startsWith('services.secrets.')) return null;
 
       const state = readMockServiceSecrets();
-      const serviceId = envelope.payload?.service_id || 'service-1';
+      const serviceId = params.service_id || 'service-1';
       const secrets = Array.isArray(state[serviceId]) ? state[serviceId] : [];
       let payload = {};
-      if (envelope.operation === 'services.secrets.list') {
+      if (operation === 'services/secrets-list' || operation === 'services.secrets.list') {
         payload = { secrets: secrets.map(({ value, ...secret }) => secret) };
-      } else if (envelope.operation === 'services.secrets.create') {
+      } else if (operation === 'services/secrets-create' || operation === 'services.secrets.create') {
         const secret = {
           id: `secret-${Date.now()}`,
           service_id: serviceId,
-          name: envelope.payload.name,
-          value: envelope.payload.value,
+          name: params.name,
+          value: params.value,
           version: 1,
           created_at: new Date().toISOString()
         };
@@ -222,34 +225,34 @@ export async function installE2EMocks(
         writeMockServiceSecrets(state);
         const { value, ...safeSecret } = secret;
         payload = { secret: safeSecret };
-      } else if (envelope.operation === 'services.secrets.update') {
-        const updated = secrets.map((secret) => secret.id === envelope.payload.secret_id
-          ? { ...secret, value: envelope.payload.value, version: Number(secret.version || 1) + 1, updated_at: new Date().toISOString() }
+      } else if (operation === 'services/secrets-update' || operation === 'services.secrets.update') {
+        const updated = secrets.map((secret) => secret.id === params.secret_id
+          ? { ...secret, value: params.value, version: Number(secret.version || 1) + 1, updated_at: new Date().toISOString() }
           : secret);
         state[serviceId] = updated;
         writeMockServiceSecrets(state);
-        const match = updated.find((secret) => secret.id === envelope.payload.secret_id) || {};
+        const match = updated.find((secret) => secret.id === params.secret_id) || {};
         const { value, ...safeSecret } = match;
         payload = { secret: safeSecret };
-      } else if (envelope.operation === 'services.secrets.delete') {
-        state[serviceId] = secrets.filter((secret) => secret.id !== envelope.payload.secret_id);
+      } else if (operation === 'services/secrets-delete' || operation === 'services.secrets.delete') {
+        state[serviceId] = secrets.filter((secret) => secret.id !== params.secret_id);
         writeMockServiceSecrets(state);
         payload = { deleted: true };
-      } else if (envelope.operation === 'services.secrets.reveal') {
-        payload = { value: secrets.find((secret) => secret.id === envelope.payload.secret_id)?.value || '' };
+      } else if (operation === 'services/secrets-reveal' || operation === 'services.secrets.reveal') {
+        payload = { value: secrets.find((secret) => secret.id === params.secret_id)?.value || '' };
       }
 
       const response = {
-        request_event_id: event.id,
-        status: 'success',
-        payload
+        jsonrpc: '2.0',
+        id: envelope.id || event.id,
+        result: { status: 'success', payload }
       };
       return {
         id: `mock-result-${event.id}`,
-        kind: 7980,
+        kind: 25910,
         pubkey: servicePubkey,
         created_at: Math.floor(Date.now() / 1000),
-        tags: [['e', event.id], ['p', envelope.requester_pubkey]],
+        tags: [['e', event.id], ['p', event.pubkey], ['encrypted', 'contextvm-jsonrpc-v1']],
         content: `mock-nip44:${btoa(unescape(encodeURIComponent(JSON.stringify(response))))}`,
         sig: 'mock-service-signature'
       };

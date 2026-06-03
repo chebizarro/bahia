@@ -57,7 +57,7 @@ func TestLLMCommandPublisherPublishesCanonicalRouteCreateRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish route create: %v", err)
 	}
-	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != 0 || receipt.ResultKind != KindCASControlState {
+	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != KindNIP38Status || receipt.ResultKind != KindContextVMMessage {
 		t.Fatalf("unexpected receipt kinds: %#v", receipt)
 	}
 	if len(capture.events) != 1 {
@@ -88,7 +88,7 @@ func TestLLMCommandPublisherPublishesCanonicalReleaseRegisterRequest(t *testing.
 	if err != nil {
 		t.Fatalf("publish release register: %v", err)
 	}
-	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != 0 || receipt.ResultKind != KindCASControlState {
+	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != KindNIP38Status || receipt.ResultKind != KindContextVMMessage {
 		t.Fatalf("unexpected receipt kinds: %#v", receipt)
 	}
 	if len(capture.events) != 1 {
@@ -117,7 +117,7 @@ func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish rollback: %v", err)
 	}
-	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != 0 || receipt.ResultKind != KindCASControlState {
+	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != KindNIP38Status || receipt.ResultKind != KindContextVMMessage {
 		t.Fatalf("unexpected receipt kinds: %#v", receipt)
 	}
 	if receipt.RequestEventID == "" || receipt.RequestPubkey == "" {
@@ -151,7 +151,7 @@ func TestLLMCommandPublisherPublishesCanonicalDeployRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish deploy: %v", err)
 	}
-	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != 0 || receipt.ResultKind != KindCASControlState {
+	if receipt.RequestKind != KindContextVMMessage || receipt.StatusKind != KindNIP38Status || receipt.ResultKind != KindContextVMMessage {
 		t.Fatalf("unexpected receipt kinds: %#v", receipt)
 	}
 	if receipt.RequestEventID == "" || receipt.RequestPubkey == "" {

@@ -361,11 +361,11 @@ describe('Nostr Client - Parsing Functions', () => {
       const pool = createPool([relay]);
       const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
 
-      const query = client.queryUntilEose([{ kinds: [31962] }]);
+      const query = client.queryUntilEose([{ kinds: [30900] }]);
       await flushPromises();
 
       expect(pool.ensureRelay).toHaveBeenCalledWith('ws://relay.example');
-      expect(relay.subscribe).toHaveBeenCalledWith([{ kinds: [31962] }], expect.objectContaining({ id: 'sub_1' }));
+      expect(relay.subscribe).toHaveBeenCalledWith([{ kinds: [30900] }], expect.objectContaining({ id: 'sub_1' }));
 
       let settled = false;
       query.then(() => { settled = true; }, () => { settled = true; });
@@ -382,7 +382,7 @@ describe('Nostr Client - Parsing Functions', () => {
       const pool = createPool([relay]);
       const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
 
-      const query = client.queryUntilEose([{ kinds: [31962] }]);
+      const query = client.queryUntilEose([{ kinds: [30900] }]);
       await flushPromises();
       relay.subscriptions[0].params.onclose('relay reconnect attempts exhausted before EOSE');
       await flushPromises();
@@ -446,7 +446,7 @@ describe('Nostr Client - Parsing Functions', () => {
       const authEvent = { id: 'auth-event' };
       const onAuth = vi.fn(async () => authEvent);
 
-      client.subscribe([{ kinds: [31962] }], { onAuth });
+      client.subscribe([{ kinds: [30900] }], { onAuth });
       await flushPromises();
 
       await expect(relay.onauth({ kind: 22242, tags: [] })).resolves.toBe(authEvent);
@@ -458,7 +458,7 @@ describe('Nostr Client - Parsing Functions', () => {
       const pool = createPool([relay]);
       const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
 
-      client.subscribe([{ kinds: [31962] }], { onEvent: vi.fn() });
+      client.subscribe([{ kinds: [30900] }], { onEvent: vi.fn() });
       await flushPromises();
       client.disconnect();
       await flushPromises();
@@ -603,13 +603,13 @@ describe('Nostr Client - Parsing Functions', () => {
           ['d', 'agent-delta'],
           ['allowed-kind', '1'],
           ['allowed-kind', '30023'],
-          ['allowed-kind', '31990']
+          ['allowed-kind', '25910']
         ]
       };
 
       const soul = parseSoulEvent(event);
 
-      expect(soul.allowedKinds).toEqual([1, 30023, 31990]);
+      expect(soul.allowedKinds).toEqual([1, 30023, 25910]);
     });
 
     it('should parse tool tags with scopes', () => {

@@ -62,7 +62,7 @@ How it runs:
 7. Publish to relays, accepting both fresh relay `OK` and duplicate relay `OK` outcomes as success.
 8. Store the canonical event locally and log the migration summary.
 
-The migration is idempotent and safe to run every startup. Non-dry-run migration requires a configured Nostr publisher and Bahia service private key. If relay backfill does not reach `EOSE`, or if publish/signing fails, fix relay/signing configuration and rerun startup; do not re-enable legacy production subscribers.
+The migration is idempotent and safe to run every startup. Non-dry-run migration requires a configured Nostr publisher and Bahia service private key. If relay backfill does not reach `EOSE`, or if publish/signing fails, fix relay/signing configuration and rerun startup; do not re-enable legacy production subscribers. Relay sidecar behavior is intentionally conservative: migration publishes canonical replacement/status/audit outputs through configured allowlisted relays, while historical inputs remain tagged with `migrated-from` and `legacy-kind` for traceability rather than being treated as live protocol.
 
 ### Read Models
 
@@ -101,7 +101,7 @@ nostr:
     backend_url: "wss://sidecar-backend.example.com"
 ```
 
-Browser and API traffic goes through the sidecar.
+Browser and API traffic goes through the sidecar. Operators must configure the sidecar relay allowlists so browsers can reach only the advertised `nostr.browser_relays` / `nostr.sidecar_url` set and backend migration/runtime publishers can reach only configured backend/upstream relays. Legacy-kind backfill may read from migration-configured relays, but live runtime publication remains canonical-only.
 
 ### Upstream Relays
 

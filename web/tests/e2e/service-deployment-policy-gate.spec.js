@@ -51,12 +51,12 @@ test.describe('Deployment policy preview gate', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       intentCount: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents.length
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5989]),
+      requestKinds: expect.arrayContaining([25910]),
       intentCount: 0
     });
 
-    const requestKinds = await page.evaluate(() => [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]);
-    expect(requestKinds).not.toContain(5961);
+    const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
+    expect(operations).not.toContain('service/deploy');
   });
 
   test('blocks intent creation when policy preview reports blockers', async ({ page }) => {
@@ -79,12 +79,12 @@ test.describe('Deployment policy preview gate', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       intentCount: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents.length
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5989]),
+      requestKinds: expect.arrayContaining([25910]),
       intentCount: 0
     });
 
-    const requestKinds = await page.evaluate(() => [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]);
-    expect(requestKinds).not.toContain(5961);
+    const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
+    expect(operations).not.toContain('service/deploy');
   });
 
   test('blocks intent creation while policy preview is still loading, then allows creation after a successful preview resolves', async ({ page }) => {
@@ -102,9 +102,9 @@ test.describe('Deployment policy preview gate', () => {
     await dialog.locator('form').evaluate((form) => form.requestSubmit());
     await expect(dialog.getByText('Policy preview must finish before you can create an intent.')).toBeVisible();
 
-    let requestKinds = await page.evaluate(() => [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]);
-    expect(requestKinds).toContain(5989);
-    expect(requestKinds).not.toContain(5961);
+    let requestKinds = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
+    expect(requestKinds).toContain('policy/evaluate');
+    expect(requestKinds).not.toContain('service/deploy');
 
     await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW?.('allow'));
 
@@ -116,12 +116,13 @@ test.describe('Deployment policy preview gate', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       intentCount: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents.length
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5989, 5961]),
+      requestKinds: expect.arrayContaining([25910]),
       intentCount: 1
     });
 
     requestKinds = await page.evaluate(() => [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]);
-    expect(requestKinds).toContain(5961);
+    const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
+    expect(operations).toContain('service/deploy');
   });
 
   test('ignores stale delayed preview responses after a newer preview request supersedes them', async ({ page }) => {

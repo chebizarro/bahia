@@ -1,6 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -17,6 +18,10 @@
   let logsError = $state(null);
   let activeTab = $state('stdout');
   let runId = $derived(page.params.id);
+  let loadSequence = 0;
+
+  const RUN_DETAIL_WAIT_MS = 5000;
+  const RUN_DETAIL_POLL_MS = 50;
 
   let isCompleted = $derived(Boolean(run && ['succeeded', 'failed', 'cancelled', 'timeout'].includes(String(run.status || '').toLowerCase())));
   let progressPercent = $derived(calculateProgress(run?.status));
@@ -28,7 +33,22 @@
     void loadRun(id);
   });
 
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForRunProjection(id, sequence) {
+    const deadline = Date.now() + RUN_DETAIL_WAIT_MS;
+    while (sequence === loadSequence && id === runId) {
+      const match = untrack(() => deploymentRuns.find((candidate) => candidate.id === id) || null);
+      if (match || Date.now() >= deadline) return match;
+      await sleep(RUN_DETAIL_POLL_MS);
+    }
+    return null;
+  }
+
   async function loadRun(id = runId) {
+    const sequence = ++loadSequence;
     loading = true;
     logsLoading = true;
     error = null;
@@ -36,7 +56,9 @@
 
     try {
       await loadDeploymentRuns();
-      run = deploymentRuns.find((candidate) => candidate.id === id) || null;
+      if (sequence !== loadSequence || id !== runId) return;
+      run = await waitForRunProjection(id, sequence);
+      if (sequence !== loadSequence || id !== runId) return;
       if (!run) {
         throw new Error('Deployment run not found');
       }
@@ -44,8 +66,10 @@
     } catch (err) {
       error = err.message || 'Failed to load deployment run';
     } finally {
-      loading = false;
-      logsLoading = false;
+      if (sequence === loadSequence && id === runId) {
+        loading = false;
+        logsLoading = false;
+      }
     }
   }
 

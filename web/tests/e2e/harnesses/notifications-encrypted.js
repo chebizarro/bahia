@@ -60,6 +60,24 @@ export async function installEncryptedNotificationHarness(
       }
     };
 
+    const KIND_CONTEXTVM = 25910;
+
+    function isRelayUrl(url, expected) {
+      return String(url || '').replace(/\/$/, '') === String(expected || '').replace(/\/$/, '');
+    }
+
+    function parseContextVMRequest(event) {
+      const plaintext = String(event.content || '').replace(/^(enc44:|mock-nip44:)/, '');
+      const envelope = JSON.parse(plaintext || '{}');
+      const payload = { ...(envelope.params || {}) };
+      delete payload._meta;
+      return { envelope, operation: envelope.method, payload };
+    }
+
+    function contextVMResultContent(envelope, result) {
+      return `enc44:${JSON.stringify({ jsonrpc: '2.0', id: envelope.id, result })}`;
+    }
+
     function matchesFilter(event, filter) {
       if (!filter || typeof filter !== 'object') return true;
       if (Array.isArray(filter.kinds) && !filter.kinds.includes(event.kind)) return false;
@@ -131,16 +149,16 @@ export async function installEncryptedNotificationHarness(
 
       const state = window.__BAHIA_E2E_NOTIFICATION_STATE;
       switch (operation) {
-        case 'notifications.channels.list':
+        case 'notifications/channels-list':
           return { status: 'ok', payload: { channels: [...state.channels] } };
-        case 'notifications.channels.get': {
+        case 'notifications/channels-get': {
           const channel = state.channels.find((candidate) => candidate.id === payload.id) || null;
           if (!channel) {
             return { status: 'error', error: { code: 'not_found', message: 'notification channel not found' } };
           }
           return { status: 'ok', payload: { channel: { ...channel } } };
         }
-        case 'notifications.channels.create': {
+        case 'notifications/channels-create': {
           const channel = {
             id: `ch-${state.nextId++}`,
             name: payload.name,
@@ -154,7 +172,7 @@ export async function installEncryptedNotificationHarness(
           state.channels = [channel, ...state.channels];
           return { status: 'ok', payload: { channel } };
         }
-        case 'notifications.channels.update': {
+        case 'notifications/channels-update': {
           const index = state.channels.findIndex((channel) => channel.id === payload.id);
           if (index === -1) {
             return { status: 'error', error: { code: 'not_found', message: 'notification channel not found' } };
@@ -170,12 +188,12 @@ export async function installEncryptedNotificationHarness(
           state.channels = state.channels.map((channel, i) => (i === index ? next : channel));
           return { status: 'ok', payload: { channel: next } };
         }
-        case 'notifications.channels.test':
+        case 'notifications/channels-test':
           return { status: 'ok', payload: { status: 'test sent' } };
-        case 'notifications.channels.delete':
+        case 'notifications/channels-delete':
           state.channels = state.channels.filter((channel) => channel.id !== payload.id);
           return { status: 'ok', payload: { status: 'deleted', id: payload.id } };
-        case 'notifications.logs.list':
+        case 'notifications/logs-list':
           return { status: 'ok', payload: { logs: [...state.logs] } };
         default:
           return { status: 'error', error: { code: 'unsupported_operation', message: `unsupported encrypted op: ${operation}` } };
@@ -208,34 +226,35 @@ export async function installEncryptedNotificationHarness(
         return originalSend.call(this, data);
       }
 
-      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 5980) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM && isRelayUrl(this.url, encryptedRelay)) {
         const event = message[1];
         const relay = this.url;
-        const plaintext = String(event.content || '').replace(/^enc44:/, '');
-        const envelope = JSON.parse(plaintext);
-        const result = notificationResult(envelope.operation, envelope.payload || {});
+        const { envelope, operation, payload } = parseContextVMRequest(event);
+        const result = notificationResult(operation, payload || {});
         window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.push({ relay, eventId: event.id, kind: event.kind });
-        window.__BAHIA_E2E_ENCRYPTED_REQUESTS.push({ relay, eventId: event.id, kind: event.kind, tags: event.tags || [], operation: envelope.operation, requesterPubkey: event.pubkey });
+        window.__BAHIA_E2E_ENCRYPTED_REQUESTS.push({ relay, eventId: event.id, kind: event.kind, tags: event.tags || [], operation, requesterPubkey: event.pubkey });
         window.__BAHIA_E2E_ENCRYPTED_OKS.push({ relay, eventId: event.id, kind: event.kind, sent: true, accepted: true, message: '' });
-        window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(envelope.operation);
+        window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(operation);
 
         originalSend.call(this, data);
 
         const resultEvent = {
           id: `result-${event.id}`,
-          kind: 7980,
+          kind: KIND_CONTEXTVM,
           pubkey: servicePubkey,
           created_at: Math.floor(Date.now() / 1000),
           tags: [
             ['e', event.id],
             ['p', event.pubkey],
-            ['encrypted', 'bahia-encrypted-v1']
+            ['encrypted', 'contextvm-jsonrpc-v1'],
+            ['method', operation]
           ],
-          content: `enc44:${JSON.stringify(
+          content: contextVMResultContent(
+            envelope,
             result.status === 'error'
-              ? { request_event_id: event.id, status: 'error', error: result.error }
-              : { request_event_id: event.id, status: 'ok', payload: result.payload }
-          )}`,
+              ? { status: 'error', error: result.error }
+              : { status: 'ok', payload: result.payload }
+          ),
           sig: '0'.repeat(128)
         };
 
@@ -248,7 +267,7 @@ export async function installEncryptedNotificationHarness(
           pubkey: resultEvent.pubkey,
           status: result.status,
           error: result.error || null,
-          operation: envelope.operation,
+          operation,
           tags: resultEvent.tags || []
         });
         queueEncryptedResult(resultEvent);

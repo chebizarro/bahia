@@ -65,6 +65,19 @@ type AssistantIdentity struct {
 	Npub    string
 }
 
+// AssistantRequestSource describes the canonical ContextVM request that initiated
+// assistant orchestration.
+type AssistantRequestSource struct {
+	Event          *nostr.Event
+	OperatorPubkey string
+	RequestID      string
+	DedupKey       string
+}
+
+// AssistantOperationResult is returned as the ContextVM JSON-RPC result payload
+// for prompt/approval operations.
+type AssistantOperationResult map[string]any
+
 // AssistantOrchestratorConfig contains dependencies and startup state.
 type AssistantOrchestratorConfig struct {
 	ChatClient       AssistantChatClient
@@ -94,8 +107,8 @@ type AssistantOrchestrator struct {
 	mu                 sync.Mutex
 	sessions           map[string]*domain.AssistantSession
 	sessionLocks       map[string]*sync.Mutex
-	processedTurns     map[string]*nostr.Event
-	processedApprovals map[string]struct{}
+	processedTurns     map[string]AssistantOperationResult
+	processedApprovals map[string]AssistantOperationResult
 	submittedPlans     map[string]struct{}
 	activeObservers    map[string]context.CancelFunc
 }
@@ -128,8 +141,8 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 		logger:             logger.With("component", "assistant_orchestrator"),
 		sessions:           make(map[string]*domain.AssistantSession),
 		sessionLocks:       make(map[string]*sync.Mutex),
-		processedTurns:     make(map[string]*nostr.Event),
-		processedApprovals: make(map[string]struct{}),
+		processedTurns:     make(map[string]AssistantOperationResult),
+		processedApprovals: make(map[string]AssistantOperationResult),
 		submittedPlans:     make(map[string]struct{}),
 		activeObservers:    make(map[string]context.CancelFunc),
 	}
@@ -143,59 +156,63 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 	return o
 }
 
-// HandlePrompt processes a kind:38420 prompt request into an approved-or-clarifying assistant result.
-func (o *AssistantOrchestrator) HandlePrompt(ctx context.Context, event *nostr.Event) error {
+// HandlePromptRequest processes a ContextVM assistant prompt request into an
+// approved-or-clarifying assistant result payload.
+func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantPromptRequest) (AssistantOperationResult, error) {
+	event := source.Event
 	if event == nil {
-		return fmt.Errorf("assistant prompt event is nil")
+		return nil, fmt.Errorf("assistant prompt event is nil")
 	}
-	var req domain.AssistantPromptRequest
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		return o.PublishFailure(ctx, event, sessionFromEvent(event), "parse_error", fmt.Sprintf("invalid prompt request JSON: %v", err))
+	if strings.TrimSpace(source.OperatorPubkey) == "" {
+		source.OperatorPubkey = event.PubKey
 	}
-	if strings.TrimSpace(req.SessionID) == "" {
-		req.SessionID = sessionFromEvent(event)
+	if strings.TrimSpace(source.RequestID) == "" {
+		source.RequestID = event.ID
+	}
+	if strings.TrimSpace(source.DedupKey) == "" {
+		source.DedupKey = source.RequestID
 	}
 	if err := validatePromptRequest(req); err != nil {
-		return o.PublishFailure(ctx, event, req.SessionID, "validation_error", err.Error())
+		return o.failureResult(req.SessionID, "validation_error", err.Error()), nil
 	}
 
 	lock := o.lockForSession(req.SessionID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	dTag := tagValue(event.Tags, "d")
-	if dTag != "" {
+	dedupKey := source.DedupKey
+	if dedupKey != "" {
 		o.mu.Lock()
-		processed := o.processedTurns[dTag]
+		processed := o.processedTurns[dedupKey]
 		o.mu.Unlock()
 		if processed != nil {
-			return o.republish(ctx, processed)
+			return processed, nil
 		}
 	}
 
-	session := o.loadOrCreateSession(req.SessionID, event.PubKey)
-	addSessionParticipant(session, event.PubKey)
+	session := o.loadOrCreateSession(req.SessionID, source.OperatorPubkey)
+	addSessionParticipant(session, source.OperatorPubkey)
 	session.State = domain.AssistantSessionStatePlanning
 	session.CurrentTurnID = req.TurnID
 	session.CurrentRequestID = event.ID
 	if err := o.publishSession(ctx, session); err != nil {
-		return err
+		return nil, err
 	}
 	if err := o.publishStatus(ctx, event, req.SessionID, "planning", map[string]any{"message": "planning assistant response"}); err != nil {
-		return err
+		return nil, err
 	}
 
 	contextBlock, err := o.contextBuilder.BuildContext(ctx, routeContextStrings(req.RouteContext), req.SelectedRefs, session.TranscriptSummary)
 	if err != nil {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
-		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "failed", "context_error", map[string]any{"summary": "failed to build assistant context", "error": err.Error()})
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "context_error", map[string]any{"summary": "failed to build assistant context", "error": err.Error()}), nil)
 	}
 	plan, err := o.planFromPrompt(ctx, event, req.SessionID, o.systemPrompt(), o.userPrompt(req, contextBlock))
 	if err != nil {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
-		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "failed", "llm_error", map[string]any{"summary": "assistant planning failed", "error": err.Error()})
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "llm_error", map[string]any{"summary": "assistant planning failed", "error": err.Error()}), nil)
 	}
 	if plan == nil {
 		plan = &domain.AssistantPlan{Summary: "The assistant did not return a plan.", NeedsClarification: true, ClarifyingQuestion: "Please restate the request with explicit target resources and desired action.", RiskLevel: "low", Steps: []domain.AssistantPlanStep{}}
@@ -203,7 +220,7 @@ func (o *AssistantOrchestrator) HandlePrompt(ctx context.Context, event *nostr.E
 	if err := o.validatePlan(*plan); err != nil {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
-		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "failed", "plan_validation_error", map[string]any{"summary": "assistant plan failed validation", "error": err.Error(), "plan": plan})
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "plan_validation_error", map[string]any{"summary": "assistant plan failed validation", "error": err.Error(), "plan": plan}), nil)
 	}
 
 	if plan.NeedsClarification {
@@ -213,14 +230,14 @@ func (o *AssistantOrchestrator) HandlePrompt(ctx context.Context, event *nostr.E
 			session.TranscriptSummary = appendTranscriptSummary(session.TranscriptSummary, "assistant asked: "+plan.ClarifyingQuestion)
 		}
 		_ = o.publishSession(ctx, session)
-		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "needs_clarification", "needs_clarification", map[string]any{"summary": plan.Summary, "clarifying_question": plan.ClarifyingQuestion, "plan": plan})
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "needs_clarification", "needs_clarification", map[string]any{"summary": plan.Summary, "clarifying_question": plan.ClarifyingQuestion, "plan": plan}), nil)
 	}
 
 	planHash := domain.ComputePlanHash(*plan, req.SessionID)
 	if planHash == "" {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
-		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "failed", "plan_hash_error", map[string]any{"summary": "assistant plan could not be hashed"})
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "plan_hash_error", map[string]any{"summary": "assistant plan could not be hashed"}), nil)
 	}
 
 	session.CurrentPlan = plan
@@ -230,115 +247,117 @@ func (o *AssistantOrchestrator) HandlePrompt(ctx context.Context, event *nostr.E
 	if len(plan.Steps) == 0 {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
-		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "completed", "completed", map[string]any{"summary": plan.Summary, "plan": plan})
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "completed", "completed", map[string]any{"summary": plan.Summary, "plan": plan}), nil)
 	}
 
 	session.State = domain.AssistantSessionStateAwaitingApproval
 	if err := o.publishSession(ctx, session); err != nil {
-		return err
+		return nil, err
 	}
-	return o.publishPromptResult(ctx, dTag, event, req.SessionID, "planned", "planned", map[string]any{"summary": plan.Summary, "plan_hash": planHash, "plan": plan})
+	return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "planned", "planned", map[string]any{"summary": plan.Summary, "plan_hash": planHash, "plan": plan}), nil)
 }
 
-// HandleApproval processes a kind:38421 approval/rejection/cancel request.
-func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr.Event) error {
+// HandleApprovalRequest processes a ContextVM assistant approval/rejection/cancel request.
+func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantApprovalRequest) (AssistantOperationResult, error) {
+	event := source.Event
 	if event == nil {
-		return fmt.Errorf("assistant approval event is nil")
+		return nil, fmt.Errorf("assistant approval event is nil")
 	}
-	sessionID := sessionFromEvent(event)
-	planHash := tagValue(event.Tags, "plan-hash")
-	decision := strings.ToLower(strings.TrimSpace(tagValue(event.Tags, "decision")))
-	var content struct {
-		Reason       string                `json:"reason,omitempty"`
-		ModifiedPlan *domain.AssistantPlan `json:"modified_plan,omitempty"`
+	if strings.TrimSpace(source.OperatorPubkey) == "" {
+		source.OperatorPubkey = event.PubKey
 	}
-	if strings.TrimSpace(event.Content) != "" {
-		if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
-			return o.PublishFailure(ctx, event, sessionID, "parse_error", fmt.Sprintf("invalid approval request JSON: %v", err))
-		}
+	if strings.TrimSpace(source.RequestID) == "" {
+		source.RequestID = event.ID
 	}
+	if strings.TrimSpace(source.DedupKey) == "" {
+		source.DedupKey = source.RequestID
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	planHash := strings.TrimSpace(req.PlanHash)
+	decision := strings.ToLower(strings.TrimSpace(req.Decision))
+	reason := firstNonEmptyString(strings.TrimSpace(req.Reason), strings.TrimSpace(req.Message))
 	if sessionID == "" || planHash == "" || decision == "" {
-		return o.PublishFailure(ctx, event, sessionID, "validation_error", "session, plan-hash, and decision tags are required")
+		return o.failureResult(sessionID, "validation_error", "session_id, plan_hash, and decision are required"), nil
 	}
 	if decision != "approve" && decision != "reject" && decision != "cancel" {
-		return o.PublishFailure(ctx, event, sessionID, "validation_error", "decision must be approve, reject, or cancel")
+		return o.failureResult(sessionID, "validation_error", "decision must be approve, reject, or cancel"), nil
 	}
 
 	lock := o.lockForSession(sessionID)
 	lock.Lock()
 
-	dTag := tagValue(event.Tags, "d")
-	if dTag != "" {
+	dedupKey := source.DedupKey
+	if dedupKey != "" {
 		o.mu.Lock()
-		_, duplicate := o.processedApprovals[dTag]
+		processed, duplicate := o.processedApprovals[dedupKey]
 		o.mu.Unlock()
 		if duplicate {
 			lock.Unlock()
-			return nil
+			return processed, nil
 		}
 	}
 
 	session := o.session(sessionID)
 	if session == nil {
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "unknown_session", map[string]any{"summary": "assistant session is not known"})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "unknown_session", map[string]any{"summary": "assistant session is not known"})
 	}
-	if !sessionHasParticipant(session, event.PubKey) {
+	if !sessionHasParticipant(session, source.OperatorPubkey) {
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "unauthorized_participant", map[string]any{"summary": "operator is not a participant in this assistant session"})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "unauthorized_participant", map[string]any{"summary": "operator is not a participant in this assistant session"})
 	}
 	if decision == "cancel" {
 		if session.State != domain.AssistantSessionStateExecuting && session.State != domain.AssistantSessionStateBlocked && session.State != domain.AssistantSessionStateAwaitingApproval {
 			lock.Unlock()
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "invalid_cancel", map[string]any{"summary": "cancel is only valid while executing, blocked, or awaiting approval"})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_cancel", map[string]any{"summary": "cancel is only valid while executing, blocked, or awaiting approval"})
 		}
 		o.cancelObserver(sessionID)
 		session.State = domain.AssistantSessionStateFailed
 		session.PendingSteps = nil
 		_ = o.publishSession(ctx, session)
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "cancelled", map[string]any{"summary": "assistant session cancelled by operator", "message": "operator cancel; no downstream rollback attempted", "reason": content.Reason, "plan_hash": planHash})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "cancelled", map[string]any{"summary": "assistant session cancelled by operator", "message": "operator cancel; no downstream rollback attempted", "reason": reason, "plan_hash": planHash})
 	}
-	if content.ModifiedPlan != nil && decision != "approve" {
+	if req.ModifiedPlan != nil && decision != "approve" {
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "validation_error", map[string]any{"summary": "modified_plan is only valid for approve decisions", "plan_hash": planHash})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "validation_error", map[string]any{"summary": "modified_plan is only valid for approve decisions", "plan_hash": planHash})
 	}
-	if content.ModifiedPlan != nil {
+	if req.ModifiedPlan != nil {
 		if session.CurrentPlan == nil || session.LastPlanHash == "" {
 			lock.Unlock()
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
 		}
-		if err := o.validatePlan(*content.ModifiedPlan); err != nil {
+		if err := o.validatePlan(*req.ModifiedPlan); err != nil {
 			lock.Unlock()
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "plan_validation_error", map[string]any{"summary": "modified assistant plan failed validation", "plan_hash": planHash, "error": err.Error()})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "plan_validation_error", map[string]any{"summary": "modified assistant plan failed validation", "plan_hash": planHash, "error": err.Error()})
 		}
-		modifiedHash := domain.ComputePlanHash(*content.ModifiedPlan, sessionID)
+		modifiedHash := domain.ComputePlanHash(*req.ModifiedPlan, sessionID)
 		if modifiedHash == "" {
 			lock.Unlock()
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "plan_hash_error", map[string]any{"summary": "modified assistant plan could not be hashed"})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "plan_hash_error", map[string]any{"summary": "modified assistant plan could not be hashed"})
 		}
 		if modifiedHash != planHash {
 			lock.Unlock()
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "plan_hash_mismatch", map[string]any{"summary": "modified plan hash does not match approval tag", "plan_hash": planHash, "computed_plan_hash": modifiedHash})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "plan_hash_mismatch", map[string]any{"summary": "modified plan hash does not match approval tag", "plan_hash": planHash, "computed_plan_hash": modifiedHash})
 		}
-		session.CurrentPlan = content.ModifiedPlan
+		session.CurrentPlan = req.ModifiedPlan
 		session.LastPlanHash = modifiedHash
-		session.PendingSteps = append([]domain.AssistantPlanStep(nil), content.ModifiedPlan.Steps...)
+		session.PendingSteps = append([]domain.AssistantPlanStep(nil), req.ModifiedPlan.Steps...)
 		_ = o.publishSession(ctx, session)
 	} else if session.LastPlanHash != planHash || session.CurrentPlan == nil {
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
 	}
 	if decision == "reject" {
 		session.State = domain.AssistantSessionStateIdle
 		session.PendingSteps = nil
 		_ = o.publishSession(ctx, session)
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "rejected", "rejected", map[string]any{"summary": "assistant plan rejected by operator", "reason": content.Reason, "plan_hash": planHash})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "rejected", "rejected", map[string]any{"summary": "assistant plan rejected by operator", "reason": reason, "plan_hash": planHash})
 	}
 	if session.State != domain.AssistantSessionStateAwaitingApproval && session.State != domain.AssistantSessionStateExecuting {
 		lock.Unlock()
-		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "invalid_state", map[string]any{"summary": "assistant session is not awaiting approval", "state": session.State})
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_state", map[string]any{"summary": "assistant session is not awaiting approval", "state": session.State})
 	}
 
 	o.mu.Lock()
@@ -346,13 +365,13 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 	o.mu.Unlock()
 	if alreadySubmitted {
 		lock.Unlock()
-		return o.markApprovalProcessed(dTag, nil, nil)
+		return o.markApprovalProcessed(dedupKey, nil, nil)
 	}
 	session.State = domain.AssistantSessionStateExecuting
 	_ = o.publishSession(ctx, session)
 	if err := o.publishStatus(ctx, event, sessionID, "executing", map[string]any{"message": "operator approved plan; submitting event-native commands", "plan_hash": planHash}); err != nil {
 		lock.Unlock()
-		return err
+		return nil, err
 	}
 
 	for i := range session.CurrentPlan.Steps {
@@ -364,7 +383,7 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 			args["idempotency_key"] = step.IdempotencyKey
 			if err := o.publishStatus(ctx, event, sessionID, "executing", map[string]any{"phase": "executing", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "message": step.Title}); err != nil {
 				lock.Unlock()
-				return err
+				return nil, err
 			}
 			var err error
 			receipt, err = o.toolInvoker.InvokeAssistantAsyncTool(ctx, step.ToolName, args)
@@ -372,7 +391,7 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 				session.State = domain.AssistantSessionStateFailed
 				_ = o.publishSession(ctx, session)
 				lock.Unlock()
-				return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "tool_dispatch_error", map[string]any{"summary": "failed to dispatch assistant plan step", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "error": err.Error()})
+				return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "tool_dispatch_error", map[string]any{"summary": "failed to dispatch assistant plan step", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "error": err.Error()})
 			}
 			o.storePendingReceipt(session, step, receipt)
 			_ = o.publishSession(ctx, session)
@@ -380,7 +399,7 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 		if receipt != nil {
 			if err := o.publishStatus(ctx, event, sessionID, "executing", map[string]any{"phase": "executing", "message": "downstream command submitted; awaiting event-native terminal result", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_request": receipt.RequestEventID, "receipt": receipt}); err != nil {
 				lock.Unlock()
-				return err
+				return nil, err
 			}
 		}
 		lock.Unlock()
@@ -388,7 +407,7 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 		lock.Lock()
 		if session.State == domain.AssistantSessionStateFailed {
 			lock.Unlock()
-			return o.markApprovalProcessed(dTag, nil, nil)
+			return o.markApprovalProcessed(dedupKey, nil, nil)
 		}
 		if err != nil || outcome.Status == "blocked" {
 			session.State = domain.AssistantSessionStateBlocked
@@ -398,13 +417,13 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 			if err != nil {
 				msg = err.Error()
 			}
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "blocked", "blocked", map[string]any{"summary": msg, "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "blocked", "blocked", map[string]any{"summary": msg, "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName})
 		}
 		if outcome.Status == "failed" {
 			session.State = domain.AssistantSessionStateFailed
 			_ = o.publishSession(ctx, session)
 			lock.Unlock()
-			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "downstream_failed", map[string]any{"summary": "downstream step failed", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
+			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "downstream_failed", map[string]any{"summary": "downstream step failed", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
 		}
 		o.clearPendingReceipt(session, step.IdempotencyKey)
 		if len(session.PendingSteps) > 0 {
@@ -419,7 +438,7 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 	session.PendingSteps = nil
 	_ = o.publishSession(ctx, session)
 	lock.Unlock()
-	return o.publishApprovalResult(ctx, dTag, event, sessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed", "plan_hash": planHash})
+	return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed", "plan_hash": planHash})
 }
 
 type downstreamOutcome struct {
@@ -559,13 +578,12 @@ func (o *AssistantOrchestrator) clearPendingReceipt(session *domain.AssistantSes
 	}
 }
 
-// PublishFailure publishes an immediate assistant failure result for rejected/malformed requests.
+// PublishFailure publishes a canonical failure status for rejected/malformed requests.
 func (o *AssistantOrchestrator) PublishFailure(ctx context.Context, event *nostr.Event, sessionID, step, message string) error {
 	if sessionID == "" && event != nil {
 		sessionID = sessionFromEvent(event)
 	}
-	_, err := o.publishResult(ctx, event, sessionID, "failed", step, map[string]any{"summary": message, "error": message})
-	return err
+	return o.publishStatus(ctx, event, sessionID, "failed", map[string]any{"step": step, "summary": message, "error": message})
 }
 
 func (o *AssistantOrchestrator) lockForSession(sessionID string) *sync.Mutex {
@@ -736,7 +754,10 @@ func (o *AssistantOrchestrator) publishSession(ctx context.Context, session *dom
 		return fmt.Errorf("marshal assistant session: %w", err)
 	}
 	tags := nostr.Tags{
-		{"d", session.SessionID},
+		{"d", domain.AssistantSessionSchema + ":" + session.SessionID},
+		{"schema", domain.AssistantSessionSchema},
+		{"domain", "assistant"},
+		{"entity", "session"},
 		{"session", session.SessionID},
 	}
 	for _, participant := range session.Participants {
@@ -746,7 +767,7 @@ func (o *AssistantOrchestrator) publishSession(ctx context.Context, session *dom
 		nostr.Tag{"agent", o.identity.AgentID},
 		nostr.Tag{"status", string(session.State)},
 	)
-	ev := &nostr.Event{Kind: domain.KindAssistantSession, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	ev := &nostr.Event{Kind: domain.KindAssistantSessionState, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	return o.signAndPublish(ctx, ev)
 }
 
@@ -759,11 +780,15 @@ func (o *AssistantOrchestrator) publishStatus(ctx context.Context, requestEvent 
 	if err != nil {
 		return fmt.Errorf("marshal assistant status: %w", err)
 	}
-	tags := o.replyTags(requestEvent, sessionID, status)
+	dTag := fmt.Sprintf("%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, time.Now().UnixNano())
+	if requestEvent != nil && requestEvent.ID != "" {
+		dTag = fmt.Sprintf("%s:%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, requestEvent.ID, time.Now().UnixNano())
+	}
+	tags := append(nostr.Tags{{"d", dTag}, {"schema", domain.AssistantStatusSchema}}, o.replyTags(requestEvent, sessionID, status)...)
 	if planHash := stringFromMap(content, "plan_hash"); planHash != "" {
 		tags = append(tags, nostr.Tag{"plan-hash", planHash})
 	}
-	if stepID := stringFromMap(content, "step_id"); stepID != "" {
+	if stepID := firstNonEmptyString(stringFromMap(content, "step_id"), stringFromMap(content, "step")); stepID != "" {
 		tags = append(tags, nostr.Tag{"step", stepID})
 	}
 	if downstream := stringFromMap(content, "downstream_request"); downstream != "" {
@@ -776,30 +801,25 @@ func (o *AssistantOrchestrator) publishStatus(ctx context.Context, requestEvent 
 	return o.signAndPublish(ctx, ev)
 }
 
-func (o *AssistantOrchestrator) publishResult(ctx context.Context, requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) (*nostr.Event, error) {
-	if content == nil {
-		content = map[string]any{}
+func (o *AssistantOrchestrator) resultPayload(requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) AssistantOperationResult {
+	payload := AssistantOperationResult{}
+	for k, v := range content {
+		payload[k] = v
 	}
-	content["status"] = status
+	payload["session_id"] = sessionID
+	payload["status"] = status
+	payload["agent"] = o.identity.AgentID
 	if step != "" {
-		content["step"] = step
+		payload["step"] = step
 	}
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return nil, fmt.Errorf("marshal assistant result: %w", err)
+	if requestEvent != nil {
+		payload["request_event_id"] = requestEvent.ID
 	}
-	tags := o.replyTags(requestEvent, sessionID, status)
-	if step != "" {
-		tags = append(tags, nostr.Tag{"step", step})
-	}
-	if planHash := stringFromMap(content, "plan_hash"); planHash != "" {
-		tags = append(tags, nostr.Tag{"plan-hash", planHash})
-	}
-	ev := &nostr.Event{Kind: domain.KindAssistantResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	if err := o.signAndPublish(ctx, ev); err != nil {
-		return ev, err
-	}
-	return ev, nil
+	return payload
+}
+
+func (o *AssistantOrchestrator) failureResult(sessionID, step, message string) AssistantOperationResult {
+	return o.resultPayload(nil, sessionID, "failed", step, map[string]any{"summary": message, "error": message})
 }
 
 func (o *AssistantOrchestrator) replyTags(requestEvent *nostr.Event, sessionID, status string) nostr.Tags {
@@ -827,40 +847,30 @@ func (o *AssistantOrchestrator) signAndPublish(ctx context.Context, ev *nostr.Ev
 	return nil
 }
 
-func (o *AssistantOrchestrator) republish(ctx context.Context, ev *nostr.Event) error {
-	if ev == nil || o.publisher == nil {
-		return nil
-	}
-	_, err := o.publisher.Publish(ctx, *ev)
-	return err
-}
-
-func (o *AssistantOrchestrator) publishPromptResult(ctx context.Context, dTag string, requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) error {
-	ev, err := o.publishResult(ctx, requestEvent, sessionID, status, step, content)
-	return o.storePromptResult(ctx, dTag, ev, err)
-}
-
-func (o *AssistantOrchestrator) storePromptResult(ctx context.Context, dTag string, ev *nostr.Event, err error) error {
-	if err == nil && dTag != "" && ev != nil {
+func (o *AssistantOrchestrator) storePromptResult(_ context.Context, dedupKey string, result AssistantOperationResult, err error) (AssistantOperationResult, error) {
+	if err == nil && dedupKey != "" && result != nil {
 		o.mu.Lock()
-		o.processedTurns[dTag] = ev
+		o.processedTurns[dedupKey] = result
 		o.mu.Unlock()
 	}
-	return err
+	return result, err
 }
 
-func (o *AssistantOrchestrator) publishApprovalResult(ctx context.Context, dTag string, requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) error {
-	ev, err := o.publishResult(ctx, requestEvent, sessionID, status, step, content)
-	return o.markApprovalProcessed(dTag, ev, err)
+func (o *AssistantOrchestrator) publishApprovalResult(ctx context.Context, dedupKey string, requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) (AssistantOperationResult, error) {
+	result := o.resultPayload(requestEvent, sessionID, status, step, content)
+	if err := o.publishStatus(ctx, requestEvent, sessionID, status, content); err != nil {
+		return result, err
+	}
+	return o.markApprovalProcessed(dedupKey, result, nil)
 }
 
-func (o *AssistantOrchestrator) markApprovalProcessed(dTag string, _ *nostr.Event, err error) error {
-	if err == nil && dTag != "" {
+func (o *AssistantOrchestrator) markApprovalProcessed(dedupKey string, result AssistantOperationResult, err error) (AssistantOperationResult, error) {
+	if err == nil && dedupKey != "" && result != nil {
 		o.mu.Lock()
-		o.processedApprovals[dTag] = struct{}{}
+		o.processedApprovals[dedupKey] = result
 		o.mu.Unlock()
 	}
-	return err
+	return result, err
 }
 
 func (o *AssistantOrchestrator) systemPrompt() string {

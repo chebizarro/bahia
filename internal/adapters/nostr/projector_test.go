@@ -13,6 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -1042,28 +1043,96 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	if !foundCapability {
 		t.Fatalf("dns_endpoint_catalog capability missing: %#v", capabilities)
 	}
-	readModels, ok := controlPlane["read_model_kinds"].(map[string]any)
+	assertNoDiscoveryKeys(t, controlPlane, "request_kinds", "status_kinds", "result_kinds", "read_model_kinds", "legacy_read_model_kinds")
+	assertDiscoveryKindMap(t, controlPlane, "transport_kinds", map[string]int{
+		"contextvm_message":        kinds.ContextVMMessage,
+		"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
+		"contextvm_ephemeral_wrap": kinds.ContextVMEphemeralGiftWrap,
+	})
+	assertDiscoveryKindMap(t, controlPlane, "observable_kinds", map[string]int{
+		"control_state": KindCASControlState,
+		"status":        KindNIP38Status,
+		"audit":         KindCASAudit,
+	})
+	assertDiscoveryKindMap(t, controlPlane, "announcement_kinds", map[string]int{
+		"server":             kinds.ContextVMServerAnnouncement,
+		"tools":              kinds.ContextVMToolsList,
+		"resources":          kinds.ContextVMResourcesList,
+		"resource_templates": kinds.ContextVMResourceTemplatesList,
+		"prompts":            kinds.ContextVMPromptsList,
+	})
+	assertDiscoveryKindMap(t, controlPlane, "relay_kinds", map[string]int{
+		"relay_set": kinds.RelaySetDiscovery,
+		"nip65":     kinds.NIP65RelayList,
+	})
+	methods, ok := controlPlane["methods"].([]any)
 	if !ok {
-		t.Fatalf("control_plane.read_model_kinds missing: %#v", controlPlane["read_model_kinds"])
+		t.Fatalf("control_plane.methods missing: %#v", controlPlane["methods"])
 	}
-	if got := readModels["dns_zone_state"]; got != float64(KindDNSZoneState) {
-		t.Fatalf("dns_zone_state kind = %#v, want %d", got, KindDNSZoneState)
+	for _, method := range []string{"service/deploy", "service/rollback", "worker/cordon", "dns/zone-create", "ml/recipe-run", "ml/inference-deploy"} {
+		assertDiscoveryStringContains(t, methods, method)
 	}
-	if got := readModels["dns_endpoint_state"]; got != float64(KindDNSEndpointState) {
-		t.Fatalf("dns_endpoint_state kind = %#v, want %d", got, KindDNSEndpointState)
+	assertDiscoveryContainsNoLegacyKinds(t, payload)
+}
+
+func assertNoDiscoveryKeys(t *testing.T, value map[string]any, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		if got, ok := value[key]; ok {
+			t.Fatalf("discovery should not advertise %s, got %#v", key, got)
+		}
 	}
-	if got := readModels["dns_policy_state"]; got != float64(KindDNSPolicyState) {
-		t.Fatalf("dns_policy_state kind = %#v, want %d", got, KindDNSPolicyState)
+}
+
+func assertDiscoveryKindMap(t *testing.T, parent map[string]any, key string, want map[string]int) {
+	t.Helper()
+	got, ok := parent[key].(map[string]any)
+	if !ok {
+		t.Fatalf("control_plane.%s missing: %#v", key, parent[key])
 	}
-	if got := readModels["dns_backend_state"]; got != float64(KindDNSBackendState) {
-		t.Fatalf("dns_backend_state kind = %#v, want %d", got, KindDNSBackendState)
+	for name, wantKind := range want {
+		if got[name] != float64(wantKind) {
+			t.Fatalf("control_plane.%s.%s = %#v, want %d", key, name, got[name], wantKind)
+		}
 	}
-	if got := readModels["worker_state"]; got != float64(KindWorkerState) {
-		t.Fatalf("worker_state kind = %#v, want %d", got, KindWorkerState)
+}
+
+func assertDiscoveryStringContains(t *testing.T, values []any, want string) {
+	t.Helper()
+	for _, value := range values {
+		if value == want {
+			return
+		}
 	}
-	if legacyReadModels, ok := controlPlane["legacy_read_model_kinds"]; ok {
-		t.Fatalf("control_plane should not advertise legacy_read_model_kinds, got %#v", legacyReadModels)
+	t.Fatalf("discovery string list missing %q: %#v", want, values)
+}
+
+func assertDiscoveryContainsNoLegacyKinds(t *testing.T, value any) {
+	t.Helper()
+	assertDiscoveryContainsNoLegacyKindsAt(t, "payload", value)
+}
+
+func assertDiscoveryContainsNoLegacyKindsAt(t *testing.T, path string, value any) {
+	t.Helper()
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			assertDiscoveryContainsNoLegacyKindsAt(t, path+"."+key, child)
+		}
+	case []any:
+		for i, child := range v {
+			assertDiscoveryContainsNoLegacyKindsAt(t, path+"["+strconv.Itoa(i)+"]", child)
+		}
+	case float64:
+		kind := int(v)
+		if float64(kind) == v && isLegacyDiscoveryKind(kind) {
+			t.Fatalf("discovery payload advertises legacy kind at %s: %d", path, kind)
+		}
 	}
+}
+
+func isLegacyDiscoveryKind(kind int) bool {
+	return (kind >= 5960 && kind < 7000) || (kind >= 7960 && kind < 8000) || (kind >= 31900 && kind < 32000)
 }
 
 func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind int) gonostr.Event {

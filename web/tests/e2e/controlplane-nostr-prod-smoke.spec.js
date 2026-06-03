@@ -33,21 +33,21 @@ const relaySystemInfo = {
 const nostrEvents = [
   nostrEvent({
     id: 'svc-1-event',
-    kind: 31962,
-    tags: [['d', 'svc-1'], ['deleted', 'false'], ['name', 'web-app']],
-    content: { id: 'svc-1', name: 'web-app', runtime_type: 'docker', deleted: false }
+    kind: 30900,
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['d', 'svc-1'], ['deleted', 'false'], ['name', 'web-app']],
+    content: { schema: 'bahia.registry.service.v1', id: 'svc-1', name: 'web-app', runtime_type: 'docker', deleted: false }
   }),
   nostrEvent({
     id: 'env-1-event',
-    kind: 31963,
-    tags: [['d', 'env-1'], ['deleted', 'false'], ['name', 'production']],
-    content: { id: 'env-1', name: 'production', protected: true, deleted: false }
+    kind: 30900,
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.environment.v1'], ['d', 'env-1'], ['deleted', 'false'], ['name', 'production']],
+    content: { schema: 'bahia.registry.environment.v1', id: 'env-1', name: 'production', protected: true, deleted: false }
   }),
   nostrEvent({
     id: 'state-1-event',
-    kind: 31961,
-    tags: [['d', 'svc-1:env-1'], ['service', 'svc-1'], ['environment', 'env-1'], ['deleted', 'false']],
-    content: { service_id: 'svc-1', environment_id: 'env-1', drift_status: 'drifted', deleted: false }
+    kind: 30900,
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.state.service.v1'], ['d', 'svc-1:env-1'], ['service', 'svc-1'], ['environment', 'env-1'], ['deleted', 'false']],
+    content: { schema: 'bahia.state.service.v1', service_id: 'svc-1', environment_id: 'env-1', drift_status: 'drifted', deleted: false }
   }),
   nostrEvent({
     id: 'worker-1-event',

@@ -34,7 +34,7 @@ function nostrEvent({ id, kind, pubkey = trustedPubkey, created_at = 100, tags =
 function systemDiscovery(overrides = {}) {
   return nostrEvent({
     id: overrides.id || 'discovery-1',
-    kind: 31974,
+    kind: 11316,
     pubkey: overrides.pubkey || trustedPubkey,
     created_at: overrides.created_at || 100,
     tags: [['d', 'bahia-system-v1']],
@@ -87,7 +87,7 @@ describe('Nostr system discovery store', () => {
 
     expect(poolClientMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(poolClientMock.queryUntilEose).toHaveBeenCalledWith([
-      { kinds: [31974, 30002], authors: [trustedPubkey] }
+      { kinds: [11316, 30002], authors: [trustedPubkey] }
     ]);
     expect(poolClientMock.disconnect).toHaveBeenCalledTimes(1);
     expect(info.features.relay_read_models).toBe(true);

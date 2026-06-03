@@ -140,9 +140,10 @@ func TestHandleLLMRouteCreatePublishesCorrelatedResult(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindLLMRouteCreateResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindLLMRouteCreateResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "e", request.ID)
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
@@ -185,9 +186,10 @@ func TestHandleLLMReleaseRegisterPublishesCorrelatedResult(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindLLMReleaseRegisterResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindLLMReleaseRegisterResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "e", request.ID)
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
@@ -248,9 +250,10 @@ func TestHandleLLMDeployRequestPublishesAcceptedStatus(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	status := capture.events[0]
-	if status.Kind != KindLLMDeploymentStatus {
-		t.Fatalf("status kind = %d, want %d", status.Kind, KindLLMDeploymentStatus)
+	if status.Kind != KindNIP38Status {
+		t.Fatalf("status kind = %d, want %d", status.Kind, KindNIP38Status)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, status.Tags, "e", request.ID)
 	assertReactorTag(t, status.Tags, "p", requestPubkey)
 	assertReactorTag(t, status.Tags, "status", "processing")
@@ -318,9 +321,10 @@ func TestHandleLLMRollbackRequestPublishesAcceptedStatus(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	status := capture.events[0]
-	if status.Kind != KindLLMDeploymentStatus {
-		t.Fatalf("status kind = %d, want %d", status.Kind, KindLLMDeploymentStatus)
+	if status.Kind != KindNIP38Status {
+		t.Fatalf("status kind = %d, want %d", status.Kind, KindNIP38Status)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, status.Tags, "e", request.ID)
 	assertReactorTag(t, status.Tags, "p", requestPubkey)
 	assertReactorTag(t, status.Tags, "status", "processing")
@@ -375,9 +379,10 @@ func TestHandleLLMDeploymentApprovalApprovesPendingIntent(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindLLMDeploymentResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindLLMDeploymentResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "e", request.ID)
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
@@ -444,9 +449,10 @@ func TestHandleLLMDeploymentApprovalRejectsPendingIntentAndRepairsState(t *testi
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindLLMDeploymentResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindLLMDeploymentResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "e", request.ID)
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
@@ -498,9 +504,10 @@ func TestHandleLLMDeploymentApprovalRejectsInvalidDecision(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindLLMDeploymentResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindLLMDeploymentResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "e", request.ID)
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "error")
@@ -508,9 +515,12 @@ func TestHandleLLMDeploymentApprovalRejectsInvalidDecision(t *testing.T) {
 	assertReactorTag(t, result.Tags, "intent", intent.ID.String())
 	assertSignedEvent(t, result)
 
-	payload := decodeLLMJSONMap(t, result.Content)
-	if payload["status"] != "error" || payload["step"] != "validation_error" {
-		t.Fatalf("unexpected invalid-decision payload: %#v", payload)
+	var response ContextVMJSONRPCResponse
+	if err := json.Unmarshal([]byte(result.Content), &response); err != nil {
+		t.Fatalf("decode invalid-decision ContextVM response: %v", err)
+	}
+	if response.Error == nil || response.Error.Message == "" {
+		t.Fatalf("unexpected invalid-decision response: %#v", response)
 	}
 }
 
@@ -537,6 +547,9 @@ func decodeLLMJSONMap(t *testing.T, content string) map[string]any {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(content), &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
+	}
+	if result, ok := payload["result"].(map[string]any); ok {
+		return result
 	}
 	return payload
 }

@@ -826,6 +826,7 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
+		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
 	}
@@ -2231,7 +2232,7 @@ func loadAssistantSessions(ctx context.Context, repo repository.NostrEventReposi
 	if repo == nil {
 		return nil
 	}
-	records, err := repo.ListByKind(ctx, domain.KindAssistantSession, 500)
+	records, err := repo.ListByKind(ctx, domain.KindAssistantSessionState, 500)
 	if err != nil {
 		logger.Warn("failed to load assistant session read models", zap.Error(err))
 		return nil

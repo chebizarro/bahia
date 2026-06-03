@@ -247,6 +247,24 @@
     }
   }
 
+  const SERVICE_DETAIL_WAIT_MS = 5000;
+  const SERVICE_DETAIL_POLL_MS = 50;
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForServiceProjection(id, sequence) {
+    const deadline = Date.now() + SERVICE_DETAIL_WAIT_MS;
+    while (sequence === loadSequence && id === serviceId) {
+      const match = untrack(() => serviceStore.find((candidate) => candidate.id === id) || null);
+      if (match) return match;
+      if (Date.now() >= deadline) return null;
+      await sleep(SERVICE_DETAIL_POLL_MS);
+    }
+    return null;
+  }
+
   async function loadServiceDetail(id) {
     const sequence = ++loadSequence;
     loading = true;
@@ -265,7 +283,8 @@
       await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
       if (sequence !== loadSequence || id !== serviceId) return;
 
-      service = serviceStore.find((candidate) => candidate.id === id) || null;
+      service = await waitForServiceProjection(id, sequence);
+      if (sequence !== loadSequence || id !== serviceId) return;
       if (!service) {
         throw new Error('Service not found');
       }

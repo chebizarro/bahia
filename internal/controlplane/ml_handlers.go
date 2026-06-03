@@ -405,7 +405,7 @@ func mlNostrMetadata(event *nostr.Event, extra map[string]any) map[string]any {
 	return metadata
 }
 
-func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event, kind int, status, code, message string, endpoint *domain.MLInferenceEndpoint, version *domain.MLModelVersion, extraTags ...nostr.Tag) error {
+func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event, _ int, status, code, message string, endpoint *domain.MLInferenceEndpoint, version *domain.MLModelVersion, extraTags ...nostr.Tag) error {
 	endpointCoord := mlRequestString(requestEvent, "endpoint")
 	modelVersionCoord := mlRequestString(requestEvent, "model_version")
 	environmentCoord := firstNonEmpty(tagValueNostr(requestEvent.Tags, "environment"), mlEnvironmentFromEndpointCoord(endpointCoord))
@@ -414,8 +414,10 @@ func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event
 		"status":           status,
 		"message":          message,
 	}
+	var rpcErr *JSONRPCError
 	if status == "failed" || status == "rejected" {
 		content["error"] = map[string]any{"code": code, "message": message}
+		rpcErr = &JSONRPCError{Code: -32000, Message: message}
 	}
 	if endpoint != nil {
 		content["endpoint_id"] = endpoint.ID.String()
@@ -437,11 +439,8 @@ func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event
 	if modelVersionCoord != "" {
 		content["model_version"] = modelVersionCoord
 	}
-	body, _ := json.Marshal(content)
 	tags := nostr.Tags{
 		{"d", "result:" + requestEvent.ID},
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", status},
 	}
 	if endpointCoord != "" {
@@ -467,12 +466,7 @@ func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event
 	if code != "" {
 		tags = append(tags, nostr.Tag{"result", code})
 	}
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign ML result: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, content, tags, rpcErr)
 }
 
 func appendMLRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {

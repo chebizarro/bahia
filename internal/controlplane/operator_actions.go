@@ -351,36 +351,28 @@ func adoptionImportStatus(results []service.AdoptionImportResult) string {
 
 func (r *Reactor) publishActionStatus(ctx context.Context, requestEvent *nostr.Event, action, step, message string) error {
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "processing"},
 		{"action", action},
 		{"step", step},
+		{"category", "runtime_action"},
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	event := &nostr.Event{Kind: KindActionStatus, CreatedAt: nostr.Now(), Tags: tags, Content: message}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign action status: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
+		"status":  "processing",
+		"action":  action,
+		"step":    step,
+		"message": message,
+	})
 }
 
 func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *nostr.Event, action string, serviceID, environmentID uuid.UUID, obs *domain.RuntimeObservation) error {
 	payload := dto.RuntimeActionResponseFromDomain(action, serviceID, environmentID, obs)
-	content, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal runtime action result: %w", err)
-	}
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "success"},
 		{"action", action},
 		{"service", serviceID.String()},
 		{"environment", environmentID.String()},
 	}
-	// Observation metadata (additive — old decoders ignore unknown tags).
 	if obs != nil {
 		tags = append(tags, nostr.Tag{"observation_id", obs.ID.String()})
 		if obs.NormalizedHash != "" {
@@ -388,60 +380,36 @@ func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *
 		}
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	event := &nostr.Event{Kind: KindActionResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign runtime action result: %w", err)
-	}
-	_, err = r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 func (r *Reactor) publishAdoptionStatus(ctx context.Context, requestEvent *nostr.Event, operation string, targets []service.AdoptionTarget, message string) error {
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "processing"},
 		{"operation", operation},
+		{"category", "adoption"},
 	}
 	tags = appendAdoptionTargetTags(tags, targets)
-	event := &nostr.Event{Kind: KindAdoptionStatus, CreatedAt: nostr.Now(), Tags: tags, Content: message}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign adoption status: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
+		"status":    "processing",
+		"operation": operation,
+		"message":   message,
+	})
 }
 
 func (r *Reactor) publishAdoptionScanResult(ctx context.Context, requestEvent *nostr.Event, status string, previews []service.AdoptionPreview) error {
 	payload := dto.AdoptionPreviewResponsesFromService(previews)
-	content, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal adoption scan result: %w", err)
-	}
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", status},
 		{"operation", "scan"},
 	}
 	tags = appendAdoptionTargetTags(tags, adoptionTargetsFromPreviews(previews))
-	event := &nostr.Event{Kind: KindAdoptionScanResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign adoption scan result: %w", err)
-	}
-	_, err = r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 func (r *Reactor) publishAdoptionImportResult(ctx context.Context, requestEvent *nostr.Event, status string, results []service.AdoptionImportResult) error {
 	payload := dto.AdoptionImportResultResponsesFromService(results)
-	content, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal adoption import result: %w", err)
-	}
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", status},
 		{"operation", "import"},
 	}
@@ -450,34 +418,17 @@ func (r *Reactor) publishAdoptionImportResult(ctx context.Context, requestEvent 
 			tags = append(tags, nostr.Tag{"target", result.TargetName})
 		}
 	}
-	event := &nostr.Event{Kind: KindAdoptionImportResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign adoption import result: %w", err)
-	}
-	_, err = r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
-func (r *Reactor) publishAdoptionError(ctx context.Context, requestEvent *nostr.Event, kind int, operation, step, message string) error {
-	content, _ := json.Marshal(map[string]any{"status": "failed", "operation": operation, "step": step, "error": message})
-	event := &nostr.Event{
-		Kind:      kind,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "failed"},
-			{"operation", operation},
-			{"step", step},
-			{"error", message},
-		},
-		Content: string(content),
+func (r *Reactor) publishAdoptionError(ctx context.Context, requestEvent *nostr.Event, _ int, operation, step, message string) error {
+	tags := nostr.Tags{
+		{"status", "failed"},
+		{"operation", operation},
+		{"step", step},
+		{"error", message},
 	}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign adoption error: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, nil, tags, &JSONRPCError{Code: -32000, Message: message})
 }
 
 func appendAdoptionTargetTags(tags nostr.Tags, targets []service.AdoptionTarget) nostr.Tags {

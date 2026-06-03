@@ -1,11 +1,5 @@
 import { stableJsonValue, parseJsonContent } from './content.js';
-import {
-  ASSISTANT_APPROVAL,
-  ASSISTANT_PROMPT_REQUEST,
-  ASSISTANT_RESULT,
-  ASSISTANT_SESSION,
-  ASSISTANT_STATUS
-} from './kinds.gen.js';
+import { CAS_CONTROL_STATE, CONTEXTVM_MESSAGE, NIP38_STATUS } from './kinds.gen.js';
 import { getDTag, getTagValue } from './tags.js';
 import { sha256Hex } from './validation.js';
 
@@ -46,15 +40,16 @@ export async function computeAssistantPlanHash(plan, sessionId) {
   return sha256Hex(payload);
 }
 
+export const ASSISTANT_SESSION_SCHEMA = 'bahia.assistant-session.v1';
+export const ASSISTANT_STATUS_SCHEMA = 'bahia.assistant-status.v1';
+
 export const ASSISTANT_KINDS = {
-  SESSION: ASSISTANT_SESSION,
-  PROMPT_REQUEST: ASSISTANT_PROMPT_REQUEST,
-  APPROVAL: ASSISTANT_APPROVAL,
-  STATUS: ASSISTANT_STATUS,
-  RESULT: ASSISTANT_RESULT
+  SESSION: CAS_CONTROL_STATE,
+  STATUS: NIP38_STATUS,
+  CONTEXTVM_RESULT: CONTEXTVM_MESSAGE
 };
 
-export const ASSISTANT_EVENT_KINDS = Object.values(ASSISTANT_KINDS);
+export const ASSISTANT_EVENT_KINDS = [ASSISTANT_KINDS.SESSION, ASSISTANT_KINDS.STATUS];
 
 export const ASSISTANT_SESSION_STATES = {
   IDLE: 'idle',
@@ -99,6 +94,7 @@ function getTaggedPubkeyRefs(event, role = '') {
 
 export function parseAssistantSessionEvent(event) {
   if (!event || event.kind !== ASSISTANT_KINDS.SESSION) return null;
+  if (getTagValue(event, 'schema', '') !== ASSISTANT_SESSION_SCHEMA) return null;
   const content = parseJsonContent(event, {});
   const sessionId = getTagValue(event, 'session', content.session_id || getDTag(event));
   const state = getTagValue(event, 'status', content.state || ASSISTANT_SESSION_STATES.IDLE);
@@ -135,6 +131,7 @@ export function parseAssistantSessionEvent(event) {
 
 export function parseAssistantStatusEvent(event) {
   if (!event || event.kind !== ASSISTANT_KINDS.STATUS) return null;
+  if (getTagValue(event, 'schema', '') !== ASSISTANT_STATUS_SCHEMA) return null;
   const content = parseJsonContent(event, {});
   const status = getTagValue(event, 'status', content.status || '');
 
@@ -159,7 +156,7 @@ export function parseAssistantStatusEvent(event) {
 }
 
 export function parseAssistantResultEvent(event) {
-  if (!event || event.kind !== ASSISTANT_KINDS.RESULT) return null;
+  if (!event || event.kind !== ASSISTANT_KINDS.CONTEXTVM_RESULT) return null;
   const content = parseJsonContent(event, {});
   const status = getTagValue(event, 'status', content.status || '');
 

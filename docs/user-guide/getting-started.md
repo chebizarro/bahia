@@ -153,7 +153,7 @@ Create a **deployment intent** to request a deployment:
 3. Select the environment and artifact
 4. Click **Create Intent**
 
-**Via Nostr:** publish a signed `DeployRequest` event, or use a UI flow backed by the Nostr control plane. The legacy REST-backed deploy command path is deprecated until the CLI publishes signed Nostr events directly.
+**Via Nostr:** publish a ContextVM `service/deploy` request as kind `25910` (or encrypted `1059`/`21059`) and follow canonical `30315`, `4903`, and `30900` observables. Legacy `DeployRequest` custom kinds are startup migration inputs only.
 
 ### Step 6: Monitor the Deployment
 
@@ -162,9 +162,9 @@ Create a **deployment intent** to request a deployment:
 - Check logs in the deployment run detail view
 
 **Via Nostr:**
-- Subscribe to `6961` (DeploymentStatus) for progress
-- Subscribe to `7961` (DeploymentResult) for completion
-- Subscribe to `31961` (ServiceState) for current state
+- Subscribe to `30315` (NIP-38 operational status) for progress
+- Subscribe to `4903` for audit/provenance facts
+- Subscribe to `30900` for current service/deployment state
 
 ## Understanding the Flow
 
@@ -175,7 +175,7 @@ Create a **deployment intent** to request a deployment:
 4. Policy evaluation (optional approval)
 5. Deployment run executes on worker
 6. Runtime observation confirms state
-7. Read models updated on Nostr
+7. Canonical observables updated on Nostr (`30900`, `30315`, `4903`)
 ```
 
 ## Next Steps

@@ -53,7 +53,7 @@ test.describe('Service detail signer-first public actions', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       service: window.__BAHIA_E2E_PUBLIC_STATE.services.find((item) => item.id === 'svc-existing-1')
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5981]),
+      requestKinds: expect.arrayContaining([25910]),
       service: expect.objectContaining({ name: 'existing-service-renamed' })
     });
 
@@ -68,7 +68,7 @@ test.describe('Service detail signer-first public actions', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       intents: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5962]),
+      requestKinds: expect.arrayContaining([25910]),
       intents: expect.arrayContaining([
         expect.objectContaining({
           service_id: 'svc-existing-1',
@@ -94,7 +94,7 @@ test.describe('Service detail signer-first public actions', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       service: window.__BAHIA_E2E_PUBLIC_STATE.services.find((item) => item.id === 'svc-existing-1')
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5982]),
+      requestKinds: expect.arrayContaining([25910]),
       service: expect.objectContaining({ deleted: true })
     });
 

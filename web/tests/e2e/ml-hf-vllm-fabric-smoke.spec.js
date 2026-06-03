@@ -42,7 +42,7 @@ const relaySystemInfo = {
 
 const nostrEvents = [
   nostrEvent({
-    kind: 31974,
+    kind: 11316,
     tags: [['d', 'bahia-system-v1']],
     content: { ...relaySystemInfo, schema: 'bahia.system-discovery.v1' }
   }),

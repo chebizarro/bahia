@@ -142,9 +142,10 @@ func TestHandleServiceActionRoutesDirectRuntimeDeploy(t *testing.T) {
 		t.Fatalf("published events = %d, want status and result", len(capture.events))
 	}
 	statusEvent, resultEvent := capture.events[0], capture.events[1]
-	if statusEvent.Kind != KindActionStatus || resultEvent.Kind != KindActionResult {
+	if statusEvent.Kind != KindNIP38Status || resultEvent.Kind != KindContextVMMessage {
 		t.Fatalf("unexpected event kinds: status=%d result=%d", statusEvent.Kind, resultEvent.Kind)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, statusEvent.Tags, "status", "processing")
 	assertReactorTag(t, statusEvent.Tags, "step", "executing")
 	assertReactorTag(t, statusEvent.Tags, "action", "deploy")
@@ -157,9 +158,7 @@ func TestHandleServiceActionRoutesDirectRuntimeDeploy(t *testing.T) {
 	assertSignedEvent(t, resultEvent)
 
 	var payload dto.RuntimeActionResponse
-	if err := json.Unmarshal([]byte(resultEvent.Content), &payload); err != nil {
-		t.Fatalf("decode runtime action result: %v", err)
-	}
+	decodeContextVMResult(t, resultEvent, &payload)
 	if payload.Action != "deploy" || payload.ServiceID != serviceID || payload.EnvironmentID != envID || payload.Observation == nil || payload.Observation.ID != obsID {
 		t.Fatalf("unexpected runtime action payload: %#v", payload)
 	}
@@ -181,9 +180,10 @@ func TestHandleServiceActionDirectRuntimeScopedAuth(t *testing.T) {
 		t.Fatalf("published events = %d, want failure result", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindActionResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindActionResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "status", "failed")
 	assertReactorTag(t, result.Tags, "action", "restart")
 	assertReactorTag(t, result.Tags, "service", serviceID.String())
@@ -314,9 +314,10 @@ func TestHandleServiceActionRoutesSuccessfulRestartAndStop(t *testing.T) {
 				t.Fatalf("published events = %d, want status and result", len(capture.events))
 			}
 			statusEvent, resultEvent := capture.events[0], capture.events[1]
-			if statusEvent.Kind != KindActionStatus || resultEvent.Kind != KindActionResult {
+			if statusEvent.Kind != KindNIP38Status || resultEvent.Kind != KindContextVMMessage {
 				t.Fatalf("unexpected event kinds: status=%d result=%d", statusEvent.Kind, resultEvent.Kind)
 			}
+			assertNoLegacyStatusResultEvents(t, capture.events)
 			assertReactorTag(t, statusEvent.Tags, "status", "processing")
 			assertReactorTag(t, statusEvent.Tags, "action", tc.action)
 			assertReactorTag(t, resultEvent.Tags, "status", "success")
@@ -325,9 +326,7 @@ func TestHandleServiceActionRoutesSuccessfulRestartAndStop(t *testing.T) {
 			assertSignedEvent(t, resultEvent)
 
 			var payload dto.RuntimeActionResponse
-			if err := json.Unmarshal([]byte(resultEvent.Content), &payload); err != nil {
-				t.Fatalf("decode runtime action result: %v", err)
-			}
+			decodeContextVMResult(t, resultEvent, &payload)
 			if payload.Action != tc.action || payload.ServiceID != serviceID || payload.EnvironmentID != envID || payload.Observation == nil || payload.Observation.HealthStatus != string(tc.status) {
 				t.Fatalf("unexpected runtime action payload: %#v", payload)
 			}
@@ -363,9 +362,10 @@ func TestHandleAdoptionScanRequestRejectsUnauthorized(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindAdoptionScanResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindAdoptionScanResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "status", "failed")
 	assertReactorTag(t, result.Tags, "step", "unauthorized")
 	assertSignedEvent(t, result)
@@ -407,9 +407,10 @@ func TestHandleAdoptionImportRequestRejectsUnauthorized(t *testing.T) {
 		t.Fatalf("published events = %d, want 1", len(capture.events))
 	}
 	result := capture.events[0]
-	if result.Kind != KindAdoptionImportResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindAdoptionImportResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "status", "failed")
 	assertReactorTag(t, result.Tags, "step", "unauthorized")
 	assertSignedEvent(t, result)
@@ -457,9 +458,10 @@ func TestHandleAdoptionScanRequestPublishesSanitizedResult(t *testing.T) {
 		t.Fatalf("published events = %d, want status and result", len(capture.events))
 	}
 	statusEvent, resultEvent := capture.events[0], capture.events[1]
-	if statusEvent.Kind != KindAdoptionStatus || resultEvent.Kind != KindAdoptionScanResult {
+	if statusEvent.Kind != KindNIP38Status || resultEvent.Kind != KindContextVMMessage {
 		t.Fatalf("unexpected event kinds: status=%d result=%d", statusEvent.Kind, resultEvent.Kind)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, statusEvent.Tags, "status", "processing")
 	assertReactorTag(t, statusEvent.Tags, "operation", "scan")
 	assertReactorTag(t, statusEvent.Tags, "target", "prod")
@@ -471,9 +473,7 @@ func TestHandleAdoptionScanRequestPublishesSanitizedResult(t *testing.T) {
 	assertSignedEvent(t, resultEvent)
 
 	var payload []dto.AdoptionPreviewResponse
-	if err := json.Unmarshal([]byte(resultEvent.Content), &payload); err != nil {
-		t.Fatalf("decode scan result: %v", err)
-	}
+	decodeContextVMResult(t, resultEvent, &payload)
 	if len(payload) != 1 || len(payload[0].Containers) != 1 {
 		t.Fatalf("unexpected scan payload: %#v", payload)
 	}
@@ -513,16 +513,15 @@ func TestHandleAdoptionImportRequestPublishesPartialFailureResult(t *testing.T) 
 		t.Fatalf("published events = %d, want status and result", len(capture.events))
 	}
 	result := capture.events[1]
-	if result.Kind != KindAdoptionImportResult {
-		t.Fatalf("result kind = %d, want %d", result.Kind, KindAdoptionImportResult)
+	if result.Kind != KindContextVMMessage {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, result.Tags, "status", "partial_failure")
 	assertReactorTag(t, result.Tags, "operation", "import")
 	assertSignedEvent(t, result)
 	var payload []dto.AdoptionImportResultResponse
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("decode import result: %v", err)
-	}
+	decodeContextVMResult(t, result, &payload)
 	if len(payload) != 2 || payload[0].RedactedEnvironmentKeys[0] != "DB_PASSWORD" || payload[1].Error != "image unsupported" {
 		t.Fatalf("unexpected import payload: %#v", payload)
 	}
@@ -564,6 +563,36 @@ func assertSignedEvent(t *testing.T, ev nostr.Event) {
 	t.Helper()
 	if ok, err := ev.CheckSignature(); err != nil || !ok {
 		t.Fatalf("published event signature invalid: ok=%v err=%v", ok, err)
+	}
+}
+
+func assertNoLegacyStatusResultEvents(t *testing.T, events []nostr.Event) {
+	t.Helper()
+	for _, ev := range events {
+		if (ev.Kind >= 6961 && ev.Kind <= 6999) || (ev.Kind >= 7961 && ev.Kind <= 7999) {
+			t.Fatalf("production command path published legacy status/result kind %d: %#v", ev.Kind, ev)
+		}
+	}
+}
+
+func decodeContextVMResult(t *testing.T, ev nostr.Event, out any) {
+	t.Helper()
+	if ev.Kind != KindContextVMMessage {
+		t.Fatalf("event kind = %d, want ContextVM message %d", ev.Kind, KindContextVMMessage)
+	}
+	var response ContextVMJSONRPCResponse
+	if err := json.Unmarshal([]byte(ev.Content), &response); err != nil {
+		t.Fatalf("decode ContextVM response: %v", err)
+	}
+	if response.Error != nil {
+		t.Fatalf("unexpected ContextVM error response: %+v", response.Error)
+	}
+	body, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("remarshal ContextVM result: %v", err)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		t.Fatalf("decode ContextVM result payload: %v body=%s", err, string(body))
 	}
 }
 
@@ -614,8 +643,8 @@ func TestDeployStepProgressionEmitsStatusEvents(t *testing.T) {
 	// Verify step status events are emitted in order with correct tags
 	for i, expectedStep := range expectedSteps {
 		ev := capture.events[i]
-		if ev.Kind != KindActionStatus {
-			t.Fatalf("event[%d] kind = %d, want %d (KindActionStatus)", i, ev.Kind, KindActionStatus)
+		if ev.Kind != KindNIP38Status {
+			t.Fatalf("event[%d] kind = %d, want %d (KindNIP38Status)", i, ev.Kind, KindNIP38Status)
 		}
 		assertReactorTag(t, ev.Tags, "status", "processing")
 		assertReactorTag(t, ev.Tags, "action", "deploy")
@@ -629,9 +658,10 @@ func TestDeployStepProgressionEmitsStatusEvents(t *testing.T) {
 
 	// Verify final result event
 	resultEvent := capture.events[len(capture.events)-1]
-	if resultEvent.Kind != KindActionResult {
-		t.Fatalf("final event kind = %d, want %d (KindActionResult)", resultEvent.Kind, KindActionResult)
+	if resultEvent.Kind != KindContextVMMessage {
+		t.Fatalf("final event kind = %d, want %d (KindContextVMMessage)", resultEvent.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, resultEvent.Tags, "status", "success")
 	assertReactorTag(t, resultEvent.Tags, "action", "deploy")
 	assertReactorTag(t, resultEvent.Tags, "service", serviceID.String())
@@ -666,7 +696,7 @@ func TestDeployStepProgressionBackwardCompatible(t *testing.T) {
 
 	// All status events must have valid nostr event structure
 	for i, ev := range capture.events {
-		if ev.Kind == KindActionStatus {
+		if ev.Kind == KindNIP38Status {
 			// A consumer that only reads "status" and "action" tags should work fine
 			var foundStatus, foundAction bool
 			for _, tag := range ev.Tags {
@@ -716,9 +746,10 @@ func TestRuntimeActionResultCarriesObservationID(t *testing.T) {
 		t.Fatalf("expected at least 2 events, got %d", len(capture.events))
 	}
 	resultEvent := capture.events[len(capture.events)-1]
-	if resultEvent.Kind != KindActionResult {
-		t.Fatalf("last event kind = %d, want %d", resultEvent.Kind, KindActionResult)
+	if resultEvent.Kind != KindContextVMMessage {
+		t.Fatalf("last event kind = %d, want %d", resultEvent.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	// Verify observation_id and observed_hash tags are present
 	assertReactorTag(t, resultEvent.Tags, "observation_id", obsID.String())
 	assertReactorTag(t, resultEvent.Tags, "observed_hash", "sha256:obs-hash")
@@ -744,9 +775,10 @@ func TestRuntimeActionResultOmitsObservationTagsWhenNil(t *testing.T) {
 		t.Fatalf("expected at least 2 events, got %d", len(capture.events))
 	}
 	resultEvent := capture.events[len(capture.events)-1]
-	if resultEvent.Kind != KindActionResult {
-		t.Fatalf("last event kind = %d, want %d", resultEvent.Kind, KindActionResult)
+	if resultEvent.Kind != KindContextVMMessage {
+		t.Fatalf("last event kind = %d, want %d", resultEvent.Kind, KindContextVMMessage)
 	}
+	assertNoLegacyStatusResultEvents(t, capture.events)
 	// observation_id should NOT be present when obs is nil
 	for _, tag := range resultEvent.Tags {
 		if len(tag) >= 2 && tag[0] == "observation_id" {

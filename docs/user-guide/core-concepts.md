@@ -160,54 +160,50 @@ Bahia is **Nostr-native** — it uses Nostr events as the primary control plane.
 
 ### Event Categories
 
-| Category | Kind Range | Purpose |
-|----------|------------|---------|
-| **Requests** | 5961-5989 | Signed operator commands |
-| **Status** | 6961-6984 | Progress updates |
-| **Results** | 7961-7979 | Terminal outcomes |
-| **Read Models** | 31961-31999 | Current state projections |
+| Category | Kind(s) | Purpose |
+|----------|---------|---------|
+| **ContextVM intents** | `25910`, optionally wrapped in `1059` or `21059` | Signed JSON-RPC mutation requests, immediate acknowledgments, and encrypted transport |
+| **Canonical state** | `30900`, `30078` | Current control-plane state projections and app-specific data |
+| **Canonical status/audit** | `30315`, `4903` | Operational progress, terminal facts, provenance, and audit |
+| **Discovery and relays** | `11316`-`11320`, `30002` | ContextVM announcements and NIP-51 relay topology |
 
-### Read Models
+Legacy Bahia custom ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are startup migration inventory only.
 
-**Read models** are Nostr replaceable events that reflect current state.
+### Canonical Observables
+
+**Canonical observables** are signed Nostr events that reflect durable truth after a ContextVM intent is acknowledged.
 
 ```json
 {
-  "kind": 31961,
-  "content": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "desired_artifact": "art-789",
-    "observed_artifact": "art-789",
-    "status": "healthy"
-  },
+  "kind": 30900,
+  "content": "{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"desired_artifact\":\"art-789\",\"observed_artifact\":\"art-789\",\"status\":\"healthy\"}",
   "tags": [
-    ["d", "svc-123:env-456"],
+    ["d", "service:svc-123:env-456"],
+    ["domain", "service"],
+    ["schema", "bahia.service-state.v1"],
     ["service", "svc-123"],
     ["environment", "env-456"]
   ]
 }
 ```
 
-Benefits of read models:
-- **Real-time updates** via subscription
+Benefits of canonical observables:
+- **Real-time updates** via scoped subscriptions
 - **Offline resilience** (cached locally)
 - **Multi-client sync** (all clients see same state)
 - **Audit trail** (events are signed and timestamped)
 
 ### Signer-First Operations
 
-Critical operations require **signed Nostr events**:
+Critical operations require **signed ContextVM intents**:
 
 ```json
 {
-  "kind": 5961,
-  "content": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "artifact_id": "art-789"
-  },
+  "kind": 25910,
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-svc-123-env-456\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"artifact_id\":\"art-789\"}}",
   "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "service/deploy"],
     ["service", "svc-123"],
     ["environment", "env-456"],
     ["artifact", "art-789"]
@@ -217,8 +213,8 @@ Critical operations require **signed Nostr events**:
 
 This ensures:
 - **Non-repudiation** — actions are cryptographically signed
-- **Auditability** — all operations are on the relay
-- **Authorization** — pubkeys are checked against allowlists
+- **Auditability** — intents and observables are on relays
+- **Authorization** — verified ContextVM pubkeys are checked against allowlists
 
 ## Control Planes
 
@@ -228,8 +224,8 @@ Bahia exposes three control-plane surfaces:
 
 The **primary** control plane for:
 - Real-time state updates
-- Signed operator commands
-- Read model subscriptions
+- ContextVM mutation intents
+- Canonical observable subscriptions
 
 ### 2. MCP (Model Context Protocol)
 
@@ -268,7 +264,7 @@ Within organizations:
 
 ## Encrypted Operations
 
-Sensitive operations use **encrypted Nostr events** (kind 5980/7980):
+Sensitive operations use **encrypted ContextVM events**: inner kind `25910` JSON-RPC messages wrapped with CEP-4/NIP-59 `1059` or `21059`. Legacy `5980`/`7980` encrypted request/result events are startup migration inputs only.
 
 - Notification channel configurations
 - Service secrets
@@ -276,9 +272,9 @@ Sensitive operations use **encrypted Nostr events** (kind 5980/7980):
 - Deployment run logs
 
 These events are:
-- NIP-44 encrypted to the service pubkey
-- Sent to separate encrypted-request relays
-- Never published to public relays
+- Encrypted to the Bahia service pubkey
+- Routed through the relay sidecar/browser relay allowlist advertised by discovery
+- Never published to non-allowlisted public relays
 
 ## Next Steps
 

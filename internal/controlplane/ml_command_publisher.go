@@ -75,14 +75,14 @@ func (p *MLCommandPublisher) PublishMLModelImportRequest(ctx context.Context, cm
 	if !hasAnyMLField(cmd.Content, "source", "uri", "repo", "model", "model_version", "artifact") {
 		return nil, fmt.Errorf("source, uri, repo, model, model_version, or artifact is required")
 	}
-	return p.publish(ctx, "ml/model-import", KindCASControlState, mlImportReadModels(), "ml-model-import", cmd)
+	return p.publish(ctx, "ml/model-import", KindContextVMMessage, mlImportReadModels(), "ml-model-import", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLRecipeRunRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "recipe") {
 		return nil, fmt.Errorf("recipe is required")
 	}
-	return p.publish(ctx, ContextVMMethodMLRecipeRun, KindCASControlState, mlRecipeReadModels(), "ml-recipe-run", cmd)
+	return p.publish(ctx, ContextVMMethodMLRecipeRun, KindContextVMMessage, mlRecipeReadModels(), "ml-recipe-run", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLInferenceDeployRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
@@ -92,21 +92,21 @@ func (p *MLCommandPublisher) PublishMLInferenceDeployRequest(ctx context.Context
 	if !hasAnyMLField(cmd.Content, "model_version", "model_version_id") {
 		return nil, fmt.Errorf("model_version or model_version_id is required")
 	}
-	return p.publish(ctx, "ml/inference-deploy", KindCASControlState, mlEndpointReadModels(), "ml-inference-deploy", cmd)
+	return p.publish(ctx, "ml/inference-deploy", KindContextVMMessage, mlEndpointReadModels(), "ml-inference-deploy", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLInferenceApprovalRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "intent_id") {
 		return nil, fmt.Errorf("intent_id is required")
 	}
-	return p.publish(ctx, "ml/inference-approval", KindCASControlState, mlEndpointReadModels(), "ml-inference-approval", cmd)
+	return p.publish(ctx, "ml/inference-approval", KindContextVMMessage, mlEndpointReadModels(), "ml-inference-approval", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLInferenceRollbackRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "endpoint", "endpoint_id") {
 		return nil, fmt.Errorf("endpoint or endpoint_id is required")
 	}
-	return p.publish(ctx, "ml/inference-rollback", KindCASControlState, mlRollbackReadModels(), "ml-inference-rollback", cmd)
+	return p.publish(ctx, "ml/inference-rollback", KindContextVMMessage, mlRollbackReadModels(), "ml-inference-rollback", cmd)
 }
 
 func (p *MLCommandPublisher) publish(ctx context.Context, method string, resultKind int, readModels map[string]int, defaultPrefix string, cmd MLCommandPayload) (*MLCommandReceipt, error) {

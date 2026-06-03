@@ -43,7 +43,7 @@ Deploying a release to an environment makes it live.
 
 ### Web UI and CLI
 
-LLM route creation is a signer-first Nostr operation (`LLMRouteCreate`, kind `5971`). Legacy REST-backed Web UI and CLI create paths are deprecated until they publish signed Nostr events directly.
+LLM route creation is a signer-first ContextVM operation. Clients publish `llm/route-create` as Nostr kind `25910`, usually inside encrypted `1059`/`21059` when the payload is sensitive, and follow canonical observables for durable truth.
 
 ### MCP Tool
 
@@ -61,8 +61,8 @@ Returns Nostr correlation metadata:
 ```json
 {
   "request_event_id": "...",
-  "request_kind": 5971,
-  "result_kind": 7971,
+  "method": "llm/route-create",
+  "observable_kinds": [30900, 30315, 4903],
   "route_id": "route-123"
 }
 ```
@@ -71,7 +71,7 @@ Returns Nostr correlation metadata:
 
 ### Web UI and CLI
 
-LLM release registration is a signer-first Nostr operation (`LLMReleaseRegister`, kind `5972`). Legacy REST-backed Web UI and CLI release-create paths are deprecated until they publish signed Nostr events directly.
+LLM release registration is a signer-first ContextVM operation. Use `llm/release-register` and follow `30900`, `30315`, and `4903` observables scoped by route and release.
 
 ### MCP Tool
 
@@ -121,19 +121,17 @@ bahia llm deploy \
 }
 ```
 
-### Nostr (Signer-First)
+### Nostr (ContextVM)
 
-Publish a `5973` LLMDeployRequest:
+Publish a ContextVM `llm/deploy` request:
 
 ```json
 {
-  "kind": 5973,
-  "content": {
-    "route_id": "route-123",
-    "release_id": "release-456",
-    "environment_id": "env-789"
-  },
+  "kind": 25910,
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"llm-deploy-route-123-env-789\",\"method\":\"llm/deploy\",\"params\":{\"route_id\":\"route-123\",\"release_id\":\"release-456\",\"environment_id\":\"env-789\",\"_meta\":{\"progressToken\":\"llm-deploy-route-123-env-789\"}}}",
   "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "llm/deploy"],
     ["route", "route-123"],
     ["release", "release-456"],
     ["environment", "env-789"]
@@ -160,17 +158,7 @@ bahia llm reject intent-123 --reason "Config issue"
 
 ### Nostr
 
-Publish a `5974` LLMDeploymentApproval:
-
-```json
-{
-  "kind": 5974,
-  "content": {
-    "intent_id": "intent-123",
-    "approved": true
-  }
-}
-```
+Publish a ContextVM `llm/approve` or `llm/reject` request and follow canonical observables scoped by `intent`.
 
 ## Rolling Back
 
@@ -222,37 +210,35 @@ bahia llm routes get route-123
 bahia llm releases list --route-id route-123
 ```
 
-## Read Models
+## Canonical Observables
 
-LLM state is published as Nostr events:
+LLM state is published as canonical Nostr observables:
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31964 | `route_id` | LLM route registry |
-| 31965 | `route_id:environment_id` | LLM route state |
+| Kind | Tags | Content |
+|------|------|---------|
+| `30900` | `d`, `domain=llm`, `schema`, `route`, optional `environment`/`release` | Route registry, release, and route/environment state projections |
+| `30315` | `status`, `route`, optional `environment`/`release`/`intent`, correlation `e` | Deployment progress and operational status |
+| `4903` | requester `p`, resource tags, correlation `e` | Audit, approval, and provenance facts |
 
 Subscribe for real-time updates:
 
 ```json
 {
-  "kinds": [31965],
+  "kinds": [30900, 30315, 4903],
+  "authors": ["<bahia-service-pubkey>"],
   "#route": ["route-123"]
 }
 ```
 
-## Nostr Event Kinds
+## Nostr Methods and Kinds
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 5971 | LLMRouteCreate | Create route request |
-| 5972 | LLMReleaseRegister | Register release |
-| 5973 | LLMDeployRequest | Deploy release |
-| 5974 | LLMDeploymentApproval | Approve/reject |
-| 5975 | LLMRollbackRequest | Rollback request |
-| 6973 | LLMDeploymentStatus | Progress updates |
-| 7971 | LLMRouteCreateResult | Route creation result |
-| 7972 | LLMReleaseRegisterResult | Release result |
-| 7973 | LLMDeploymentResult | Deploy/rollback result |
+| Surface | Contract | Description |
+|---------|----------|-------------|
+| Mutation intent | ContextVM `25910` (`1059`/`21059` when encrypted) | `llm/route-create`, `llm/release-register`, `llm/deploy`, `llm/approve`, `llm/reject`, `llm/rollback` |
+| Observable state | `30900` | Route, release, and route/environment projections |
+| Observable status/audit | `30315`, `4903` | Progress, approvals, terminal facts, and provenance |
+
+Historical `5971`-`5975`, `6973`, `7971`-`7973`, and `31964`/`31965` events are startup migration inputs only.
 
 ## Best Practices
 

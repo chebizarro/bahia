@@ -12,7 +12,7 @@ Environments define:
 
 ## Creating an Environment
 
-Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1/environments`; clients publish a signed Nostr `5965` `EnvironmentCreate` command to the control-plane relay and subscribe for the correlated `7964` result/read-model update.
+Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1/environments`; clients publish a ContextVM JSON-RPC `environment/create` intent as Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 `1059` or `21059`. The response acknowledges receipt only; durable environment state, status, and audit facts come from canonical `30900`, `30315`, and `4903` observables.
 
 ### Web UI
 
@@ -26,7 +26,7 @@ Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1
 
 ### Nostr
 
-Publish a `5965` EnvironmentCreate event.
+Publish a ContextVM `environment/create` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper.
 
 ## Environment Properties
 
@@ -207,22 +207,22 @@ These are available to all services in the environment.
 
 ## Updating Environments
 
-Environment updates are signer-first. REST `PUT /api/v1/environments/{id}` is no longer accepted.
+Environment updates are signer-first ContextVM intents. REST `PUT /api/v1/environments/{id}` is no longer accepted.
 
 ### Web UI
 
 1. Go to the environment detail page
 2. Click **Settings**
 3. Modify properties
-4. Click **Save** to publish the signed Nostr command
+4. Click **Save** to publish the signed ContextVM intent
 
 ### Nostr
 
-Publish a `5983` EnvironmentUpdate event.
+Publish a ContextVM `environment/update` request.
 
 ## Deleting Environments
 
-Environments can be deleted when no longer needed by publishing a signed `5984` EnvironmentDelete event. REST `DELETE /api/v1/environments/{id}` is no longer accepted.
+Environments can be deleted when no longer needed by publishing a ContextVM `environment/delete` intent. REST `DELETE /api/v1/environments/{id}` is no longer accepted for signer-first mutations.
 
 **Warning**: You cannot delete an environment that has:
 - Active deployments
@@ -231,14 +231,17 @@ Environments can be deleted when no longer needed by publishing a signed `5984` 
 
 Remove or stop all services first.
 
-## Read Models
+## Canonical Observables
 
-Environment state is published as Nostr read models:
+Environment state is published as canonical Nostr observables:
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31963 | `environment_id` | Environment registry entry |
-| 31961 | `service_id:environment_id` | Service state in environment |
+| Kind | Tags | Content |
+|------|------|---------|
+| `30900` | `d`, `domain=environment` or `domain=service`, `schema`, `environment`, optional `service` | Environment registry and service/environment state projections |
+| `30315` | `status`, `environment`, optional `service`, correlation `e` | Operational status and progress |
+| `4903` | requester `p`, resource tags, correlation `e` | Immutable audit facts |
+
+Historical `31961`/`31963` read models are startup migration inputs only.
 
 ## Best Practices
 

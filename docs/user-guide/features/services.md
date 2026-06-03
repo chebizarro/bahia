@@ -12,7 +12,7 @@ Services are the primary organizational unit in Bahia. Each service:
 
 ## Creating a Service
 
-Service creation is signer-first. Bahia no longer accepts REST `POST /api/v1/services`; clients publish a signed Nostr `5964` `ServiceCreate` command to the control-plane relay and subscribe for the correlated `7963` result/read-model update.
+Service creation is signer-first. Bahia no longer accepts REST `POST /api/v1/services`; clients publish a ContextVM JSON-RPC `service/create` intent as Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 `1059` or `21059` for encrypted transport. The immediate JSON-RPC response is only an acknowledgment; clients follow canonical `30900`, `30315`, and `4903` observables for durable state, progress, and audit truth.
 
 ### Web UI
 
@@ -25,23 +25,23 @@ Service creation is signer-first. Bahia no longer accepts REST `POST /api/v1/ser
    - **Description**: What the service does
 4. Click **Create** to publish the signed Nostr command
 
-### Nostr (Signer-First)
+### Nostr (ContextVM)
 
-Publish a `5964` ServiceCreate event:
+Publish a ContextVM `service/create` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper:
 
 ```json
 {
-  "kind": 5964,
-  "content": {
-    "name": "payment-api",
-    "repository": "https://github.com/company/payment-api"
-  },
+  "kind": 25910,
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-create-payment-api\",\"method\":\"service/create\",\"params\":{\"name\":\"payment-api\",\"repository\":\"https://github.com/company/payment-api\",\"_meta\":{\"progressToken\":\"svc-create-payment-api\"}}}",
   "tags": [
-    ["t", "bahia"],
-    ["t", "service-create"]
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "service/create"],
+    ["service", "payment-api"]
   ]
 }
 ```
+
+Require relay `OK` with `accepted=true`, then subscribe to canonical observables scoped by `service`.
 
 ## Service Properties
 
@@ -131,10 +131,10 @@ drift: false
 
 Deploy, restart, and stop are signer-first Nostr control-plane operations.
 
-- Deploy by publishing a signed `DeployRequest` event (`kind:5961`) and subscribing for the deployment result/read-model events.
-- Restart or stop an adopted direct-runtime workload by publishing a signed `ServiceAction` event (`kind:5963`) with the action payload.
+- Deploy by publishing a ContextVM `service/deploy` intent and subscribing for canonical deployment status, audit, and state events.
+- Restart or stop an adopted direct-runtime workload with ContextVM `service/restart` or `service/stop`.
 
-Legacy REST-backed service action endpoints and direct-runtime CLI action paths are deprecated until the CLI publishes signed Nostr events directly.
+Legacy Bahia request/status/result kinds and legacy REST-backed service action endpoints are migration-only and are not live service control-plane guidance.
 
 ## Service Secrets
 
@@ -162,7 +162,7 @@ See [Secrets Management](#secrets-management) for details.
 
 ## Tags and Metadata
 
-Use tags to organize services by publishing a signed `5981` ServiceUpdate command with the updated metadata.
+Use tags to organize services by publishing a ContextVM `service/update` intent with the updated metadata.
 
 Query services by tag:
 
@@ -172,18 +172,18 @@ bahia services list --tag team=payments
 
 ## Deleting a Service
 
-Services can be deleted when no longer needed by publishing a signed `5982` ServiceDelete event. REST `DELETE /api/v1/services/{id}` is no longer accepted.
+Services can be deleted when no longer needed by publishing a ContextVM `service/delete` intent. REST `DELETE /api/v1/services/{id}` is no longer accepted for signer-first mutations.
 
 ### Web UI
 
 1. Go to service **Settings**
 2. Scroll to **Danger Zone**
 3. Click **Delete Service**
-4. Confirm deletion to publish the signed Nostr command
+4. Confirm deletion to publish the signed ContextVM intent
 
 ### Nostr
 
-Publish a `5982` ServiceDelete event.
+Publish a ContextVM `service/delete` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper.
 
 **Warning**: Deleting a service removes:
 - All deployment history
@@ -192,24 +192,27 @@ Publish a `5982` ServiceDelete event.
 
 Artifacts and builds are **not** deleted (they may be shared).
 
-## Read Models
+## Canonical Observables
 
-Service state is published as Nostr read models:
+Service state is published as canonical Nostr observables:
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31962 | `service_id` | Service registry entry |
-| 31961 | `service_id:environment_id` | Current desired/observed state |
+| Kind | Tags | Content |
+|------|------|---------|
+| `30900` | `d`, `domain=service`, `schema`, `service`, optional `environment` | Current service registry and desired/observed state projections |
+| `30315` | `status`, `service`, optional `environment`, correlation `e` | Operational progress and status |
+| `4903` | requester `p`, resource tags, correlation `e` | Immutable audit and provenance facts |
 
 Subscribe to these for real-time updates:
 
 ```json
 {
-  "kinds": [31962],
+  "kinds": [30900, 30315, 4903],
   "authors": ["<bahia-service-pubkey>"],
-  "#d": ["svc-123"]
+  "#service": ["svc-123"]
 }
 ```
+
+Historical `31961`/`31962` read models are startup migration inputs only.
 
 ## Best Practices
 

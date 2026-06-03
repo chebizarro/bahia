@@ -210,25 +210,25 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
   return [
     ...services.map((svc, index) => nostrEvent({
       id: `svc-${index}`,
-      kind: 31962,
+      kind: 30900,
       tags: [['d', svc.id], ['deleted', 'false'], ['name', svc.name]],
       content: { ...svc, deleted: false }
     })),
     ...environments.map((env, index) => nostrEvent({
       id: `env-${index}`,
-      kind: 31963,
+      kind: 30900,
       tags: [['d', env.id], ['deleted', 'false'], ['name', env.name]],
       content: { ...env, deleted: false }
     })),
     ...states.map((state, index) => nostrEvent({
       id: `state-${index}`,
-      kind: 31961,
+      kind: 30900,
       tags: [['d', state.id || `${state.service_id}:${state.environment_id}`], ['service', state.service_id], ['environment', state.environment_id], ['deleted', 'false']],
       content: { ...state, deleted: false }
     })),
     ...intents.map((intent, index) => nostrEvent({
       id: `intent-${index}`,
-      kind: 31967,
+      kind: 30900,
       tags: [['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['deleted', 'false']],
       content: { ...intent, deleted: false }
     })),
@@ -298,47 +298,53 @@ async function installEncryptedDashboardPaymentHarness(page) {
         return originalSend.call(this, data);
       }
 
-      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 5980) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 25910) {
         const event = message[1];
-        const plaintext = String(event.content || '').replace(/^enc44:/, '');
+        const content = String(event.content || '');
+        const plaintext = content.startsWith('mock-nip44:')
+          ? decodeURIComponent(escape(atob(content.replace(/^mock-nip44:/, ''))))
+          : content.replace(/^enc44:/, '');
         const envelope = JSON.parse(plaintext);
-        if (envelope.operation === 'payments.history') {
-          const worker = String(envelope.payload?.worker || '');
+          const params = { ...(envelope.params || {}) };
+          delete params._meta;
+        if (envelope.method === 'payments/history') {
+          const worker = String(params.worker || envelope.payload?.worker || '');
           const trace = window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE || [];
-          trace.push({ relay: this.url, operation: envelope.operation, worker });
+          trace.push({ relay: this.url, operation: 'payments.history', worker });
           window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = trace;
 
           const error = window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS?.[worker];
           const resultEnvelope = error
             ? {
-                request_event_id: event.id,
-                status: 'error',
-                error: typeof error === 'string' ? { code: 'handler_failed', message: error } : error
+                jsonrpc: '2.0',
+                id: envelope.id || event.id,
+                result: { status: 'error',
+                error: typeof error === 'string' ? { code: 'handler_failed', message: error } : error }
               }
             : {
-                request_event_id: event.id,
-                status: 'ok',
-                payload: window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY?.[worker] || []
+                jsonrpc: '2.0',
+                id: envelope.id || event.id,
+                result: { status: 'ok', payload: window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY?.[worker] || [] }
               };
           const resultEvent = {
             id: `result-${event.id}`,
-            kind: 7980,
+            kind: 25910,
             pubkey: servicePubkey,
             created_at: Math.floor(Date.now() / 1000),
-            tags: [['e', event.id], ['p', event.pubkey], ['encrypted', 'bahia-encrypted-v1']],
-            content: `enc44:${JSON.stringify(resultEnvelope)}`,
+            tags: [['e', event.id], ['p', event.pubkey], ['encrypted', 'contextvm-jsonrpc-v1']],
+            content: String(event.content || '').startsWith('mock-nip44:')
+              ? `mock-nip44:${btoa(unescape(encodeURIComponent(JSON.stringify(resultEnvelope))))}`
+              : `enc44:${JSON.stringify(resultEnvelope)}`,
             sig: '0'.repeat(128)
           };
 
           const sent = originalSend.call(this, data);
-          setTimeout(() => {
-            if (this.readyState !== window.WebSocket.OPEN) return;
-            for (const [subId, filters] of this.subscriptions?.entries() || []) {
-              if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
-                this.onmessage?.({ data: JSON.stringify(['EVENT', subId, resultEvent]) });
-              }
+          if (this.readyState !== window.WebSocket.OPEN) return sent;
+          for (const [subId, filters] of this.subscriptions?.entries() || []) {
+            if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
+              this.onmessage?.({ data: JSON.stringify(['EVENT', subId, resultEvent]) });
             }
-          }, 0);
+          }
           return sent;
         }
       }

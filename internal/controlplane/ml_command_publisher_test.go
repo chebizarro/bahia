@@ -29,7 +29,7 @@ func TestMLCommandPublisherPublishesAddressableDeployRequestWithCorrelation(t *t
 	if err != nil {
 		t.Fatalf("publish deploy: %v", err)
 	}
-	if receipt.RequestKind != KindContextVMMessage || receipt.ResultKind != KindCASControlState || receipt.DTag != "deploy:qwen-prod" || receipt.PublishedRelays != 2 {
+	if receipt.RequestKind != KindContextVMMessage || receipt.ResultKind != KindContextVMMessage || receipt.DTag != "deploy:qwen-prod" || receipt.PublishedRelays != 2 {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 	if receipt.ReadModelKinds["endpoint_state"] != KindCASControlState || receipt.Endpoint != "endpoint:qwen:prod" || receipt.ModelVersion != "model-version:qwen:v1" {
@@ -68,9 +68,9 @@ func TestMLCommandPublisherPublishesImportRecipeAndRollbackKinds(t *testing.T) {
 		wantMethod string
 		wantResult int
 	}{
-		{"import", publisher.PublishMLModelImportRequest, "ml/model-import", KindCASControlState},
-		{"recipe", publisher.PublishMLRecipeRunRequest, ContextVMMethodMLRecipeRun, KindCASControlState},
-		{"rollback", publisher.PublishMLInferenceRollbackRequest, "ml/inference-rollback", KindCASControlState},
+		{"import", publisher.PublishMLModelImportRequest, "ml/model-import", KindContextVMMessage},
+		{"recipe", publisher.PublishMLRecipeRunRequest, ContextVMMethodMLRecipeRun, KindContextVMMessage},
+		{"rollback", publisher.PublishMLInferenceRollbackRequest, "ml/inference-rollback", KindContextVMMessage},
 	}
 	for _, tt := range calls {
 		t.Run(tt.name, func(t *testing.T) {

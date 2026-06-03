@@ -53,6 +53,7 @@ test.describe('Notifications encrypted transport smoke', () => {
     await row.getByRole('button', { name: 'Test' }).click();
     await expect(page.getByText('Test notification sent to PagerDuty Webhook')).toBeVisible();
 
+    const normalizeRelay = (relay) => String(relay || '').replace(/\/$/, '');
     const transportTrace = await page.evaluate(() => ({
       relays: window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.map((entry) => entry.relay),
       requests: window.__BAHIA_E2E_ENCRYPTED_REQUESTS,
@@ -61,24 +62,25 @@ test.describe('Notifications encrypted transport smoke', () => {
       operations: [...window.__BAHIA_E2E_ENCRYPTED_OPERATIONS]
     }));
 
-    expect(transportTrace.relays.length).toBeGreaterThanOrEqual(3);
-    expect(transportTrace.relays.every((relay) => relay === ENCRYPTED_RELAY)).toBe(true);
-    expect(transportTrace.relays.some((relay) => relay === PUBLIC_RELAY)).toBe(false);
+    const normalizedRelays = transportTrace.relays.map(normalizeRelay);
+    expect(normalizedRelays.length).toBeGreaterThanOrEqual(3);
+    expect(normalizedRelays.every((relay) => relay === ENCRYPTED_RELAY)).toBe(true);
+    expect(normalizedRelays.some((relay) => relay === PUBLIC_RELAY)).toBe(false);
     expect(transportTrace.operations).toEqual(expect.arrayContaining([
-      'notifications.channels.list',
-      'notifications.channels.create',
-      'notifications.channels.test'
+      'notifications/channels-list',
+      'notifications/channels-create',
+      'notifications/channels-test'
     ]));
 
     for (const request of transportTrace.requests) {
-      expect(request.kind).toBe(5980);
-      expect(request.relay).toBe(ENCRYPTED_RELAY);
-      expect(request.relay).not.toBe(PUBLIC_RELAY);
+      expect(request.kind).toBe(25910);
+      expect(normalizeRelay(request.relay)).toBe(ENCRYPTED_RELAY);
+      expect(normalizeRelay(request.relay)).not.toBe(PUBLIC_RELAY);
       expect(transportTrace.oks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: 5980, accepted: true })
+        expect.objectContaining({ eventId: request.eventId, kind: 25910, accepted: true })
       ]));
       expect(transportTrace.results).toEqual(expect.arrayContaining([
-        expect.objectContaining({ requestEventId: request.eventId, kind: 7980, pubkey: 'b'.repeat(64), status: 'ok' })
+        expect.objectContaining({ requestEventId: request.eventId, kind: 25910, pubkey: 'b'.repeat(64), status: 'ok' })
       ]));
     }
   });

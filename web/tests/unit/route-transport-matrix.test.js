@@ -145,7 +145,7 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     expect(orgs.transport_class).toBe('nostr_request_result_facade');
     expect(orgs.pstf_status).toBe('decision_recorded_2026-06-02');
     expect(orgs.resolved_by_beads).toEqual(['bahia-sv0j']);
-    expect(orgs.evidence.join(' ')).toMatch(/encrypted request\/result facade|5980\/7980/);
+    expect(orgs.evidence.join(' ')).toMatch(/encrypted request\/result facade|25910/);
     expect(orgs.evidence.join(' ')).toMatch(/without public org read-model projection|not nostr_native read models/);
 
     const ml = matrix.entries.find((entry) => entry.id === 'ml-rest-to-nostr-ingress');

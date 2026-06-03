@@ -82,7 +82,7 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 }
 
 func (r *AssistantSessionRecoveryRunner) queryRecentSessions(ctx context.Context, servicePubkey string) ([]domain.AssistantSession, error) {
-	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{domain.KindAssistantSession}, Authors: []string{servicePubkey}, Limit: r.limit}})
+	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{domain.KindAssistantSessionState}, Authors: []string{servicePubkey}, Tags: nostr.TagMap{"schema": []string{domain.AssistantSessionSchema}}, Limit: r.limit}})
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (r *AssistantSessionRecoveryRunner) recoverSession(ctx context.Context, rec
 			session.State = domain.AssistantSessionStateCompleted
 			_ = r.orchestrator.publishSession(ctx, session)
 			lock.Unlock()
-			_, _ = r.orchestrator.publishResult(ctx, nil, recovered.SessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed during startup recovery", "plan_hash": session.LastPlanHash})
+			_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "completed", map[string]any{"summary": "assistant plan completed during startup recovery", "step": "completed", "plan_hash": session.LastPlanHash})
 			return
 		}
 		step := session.PendingSteps[0]
@@ -191,7 +191,7 @@ func (r *AssistantSessionRecoveryRunner) recoverSession(ctx context.Context, rec
 			_ = r.orchestrator.publishSession(ctx, session)
 			lock.Unlock()
 			r.logger.Warn("assistant session recovery blocked", "session_id", recovered.SessionID, "step_id", step.StepID, "error", err)
-			_, _ = r.orchestrator.publishResult(ctx, nil, recovered.SessionID, "blocked", "blocked", map[string]any{"summary": "downstream observation blocked during startup recovery", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName})
+			_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "blocked", map[string]any{"summary": "downstream observation blocked during startup recovery", "step": "blocked", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName})
 			return
 		}
 		if outcome.Status == "failed" {
@@ -199,7 +199,7 @@ func (r *AssistantSessionRecoveryRunner) recoverSession(ctx context.Context, rec
 			_ = r.orchestrator.publishSession(ctx, session)
 			lock.Unlock()
 			r.logger.Info("assistant step recovered as failed", "session_id", recovered.SessionID, "step_id", step.StepID)
-			_, _ = r.orchestrator.publishResult(ctx, nil, recovered.SessionID, "failed", "downstream_failed", map[string]any{"summary": "downstream step failed before/during startup recovery", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
+			_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "failed", map[string]any{"summary": "downstream step failed before/during startup recovery", "step": "downstream_failed", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
 			return
 		}
 		r.orchestrator.clearPendingReceipt(session, receipt.IdempotencyKey)

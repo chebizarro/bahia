@@ -52,7 +52,7 @@ describe('encrypted route stores', () => {
     await expect(store.loadDeploymentRunLogs('run-1')).rejects.toThrow('run is still in progress');
     expect(store.deploymentRunLogsState.errorByRun['run-1']).toBe('run is still in progress');
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({
-      operation: 'deployments.run_logs.get',
+      operation: 'deployments/run-logs-get',
       payload: { run_id: 'run-1', tail: 100, stream: 'merged' }
     }));
   });

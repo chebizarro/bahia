@@ -131,6 +131,20 @@ async function installEncryptedRunLogHarness(page) {
       }
     };
 
+    const KIND_CONTEXTVM = 25910;
+
+    function isRelayUrl(url, expected) {
+      return String(url || '').replace(/\/$/, '') === String(expected || '').replace(/\/$/, '');
+    }
+
+    function parseContextVMRequest(event) {
+      const plaintext = String(event.content || '').replace(/^(enc44:|mock-nip44:)/, '');
+      const envelope = JSON.parse(plaintext || '{}');
+      const payload = { ...(envelope.params || {}) };
+      delete payload._meta;
+      return { envelope, operation: envelope.method, payload };
+    }
+
     function matchesFilter(event, filter) {
       if (!filter || typeof filter !== 'object') return true;
       if (Array.isArray(filter.kinds) && !filter.kinds.includes(event.kind)) return false;
@@ -168,37 +182,40 @@ async function installEncryptedRunLogHarness(page) {
         return originalSend.call(this, data);
       }
 
-      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 5980) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM && isRelayUrl(this.url, encryptedRelay)) {
         const event = message[1];
         const relay = this.url;
-        const plaintext = String(event.content || '').replace(/^enc44:/, '');
-        const envelope = JSON.parse(plaintext);
+        const { envelope, operation } = parseContextVMRequest(event);
 
-        if (envelope.operation !== 'deployments.run_logs.get') {
+        if (operation !== 'deployments/run-logs-get' && operation !== 'deployments.run_logs.get') {
           return originalSend.call(this, data);
         }
 
         window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.push({ relay, eventId: event.id });
-        window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(envelope.operation);
+        window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(operation);
         originalSend.call(this, data);
 
         const resultEvent = {
           id: `result-${event.id}`,
-          kind: 7980,
+          kind: KIND_CONTEXTVM,
           pubkey: servicePubkey,
           created_at: Math.floor(Date.now() / 1000),
           tags: [
             ['e', event.id],
             ['p', event.pubkey],
-            ['encrypted', 'bahia-encrypted-v1']
+            ['encrypted', 'contextvm-jsonrpc-v1'],
+            ['method', operation]
           ],
           content: `enc44:${JSON.stringify({
-            request_event_id: event.id,
-            status: 'ok',
-            payload: {
-              logs: {
-                stdout: 'deploy started\ndeploy complete',
-                stderr: 'warning: none'
+            jsonrpc: '2.0',
+            id: envelope.id || event.id,
+            result: {
+              status: 'ok',
+              payload: {
+                logs: {
+                  stdout: 'deploy started\ndeploy complete',
+                  stderr: 'warning: none'
+                }
               }
             }
           })}`,
@@ -281,7 +298,7 @@ test.describe('Deployment history and run details current-contract smoke', () =>
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       latestIntent: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents[0]
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5961]),
+      requestKinds: expect.arrayContaining([25910]),
       latestIntent: expect.objectContaining({
         service_id: 'service-1',
         environment_id: 'env-1',
@@ -300,6 +317,7 @@ test.describe('Deployment history and run details current-contract smoke', () =>
     await page.getByRole('button', { name: 'stderr' }).click();
     await expect(page.locator('pre.logs')).toContainText('warning: none');
 
+    const normalizeRelay = (relay) => String(relay || '').replace(/\/$/, '');
     const encryptedTrace = await page.evaluate(() => ({
       relays: [...window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.map((entry) => entry.relay)],
       operations: [...window.__BAHIA_E2E_ENCRYPTED_OPERATIONS],
@@ -307,9 +325,10 @@ test.describe('Deployment history and run details current-contract smoke', () =>
     }));
 
     expect(encryptedTrace.operations.length).toBeGreaterThanOrEqual(1);
-    expect(encryptedTrace.operations.every((operation) => operation === 'deployments.run_logs.get')).toBe(true);
-    expect(encryptedTrace.relays.length).toBeGreaterThanOrEqual(1);
-    expect(encryptedTrace.relays.every((relay) => relay === 'ws://encrypted.test.local')).toBe(true);
+    expect(encryptedTrace.operations.every((operation) => operation === 'deployments/run-logs-get')).toBe(true);
+    const normalizedRelays = encryptedTrace.relays.map(normalizeRelay);
+    expect(normalizedRelays.length).toBeGreaterThanOrEqual(1);
+    expect(normalizedRelays.every((relay) => relay === 'ws://encrypted.test.local')).toBe(true);
     expect(encryptedTrace.publicKinds).not.toContain(5980);
   });
 });

@@ -8,109 +8,76 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 )
 
-const fallbackAssistantAgentID = "bahia-operator-assistant"
-
-func (r *Reactor) handleAssistantPromptRequest(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	logger.Info("received assistant prompt request")
-
-	if !r.isAuthorized(event.PubKey) {
-		logger.Warn("unauthorized assistant prompt request")
-		_ = r.publishAssistantFailure(ctx, event, "unauthorized", "requester not in authorized list")
+// RegisterAssistantContextVMHandlers registers the operator assistant mutation
+// intents on the canonical ContextVM request transport. Durable assistant state
+// is emitted by the orchestrator as 30900/30315 observables; these handlers only
+// return the ContextVM JSON-RPC result payload for the initiating request.
+func RegisterAssistantContextVMHandlers(transport *EncryptedRequestTransport, orchestrator *service.AssistantOrchestrator) {
+	if transport == nil || orchestrator == nil {
 		return
 	}
-	if r.assistantOrchestrator == nil {
-		_ = r.publishAssistantFailure(ctx, event, "assistant_unavailable", "assistant orchestrator is not configured")
-		return
-	}
-	var req domain.AssistantPromptRequest
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		_ = r.assistantOrchestrator.PublishFailure(ctx, event, assistantSessionFromEvent(event), "parse_error", fmt.Sprintf("invalid prompt request JSON: %v", err))
-		return
-	}
-	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.TurnID) == "" || strings.TrimSpace(req.Prompt) == "" || tagValueNostr(event.Tags, "d") == "" || tagValueNostr(event.Tags, "session") == "" {
-		_ = r.assistantOrchestrator.PublishFailure(ctx, event, firstNonEmpty(req.SessionID, assistantSessionFromEvent(event)), "validation_error", "prompt request requires d and session tags plus session_id, turn_id, and prompt content fields")
-		return
-	}
-	if servicePubkey := r.servicePubkey(); servicePubkey != "" && !assistantHasPTag(event.Tags, servicePubkey) {
-		_ = r.assistantOrchestrator.PublishFailure(ctx, event, req.SessionID, "wrong_service", "prompt request is not addressed to this Bahia service pubkey")
-		return
-	}
-
-	go func() {
-		if err := r.assistantOrchestrator.HandlePrompt(ctx, event); err != nil {
-			logger.Error("assistant prompt orchestration failed", "error", err)
-		}
-	}()
+	adapter := assistantContextVMAdapter{orchestrator: orchestrator}
+	transport.RegisterContextVMHandler(domain.AssistantContextVMMethodPrompt, adapter.handlePrompt)
+	transport.RegisterContextVMHandler(domain.AssistantContextVMMethodApproval, adapter.handleApproval)
 }
 
-func (r *Reactor) handleAssistantApprovalRequest(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	logger.Info("received assistant approval request")
-
-	if !r.isAuthorized(event.PubKey) {
-		logger.Warn("unauthorized assistant approval request")
-		_ = r.publishAssistantFailure(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-	if r.assistantOrchestrator == nil {
-		_ = r.publishAssistantFailure(ctx, event, "assistant_unavailable", "assistant orchestrator is not configured")
-		return
-	}
-	if tagValueNostr(event.Tags, "d") == "" || tagValueNostr(event.Tags, "session") == "" || tagValueNostr(event.Tags, "plan-hash") == "" || tagValueNostr(event.Tags, "decision") == "" {
-		_ = r.assistantOrchestrator.PublishFailure(ctx, event, assistantSessionFromEvent(event), "validation_error", "approval request requires d, session, plan-hash, and decision tags")
-		return
-	}
-	if strings.TrimSpace(event.Content) != "" {
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(event.Content), &raw); err != nil {
-			_ = r.assistantOrchestrator.PublishFailure(ctx, event, assistantSessionFromEvent(event), "parse_error", fmt.Sprintf("invalid approval request JSON: %v", err))
-			return
-		}
-	}
-	if !r.assistantOrchestrator.IsSessionParticipant(assistantSessionFromEvent(event), event.PubKey) {
-		_ = r.assistantOrchestrator.PublishFailure(ctx, event, assistantSessionFromEvent(event), "unauthorized_participant", "requester is not a participant in this assistant session")
-		return
-	}
-
-	go func() {
-		if err := r.assistantOrchestrator.HandleApproval(ctx, event); err != nil {
-			logger.Error("assistant approval orchestration failed", "error", err)
-		}
-	}()
+type assistantContextVMAdapter struct {
+	orchestrator *service.AssistantOrchestrator
 }
 
-func (r *Reactor) publishAssistantFailure(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
-	sessionID := assistantSessionFromEvent(requestEvent)
-	content, _ := json.Marshal(map[string]any{"status": "failed", "step": step, "summary": message, "error": message})
-	tags := nostr.Tags{
-		{"session", sessionID},
-		{"agent", fallbackAssistantAgentID},
-		{"status", "failed"},
-		{"step", step},
+func (a assistantContextVMAdapter) handlePrompt(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload domain.AssistantPromptRequest
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("invalid assistant prompt params: %w", err)
 	}
-	if requestEvent != nil {
-		tags = append(tags, nostr.Tag{"e", requestEvent.ID, "", "reply"}, nostr.Tag{"p", requestEvent.PubKey})
+	if strings.TrimSpace(payload.SessionID) == "" || strings.TrimSpace(payload.TurnID) == "" || strings.TrimSpace(payload.Prompt) == "" {
+		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "prompt request requires session_id, turn_id, and prompt", "error": "prompt request requires session_id, turn_id, and prompt"}, nil
 	}
-	event := &nostr.Event{Kind: domain.KindAssistantResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign assistant failure: %w", err)
+	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey) {
+		return service.AssistantOperationResult{"status": "failed", "step": "unauthorized_participant", "session_id": payload.SessionID, "summary": "requester is not a participant in this assistant session", "error": "requester is not a participant in this assistant session"}, nil
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return a.orchestrator.HandlePromptRequest(ctx, assistantSourceFromContextVM(request), payload)
 }
 
-func (r *Reactor) servicePubkey() string {
-	if r == nil || strings.TrimSpace(r.config.PrivateKey) == "" {
-		return ""
+func (a assistantContextVMAdapter) handleApproval(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload domain.AssistantApprovalRequest
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("invalid assistant approval params: %w", err)
 	}
-	pubkey, err := nostr.GetPublicKey(r.config.PrivateKey)
-	if err != nil {
-		return ""
+	payload.Decision = strings.ToLower(strings.TrimSpace(payload.Decision))
+	if strings.TrimSpace(payload.SessionID) == "" || strings.TrimSpace(payload.PlanHash) == "" || payload.Decision == "" {
+		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "approval request requires session_id, plan_hash, and decision", "error": "approval request requires session_id, plan_hash, and decision"}, nil
 	}
-	return strings.ToLower(strings.TrimSpace(pubkey))
+	if payload.Decision != "approve" && payload.Decision != "reject" && payload.Decision != "cancel" {
+		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "decision must be approve, reject, or cancel", "error": "decision must be approve, reject, or cancel"}, nil
+	}
+	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey) {
+		return service.AssistantOperationResult{"status": "failed", "step": "unauthorized_participant", "session_id": payload.SessionID, "summary": "requester is not a participant in this assistant session", "error": "requester is not a participant in this assistant session"}, nil
+	}
+	return a.orchestrator.HandleApprovalRequest(ctx, assistantSourceFromContextVM(request), payload)
+}
+
+func assistantSourceFromContextVM(request ContextVMRequest) service.AssistantRequestSource {
+	dedupKey := strings.TrimSpace(request.ProgressToken)
+	if dedupKey == "" && request.Event != nil {
+		dedupKey = request.Event.ID
+	}
+	source := service.AssistantRequestSource{Event: request.Event, DedupKey: dedupKey}
+	if request.Event != nil {
+		source.OperatorPubkey = request.Event.PubKey
+		source.RequestID = request.Event.ID
+	}
+	return source
+}
+
+func decodeContextVMParams(params json.RawMessage, out any) error {
+	if len(params) == 0 || string(params) == "null" {
+		return json.Unmarshal([]byte(`{}`), out)
+	}
+	return json.Unmarshal(params, out)
 }
 
 func assistantHasPTag(tags nostr.Tags, pubkey string) bool {
@@ -124,18 +91,4 @@ func assistantHasPTag(tags nostr.Tags, pubkey string) bool {
 		}
 	}
 	return false
-}
-
-func assistantSessionFromEvent(event *nostr.Event) string {
-	if event == nil {
-		return ""
-	}
-	if value := tagValueNostr(event.Tags, "session"); value != "" {
-		return value
-	}
-	var raw struct {
-		SessionID string `json:"session_id"`
-	}
-	_ = json.Unmarshal([]byte(event.Content), &raw)
-	return strings.TrimSpace(raw.SessionID)
 }

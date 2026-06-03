@@ -1826,12 +1826,8 @@ func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) 
 		r.publishError(ctx, event, "evaluate_error", err.Error())
 		return
 	}
-	content, _ := json.Marshal(evaluation)
-	tags := nostr.Tags{{"e", event.ID, "", "reply"}, {"p", event.PubKey}, {"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
-	result := &nostr.Event{Kind: KindActionResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, result); err == nil {
-		_, _ = r.publishEvent(ctx, result)
-	}
+	tags := nostr.Tags{{"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
+	_ = r.publishContextVMResult(ctx, event, evaluation, tags, nil)
 }
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
@@ -2244,32 +2240,22 @@ func (r *Reactor) appendRequestResourceTags(ctx context.Context, tags nostr.Tags
 	return tags
 }
 
-// publishStatus publishes a legacy deployment status event for direct handler tests.
+// publishStatus publishes canonical deployment progress for retained direct handler paths.
 func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "processing"},
 		{"step", step},
+		{"category", "deployment"},
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-
-	event := &nostr.Event{
-		Kind:      KindDeploymentStatus,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   message,
-	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign status event: %w", err)
-	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
+		"status":  "processing",
+		"step":    step,
+		"message": message,
+	})
 }
 
-// publishDeploymentResult publishes a legacy deployment result event for direct handler tests.
+// publishDeploymentResult publishes a ContextVM deployment result for retained direct handler paths.
 func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.DeploymentIntent) error {
 	payload := map[string]interface{}{
 		"intent_id":      intent.ID.String(),
@@ -2279,15 +2265,12 @@ func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nos
 		"status":         intent.Status,
 	}
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "success"},
 		{"service", intent.ServiceID.String()},
 		{"environment", intent.EnvironmentID.String()},
 		{"artifact", intent.ArtifactID.String()},
 		{"intent", intent.ID.String()},
 	}
-	// Desired-state metadata (additive — old decoders ignore unknown fields).
 	if intent.DesiredHash != "" {
 		payload["desired_hash"] = intent.DesiredHash
 		tags = append(tags, nostr.Tag{"desired_hash", intent.DesiredHash})
@@ -2295,33 +2278,16 @@ func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nos
 	if intent.DesiredState != nil {
 		appendDesiredStateMeta(intent.DesiredState, payload, &tags)
 	}
-
-	content, _ := json.Marshal(payload)
-	event := &nostr.Event{
-		Kind:      KindDeploymentResult,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   string(content),
-	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign result event: %w", err)
-	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
-// publishActionResult publishes a legacy action result event for direct handler tests.
+// publishActionResult publishes a ContextVM action result for retained direct handler paths.
 func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.Event, action, status string, err error) error {
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"action", action},
 		{"status", status},
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-
 	content := map[string]interface{}{
 		"action": action,
 		"status": status,
@@ -2329,34 +2295,18 @@ func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.E
 	if err != nil {
 		tags = append(tags, nostr.Tag{"error", err.Error()})
 		content["error"] = err.Error()
+		return r.publishContextVMResult(ctx, requestEvent, nil, tags, &JSONRPCError{Code: -32000, Message: err.Error()})
 	}
-
-	contentBytes, _ := json.Marshal(content)
-
-	event := &nostr.Event{
-		Kind:      KindActionResult,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   string(contentBytes),
-	}
-
-	if signErr := r.signEvent(ctx, event); signErr != nil {
-		return fmt.Errorf("sign action result: %w", signErr)
-	}
-
-	_, pubErr := r.publishEvent(ctx, event)
-	return pubErr
+	return r.publishContextVMResult(ctx, requestEvent, content, tags, nil)
 }
 
 // publishApprovalResult publishes a result for deployment approval/rejection.
 func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr.Event, intentID, decision string) error {
-	content, _ := json.Marshal(map[string]interface{}{
+	content := map[string]interface{}{
 		"intent_id": intentID,
 		"decision":  decision,
-	})
+	}
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "success"},
 		{"intent", intentID},
 		{"decision", decision},
@@ -2370,74 +2320,48 @@ func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr
 			)
 		}
 	}
-
-	event := &nostr.Event{
-		Kind:      KindActionResult,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   string(content),
-	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign approval result: %w", err)
-	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, content, tags, nil)
 }
 
 func (r *Reactor) publishLLMRouteCreateResult(ctx context.Context, requestEvent *nostr.Event, route *domain.LLMRoute) error {
-	content, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"route_id": route.ID.String(),
 		"name":     route.Name,
 		"status":   "success",
-	})
-	event := &nostr.Event{
-		Kind:      KindLLMRouteCreateResult,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"route", route.ID.String()},
-		},
-		Content: string(content),
 	}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign LLM route create result: %w", err)
+	tags := nostr.Tags{
+		{"status", "success"},
+		{"route", route.ID.String()},
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 func (r *Reactor) publishLLMReleaseRegisterResult(ctx context.Context, requestEvent *nostr.Event, release *domain.LLMRelease) error {
-	content, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"route_id":   release.RouteID.String(),
 		"release_id": release.ID.String(),
 		"version":    release.Version,
 		"status":     "success",
-	})
-	event := &nostr.Event{
-		Kind:      KindLLMReleaseRegisterResult,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"route", release.RouteID.String()},
-			{"release", release.ID.String()},
-		},
-		Content: string(content),
 	}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign LLM release register result: %w", err)
+	tags := nostr.Tags{
+		{"status", "success"},
+		{"route", release.RouteID.String()},
+		{"release", release.ID.String()},
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 func (r *Reactor) publishLLMDeploymentStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.LLMDeploymentIntent, step, message string) error {
-	content, _ := json.Marshal(map[string]any{
+	tags := nostr.Tags{
+		{"status", "processing"},
+		{"step", step},
+		{"category", "llm_deployment"},
+		{"route", intent.RouteID.String()},
+		{"environment", intent.EnvironmentID.String()},
+		{"release", intent.ReleaseID.String()},
+		{"intent", intent.ID.String()},
+	}
+	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
 		"intent_id":      intent.ID.String(),
 		"route_id":       intent.RouteID.String(),
 		"environment_id": intent.EnvironmentID.String(),
@@ -2446,36 +2370,18 @@ func (r *Reactor) publishLLMDeploymentStatus(ctx context.Context, requestEvent *
 		"step":           step,
 		"message":        message,
 	})
-	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
-		{"status", "processing"},
-		{"step", step},
-		{"route", intent.RouteID.String()},
-		{"environment", intent.EnvironmentID.String()},
-		{"release", intent.ReleaseID.String()},
-		{"intent", intent.ID.String()},
-	}
-	event := &nostr.Event{Kind: KindLLMDeploymentStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign LLM deployment status: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
 }
 
 func (r *Reactor) publishLLMDeploymentResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.LLMDeploymentIntent, status, message string) error {
-	content, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"intent_id":      intent.ID.String(),
 		"route_id":       intent.RouteID.String(),
 		"environment_id": intent.EnvironmentID.String(),
 		"release_id":     intent.ReleaseID.String(),
 		"status":         status,
 		"message":        message,
-	})
+	}
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "success"},
 		{"result", status},
 		{"route", intent.RouteID.String()},
@@ -2483,37 +2389,17 @@ func (r *Reactor) publishLLMDeploymentResult(ctx context.Context, requestEvent *
 		{"release", intent.ReleaseID.String()},
 		{"intent", intent.ID.String()},
 	}
-	event := &nostr.Event{Kind: KindLLMDeploymentResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign LLM deployment result: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 func (r *Reactor) publishLLMError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
-	kind := KindLLMDeploymentResult
-	switch requestEvent.Kind {
-	case KindLLMRouteCreate:
-		kind = KindLLMRouteCreateResult
-	case KindLLMReleaseRegister:
-		kind = KindLLMReleaseRegisterResult
-	}
-	content, _ := json.Marshal(map[string]any{"status": "error", "step": step, "error": message})
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "error"},
 		{"step", step},
 		{"error", message},
 	}
 	tags = appendLLMRequestTags(tags, requestEvent)
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign LLM error result: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, nil, tags, &JSONRPCError{Code: -32000, Message: message})
 }
 
 func appendLLMRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {
@@ -2558,87 +2444,124 @@ func appendLLMRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags
 
 // publishServiceCreated publishes a result for service creation.
 func (r *Reactor) publishServiceCreated(ctx context.Context, requestEvent *nostr.Event, svc *domain.Service) error {
-	content, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"service_id":    svc.ID.String(),
 		"name":          svc.Name,
 		"artifact_repo": svc.ArtifactRepo,
 		"runtime_type":  svc.RuntimeType,
-	})
-
-	event := &nostr.Event{
-		Kind:      KindServiceCreateResult,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"type", "service_created"},
-			{"service", svc.ID.String()},
-		},
-		Content: string(content),
 	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign service created: %w", err)
+	tags := nostr.Tags{
+		{"status", "success"},
+		{"type", "service_created"},
+		{"service", svc.ID.String()},
 	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 // publishEnvironmentCreated publishes a result for environment creation.
 func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *nostr.Event, env *domain.Environment) error {
-	content, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"environment_id":  env.ID.String(),
 		"name":            env.Name,
 		"protected":       env.Protected,
 		"deploy_strategy": env.DeployStrategy,
-	})
-
-	event := &nostr.Event{
-		Kind:      KindEnvCreateResult,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"type", "environment_created"},
-			{"environment", env.ID.String()},
-		},
-		Content: string(content),
 	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign environment created: %w", err)
+	tags := nostr.Tags{
+		{"status", "success"},
+		{"type", "environment_created"},
+		{"environment", env.ID.String()},
 	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
-// publishError publishes a legacy error result event for direct handler tests.
+// publishError publishes a ContextVM error response for retained direct handler paths.
 func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
 		{"status", "error"},
 		{"step", step},
 		{"error", message},
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	event := &nostr.Event{
-		Kind:      KindDeploymentResult,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   message,
-	}
+	return r.publishContextVMResult(ctx, requestEvent, nil, tags, &JSONRPCError{Code: -32000, Message: message})
+}
 
+func (r *Reactor) publishCanonicalStatus(ctx context.Context, requestEvent *nostr.Event, tags nostr.Tags, content map[string]any) error {
+	if requestEvent == nil {
+		return fmt.Errorf("request event is nil")
+	}
+	if content == nil {
+		content = map[string]any{}
+	}
+	content["request_event_id"] = requestEvent.ID
+	content["request_pubkey"] = requestEvent.PubKey
+	body, err := json.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("marshal canonical status: %w", err)
+	}
+	eventTags := nostr.Tags{{"d", canonicalReplyDTag("status", requestEvent, tags)}, {"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}}
+	eventTags = append(eventTags, compactTags(tags)...)
+	event := &nostr.Event{Kind: KindNIP38Status, CreatedAt: nostr.Now(), Tags: dedupeTags(eventTags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign error event: %w", err)
+		return fmt.Errorf("sign canonical status: %w", err)
 	}
-
-	_, err := r.publishEvent(ctx, event)
+	_, err = r.publishEvent(ctx, event)
 	return err
+}
+
+func (r *Reactor) publishContextVMResult(ctx context.Context, requestEvent *nostr.Event, result any, tags nostr.Tags, rpcErr *JSONRPCError) error {
+	if requestEvent == nil {
+		return fmt.Errorf("request event is nil")
+	}
+	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMReplyID(requestEvent), Result: result}
+	if rpcErr != nil {
+		response.Result = nil
+		response.Error = rpcErr
+	}
+	content, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("marshal ContextVM response: %w", err)
+	}
+	eventTags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {ContextVMRoutingTag, ContextVMWireVersion}}
+	eventTags = append(eventTags, compactTags(tags)...)
+	event := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: dedupeTags(eventTags), Content: string(content)}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign ContextVM response: %w", err)
+	}
+	_, err = r.publishEvent(ctx, event)
+	return err
+}
+
+func contextVMReplyID(requestEvent *nostr.Event) json.RawMessage {
+	if requestEvent != nil && strings.TrimSpace(requestEvent.Content) != "" {
+		var rpc ContextVMJSONRPCRequest
+		if err := json.Unmarshal([]byte(requestEvent.Content), &rpc); err == nil && len(rpc.ID) > 0 {
+			return contextVMResponseID(rpc.ID)
+		}
+	}
+	if requestEvent != nil {
+		if dTag := strings.TrimSpace(tagValueNostr(requestEvent.Tags, "d")); dTag != "" {
+			body, _ := json.Marshal(dTag)
+			return body
+		}
+		if requestEvent.ID != "" {
+			body, _ := json.Marshal(requestEvent.ID)
+			return body
+		}
+	}
+	return json.RawMessage("null")
+}
+
+func canonicalReplyDTag(prefix string, requestEvent *nostr.Event, tags nostr.Tags) string {
+	parts := []string{prefix}
+	if requestEvent != nil && requestEvent.ID != "" {
+		parts = append(parts, requestEvent.ID)
+	}
+	for _, key := range []string{"step", "action", "operation", "intent", "service", "environment", "route"} {
+		if value := strings.TrimSpace(tagValueNostr(tags, key)); value != "" {
+			parts = append(parts, key+":"+value)
+		}
+	}
+	return strings.Join(parts, ":")
 }
 
 // signEvent signs an event through the canonical signer compatibility boundary.
@@ -2835,74 +2758,46 @@ func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) 
 	r.publishRemediationResult(ctx, event, state, "remediation_started", fmt.Sprintf("Deployment intent %s created", intent.ID))
 }
 
-// publishObservationResult publishes a legacy observation result event for direct handler tests.
+// publishObservationResult publishes a ContextVM observation result for retained direct handler paths.
 func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *nostr.Event, obs *domain.RuntimeObservation) error {
-	content, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"observation_id":        obs.ID.String(),
 		"service_id":            obs.ServiceID.String(),
 		"environment_id":        obs.EnvironmentID.String(),
 		"observed_image_digest": obs.ObservedImageDigest,
 		"health_status":         string(obs.HealthStatus),
 		"observed_at":           obs.ObservedAt.Format(time.RFC3339),
-	})
-
-	event := &nostr.Event{
-		Kind:      KindObservationResult,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"service", obs.ServiceID.String()},
-			{"environment", obs.EnvironmentID.String()},
-			{"observation", obs.ID.String()},
-		},
-		Content: string(content),
 	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign observation result: %w", err)
+	tags := nostr.Tags{
+		{"status", "success"},
+		{"service", obs.ServiceID.String()},
+		{"environment", obs.EnvironmentID.String()},
+		{"observation", obs.ID.String()},
 	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
-// publishRemediationResult publishes a legacy remediation result event for direct handler tests.
+// publishRemediationResult publishes a ContextVM remediation result for retained direct handler paths.
 func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *nostr.Event, state *domain.EnvironmentServiceState, status, message string) error {
-	content, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"service_id":     state.ServiceID.String(),
 		"environment_id": state.EnvironmentID.String(),
 		"drift_status":   string(state.DriftStatus),
 		"status":         status,
 		"message":        message,
-	})
-
-	event := &nostr.Event{
-		Kind:      KindRemediationResult,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", status},
-			{"service", state.ServiceID.String()},
-			{"environment", state.EnvironmentID.String()},
-		},
-		Content: string(content),
+	}
+	tags := nostr.Tags{
+		{"status", status},
+		{"service", state.ServiceID.String()},
+		{"environment", state.EnvironmentID.String()},
 	}
 	if state.DesiredArtifactID != nil {
-		event.Tags = append(event.Tags, nostr.Tag{"artifact", state.DesiredArtifactID.String()})
+		tags = append(tags, nostr.Tag{"artifact", state.DesiredArtifactID.String()})
 	}
 	if state.DesiredIntentID != nil {
-		event.Tags = append(event.Tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
+		tags = append(tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
 	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign remediation result: %w", err)
-	}
-
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 // publishStateEvent publishes canonical CAS service state.

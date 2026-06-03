@@ -8,8 +8,7 @@ const initialState = createPublicState();
 test.beforeEach(async ({ page }) => {
   await installE2EMocks(page, { systemInfo });
   await installPublicServiceDeploymentHarness(page, {
-    initialState,
-    emitCreateServiceProjection: false
+    initialState
   });
 });
 
@@ -43,7 +42,7 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       intentCount: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents.length
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5961]),
+      requestKinds: expect.arrayContaining([25910]),
       intentCount: 1
     });
 
@@ -63,7 +62,7 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
       runCount: window.__BAHIA_E2E_PUBLIC_STATE.deploymentRuns.length,
       approvalStates: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents.map((intent) => intent.approval_status)
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([5966]),
+      requestKinds: expect.arrayContaining([25910]),
       runCount: 1,
       approvalStates: expect.arrayContaining(['approved'])
     });
@@ -89,9 +88,10 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
       kinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]
     }));
 
-    const canonicalRequests = transportTrace.requests.filter((request) => [5964, 5989, 5961, 5966].includes(request.kind));
+    const canonicalRequests = transportTrace.requests.filter((request) => request.kind === 25910);
     expect(transportTrace.relays.length).toBeGreaterThanOrEqual(4);
-    expect(transportTrace.kinds).toEqual(expect.arrayContaining([5964, 5989, 5961, 5966]));
+    expect(transportTrace.requests.map((request) => request.operation)).toEqual(expect.arrayContaining(['service/create', 'policy/evaluate', 'service/deploy', 'approval/approve']));
+    expect(transportTrace.kinds).toEqual(expect.arrayContaining([25910]));
     expect(transportTrace.kinds).not.toContain(5980);
     expect(canonicalRequests.length).toBeGreaterThanOrEqual(4);
 
@@ -104,8 +104,8 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
       ]));
     }
     expect(transportTrace.projections).toEqual(expect.arrayContaining([
-      expect.objectContaining({ requestEventId: expect.any(String), kind: 31967 }),
-      expect.objectContaining({ requestEventId: expect.any(String), kind: 31968 })
+      expect.objectContaining({ requestEventId: expect.any(String), kind: 30900 }),
+      expect.objectContaining({ requestEventId: expect.any(String), kind: 30900 })
     ]));
   });
 });

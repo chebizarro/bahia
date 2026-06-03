@@ -15,7 +15,7 @@ import (
 )
 
 // TestDeployStatusEventsIncludeStepTags verifies that step-progression status
-// events (kind:6963) published during DeployWithStatus carry the expected step
+// events published during DeployWithStatus use canonical NIP-38 status events and carry the expected step
 // tag, action tag, and correlation tags (e, p, service, environment, artifact).
 func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
@@ -64,20 +64,20 @@ func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
 
 	reactor.handleServiceAction(context.Background(), requestEvent)
 
-	// Find all status events (kind:6963).
+	// Find all canonical status/result reply events.
 	var statusEvents []nostr.Event
 	var resultEvents []nostr.Event
 	for _, ev := range capture.events {
 		switch ev.Kind {
-		case KindActionStatus:
+		case KindNIP38Status:
 			statusEvents = append(statusEvents, ev)
-		case KindActionResult:
+		case KindContextVMMessage:
 			resultEvents = append(resultEvents, ev)
 		}
 	}
 
 	if len(statusEvents) == 0 {
-		t.Fatal("expected at least one status event (kind:6963)")
+		t.Fatal("expected at least one canonical NIP-38 status event")
 	}
 
 	// The first status event should be the initial "executing" step from handleDirectRuntimeActionRequest.
@@ -116,7 +116,7 @@ func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
 	}
 }
 
-// TestResultEventsCorrelateToOriginalRequest verifies that kind:7962 result
+// TestResultEventsCorrelateToOriginalRequest verifies that ContextVM response
 // events carry the correct correlation tags linking back to the request event.
 func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
@@ -153,13 +153,13 @@ func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 	// Find the result event.
 	var result *nostr.Event
 	for i := range capture.events {
-		if capture.events[i].Kind == KindActionResult {
+		if capture.events[i].Kind == KindContextVMMessage {
 			result = &capture.events[i]
 			break
 		}
 	}
 	if result == nil {
-		t.Fatal("no result event (kind:7962) published")
+		t.Fatal("no ContextVM result event published")
 	}
 
 	// Verify correlation tags.
@@ -183,9 +183,7 @@ func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 
 	// Verify result content is valid and contains the expected payload.
 	var payload dto.RuntimeActionResponse
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("decode result content: %v", err)
-	}
+	decodeContextVMResult(t, *result, &payload)
 	if payload.Action != "deploy" {
 		t.Fatalf("result action = %q, want deploy", payload.Action)
 	}
@@ -201,7 +199,7 @@ func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 }
 
 // TestFailurePathsPublishTerminalResults verifies that when the runtime
-// lifecycle service returns an error, a terminal result event (kind:7962) is
+// lifecycle service returns an error, a terminal ContextVM error response is
 // still published with status=failed and the error message.
 func TestFailurePathsPublishTerminalResults(t *testing.T) {
 	tests := []struct {
@@ -266,7 +264,7 @@ func TestFailurePathsPublishTerminalResults(t *testing.T) {
 			// Find the terminal result event.
 			var result *nostr.Event
 			for i := range capture.events {
-				if capture.events[i].Kind == KindActionResult {
+				if capture.events[i].Kind == KindContextVMMessage {
 					ev := capture.events[i]
 					// Check if this is the terminal result (not the status event).
 					for _, tag := range ev.Tags {
@@ -278,7 +276,7 @@ func TestFailurePathsPublishTerminalResults(t *testing.T) {
 				}
 			}
 			if result == nil {
-				t.Fatal("no terminal failure result event (kind:7962 status=failed) published")
+				t.Fatal("no terminal ContextVM failure result event status=failed published")
 			}
 
 			// Verify correlation tags on failure result.
@@ -300,18 +298,18 @@ func TestFailurePathsPublishTerminalResults(t *testing.T) {
 				t.Fatal("failure result missing error tag")
 			}
 
-			// Verify error content includes the error message.
-			var content2 map[string]interface{}
-			if err := json.Unmarshal([]byte(result.Content), &content2); err != nil {
-				t.Fatalf("decode failure result content: %v", err)
+			var response ContextVMJSONRPCResponse
+			if err := json.Unmarshal([]byte(result.Content), &response); err != nil {
+				t.Fatalf("decode failure ContextVM response: %v", err)
 			}
-			if errStr, ok := content2["error"].(string); !ok || errStr == "" {
-				t.Fatalf("failure result content missing error field: %v", content2)
+			if response.Error == nil || response.Error.Message == "" {
+				t.Fatalf("failure response missing error: %+v", response)
 			}
 
 			// Verify resource correlation tags are present.
 			assertReactorTag(t, result.Tags, "service", serviceID.String())
 			assertReactorTag(t, result.Tags, "environment", envID.String())
+			assertNoLegacyStatusResultEvents(t, capture.events)
 		})
 	}
 }
@@ -353,7 +351,7 @@ func TestDeployStatusStepProgressionPublishesAllSteps(t *testing.T) {
 	// Collect all status events.
 	var statusSteps []string
 	for _, ev := range capture.events {
-		if ev.Kind == KindActionStatus {
+		if ev.Kind == KindNIP38Status {
 			for _, tag := range ev.Tags {
 				if len(tag) >= 2 && tag[0] == "step" {
 					statusSteps = append(statusSteps, tag[1])
@@ -383,32 +381,17 @@ func TestDeployStatusStepProgressionPublishesAllSteps(t *testing.T) {
 	}
 }
 
-// TestResultEventKindsMatchDocumentedSemantics verifies that the event kinds
-// used for status and result events match the documented Nostr command spec.
-func TestResultEventKindsMatchDocumentedSemantics(t *testing.T) {
-	// Kind:6963 is KindActionStatus (service action progress).
-	if KindActionStatus != 6963 {
-		t.Fatalf("KindActionStatus = %d, want 6963", KindActionStatus)
+// TestProductionReplyKindsAreCanonical verifies production command reply paths
+// use canonical NIP-38 status and ContextVM response kinds instead of legacy 696x/796x replies.
+func TestProductionReplyKindsAreCanonical(t *testing.T) {
+	if KindNIP38Status >= 6961 && KindNIP38Status <= 6999 {
+		t.Fatalf("KindNIP38Status = %d must not be legacy 696x", KindNIP38Status)
 	}
-
-	// Kind:7962 is KindActionResult (service action terminal result).
-	if KindActionResult != 7962 {
-		t.Fatalf("KindActionResult = %d, want 7962", KindActionResult)
+	if KindContextVMMessage >= 7961 && KindContextVMMessage <= 7999 {
+		t.Fatalf("KindContextVMMessage = %d must not be legacy 796x", KindContextVMMessage)
 	}
-
-	// Kind:6961 is KindDeploymentStatus (deployment progress).
-	if KindDeploymentStatus != 6961 {
-		t.Fatalf("KindDeploymentStatus = %d, want 6961", KindDeploymentStatus)
-	}
-
-	// Kind:7961 is KindDeploymentResult (deployment terminal result).
-	if KindDeploymentResult != 7961 {
-		t.Fatalf("KindDeploymentResult = %d, want 7961", KindDeploymentResult)
-	}
-
-	// Kind:31961 is KindServiceState (replaceable service state read model).
-	if KindServiceState != 31961 {
-		t.Fatalf("KindServiceState = %d, want 31961", KindServiceState)
+	if KindActionStatus != 6963 || KindActionResult != 7962 {
+		t.Fatalf("legacy constants changed unexpectedly; keep them migration/test-only")
 	}
 }
 
