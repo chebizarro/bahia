@@ -60,7 +60,7 @@ func (p *WorkerStatePublisher) Publish(ctx context.Context, worker *domain.Worke
 		worker.SchedulingState = domain.WorkerSchedulingActive
 	}
 	content := workerStateContent(worker)
-	event := &nostr.Event{Kind: KindWorkerState, CreatedAt: p.nextCreatedAt(worker.PubKey), Tags: workerStateTags(worker), Content: mustJSON(content)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: p.nextCreatedAt(worker.PubKey), Tags: workerStateTags(worker), Content: mustJSON(content)}
 	if err := SignGoNostrEvent(ctx, p.signer, event); err != nil {
 		return fmt.Errorf("sign worker state: %w", err)
 	}
@@ -131,7 +131,16 @@ func workerStateContent(worker *domain.Worker) map[string]any {
 }
 
 func workerStateTags(worker *domain.Worker) nostr.Tags {
-	tags := nostr.Tags{{"d", worker.PubKey}, {"worker", worker.PubKey}, {"deleted", "false"}, {"status", string(worker.Status)}, {"scheduling_state", string(worker.SchedulingState)}}
+	tags := nostr.Tags{
+		{"d", "worker:state:" + worker.PubKey},
+		{"domain", "worker"},
+		{"schema", "bahia.state.worker.v1"},
+		{"legacy_kind", fmt.Sprintf("%d", KindWorkerState)},
+		{"worker", worker.PubKey},
+		{"deleted", "false"},
+		{"status", string(worker.Status)},
+		{"scheduling_state", string(worker.SchedulingState)},
+	}
 	if worker.Pressure != nil {
 		if worker.Pressure.CapacityClass != "" {
 			tags = append(tags, nostr.Tag{"capacity_class", string(worker.Pressure.CapacityClass)})

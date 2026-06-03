@@ -607,7 +607,7 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	r.trackLastSeen(event)
 
 	switch {
-	case event.Kind == nostrpool.KindHeartbeatObservation:
+	case isHeartbeatObservationEvent(event):
 		go r.handleHeartbeatObservation(ctx, event)
 	case isCanonicalRuntimeReplayKind(event.Kind):
 		return
@@ -646,7 +646,21 @@ func (r *Reactor) isDuplicateIdempotencyCommand(ctx context.Context, event *nost
 }
 
 func isIdempotencyCommandKind(kind int) bool {
-	return slices.Contains(defaultRequestSubscriptionKinds(), kind) || kind == nostrpool.KindFailoverRequest || kind == nostrpool.KindRecoveryRequest
+	switch kind {
+	case kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, nostrpool.KindFailoverRequest, nostrpool.KindRecoveryRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+func isHeartbeatObservationEvent(event *nostr.Event) bool {
+	if event == nil || event.Kind != nostrpool.KindNIP38Status {
+		return false
+	}
+	schema := tagValueNostr(event.Tags, "schema")
+	dTag := tagValueNostr(event.Tags, "d")
+	return schema == "bahia.status.continuity-heartbeat.v1" || strings.HasPrefix(dTag, "continuity:heartbeat:") || strings.HasPrefix(dTag, "heartbeat:")
 }
 
 func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
@@ -1873,12 +1887,7 @@ const (
 )
 
 func acceptedWorkerReadModelKinds() []int {
-	return []int{
-		KindWorkerState,
-		KindWorkerAssignmentState,
-		KindWorkerDrainStatus,
-		KindWorkerEligibilityPreview,
-	}
+	return []int{KindCASControlState}
 }
 
 func isAcceptedWorkerReadModelKind(kind int) bool {
@@ -2024,7 +2033,6 @@ func canonicalReactorSubscriptionKinds() []int {
 		kinds.ContextVMMessage,
 		kinds.ContextVMGiftWrap,
 		kinds.ContextVMEphemeralGiftWrap,
-		nostrpool.KindHeartbeatObservation,
 	}
 }
 
@@ -2043,7 +2051,6 @@ func canonicalRuntimeReplayKinds() []int {
 		kinds.ContextVMPromptsList,
 		nostrpool.KindRelaySetDiscovery,
 		nostrpool.KindNIP65RelayList,
-		nostrpool.KindHeartbeatObservation,
 	}
 }
 

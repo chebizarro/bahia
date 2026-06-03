@@ -7,26 +7,19 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-func TestWorkerKindConstantsUseNonCollidingCanonicalBlock(t *testing.T) {
+func TestWorkerLegacyKindConstantsRemainMigrationOnly(t *testing.T) {
 	if KindWorkerState != 32000 || KindWorkerAssignmentState != 32001 || KindWorkerDrainStatus != 32002 || KindWorkerEligibilityPreview != 32003 {
-		t.Fatalf("unexpected worker read model kinds: state=%d assignment=%d drain=%d eligibility=%d", KindWorkerState, KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview)
+		t.Fatalf("unexpected legacy worker read model kind mappings: state=%d assignment=%d drain=%d eligibility=%d", KindWorkerState, KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview)
 	}
 }
 
-func TestWorkerReadModelCompatibilityKindsAcceptCanonicalValuesOnly(t *testing.T) {
-	for _, kind := range []int{
-		KindWorkerState,
-		KindWorkerAssignmentState,
-		KindWorkerDrainStatus,
-		KindWorkerEligibilityPreview,
-	} {
-		if !isAcceptedWorkerReadModelKind(kind) {
-			t.Fatalf("worker read-model kind %d should be accepted", kind)
-		}
+func TestWorkerReadModelRuntimeAcceptsCanonicalStateKindOnly(t *testing.T) {
+	if !isAcceptedWorkerReadModelKind(KindCASControlState) {
+		t.Fatalf("canonical worker read-model kind %d should be accepted", KindCASControlState)
 	}
-	for _, kind := range []int{31974, 31991, 31992, 31993, 31994, 31995, 31996, 31997, 31998, 31999, 32010} {
+	for _, kind := range []int{KindWorkerState, KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview, 31974, 31991, 31992, 31993, 31994, 31995, 31996, 31997, 31998, 31999, 32010} {
 		if isAcceptedWorkerReadModelKind(kind) {
-			t.Fatalf("non-worker read-model kind %d should not be accepted as a worker compatibility kind", kind)
+			t.Fatalf("legacy/non-worker read-model kind %d should not be accepted at runtime", kind)
 		}
 	}
 }

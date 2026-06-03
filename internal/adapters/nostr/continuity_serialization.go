@@ -350,13 +350,19 @@ func DecodeReplicationPolicyEvent(event *gonostr.Event) (*domain.ReplicationPoli
 	return &policy, nil
 }
 
-// EncodeHeartbeatObservationEvent serializes a worker heartbeat as a kind 30350 observation.
+const heartbeatObservationStatusSchema = "bahia.status.continuity-heartbeat.v1"
+
+// EncodeHeartbeatObservationEvent serializes a worker heartbeat as a NIP-38 status event.
 func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.Event, error) {
 	if err := validateHeartbeatObservation(&obs); err != nil {
 		return gonostr.Event{}, err
 	}
 	tags := gonostr.Tags{
-		{"d", "heartbeat:" + obs.WorkerPubKey},
+		{"d", "continuity:heartbeat:" + obs.WorkerPubKey},
+		{"domain", "continuity"},
+		{"schema", heartbeatObservationStatusSchema},
+		{"status", "online"},
+		{"legacy_kind", strconv.Itoa(KindHeartbeatObservation)},
 		{"worker", obs.WorkerPubKey},
 		{"p", obs.WorkerPubKey},
 		{"sequence", strconv.FormatUint(obs.Sequence, 10)},
@@ -365,20 +371,27 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 	if obs.ExpiresAfter > 0 {
 		tags = append(tags, gonostr.Tag{"expires_after_ms", strconv.FormatInt(obs.ExpiresAfter.Milliseconds(), 10)})
 	}
-	event := continuityEventBase(KindHeartbeatObservation, tags, "")
+	event := continuityEventBase(KindNIP38Status, tags, "")
 	if !obs.ObservedAt.IsZero() {
 		event.CreatedAt = gonostr.Timestamp(obs.ObservedAt.Unix())
 	}
 	return event, nil
 }
 
-// DecodeHeartbeatObservationEvent deserializes a kind 30350 heartbeat observation.
+// DecodeHeartbeatObservationEvent deserializes a canonical NIP-38 heartbeat status.
+// Legacy kind 30350 is accepted only for local historical decode/migration paths;
+// runtime subscriptions and new publishes must use KindNIP38Status.
 func DecodeHeartbeatObservationEvent(event *gonostr.Event) (*domain.HeartbeatObservation, error) {
 	if event == nil {
 		return nil, fmt.Errorf("heartbeat observation event is nil")
 	}
-	if event.Kind != KindHeartbeatObservation {
+	if event.Kind != KindNIP38Status && event.Kind != KindHeartbeatObservation {
 		return nil, fmt.Errorf("unexpected heartbeat observation kind %d", event.Kind)
+	}
+	if event.Kind == KindNIP38Status {
+		if schema := continuityTagValue(event.Tags, "schema"); schema != "" && schema != heartbeatObservationStatusSchema {
+			return nil, fmt.Errorf("unexpected heartbeat observation schema %q", schema)
+		}
 	}
 	if continuityTagValue(event.Tags, "d") == "" {
 		return nil, fmt.Errorf("heartbeat observation d tag is required")

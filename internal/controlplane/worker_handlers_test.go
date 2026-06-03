@@ -34,10 +34,10 @@ func TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle(t *testing.T) {
 		t.Fatalf("unexpected worker state: %#v", updated)
 	}
 	assertPublishedKind(t, capture.events, KindWorkerStatus)
-	assertPublishedKind(t, capture.events, KindWorkerState)
+	assertPublishedKind(t, capture.events, KindCASControlState)
 	assertPublishedKind(t, capture.events, KindWorkerResult)
-	state := lastPublishedKind(t, capture.events, KindWorkerState)
-	if tagValueNostr(state.Tags, "d") != workerPubkey || tagValueNostr(state.Tags, "scheduling_state") != string(domain.WorkerSchedulingCordoned) {
+	state := lastPublishedKind(t, capture.events, KindCASControlState)
+	if tagValueNostr(state.Tags, "d") != "worker:state:"+workerPubkey || tagValueNostr(state.Tags, "domain") != "worker" || tagValueNostr(state.Tags, "schema") != "bahia.state.worker.v1" || tagValueNostr(state.Tags, "legacy_kind") != "32000" || tagValueNostr(state.Tags, "scheduling_state") != string(domain.WorkerSchedulingCordoned) {
 		t.Fatalf("unexpected worker state tags: %#v", state.Tags)
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
@@ -69,7 +69,7 @@ func TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel(t *testing.
 	if updated.Labels["role"] != "inference" || updated.Labels["track"] != "canary" {
 		t.Fatalf("unexpected labels: %#v", updated.Labels)
 	}
-	state := lastPublishedKind(t, capture.events, KindWorkerState)
+	state := lastPublishedKind(t, capture.events, KindCASControlState)
 	if !hasFullTag(state.Tags, nostr.Tag{"label", "role", "inference"}) || !hasFullTag(state.Tags, nostr.Tag{"label", "track", "canary"}) {
 		t.Fatalf("state event missing label tags: %#v", state.Tags)
 	}

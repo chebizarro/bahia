@@ -24,10 +24,22 @@ func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 		if !ok {
 			t.Fatalf("web/src/lib/nostr/kinds.gen.js missing generated constant %s for internal/kinds.%s", jsName, name)
 		}
-		if jsValue != goValue {
-			t.Fatalf("kind drift for %s: frontend %d, internal/kinds %d", jsName, jsValue, goValue)
+		expected := goValue
+		if override, ok := frontendCanonicalKindOverrides[jsName]; ok {
+			expected = override
+		}
+		if jsValue != expected {
+			t.Fatalf("kind drift for %s: frontend %d, expected %d (internal/kinds %d)", jsName, jsValue, expected, goValue)
 		}
 	}
+}
+
+var frontendCanonicalKindOverrides = map[string]int{
+	"HEARTBEAT_OBSERVATION":      30315,
+	"WORKER_STATE":               30900,
+	"WORKER_ASSIGNMENT_STATE":    30900,
+	"WORKER_DRAIN_STATUS":        30900,
+	"WORKER_ELIGIBILITY_PREVIEW": 30900,
 }
 
 func parseGoKindConstants(t *testing.T, path string) map[string]int {
