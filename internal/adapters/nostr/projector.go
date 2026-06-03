@@ -2049,7 +2049,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 		},
 	}
 	content, _ := json.Marshal(payload)
-	if err := p.publishSigned(ctx, KindSystemDiscovery, gonostr.Tags{{"d", "bahia-system-v1"}, {"schema", "bahia.system-discovery.v1"}}, string(content), "system.discovery", nil); err != nil {
+	if err := p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, gonostr.Tags{{"schema", "bahia.system-discovery.v1"}, {"name", "Bahia"}}, string(content), "system.discovery", nil); err != nil {
 		return err
 	}
 	if err := p.publishRelaySet(ctx, "bahia-browser-v1", browserRelays); err != nil {

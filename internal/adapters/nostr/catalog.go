@@ -757,8 +757,14 @@ func noopProjectionFamily(group string) ProjectionFamily {
 	switch {
 	case strings.HasPrefix(group, "core_control_plane"):
 		return FamilyControlPlane
-	case strings.HasPrefix(group, "system"):
+	case strings.HasPrefix(group, "discovery") || strings.HasPrefix(group, "system"):
 		return FamilySystem
+	case strings.HasPrefix(group, "state"):
+		return FamilyState
+	case strings.HasPrefix(group, "status"):
+		return FamilyControlPlane
+	case strings.HasPrefix(group, "audit"):
+		return FamilyControlPlane
 	default:
 		return ProjectionFamily("")
 	}

@@ -462,8 +462,8 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 		t.Fatalf("republish snapshot: %v", err)
 	}
 
-	discovery := assertOneSignedKind(t, sink, KindSystemDiscovery)
-	assertTag(t, discovery, "d", "bahia-system-v1")
+	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertTag(t, discovery, "schema", "bahia.system-discovery.v1")
 	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
 	browserSet := assertOneRelaySet(t, sink, "bahia-browser-v1")
 	assertTag(t, browserSet, "relay", "ws://localhost:3000/relay")
@@ -1021,7 +1021,7 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 		t.Fatalf("republish snapshot: %v", err)
 	}
 
-	discovery := assertOneSignedKind(t, sink, KindSystemDiscovery)
+	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
 		t.Fatalf("unmarshal discovery: %v", err)
