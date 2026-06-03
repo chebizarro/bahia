@@ -596,15 +596,15 @@ recordObservation({ service_id, environment_id, observed_image_digest, health_st
 | **Services** | | | | |
 | List | ✅ | ✅ | ✅ | ✅ `bahia_list_services` |
 | Get | ✅ | ✅ | ✅ | ✅ `bahia_get_service` |
-| Create | ✅ | ❌ | ❌ | ✅ `bahia_create_service` |
-| Update | ✅ | ❌ | ❌ | ❌ |
-| Delete | ✅ | ❌ | ❌ | ✅ `bahia_delete_service` |
+| Create | signer-first Nostr only | ❌ REST mutation removed | signer-first Nostr | deprecated `bahia_create_service` returns migration error |
+| Update | signer-first Nostr only | ❌ REST mutation removed | signer-first Nostr | deprecated `bahia_update_service` returns migration error |
+| Delete | signer-first Nostr only | ❌ REST mutation removed | signer-first Nostr | deprecated `bahia_delete_service` returns migration error |
 | **Environments** | | | | |
 | List | ✅ | ✅ | ✅ | ✅ `bahia_list_environments` |
 | Get | ✅ | ✅ | ❌ | ✅ `bahia_get_environment` |
-| Create | ✅ | ❌ | ❌ | ✅ `bahia_create_environment` |
-| Update | ✅ | ❌ | ❌ | ❌ |
-| Delete | ✅ | ❌ | ❌ | ✅ `bahia_delete_environment` |
+| Create | signer-first Nostr only | ❌ REST mutation removed | signer-first Nostr | deprecated `bahia_create_environment` returns migration error |
+| Update | signer-first Nostr only | ❌ REST mutation removed | signer-first Nostr | deprecated `bahia_update_environment` returns migration error |
+| Delete | signer-first Nostr only | ❌ REST mutation removed | signer-first Nostr | deprecated `bahia_delete_environment` returns migration error |
 | **Deployments** | | | | |
 | Create Intent | ✅ | ✅ | ❌ | ✅ `bahia_deploy` |
 | Get Intent | ✅ | ✅ | ❌ | ✅ `bahia_get_deployment_status` |
@@ -674,10 +674,10 @@ recordObservation({ service_id, environment_id, observed_image_digest, health_st
 
 ## MCP Tool Coverage Gaps
 
-The following operations exist in the REST API but lack MCP tools:
+The following operations exist in the REST API but lack MCP tools, or intentionally require signer-first Nostr flows instead of direct MCP registry writes:
 
-1. **Service Update** - Can create/delete but not update
-2. **Environment Update** - Can create/delete but not update
+1. **Service Create/Update/Delete** - Direct MCP registry writes are deprecated; use signed ContextVM/Nostr `service/*` commands.
+2. **Environment Create/Update/Delete** - Direct MCP registry writes are deprecated; use signed ContextVM/Nostr `environment/*` commands.
 3. **Policy CRUD** - No MCP tools for policies
 4. **Secrets CRUD** - No MCP tools for secrets
 5. **Notification CRUD** - No MCP tools for notifications
@@ -691,11 +691,9 @@ The following operations exist in the REST API but lack MCP tools:
 ### Recommended New MCP Tools
 
 ```go
-// Service operations
-"bahia_update_service"     // Update service properties
-
-// Environment operations
-"bahia_update_environment" // Update environment config
+// Service/environment mutations are intentionally omitted from new direct-write recommendations.
+// Use signer-first ContextVM/Nostr methods: service/create, service/update, service/delete,
+// environment/create, environment/update, environment/delete.
 
 // Policy operations
 "bahia_list_policies"

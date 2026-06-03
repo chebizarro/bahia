@@ -77,6 +77,10 @@ func newRootCommand() *cobra.Command {
 	return rootCmd
 }
 
+func signerFirstMutationUnavailable(method string) error {
+	return fmt.Errorf("%s is no longer available through REST-backed CLI mutations; publish a signed ContextVM/Nostr %s command with an operator signer instead", method, method)
+}
+
 // --- Auth Commands ---
 
 func authCommands() *cobra.Command {
@@ -145,18 +149,10 @@ func servicesCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new service",
+		Short: "Create a new service (deprecated: signer-first Nostr only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, _ := cmd.Flags().GetString("name")
-			artifactRepo, _ := cmd.Flags().GetString("artifact-repo")
-			runtimeType, _ := cmd.Flags().GetString("runtime-type")
-
-			svc, err := apiClient.CreateService(cmd.Context(), name, artifactRepo, domain.RuntimeType(runtimeType))
-			if err != nil {
-				return err
-			}
-			return outputSingle(svc)
+			return signerFirstMutationUnavailable("service/create")
 		},
 	}
 	createCmd.Flags().String("name", "", "Service name")
@@ -285,18 +281,10 @@ func environmentsCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new environment",
+		Short: "Create a new environment (deprecated: signer-first Nostr only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, _ := cmd.Flags().GetString("name")
-			strategy, _ := cmd.Flags().GetString("strategy")
-			protected, _ := cmd.Flags().GetBool("protected")
-
-			env, err := apiClient.CreateEnvironment(cmd.Context(), name, domain.DeployStrategy(strategy), protected)
-			if err != nil {
-				return err
-			}
-			return outputSingle(env)
+			return signerFirstMutationUnavailable("environment/create")
 		},
 	}
 	createCmd.Flags().String("name", "", "Environment name")

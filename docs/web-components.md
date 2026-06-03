@@ -175,7 +175,7 @@ This guide documents the reusable Svelte components available in the Bahia web a
   async function save() {
     saving = true;
     try {
-      await api.createService(data);
+      await submitSignedOperatorCommand('service/create', data);
     } finally {
       saving = false;
     }
@@ -186,6 +186,8 @@ This guide documents the reusable Svelte components available in the Bahia web a
   Save Service
 </LoadingButton>
 ```
+
+Service and environment create/update/delete flows must use signer-first ContextVM/Nostr operator commands. REST-backed API client mutation helpers and direct MCP registry writes are deprecated and return migration errors.
 
 ---
 

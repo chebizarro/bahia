@@ -230,7 +230,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_service",
-			Description: "Register a new service in the deployment registry",
+			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method service/create instead",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -258,7 +258,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_update_service",
-			Description: "Update an existing service's configuration",
+			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method service/update instead",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -319,7 +319,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_environment",
-			Description: "Create a new deployment environment",
+			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method environment/create instead",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -344,7 +344,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_update_environment",
-			Description: "Update an existing environment's configuration",
+			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method environment/update instead",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -570,7 +570,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_delete_service",
-			Description: "Delete a service from the registry",
+			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method service/delete instead",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -589,7 +589,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_delete_environment",
-			Description: "Delete an environment from the registry",
+			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method environment/delete instead",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1716,6 +1716,10 @@ func (s *Server) InvokeTool(ctx context.Context, name string, arguments map[stri
 	return s.CallTool(ctx, name, arguments)
 }
 
+func signerFirstMCPMutationUnavailable(toolName, method string) *ToolResult {
+	return errorResult(fmt.Sprintf("%s is no longer available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
+}
+
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
 
@@ -2030,47 +2034,7 @@ func (s *Server) handleGetService(ctx context.Context, args map[string]interface
 }
 
 func (s *Server) handleCreateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	name, _ := args["name"].(string)
-	artifactRepo, _ := args["artifact_repo"].(string)
-	repoURL, _ := args["repo_url"].(string)
-	runtimeType, _ := args["runtime_type"].(string)
-
-	if name == "" {
-		return errorResult("name is required"), nil
-	}
-	if artifactRepo == "" {
-		return errorResult("artifact_repo is required"), nil
-	}
-
-	if runtimeType == "" {
-		runtimeType = "docker"
-	}
-
-	// Validate runtime type
-	if err := domain.ValidateRuntimeType(domain.RuntimeType(runtimeType)); err != nil {
-		return errorResult(fmt.Sprintf("invalid runtime_type: %v", err)), nil
-	}
-
-	svc := &domain.Service{
-		ID:           uuid.New(),
-		Name:         name,
-		ArtifactRepo: artifactRepo,
-		RepoURL:      repoURL,
-		RuntimeType:  domain.RuntimeType(runtimeType),
-	}
-
-	if err := s.registry.CreateService(ctx, svc); err != nil {
-		return errorResult(fmt.Sprintf("failed to create service: %v", err)), nil
-	}
-
-	s.logger.Info("service created", zap.String("service_id", svc.ID.String()), zap.String("name", name))
-
-	result := map[string]interface{}{
-		"status":     "created",
-		"service_id": svc.ID.String(),
-		"name":       name,
-	}
-	return jsonResult(result)
+	return signerFirstMCPMutationUnavailable("bahia_create_service", "service/create"), nil
 }
 
 func (s *Server) handleListEnvironments(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2116,162 +2080,15 @@ func (s *Server) handleGetEnvironment(ctx context.Context, args map[string]inter
 }
 
 func (s *Server) handleCreateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	name, _ := args["name"].(string)
-	protected, _ := args["protected"].(bool)
-	deployStrategy, _ := args["deploy_strategy"].(string)
-
-	if name == "" {
-		return errorResult("name is required"), nil
-	}
-
-	if deployStrategy == "" {
-		deployStrategy = "replace"
-	}
-
-	env := &domain.Environment{
-		ID:             uuid.New(),
-		Name:           name,
-		Protected:      protected,
-		DeployStrategy: domain.DeployStrategy(deployStrategy),
-	}
-
-	if err := s.registry.CreateEnvironment(ctx, env); err != nil {
-		return errorResult(fmt.Sprintf("failed to create environment: %v", err)), nil
-	}
-
-	s.logger.Info("environment created", zap.String("environment_id", env.ID.String()), zap.String("name", name))
-
-	result := map[string]interface{}{
-		"status":         "created",
-		"environment_id": env.ID.String(),
-		"name":           name,
-	}
-	return jsonResult(result)
+	return signerFirstMCPMutationUnavailable("bahia_create_environment", "environment/create"), nil
 }
 
 func (s *Server) handleUpdateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	if serviceIDStr == "" {
-		return errorResult("service_id is required"), nil
-	}
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	// Get existing service
-	svc, err := s.registry.GetService(ctx, serviceID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get service: %v", err)), nil
-	}
-	if svc == nil {
-		return errorResult("service not found"), nil
-	}
-
-	// Update fields if provided
-	if name, ok := args["name"].(string); ok && name != "" {
-		svc.Name = name
-	}
-	if repoURL, ok := args["repo_url"].(string); ok {
-		svc.RepoURL = repoURL
-		svc.Repository = nil
-	}
-	if artifactRepo, ok := args["artifact_repo"].(string); ok && artifactRepo != "" {
-		svc.ArtifactRepo = artifactRepo
-	}
-	if defaultBranch, ok := args["default_branch"].(string); ok {
-		svc.DefaultBranch = defaultBranch
-	}
-	if runtimeType, ok := args["runtime_type"].(string); ok && runtimeType != "" {
-		rt := domain.RuntimeType(runtimeType)
-		// Validate runtime type
-		if rt != domain.RuntimeTypeDocker && rt != domain.RuntimeTypeCompose &&
-			rt != domain.RuntimeTypeK8s && rt != domain.RuntimeTypePodman {
-			return errorResult(fmt.Sprintf("invalid runtime_type: %s (must be docker, compose, kubernetes, or podman)", runtimeType)), nil
-		}
-		svc.RuntimeType = rt
-	}
-
-	svc.UpdatedAt = time.Now()
-
-	if err := s.registry.UpdateService(ctx, svc); err != nil {
-		return errorResult(fmt.Sprintf("failed to update service: %v", err)), nil
-	}
-
-	s.logger.Info("service updated",
-		zap.String("service_id", svc.ID.String()),
-		zap.String("name", svc.Name),
-	)
-
-	result := map[string]interface{}{
-		"status":     "updated",
-		"service_id": svc.ID.String(),
-		"service":    serviceToMap(svc),
-	}
-	return jsonResult(result)
+	return signerFirstMCPMutationUnavailable("bahia_update_service", "service/update"), nil
 }
 
 func (s *Server) handleUpdateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	envIDStr, _ := args["environment_id"].(string)
-	if envIDStr == "" {
-		return errorResult("environment_id is required"), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	// Get existing environment
-	env, err := s.registry.GetEnvironment(ctx, envID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get environment: %v", err)), nil
-	}
-	if env == nil {
-		return errorResult("environment not found"), nil
-	}
-
-	// Update fields if provided
-	if name, ok := args["name"].(string); ok && name != "" {
-		env.Name = name
-	}
-	if loomWorkerSelector, ok := args["loom_worker_selector"].(map[string]interface{}); ok {
-		env.LoomWorkerSelector = loomWorkerSelector
-	}
-	if runtimeConfig, ok := args["runtime_config"].(map[string]interface{}); ok {
-		env.RuntimeConfig = runtimeConfig
-	}
-	if deployStrategy, ok := args["deploy_strategy"].(string); ok && deployStrategy != "" {
-		ds := domain.DeployStrategy(deployStrategy)
-		// Validate deploy strategy
-		if ds != domain.DeployStrategyReplace && ds != domain.DeployStrategyBlueGreen &&
-			ds != domain.DeployStrategyCanary {
-			return errorResult(fmt.Sprintf("invalid deploy_strategy: %s (must be replace, blue_green, or canary)", deployStrategy)), nil
-		}
-		env.DeployStrategy = ds
-	}
-	if protected, ok := args["protected"].(bool); ok {
-		env.Protected = protected
-	}
-
-	env.UpdatedAt = time.Now()
-
-	if err := s.registry.UpdateEnvironment(ctx, env); err != nil {
-		return errorResult(fmt.Sprintf("failed to update environment: %v", err)), nil
-	}
-
-	s.logger.Info("environment updated",
-		zap.String("environment_id", env.ID.String()),
-		zap.String("name", env.Name),
-	)
-
-	result := map[string]interface{}{
-		"status":         "updated",
-		"environment_id": env.ID.String(),
-		"environment":    environmentToMap(env),
-	}
-	return jsonResult(result)
+	return signerFirstMCPMutationUnavailable("bahia_update_environment", "environment/update"), nil
 }
 
 func (s *Server) handleDeploy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2740,47 +2557,11 @@ func (s *Server) handleLLMRollback(ctx context.Context, args map[string]interfac
 }
 
 func (s *Server) handleDeleteService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	force, _ := args["force"].(bool)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	if err := s.registry.DeleteService(ctx, serviceID, force); err != nil {
-		return errorResult(fmt.Sprintf("failed to delete service: %v", err)), nil
-	}
-
-	s.logger.Info("service deleted", zap.String("service_id", serviceID.String()))
-
-	result := map[string]interface{}{
-		"status":     "deleted",
-		"service_id": serviceID.String(),
-	}
-	return jsonResult(result)
+	return signerFirstMCPMutationUnavailable("bahia_delete_service", "service/delete"), nil
 }
 
 func (s *Server) handleDeleteEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	envIDStr, _ := args["environment_id"].(string)
-	force, _ := args["force"].(bool)
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	if err := s.registry.DeleteEnvironment(ctx, envID, force); err != nil {
-		return errorResult(fmt.Sprintf("failed to delete environment: %v", err)), nil
-	}
-
-	s.logger.Info("environment deleted", zap.String("environment_id", envID.String()))
-
-	result := map[string]interface{}{
-		"status":         "deleted",
-		"environment_id": envID.String(),
-	}
-	return jsonResult(result)
+	return signerFirstMCPMutationUnavailable("bahia_delete_environment", "environment/delete"), nil
 }
 
 func (s *Server) handleListArtifacts(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {

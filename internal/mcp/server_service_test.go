@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,32 +123,20 @@ func newTestMCPServiceServer() (*Server, *testServiceRepo) {
 	return server, svcRepo
 }
 
-func TestCallTool_ServiceListGetCreateDelete(t *testing.T) {
+func TestCallTool_ServiceListGetAndMutationsDeprecated(t *testing.T) {
 	ctx := context.Background()
 	server, svcRepo := newTestMCPServiceServer()
-
-	createRes, err := server.CallTool(ctx, "bahia_create_service", map[string]interface{}{
-		"name":          "api",
-		"artifact_repo": "registry.example.com/api",
-		"repo_url":      "https://example.com/api.git",
-		"runtime_type":  "compose",
-	})
-	if err != nil {
-		t.Fatalf("create call err: %v", err)
-	}
-	if createRes.IsError {
-		t.Fatalf("create returned error: %s", createRes.Content[0].Text)
-	}
-	createPayload := decodeResultMap(t, createRes)
-	serviceID := createPayload["service_id"].(string)
-	if createPayload["status"] != "created" {
-		t.Fatalf("expected created status, got %v", createPayload["status"])
-	}
-	if len(svcRepo.services) != 1 {
-		t.Fatalf("expected service to be persisted, got %d", len(svcRepo.services))
+	serviceID := uuid.New()
+	svcRepo.services[serviceID] = &domain.Service{
+		ID:            serviceID,
+		Name:          "api",
+		RepoURL:       "https://example.com/api.git",
+		ArtifactRepo:  "registry.example.com/api",
+		DefaultBranch: "main",
+		RuntimeType:   domain.RuntimeTypeCompose,
 	}
 
-	getByIDRes, err := server.CallTool(ctx, "bahia_get_service", map[string]interface{}{"service_id": serviceID})
+	getByIDRes, err := server.CallTool(ctx, "bahia_get_service", map[string]interface{}{"service_id": serviceID.String()})
 	if err != nil {
 		t.Fatalf("get by id call err: %v", err)
 	}
@@ -175,7 +164,7 @@ func TestCallTool_ServiceListGetCreateDelete(t *testing.T) {
 	if getByNameRes.IsError {
 		t.Fatalf("get by name returned error: %s", getByNameRes.Content[0].Text)
 	}
-	if got := decodeResultMap(t, getByNameRes)["id"]; got != serviceID {
+	if got := decodeResultMap(t, getByNameRes)["id"]; got != serviceID.String() {
 		t.Fatalf("expected service id %s, got %v", serviceID, got)
 	}
 
@@ -190,92 +179,36 @@ func TestCallTool_ServiceListGetCreateDelete(t *testing.T) {
 	if int(listPayload["total"].(float64)) != 1 {
 		t.Fatalf("expected 1 service, got %v", listPayload["total"])
 	}
-	services := listPayload["services"].([]interface{})
-	listed := services[0].(map[string]interface{})
-	if listed["id"] != serviceID || listed["name"] != "api" {
-		t.Fatalf("unexpected listed service: %#v", listed)
-	}
 
-	deleteRes, err := server.CallTool(ctx, "bahia_delete_service", map[string]interface{}{"service_id": serviceID})
-	if err != nil {
-		t.Fatalf("delete call err: %v", err)
+	assertSignerFirstMutationError(t, server, "bahia_create_service", map[string]interface{}{
+		"name":          "new-api",
+		"artifact_repo": "registry.example.com/new-api",
+	})
+	assertSignerFirstMutationError(t, server, "bahia_update_service", map[string]interface{}{
+		"service_id": serviceID.String(),
+		"name":       "api-v2",
+	})
+	assertSignerFirstMutationError(t, server, "bahia_delete_service", map[string]interface{}{"service_id": serviceID.String()})
+
+	if len(svcRepo.services) != 1 {
+		t.Fatalf("deprecated mutations must not change repository state, got %d services", len(svcRepo.services))
 	}
-	if deleteRes.IsError {
-		t.Fatalf("delete returned error: %s", deleteRes.Content[0].Text)
-	}
-	deletePayload := decodeResultMap(t, deleteRes)
-	if deletePayload["status"] != "deleted" || deletePayload["service_id"] != serviceID {
-		t.Fatalf("unexpected delete payload: %#v", deletePayload)
-	}
-	if len(svcRepo.services) != 0 {
-		t.Fatalf("expected service to be deleted, got %d services", len(svcRepo.services))
+	if svcRepo.services[serviceID].Name != "api" {
+		t.Fatalf("deprecated update mutated service name to %q", svcRepo.services[serviceID].Name)
 	}
 }
 
-func TestCallTool_UpdateService_AllFields(t *testing.T) {
-	ctx := context.Background()
-	server, svcRepo := newTestMCPServiceServer()
-	serviceID := uuid.New()
-	svcRepo.services[serviceID] = &domain.Service{
-		ID:            serviceID,
-		Name:          "api",
-		RepoURL:       "https://example.com/old.git",
-		ArtifactRepo:  "registry.example.com/api",
-		DefaultBranch: "main",
-		RuntimeType:   domain.RuntimeTypeDocker,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
-
-	result, err := server.CallTool(ctx, "bahia_update_service", map[string]interface{}{
-		"service_id":     serviceID.String(),
-		"name":           "api-v2",
-		"repo_url":       "https://example.com/new.git",
-		"artifact_repo":  "registry.example.com/api-v2",
-		"default_branch": "develop",
-		"runtime_type":   "compose",
-	})
+func assertSignerFirstMutationError(t *testing.T, server *Server, tool string, args map[string]interface{}) {
+	t.Helper()
+	result, err := server.CallTool(context.Background(), tool, args)
 	if err != nil {
-		t.Fatalf("call err: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("update returned error: %s", result.Content[0].Text)
-	}
-
-	payload := decodeResultMap(t, result)
-	service := payload["service"].(map[string]interface{})
-
-	if service["name"] != "api-v2" {
-		t.Fatalf("expected updated name, got %v", service["name"])
-	}
-	if service["repo_url"] != "https://example.com/new.git" {
-		t.Fatalf("expected updated repo_url, got %v", service["repo_url"])
-	}
-	if service["artifact_repo"] != "registry.example.com/api-v2" {
-		t.Fatalf("expected updated artifact_repo, got %v", service["artifact_repo"])
-	}
-	if service["default_branch"] != "develop" {
-		t.Fatalf("expected updated default_branch, got %v", service["default_branch"])
-	}
-	if service["runtime_type"] != "compose" {
-		t.Fatalf("expected updated runtime_type, got %v", service["runtime_type"])
-	}
-}
-
-func TestCallTool_UpdateService_InvalidRuntimeType(t *testing.T) {
-	ctx := context.Background()
-	server, svcRepo := newTestMCPServiceServer()
-	serviceID := uuid.New()
-	svcRepo.services[serviceID] = &domain.Service{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}
-
-	result, err := server.CallTool(ctx, "bahia_update_service", map[string]interface{}{
-		"service_id":   serviceID.String(),
-		"runtime_type": "invalid",
-	})
-	if err != nil {
-		t.Fatalf("call err: %v", err)
+		t.Fatalf("%s call err: %v", tool, err)
 	}
 	if !result.IsError {
-		t.Fatalf("expected error result for invalid runtime_type")
+		t.Fatalf("expected %s to return an error result", tool)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "direct registry mutation") || !strings.Contains(text, "ContextVM/Nostr") {
+		t.Fatalf("expected signer-first migration error for %s, got %q", tool, text)
 	}
 }

@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -92,31 +91,20 @@ func newTestMCPEnvironmentServer() (*Server, *testEnvironmentRepo) {
 	return server, envRepo
 }
 
-func TestCallTool_EnvironmentListGetCreateDelete(t *testing.T) {
+func TestCallTool_EnvironmentListGetAndMutationsDeprecated(t *testing.T) {
 	ctx := context.Background()
 	server, envRepo := newTestMCPEnvironmentServer()
-
-	createRes, err := server.CallTool(ctx, "bahia_create_environment", map[string]interface{}{
-		"name":            "staging",
-		"protected":       true,
-		"deploy_strategy": "blue_green",
-	})
-	if err != nil {
-		t.Fatalf("create call err: %v", err)
-	}
-	if createRes.IsError {
-		t.Fatalf("create returned error: %s", createRes.Content[0].Text)
-	}
-	createPayload := decodeResultMap(t, createRes)
-	envID := createPayload["environment_id"].(string)
-	if createPayload["status"] != "created" {
-		t.Fatalf("expected created status, got %v", createPayload["status"])
-	}
-	if len(envRepo.environments) != 1 {
-		t.Fatalf("expected environment to be persisted, got %d", len(envRepo.environments))
+	envID := uuid.New()
+	envRepo.environments[envID] = &domain.Environment{
+		ID:                 envID,
+		Name:               "staging",
+		LoomWorkerSelector: map[string]any{"tier": "small"},
+		RuntimeConfig:      map[string]any{"replicas": float64(1)},
+		DeployStrategy:     domain.DeployStrategyBlueGreen,
+		Protected:          true,
 	}
 
-	getByIDRes, err := server.CallTool(ctx, "bahia_get_environment", map[string]interface{}{"environment_id": envID})
+	getByIDRes, err := server.CallTool(ctx, "bahia_get_environment", map[string]interface{}{"environment_id": envID.String()})
 	if err != nil {
 		t.Fatalf("get by id call err: %v", err)
 	}
@@ -141,7 +129,7 @@ func TestCallTool_EnvironmentListGetCreateDelete(t *testing.T) {
 	if getByNameRes.IsError {
 		t.Fatalf("get by name returned error: %s", getByNameRes.Content[0].Text)
 	}
-	if got := decodeResultMap(t, getByNameRes)["id"]; got != envID {
+	if got := decodeResultMap(t, getByNameRes)["id"]; got != envID.String() {
 		t.Fatalf("expected environment id %s, got %v", envID, got)
 	}
 
@@ -156,96 +144,20 @@ func TestCallTool_EnvironmentListGetCreateDelete(t *testing.T) {
 	if int(listPayload["total"].(float64)) != 1 {
 		t.Fatalf("expected 1 environment, got %v", listPayload["total"])
 	}
-	environments := listPayload["environments"].([]interface{})
-	listed := environments[0].(map[string]interface{})
-	if listed["id"] != envID || listed["name"] != "staging" {
-		t.Fatalf("unexpected listed environment: %#v", listed)
-	}
 
-	deleteRes, err := server.CallTool(ctx, "bahia_delete_environment", map[string]interface{}{"environment_id": envID})
-	if err != nil {
-		t.Fatalf("delete call err: %v", err)
-	}
-	if deleteRes.IsError {
-		t.Fatalf("delete returned error: %s", deleteRes.Content[0].Text)
-	}
-	deletePayload := decodeResultMap(t, deleteRes)
-	if deletePayload["status"] != "deleted" || deletePayload["environment_id"] != envID {
-		t.Fatalf("unexpected delete payload: %#v", deletePayload)
-	}
-	if len(envRepo.environments) != 0 {
-		t.Fatalf("expected environment to be deleted, got %d environments", len(envRepo.environments))
-	}
-}
-
-func TestCallTool_UpdateEnvironment_AllFields(t *testing.T) {
-	ctx := context.Background()
-	server, envRepo := newTestMCPEnvironmentServer()
-	envID := uuid.New()
-	envRepo.environments[envID] = &domain.Environment{
-		ID:                 envID,
-		Name:               "staging",
-		LoomWorkerSelector: map[string]any{"tier": "small"},
-		RuntimeConfig:      map[string]any{"replicas": float64(1)},
-		DeployStrategy:     domain.DeployStrategyReplace,
-		Protected:          true,
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
-	}
-
-	result, err := server.CallTool(ctx, "bahia_update_environment", map[string]interface{}{
-		"environment_id":       envID.String(),
-		"name":                 "production",
-		"loom_worker_selector": map[string]interface{}{"tier": "large", "region": "us-west"},
-		"runtime_config":       map[string]interface{}{"replicas": float64(3), "autoscale": true},
-		"deploy_strategy":      "canary",
-		"protected":            false,
+	assertSignerFirstMutationError(t, server, "bahia_create_environment", map[string]interface{}{
+		"name": "production",
 	})
-	if err != nil {
-		t.Fatalf("call err: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("update returned error: %s", result.Content[0].Text)
-	}
-
-	payload := decodeResultMap(t, result)
-	environment := payload["environment"].(map[string]interface{})
-
-	if environment["name"] != "production" {
-		t.Fatalf("expected updated name, got %v", environment["name"])
-	}
-	if environment["deploy_strategy"] != "canary" {
-		t.Fatalf("expected updated deploy strategy, got %v", environment["deploy_strategy"])
-	}
-	if protected, ok := environment["protected"].(bool); !ok || protected {
-		t.Fatalf("expected protected=false, got %v", environment["protected"])
-	}
-
-	selector := environment["loom_worker_selector"].(map[string]interface{})
-	if selector["tier"] != "large" {
-		t.Fatalf("expected selector tier=large, got %v", selector["tier"])
-	}
-
-	runtimeConfig := environment["runtime_config"].(map[string]interface{})
-	if runtimeConfig["replicas"].(float64) != 3 {
-		t.Fatalf("expected runtime replicas=3, got %v", runtimeConfig["replicas"])
-	}
-}
-
-func TestCallTool_UpdateEnvironment_InvalidDeployStrategy(t *testing.T) {
-	ctx := context.Background()
-	server, envRepo := newTestMCPEnvironmentServer()
-	envID := uuid.New()
-	envRepo.environments[envID] = &domain.Environment{ID: envID, Name: "staging", DeployStrategy: domain.DeployStrategyReplace}
-
-	result, err := server.CallTool(ctx, "bahia_update_environment", map[string]interface{}{
-		"environment_id":  envID.String(),
-		"deploy_strategy": "invalid",
+	assertSignerFirstMutationError(t, server, "bahia_update_environment", map[string]interface{}{
+		"environment_id": envID.String(),
+		"name":           "production",
 	})
-	if err != nil {
-		t.Fatalf("call err: %v", err)
+	assertSignerFirstMutationError(t, server, "bahia_delete_environment", map[string]interface{}{"environment_id": envID.String()})
+
+	if len(envRepo.environments) != 1 {
+		t.Fatalf("deprecated mutations must not change repository state, got %d environments", len(envRepo.environments))
 	}
-	if !result.IsError {
-		t.Fatalf("expected error result for invalid deploy strategy")
+	if envRepo.environments[envID].Name != "staging" {
+		t.Fatalf("deprecated update mutated environment name to %q", envRepo.environments[envID].Name)
 	}
 }

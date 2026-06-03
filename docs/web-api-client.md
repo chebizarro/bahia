@@ -66,28 +66,9 @@ await api.listServices();
 // Get service by ID
 await api.getService(serviceId);
 // Returns: { id, name, artifact_repo, runtime_type, ... }
-
-// Create service
-await api.createService({
-  name: 'my-service',
-  artifact_repo: 'ghcr.io/myorg/my-service',
-  runtime_type: 'docker',
-  default_branch: 'main',
-  repo_url: 'https://github.com/myorg/my-service'
-});
-// Returns: { id, name, ... }
-
-// Update service
-await api.updateService(serviceId, {
-  name: 'new-name',
-  default_branch: 'develop'
-});
-// Returns: { id, name, ... }
-
-// Delete service
-await api.deleteService(serviceId, force = false);
-// Returns: null
 ```
+
+Service registry mutations are no longer exposed as REST-backed API client calls. Create/update/delete operations must be submitted as signed ContextVM/Nostr operator commands (`service/create`, `service/update`, `service/delete`) using an operator signer. Legacy REST/MCP mutation paths intentionally return migration errors so the app cannot create hidden direct registry writes.
 
 ### Environments
 
@@ -99,27 +80,9 @@ await api.listEnvironments();
 // Get environment by ID
 await api.getEnvironment(envId);
 // Returns: { id, name, loom_worker_selector, runtime_config, ... }
-
-// Create environment
-await api.createEnvironment({
-  name: 'production',
-  loom_worker_selector: { region: 'us-east-1' },
-  runtime_config: { timeout: 300, memory: '2Gi' },
-  deploy_strategy: 'rolling',
-  protected: true
-});
-// Returns: { id, name, ... }
-
-// Update environment
-await api.updateEnvironment(envId, {
-  runtime_config: { timeout: 600 }
-});
-// Returns: { id, name, ... }
-
-// Delete environment
-await api.deleteEnvironment(envId);
-// Returns: null
 ```
+
+Environment registry mutations are no longer exposed as REST-backed API client calls. Create/update/delete operations must be submitted as signed ContextVM/Nostr operator commands (`environment/create`, `environment/update`, `environment/delete`) using an operator signer.
 
 ### Deployments
 

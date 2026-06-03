@@ -125,7 +125,7 @@ export class MCPDriver {
   }
 
   /**
-   * Create service via MCP
+   * Deprecated: direct service creation via MCP now returns a signer-first Nostr migration error.
    */
   async bahiaCreateService(data: {
     name: string;
@@ -160,7 +160,7 @@ export class MCPDriver {
   }
 
   /**
-   * Create environment via MCP
+   * Deprecated: direct environment creation via MCP now returns a signer-first Nostr migration error.
    */
   async bahiaCreateEnvironment(data: {
     name: string;
