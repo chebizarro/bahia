@@ -116,6 +116,15 @@ func TestRequiredGroupsHaveNonErrorDecoders(t *testing.T) {
 			if decoded.Kind != kind {
 				t.Fatalf("required group %q kind %d decoded kind = %d", group.Name, kind, decoded.Kind)
 			}
+			if decoded.Family == "" {
+				t.Fatalf("required group %q kind %d decoded empty projection family", group.Name, kind)
+			}
+			if decoded.DTag == "" {
+				t.Fatalf("required group %q kind %d decoded empty d tag", group.Name, kind)
+			}
+			if decoded.Timestamp.IsZero() {
+				t.Fatalf("required group %q kind %d decoded zero timestamp", group.Name, kind)
+			}
 		}
 	}
 }

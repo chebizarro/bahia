@@ -305,17 +305,11 @@ func (r *Reactor) publishDNSOperationStatus(ctx context.Context, requestEvent *n
 	if zoneName != "" {
 		content["zone"] = zoneName
 	}
-	body, _ := json.Marshal(content)
-	tags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", "processing"}, {"action", action}, {"step", step}}
+	tags := nostr.Tags{{"domain", "dns"}, {"schema", "bahia.status.dns.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindDNSOperationStatus)}, {"status", "processing"}, {"action", action}, {"step", step}}
 	if zoneName != "" {
 		tags = append(tags, nostr.Tag{"zone", zoneName})
 	}
-	event := &nostr.Event{Kind: KindDNSOperationStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign DNS status: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishCanonicalStatus(ctx, requestEvent, tags, content)
 }
 
 func (r *Reactor) publishDNSOperationResult(ctx context.Context, requestEvent *nostr.Event, resultKind int, action, status, step, message string, details map[string]any) error {
@@ -334,18 +328,14 @@ func (r *Reactor) publishDNSOperationResult(ctx context.Context, requestEvent *n
 			content[key] = value
 		}
 	}
-	body, _ := json.Marshal(content)
-	tags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", status}, {"action", action}, {"step", step}}
+	tags := nostr.Tags{{"domain", "dns"}, {"schema", "bahia.result.dns.v1"}, {"legacy_kind", fmt.Sprintf("%d", resultKind)}, {"status", status}, {"action", action}, {"step", step}}
 	if zoneName, ok := content["zone"].(string); ok && zoneName != "" {
 		tags = append(tags, nostr.Tag{"zone", zoneName})
 	}
-	if step == "unsupported" || step == "parse_error" || step == "validation_error" || step == "reconcile_failed" || step == "unauthorized" {
+	var rpcErr *JSONRPCError
+	if step == "unsupported" || step == "parse_error" || step == "validation_error" || step == "reconcile_failed" || step == "unauthorized" || status == "error" || status == "failed" {
 		tags = append(tags, nostr.Tag{"error", message})
+		rpcErr = &JSONRPCError{Code: -32000, Message: message}
 	}
-	event := &nostr.Event{Kind: resultKind, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign DNS result: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, content, tags, rpcErr)
 }

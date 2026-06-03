@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -306,6 +307,23 @@ func newDNSHandlerTestReactorWithOperator(t *testing.T, operator DNSControlPlane
 
 func assertDNSPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event {
 	t.Helper()
+	legacyKind := strconv.Itoa(kind)
+	if isLegacyDNSObservableKind(kind) {
+		for _, ev := range events {
+			if ev.Kind == kind {
+				t.Fatalf("legacy DNS kind %d was published directly; events=%#v", kind, events)
+			}
+		}
+		for _, ev := range events {
+			if tagValueNostr(ev.Tags, "legacy_kind") == legacyKind {
+				if ok, err := ev.CheckSignature(); err != nil || !ok {
+					t.Fatalf("canonical event for legacy kind %d signature invalid: ok=%v err=%v", kind, ok, err)
+				}
+				return ev
+			}
+		}
+		t.Fatalf("canonical event carrying legacy_kind %d not published; events=%#v", kind, events)
+	}
 	for _, ev := range events {
 		if ev.Kind == kind {
 			if ok, err := ev.CheckSignature(); err != nil || !ok {
@@ -318,35 +336,47 @@ func assertDNSPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.
 	return nostr.Event{}
 }
 
+func isLegacyDNSObservableKind(kind int) bool {
+	switch kind {
+	case KindDNSOperationStatus, KindDNSZoneCreateResult, KindDNSPolicyApplyResult, KindDNSRecordOverrideResult, KindDNSDriftRemediateResult, KindDNSBackendRegisterResult:
+		return true
+	default:
+		return false
+	}
+}
+
 func assertDNSResultStatus(t *testing.T, event nostr.Event, want string) {
 	t.Helper()
-	var content map[string]any
-	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
-		t.Fatalf("decode DNS result content: %v", err)
-	}
-	if got := content["status"]; got != want {
-		t.Fatalf("status = %v, want %s; content=%s", got, want, event.Content)
+	if got := tagValueNostr(event.Tags, "status"); got != want {
+		t.Fatalf("status tag = %q, want %s; tags=%#v content=%s", got, want, event.Tags, event.Content)
 	}
 }
 
 func assertDNSResultStep(t *testing.T, event nostr.Event, want string) {
 	t.Helper()
-	var content map[string]any
-	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
-		t.Fatalf("decode DNS result content: %v", err)
-	}
-	if got := content["step"]; got != want {
-		t.Fatalf("step = %v, want %s; content=%s", got, want, event.Content)
+	if got := tagValueNostr(event.Tags, "step"); got != want {
+		t.Fatalf("step tag = %q, want %s; tags=%#v content=%s", got, want, event.Tags, event.Content)
 	}
 }
 
 func assertDNSResultField(t *testing.T, event nostr.Event, key string, want any) {
 	t.Helper()
-	var content map[string]any
-	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
-		t.Fatalf("decode DNS result content: %v", err)
-	}
+	content := dnsResultPayload(t, event)
 	if got := content[key]; got != want {
 		t.Fatalf("%s = %#v, want %#v; content=%s", key, got, want, event.Content)
 	}
+}
+
+func dnsResultPayload(t *testing.T, event nostr.Event) map[string]any {
+	t.Helper()
+	var response struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &response); err != nil {
+		t.Fatalf("decode DNS ContextVM result content: %v", err)
+	}
+	if response.Result == nil {
+		t.Fatalf("DNS result content has no JSON-RPC result payload: %s", event.Content)
+	}
+	return response.Result
 }

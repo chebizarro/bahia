@@ -462,6 +462,7 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 		t.Fatalf("republish snapshot: %v", err)
 	}
 
+	assertNoPublishedKind(t, sink, KindSystemDiscovery)
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertTag(t, discovery, "schema", "bahia.system-discovery.v1")
 	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
@@ -1133,6 +1134,13 @@ func assertDiscoveryContainsNoLegacyKindsAt(t *testing.T, path string, value any
 
 func isLegacyDiscoveryKind(kind int) bool {
 	return (kind >= 5960 && kind < 7000) || (kind >= 7960 && kind < 8000) || (kind >= 31900 && kind < 32000)
+}
+
+func assertNoPublishedKind(t *testing.T, sink *captureProjectionPublisher, kind int) {
+	t.Helper()
+	if events := sink.byKind(kind); len(events) != 0 {
+		t.Fatalf("expected no events of kind %d, got %d", kind, len(events))
+	}
 }
 
 func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind int) gonostr.Event {

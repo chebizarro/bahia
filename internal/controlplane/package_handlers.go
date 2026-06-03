@@ -380,16 +380,11 @@ func (r *Reactor) lookupPackageRepository(ctx context.Context, id uuid.UUID, nam
 func (r *Reactor) publishPackageStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, step, status, message string) error {
 	content := map[string]any{"intent_id": intent.ID.String(), "request_event_id": requestEvent.ID, "operation": string(intent.Operation), "step": step, "status": status, "message": message}
 	tags := packageReplyTags(requestEvent, intent, step, status)
-	event := &nostr.Event{Kind: KindPackageStatus, CreatedAt: nostr.Now(), Tags: tags, Content: mustJSON(content)}
-	if err := r.signEvent(ctx, event); err != nil {
+	tags = append(tags, nostr.Tag{"domain", "package"}, nostr.Tag{"schema", "bahia.status.package.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPackageStatus)})
+	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, content); err != nil {
 		return err
 	}
-	published, err := r.publishEvent(ctx, event)
-	if err == nil && published > 0 && r.packageProjection != nil {
-		intent.LastStatusEventID = event.ID
-		_ = r.packageProjection.UpsertIntent(ctx, intent)
-	}
-	return err
+	return nil
 }
 
 func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, operation string, result map[string]any, errorMessage string) error {
@@ -407,16 +402,18 @@ func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.
 	if errorMessage != "" {
 		tags = append(tags, nostr.Tag{"error", errorMessage})
 	}
-	event := &nostr.Event{Kind: KindPackageResult, CreatedAt: nostr.Now(), Tags: tags, Content: mustJSON(result)}
-	if err := r.signEvent(ctx, event); err != nil {
+	tags = append(tags, nostr.Tag{"domain", "package"}, nostr.Tag{"schema", "bahia.result.package.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPackageResult)})
+	var rpcErr *JSONRPCError
+	if errorMessage != "" || status == "failed" || status == "rejected" {
+		rpcErr = &JSONRPCError{Code: -32000, Message: errorMessage}
+		if rpcErr.Message == "" {
+			rpcErr.Message = status
+		}
+	}
+	if err := r.publishContextVMResult(ctx, requestEvent, result, tags, rpcErr); err != nil {
 		return err
 	}
-	published, err := r.publishEvent(ctx, event)
-	if err == nil && published > 0 && r.packageProjection != nil {
-		intent.LastResultEventID = event.ID
-		_ = r.packageProjection.UpsertIntent(ctx, intent)
-	}
-	return err
+	return nil
 }
 
 func (r *Reactor) publishPackageError(ctx context.Context, requestEvent *nostr.Event, operation domain.PackageOperation, step, message string) error {
@@ -445,7 +442,7 @@ func packageReplyTags(requestEvent *nostr.Event, intent *domain.PackageIntent, s
 }
 
 func (r *Reactor) publishPackageRepositoryRegistry(ctx context.Context, repo *domain.PackageRepository) error {
-	event := &nostr.Event{Kind: KindPackageRepositoryRegistry, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", repo.ID.String()}, {"repository", repo.ID.String()}, {"name", repo.Name}, {"backend_ref", repo.BackendRef}, {"format", string(repo.Format)}, {"status", string(repo.Status)}, {"deleted", fmt.Sprintf("%t", repo.Deleted)}}, Content: mustJSON(repo)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:repository:" + repo.ID.String()}, {"domain", "package"}, {"entity", "repository"}, {"schema", "bahia.state.package-repository.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageRepositoryRegistry)}, {"repository", repo.ID.String()}, {"name", repo.Name}, {"backend_ref", repo.BackendRef}, {"format", string(repo.Format)}, {"status", string(repo.Status)}, {"deleted", fmt.Sprintf("%t", repo.Deleted)}}, Content: mustJSON(repo)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return err
 	}
@@ -459,7 +456,7 @@ func (r *Reactor) publishPackageRepositoryRegistry(ctx context.Context, repo *do
 
 func (r *Reactor) publishPackageArtifactRegistry(ctx context.Context, artifact *domain.PackageArtifact) error {
 	d := fmt.Sprintf("%s:%s:%s:%s:%s", artifact.RepositoryID, artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
-	event := &nostr.Event{Kind: KindPackageArtifactRegistry, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"artifact", artifact.ID.String()}, {"repository", artifact.RepositoryID.String()}, {"repository_name", artifact.RepositoryName}, {"package", artifact.PackageName}, {"version", artifact.Version}, {"filename", artifact.Filename}, {"sha256", artifact.SHA256}, {"status", string(artifact.Status)}, {"deleted", fmt.Sprintf("%t", artifact.Deleted)}}, Content: mustJSON(artifact)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:artifact:" + d}, {"domain", "package"}, {"entity", "artifact"}, {"schema", "bahia.state.package-artifact.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageArtifactRegistry)}, {"artifact", artifact.ID.String()}, {"repository", artifact.RepositoryID.String()}, {"repository_name", artifact.RepositoryName}, {"package", artifact.PackageName}, {"version", artifact.Version}, {"filename", artifact.Filename}, {"sha256", artifact.SHA256}, {"status", string(artifact.Status)}, {"deleted", fmt.Sprintf("%t", artifact.Deleted)}}, Content: mustJSON(artifact)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return err
 	}
@@ -472,7 +469,7 @@ func (r *Reactor) publishPackageArtifactRegistry(ctx context.Context, artifact *
 }
 
 func (r *Reactor) publishPackagePromotionRegistry(ctx context.Context, publication *domain.PackagePublication) error {
-	event := &nostr.Event{Kind: KindPackagePromotionRegistry, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", publication.ID.String()}, {"promotion", publication.ID.String()}, {"repository", publication.RepositoryID.String()}, {"artifact", publication.ArtifactID.String()}, {"status", string(publication.Status)}, {"policy_decision", string(publication.PolicyDecision)}}, Content: mustJSON(publication)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:promotion:" + publication.ID.String()}, {"domain", "package"}, {"entity", "promotion"}, {"schema", "bahia.state.package-promotion.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackagePromotionRegistry)}, {"promotion", publication.ID.String()}, {"repository", publication.RepositoryID.String()}, {"artifact", publication.ArtifactID.String()}, {"status", string(publication.Status)}, {"policy_decision", string(publication.PolicyDecision)}}, Content: mustJSON(publication)}
 	if publication.TargetRepositoryID != nil {
 		event.Tags = append(event.Tags, nostr.Tag{"target_repository", publication.TargetRepositoryID.String()})
 	}
@@ -493,12 +490,8 @@ func (r *Reactor) publishPackageDriftEvent(ctx context.Context, requestEvent *no
 		status = "drifted"
 	}
 	content := map[string]any{"repository_id": repo.ID.String(), "repository_name": repo.Name, "status": status, "drifted": drifted, "observations": observations, "repository_last_event_id": repo.LastEventID}
-	event := &nostr.Event{Kind: KindPackageDriftEvent, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"repository", repo.ID.String()}, {"repository_name", repo.Name}, {"status", status}}, Content: mustJSON(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return err
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	tags := nostr.Tags{{"domain", "package"}, {"schema", "bahia.result.package-drift.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageDriftEvent)}, {"repository", repo.ID.String()}, {"repository_name", repo.Name}, {"status", status}}
+	return r.publishContextVMResult(ctx, requestEvent, content, tags, nil)
 }
 
 func mustJSON(v any) string {

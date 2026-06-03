@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -72,13 +73,31 @@ func TestPackageRepositoryApplyDuplicateTerminalReplaysResultOnly(t *testing.T) 
 
 	reactor.handlePackageRepositoryApply(ctx, &nostr.Event{ID: "duplicate", PubKey: pubkey, Kind: KindPackageRepositoryApply, Content: mustJSON(PackageRepositoryApplyCommand{Name: "libs", Format: domain.PackageRepositoryFormatNPM, BackendRef: "mock"})})
 
-	if len(capture.events) != 1 || capture.events[0].Kind != KindPackageResult {
+	if len(capture.events) != 1 {
 		t.Fatalf("expected one replayed package result, got %#v", capture.events)
 	}
+	assertPublishedKind(t, capture.events, KindPackageResult)
 }
 
 func assertPublishedKind(t *testing.T, events []nostr.Event, kind int) {
 	t.Helper()
+	legacyKind := strconv.Itoa(kind)
+	if isLegacyRuntimeObservableKind(kind) {
+		for _, ev := range events {
+			if ev.Kind == kind {
+				t.Fatalf("legacy runtime kind %d was published directly; events=%#v", kind, events)
+			}
+		}
+		for _, ev := range events {
+			if tagValueNostr(ev.Tags, "legacy_kind") == legacyKind {
+				if ok, err := ev.CheckSignature(); err != nil || !ok {
+					t.Fatalf("canonical event for legacy kind %d signature invalid: ok=%v err=%v", kind, ok, err)
+				}
+				return
+			}
+		}
+		t.Fatalf("canonical event carrying legacy_kind %d not published; events=%#v", kind, events)
+	}
 	for _, ev := range events {
 		if ev.Kind == kind {
 			if ok, err := ev.CheckSignature(); err != nil || !ok {
@@ -88,6 +107,15 @@ func assertPublishedKind(t *testing.T, events []nostr.Event, kind int) {
 		}
 	}
 	t.Fatalf("kind %d not published; events=%#v", kind, events)
+}
+
+func isLegacyRuntimeObservableKind(kind int) bool {
+	switch kind {
+	case KindPackageStatus, KindPackageResult, KindPackageDriftEvent, KindPackageRepositoryRegistry, KindPackageArtifactRegistry, KindPackagePromotionRegistry, KindWorkerStatus, KindWorkerResult:
+		return true
+	default:
+		return false
+	}
 }
 
 type memoryPackageProjection struct {

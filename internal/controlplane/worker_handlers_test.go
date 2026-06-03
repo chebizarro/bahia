@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -41,10 +42,7 @@ func TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle(t *testing.T) {
 		t.Fatalf("unexpected worker state tags: %#v", state.Tags)
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("result content: %v", err)
-	}
+	payload := workerResultPayload(t, result)
 	if payload["status"] != "succeeded" || payload["worker_pubkey"] != workerPubkey || payload["idempotency_key"] != "cordon-1" || payload["scheduling_state"] != string(domain.WorkerSchedulingCordoned) {
 		t.Fatalf("unexpected result payload: %#v", payload)
 	}
@@ -104,12 +102,8 @@ func TestWorkerHandlerRejectsConflictingWorkerTagAndContent(t *testing.T) {
 		t.Fatal("handler must reject mismatched worker tag/content instead of mutating body worker")
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("result content: %v", err)
-	}
-	if payload["status"] != "failed" || payload["code"] != "validation_error" {
-		t.Fatalf("unexpected conflict result: %#v", payload)
+	if tagValueNostr(result.Tags, "status") != "failed" || tagValueNostr(result.Tags, "result") != "validation_error" {
+		t.Fatalf("unexpected conflict result tags: %#v content=%s", result.Tags, result.Content)
 	}
 }
 
@@ -130,12 +124,8 @@ func TestWorkerHandlerRejectsDisabledWorkerTransition(t *testing.T) {
 		t.Fatalf("disabled worker should remain disabled, got %q", updated.SchedulingState)
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("result content: %v", err)
-	}
-	if payload["status"] != "failed" || payload["code"] != "invalid_transition" {
-		t.Fatalf("unexpected transition result: %#v", payload)
+	if tagValueNostr(result.Tags, "status") != "failed" || tagValueNostr(result.Tags, "result") != "invalid_transition" {
+		t.Fatalf("unexpected transition result tags: %#v content=%s", result.Tags, result.Content)
 	}
 }
 
@@ -211,12 +201,8 @@ func TestWorkerPolicyApplyRejectsMismatchedWorkerTagAndPolicyPin(t *testing.T) {
 		t.Fatalf("mismatched policy pin should not persist: %#v", updated.RuntimeConfig)
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("result content: %v", err)
-	}
-	if payload["status"] != "failed" || payload["code"] != "validation_error" {
-		t.Fatalf("unexpected mismatch result: %#v", payload)
+	if tagValueNostr(result.Tags, "status") != "failed" || tagValueNostr(result.Tags, "result") != "validation_error" {
+		t.Fatalf("unexpected mismatch result tags: %#v content=%s", result.Tags, result.Content)
 	}
 }
 
@@ -271,10 +257,7 @@ func TestWorkerCleanupHandlerPublishesDispatchResultWithLoomJobID(t *testing.T) 
 	reactor.handleWorkerCleanupRequest(ctx, event)
 
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("result content: %v", err)
-	}
+	payload := workerResultPayload(t, result)
 	if payload["status"] != "succeeded" || payload["code"] != "cleanup_dispatched" || payload["loom_job_id"] != "loom-cleanup-dispatch" {
 		t.Fatalf("expected dispatch result with loom job id, got %#v", payload)
 	}
@@ -329,12 +312,8 @@ func TestWorkerCleanupHandlerPublishesNewRejectionCodes(t *testing.T) {
 			reactor.handleWorkerCleanupRequest(ctx, event)
 
 			result := lastPublishedKind(t, capture.events, KindWorkerResult)
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-				t.Fatalf("result content: %v", err)
-			}
-			if payload["status"] != "rejected" || payload["code"] != tc.wantCode {
-				t.Fatalf("unexpected cleanup rejection payload: %#v", payload)
+			if tagValueNostr(result.Tags, "status") != "rejected" || tagValueNostr(result.Tags, "result") != tc.wantCode {
+				t.Fatalf("unexpected cleanup rejection tags: %#v content=%s", result.Tags, result.Content)
 			}
 		})
 	}
@@ -366,12 +345,8 @@ func TestWorkerHandlerRejectsMissingIdempotencyKey(t *testing.T) {
 		t.Fatal("worker should not be changed without an idempotency key")
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		t.Fatalf("result content: %v", err)
-	}
-	if payload["status"] != "failed" || payload["code"] != "validation_error" {
-		t.Fatalf("unexpected validation result: %#v", payload)
+	if tagValueNostr(result.Tags, "status") != "failed" || tagValueNostr(result.Tags, "result") != "validation_error" {
+		t.Fatalf("unexpected validation result tags: %#v content=%s", result.Tags, result.Content)
 	}
 }
 
@@ -594,6 +569,19 @@ func copyMapAny(in map[string]any) map[string]any {
 
 func lastPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event {
 	t.Helper()
+	if isLegacyRuntimeObservableKind(kind) {
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Kind == kind {
+				t.Fatalf("legacy runtime kind %d was published directly; events=%#v", kind, events)
+			}
+		}
+		wantLegacy := strconv.Itoa(kind)
+		for i := len(events) - 1; i >= 0; i-- {
+			if tagValueNostr(events[i].Tags, "legacy_kind") == wantLegacy {
+				return events[i]
+			}
+		}
+	}
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Kind == kind {
 			return events[i]
@@ -601,6 +589,20 @@ func lastPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event
 	}
 	t.Fatalf("kind %d not published; events=%#v", kind, events)
 	return nostr.Event{}
+}
+
+func workerResultPayload(t *testing.T, event nostr.Event) map[string]any {
+	t.Helper()
+	var response struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &response); err != nil {
+		t.Fatalf("result content: %v", err)
+	}
+	if response.Result == nil {
+		t.Fatalf("worker result has no JSON-RPC result payload: %s", event.Content)
+	}
+	return response.Result
 }
 
 func hasFullTag(tags nostr.Tags, want nostr.Tag) bool {

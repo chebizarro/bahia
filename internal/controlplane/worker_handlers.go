@@ -675,12 +675,9 @@ func (r *Reactor) publishWorkerStatus(ctx context.Context, requestEvent *nostr.E
 		"workload_kind":    req.WorkloadKind,
 		"idempotency_key":  req.IdempotencyKey,
 	}
-	event := &nostr.Event{Kind: KindWorkerStatus, CreatedAt: nostr.Now(), Tags: workerReplyTags(requestEvent, req, command, status, step), Content: mustJSON(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign worker status: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	tags := workerReplyTags(requestEvent, req, command, status, step)
+	tags = append(tags, nostr.Tag{"domain", "worker"}, nostr.Tag{"schema", "bahia.status.worker.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerStatus)})
+	return r.publishCanonicalStatus(ctx, requestEvent, tags, content)
 }
 
 func (r *Reactor) publishWorkerCleanupResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, status, code, message string, worker *domain.Worker, exec *service.CleanupExecution) error {
@@ -730,12 +727,12 @@ func (r *Reactor) publishWorkerCleanupResult(ctx context.Context, requestEvent *
 	if mode := strings.TrimSpace(fmt.Sprint(content["cleanup_mode"])); mode != "" {
 		tags = append(tags, nostr.Tag{"cleanup_mode", mode})
 	}
-	event := &nostr.Event{Kind: KindWorkerResult, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: mustJSON(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign worker cleanup result: %w", err)
+	tags = append(tags, nostr.Tag{"domain", "worker"}, nostr.Tag{"schema", "bahia.result.worker-cleanup.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerResult)})
+	var rpcErr *JSONRPCError
+	if status == "failed" || status == "rejected" {
+		rpcErr = &JSONRPCError{Code: -32000, Message: message}
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, content, dedupeTags(tags), rpcErr)
 }
 
 func (r *Reactor) publishWorkerResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, command, status, code, message string, worker *domain.Worker) error {
@@ -778,12 +775,12 @@ func (r *Reactor) publishWorkerResult(ctx context.Context, requestEvent *nostr.E
 	if code != "" {
 		tags = append(tags, nostr.Tag{"result", code})
 	}
-	event := &nostr.Event{Kind: KindWorkerResult, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: mustJSON(content)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign worker result: %w", err)
+	tags = append(tags, nostr.Tag{"domain", "worker"}, nostr.Tag{"schema", "bahia.result.worker.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerResult)})
+	var rpcErr *JSONRPCError
+	if status == "failed" || status == "rejected" {
+		rpcErr = &JSONRPCError{Code: -32000, Message: message}
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.publishContextVMResult(ctx, requestEvent, content, dedupeTags(tags), rpcErr)
 }
 
 func workerReplyTags(requestEvent *nostr.Event, req *workerCommandRequest, command, status, step string) nostr.Tags {
