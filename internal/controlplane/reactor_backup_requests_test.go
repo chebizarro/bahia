@@ -403,8 +403,8 @@ func TestBackupRequestKindsAreOmittedFromRuntimeSubscription(t *testing.T) {
 			}
 		}
 	}
-	if len(filters[0].Authors) != 0 {
-		t.Fatalf("canonical runtime filter should not retain legacy author scope: %#v", filters[0].Authors)
+	if len(filters[0].Authors) != 1 || filters[0].Authors[0] != "operator" {
+		t.Fatalf("canonical runtime filter should scope ContextVM reads to authorized operators: %#v", filters[0].Authors)
 	}
 }
 

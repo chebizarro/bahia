@@ -84,7 +84,7 @@ func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing
 		t.Fatalf("expected one canonical runtime replay filter, got %d", len(filters))
 	}
 	filter := filters[0]
-	assertAuthors(t, filter.Authors, nil)
+	assertAuthors(t, filter.Authors, []string{"global", "adoption", "runtime"})
 	assertFilterHasKinds(t, filter, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap, nostr.KindHeartbeatObservation)
 	assertFilterMissingKinds(t, filter,
 		nostr.KindCASControlState,
@@ -104,13 +104,17 @@ func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing
 }
 
 func TestReactorBuildRequestSubscriptionFiltersIgnoresLegacyAuthorScopes(t *testing.T) {
-	r := NewReactor(Config{AuthorizedPubkeys: []string{"global"}}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
+	r := NewReactor(Config{
+		AuthorizedPubkeys:              []string{"global"},
+		AdoptionAuthorizedPubkeys:      []string{"adoption"},
+		DirectRuntimeAuthorizedPubkeys: []string{"runtime"},
+	}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(gonostr.Timestamp(67890))
 	if len(filters) != 1 {
 		t.Fatalf("expected one canonical runtime replay filter, got %d", len(filters))
 	}
-	assertAuthors(t, filters[0].Authors, nil)
+	assertAuthors(t, filters[0].Authors, []string{"global", "adoption", "runtime"})
 	assertFilterMissingKinds(t, filters[0], KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, KindWorkerCleanupRequest)
 }
 

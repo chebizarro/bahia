@@ -2005,8 +2005,9 @@ func replayCursorWithOverlap(timestamp nostr.Timestamp) nostr.Timestamp {
 
 func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
 	return []nostr.Filter{{
-		Kinds: canonicalReactorSubscriptionKinds(),
-		Since: &since,
+		Kinds:   canonicalReactorSubscriptionKinds(),
+		Authors: r.requestSubscriptionAuthors(),
+		Since:   &since,
 	}}
 }
 
@@ -2060,7 +2061,7 @@ func isLegacyProductionRuntimeKind(kind int) bool {
 }
 
 func (r *Reactor) requestSubscriptionAuthors() []string {
-	return r.subscriptionAuthors(operatorScopeDefault)
+	return r.subscriptionAuthors(operatorScopeDefault, operatorScopeAdoption, operatorScopeDirectRuntime)
 }
 
 func (r *Reactor) subscriptionAuthors(scopes ...operatorScope) []string {
