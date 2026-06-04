@@ -1,21 +1,23 @@
-import { fetchContinuityStatus, fetchContinuityTopology } from '$lib/api/continuity';
+import { loadContinuityDashboardFromNostr } from '$lib/nostr/continuity';
 import type { PageLoad } from './$types';
 
-export const load: PageLoad = async ({ fetch }) => {
-  const [statusResult, topologyResult] = await Promise.allSettled([
-    fetchContinuityStatus(fetch),
-    fetchContinuityTopology(fetch)
-  ]);
+export const ssr = false;
 
-  const statuses = statusResult.status === 'fulfilled' ? statusResult.value : [];
-  const assessments = topologyResult.status === 'fulfilled' ? topologyResult.value : [];
-  const errors = [statusResult, topologyResult]
-    .filter((result) => result.status === 'rejected')
-    .map((result) => (result.reason instanceof Error ? result.reason.message : 'Failed to load continuity data'));
-
-  return {
-    statuses,
-    assessments,
-    error: errors.length > 0 ? errors.join('; ') : null
-  };
+export const load: PageLoad = async () => {
+  try {
+    const { statuses, assessments, events } = await loadContinuityDashboardFromNostr();
+    return {
+      statuses,
+      assessments,
+      continuityEvents: events,
+      error: null
+    };
+  } catch (caught) {
+    return {
+      statuses: [],
+      assessments: [],
+      continuityEvents: [],
+      error: caught instanceof Error ? caught.message : 'Failed to load continuity data from Nostr relays'
+    };
+  }
 };

@@ -150,7 +150,7 @@ _Logically part of Section B — the self-identity publisher is the bootstrapper
 
 **Route gating by tier**: Mount all routes but guard disabled groups with mode/tier middleware returning 503 with explanatory body — don't make them 404.
 - tier0: `/health`, `/ready`, `/metrics`
-- tier1: `/api/continuity/*`, worker reads, minimal backup/DNS status
+- tier1: continuity Nostr subscriptions/read models, worker reads, minimal backup/DNS status
 - tier2: core `/api/v1` service/environment/build/artifact/deployment/state/policy
 - tier3: LLM, ML, packages, OCI, assistant, HiveCI, tool provisioning
 
@@ -207,7 +207,7 @@ _Logically part of Section B — the self-identity publisher is the bootstrapper
 
 ### Item 8 — Wire existing continuity runtime ⚠️ CRITICAL PATH
 **Goal:** Connect the already-implemented continuity components in `app.go` so the continuity fabric is fully operational. This is a gate for DB-optional startup (Item 12) since tier1 requires working continuity.
-**Done when:** `app.go` creates continuity definition store, heartbeat monitor, continuity graph, failover trigger engine. `ContinuityGraph` passed to router deps. `/api/continuity/topology` and `/api/continuity/simulate` return real data. Integration tests verify.
+**Done when:** `app.go` creates continuity definition store, heartbeat monitor, and failover trigger engine. Continuity status/progress are served as Nostr kinds 30351/30353 and definitions as kinds 31400-31404; the web dashboard derives topology/simulation from relay-backed continuity events without `/api/continuity/*` endpoints. Integration tests verify.
 **Key files:** `internal/app/app.go`
 **Dependencies:** None — start early, as it gates Item 12.
 **Size:** Small

@@ -33,43 +33,41 @@ var Version = "dev"
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
-	Config             *config.Config
-	AuthMiddleware     auth.MiddlewareConfig
-	Workers            repository.WorkerRepository
-	Builds             repository.BuildRepository
-	Runs               repository.DeploymentRunRepository
-	Services           repository.ServiceRepository
-	Environments       repository.EnvironmentRepository
-	EnvStates          repository.EnvironmentServiceStateRepository
-	RuntimeResolver    runtimeadapter.RuntimeResolver
-	Payments           *service.PaymentService
-	SBOMs              repository.SBOMRepository
-	Artifacts          repository.ArtifactRepository
-	Signatures         repository.ArtifactSignatureRepository
-	SignVerifier       SignatureVerifier
-	Policies           *service.PolicyService
-	Adoption           *service.AdoptionService
-	RuntimeLifecycle   *service.RuntimeLifecycleService
-	Secrets            repository.SecretRepository
-	Encryptor          *secrets.Encryptor
-	Notifications      repository.NotificationRepository
-	Dispatcher         *notifications.Dispatcher
-	ToolProvisioning   repository.ToolProvisioningRepository
-	MCP                *handlers.MCPHandler
-	HiveCI             repository.HiveCIRepository
-	Blossom            *blossom.Client
-	OCI                http.Handler
-	Orgs               repository.OrganizationRepository
-	OrgMembers         repository.OrgMemberRepository
-	OrgInvites         repository.OrgInviteRepository
-	RBAC               *auth.RBAC
-	LLMRegistry        *service.LLMRegistryService
-	MLRegistry         *service.MLRegistryService
-	MLCommands         handlers.MLCommandPublisher
-	ContinuityStatuses service.ContinuityStatusReader
-	ContinuityGraph    handlers.ContinuityGraphReader
-	HealthProvider     any
-	ModePolicy         any
+	Config           *config.Config
+	AuthMiddleware   auth.MiddlewareConfig
+	Workers          repository.WorkerRepository
+	Builds           repository.BuildRepository
+	Runs             repository.DeploymentRunRepository
+	Services         repository.ServiceRepository
+	Environments     repository.EnvironmentRepository
+	EnvStates        repository.EnvironmentServiceStateRepository
+	RuntimeResolver  runtimeadapter.RuntimeResolver
+	Payments         *service.PaymentService
+	SBOMs            repository.SBOMRepository
+	Artifacts        repository.ArtifactRepository
+	Signatures       repository.ArtifactSignatureRepository
+	SignVerifier     SignatureVerifier
+	Policies         *service.PolicyService
+	Adoption         *service.AdoptionService
+	RuntimeLifecycle *service.RuntimeLifecycleService
+	Secrets          repository.SecretRepository
+	Encryptor        *secrets.Encryptor
+	Notifications    repository.NotificationRepository
+	Dispatcher       *notifications.Dispatcher
+	ToolProvisioning repository.ToolProvisioningRepository
+	MCP              *handlers.MCPHandler
+	HiveCI           repository.HiveCIRepository
+	Blossom          *blossom.Client
+	OCI              http.Handler
+	Orgs             repository.OrganizationRepository
+	OrgMembers       repository.OrgMemberRepository
+	OrgInvites       repository.OrgInviteRepository
+	RBAC             *auth.RBAC
+	LLMRegistry      *service.LLMRegistryService
+	MLRegistry       *service.MLRegistryService
+	MLCommands       handlers.MLCommandPublisher
+	HealthProvider   any
+	ModePolicy       any
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -163,8 +161,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	if deps.MLRegistry != nil || deps.MLCommands != nil {
 		mlH = handlers.NewMLHandler(deps.MLRegistry, deps.MLCommands)
 	}
-	continuityH := handlers.NewContinuityHandler(deps.ContinuityStatuses, deps.ContinuityGraph)
-
 	var logsH *handlers.LogHandler
 	if deps.Runs != nil && deps.Services != nil && deps.Environments != nil {
 		var logService *runtimeadapter.LogService
@@ -190,16 +186,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	if deps.MCP != nil {
 		r.With(tier3Gate, middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
 	}
-
-	// Continuity read-model routes (authenticated when auth is enabled).
-	r.Route("/api", func(r chi.Router) {
-		r.Use(middleware.ContentType)
-		r.Use(tier1Gate)
-		r.Use(auth.MiddlewareFromConfig(authMiddleware))
-		r.With(middleware.RateLimit(readLimiter)).Get("/continuity/status", continuityH.Status)
-		r.With(middleware.RateLimit(readLimiter)).Get("/continuity/topology", continuityH.Topology)
-		r.With(middleware.RateLimit(writeLimiter)).Post("/continuity/simulate", continuityH.Simulate)
-	})
 
 	// API v1 routes (authenticated when auth is enabled).
 	r.Route("/api/v1", func(r chi.Router) {

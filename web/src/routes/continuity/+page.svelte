@@ -161,7 +161,7 @@
   {:else if activeTab === 'topology'}
     <TopologyView {assessments} {statuses} />
   {:else}
-    <SimulationPanel baseline={assessments} {statuses} />
+    <SimulationPanel baseline={assessments} {statuses} continuityEvents={data?.continuityEvents || []} />
   {/if}
 </div>
 

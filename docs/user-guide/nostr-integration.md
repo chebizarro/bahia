@@ -313,11 +313,11 @@ Bahia route/control-surface transport classification is tracked in PSTF at `pstf
 | `nostr_request_result_facade` | Route uses signed/encrypted Nostr transport, but wraps domain operations as correlated request/result operations rather than durable domain event semantics. |
 | `rest_to_nostr_bridge` | Browser/API HTTP ingress submits work that the backend publishes as Nostr commands. Treat this as compatibility ingress, not signer-first browser control. |
 | `rest_compatibility` | Legacy or compatibility REST endpoint remains mounted for clients or domain reads/writes. |
-| `http_native` | HTTP is the expected protocol for that surface, such as Blossom/SBOM/continuity discovery-style interactions. |
+| `http_native` | HTTP is the expected protocol for that surface, such as Blossom/SBOM discovery-style interactions. |
 
 Signer-first route files must not import REST API clients for command submission. The unit guard `web/tests/unit/route-transport-matrix.test.js` fails when a pure `nostr_native` or `nostr_request_result_facade` route adds `$lib/api/*` route imports without an explicit non-signer-first matrix classification.
 
-Current exceptions are matrix-classified: artifact Blossom/SBOM HTTP surfaces, continuity HTTP status/simulation, and ML REST-to-Nostr compatibility ingress.
+Current exceptions are matrix-classified: artifact Blossom/SBOM HTTP surfaces and ML REST-to-Nostr compatibility ingress. Continuity status/topology/simulation now uses Nostr read models and local event-derived assessment.
 
 ## Authentication
 

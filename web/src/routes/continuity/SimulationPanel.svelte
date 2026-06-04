@@ -1,13 +1,16 @@
 <script lang="ts">
-  import { simulateWorkerFailure } from '$lib/api/continuity';
+  import { simulateWorkerFailureFromEvents } from '$lib/nostr/continuity';
+  import type { ContinuityNostrEvent } from '$lib/nostr/continuity';
   import type { ContinuityAssessmentDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
   let {
     baseline = [],
-    statuses = []
+    statuses = [],
+    continuityEvents = []
   }: {
     baseline?: ContinuityAssessmentDTO[];
     statuses?: ContinuityServiceStatusDTO[];
+    continuityEvents?: ContinuityNostrEvent[];
   } = $props();
 
   let workerPubKey = $state('');
@@ -82,7 +85,7 @@
     loading = true;
     error = '';
     try {
-      simulated = await simulateWorkerFailure(key);
+      simulated = simulateWorkerFailureFromEvents(key, continuityEvents, statuses);
       simulatedWorker = key;
     } catch (caught) {
       simulated = [];

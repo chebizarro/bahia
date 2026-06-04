@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-giw6",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The /continuity web route imports only Nostr continuity helpers and does not import $lib/api/continuity or fetch /api/continuity/*.",
+      "tests": ["BAHIA_NOSTR_AUDIT_PARITY route transport matrix keeps REST/API route imports explicit and limited"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Continuity status cards are decoded from kind 30351 read-model events and topology/simulation are derived from continuity Nostr event history.",
+      "tests": ["continuity-nostr.test.ts"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Backend router no longer mounts /api/continuity/status, /api/continuity/topology, or /api/continuity/simulate.",
+      "tests": ["TestContinuityRESTRoutesAreRemoved"]
+    }
+  ]
+}

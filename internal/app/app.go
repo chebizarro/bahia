@@ -412,15 +412,6 @@ func New(cfg *config.Config) (*App, error) {
 		},
 	}}, RunnerTier(Tier0))
 
-	continuityGraph, err := service.NewContinuityGraph(
-		continuityDefinitionStore,
-		continuityHeartbeatMonitor,
-		continuityStatusStore,
-		continuityWorkerReader{repo: workerRepo, logger: logger},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("creating continuity graph: %w", err)
-	}
 	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
 		continuityHeartbeatMonitor,
 		continuityDefinitionStore,
@@ -909,39 +900,37 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
-			Config:             cfg,
-			AuthMiddleware:     authMiddleware,
-			Workers:            workerRepo,
-			Builds:             buildRepo,
-			Runs:               runRepo,
-			Services:           serviceRepo,
-			Environments:       envRepo,
-			EnvStates:          stateRepo,
-			RuntimeResolver:    runtimeResolver,
-			Payments:           paymentSvc,
-			SBOMs:              sbomRepo,
-			Artifacts:          artifactRepo,
-			Policies:           policySvc,
-			Adoption:           adoptionSvc,
-			RuntimeLifecycle:   runtimeLifecycleSvc,
-			Secrets:            secretRepo,
-			Encryptor:          secretEncryptor,
-			Notifications:      notifRepo,
-			Dispatcher:         notifDispatcher,
-			MCP:                mcpHandler,
-			Blossom:            blossomClient,
-			OCI:                ociHandler,
-			Orgs:               orgRepo,
-			OrgMembers:         orgMemberRepo,
-			OrgInvites:         orgInviteRepo,
-			RBAC:               rbac,
-			MLRegistry:         mlRegistry,
-			MLCommands:         mlCommandPublisher,
-			LLMRegistry:        llmRegistry,
-			ContinuityStatuses: continuityStatusStore,
-			ContinuityGraph:    continuityGraph,
-			HealthProvider:     healthProvider,
-			ModePolicy:         policy,
+			Config:           cfg,
+			AuthMiddleware:   authMiddleware,
+			Workers:          workerRepo,
+			Builds:           buildRepo,
+			Runs:             runRepo,
+			Services:         serviceRepo,
+			Environments:     envRepo,
+			EnvStates:        stateRepo,
+			RuntimeResolver:  runtimeResolver,
+			Payments:         paymentSvc,
+			SBOMs:            sbomRepo,
+			Artifacts:        artifactRepo,
+			Policies:         policySvc,
+			Adoption:         adoptionSvc,
+			RuntimeLifecycle: runtimeLifecycleSvc,
+			Secrets:          secretRepo,
+			Encryptor:        secretEncryptor,
+			Notifications:    notifRepo,
+			Dispatcher:       notifDispatcher,
+			MCP:              mcpHandler,
+			Blossom:          blossomClient,
+			OCI:              ociHandler,
+			Orgs:             orgRepo,
+			OrgMembers:       orgMemberRepo,
+			OrgInvites:       orgInviteRepo,
+			RBAC:             rbac,
+			MLRegistry:       mlRegistry,
+			MLCommands:       mlCommandPublisher,
+			LLMRegistry:      llmRegistry,
+			HealthProvider:   healthProvider,
+			ModePolicy:       policy,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -1437,11 +1426,6 @@ func cleanupJobStatusFromLoom(status *loom.JobStatus) *service.CleanupJobStatus 
 	return &service.CleanupJobStatus{JobID: status.JobID, Status: status.Status, Success: status.Success, ExitCode: status.ExitCode, Duration: status.Duration, WorkerPubkey: status.WorkerPubkey, StdoutURL: status.StdoutURL, StderrURL: status.StderrURL, ChangeToken: status.ChangeToken, Error: status.Error, LogOutput: status.LogOutput}
 }
 
-type continuityWorkerReader struct {
-	repo   repository.WorkerRepository
-	logger *zap.Logger
-}
-
 func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, policy *ModePolicy) {
 	if manager == nil {
 		return
@@ -1474,20 +1458,6 @@ func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, pol
 			}
 		}(reg)
 	}
-}
-
-func (r continuityWorkerReader) ListWorkers() []domain.Worker {
-	if r.repo == nil {
-		return nil
-	}
-	workers, err := r.repo.List(context.Background(), "", 0)
-	if err != nil {
-		if r.logger != nil {
-			r.logger.Warn("list workers for continuity graph failed", zap.Error(err))
-		}
-		return nil
-	}
-	return workers
 }
 
 func (a *App) Run() error {

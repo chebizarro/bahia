@@ -43,7 +43,7 @@ No remaining work is known for `bahia-piy8` in the touched scope.
 
 - Added `route_transport_matrix.json` as the durable PSTF artifact for route/control-surface classification using the orchestration taxonomy: `nostr_native`, `nostr_request_result_facade`, `rest_to_nostr_bridge`, `rest_compatibility`, and `http_native`.
 - Classified audited browser routes and backend/API control surfaces with repository-backed evidence from `docs/investigations/fake-nostr-routes-audit-2026-06-01.md`.
-- Explicitly allowlisted the only route files that currently import REST/API helpers: artifact Blossom/SBOM HTTP surfaces, continuity HTTP status/simulation, and ML REST-to-Nostr compatibility ingress.
+- Explicitly allowlisted the only route files that currently import REST/API helpers: artifact Blossom/SBOM HTTP surfaces and ML REST-to-Nostr compatibility ingress. Continuity is now classified as Nostr-native by `bahia-giw6` and has no route REST import allowlist entry.
 - Added `web/tests/unit/route-transport-matrix.test.js`, a static guard that fails if pure signer-first route files import REST/API clients for command ingress, if a new route-level `$lib/api/*` import lacks exact matrix classification, if a matrix route path does not exist, or if a live SvelteKit `+page` route/loader lacks matrix coverage.
 - Updated user-facing Nostr integration documentation and the investigation report to point operators and agents at the PSTF matrix instead of relying on transient audit prose.
 

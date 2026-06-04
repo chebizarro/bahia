@@ -1,9 +1,9 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
-  "updated_at": "2026-06-02",
+  "updated_at": "2026-06-03",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
@@ -18,18 +18,6 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "SBOM and attestation HTTP surfaces only; artifact read model and signature verification remain separate Nostr/encrypted flows."
-    },
-    {
-      "file": "web/src/routes/continuity/+page.ts",
-      "permitted_transport_classes": ["http_native"],
-      "allowed_imports": ["$lib/api/continuity"],
-      "allowed_usage": "Continuity status/topology are currently direct HTTP surfaces, not signer-first Nostr routes."
-    },
-    {
-      "file": "web/src/routes/continuity/SimulationPanel.svelte",
-      "permitted_transport_classes": ["http_native"],
-      "allowed_imports": ["$lib/api/continuity"],
-      "allowed_usage": "Continuity failure simulation is currently a direct HTTP surface, not signer-first Nostr command ingress."
     },
     {
       "file": "web/src/routes/ml/+page.svelte",
@@ -213,14 +201,15 @@
       "pstf_status": "current_audit_evidence"
     },
     {
-      "id": "continuity-http-surface",
+      "id": "continuity-nostr-read-models",
       "surface": "`/continuity` status, topology, and simulation",
-      "transport_class": "http_native",
+      "transport_class": "nostr_native",
       "route_files": ["web/src/routes/continuity/+page.svelte", "web/src/routes/continuity/+page.ts", "web/src/routes/continuity/SimulationPanel.svelte"],
-      "control_files": ["web/src/lib/api/continuity.ts", "internal/api/router/router.go"],
-      "evidence": ["Continuity load fetches status/topology through $lib/api/continuity.", "SimulationPanel submits worker-failure simulation through $lib/api/continuity."],
-      "rest_import_policy": "allowed_http_native",
-      "pstf_status": "current_audit_evidence"
+      "control_files": ["web/src/lib/nostr/continuity.ts", "internal/service/continuity_status_projector.go", "internal/adapters/nostr/catalog.go"],
+      "evidence": ["Continuity load calls loadContinuityDashboardFromNostr() and consumes scoped relay filters for kind 30351/30353 status plus 31400-31404 definitions and 30315 continuity heartbeat events.", "SimulationPanel derives worker-failure impact locally from the same Nostr event set instead of POSTing to a REST simulation endpoint.", "internal/api/router/router.go no longer mounts /api/continuity/status, /api/continuity/topology, or /api/continuity/simulate."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "resolved_by_bahia-giw6",
+      "resolved_by_beads": ["bahia-giw6"]
     },
     {
       "id": "souls-nostr-with-eose-caveats",

@@ -767,6 +767,25 @@ func makeRouterNIP98HeaderWithKey(t *testing.T, privateKey, method, url string) 
 
 // --- Health / Ready ---
 
+func TestContinuityRESTRoutesAreRemoved(t *testing.T) {
+	srv := newTestServer()
+	defer srv.Close()
+
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodGet, "/api/continuity/status", nil},
+		{http.MethodGet, "/api/continuity/topology", nil},
+		{http.MethodPost, "/api/continuity/simulate", map[string]string{"worker_pubkey": "worker-a"}},
+	}
+	for _, tt := range tests {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)
+		assertDeprecatedMutationRouteRemoved(t, tt.method, tt.path, resp, body)
+	}
+}
+
 func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	cfg := config.Defaults()
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())

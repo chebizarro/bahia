@@ -31,7 +31,7 @@ const mandatoryEntryIds = [
   'llm-public-controlplane',
   'dns-public-controlplane',
   'backup-public-controlplane',
-  'continuity-http-surface',
+  'continuity-nostr-read-models',
   'souls-nostr-with-eose-caveats',
   'events-relay-activity',
   'settings-discovery-and-relay-config',

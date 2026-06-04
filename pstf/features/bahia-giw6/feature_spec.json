@@ -1,0 +1,14 @@
+{
+  "feature_id": "bahia-giw6",
+  "title": "Remove continuity dashboard REST dependency",
+  "observed_behavior": "The /continuity web route loaded status/topology through $lib/api/continuity and SimulationPanel POSTed to /api/continuity/simulate, while backend router mounted /api/continuity/status, /api/continuity/topology, and /api/continuity/simulate.",
+  "intended_behavior": "The continuity dashboard consumes scoped Nostr continuity events directly: kind 30351/30353 read models for status/progress, kinds 31400-31404 for continuity definitions, kind 30315 continuity heartbeat, and worker state read models for standby assignment context. The backend serves continuity state through those Nostr events and no longer exposes nonessential continuity REST endpoints.",
+  "scope": [
+    "web/src/lib/nostr/continuity.ts",
+    "web/src/routes/continuity/+page.ts",
+    "web/src/routes/continuity/SimulationPanel.svelte",
+    "internal/api/router/router.go",
+    "internal/app/app.go",
+    "pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json"
+  ]
+}
