@@ -42,7 +42,7 @@ Placeholder tests are mapped one-to-one with criteria in `test_matrix.json`; exe
 
 ## Ambiguities / Human Decisions Needed
 
-None for correcting the evidence classification. ML browser ingress policy remains sibling-owned by `bahia-jxm3`; this PSTF cleanup does not decide whether `/ml` should remain REST-to-Nostr compatibility ingress or become signer-first browser publishing.
+None for correcting the evidence classification. ML browser ingress was later moved to signer-first browser Nostr publishing by `bahia-gkg7` and is tracked in `BAHIA_NOSTR_AUDIT_PARITY` as `ml-nostr-controlplane`.
 
 ## Confidence Assessment
 

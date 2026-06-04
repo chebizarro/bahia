@@ -21,7 +21,7 @@ type MLCommandPublisher interface {
 	PublishMLInferenceRollbackRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 }
 
-// MLHandler exposes the generic AI/ML REST compatibility surface.
+// MLHandler exposes the generic AI/ML compatibility HTTP surface for external clients.
 type MLHandler struct {
 	registry *service.MLRegistryService
 	commands MLCommandPublisher

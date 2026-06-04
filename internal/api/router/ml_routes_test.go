@@ -104,7 +104,7 @@ func TestMLRESTAsyncRoutesReturnNostrCorrelationMetadata(t *testing.T) {
 				t.Fatalf("missing Nostr correlation metadata: %#v", data)
 			}
 			if data["status"] != "submitted" || data["published_relays"].(float64) != 1 || data["timeout_seconds"].(float64) != 30 {
-				t.Fatalf("missing REST-to-Nostr receipt status metadata: %#v", data)
+				t.Fatalf("missing Nostr command receipt status metadata: %#v", data)
 			}
 			if message, _ := data["message"].(string); !strings.Contains(message, "subscribe to Nostr result/read-model events") {
 				t.Fatalf("receipt message must describe Nostr completion semantics: %#v", data)

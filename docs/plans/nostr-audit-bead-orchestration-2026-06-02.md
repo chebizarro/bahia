@@ -29,7 +29,7 @@ Source audit: `docs/investigations/fake-nostr-routes-audit-2026-06-01.md`.
 
 ### [x] Item 3 — Domain ingress semantics: orgs and ML
 **Beads:** `bahia-sv0j`, `bahia-jxm3`.
-**Goal:** Resolve/document or implement org encrypted CRUD facade and ML REST-to-Nostr bridge semantics.
+**Goal:** Resolve/document org encrypted CRUD facade semantics and migrate ML browser ingress to Nostr-native commands where required.
 **Done when:** HITL/PSTF decisions are recorded; UI/docs/tests match chosen classifications; org and ML no longer imply stronger Nostr-native semantics than implemented.
 **Key files:** `web/src/lib/stores/orgs.svelte.js`, `internal/controlplane/encrypted_domain_handlers.go`, `internal/controlplane/encrypted_transport.go`, `web/src/routes/ml/+page.svelte`, `web/src/lib/api/client.js`, `internal/api/handlers/ml.go`, `internal/controlplane/ml_command_publisher.go`, relevant PSTF.
 **Dependencies:** Item 1 taxonomy and Item 2 lifecycle contract are complete; ready to dispatch.

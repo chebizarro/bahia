@@ -4,7 +4,7 @@
   "intent": "REST, MCP, and CLI long-running control-plane writes return canonical Nostr command receipts or use the normalized command publisher path.",
   "observed_prework": [
     "web/src/lib/api/client.js has synchronous consumers for adoption scan/import and direct runtime actions.",
-    "ML REST writes already use Nostr command publishers and return 202 Accepted.",
+    "ML compatibility HTTP writes already use Nostr command publishers and return 202 Accepted.",
     "MCP deployment tools previously wrote deployment intents directly when invoked through bahia_deploy/bahia_rollback."
   ],
   "implemented_scope": [
@@ -12,7 +12,7 @@
     "Added idempotency_key/status/error fields to service, LLM, and ML command publisher receipts.",
     "Added default 30 second publish-and-wait timeout and deterministic idempotency key generation for signer-first operator client commands.",
     "Added persistent d-tag replay lookup support in Nostr event repositories and reactor dedupe by kind/pubkey/d-tag.",
-    "Changed ML REST receipt response to the canonical CommandReceipt shape while preserving 202 behavior.",
+    "Changed ML compatibility receipt response to the canonical CommandReceipt shape while preserving 202 behavior.",
     "Changed MCP deployment/rollback to use ServiceCommandPublisher when configured, returning uniform receipts."
   ]
 }

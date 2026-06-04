@@ -317,7 +317,7 @@ Bahia route/control-surface transport classification is tracked in PSTF at `pstf
 
 Signer-first route files must not import REST API clients for command submission. The unit guard `web/tests/unit/route-transport-matrix.test.js` fails when a pure `nostr_native` or `nostr_request_result_facade` route adds `$lib/api/*` route imports without an explicit non-signer-first matrix classification.
 
-Current exceptions are matrix-classified: artifact Blossom/SBOM HTTP surfaces and ML REST-to-Nostr compatibility ingress. Continuity status/topology/simulation now uses Nostr read models and local event-derived assessment.
+Current route-level REST client exceptions are matrix-classified artifact Blossom/SBOM HTTP surfaces only. ML import/deploy and continuity status/topology/simulation now use Nostr-backed browser paths.
 
 ## Authentication
 

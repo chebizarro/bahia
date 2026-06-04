@@ -12,11 +12,9 @@ The ML fabric supports:
 
 ## Transport Semantics
 
-The ML web import and deploy forms are **REST-to-Nostr bridge** ingress. The browser submits to `/api/v1/ml/imports` or `/api/v1/ml/deployments`; Bahia validates the HTTP payload, signs the corresponding ML request event (`38394` import or `38391` deploy), publishes it to relays, and returns a `202 Accepted` receipt with `request_event_id`, `request_kind`, `result_kind`, read-model kinds, relay acceptance count, and idempotency metadata.
+The ML web import and deploy forms publish signed Nostr ContextVM commands directly through the browser control-plane transport. Import uses `ml/model-import`; deployment uses `ml/inference-deploy`. Submission is not terminal workflow completion: operators should monitor correlated ContextVM result events, legacy ML result projections where present, and the ML read models listed below.
 
-The HTTP response is only publish acceptance. Completion comes from the correlated terminal Nostr result (`38399` import result, `38396` deploy result, or related ML result kinds) and the ML read models listed below. Browser pinning for an existing endpoint is separate signer-first Nostr ingress for the worker placement command.
-
-Direct Nostr clients and MCP tools may publish/return the same ML command metadata without using the web bridge.
+Browser pinning for an existing endpoint is also signer-first Nostr ingress for the worker placement command. External clients that still require compatibility HTTP can use backend compatibility endpoints, but the Bahia web route no longer depends on them.
 
 ## Key Concepts
 

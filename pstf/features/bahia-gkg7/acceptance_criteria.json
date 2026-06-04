@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-gkg7",
+  "criteria": [
+    {
+      "id": "GKG7-AC-001",
+      "description": "The ML route publishes import and deploy requests through Nostr ContextVM operations instead of $lib/api REST methods.",
+      "verification": "Static route matrix/unit tests verify /ml has no $lib/api import and contains ml/model-import plus ml/inference-deploy publish paths."
+    },
+    {
+      "id": "GKG7-AC-002",
+      "description": "$lib/api/client.js exposes only HTTP-native Blossom/SBOM helpers plus generic fetch/auth/query plumbing.",
+      "verification": "API client unit tests assert the exact surviving method surface."
+    },
+    {
+      "id": "GKG7-AC-003",
+      "description": "Route transport documentation and PSTF classify /ml browser import/deploy as Nostr-native and remove the REST client allowlist entry.",
+      "verification": "Route transport matrix test and docs search confirm ML is no longer a route-level REST client exception."
+    }
+  ]
+}

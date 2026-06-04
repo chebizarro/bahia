@@ -26,7 +26,7 @@ const mandatoryEntryIds = [
   'packages-public-controlplane',
   'policies-public-controlplane',
   'workers-read-models-and-controls',
-  'ml-rest-to-nostr-ingress',
+  'ml-nostr-controlplane',
   'ml-existing-endpoint-pin-signer-first',
   'llm-public-controlplane',
   'dns-public-controlplane',
@@ -148,12 +148,12 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     expect(orgs.evidence.join(' ')).toMatch(/encrypted request\/result facade|25910/);
     expect(orgs.evidence.join(' ')).toMatch(/without public org read-model projection|not nostr_native read models/);
 
-    const ml = matrix.entries.find((entry) => entry.id === 'ml-rest-to-nostr-ingress');
-    expect(ml.transport_class).toBe('rest_to_nostr_bridge');
-    expect(ml.pstf_status).toBe('decision_recorded_2026-06-02');
-    expect(ml.resolved_by_beads).toEqual(['bahia-jxm3']);
-    expect(ml.rest_import_policy).toBe('allowed_rest_to_nostr_bridge');
-    expect(ml.evidence.join(' ')).toMatch(/HTTP 202 is publish acceptance only/);
+    const ml = matrix.entries.find((entry) => entry.id === 'ml-nostr-controlplane');
+    expect(ml.transport_class).toBe('nostr_native');
+    expect(ml.pstf_status).toBe('resolved_by_bahia-gkg7');
+    expect(ml.resolved_by_beads).toEqual(['bahia-jxm3', 'bahia-gkg7']);
+    expect(ml.rest_import_policy).toBe('forbidden_for_browser_command_ingress');
+    expect(ml.evidence.join(' ')).toMatch(/ml\/model-import|ml\/inference-deploy/);
 
     const mlPin = matrix.entries.find((entry) => entry.id === 'ml-existing-endpoint-pin-signer-first');
     expect(mlPin.transport_class).toBe('nostr_native');
@@ -164,8 +164,9 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     expect(orgDocs).toContain('encrypted request/result facade');
     expect(orgDocs).toContain('durable org state remains repository-backed');
     const mlPage = readFileSync(resolve(repoRoot, 'web/src/routes/ml/+page.svelte'), 'utf8');
-    expect(mlPage).toContain('REST-to-Nostr bridge');
-    expect(mlPage).toContain('HTTP acceptance is not completion');
+    expect(mlPage).toContain('ml/model-import');
+    expect(mlPage).toContain('ml/inference-deploy');
+    expect(mlPage).not.toMatch(apiRouteImportPattern);
   });
 
   it('fails if a pure signer-first route starts importing REST clients for command ingress', () => {

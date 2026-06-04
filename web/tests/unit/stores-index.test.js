@@ -11,16 +11,6 @@ const authMock = vi.hoisted(() => ({
 
 vi.mock('../../src/lib/stores/auth.js', () => authMock);
 
-vi.mock('../../src/lib/api/client.js', () => {
-  const mockApi = {
-    listServices: vi.fn(),
-    listEnvironments: vi.fn(),
-    listStates: vi.fn(),
-    listWorkers: vi.fn()
-  };
-  return { api: mockApi };
-});
-
 const controlplaneMock = vi.hoisted(() => ({
   services: [],
   environments: [],
@@ -37,7 +27,6 @@ vi.mock('../../src/lib/stores/controlplane.svelte.js', () => controlplaneMock);
 
 describe('Global Stores (index.js)', () => {
   let storesModule;
-  let mockApi;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -56,24 +45,6 @@ describe('Global Stores (index.js)', () => {
     });
     controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true });
 
-    const apiModule = await import('../../src/lib/api/client.js');
-    mockApi = apiModule.api;
-    mockApi.listServices.mockResolvedValue([
-      { id: 'svc-1', name: 'Service 1' },
-      { id: 'svc-2', name: 'Service 2' }
-    ]);
-    mockApi.listEnvironments.mockResolvedValue([
-      { id: 'env-prod', name: 'Production' },
-      { id: 'env-dev', name: 'Development' }
-    ]);
-    mockApi.listStates.mockResolvedValue([
-      { id: 'state-1', service_id: 'svc-1', environment_id: 'env-prod', drift_status: 'synced' },
-      { id: 'state-2', service_id: 'svc-1', environment_id: 'env-dev', drift_status: 'drifted' }
-    ]);
-    mockApi.listWorkers.mockResolvedValue([
-      { pubkey: 'worker-1', status: 'active' },
-      { pubkey: 'worker-2', status: 'idle' }
-    ]);
     storesModule = await import('../../src/lib/stores/index.js');
   });
 
@@ -97,10 +68,6 @@ describe('Global Stores (index.js)', () => {
     await storesModule.loadWorkers();
 
     expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(4);
-    expect(mockApi.listServices).not.toHaveBeenCalled();
-    expect(mockApi.listEnvironments).not.toHaveBeenCalled();
-    expect(mockApi.listStates).not.toHaveBeenCalled();
-    expect(mockApi.listWorkers).not.toHaveBeenCalled();
   });
 
   it('does not let REST refreshes overwrite authoritative relay-backed state', async () => {
@@ -109,7 +76,6 @@ describe('Global Stores (index.js)', () => {
 
     await storesModule.loadServices();
 
-    expect(mockApi.listServices).not.toHaveBeenCalled();
     expect(storesModule.services).toEqual([{ id: 'svc-relay', name: 'Relay Service' }]);
   });
 
@@ -117,7 +83,6 @@ describe('Global Stores (index.js)', () => {
     await storesModule.loadAll();
 
     expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
-    expect(mockApi.listServices).not.toHaveBeenCalled();
   });
 
   it('loadAll logs relay bootstrap failures without falling back to REST', async () => {
@@ -127,10 +92,6 @@ describe('Global Stores (index.js)', () => {
     await storesModule.loadAll();
 
     expect(consoleSpy).toHaveBeenCalledWith('Nostr controlplane bootstrap failed:', 'no relay');
-    expect(mockApi.listServices).not.toHaveBeenCalled();
-    expect(mockApi.listEnvironments).not.toHaveBeenCalled();
-    expect(mockApi.listStates).not.toHaveBeenCalled();
-    expect(mockApi.listWorkers).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
 

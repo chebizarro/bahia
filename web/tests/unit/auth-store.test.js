@@ -490,7 +490,7 @@ describe('Auth Store', () => {
 
       await authModule.login();
       const { api } = await import('../../src/lib/api/client.js');
-      await api.listServices();
+      await api.getBlossomServers();
 
       expect(authModule.authState.directNip98Ready).toBe(true);
       expect(authModule.authState.compatibility.restNip98Advertised).toBe(true);
@@ -498,7 +498,7 @@ describe('Auth Store', () => {
       expect(authModule.authState.compatibility.restNip98LastError).toBeNull();
       expect(localStorage.getItem('bahia_token')).toBeNull();
       expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
-      expect(global.fetch).toHaveBeenLastCalledWith('/api/v1/services', expect.objectContaining({
+      expect(global.fetch).toHaveBeenLastCalledWith('/api/v1/blossom/servers', expect.objectContaining({
         headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Nostr /) })
       }));
     });

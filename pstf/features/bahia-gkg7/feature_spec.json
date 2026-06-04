@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-gkg7",
+  "title": "Remove redundant web API bridge methods",
+  "status": "implemented",
+  "bead_id": "bahia-gkg7",
+  "date": "2026-06-03",
+  "intent": "Remove redundant ML compatibility HTTP calls from the Bahia web app, publish ML import/deploy through Nostr commands, and reduce $lib/api/client.js to HTTP-native interop helpers only.",
+  "scope": [
+    "web/src/routes/ml/+page.svelte",
+    "web/src/lib/api/client.js",
+    "web/tests/unit/api-client*.test.js",
+    "web/tests/unit/route-transport-matrix.test.js",
+    "pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json",
+    "docs/user-guide/features/ml-models.md"
+  ],
+  "transport_class": "nostr_native"
+}

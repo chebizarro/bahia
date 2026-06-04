@@ -1,36 +1,13 @@
 {
   "feature_id": "bahia-jxm3",
-  "status": "verified",
+  "status": "superseded_by_bahia-gkg7",
   "tests": [
     {
       "test_id": "JXM3-T-001",
-      "ac_ids": [
-        "JXM3-AC-001"
-      ],
       "target_path": "web/tests/unit/route-transport-matrix.test.js",
-      "title": "Route matrix, ML page, and docs lock REST-to-Nostr bridge decision",
+      "title": "Superseded by current ML Nostr-native route matrix coverage",
       "type": "static_unit",
-      "status": "pass"
-    },
-    {
-      "test_id": "JXM3-T-002",
-      "ac_ids": [
-        "JXM3-AC-002"
-      ],
-      "target_path": "internal/api/router/ml_routes_test.go",
-      "title": "ML REST async routes return Nostr correlation receipts and reject publish failures without submitted metadata",
-      "type": "go_unit",
-      "status": "pass"
-    },
-    {
-      "test_id": "JXM3-T-003",
-      "ac_ids": [
-        "JXM3-AC-003"
-      ],
-      "target_path": "internal/controlplane/ml_command_publisher_test.go",
-      "title": "ML command publisher signs scoped events and rejects zero accepted relay publishes",
-      "type": "go_unit",
-      "status": "pass"
+      "status": "superseded"
     }
   ]
 }

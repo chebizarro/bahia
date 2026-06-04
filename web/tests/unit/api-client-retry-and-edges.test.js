@@ -1,89 +1,69 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-global.window = global;
+import { BahiaClient } from '../../src/lib/api/client.js';
 
-describe('BahiaClient - Retry and Edge Coverage', () => {
-  let BahiaClient;
+function json(data) {
+  return {
+    ok: true,
+    headers: new Map([['content-type', 'application/json']]),
+    json: async () => ({ data })
+  };
+}
+
+function error(status, statusText) {
+  return {
+    ok: false,
+    status,
+    statusText,
+    json: async () => { throw new Error('not json'); }
+  };
+}
+
+describe('BahiaClient retry and edge behavior', () => {
   let client;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
-    const module = await import('../../src/lib/api/client.js');
-    BahiaClient = module.BahiaClient;
+    global.fetch = vi.fn();
     client = new BahiaClient();
   });
 
   it('retries GET once on network error by default', async () => {
-    global.fetch
-      .mockRejectedValueOnce(new Error('network down'))
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: [{ id: 'svc-1' }] })
-      });
+    global.fetch.mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce(json(['ok']));
 
-    const result = await client.listServices();
+    await expect(client.getBlossomServers()).resolves.toEqual(['ok']);
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
-    expect(result).toEqual([{ id: 'svc-1' }]);
   });
 
   it('does not retry POST by default on network error', async () => {
     global.fetch.mockRejectedValueOnce(new Error('network down'));
 
-    await expect(client.createService({ name: 'svc' })).rejects.toThrow('network down');
+    await expect(client.listBlossomBlobs()).rejects.toThrow('network down');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('supports explicit retry override', async () => {
-    global.fetch
-      .mockRejectedValueOnce(new Error('timeout'))
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { ok: true } })
-      });
+  it('supports explicit retry override for POST requests', async () => {
+    global.fetch.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce(json({ ok: true }));
 
-    const result = await client.fetch('/custom', { method: 'POST', retries: 1, retryDelayMs: 0 });
+    await expect(client.fetch('/blossom/list', { method: 'POST', body: '{}', retries: 1, retryDelayMs: 0 })).resolves.toEqual({ ok: true });
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ ok: true });
   });
 
   it('retries GET on retriable 5xx responses by default', async () => {
-    global.fetch
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        statusText: 'Service Unavailable',
-        json: async () => {
-          throw new Error('not json');
-        }
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: [{ id: 'svc-1' }] })
-      });
+    global.fetch.mockResolvedValueOnce(error(503, 'Service Unavailable')).mockResolvedValueOnce(json({ ok: true }));
 
-    const result = await client.fetch('/services', { retryDelayMs: 0 });
+    await expect(client.fetch('/blossom/health', { retryDelayMs: 0 })).resolves.toEqual({ ok: true });
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
-    expect(result).toEqual([{ id: 'svc-1' }]);
   });
 
   it('does not retry non-retriable status codes by default', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: false,
-      status: 429,
-      statusText: 'Too Many Requests',
-      json: async () => {
-        throw new Error('not json');
-      }
-    });
+    global.fetch.mockResolvedValueOnce(error(429, 'Too Many Requests'));
 
-    await expect(client.fetch('/rate-limited', { retries: 3, retryDelayMs: 0 })).rejects.toThrow('HTTP 429: Too Many Requests');
+    await expect(client.fetch('/sbom/search', { retries: 3, retryDelayMs: 0 })).rejects.toThrow('HTTP 429: Too Many Requests');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -92,13 +72,9 @@ describe('BahiaClient - Retry and Edge Coverage', () => {
     global.fetch
       .mockRejectedValueOnce(new Error('network down'))
       .mockRejectedValueOnce(new Error('network down'))
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { ok: true } })
-      });
+      .mockResolvedValueOnce(json({ ok: true }));
 
-    const fetchPromise = client.fetch('/custom', { retries: 2, retryDelayMs: 100 });
+    const fetchPromise = client.fetch('/blossom/health', { retries: 2, retryDelayMs: 100 });
 
     await vi.advanceTimersByTimeAsync(99);
     expect(global.fetch).toHaveBeenCalledTimes(1);
@@ -112,172 +88,24 @@ describe('BahiaClient - Retry and Edge Coverage', () => {
     await vi.advanceTimersByTimeAsync(1);
     await expect(fetchPromise).resolves.toEqual({ ok: true });
     expect(global.fetch).toHaveBeenCalledTimes(3);
-
-    vi.useRealTimers();
   });
 
   it('supports configurable retry statuses', async () => {
-    global.fetch
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 429,
-        statusText: 'Too Many Requests',
-        json: async () => {
-          throw new Error('not json');
-        }
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { ok: true } })
-      });
+    global.fetch.mockResolvedValueOnce(error(429, 'Too Many Requests')).mockResolvedValueOnce(json({ ok: true }));
 
-    const result = await client.fetch('/rate-limited', {
-      retries: 1,
-      retryDelayMs: 0,
-      retryStatuses: [429]
-    });
+    await expect(client.fetch('/sbom/search', { retries: 1, retryDelayMs: 0, retryStatuses: [429] })).resolves.toEqual({ ok: true });
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ ok: true });
   });
 
-  it('falls back to HTTP status error when non-2xx body is not JSON', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: false,
-      status: 502,
-      statusText: 'Bad Gateway',
-      json: async () => {
-        throw new Error('not json');
-      }
-    });
+  it('defaults nullable Blossom responses to empty containers', async () => {
+    global.fetch
+      .mockResolvedValueOnce(json(null))
+      .mockResolvedValueOnce(json(null))
+      .mockResolvedValueOnce(json(null));
 
-    await expect(client.fetch('/bad-gateway', { retries: 0 })).rejects.toThrow('HTTP 502: Bad Gateway');
-  });
-
-  it('streamLogs wires log/error handlers and close function', () => {
-    const handlers = {};
-    const close = vi.fn();
-    global.EventSource = vi.fn(function EventSourceMock() {
-      return {
-        addEventListener: vi.fn((name, cb) => {
-          handlers[name] = cb;
-        }),
-        close,
-        onerror: null
-      };
-    });
-
-    const onLog = vi.fn();
-    const onError = vi.fn();
-
-    const stop = client.streamLogs('svc', 'env', 25, onLog, onError);
-
-    handlers.log({ data: JSON.stringify({ line: 'hello' }) });
-    expect(onLog).toHaveBeenCalledWith({ line: 'hello' });
-
-    const eventSource = global.EventSource.mock.results[0].value;
-    eventSource.onerror(new Error('sse failed'));
-    expect(onError).toHaveBeenCalled();
-
-    stop();
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('lookupRepositoryCI returns empty array when results are missing', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: {} })
-    });
-
-    const result = await client.lookupRepositoryCI('org/repo');
-    expect(result).toEqual([]);
-  });
-
-
-  it('listBlossomBlobs sends pubkey payload when provided', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: [] })
-    });
-
-    await client.listBlossomBlobs('npub1abc');
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/blossom/list',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ pubkey: 'npub1abc' }) })
-    );
-  });
-
-  it('listBlossomBlobs sends empty body when pubkey is omitted', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: [] })
-    });
-
-    await client.listBlossomBlobs();
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/blossom/list',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({}) })
-    );
-  });
-
-  it('getBlossomServers defaults to [] when backend returns null', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: null })
-    });
-
-    const result = await client.getBlossomServers();
-
-    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/servers', expect.any(Object));
-    expect(result).toEqual([]);
-  });
-
-  it('checkBlossomHealth defaults to {} when backend returns null', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: null })
-    });
-
-    const result = await client.checkBlossomHealth();
-
-    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/health', expect.any(Object));
-    expect(result).toEqual({});
-  });
-
-  it('getBlossomStats defaults to {} when backend returns null', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: null })
-    });
-
-    const result = await client.getBlossomStats();
-
-    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/stats', expect.any(Object));
-    expect(result).toEqual({});
-  });
-
-  it('organization member/invite methods call expected paths', async () => {
-    global.fetch.mockResolvedValue({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: [] })
-    });
-
-    await client.listOrgMembers('org-1');
-    await client.listOrgInvites('org-1');
-    await client.getMyInvites();
-
-    expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/v1/orgs/org-1/members', expect.any(Object));
-    expect(global.fetch).toHaveBeenNthCalledWith(2, '/api/v1/orgs/org-1/invites', expect.any(Object));
-    expect(global.fetch).toHaveBeenNthCalledWith(3, '/api/v1/me/invites', expect.any(Object));
+    await expect(client.getBlossomServers()).resolves.toEqual([]);
+    await expect(client.checkBlossomHealth()).resolves.toEqual({});
+    await expect(client.getBlossomStats()).resolves.toEqual({});
   });
 });

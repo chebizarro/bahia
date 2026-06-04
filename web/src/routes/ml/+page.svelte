@@ -1,7 +1,6 @@
 <script>
   import { bootstrapControlplane, controlplaneConnection, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, environments, workers } from '$lib/stores';
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
-  import { api } from '$lib/api/client.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import {
@@ -86,12 +85,34 @@
   function setFailure(message) { notice = { type: 'error', message }; }
   function resetNotice() { notice = null; }
 
-  function formatBridgeReceipt(action, result, fallback) {
-    if (!result?.request_event_id) return result?.message || fallback;
-    const relayCount = Number(result?.published_relays || 0);
-    const resultKind = result?.result_kind ? `result kind ${result.result_kind}` : 'the terminal result kind';
-    const requestPreview = String(result.request_event_id).slice(0, 12);
-    return `${action} command accepted by REST-to-Nostr bridge as request ${requestPreview}…; ${relayCount} relay(s) accepted it. Watch ${resultKind} and ML read models for completion.`;
+  function commandTagsFromPayload(payload = {}) {
+    const tags = [];
+    const idempotencyKey = String(payload.idempotency_key || payload.request_id || payload.d || '').trim();
+    if (idempotencyKey) tags.push(['d', idempotencyKey]);
+    if (payload.tags && typeof payload.tags === 'object' && !Array.isArray(payload.tags)) {
+      for (const [key, value] of Object.entries(payload.tags)) {
+        const tagValue = String(value ?? '').trim();
+        if (key && tagValue) tags.push([key, tagValue]);
+      }
+    }
+    for (const key of ['model', 'model_version', 'endpoint', 'runtime_preference', 'source']) {
+      const value = String(payload[key] ?? '').trim();
+      if (!value) continue;
+      const tagName = key === 'runtime_preference' ? 'runtime' : key;
+      if (!tags.some((tag) => tag[0] === tagName && tag[1] === value)) tags.push([tagName, value]);
+    }
+    return tags;
+  }
+
+  function formatNostrReceipt(action, result, fallback) {
+    const eventId = result?.id || result?.request_event_id;
+    if (!eventId) return result?.message || fallback;
+    const requestPreview = String(eventId).slice(0, 12);
+    return `${action} command published as Nostr request ${requestPreview}…; watch correlated ContextVM result events and ML read models for completion.`;
+  }
+
+  async function publishMLCommand(operation, payload) {
+    return publishCommand({ operation, tags: commandTagsFromPayload(payload), content: payload });
   }
 
   // Derived
@@ -118,8 +139,8 @@
     importSubmitting = true;
     resetNotice();
     try {
-      const result = await api.importMLModel(buildImportPayload(importForm));
-      setSuccess(formatBridgeReceipt('Model import', result, 'Model import command accepted by REST-to-Nostr bridge. Watch Nostr result/read-model events for completion.'));
+      const result = await publishMLCommand('ml/model-import', buildImportPayload(importForm));
+      setSuccess(formatNostrReceipt('Model import', result, 'Model import command published. Watch correlated ContextVM result events and ML read models for completion.'));
       importForm = { ...importForm, model_slug: '', source_uri: '', revision: '' };
     } catch (err) {
       setFailure(err.message || 'Failed to submit model import');
@@ -191,8 +212,8 @@
         const pinResult = await publishExistingEndpointPin(existingEndpointForDeploy, policy.pinned_worker);
         pinMessage = pinResult?.message ? ` ${pinResult.message}.` : ' Existing endpoint pin command accepted.';
       }
-      const result = await api.deployMLEndpoint(buildDeployPayload(deployForm));
-      const deploymentReceipt = formatBridgeReceipt('Inference deployment', result, `Inference deployment command accepted by REST-to-Nostr bridge with ${preview.estimated_eligible_count} eligible worker(s). Watch Nostr result/read-model events for completion.`);
+      const result = await publishMLCommand('ml/inference-deploy', buildDeployPayload(deployForm));
+      const deploymentReceipt = formatNostrReceipt('Inference deployment', result, `Inference deployment command published with ${preview.estimated_eligible_count} eligible worker(s). Watch correlated ContextVM result events and ML read models for completion.`);
       setSuccess(`${deploymentReceipt}${pinMessage}`);
       deployForm = { ...deployForm, endpoint: '', model_version: '' };
     } catch (err) {
@@ -394,7 +415,7 @@
     <div class="workflow-grid">
       <section class="panel">
         <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Import Model</h2>
-        <p class="transport-note">This form is REST-to-Nostr bridge ingress: Bahia signs a ML import request event and returns Nostr correlation metadata. HTTP acceptance is not completion.</p>
+        <p class="transport-note">This form publishes a signed Nostr ML import command. Submission is not completion; monitor correlated ContextVM result events and ML read models.</p>
         <form onsubmit={handleImport} data-testid="ml-import-form">
           <label>
             Model slug
@@ -436,7 +457,7 @@
 
       <section class="panel">
         <h2><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Deploy Inference Endpoint</h2>
-        <p class="transport-note">Deployment submission uses the REST-to-Nostr bridge and completes only through correlated Nostr result/read-model events. Existing endpoint pinning remains signer-first from the browser.</p>
+        <p class="transport-note">Deployment submission publishes a signed Nostr inference command and completes only through correlated ContextVM result events and ML read models. Existing endpoint pinning publishes signer-first workload placement events before deployment.</p>
         <form onsubmit={handleDeploy} data-testid="ml-deploy-form">
           <label>
             Endpoint coordinate

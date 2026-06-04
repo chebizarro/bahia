@@ -12,17 +12,10 @@ vi.mock('$lib/nostr/client.js', () => ({
   fetchRepositories: vi.fn()
 }));
 
-vi.mock('$lib/api/client.js', () => ({
-  api: {
-    lookupRepositoryCI: vi.fn()
-  }
-}));
-
 describe('repositories store', () => {
   let store;
   let authModule;
   let nostrModule;
-  let apiModule;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -30,16 +23,12 @@ describe('repositories store', () => {
 
     authModule = await import('$lib/stores/auth.js');
     nostrModule = await import('$lib/nostr/client.js');
-    apiModule = await import('$lib/api/client.js');
-
     authModule.authState.relays = {
       'wss://auth-read.example': { read: true, write: true },
       'wss://auth-write-only.example': { read: false, write: true }
     };
 
     nostrModule.fetchRepositories.mockResolvedValue([]);
-    apiModule.api.lookupRepositoryCI.mockResolvedValue([]);
-
     store = await import('$lib/stores/repositories.svelte.js');
   });
 
@@ -58,7 +47,6 @@ describe('repositories store', () => {
 
     await Promise.resolve();
 
-    expect(apiModule.api.lookupRepositoryCI).not.toHaveBeenCalled();
     expect(store.repositories[0].ci.state).toBe('empty');
     expect(store.repositories[1].ci.state).toBe('empty');
   });
@@ -101,17 +89,14 @@ describe('repositories store', () => {
 
     await store.enrichRepositoriesWithCI(repoList);
 
-    expect(apiModule.api.lookupRepositoryCI).not.toHaveBeenCalled();
     expect(repoList[0].ci).toEqual({ state: 'unsupported', lookup: null, error: null });
   });
 
-  it('does not call REST CI lookup while enriching public repository cards', async () => {
+  it('keeps public repository cards on read-model CI state only', async () => {
     const repoList = [{ displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha' }];
-    apiModule.api.lookupRepositoryCI.mockRejectedValue(new Error('CI backend unavailable'));
 
     await store.enrichRepositoriesWithCI(repoList);
 
-    expect(apiModule.api.lookupRepositoryCI).not.toHaveBeenCalled();
     expect(store.ciError.value).toBe(null);
     expect(repoList[0].ci).toEqual({ state: 'empty', lookup: null, error: null });
     expect(store.ciLoading.value).toBe(false);

@@ -1,431 +1,92 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the window object before importing the client
-global.window = global;
+import { BahiaClient } from '../../src/lib/api/client.js';
 
-describe('BahiaClient - Core Functionality', () => {
-  let BahiaClient;
+function response({ data, error, ok = true, status = 200, statusText = 'OK', contentType = 'application/json' } = {}) {
+  return {
+    ok,
+    status,
+    statusText,
+    headers: new Map(contentType ? [['content-type', contentType]] : []),
+    json: async () => ({ data, error })
+  };
+}
+
+describe('BahiaClient core HTTP behavior', () => {
   let client;
 
-  beforeEach(async () => {
-    // Clear localStorage and mocks
-    localStorage.clear();
-    vi.clearAllMocks();
-    
-    // Reset modules to avoid state leakage
-    vi.resetModules();
-    
-    // Dynamically import the client to get a fresh instance
-    const module = await import('../../src/lib/api/client.js');
-    // The actual export is 'api', but we need the class for testing
-    // We'll create a new instance using the same constructor logic
-    BahiaClient = class {
-      constructor() {
-        this.authProvider = null;
-      }
-      setAuthProvider(provider) {
-        this.authProvider = provider || null;
-      }
-      query(params) {
-        if (!params || typeof params !== 'object') return '';
-        const pairs = [];
-        for (const [key, value] of Object.entries(params)) {
-          if (value === null || value === undefined || value === '') continue;
-          if (Array.isArray(value)) {
-            if (value.length > 0) {
-              pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value.join(','))}`);
-            }
-          } else {
-            pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
-          }
-        }
-        return pairs.length > 0 ? `?${pairs.join('&')}` : '';
-      }
-      async fetch(path, options = {}) {
-        const headers = {
-          'Content-Type': 'application/json',
-          ...options.headers
-        };
-        if (!headers.Authorization && this.authProvider?.getAuthorizationHeader) {
-          const authorization = await this.authProvider.getAuthorizationHeader({ method: options.method || 'GET', url: `/api/v1${path}` });
-          if (authorization) headers.Authorization = authorization;
-        }
-        const res = await fetch(`/api/v1${path}`, { ...options, headers });
-        if (!res.ok) {
-          let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
-          try {
-            const errorData = await res.json();
-            if (errorData.error) {
-              errorMessage = errorData.error;
-            }
-          } catch {}
-          throw new Error(errorMessage);
-        }
-        const contentType = res.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          return null;
-        }
-        const data = await res.json();
-        if (data.error) {
-          throw new Error(data.error);
-        }
-        return data.data;
-      }
-      createSecret(serviceId, payload) {
-        return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`, {
-          method: 'POST',
-          body: JSON.stringify(payload)
-        });
-      }
-      evaluatePolicy(payload) {
-        return this.fetch('/policies/evaluate', {
-          method: 'POST',
-          body: JSON.stringify(payload)
-        });
-      }
-      listNotificationChannels(params = {}) {
-        return this.fetch(`/notifications/channels${this.query(params)}`);
-      }
-    };
-    
+  beforeEach(() => {
+    global.fetch = vi.fn();
     client = new BahiaClient();
   });
 
-  describe('Auth Provider', () => {
-    it('starts without localStorage bearer token state', () => {
-      localStorage.setItem('bahia_token', 'existing-token');
-      const newClient = new BahiaClient();
-      expect(newClient.authProvider).toBeNull();
-      expect(newClient.token).toBeUndefined();
-    });
-
-    it('should include Authorization header from auth provider when configured', async () => {
-      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr signed-event') });
-      
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: {} })
-      });
-
-      await client.fetch('/test-endpoint');
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/test-endpoint',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': 'Nostr signed-event'
-          })
-        })
-      );
-    });
-
-    it('should not include Authorization header when no provider is set', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: {} })
-      });
-
-      await client.fetch('/test-endpoint');
-
-      const callArgs = global.fetch.mock.calls[0][1];
-      expect(callArgs.headers).not.toHaveProperty('Authorization');
-    });
-
-    it('should update Authorization header after provider change', async () => {
-      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr first') });
-      
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: {} })
-      });
-
-      await client.fetch('/test-endpoint');
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/test-endpoint',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': 'Nostr first'
-          })
-        })
-      );
-
-      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr second') });
-      global.fetch.mockClear();
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: {} })
-      });
-
-      await client.fetch('/another-endpoint');
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/another-endpoint',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': 'Nostr second'
-          })
-        })
-      );
-    });
+  it('starts without bearer-token state', () => {
+    expect(client.authProvider).toBeNull();
+    expect(client.token).toBeUndefined();
   });
 
-  describe('Non-2xx Error Handling', () => {
-    it('should throw error on 404 with backend error message', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ error: 'Resource not found' })
-      });
+  it('serializes query parameters consistently', () => {
+    expect(client.query({ q: 'openssl', tags: ['a', 'b'], enabled: true, empty: '', none: null })).toBe('?q=openssl&tags=a%2Cb&enabled=true');
+    expect(client.query({})).toBe('');
+    expect(client.query(null)).toBe('');
+  });
 
-      await expect(client.fetch('/missing')).rejects.toThrow('Resource not found');
-    });
+  it('injects auth provider headers without storing bearer credentials', async () => {
+    client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr signed-event') });
+    global.fetch.mockResolvedValueOnce(response({ data: {} }));
 
-    it('should throw error on 401 Unauthorized', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ error: 'Authentication required' })
-      });
+    await client.fetch('/blossom/servers');
 
-      await expect(client.fetch('/protected')).rejects.toThrow('Authentication required');
-    });
+    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/servers', expect.objectContaining({
+      method: 'GET',
+      headers: expect.objectContaining({ Authorization: 'Nostr signed-event' })
+    }));
+  });
 
-    it('should throw error on 403 Forbidden', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: false,
-        status: 403,
-        statusText: 'Forbidden',
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ error: 'Access denied' })
-      });
+  it('does not inject authorization when no provider is configured', async () => {
+    global.fetch.mockResolvedValueOnce(response({ data: {} }));
 
-      await expect(client.fetch('/forbidden')).rejects.toThrow('Access denied');
-    });
+    await client.fetch('/blossom/servers');
 
-    it('should throw error on 500 with default message when no error body', async () => {
-      global.fetch.mockResolvedValueOnce({
+    expect(global.fetch.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+  });
+
+  it('unwraps Bahia data envelopes and returns null for non-JSON responses', async () => {
+    global.fetch
+      .mockResolvedValueOnce(response({ data: { ok: true } }))
+      .mockResolvedValueOnce(response({ contentType: 'text/plain' }));
+
+    await expect(client.fetch('/sbom/search')).resolves.toEqual({ ok: true });
+    await expect(client.fetch('/metrics')).resolves.toBeNull();
+  });
+
+  it('normalizes backend error envelopes and HTTP status failures', async () => {
+    global.fetch
+      .mockResolvedValueOnce(response({ ok: false, status: 404, statusText: 'Not Found', error: 'missing artifact' }))
+      .mockResolvedValueOnce({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
         headers: new Map([['content-type', 'text/plain']]),
-        json: async () => { throw new Error('Not JSON'); }
+        json: async () => { throw new Error('not json'); }
       });
 
-      await expect(client.fetch('/error')).rejects.toThrow('HTTP 500: Internal Server Error');
-    });
-
-    it('should handle 204 No Content gracefully', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-        headers: new Map([['content-type', 'text/plain']]),
-        json: async () => { throw new Error('No content'); }
-      });
-
-      const result = await client.fetch('/no-content');
-      expect(result).toBeNull();
-    });
+    await expect(client.fetch('/artifacts/missing/sbom')).rejects.toThrow('missing artifact');
+    await expect(client.fetch('/blossom/health', { retries: 0 })).rejects.toThrow('HTTP 500: Internal Server Error');
   });
 
-  describe('Backend Error Field Handling', () => {
-    it('should throw when response has error field in data', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ error: 'Validation failed' })
-      });
+  it('supports the live Blossom and SBOM route calls', async () => {
+    global.fetch
+      .mockResolvedValueOnce(response({ data: ['https://blossom.example'] }))
+      .mockResolvedValueOnce(response({ data: { 'https://blossom.example': 'ok' } }))
+      .mockResolvedValueOnce(response({ data: [{ sha256: 'abc' }] }))
+      .mockResolvedValueOnce(response({ data: { bomFormat: 'CycloneDX' } }))
+      .mockResolvedValueOnce(response({ data: { statement: 'attested' } }));
 
-      await expect(client.fetch('/validate')).rejects.toThrow('Validation failed');
-    });
-
-    it('should prefer backend error message over HTTP status', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: 'Bad Request',
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ error: 'Invalid service configuration' })
-      });
-
-      await expect(client.fetch('/bad')).rejects.toThrow('Invalid service configuration');
-    });
-  });
-
-  describe('URL Encoding', () => {
-    it('should encode special characters in path parameters', async () => {
-      const serviceId = 'service/with/slashes';
-      
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: {} })
-      });
-
-      await client.createSecret(serviceId, { key: 'SECRET_KEY', value: 'secret' });
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        `/api/v1/services/${encodeURIComponent(serviceId)}/secrets`,
-        expect.any(Object)
-      );
-    });
-
-    it('should encode spaces in path parameters', async () => {
-      const serviceId = 'my service name';
-      
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: {} })
-      });
-
-      await client.createSecret(serviceId, {});
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        `/api/v1/services/my%20service%20name/secrets`,
-        expect.any(Object)
-      );
-    });
-
-    it('should encode query parameters correctly', () => {
-      const params = {
-        service_id: 'abc-123',
-        status: 'active',
-        limit: 10
-      };
-
-      const query = client.query(params);
-      expect(query).toBe('?service_id=abc-123&status=active&limit=10');
-    });
-
-    it('should encode special characters in query parameters', () => {
-      const params = {
-        search: 'test@example.com',
-        filter: 'status=active'
-      };
-
-      const query = client.query(params);
-      expect(query).toContain(encodeURIComponent('test@example.com'));
-      expect(query).toContain(encodeURIComponent('status=active'));
-    });
-
-    it('should skip null, undefined, and empty string query parameters', () => {
-      const params = {
-        a: 'value',
-        b: null,
-        c: undefined,
-        d: '',
-        e: 'another'
-      };
-
-      const query = client.query(params);
-      expect(query).toBe('?a=value&e=another');
-    });
-
-    it('should encode array query parameters as comma-separated', () => {
-      const params = {
-        types: ['deployment', 'rollback', 'config']
-      };
-
-      const query = client.query(params);
-      expect(query).toBe('?types=deployment%2Crollback%2Cconfig');
-    });
-
-    it('should skip empty arrays in query parameters', () => {
-      const params = {
-        ids: [],
-        status: 'active'
-      };
-
-      const query = client.query(params);
-      expect(query).toBe('?status=active');
-    });
-  });
-
-  describe('Representative API Methods', () => {
-    it('should call createSecret with correct path and body', async () => {
-      const serviceId = 'svc-123';
-      const payload = { key: 'DB_PASSWORD', value: 'secret123' };
-
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { id: 'secret-1', key: 'DB_PASSWORD' } })
-      });
-
-      const result = await client.createSecret(serviceId, payload);
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/services/svc-123/secrets',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify(payload)
-        })
-      );
-      expect(result).toEqual({ id: 'secret-1', key: 'DB_PASSWORD' });
-    });
-
-    it('should call evaluatePolicy with correct payload', async () => {
-      const payload = {
-        policy_id: 'pol-1',
-        context: { environment: 'production' }
-      };
-
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { allowed: true, reason: 'Policy approved' } })
-      });
-
-      const result = await client.evaluatePolicy(payload);
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/policies/evaluate',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify(payload)
-        })
-      );
-      expect(result).toEqual({ allowed: true, reason: 'Policy approved' });
-    });
-
-    it('should call listNotificationChannels with query parameters', async () => {
-      const params = { type: 'slack', enabled: true };
-
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: [{ id: 'ch-1', type: 'slack' }] })
-      });
-
-      const result = await client.listNotificationChannels(params);
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/notifications/channels?type=slack&enabled=true',
-        expect.any(Object)
-      );
-      expect(result).toEqual([{ id: 'ch-1', type: 'slack' }]);
-    });
-
-    it('should call listNotificationChannels without parameters', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: [] })
-      });
-
-      await client.listNotificationChannels();
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/notifications/channels',
-        expect.any(Object)
-      );
-    });
+    await expect(client.getBlossomServers()).resolves.toEqual(['https://blossom.example']);
+    await expect(client.checkBlossomHealth()).resolves.toEqual({ 'https://blossom.example': 'ok' });
+    await expect(client.listBlossomBlobs()).resolves.toEqual([{ sha256: 'abc' }]);
+    await expect(client.getSBOM('artifact-1')).resolves.toEqual({ bomFormat: 'CycloneDX' });
+    await expect(client.getSBOMAttestation('artifact-1')).resolves.toEqual({ statement: 'attested' });
   });
 });

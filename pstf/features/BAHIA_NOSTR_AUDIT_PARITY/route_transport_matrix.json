@@ -1,7 +1,7 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
   "updated_at": "2026-06-03",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
@@ -18,12 +18,6 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "SBOM and attestation HTTP surfaces only; artifact read model and signature verification remain separate Nostr/encrypted flows."
-    },
-    {
-      "file": "web/src/routes/ml/+page.svelte",
-      "permitted_transport_classes": ["rest_to_nostr_bridge"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "ML import/deploy browser submissions are REST-to-Nostr bridge ingress: HTTP returns Nostr command receipt metadata; terminal completion remains correlated Nostr result/read-model events."
     }
   ],
   "entries": [
@@ -149,15 +143,15 @@
       "pstf_status": "current_audit_evidence"
     },
     {
-      "id": "ml-rest-to-nostr-ingress",
+      "id": "ml-nostr-controlplane",
       "surface": "`/ml` import and deployment browser submissions",
-      "transport_class": "rest_to_nostr_bridge",
+      "transport_class": "nostr_native",
       "route_files": ["web/src/routes/ml/+page.svelte"],
-      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/ml.go", "internal/controlplane/ml_command_publisher.go"],
-      "evidence": ["ML page calls api.importMLModel() and api.deployMLEndpoint() for import/deploy bridge ingress while keeping existing endpoint pinning signer-first.", "Backend ML write compatibility handlers publish signed Nostr commands, reject zero relay acceptance, and return request/result/read-model correlation metadata.", "docs/control-planes.md and docs/user-guide/features/ml-models.md state HTTP 202 is publish acceptance only; terminal completion remains correlated Nostr result/read-model events."],
-      "rest_import_policy": "allowed_rest_to_nostr_bridge",
-      "pstf_status": "decision_recorded_2026-06-02",
-      "resolved_by_beads": ["bahia-jxm3"]
+      "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/stores/public-controlplane.svelte.js", "internal/controlplane/ml_handlers.go", "internal/controlplane/ml_command_publisher.go"],
+      "evidence": ["ML page publishes import/deploy operations through publishCommand() using ml/model-import and ml/inference-deploy ContextVM Nostr commands.", "Backend reactor handles those ContextVM operations as ML Nostr requests and returns correlated ContextVM result events while ML registry projections update read models.", "web/src/lib/api/client.js no longer exposes ML REST bridge methods or ML REST read-model facades."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "resolved_by_bahia-gkg7",
+      "resolved_by_beads": ["bahia-jxm3", "bahia-gkg7"]
     },
     {
       "id": "ml-existing-endpoint-pin-signer-first",
@@ -165,10 +159,10 @@
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/ml/+page.svelte"],
       "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/nostr/controlplane-requests.js"],
-      "evidence": ["Existing endpoint pinning in web/src/routes/ml/+page.svelte calls publishCommand() with workload.pin.request before bridge deployment submission when a pinned worker targets an existing endpoint.", "The pin command follows signer-first browser Nostr request/result lifecycle semantics and is distinct from ML import/deploy REST-to-Nostr bridge ingress."],
+      "evidence": ["Existing endpoint pinning in web/src/routes/ml/+page.svelte calls publishCommand() with workload.pin.request before deployment submission when a pinned worker targets an existing endpoint.", "The pin command follows signer-first browser Nostr request/result lifecycle semantics and shares the ML page's Nostr-native command ingress."],
       "rest_import_policy": "forbidden_for_pin_command_ingress",
-      "pstf_status": "decision_recorded_2026-06-02",
-      "resolved_by_beads": ["bahia-jxm3"]
+      "pstf_status": "resolved_by_bahia-gkg7",
+      "resolved_by_beads": ["bahia-jxm3", "bahia-gkg7"]
     },
     {
       "id": "llm-public-controlplane",
@@ -247,8 +241,8 @@
       "surface": "Mounted `/api/v1` compatibility endpoints for legacy/domain reads and writes",
       "transport_class": "rest_compatibility",
       "route_files": [],
-      "control_files": ["web/src/lib/api/client.js", "internal/api/router/router.go"],
-      "evidence": ["Router still mounts REST compatibility routes for orgs, services, environments, deployments, workers, policies, payments, notifications, artifacts, SBOM, signatures, and direct runtime/adoption methods.", "These surfaces must not be described as signer-first browser Nostr command ingress unless the route uses Nostr publishing directly."],
+      "control_files": ["internal/api/router/router.go"],
+      "evidence": ["Router still mounts REST compatibility routes for legacy clients and domain reads/writes outside current browser command ingress.", "web/src/lib/api/client.js intentionally omits redundant compatibility groups and keeps only HTTP-native Blossom/SBOM interop helpers used by web routes."],
       "rest_import_policy": "allowed_only_when_matrix_classifies_surface_as_rest_compatibility_or_http_native",
       "pstf_status": "current_audit_evidence"
     }
