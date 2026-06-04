@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-enph",
+  "title": "Mark NIP-44 capability after successful signer probe",
+  "status": "implemented",
+  "bead_id": "bahia-enph",
+  "date": "2026-06-03",
+  "intent": "Ensure successful encrypted signer readiness probes update authState.capabilities.nip44 to true and clear NIP-44 blockers so UI capability state reflects effective signer behavior.",
+  "scope": [
+    "web/src/lib/stores/auth.svelte.js",
+    "web/tests/unit/auth-store.test.js"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-enph",
+  "criteria": [
+    {
+      "id": "ENPH-AC-001",
+      "description": "A successful encryptNip44 readiness probe marks effective NIP-44 capability available and clears blockers.",
+      "verification": "Full auth-store unit file passes, including the cached successful signer readiness test."
+    },
+    {
+      "id": "ENPH-AC-002",
+      "description": "NIP-44 bridge failures still mark the signer unavailable and preserve blocker errors.",
+      "verification": "Existing auth-store failure-path test remains green."
+    }
+  ]
+}

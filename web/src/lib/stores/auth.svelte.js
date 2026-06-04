@@ -135,6 +135,15 @@ function markEncryptedSignerUnavailable(message) {
   };
 }
 
+function markEncryptedSignerAvailable() {
+  const nextCapabilities = {
+    ...(authState.capabilities || {}),
+    nip44: true,
+    nip44Blocker: null
+  };
+  updateAuthState({ capabilities: nextCapabilities });
+}
+
 function resolveActiveSigner() {
   if (authState.authMethod === 'nip46') {
     return getNip46Signer();
@@ -810,6 +819,7 @@ export async function ensureEncryptedSignerReady(recipientPubkey) {
       requester_pubkey: authState.pubkey,
       created_at: Math.floor(Date.now() / 1000)
     }));
+    markEncryptedSignerAvailable();
     encryptedSignerProbe = {
       authMethod,
       recipientPubkey,
