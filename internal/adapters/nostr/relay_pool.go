@@ -149,6 +149,13 @@ func IsAuthRequiredReason(reason string) bool {
 	return strings.HasPrefix(reason, "auth-required:")
 }
 
+func subscribeAuthRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "auth-required")
+}
+
 // IsRateLimitedReason returns true if a relay protocol reason indicates rate limiting.
 func IsRateLimitedReason(reason string) bool {
 	return strings.HasPrefix(reason, "rate-limited:")
@@ -215,6 +222,30 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 	err := mr.relay.Publish(ctx, ev)
 	if err != nil {
 		if reason, ok := publishRejectionReason(err); ok {
+			if IsAuthRequiredReason(reason) {
+				if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
+					err = mr.relay.Publish(ctx, ev)
+					if err == nil {
+						p.recordRelayPublishSuccess(mr.url, time.Since(startedAt))
+						p.recordRelayConnectionState(mr.url, true)
+						p.logger.Info("event accepted by relay after NIP-42 AUTH",
+							zap.String("relay", mr.url),
+							zap.String("event_id", ev.ID),
+						)
+						result.Accepted = true
+						return result
+					}
+					if retryReason, retryOK := publishRejectionReason(err); retryOK {
+						reason = retryReason
+					}
+				} else {
+					p.logger.Warn("publish AUTH retry failed",
+						zap.String("relay", mr.url),
+						zap.String("event_id", ev.ID),
+						zap.Error(authErr),
+					)
+				}
+			}
 			result.Reason = reason
 			p.recordRelayPublishFailure(mr.url, reason)
 			p.logPublishRejection(mr.url, ev.ID, reason)
@@ -399,6 +430,13 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 		}
 
 		sub, err := mr.relay.Subscribe(ctx, filters)
+		if err != nil && subscribeAuthRequired(err) {
+			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
+				sub, err = mr.relay.Subscribe(ctx, filters)
+			} else {
+				p.recordRelayError(mr.url, authErr.Error())
+			}
+		}
 		if err != nil {
 			p.recordRelayError(mr.url, err.Error())
 		}
@@ -496,6 +534,13 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 		}
 
 		sub, err := mr.relay.Subscribe(subCtx, filters)
+		if err != nil && subscribeAuthRequired(err) {
+			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
+				sub, err = mr.relay.Subscribe(subCtx, filters)
+			} else {
+				p.recordRelayError(mr.url, authErr.Error())
+			}
+		}
 		if err != nil {
 			p.recordRelayError(mr.url, err.Error())
 		}
@@ -920,6 +965,28 @@ func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOption {
 	})
 }
 
+func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *managedRelay) error {
+	if p.privateKey == "" {
+		return fmt.Errorf("no private key configured for NIP-42 AUTH")
+	}
+	if mr == nil || mr.relay == nil {
+		return fmt.Errorf("relay not connected: %s", mr.url)
+	}
+
+	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", mr.url))
+	if err := mr.relay.Auth(ctx, func(event *nostr.Event) error {
+		return event.Sign(p.privateKey)
+	}); err != nil {
+		p.logger.Error("NIP-42 AUTH failed",
+			zap.String("relay", mr.url),
+			zap.Error(err),
+		)
+		return err
+	}
+	p.logger.Info("NIP-42 AUTH completed", zap.String("relay", mr.url))
+	return nil
+}
+
 // AuthenticateRelay sends a NIP-42 AUTH response to a specific relay.
 // Call this after receiving an auth-required error (PublishResult.IsAuthRequired()).
 // Returns an error if no private key is configured or auth fails.
@@ -944,22 +1011,7 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 		return fmt.Errorf("relay not connected: %s", relayURL)
 	}
 
-	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", relayURL))
-
-	err := relay.Auth(ctx, func(event *nostr.Event) error {
-		return event.Sign(p.privateKey)
-	})
-
-	if err != nil {
-		p.logger.Error("NIP-42 AUTH failed",
-			zap.String("relay", relayURL),
-			zap.Error(err),
-		)
-		return err
-	}
-
-	p.logger.Info("NIP-42 AUTH completed", zap.String("relay", relayURL))
-	return nil
+	return p.authenticateManagedRelayLocked(ctx, &managedRelay{url: relayURL, relay: relay, connected: true})
 }
 
 // Close disconnects all relays and stops reconnection.
