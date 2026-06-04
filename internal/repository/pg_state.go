@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -71,13 +72,15 @@ func (r *PgEnvironmentServiceStateRepository) scanState(row pgx.Row) (*domain.En
 	s := &domain.EnvironmentServiceState{}
 	var desiredRuntimeStateJSON []byte
 	var failureMetadataJSON []byte
+	var desiredHash sql.NullString
 	err := row.Scan(&s.ServiceID, &s.EnvironmentID, &s.DeploymentUnitID, &s.DesiredArtifactID, &s.DesiredIntentID,
 		&s.LastSuccessfulRunID, &s.CurrentObservationID, &s.DriftStatus,
-		&desiredRuntimeStateJSON, &s.DesiredHash, &failureMetadataJSON, &s.ReconcileBackoffUntil,
+		&desiredRuntimeStateJSON, &desiredHash, &failureMetadataJSON, &s.ReconcileBackoffUntil,
 		&s.ReconcileConsecutiveFailures, &s.LastReconciledAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	s.DesiredHash = nullStringValue(desiredHash)
 	if len(desiredRuntimeStateJSON) > 0 && string(desiredRuntimeStateJSON) != "null" {
 		s.DesiredRuntimeState = &domain.DesiredServiceSpec{}
 		if err := unmarshalJSON(desiredRuntimeStateJSON, s.DesiredRuntimeState, "desired runtime state"); err != nil {
@@ -116,12 +119,14 @@ func (r *PgEnvironmentServiceStateRepository) listByQuery(ctx context.Context, q
 		var s domain.EnvironmentServiceState
 		var desiredRuntimeStateJSON []byte
 		var failureMetadataJSON []byte
+		var desiredHash sql.NullString
 		if err := rows.Scan(&s.ServiceID, &s.EnvironmentID, &s.DeploymentUnitID, &s.DesiredArtifactID, &s.DesiredIntentID,
 			&s.LastSuccessfulRunID, &s.CurrentObservationID, &s.DriftStatus,
-			&desiredRuntimeStateJSON, &s.DesiredHash, &failureMetadataJSON, &s.ReconcileBackoffUntil,
+			&desiredRuntimeStateJSON, &desiredHash, &failureMetadataJSON, &s.ReconcileBackoffUntil,
 			&s.ReconcileConsecutiveFailures, &s.LastReconciledAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning state: %w", err)
 		}
+		s.DesiredHash = nullStringValue(desiredHash)
 		if len(desiredRuntimeStateJSON) > 0 && string(desiredRuntimeStateJSON) != "null" {
 			s.DesiredRuntimeState = &domain.DesiredServiceSpec{}
 			if err := unmarshalJSON(desiredRuntimeStateJSON, s.DesiredRuntimeState, "desired runtime state"); err != nil {

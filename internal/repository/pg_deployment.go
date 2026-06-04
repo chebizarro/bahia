@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -64,12 +65,14 @@ func (r *PgDeploymentIntentRepository) Create(ctx context.Context, di *domain.De
 func (r *PgDeploymentIntentRepository) scanIntent(row pgx.Row) (*domain.DeploymentIntent, error) {
 	di := &domain.DeploymentIntent{}
 	var approvalJSON, metaJSON, desiredStateJSON []byte
+	var desiredHash sql.NullString
 	err := row.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.DeploymentUnitID, &di.ArtifactID, &di.RequestedBy, &di.SourceKind,
 		&di.ApprovalStatus, &di.Status, &di.SupersedesIntentID, &approvalJSON, &metaJSON,
-		&desiredStateJSON, &di.DesiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt)
+		&desiredStateJSON, &desiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	di.DesiredHash = nullStringValue(desiredHash)
 	if err := unmarshalJSON(approvalJSON, &di.ApprovalMetadata, "approval metadata"); err != nil {
 		return nil, err
 	}
@@ -128,11 +131,13 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 	for rows.Next() {
 		var di domain.DeploymentIntent
 		var approvalJSON, metaJSON, desiredStateJSON []byte
+		var desiredHash sql.NullString
 		if err := rows.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.DeploymentUnitID, &di.ArtifactID, &di.RequestedBy, &di.SourceKind,
 			&di.ApprovalStatus, &di.Status, &di.SupersedesIntentID, &approvalJSON, &metaJSON,
-			&desiredStateJSON, &di.DesiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt); err != nil {
+			&desiredStateJSON, &desiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning deployment intent: %w", err)
 		}
+		di.DesiredHash = nullStringValue(desiredHash)
 		if err := unmarshalJSON(approvalJSON, &di.ApprovalMetadata, "approval metadata"); err != nil {
 			return nil, fmt.Errorf("reading intent %s: %w", di.ID, err)
 		}

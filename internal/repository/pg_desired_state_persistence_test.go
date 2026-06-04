@@ -132,7 +132,7 @@ func TestPgDeploymentIntentRepository_NilDesiredState(t *testing.T) {
 		}).AddRow(
 			id, uuid.New(), uuid.New(), nil, uuid.New(), "npub1test", "manual",
 			"not_required", "pending", nil, []byte(`{}`), []byte(`{}`),
-			nil, "", now, nil, now,
+			nil, nil, now, nil, now,
 		))
 
 	got, err := repo.GetByID(context.Background(), id)
@@ -221,6 +221,36 @@ func TestPgDeploymentRunRepository_ApplyMetadataRoundTrip(t *testing.T) {
 // ---------------------------------------------------------------------------
 // EnvironmentServiceState: desired_runtime_state + desired_hash round-trip
 // ---------------------------------------------------------------------------
+
+func TestPgEnvironmentServiceStateRepository_NullDesiredRuntimeStateHash(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgEnvironmentServiceStateRepositoryWithDB(mock)
+	svcID := uuid.New()
+	envID := uuid.New()
+	now := time.Now().UTC()
+
+	mock.ExpectQuery("SELECT .+ FROM environment_service_state WHERE service_id").
+		WithArgs(svcID, envID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"service_id", "environment_id", "deployment_unit_id", "desired_artifact_id", "desired_intent_id",
+			"last_successful_run_id", "current_observation_id", "drift_status",
+			"desired_runtime_state", "desired_hash", "reconcile_failure_metadata", "reconcile_backoff_until", "reconcile_consecutive_failures", "last_reconciled_at", "updated_at",
+		}).AddRow(
+			svcID, envID, nil, nil, nil, nil, nil, "unknown",
+			nil, nil, nil, nil, 0, nil, now,
+		))
+
+	got, err := repo.Get(context.Background(), svcID, envID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.DesiredRuntimeState)
+	assert.Empty(t, got.DesiredHash)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestPgEnvironmentServiceStateRepository_DesiredRuntimeStateRoundTrip(t *testing.T) {
 	mock, err := pgxmock.NewPool()
