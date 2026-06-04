@@ -1,10 +1,12 @@
 <script>
   import { untrack } from 'svelte';
-  import { workers, loading, loadWorkers } from '$lib/stores';
+  import { workers, workerCleanupExecutions, loading, loadWorkers } from '$lib/stores';
   import { goto } from '$app/navigation';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import CleanupRequestDialog from './CleanupRequestDialog.svelte';
+  import { activeCleanupByWorker } from '../fleet-health/page-model.js';
   import {
     SCHEDULING_STATES,
     WORKER_COMMANDS,
@@ -96,6 +98,8 @@
   let onlineOnly = $state(false);
   let pendingCommands = $state({});
   let notice = $state(null);
+  let cleanupDialogOpen = $state(false);
+  let cleanupWorker = $state(null);
   let workersPageInitialized = $state(false);
 
   $effect(() => {
@@ -112,6 +116,8 @@
   const taskOptions = $derived(collectWorkerValues(workers, workerWorkloadValues));
   const fleetSummary = $derived.by(() => summarizeFleetCapacity(workers));
   const workerActivity = $derived(summarizeWorkerActivity(workers));
+  const activeCleanupMap = $derived(activeCleanupByWorker(workerCleanupExecutions));
+  const selectedActiveCleanup = $derived(cleanupWorker ? activeCleanupMap.get(cleanupWorker.pubkey) || null : null);
 
   const filteredWorkers = $derived.by(() => filterWorkerRows(workers, {
     capabilityFilter,
@@ -408,17 +414,16 @@
     event.stopPropagation();
     if (!isWorkerActionAllowed(worker, action) || isWorkerPublishPending(worker)) return;
 
+    if (action.cleanup) {
+      cleanupWorker = worker;
+      cleanupDialogOpen = true;
+      return;
+    }
+
     let reason = '';
     let labels = null;
     let cleanupMode = null;
     try {
-      if (action.cleanup) {
-        const input = globalThis.prompt?.('Cleanup mode: reclaimable_only or aggressive', 'reclaimable_only');
-        if (input === null || input === undefined) return;
-        cleanupMode = input.trim();
-        if (!['reclaimable_only', 'aggressive'].includes(cleanupMode)) throw new Error('Cleanup mode must be reclaimable_only or aggressive');
-      }
-
       if (action.labels) {
         const input = globalThis.prompt?.('Worker labels as key=value lines. Empty input clears labels.', labelsText(worker));
         if (input === null || input === undefined) return;
@@ -439,6 +444,15 @@
     } finally {
       setActionPending(worker, action, false);
     }
+  }
+
+  function closeCleanupDialog() {
+    cleanupDialogOpen = false;
+  }
+
+  function handleCleanupSubmitted() {
+    cleanupDialogOpen = false;
+    setNotice('success', `Cleanup intent published for ${cleanupWorker?.name || cleanupWorker?.pubkey || 'worker'}`);
   }
 
   async function copySelector(event, worker) {
@@ -736,6 +750,15 @@
     </div>
   {/if}
 </div>
+
+<CleanupRequestDialog
+  open={cleanupDialogOpen}
+  worker={cleanupWorker}
+  activeCleanup={selectedActiveCleanup}
+  source="web.workers.list"
+  onClose={closeCleanupDialog}
+  onSubmitted={handleCleanupSubmitted}
+/>
 
 <style>
   .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }

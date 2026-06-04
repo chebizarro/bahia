@@ -32,6 +32,7 @@ export {
   workerAssignments,
   workerDrainStatuses,
   workerEligibilityPreviews,
+  workerCleanupExecutions,
   events,
   backupRepositories,
   backupPolicies,

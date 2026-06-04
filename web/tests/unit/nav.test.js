@@ -27,6 +27,7 @@ describe('nav model helpers', () => {
 
     expect(NAV_LINKS).toContainEqual({ href: '/souls', label: 'Souls' });
     expect(NAV_LINKS).toContainEqual({ href: '/dns', label: 'DNS' });
+    expect(NAV_LINKS).toContainEqual({ href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth' });
     expect(NAV_LINKS).toContainEqual({ href: '/notifications', label: 'Notifications' });
     expect(NAV_LINKS).toContainEqual({ href: '/ml', label: 'Inference' });
     expect(NAV_LINKS).toContainEqual({ href: '/llm', label: 'LLM' });
@@ -57,6 +58,11 @@ describe('nav model helpers', () => {
     expect(currentLocation('/workers/abc')).toEqual({
       section: 'Operations',
       page: 'Workers',
+      icon: 'server'
+    });
+    expect(currentLocation('/fleet-health')).toEqual({
+      section: 'Operations',
+      page: 'Fleet Health',
       icon: 'server'
     });
     expect(currentLocation('/llm/history')).toEqual({

@@ -10,6 +10,7 @@ describe('route access', () => {
   it('marks /souls and /llm as protected routes while leaving /settings public for auth setup', () => {
     expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
+    expect(routeAccessConfig.protectedPrefixes).toContain('/fleet-health');
     expect(routeAccessConfig.protectedPrefixes).not.toContain('/settings');
     expect(getRouteAccess('/souls')).toMatchObject({
       pathname: '/souls',

@@ -4,13 +4,21 @@
   import ErrorState from '$lib/components/ErrorState.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
-  import { workers, loadWorkers } from '$lib/stores';
+  import { workers, workerCleanupExecutions, loadWorkers } from '$lib/stores';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { SCHEDULING_STATES, WORKER_COMMANDS, workerOperation } from '../actions.js';
   import { inferWorkerStatus } from '../list-utils.js';
+  import CleanupRequestDialog from '../CleanupRequestDialog.svelte';
+  import { activeCleanupByWorker } from '../../fleet-health/page-model.js';
 
   const WORKER_ACTIONS = [
+    {
+      label: 'Request cleanup',
+      command: WORKER_COMMANDS.CLEANUP_REQUEST,
+      cleanup: true,
+      allowedFrom: SCHEDULING_STATES
+    },
     {
       label: 'Cordon',
       command: WORKER_COMMANDS.CORDON,
@@ -61,6 +69,7 @@
   let loading = $state(true);
   let error = $state(null);
   let notice = $state(null);
+  let cleanupDialogOpen = $state(false);
   let pendingCommands = $state({});
   let loadSequence = 0;
 
@@ -357,6 +366,11 @@
     const targetWorker = worker;
     if (!targetWorker || !action || !isWorkerActionAllowed(targetWorker, action) || isAnyActionPending(targetWorker)) return;
 
+    if (action.cleanup) {
+      cleanupDialogOpen = true;
+      return;
+    }
+
     let reason = '';
     let labels = null;
     try {
@@ -455,6 +469,18 @@
   let labels = $derived(worker ? workerLabelEntries(worker) : []);
   let selectors = $derived(worker ? selectorRows(worker) : []);
   let acceptsWork = $derived(worker ? acceptingNewWork(worker) : false);
+
+  let activeCleanupMap = $derived(activeCleanupByWorker(workerCleanupExecutions));
+  let selectedActiveCleanup = $derived(worker ? activeCleanupMap.get(worker.pubkey) || null : null);
+
+  function closeCleanupDialog() {
+    cleanupDialogOpen = false;
+  }
+
+  function handleCleanupSubmitted() {
+    cleanupDialogOpen = false;
+    setNotice('success', `Cleanup intent published for ${worker?.name || worker?.pubkey || 'worker'}`);
+  }
 
   let overviewCards = $derived(worker ? [
     { label: 'Liveness', value: livenessStatus },
@@ -786,6 +812,15 @@
     <ErrorState message="Worker not found" />
   {/if}
 </div>
+
+<CleanupRequestDialog
+  open={cleanupDialogOpen}
+  worker={worker}
+  activeCleanup={selectedActiveCleanup}
+  source="web.workers.detail"
+  onClose={closeCleanupDialog}
+  onSubmitted={handleCleanupSubmitted}
+/>
 
 <style>
   .page { max-width: 1100px; }

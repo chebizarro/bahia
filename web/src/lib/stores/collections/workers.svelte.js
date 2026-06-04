@@ -15,16 +15,18 @@ export const workers = $state([]);
 export const workerAssignments = $state([]);
 export const workerDrainStatuses = $state([]);
 export const workerEligibilityPreviews = $state([]);
+export const workerCleanupExecutions = $state([]);
 
 const workerMap = new Map();
 const workerAssignmentMap = new Map();
 const workerDrainStatusMap = new Map();
 const workerEligibilityPreviewMap = new Map();
+const workerCleanupExecutionMap = new Map();
 
 export function resetWorkers() {
-  [workerMap, workerAssignmentMap, workerDrainStatusMap, workerEligibilityPreviewMap]
+  [workerMap, workerAssignmentMap, workerDrainStatusMap, workerEligibilityPreviewMap, workerCleanupExecutionMap]
     .forEach((map) => map.clear());
-  [workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews]
+  [workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions]
     .forEach((array) => { array.length = 0; });
 }
 
@@ -33,6 +35,7 @@ export function refreshWorkers() {
   replaceArray(workerAssignments, Array.from(workerAssignmentMap.values()).sort(sortByNameOrId));
   replaceArray(workerDrainStatuses, Array.from(workerDrainStatusMap.values()).sort(sortByNameOrId));
   replaceArray(workerEligibilityPreviews, Array.from(workerEligibilityPreviewMap.values()).sort(sortByNewestField(['updated_at', 'nostr_created_at'])));
+  replaceArray(workerCleanupExecutions, Array.from(workerCleanupExecutionMap.values()).sort(sortByNewestField(['updated_at', 'completed_at', 'started_at', 'nostr_created_at'])));
 }
 
 export function hasWorkerReadModelTag(event) {
@@ -90,5 +93,6 @@ export function applyWorkerStateEvent(event, replaceableEvents) {
 export const workerApplicators = {
   assignment: (event, replaceableEvents) => applyProjectedEntity(event, workerAssignmentMap, replaceableEvents, ['worker_pubkey']),
   drainStatus: (event, replaceableEvents) => applyProjectedEntity(event, workerDrainStatusMap, replaceableEvents, ['worker_pubkey']),
-  eligibilityPreview: (event, replaceableEvents) => applyProjectedEntity(event, workerEligibilityPreviewMap, replaceableEvents, ['preview_id'])
+  eligibilityPreview: (event, replaceableEvents) => applyProjectedEntity(event, workerEligibilityPreviewMap, replaceableEvents, ['preview_id']),
+  cleanupExecution: (event, replaceableEvents) => applyProjectedEntity(event, workerCleanupExecutionMap, replaceableEvents, ['cleanup_id', 'idempotency_key', 'loom_job_id', 'worker_pubkey'])
 };

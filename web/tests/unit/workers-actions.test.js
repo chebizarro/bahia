@@ -36,4 +36,21 @@ describe('workers action publish payloads', () => {
       }
     });
   });
+
+  it('allows cleanup requests to identify the publishing UI surface', () => {
+    const worker = { pubkey: 'worker-pubkey-1' };
+    const action = { command: WORKER_COMMANDS.CLEANUP_REQUEST };
+
+    expect(workerCommandPublishPayload({
+      action,
+      worker,
+      key: 'cleanup-key',
+      requesterPubkey: 'operator-pubkey-1',
+      cleanupMode: 'aggressive',
+      source: 'web.fleet-health'
+    }).content.operator_metadata).toEqual({
+      source: 'web.fleet-health',
+      requested_by: 'operator-pubkey-1'
+    });
+  });
 });

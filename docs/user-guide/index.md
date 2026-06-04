@@ -47,6 +47,7 @@ open http://localhost:3000
 | [ML Models](features/ml-models.md) | AI/ML model registry, recipes, and inference |
 | [Souls](features/souls.md) | AI agent provisioning with Soul Factory |
 | [Workers](features/workers.md) | Loom workers for deployment execution |
+| [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
 | [Backup](features/backup.md) | Backup definitions, policies, and recovery |
 | [DNS](features/dns.md) | DNS zone and endpoint management |
 | [Packages](features/packages.md) | Package repository management |

@@ -87,6 +87,7 @@ Historical Bahia-specific ranges are retained only for startup migration, histor
 | `6961`-`6997` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | `7961`-`7997` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| worker cleanup lifecycle | Fleet Health cleanup status | `30900` with `schema=bahia.state.worker-cleanup.v1`; no legacy live command kind is introduced |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |

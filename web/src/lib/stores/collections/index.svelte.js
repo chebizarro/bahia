@@ -17,7 +17,8 @@ import {
   workers,
   workerAssignments,
   workerDrainStatuses,
-  workerEligibilityPreviews
+  workerEligibilityPreviews,
+  workerCleanupExecutions
 } from './workers.svelte.js';
 import {
   backupRepositories,
@@ -53,7 +54,8 @@ export {
   workers,
   workerAssignments,
   workerDrainStatuses,
-  workerEligibilityPreviews
+  workerEligibilityPreviews,
+  workerCleanupExecutions
 } from './workers.svelte.js';
 export {
   backupRepositories,
@@ -148,6 +150,7 @@ export function controlplaneSnapshot() {
       workerAssignments: Array.from(workerAssignments),
       workerDrainStatuses: Array.from(workerDrainStatuses),
       workerEligibilityPreviews: Array.from(workerEligibilityPreviews),
+      workerCleanupExecutions: Array.from(workerCleanupExecutions),
       events: Array.from(events),
       backupRepositories: Array.from(backupRepositories),
       backupPolicies: Array.from(backupPolicies),
@@ -195,6 +198,7 @@ export function hydrateCachedCollections() {
     replaceSnapshotArray(workerAssignments, cached.workerAssignments);
     replaceSnapshotArray(workerDrainStatuses, cached.workerDrainStatuses);
     replaceSnapshotArray(workerEligibilityPreviews, cached.workerEligibilityPreviews);
+    replaceSnapshotArray(workerCleanupExecutions, cached.workerCleanupExecutions);
     replaceSnapshotArray(events, cached.events);
     replaceSnapshotArray(backupRepositories, cached.backupRepositories);
     replaceSnapshotArray(backupPolicies, cached.backupPolicies);

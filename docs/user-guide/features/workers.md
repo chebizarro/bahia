@@ -60,6 +60,12 @@ Navigate to **Workers** in the sidebar:
 - View all registered workers
 - See status and capabilities
 - Check current tasks
+- Request local cleanup through the cleanup mode dialog
+
+Navigate to **Fleet Health** for the dedicated resource-pressure view:
+- See the fleet weather map grouped by capacity class
+- Review cleanup history and active cleanup status
+- Open cleanup remediation for workers with cleanup recommendations
 
 Click a worker to see:
 - **Overview**: Status, capabilities, hardware

@@ -15,6 +15,7 @@ const DELIVERY_LINKS = [
 const OPERATIONS_LINKS = [
   { href: '/environments', label: 'Environments' },
   { href: '/workers', label: 'Workers' },
+  { href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth' },
   { href: '/backup', label: 'Backup' },
   { href: '/continuity', label: 'Continuity' },
   { href: '/dns', label: 'DNS' },

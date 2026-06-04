@@ -19,6 +19,8 @@
     isActiveNavLink,
     isActiveNavSection
   } from '$lib/components/nav-model.js';
+  import { workers } from '$lib/stores';
+  import { fleetHealthNavBadge } from '../../routes/fleet-health/page-model.js';
   const SECTION_ICONS = {
     'layout-dashboard': WorkspaceIcon,
     rocket: DeploymentIcon,
@@ -59,6 +61,11 @@
 
   function closeMenu() {
     menuOpen = false;
+  }
+
+  function linkBadge(link) {
+    if (link?.statusKey === 'fleetHealth') return fleetHealthNavBadge(workers);
+    return link?.badge || '';
   }
 
   function handleWindowKeydown(event) {
@@ -144,13 +151,13 @@
                   <a
                     href={link.href}
                     class:active={isActiveNavLink($page.url.pathname, link.href)}
-                    class:with-badge={link.badge}
+                    class:with-badge={linkBadge(link)}
                     aria-current={isActiveNavLink($page.url.pathname, link.href) ? 'page' : undefined}
                     onclick={closeMenu}
                   >
                     <span>{link.label}</span>
-                    {#if link.badge}
-                      <span class="badge">{link.badge}</span>
+                    {#if linkBadge(link)}
+                      <span class="badge">{linkBadge(link)}</span>
                     {/if}
                   </a>
                 </li>

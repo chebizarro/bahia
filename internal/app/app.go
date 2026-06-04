@@ -270,6 +270,8 @@ func New(cfg *config.Config) (*App, error) {
 	pressureMonitor := service.NewWorkerPressureMonitor()
 	workerStatePublisher := controlplane.NewWorkerStatePublisher(controlPlanePool, controlPlaneSigner)
 	workerStatePublisher.ConfigureAudit(nostrEventRepo, logger)
+	workerCleanupStatePublisher := controlplane.NewWorkerCleanupStatePublisher(controlPlanePool, controlPlaneSigner)
+	workerCleanupStatePublisher.ConfigureAudit(nostrEventRepo, logger)
 
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger, service.WithWorkerPolicyPressureThresholds(pressureThresholds))
@@ -481,7 +483,7 @@ func New(cfg *config.Config) (*App, error) {
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger, service.WithMLPlacementPressureThresholds(pressureThresholds)), logger)
 	workerCleanupOrchestrator := service.NewWorkerCleanupOrchestrator(workerRepo, workerReadModelSvc, loomCleanupClient{client: loomClient}, publisher, service.WorkerCleanupConfig{Mode: cfg.WorkerCleanup.Mode, Cooldown: cfg.WorkerCleanup.Cooldown, TargetFreeGB: cfg.WorkerCleanup.TargetFreeGB, PaymentToken: cfg.WorkerCleanup.PaymentToken, RequiredSoftware: cfg.WorkerCleanup.RequiredSoftware, PressureThresholds: pressureThresholds}, logger)
-	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, workerCleanupOrchestrator, workerRepo, logger)
+	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, workerCleanupStatePublisher, workerCleanupOrchestrator, workerRepo, logger)
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
@@ -1235,6 +1237,7 @@ func setupWorkerPressureSubscriptions(
 	publisher events.Publisher,
 	monitor *service.WorkerPressureMonitor,
 	statePublisher *controlplane.WorkerStatePublisher,
+	cleanupStatePublisher *controlplane.WorkerCleanupStatePublisher,
 	cleanupOrchestrator *service.WorkerCleanupOrchestrator,
 	workerRepo repository.WorkerRepository,
 	logger *zap.Logger,
@@ -1270,6 +1273,22 @@ func setupWorkerPressureSubscriptions(
 			}
 		}
 	})
+	publishCleanupState := func(ctx context.Context, e events.Event) {
+		cleanup, ok := e.Data.(events.WorkerCleanupEvent)
+		if !ok || cleanupStatePublisher == nil {
+			if !ok {
+				logger.Warn("worker cleanup event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			}
+			return
+		}
+		if err := cleanupStatePublisher.Publish(ctx, cleanup); err != nil {
+			logger.Warn("publish worker cleanup state failed", zap.String("worker_pubkey", cleanup.WorkerPubKey), zap.String("status", cleanup.Status), zap.Error(err))
+		}
+	}
+	publisher.Subscribe(events.EventWorkerCleanupRequested, publishCleanupState)
+	publisher.Subscribe(events.EventWorkerCleanupCompleted, publishCleanupState)
+	publisher.Subscribe(events.EventWorkerCleanupFailed, publishCleanupState)
+
 	publisher.Subscribe(events.EventWorkerPressureChanged, func(ctx context.Context, e events.Event) {
 		changed, ok := e.Data.(events.WorkerPressureChanged)
 		if !ok || cleanupOrchestrator == nil || !cleanupOrchestrator.AutoModeEnabled() || changed.Current == nil {

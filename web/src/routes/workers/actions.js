@@ -36,13 +36,13 @@ export function workerCommandTags(action, worker, key) {
   ];
 }
 
-export function workerCommandContent(action, worker, key, reason, requesterPubkey, labels = null, cleanupMode = null) {
+export function workerCommandContent(action, worker, key, reason, requesterPubkey, labels = null, cleanupMode = null, source = 'web.workers.list') {
   const content = {
     worker_pubkey: worker.pubkey,
     reason: reason || '',
     idempotency_key: key,
     operator_metadata: {
-      source: 'web.workers.list',
+      source: source || 'web.workers.list',
       requested_by: requesterPubkey || ''
     }
   };
@@ -51,10 +51,10 @@ export function workerCommandContent(action, worker, key, reason, requesterPubke
   return content;
 }
 
-export function workerCommandPublishPayload({ action, worker, key, reason = '', requesterPubkey = '', labels = null, cleanupMode = null }) {
+export function workerCommandPublishPayload({ action, worker, key, reason = '', requesterPubkey = '', labels = null, cleanupMode = null, source = 'web.workers.list' }) {
   return {
     operation: workerOperation(action),
     tags: workerCommandTags(action, worker, key),
-    content: workerCommandContent(action, worker, key, reason, requesterPubkey, labels, cleanupMode)
+    content: workerCommandContent(action, worker, key, reason, requesterPubkey, labels, cleanupMode, source)
   };
 }

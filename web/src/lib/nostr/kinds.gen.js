@@ -320,6 +320,7 @@ export const BAHIA_STATE_SCHEMAS = Object.freeze({
   WORKER_ASSIGNMENT_STATE: 'bahia.state.worker-assignment.v1',
   WORKER_DRAIN_STATUS: 'bahia.state.worker-drain.v1',
   WORKER_ELIGIBILITY_PREVIEW: 'bahia.state.worker-eligibility.v1',
+  WORKER_CLEANUP_EXECUTION: 'bahia.state.worker-cleanup.v1',
   CONTINUITY_PROFILE: 'bahia.state.continuity-profile.v1',
   FAILOVER_POLICY: 'bahia.state.failover-policy.v1',
   STANDBY_NODE_DEFINITION: 'bahia.state.standby-node.v1',

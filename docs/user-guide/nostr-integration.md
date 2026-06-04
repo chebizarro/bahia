@@ -88,6 +88,15 @@ The migration is idempotent and safe to run every startup. Non-dry-run migration
 
 For `(kind, pubkey, d-tag)`, the **latest event wins**.
 
+Worker resource-pressure and cleanup projections use the same canonical state layer:
+
+| Schema | Domain | Purpose |
+|--------|--------|---------|
+| `bahia.state.worker.v1` | `worker` | Worker scheduling, telemetry, pressure, and capacity-class state. |
+| `bahia.state.worker-cleanup.v1` | `worker` | Cleanup execution lifecycle for Fleet Health and worker remediation history. |
+
+A cleanup execution projection is kind `30900` with tags such as `schema=bahia.state.worker-cleanup.v1`, `worker=<worker_pubkey>`, `status=<requested|dispatched|running|completed|failed>`, and `cleanup_mode=<reclaimable_only|aggressive>`. Cleanup mutation intent remains encrypted ContextVM `worker/cleanup`; public cleanup progress is represented by this state projection.
+
 ## Relay Topology
 
 ### Sidecar

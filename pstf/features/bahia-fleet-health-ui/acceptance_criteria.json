@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-fleet-health-ui",
+  "criteria": [
+    {
+      "id": "FH-AC-001",
+      "statement": "The web app exposes Fleet Health as an obvious Operations navigation destination and protects it like other authenticated operations routes.",
+      "tests": ["web/tests/unit/nav.test.js", "web/tests/unit/route-access.test.js"]
+    },
+    {
+      "id": "FH-AC-002",
+      "statement": "Fleet Health computes fleet weather lanes, summary counts, dominant pressure signals, and active cleanup state from real worker and cleanup read models.",
+      "tests": ["web/tests/unit/fleet-health-page-model.test.js"]
+    },
+    {
+      "id": "FH-AC-003",
+      "statement": "Cleanup requests use encrypted ContextVM worker/cleanup mutation intent and carry operator source metadata without introducing a public command kind.",
+      "tests": ["web/tests/unit/workers-actions.test.js"]
+    },
+    {
+      "id": "FH-AC-004",
+      "statement": "Bahia publishes cleanup lifecycle as canonical kind 30900 state with schema bahia.state.worker-cleanup.v1 and verifies relay acceptance.",
+      "tests": ["internal/controlplane/worker_cleanup_state_publisher_test.go"]
+    }
+  ]
+}

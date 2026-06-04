@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-fleet-health-ui",
+  "title": "Fleet Health resource pressure UI",
+  "intent": "Surface Bahia resource-pressure orchestration as a first-class web area with fleet weather map, cleanup lifecycle status, and cleanup mode flow backed by Nostr-native state projections.",
+  "scope": [
+    "Dedicated /fleet-health route in the web app",
+    "Operations navigation entry and live pressure badge",
+    "Fleet weather lanes by capacity class",
+    "Cleanup execution status/history dashboard",
+    "Reusable cleanup mode dialog publishing ContextVM worker/cleanup intents",
+    "Canonical kind 30900 worker cleanup lifecycle state projection"
+  ],
+  "nostr_contract": {
+    "observables": [
+      { "kind": 10100, "purpose": "loom worker telemetry and capability advertisement" },
+      { "kind": 30900, "schema": "bahia.state.worker.v1", "purpose": "worker scheduling and pressure state" },
+      { "kind": 30900, "schema": "bahia.state.worker-cleanup.v1", "purpose": "worker cleanup lifecycle state" }
+    ],
+    "mutation_intent": "Encrypted ContextVM worker/cleanup request; no new public command kind"
+  }
+}
