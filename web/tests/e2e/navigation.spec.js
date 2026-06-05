@@ -82,6 +82,20 @@ test.describe('Navigation', () => {
     await expect(pageContent).toBeVisible();
   });
 
+  test('exposes global and contextual documentation actions', async ({ page }) => {
+    await page.goto('/services');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', '/docs');
+    await expect(page.getByRole('link', { name: 'Open Services documentation' })).toHaveAttribute('href', '/docs/features-services');
+
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', '/docs');
+    await expect(page.getByRole('link', { name: /^Help:/ })).toHaveCount(0);
+  });
+
   test('should render navigation without errors', async ({ page }) => {
     const consoleErrors = [];
     page.on('console', (msg) => {

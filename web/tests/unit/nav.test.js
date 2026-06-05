@@ -1,12 +1,18 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
+  DOCS_HOME_LINK,
   NAV_LINKS,
   NAV_SECTIONS,
   PRIMARY_NAV_LINKS,
   authPresentation,
   currentLocation,
+  currentRouteDocs,
+  currentRouteDocsRef,
   isActiveNavLink,
   isActiveNavSection,
+  routeDocTopics,
   truncatePubkey
 } from '../../src/lib/components/nav-model.js';
 import {
@@ -14,6 +20,26 @@ import {
   authenticatedMenuItems,
   menuKeyHandler
 } from '../../src/lib/components/user-menu-model.js';
+
+const DOCS_ROOT = [
+  join(process.cwd(), 'docs', 'user-guide'),
+  join(process.cwd(), '..', 'docs', 'user-guide')
+].find((candidate) => existsSync(candidate));
+
+function docsCatalogTopics(dir = DOCS_ROOT) {
+  const topics = new Set();
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      for (const topic of docsCatalogTopics(fullPath)) topics.add(topic);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const rel = relative(DOCS_ROOT, fullPath).replaceAll('\\', '/').replace(/\.md$/, '');
+    topics.add(rel.replaceAll('/', '-'));
+  }
+  return topics;
+}
 
 describe('nav model helpers', () => {
   it('groups navigation links into consolidated sections', () => {
@@ -25,16 +51,19 @@ describe('nav model helpers', () => {
       { title: 'Admin', icon: 'shield' }
     ]);
 
-    expect(NAV_LINKS).toContainEqual({ href: '/souls', label: 'Souls' });
-    expect(NAV_LINKS).toContainEqual({ href: '/dns', label: 'DNS' });
-    expect(NAV_LINKS).toContainEqual({ href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth' });
-    expect(NAV_LINKS).toContainEqual({ href: '/notifications', label: 'Notifications' });
-    expect(NAV_LINKS).toContainEqual({ href: '/ml', label: 'Inference' });
-    expect(NAV_LINKS).toContainEqual({ href: '/llm', label: 'LLM' });
-    expect(NAV_LINKS).toContainEqual({ href: '/payments', label: 'Payments' });
-    expect(NAV_LINKS).toContainEqual({ href: '/policies', label: 'Policies' });
+    expect(NAV_LINKS).toEqual(expect.arrayContaining([
+      expect.objectContaining({ href: '/souls', label: 'Souls', docTopic: 'features-souls' }),
+      expect.objectContaining({ href: '/dns', label: 'DNS', docTopic: 'features-dns' }),
+      expect.objectContaining({ href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' }),
+      expect.objectContaining({ href: '/notifications', label: 'Notifications', docTopic: 'features-notifications' }),
+      expect.objectContaining({ href: '/ml', label: 'Inference', docTopic: 'features-ml-models' }),
+      expect.objectContaining({ href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' }),
+      expect.objectContaining({ href: '/payments', label: 'Payments', docTopic: 'features-payments' }),
+      expect.objectContaining({ href: '/policies', label: 'Policies', docTopic: 'features-policies' })
+    ]));
+    expect(PRIMARY_NAV_LINKS).toBe(NAV_LINKS);
     const pendingApprovals = NAV_LINKS.find((link) => link.href === '/deployments/pending');
-    expect(pendingApprovals).toEqual({ href: '/deployments/pending', label: 'Pending Approvals' });
+    expect(pendingApprovals).toEqual({ href: '/deployments/pending', label: 'Pending Approvals', docTopic: 'features-deployments' });
     expect(pendingApprovals).not.toHaveProperty('badge');
   });
 
@@ -52,6 +81,46 @@ describe('nav model helpers', () => {
     expect(isActiveNavSection('/workers/abc', NAV_SECTIONS[2])).toBe(true);
     expect(isActiveNavSection('/llm/history', NAV_SECTIONS[3])).toBe(true);
     expect(isActiveNavSection('/settings', NAV_SECTIONS[0])).toBe(false);
+  });
+
+  it('derives route documentation metadata from consolidated nav links', () => {
+    expect(DOCS_HOME_LINK).toEqual({ href: '/docs', label: 'Docs' });
+    expect(currentRouteDocs('/services')).toEqual({
+      routeHref: '/services',
+      routeLabel: 'Services',
+      topic: 'features-services',
+      href: '/docs/features-services',
+      label: 'Services documentation'
+    });
+    expect(currentRouteDocs('/deployments/pending/approval-1')).toMatchObject({
+      routeHref: '/deployments/pending',
+      topic: 'features-deployments'
+    });
+    expect(currentRouteDocs('/fleet-health')).toMatchObject({ topic: 'features-fleet-health' });
+    expect(currentRouteDocs('/llm/history')).toMatchObject({ topic: 'features-llm-routes' });
+    expect(currentRouteDocs('/ml/endpoints')).toMatchObject({ topic: 'features-ml-models' });
+    expect(currentRouteDocs('/settings')).toBeNull();
+    expect(currentRouteDocsRef('/services')).toEqual({
+      ref: 'docs:features-services',
+      label: 'Services documentation',
+      href: '/docs/features-services',
+      topic: 'features-services',
+      source: 'route'
+    });
+  });
+
+  it('keeps nav doc topics backed by the docs catalog source tree', () => {
+    const catalogTopics = docsCatalogTopics();
+    expect(routeDocTopics()).toEqual(expect.arrayContaining([
+      { href: '/services', label: 'Services', docTopic: 'features-services' },
+      { href: '/deployments', label: 'Deployments', docTopic: 'features-deployments' },
+      { href: '/fleet-health', label: 'Fleet Health', docTopic: 'features-fleet-health' },
+      { href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' },
+      { href: '/ml', label: 'Inference', docTopic: 'features-ml-models' }
+    ]));
+    for (const { docTopic } of routeDocTopics()) {
+      expect(catalogTopics.has(docTopic), `${docTopic} should exist in docs/user-guide catalog`).toBe(true);
+    }
   });
 
   it('derives the current breadcrumb location from consolidated sections', () => {

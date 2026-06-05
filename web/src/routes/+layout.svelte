@@ -5,6 +5,7 @@
   import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
+  import { currentRouteDocsRef } from '$lib/components/nav-model.js';
   import { loadAll, unsubscribeFromEvents } from '$lib/stores';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
@@ -32,6 +33,9 @@
     route: page.url.pathname,
     params: page.params || {}
   });
+  const assistantDefaultSelectedRefs = $derived(
+    currentRouteDocsRef(page.url.pathname) ? [currentRouteDocsRef(page.url.pathname)] : []
+  );
 
   $effect(() => {
     let active = true;
@@ -74,7 +78,7 @@
       {/if}
     </ErrorBoundary>
   </main>
-  <AssistantChat routeContext={assistantRouteContext} />
+  <AssistantChat routeContext={assistantRouteContext} defaultSelectedRefs={assistantDefaultSelectedRefs} />
 </div>
 
 <ToastContainer />

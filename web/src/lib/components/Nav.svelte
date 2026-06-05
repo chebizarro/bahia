@@ -14,8 +14,10 @@
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import UserMenu from '$lib/components/UserMenu.svelte';
   import {
+    DOCS_HOME_LINK,
     NAV_SECTIONS,
     currentLocation,
+    currentRouteDocs,
     isActiveNavLink,
     isActiveNavSection
   } from '$lib/components/nav-model.js';
@@ -34,6 +36,7 @@
   let drawerCloseButton = $state();
   let previousMenuOpen = false;
   let location = $derived(currentLocation($page.url.pathname));
+  let routeDocs = $derived(currentRouteDocs($page.url.pathname));
 
   $effect(() => {
     $page.url.pathname;
@@ -110,6 +113,14 @@
     </div>
 
     <div class="nav-actions">
+      {#if routeDocs}
+        <a class="context-docs-link" href={routeDocs.href} aria-label={`Open ${routeDocs.label}`}>
+          Help: {routeDocs.routeLabel}
+        </a>
+      {/if}
+
+      <a class="docs-home-link" href={DOCS_HOME_LINK.href}>{DOCS_HOME_LINK.label}</a>
+
       <ConnectionStatus />
 
       <UserMenu />
@@ -136,6 +147,24 @@
       </div>
 
       <div class="nav-sections">
+        <section class="nav-section docs-section">
+          <h2>Documentation</h2>
+          <ul>
+            <li>
+              <a href={DOCS_HOME_LINK.href} onclick={closeMenu}>
+                <span>{DOCS_HOME_LINK.label}</span>
+              </a>
+            </li>
+            {#if routeDocs}
+              <li>
+                <a href={routeDocs.href} onclick={closeMenu}>
+                  <span>{routeDocs.label}</span>
+                </a>
+              </li>
+            {/if}
+          </ul>
+        </section>
+
         {#each NAV_SECTIONS as section}
           {@const SectionIcon = SECTION_ICONS[section.icon]}
           <section class:active-section={isActiveNavSection($page.url.pathname, section)} class="nav-section">
@@ -258,19 +287,40 @@
 
   .menu-toggle,
   .drawer-close,
-  .theme-toggle {
+  .theme-toggle,
+  .docs-home-link,
+  .context-docs-link {
     border-radius: 8px;
     transition: all 0.15s;
   }
 
   .menu-toggle,
   .drawer-close,
-  .theme-toggle {
+  .theme-toggle,
+  .docs-home-link,
+  .context-docs-link {
     background: transparent;
     color: var(--text-muted);
     border: 1px solid var(--border-color);
     padding: 0.5rem 0.875rem;
     cursor: pointer;
+  }
+
+  .docs-home-link,
+  .context-docs-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .context-docs-link {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--primary, #6366f1) 16%, transparent);
   }
 
   .menu-toggle {
@@ -289,7 +339,11 @@
   .drawer-close:hover,
   .drawer-close:focus-visible,
   .theme-toggle:hover,
-  .theme-toggle:focus-visible {
+  .theme-toggle:focus-visible,
+  .docs-home-link:hover,
+  .docs-home-link:focus-visible,
+  .context-docs-link:hover,
+  .context-docs-link:focus-visible {
     background: var(--hover-bg);
     color: var(--text-primary);
   }
@@ -369,6 +423,11 @@
   .nav-section {
     border-top: 1px solid var(--border-color);
     padding-top: 1rem;
+  }
+
+  .docs-section {
+    border-top: 0;
+    padding-top: 0;
   }
 
   .nav-section.active-section h2 {
@@ -458,8 +517,14 @@
 
     .menu-toggle,
     .theme-toggle,
-    .drawer-close {
+    .drawer-close,
+    .docs-home-link,
+    .context-docs-link {
       padding: 0.5rem 0.75rem;
+    }
+
+    .context-docs-link {
+      display: none;
     }
 
     .breadcrumb {

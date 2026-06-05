@@ -10,7 +10,7 @@
   import AssistantSessionTabs from './AssistantSessionTabs.svelte';
   import AssistantTurn from './AssistantTurn.svelte';
 
-  let { routeContext = null } = $props();
+  let { routeContext = null, defaultSelectedRefs = [] } = $props();
 
   const session = $derived(activeAssistantSession());
   const pendingCount = $derived(Object.keys(pendingAssistantRequests).length);
@@ -78,7 +78,7 @@
     </section>
   </div>
 
-  <AssistantComposer {session} {routeContext} panelOpen={assistantUi.panelOpen} />
+  <AssistantComposer {session} {routeContext} {defaultSelectedRefs} panelOpen={assistantUi.panelOpen} />
 </div>
 
 <style>

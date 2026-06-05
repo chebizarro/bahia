@@ -4,14 +4,23 @@
     publishAssistantPrompt,
     publishAssistantApproval
   } from '$lib/stores/assistant.svelte.js';
+  import { mergeAssistantRefs } from './assistant-refs.js';
 
-  let { session = null, routeContext = null, panelOpen = false } = $props();
+  let {
+    session = null,
+    routeContext = null,
+    selectedRefs = [],
+    defaultSelectedRefs = [],
+    panelOpen = false
+  } = $props();
 
   let prompt = $state('');
   let submitting = $state(false);
   let error = $state('');
+  let dismissedRefs = $state([]);
   let textarea;
 
+  const visibleSelectedRefs = $derived(mergeAssistantRefs({ selectedRefs, defaultSelectedRefs, dismissedRefs }));
   const canCancel = $derived(session?.state === 'executing' || session?.state === 'blocked');
   const disabled = $derived(submitting || assistantConnection.status === 'waiting_auth');
 
@@ -26,13 +35,22 @@
     submitting = true;
     error = '';
     try {
-      await publishAssistantPrompt({ prompt: value, sessionId: session?.sessionId, routeContext });
+      await publishAssistantPrompt({
+        prompt: value,
+        sessionId: session?.sessionId,
+        routeContext,
+        selectedRefs: visibleSelectedRefs.map((ref) => ref.ref)
+      });
       prompt = '';
     } catch (err) {
       error = err?.message || String(err);
     } finally {
       submitting = false;
     }
+  }
+
+  function dismissRef(ref) {
+    dismissedRefs = Array.from(new Set([...dismissedRefs, ref]));
   }
 
   function handleKeydown(event) {
@@ -66,6 +84,25 @@
   <p class="error">{error}</p>
 {/if}
 
+{#if visibleSelectedRefs.length}
+  <div class="selected-refs" aria-label="Selected assistant references">
+    <span class="selected-refs-label">References</span>
+    {#each visibleSelectedRefs as item (item.ref)}
+      <span class="ref-pill {item.type}">
+        {#if item.href}
+          <a href={item.href} target={item.href.startsWith('/docs/') ? undefined : '_blank'} rel={item.href.startsWith('/docs/') ? undefined : 'noreferrer'}>{item.label}</a>
+        {:else}
+          <span>{item.label}</span>
+        {/if}
+        <code>{item.ref}</code>
+        {#if item.dismissible}
+          <button type="button" aria-label={`Remove ${item.label} reference`} onclick={() => dismissRef(item.ref)}>×</button>
+        {/if}
+      </span>
+    {/each}
+  </div>
+{/if}
+
 <form class="composer" onsubmit={submitPrompt}>
   <textarea
     bind:this={textarea}
@@ -79,6 +116,59 @@
 </form>
 
 <style>
+  .selected-refs {
+    border-top: 1px solid var(--border-color);
+    padding: 0.65rem 0.75rem 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .selected-refs-label {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .ref-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--hover-bg);
+    color: var(--text-primary);
+    padding: 0.25rem 0.35rem 0.25rem 0.55rem;
+    font-size: 0.75rem;
+  }
+  .ref-pill.docs {
+    background: color-mix(in srgb, var(--primary, #6366f1) 16%, transparent);
+  }
+  .ref-pill a {
+    color: inherit;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .ref-pill a:hover,
+  .ref-pill a:focus-visible {
+    text-decoration: underline;
+  }
+  .ref-pill code {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+  .ref-pill button {
+    width: 1.35rem;
+    height: 1.35rem;
+    border: 0;
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+    line-height: 1;
+  }
   .composer {
     display: grid;
     grid-template-columns: 1fr auto;

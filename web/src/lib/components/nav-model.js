@@ -1,38 +1,40 @@
 const WORKSPACE_LINKS = [
   { href: '/', label: 'Dashboard' },
-  { href: '/orgs', label: 'Orgs' },
-  { href: '/souls', label: 'Souls' }
+  { href: '/orgs', label: 'Orgs', docTopic: 'features-organizations' },
+  { href: '/souls', label: 'Souls', docTopic: 'features-souls' }
 ];
 
 const DELIVERY_LINKS = [
-  { href: '/services', label: 'Services' },
-  { href: '/artifacts', label: 'Artifacts' },
-  { href: '/packages', label: 'Packages' },
-  { href: '/deployments', label: 'Deployments' },
-  { href: '/deployments/pending', label: 'Pending Approvals' }
+  { href: '/services', label: 'Services', docTopic: 'features-services' },
+  { href: '/artifacts', label: 'Artifacts', docTopic: 'features-artifacts' },
+  { href: '/packages', label: 'Packages', docTopic: 'features-packages' },
+  { href: '/deployments', label: 'Deployments', docTopic: 'features-deployments' },
+  { href: '/deployments/pending', label: 'Pending Approvals', docTopic: 'features-deployments' }
 ];
 
 const OPERATIONS_LINKS = [
-  { href: '/environments', label: 'Environments' },
-  { href: '/workers', label: 'Workers' },
-  { href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth' },
-  { href: '/backup', label: 'Backup' },
+  { href: '/environments', label: 'Environments', docTopic: 'features-environments' },
+  { href: '/workers', label: 'Workers', docTopic: 'features-workers' },
+  { href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' },
+  { href: '/backup', label: 'Backup', docTopic: 'features-backup' },
   { href: '/continuity', label: 'Continuity' },
-  { href: '/dns', label: 'DNS' },
-  { href: '/notifications', label: 'Notifications' },
+  { href: '/dns', label: 'DNS', docTopic: 'features-dns' },
+  { href: '/notifications', label: 'Notifications', docTopic: 'features-notifications' },
   { href: '/events', label: 'Events' }
 ];
 
 const INTELLIGENCE_LINKS = [
-  { href: '/ml', label: 'Inference' },
-  { href: '/llm', label: 'LLM' }
+  { href: '/ml', label: 'Inference', docTopic: 'features-ml-models' },
+  { href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' }
 ];
 
 const ADMIN_LINKS = [
-  { href: '/payments', label: 'Payments' },
-  { href: '/policies', label: 'Policies' },
+  { href: '/payments', label: 'Payments', docTopic: 'features-payments' },
+  { href: '/policies', label: 'Policies', docTopic: 'features-policies' },
   { href: '/settings', label: 'Settings' }
 ];
+
+export const DOCS_HOME_LINK = { href: '/docs', label: 'Docs' };
 
 export const NAV_SECTIONS = [
   { title: 'Workspace', icon: 'layout-dashboard', links: WORKSPACE_LINKS },
@@ -43,6 +45,7 @@ export const NAV_SECTIONS = [
 ];
 
 export const NAV_LINKS = NAV_SECTIONS.flatMap((section) => section.links);
+export const PRIMARY_NAV_LINKS = NAV_LINKS;
 
 export function truncatePubkey(pubkey) {
   if (!pubkey || pubkey.length < 16) return pubkey;
@@ -61,6 +64,41 @@ export function isActiveNavLink(pathname = '/', href = '/') {
 
 export function isActiveNavSection(pathname = '/', section = {}) {
   return Array.isArray(section.links) && section.links.some((link) => isActiveNavLink(pathname, link.href));
+}
+
+export function routeDocTopics() {
+  return NAV_LINKS
+    .filter((link) => link.docTopic)
+    .map((link) => ({ href: link.href, label: link.label, docTopic: link.docTopic }));
+}
+
+export function docsHrefForTopic(topic = '') {
+  const cleanTopic = String(topic || '').trim();
+  return cleanTopic ? `/docs/${encodeURIComponent(cleanTopic)}` : '';
+}
+
+export function currentRouteDocs(pathname = '/') {
+  const match = NAV_LINKS.find((link) => link.docTopic && isActiveNavLink(pathname, link.href));
+  if (!match) return null;
+  return {
+    routeHref: match.href,
+    routeLabel: match.label,
+    topic: match.docTopic,
+    href: docsHrefForTopic(match.docTopic),
+    label: `${match.label} documentation`
+  };
+}
+
+export function currentRouteDocsRef(pathname = '/') {
+  const docs = currentRouteDocs(pathname);
+  if (!docs) return null;
+  return {
+    ref: `docs:${docs.topic}`,
+    label: docs.label,
+    href: docs.href,
+    topic: docs.topic,
+    source: 'route'
+  };
 }
 
 export function currentLocation(pathname = '/') {

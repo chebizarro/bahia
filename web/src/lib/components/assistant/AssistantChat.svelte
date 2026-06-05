@@ -3,10 +3,10 @@
   import AssistantBubble from './AssistantBubble.svelte';
   import AssistantPanel from './AssistantPanel.svelte';
 
-  let { routeContext = null } = $props();
+  let { routeContext = null, defaultSelectedRefs = [] } = $props();
 </script>
 
-<AssistantPanel {routeContext} />
+<AssistantPanel {routeContext} {defaultSelectedRefs} />
 <AssistantBubble
   panelOpen={assistantUi.panelOpen}
   hasUnread={assistantUi.hasUnread}

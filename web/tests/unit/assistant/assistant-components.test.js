@@ -1,14 +1,117 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import AssistantComposer from '../../../src/lib/components/assistant/AssistantComposer.svelte';
 import AssistantPlanApproval from '../../../src/lib/components/assistant/AssistantPlanApproval.svelte';
 import AssistantTurn from '../../../src/lib/components/assistant/AssistantTurn.svelte';
-import { renderComponent, textOf } from '../utils/svelte-component-test';
+import { mergeAssistantRefs, safeAssistantRefHref } from '../../../src/lib/components/assistant/assistant-refs.js';
+import { renderComponent, textOf, tick } from '../utils/svelte-component-test';
 
-vi.mock('../../../src/lib/stores/assistant.svelte.js', () => ({
+const assistantStoreMock = vi.hoisted(() => ({
+  assistantConnection: { status: 'live', operatorPubkey: 'a'.repeat(64) },
   publishAssistantApproval: vi.fn(),
+  publishAssistantPrompt: vi.fn(),
   downstreamRequestsForTurn: (item) => item?.downstreamRequestId ? [item.downstreamRequestId] : []
 }));
 
+vi.mock('../../../src/lib/stores/assistant.svelte.js', () => assistantStoreMock);
+
+async function setTextAreaValue(target, value) {
+  const textarea = target.querySelector('textarea');
+  textarea.value = value;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+}
+
+async function flush() {
+  await tick();
+  await Promise.resolve();
+  await tick();
+}
+
+describe('assistant refs model', () => {
+  it('allows only docs and HTTP(S) hrefs for assistant reference pills', () => {
+    expect(safeAssistantRefHref('/docs/features-services')).toBe('/docs/features-services');
+    expect(safeAssistantRefHref('https://example.com/doc')).toBe('https://example.com/doc');
+    expect(safeAssistantRefHref('http://example.com/doc')).toBe('http://example.com/doc');
+    expect(safeAssistantRefHref('javascript:alert(1)')).toBe('');
+    expect(safeAssistantRefHref('/settings')).toBe('');
+  });
+
+  it('merges default docs refs without replacing selected operational refs', () => {
+    expect(mergeAssistantRefs({
+      selectedRefs: ['service:svc-1'],
+      defaultSelectedRefs: [{ ref: 'docs:features-services', label: 'Services documentation', href: '/docs/features-services' }]
+    })).toEqual([
+      expect.objectContaining({ ref: 'service:svc-1', type: 'operational', dismissible: false }),
+      expect.objectContaining({ ref: 'docs:features-services', type: 'docs', dismissible: true })
+    ]);
+
+    expect(mergeAssistantRefs({
+      selectedRefs: ['service:svc-1'],
+      defaultSelectedRefs: [{ ref: 'docs:features-services', label: 'Services documentation' }],
+      dismissedRefs: ['docs:features-services']
+    }).map((ref) => ref.ref)).toEqual(['service:svc-1']);
+  });
+});
+
 describe('assistant components', () => {
+  beforeEach(() => {
+    assistantStoreMock.publishAssistantApproval.mockReset();
+    assistantStoreMock.publishAssistantPrompt.mockReset();
+    assistantStoreMock.publishAssistantPrompt.mockResolvedValue({ ok: true });
+    assistantStoreMock.assistantConnection.status = 'live';
+  });
+  it('shows route-derived docs refs in the composer and submits them through selectedRefs', async () => {
+    const routeContext = { route: '/services', params: {} };
+    const target = renderComponent(AssistantComposer, {
+      routeContext,
+      defaultSelectedRefs: [{ ref: 'docs:features-services', label: 'Services documentation', href: '/docs/features-services' }]
+    });
+
+    expect(textOf(target)).toContain('References');
+    expect(textOf(target)).toContain('Services documentation');
+    expect(textOf(target)).toContain('docs:features-services');
+    expect(target.querySelector('a[href="/docs/features-services"]')).toBeTruthy();
+
+    await setTextAreaValue(target, 'Explain services');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith({
+      prompt: 'Explain services',
+      sessionId: undefined,
+      routeContext,
+      selectedRefs: ['docs:features-services']
+    });
+  });
+
+  it('dismisses route docs refs without removing selected operational refs', async () => {
+    const routeContext = { route: '/services', params: {} };
+    const target = renderComponent(AssistantComposer, {
+      routeContext,
+      selectedRefs: ['service:svc-1'],
+      defaultSelectedRefs: [{ ref: 'docs:features-services', label: 'Services documentation', href: '/docs/features-services' }]
+    });
+
+    const removeDocs = target.querySelector('button[aria-label="Remove Services documentation reference"]');
+    expect(removeDocs).toBeTruthy();
+    removeDocs.click();
+    await tick();
+
+    expect(textOf(target)).toContain('service:svc-1');
+    expect(textOf(target)).not.toContain('docs:features-services');
+
+    await setTextAreaValue(target, 'Use service context only');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith({
+      prompt: 'Use service context only',
+      sessionId: undefined,
+      routeContext,
+      selectedRefs: ['service:svc-1']
+    });
+  });
+
   it('renders plan approval steps with tool names, args previews, and decisions', () => {
     const target = renderComponent(AssistantPlanApproval, {
       sessionId: 'assistant-session-1',
