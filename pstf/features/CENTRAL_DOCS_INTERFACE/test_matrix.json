@@ -1,0 +1,104 @@
+{
+  "feature_id": "CENTRAL_DOCS_INTERFACE",
+  "updated_at": "2026-06-05",
+  "matrix": [
+    {
+      "test": "go test ./internal/docs",
+      "acceptance_criteria": [
+        "CDI-AC-01",
+        "CDI-AC-05"
+      ],
+      "proves": [
+        "Deterministic docs catalog scan and metadata extraction include nested topics such as features-fleet-health.",
+        "Unsafe topics, duplicate topics, symlinked outside files, unsafe/unsupported links, outside-root links, and missing docs targets are explicit failures.",
+        "Route docTopic metadata is backed by the central docs catalog."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "go test ./internal/mcp",
+      "acceptance_criteria": [
+        "CDI-AC-02"
+      ],
+      "proves": [
+        "MCP docs list/read/resource paths consume the scanned docs catalog.",
+        "bahia_docs_read points agents to bahia_docs_list rather than embedding a static topic list.",
+        "bahia://docs/features-fleet-health appears without special casing."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "go test ./internal/api/router -run TestDocsReadRoutes",
+      "acceptance_criteria": [
+        "CDI-AC-03"
+      ],
+      "proves": [
+        "/api/v1/docs and /api/v1/docs/{topic} return catalog/document/link data from the central service.",
+        "Missing/invalid docs topics and missing docs roots are explicit errors.",
+        "Docs routes reject writes and do not expose Nostr command metadata."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "go test ./internal/service -run TestAssistantContextBuilder",
+      "acceptance_criteria": [
+        "CDI-AC-07"
+      ],
+      "proves": [
+        "Docs refs resolve into Documentation References with title/topic/source/href metadata.",
+        "Docs context is bounded by MaxChars and unresolved docs refs are non-fatal.",
+        "Operational selected references continue to resolve alongside docs refs."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "cd web && npm test -- --run tests/unit/docs-ui.test.js",
+      "acceptance_criteria": [
+        "CDI-AC-04"
+      ],
+      "proves": [
+        "The docs API client uses GET-only /api/v1/docs paths.",
+        "The /docs catalog page renders grouped topics and explicit API failure states.",
+        "The docs reader sanitizes Markdown HTML, rewrites internal links from central resolutions, preserves external links, and handles not-found topics."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "cd web && npm test -- --run tests/unit/nav.test.js",
+      "acceptance_criteria": [
+        "CDI-AC-05"
+      ],
+      "proves": [
+        "Docs home and route docs metadata derive from consolidated nav links.",
+        "Required route docs topics include services, deployments, fleet-health, LLM routes, and ML models.",
+        "Every nav docTopic exists in docs/user-guide."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "cd web && npm test -- --run tests/unit/assistant/assistant-components.test.js tests/unit/assistant/assistant-store.test.js",
+      "acceptance_criteria": [
+        "CDI-AC-06"
+      ],
+      "proves": [
+        "Route-derived docs refs are visible in the assistant composer and submitted as selectedRefs.",
+        "Docs refs can be dismissed without removing operational refs.",
+        "publishAssistantPrompt still sends selected_refs through encrypted assistant/prompt payload construction."
+      ],
+      "status": "verified"
+    },
+    {
+      "test": "cd web && npm test -- --run tests/unit/route-transport-matrix.test.js",
+      "acceptance_criteria": [
+        "CDI-AC-03",
+        "CDI-AC-08"
+      ],
+      "proves": [
+        "Every live route page is classified in the route transport matrix.",
+        "Docs routes are allowlisted only as http_native read-only docs queries.",
+        "Pure signer-first routes do not import REST clients for command ingress."
+      ],
+      "status": "verified"
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "feature_id": "CENTRAL_DOCS_INTERFACE",
+  "updated_at": "2026-06-05",
+  "criteria": [
+    {
+      "id": "CDI-AC-01",
+      "work_items": [
+        1
+      ],
+      "statement": "The central docs service scans every Markdown file under docs/user-guide deterministically, exposes normalized topics/metadata, and rejects path traversal, duplicate topics, symlinked outside files, unsafe links, and missing targets explicitly.",
+      "tests": [
+        "go test ./internal/docs -run 'TestCatalogScansMarkdownDeterministically|TestCatalogRejectsDuplicateNormalizedTopics|TestCatalogSkipsSymlinkedMarkdown|TestReadResolvesScannedTopicsAndRejectsUnsafeInput|TestResolveMarkdownLinkMapsInternalDocsAndPreservesExternalLinks|TestResolveMarkdownLinkRejectsOutsideRootAndMissingTargets|TestReadWithLinksReturnsResolvedAndRejectedDocumentLinks'"
+      ],
+      "evidence_files": [
+        "internal/docs/catalog.go",
+        "internal/docs/catalog_test.go"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-02",
+      "work_items": [
+        2
+      ],
+      "statement": "MCP docs resources and bahia_docs_list/read use the central catalog with no static topic-list drift while preserving bahia://docs/{topic} resource compatibility and missing-topic errors.",
+      "tests": [
+        "go test ./internal/mcp -run 'TestDocsToolDefinitions|TestDocsResourceCatalogScansDocsRoot|TestHandleDocsListReturnsScannedCatalog|TestHandleDocsRead|TestHandleDocsReadReportsOperationalErrors|TestListDocsResources'"
+      ],
+      "evidence_files": [
+        "internal/mcp/docs_resources.go",
+        "internal/mcp/docs_resources_test.go"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-03",
+      "work_items": [
+        3
+      ],
+      "statement": "The browser docs API is a read-only HTTP-native query surface mounted under /api/v1, returns catalog/document/link metadata, handles errors explicitly, rejects writes, and does not publish or claim Nostr command completion.",
+      "tests": [
+        "go test ./internal/api/router -run TestDocsReadRoutes"
+      ],
+      "evidence_files": [
+        "internal/api/handlers/docs.go",
+        "internal/api/router/router.go",
+        "internal/api/router/docs_routes_test.go",
+        "pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-04",
+      "work_items": [
+        4
+      ],
+      "statement": "The web /docs UI browses grouped catalog topics, renders sanitized Markdown documents, rewrites internal links with central link-resolution data, preserves external links, and displays explicit catalog/read failure states.",
+      "tests": [
+        "cd web && npm test -- --run tests/unit/docs-ui.test.js"
+      ],
+      "evidence_files": [
+        "web/src/routes/docs/+page.svelte",
+        "web/src/routes/docs/[topic]/+page.svelte",
+        "web/src/lib/components/docs/*",
+        "web/tests/unit/docs-ui.test.js"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-05",
+      "work_items": [
+        5
+      ],
+      "statement": "Global navigation exposes a Docs entry and route-context docs affordances from nav-model docTopic metadata, and every referenced topic exists in the central catalog.",
+      "tests": [
+        "go test ./internal/docs -run TestWebNavDocTopicsExistInCentralCatalog",
+        "cd web && npm test -- --run tests/unit/nav.test.js"
+      ],
+      "evidence_files": [
+        "web/src/lib/components/nav-model.js",
+        "web/src/lib/components/Nav.svelte",
+        "web/tests/unit/nav.test.js",
+        "internal/docs/nav_model_topics_test.go"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-06",
+      "work_items": [
+        6
+      ],
+      "statement": "Assistant prompts keep the existing encrypted ContextVM assistant/prompt transport while sending visible, dismissible route documentation refs through selected_refs without dropping operational selected refs.",
+      "tests": [
+        "cd web && npm test -- --run tests/unit/assistant/assistant-components.test.js tests/unit/assistant/assistant-store.test.js"
+      ],
+      "evidence_files": [
+        "web/src/routes/+layout.svelte",
+        "web/src/lib/components/assistant/*",
+        "web/src/lib/stores/assistant.svelte.js",
+        "web/tests/unit/assistant/assistant-components.test.js"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-07",
+      "work_items": [
+        7
+      ],
+      "statement": "AssistantContextBuilder resolves docs:{topic} and bahia://docs/{topic} refs into bounded Documentation References context, records unresolved docs refs non-fatally, and preserves existing operational selected-ref resolution.",
+      "tests": [
+        "go test ./internal/service -run TestAssistantContextBuilder.*Documentation",
+        "go test ./internal/service -run TestAssistantContextBuilderKeepsOperationalSelectedRefResolutionWithDocsRefs"
+      ],
+      "evidence_files": [
+        "internal/service/assistant_context_builder.go",
+        "internal/service/assistant_context_builder_docs_test.go"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "CDI-AC-08",
+      "work_items": [
+        8
+      ],
+      "statement": "Cross-track closeout records PSTF artifacts, user-facing docs, route transport evidence, quality gates, Beads status, and confirms no fake catalog, placeholder UI, ignored API failure, hardcoded topic drift, or synthetic Nostr/ContextVM behavior remains in touched scope.",
+      "tests": [
+        "go test ./internal/docs ./internal/mcp ./internal/api/router ./internal/service",
+        "go test ./...",
+        "cd web && npm test -- --run tests/unit/docs-ui.test.js tests/unit/nav.test.js tests/unit/assistant/assistant-components.test.js tests/unit/assistant/assistant-store.test.js tests/unit/route-transport-matrix.test.js",
+        "cd web && npm run lint",
+        "cd web && npm run build"
+      ],
+      "evidence_files": [
+        "pstf/features/CENTRAL_DOCS_INTERFACE/*",
+        "docs/user-guide/index.md",
+        "docs/user-guide/mcp-tools.md",
+        "docs/user-guide/nostr-integration.md"
+      ],
+      "status": "verified_with_followup",
+      "notes": "Required docs/API/web tests and build passed. npm run lint is unavailable because web/package.json has no lint script; follow-up bahia-4ez0 tracks adding a deterministic web lint gate."
+    }
+  ]
+}

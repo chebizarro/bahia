@@ -27,6 +27,14 @@ open http://localhost:3000
 
 ## Documentation Overview
 
+The same documentation corpus is available in three places:
+
+- **Web UI**: Open `/docs` for the browsable catalog, then `/docs/<topic>` for a specific guide such as `/docs/features-services`.
+- **Contextual help**: Product routes with matching guides expose a route-specific docs action, and the assistant composer shows a dismissible documentation reference such as `docs:features-services` before you send a prompt.
+- **MCP**: AI agents can discover docs with `bahia_docs_list`, read topics with `bahia_docs_read`, or read `bahia://docs/<topic>` resources.
+
+All three paths read from `docs/user-guide/**/*.md`; do not duplicate user-facing docs in route code or assistant prompts.
+
 ### Getting Started
 - [Getting Started](getting-started.md) — Installation, first deployment, initial setup
 
@@ -96,7 +104,9 @@ open http://localhost:3000
 ## Getting Help
 
 - **Web UI**: Access the dashboard at `http://localhost:3000`
-- **MCP**: Connect to `/mcp` or `/api/v1/mcp` for AI agent tooling
+- **Docs UI**: Browse documentation at `http://localhost:3000/docs`; internal documentation links stay inside `/docs/<topic>`.
+- **Assistant**: Open the floating assistant on a mapped product route to include a visible, dismissible route docs reference in `selected_refs`.
+- **MCP**: Connect to `/mcp` or `/api/v1/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`.
 - **Nostr**: Subscribe to read models and status events
 - **API Docs**: See [api.md](../api.md) for HTTP reference
 

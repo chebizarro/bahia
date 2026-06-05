@@ -200,6 +200,21 @@ ContextVM commands use JSON-RPC request/response for private intent acknowledgme
 5. Treat JSON-RPC response status as command acknowledgment only; long-running truth is the canonical observable event stream.
 6. Surface `AUTH`, `CLOSED`, zero-accepted publish, explicit abort, and configured timeout outcomes as distinct failures or degraded waits.
 
+### Assistant documentation context
+
+The floating assistant keeps the same encrypted ContextVM operation for prompts: `assistant/prompt` carried as kind `25910` and normally wrapped with CEP-4/NIP-59 where supported. Documentation context does not introduce a relay polling loop, synthetic request/response route, or new Nostr completion signal.
+
+When a page has route documentation metadata, the assistant composer shows a dismissible selected reference such as:
+
+```json
+{
+  "route_context": { "route": "/services", "params": {} },
+  "selected_refs": ["docs:features-services"]
+}
+```
+
+The backend resolves `docs:<topic>` and `bahia://docs/<topic>` references from the central `docs/user-guide` catalog into a bounded `Documentation References` section before calling the assistant model. Missing docs refs are reported in context as unresolved references; they do not convert the prompt into a failed control-plane mutation. If the assistant later performs or follows an operational command, durable progress and terminal truth still come from the canonical observable event stream described above.
+
 ### Example: Deployment Follow
 
 ```javascript

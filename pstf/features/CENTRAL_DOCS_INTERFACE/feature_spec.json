@@ -1,0 +1,30 @@
+{
+  "feature_id": "CENTRAL_DOCS_INTERFACE",
+  "title": "Central Documentation Interface",
+  "source_plan": "docs/plans/central-docs-interface-2026-06-05.md",
+  "source_beads": ["bahia-521z"],
+  "implementation_beads": ["bahia-brbu", "bahia-76ls", "bahia-ee8d", "bahia-n9m8"],
+  "commits_reviewed": ["fe0db90", "58154ad", "b3a5928", "2f5b168"],
+  "updated_at": "2026-06-05",
+  "intent": {
+    "summary": "Make docs/user-guide the single runtime documentation source for MCP, the authenticated web UI, and assistant selected-reference context.",
+    "source_of_truth": "docs/user-guide/**/*.md",
+    "browser_surfaces": ["/docs", "/docs/{topic}", "/api/v1/docs", "/api/v1/docs/{topic}"],
+    "agent_surfaces": ["bahia://docs/{topic}", "bahia_docs_list", "bahia_docs_read", "assistant selected_refs docs:{topic}", "assistant selected_refs bahia://docs/{topic}"],
+    "transport_classification": "http_native read-only docs/query surface for browser docs routes; assistant prompts remain encrypted ContextVM assistant/prompt with docs refs carried only as selected_refs metadata."
+  },
+  "observed_behavior": [
+    "internal/docs catalog scans Markdown files under docs/user-guide, normalizes nested topics such as features-fleet-health, extracts title/category/source/href metadata, and rejects unsafe topic/link paths.",
+    "MCP docs resource listing and bahia_docs_list/read consume the same central docs catalog instead of a hardcoded topic list.",
+    "Go router mounts GET-only /api/v1/docs and /api/v1/docs/{topic} under the existing authenticated read route layer and returns Markdown plus central link-resolution metadata.",
+    "SvelteKit /docs and /docs/[topic] load through the Bahia API client, render sanitized Markdown, rewrite internal links from API-provided link resolutions, preserve external links, and display explicit API/not-found failures.",
+    "Navigation metadata exposes docTopic mappings for product routes, renders global/contextual docs affordances, and verifies every mapped topic exists in the central docs catalog.",
+    "Assistant composer displays route-derived docs refs, allows dismissing them, preserves operational selected refs, and sends selected_refs through the existing assistant/prompt encrypted ContextVM path.",
+    "AssistantContextBuilder resolves docs:{topic} and bahia://docs/{topic} selected refs into a bounded Documentation References section and records unresolved refs without failing prompt context construction.",
+    "PSTF route transport evidence classifies docs browser routes as http_native read-only queries and keeps REST imports allowlisted only for those routes."
+  ],
+  "out_of_scope": [
+    "Full navigation E2E harness console error cleanup is tracked separately by bahia-oikr.",
+    "Frontmatter/descriptions for documentation catalog ordering remain a product enhancement, not required for this slice."
+  ]
+}

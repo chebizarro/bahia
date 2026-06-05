@@ -272,6 +272,53 @@ Use these to subscribe for ContextVM responses and canonical observable completi
 
 ## Resources
 
+### Documentation
+
+Bahia exposes the user guide as MCP resources backed by the same central catalog used by the web `/docs` interface.
+
+```json
+{
+  "uri": "bahia://docs/features-services",
+  "name": "docs:features-services",
+  "description": "Services",
+  "mimeType": "text/markdown",
+  "metadata": {
+    "topic": "features-services",
+    "path": "features/services.md",
+    "category": "feature",
+    "href": "/docs/features-services"
+  }
+}
+```
+
+Use `bahia_docs_list` to discover the current scanned topic list, then call `bahia_docs_read` with a topic name:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "bahia_docs_list",
+    "arguments": {}
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "tools/call",
+  "params": {
+    "name": "bahia_docs_read",
+    "arguments": { "topic": "features-services" }
+  }
+}
+```
+
+The docs catalog is not a hardcoded MCP list. It scans `docs/user-guide/**/*.md`, so new user-facing guide files become MCP resources and `/docs/<topic>` web pages from the same source.
+
 ### DNS Endpoints
 
 ```json
@@ -373,10 +420,11 @@ Production runtime no longer exposes legacy Bahia request/status/result kinds as
 ## Best Practices
 
 1. **List tools first** — Discover available capabilities
-2. **Follow async operations** — Use Nostr correlation
-3. **Handle errors** — Check `isError` field
-4. **Use typed arguments** — Match expected schema
-5. **Authenticate for production** — Use NIP-98
+2. **List docs before reading** — Use `bahia_docs_list` instead of assuming a static topic list.
+3. **Follow async operations** — Use Nostr correlation
+4. **Handle errors** — Check `isError` field
+5. **Use typed arguments** — Match expected schema
+6. **Authenticate for production** — Use NIP-98
 
 ## Related
 
