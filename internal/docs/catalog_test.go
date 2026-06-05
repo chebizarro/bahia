@@ -188,6 +188,31 @@ func TestResolveMarkdownLinkRejectsOutsideRootAndMissingTargets(t *testing.T) {
 	}
 }
 
+func TestReadWithLinksReturnsResolvedAndRejectedDocumentLinks(t *testing.T) {
+	docsDir := writeDocsFixture(t, map[string]string{
+		"index.md":             "# Index\n\n[Services](features/services.md) [External](https://example.com) [Bad](../README.md)",
+		"features/services.md": "# Services",
+	})
+	service := New(docsDir)
+
+	doc, err := service.ReadWithLinks(context.Background(), "index")
+	if err != nil {
+		t.Fatalf("ReadWithLinks returned error: %v", err)
+	}
+	if len(doc.Links) != 3 {
+		t.Fatalf("links len = %d, want 3: %#v", len(doc.Links), doc.Links)
+	}
+	if doc.Links[0].Original != "features/services.md" || doc.Links[0].Href != "/docs/features-services" || doc.Links[0].Topic != "features-services" || doc.Links[0].Status != "resolved" {
+		t.Fatalf("unexpected internal link: %#v", doc.Links[0])
+	}
+	if doc.Links[1].Original != "https://example.com" || doc.Links[1].Href != "https://example.com" || !doc.Links[1].External || doc.Links[1].Status != "resolved" {
+		t.Fatalf("unexpected external link: %#v", doc.Links[1])
+	}
+	if doc.Links[2].Original != "../README.md" || doc.Links[2].Status != "outside_docs_root" || doc.Links[2].Href != "" {
+		t.Fatalf("unexpected rejected link: %#v", doc.Links[2])
+	}
+}
+
 func writeDocsFixture(t *testing.T, files map[string]string) string {
 	t.Helper()
 	docsDir := filepath.Join(t.TempDir(), "docs", "user-guide")

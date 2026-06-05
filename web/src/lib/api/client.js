@@ -98,6 +98,14 @@ export class BahiaClient {
     return this.fetch(`/sbom/search${this.query(params)}`);
   }
 
+  listDocs() {
+    return this.fetch('/docs', { retries: 0 });
+  }
+
+  getDoc(topic) {
+    return this.fetch(`/docs/${encodeURIComponent(topic)}`, { retries: 0 });
+  }
+
   ingestSBOM(artifactId, payload) {
     return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`, {
       method: 'POST',

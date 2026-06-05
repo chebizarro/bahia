@@ -1,9 +1,9 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
-  "updated_at": "2026-06-03",
+  "updated_at": "2026-06-05",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
@@ -18,6 +18,18 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "SBOM and attestation HTTP surfaces only; artifact read model and signature verification remain separate Nostr/encrypted flows."
+    },
+    {
+      "file": "web/src/routes/docs/+page.svelte",
+      "permitted_transport_classes": ["http_native"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Read-only central documentation catalog query through /api/v1/docs; no browser command ingress or Nostr completion claim."
+    },
+    {
+      "file": "web/src/routes/docs/[topic]/+page.svelte",
+      "permitted_transport_classes": ["http_native"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Read-only central documentation topic query through /api/v1/docs/{topic}; no browser command ingress or Nostr completion claim."
     }
   ],
   "entries": [
@@ -143,6 +155,16 @@
       "pstf_status": "current_audit_evidence"
     },
     {
+      "id": "fleet-health-nostr-read-models",
+      "surface": "`/fleet-health` worker pressure and cleanup orchestration dashboard",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/fleet-health/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/routes/fleet-health/page-model.js", "web/src/routes/workers/CleanupRequestDialog.svelte"],
+      "evidence": ["Fleet Health reads worker, assignment, telemetry, and cleanup execution projections from shared Nostr-backed stores.", "Cleanup actions are delegated to the worker cleanup request dialog rather than a route-level REST mutation."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
       "id": "ml-nostr-controlplane",
       "surface": "`/ml` import and deployment browser submissions",
       "transport_class": "nostr_native",
@@ -235,6 +257,17 @@
       "evidence": ["Settings manipulates Nostr client relay configuration and Nostr Connect auth.", "System discovery/bootstrap may be HTTP-native and is not treated as fake Nostr control-plane command ingress."],
       "rest_import_policy": "no_rest_client_import_observed",
       "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "central-docs-http-native",
+      "surface": "`/docs` and `/docs/[topic]` central documentation browser reads",
+      "transport_class": "http_native",
+      "route_files": ["web/src/routes/docs/+page.svelte", "web/src/routes/docs/[topic]/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/router/router.go", "internal/api/handlers/docs.go", "internal/docs/catalog.go"],
+      "evidence": ["Docs pages call api.listDocs() and api.getDoc() against read-only /api/v1/docs routes backed by the central internal/docs catalog service.", "Docs API responses contain Markdown metadata and link-resolution data only; router tests assert no request_event_id, result_kind, published_relays, or Nostr result subscription claims are returned."],
+      "rest_import_policy": "allowed_http_native_read_only_docs_queries",
+      "pstf_status": "resolved_by_bahia-76ls",
+      "resolved_by_beads": ["bahia-76ls"]
     },
     {
       "id": "backend-rest-compatibility-routes",

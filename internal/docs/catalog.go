@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -35,8 +36,18 @@ type Topic struct {
 }
 
 type Document struct {
-	Topic    Topic  `json:"topic"`
-	Markdown string `json:"markdown"`
+	Topic    Topic          `json:"topic"`
+	Markdown string         `json:"markdown"`
+	Links    []DocumentLink `json:"links,omitempty"`
+}
+
+type DocumentLink struct {
+	Original string `json:"original"`
+	Href     string `json:"href,omitempty"`
+	Topic    string `json:"topic,omitempty"`
+	External bool   `json:"external,omitempty"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
 }
 
 type LinkResolution struct {
@@ -45,6 +56,8 @@ type LinkResolution struct {
 	Topic    string `json:"topic,omitempty"`
 	External bool   `json:"external,omitempty"`
 }
+
+var markdownLinkPattern = regexp.MustCompile(`!?\[[^\]\n]+\]\(([^)\s]+)(?:\s+['"][^)]*['"])?\)`)
 
 func New(basePath string) Service {
 	if strings.TrimSpace(basePath) == "" {
@@ -128,6 +141,14 @@ func (s Service) Catalog(ctx context.Context) ([]Topic, error) {
 }
 
 func (s Service) Read(ctx context.Context, topic string) (Document, error) {
+	return s.read(ctx, topic, false)
+}
+
+func (s Service) ReadWithLinks(ctx context.Context, topic string) (Document, error) {
+	return s.read(ctx, topic, true)
+}
+
+func (s Service) read(ctx context.Context, topic string, includeLinks bool) (Document, error) {
 	topic = strings.TrimSpace(topic)
 	if unsafeTopic(topic) {
 		return Document{}, ErrInvalidTopic
@@ -145,12 +166,60 @@ func (s Service) Read(ctx context.Context, topic string) (Document, error) {
 		if err != nil {
 			return Document{}, fmt.Errorf("read documentation topic %s: %w", topic, err)
 		}
-		return Document{Topic: item, Markdown: string(content)}, nil
+		document := Document{Topic: item, Markdown: string(content)}
+		if includeLinks {
+			document.Links = s.resolveDocumentLinksWithCatalog(item.SourcePath, document.Markdown, catalog)
+		}
+		return document, nil
 	}
 	return Document{}, ErrNotFound
 }
 
+func (s Service) ResolveDocumentLinks(ctx context.Context, sourcePath string, markdown string) []DocumentLink {
+	catalog, err := s.Catalog(ctx)
+	if err != nil {
+		return []DocumentLink{{Status: "error", Error: err.Error()}}
+	}
+	return s.resolveDocumentLinksWithCatalog(sourcePath, markdown, catalog)
+}
+
+func (s Service) resolveDocumentLinksWithCatalog(sourcePath string, markdown string, catalog []Topic) []DocumentLink {
+	seen := map[string]bool{}
+	links := []DocumentLink{}
+	for _, match := range markdownLinkPattern.FindAllStringSubmatch(markdown, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		rawHref := strings.TrimSpace(match[1])
+		if rawHref == "" || seen[rawHref] {
+			continue
+		}
+		seen[rawHref] = true
+		resolved, err := s.resolveMarkdownLinkWithCatalog(sourcePath, rawHref, catalog)
+		if err != nil {
+			links = append(links, DocumentLink{Original: rawHref, Status: linkErrorStatus(err), Error: err.Error()})
+			continue
+		}
+		links = append(links, DocumentLink{
+			Original: resolved.Original,
+			Href:     resolved.Href,
+			Topic:    resolved.Topic,
+			External: resolved.External,
+			Status:   "resolved",
+		})
+	}
+	return links
+}
+
 func (s Service) ResolveMarkdownLink(ctx context.Context, sourcePath string, rawHref string) (LinkResolution, error) {
+	catalog, err := s.Catalog(ctx)
+	if err != nil {
+		return LinkResolution{}, err
+	}
+	return s.resolveMarkdownLinkWithCatalog(sourcePath, rawHref, catalog)
+}
+
+func (s Service) resolveMarkdownLinkWithCatalog(sourcePath string, rawHref string, catalog []Topic) (LinkResolution, error) {
 	if strings.TrimSpace(rawHref) == "" {
 		return LinkResolution{}, ErrUnsupportedLink
 	}
@@ -189,10 +258,6 @@ func (s Service) ResolveMarkdownLink(ctx context.Context, sourcePath string, raw
 	topic := TopicFromPath(targetRel)
 	if unsafeTopic(topic) {
 		return LinkResolution{}, ErrInvalidTopic
-	}
-	catalog, err := s.Catalog(ctx)
-	if err != nil {
-		return LinkResolution{}, err
 	}
 	found := false
 	for _, item := range catalog {
@@ -246,6 +311,21 @@ func allowedExternalScheme(scheme string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func linkErrorStatus(err error) string {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return "not_found"
+	case errors.Is(err, ErrOutsideDocsRoot):
+		return "outside_docs_root"
+	case errors.Is(err, ErrUnsupportedLink):
+		return "unsupported"
+	case errors.Is(err, ErrInvalidTopic):
+		return "invalid_topic"
+	default:
+		return "error"
 	}
 }
 
