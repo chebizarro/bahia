@@ -24,7 +24,7 @@ func TestAssistantContextBuilderIncludesDNSContextWhenRegistryProvided(t *testin
 		}},
 		policies: []domain.DNSPolicy{{ID: uuid.MustParse("22222222-2222-4222-8222-222222222222"), Name: "internal-only", ZoneID: &zoneID, Enabled: true}},
 	}
-	builder := NewAssistantContextBuilder(nil, nil, nil, registry, nil, AssistantContextBuilderConfig{})
+	builder := NewAssistantContextBuilder(nil, nil, nil, registry, nil, nil, AssistantContextBuilderConfig{})
 
 	got, err := builder.BuildContext(ctx, nil, nil, "")
 	if err != nil {
@@ -39,7 +39,7 @@ func TestAssistantContextBuilderIncludesDNSContextWhenRegistryProvided(t *testin
 }
 
 func TestAssistantContextBuilderOmitsDNSContextWhenRegistryMissing(t *testing.T) {
-	builder := NewAssistantContextBuilder(nil, nil, nil, nil, nil, AssistantContextBuilderConfig{})
+	builder := NewAssistantContextBuilder(nil, nil, nil, nil, nil, nil, AssistantContextBuilderConfig{})
 
 	got, err := builder.BuildContext(context.Background(), nil, nil, "")
 	if err != nil {

@@ -40,6 +40,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/db"
+	"github.com/openagentsinc/bahia/internal/docs"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/mcp"
@@ -759,7 +760,8 @@ func New(cfg *config.Config) (*App, error) {
 		if dnsProjector != nil {
 			assistantDNS = assistantDNSRegistryAdapter{endpoints: dnsProjector, zones: dnsZoneRepo, staticZones: dnsZones, policies: dnsPolicyRepo}
 		}
-		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, service.AssistantContextBuilderConfig{})
+		userDocs := docs.New(docs.DefaultBasePath)
+		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, &userDocs, service.AssistantContextBuilderConfig{})
 		chatClient := llmadapter.NewChatClient(llmadapter.ChatClientConfig{
 			BaseURL: cfg.Assistant.LLMBaseURL,
 			Model:   cfg.Assistant.LLMModel,

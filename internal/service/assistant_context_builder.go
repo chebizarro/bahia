@@ -2,16 +2,23 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/google/uuid"
+	userdocs "github.com/openagentsinc/bahia/internal/docs"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-const defaultAssistantContextMaxChars = 24000
+const (
+	defaultAssistantContextMaxChars = 24000
+	// assistantDocsContextBudgetDivisor reserves at most one quarter of MaxChars for selected documentation refs.
+	assistantDocsContextBudgetDivisor = 4
+)
 
 // AssistantContextBuilder assembles bounded operational context for the assistant planner.
 type AssistantContextBuilder struct {
@@ -20,6 +27,7 @@ type AssistantContextBuilder struct {
 	ml       AssistantMLRegistry
 	dns      AssistantDNSRegistry
 	workers  AssistantWorkerCatalog
+	docs     AssistantDocsProvider
 	maxChars int
 }
 
@@ -64,6 +72,11 @@ type AssistantWorkerCatalog interface {
 	GetWorker(ctx context.Context, pubkey string) (*domain.Worker, error)
 }
 
+// AssistantDocsProvider is the central documentation surface needed for selected docs refs.
+type AssistantDocsProvider interface {
+	Read(ctx context.Context, topic string) (userdocs.Document, error)
+}
+
 // NewAssistantContextBuilder creates a context builder.
 func NewAssistantContextBuilder(
 	services AssistantServiceRegistry,
@@ -71,12 +84,13 @@ func NewAssistantContextBuilder(
 	ml AssistantMLRegistry,
 	dns AssistantDNSRegistry,
 	workers AssistantWorkerCatalog,
+	docs AssistantDocsProvider,
 	config AssistantContextBuilderConfig,
 ) *AssistantContextBuilder {
 	if config.MaxChars <= 0 {
 		config.MaxChars = defaultAssistantContextMaxChars
 	}
-	return &AssistantContextBuilder{services: services, llm: llm, ml: ml, dns: dns, workers: workers, maxChars: config.MaxChars}
+	return &AssistantContextBuilder{services: services, llm: llm, ml: ml, dns: dns, workers: workers, docs: docs, maxChars: config.MaxChars}
 }
 
 // BuildContext returns a structured, bounded, secret-free text block for LLM planning.
@@ -108,6 +122,7 @@ func (b *AssistantContextBuilder) BuildContext(ctx context.Context, routeContext
 		}
 	}
 
+	b.appendDocumentationReferences(ctx, &out, selectedRefs)
 	if err := b.appendResolvedResources(ctx, &out, routeContext, selectedRefs); err != nil {
 		return "", err
 	}
@@ -116,6 +131,93 @@ func (b *AssistantContextBuilder) BuildContext(ctx context.Context, routeContext
 	}
 
 	return truncateContext(out.String(), b.maxChars), nil
+}
+
+func (b *AssistantContextBuilder) appendDocumentationReferences(ctx context.Context, out *strings.Builder, selectedRefs []string) {
+	docRefs := selectedDocumentationRefs(selectedRefs)
+	if len(docRefs) == 0 {
+		return
+	}
+
+	docsBudget := b.maxChars / assistantDocsContextBudgetDivisor
+	if docsBudget <= 0 {
+		return
+	}
+
+	var docsOut strings.Builder
+	writeSection(&docsOut, "Documentation References")
+	omitted := false
+	for i, docRef := range docRefs {
+		remaining := docsBudget - docsOut.Len()
+		if remaining <= 0 {
+			omitted = true
+			break
+		}
+		refsLeft := len(docRefs) - i
+		entryBudget := remaining / refsLeft
+		if refsLeft == 1 {
+			entryBudget = remaining
+		}
+		if entryBudget <= 0 {
+			omitted = true
+			break
+		}
+		entry := b.documentationReferenceEntry(ctx, docRef, entryBudget)
+		if len(entry) > entryBudget {
+			entry = truncateToBudget(entry, entryBudget)
+		}
+		if entry == "" {
+			omitted = true
+			break
+		}
+		docsOut.WriteString(entry)
+	}
+	if omitted {
+		appendLineWithinBudget(&docsOut, docsBudget, "- additional documentation refs omitted due to docs context budget\n")
+	}
+
+	out.WriteString(truncateToBudget(docsOut.String(), docsBudget))
+	if !strings.HasSuffix(out.String(), "\n") {
+		out.WriteString("\n")
+	}
+}
+
+func (b *AssistantContextBuilder) documentationReferenceEntry(ctx context.Context, docRef documentationRef, entryBudget int) string {
+	var entry strings.Builder
+	if docRef.topic == "" {
+		fmt.Fprintf(&entry, "- unresolved documentation ref=%s reason=invalid documentation topic\n", docRef.ref)
+		return entry.String()
+	}
+	if b.docs == nil {
+		fmt.Fprintf(&entry, "- unresolved documentation ref=%s topic=%s reason=documentation provider unavailable\n", docRef.ref, docRef.topic)
+		return entry.String()
+	}
+
+	doc, err := b.docs.Read(ctx, docRef.topic)
+	if err != nil {
+		fmt.Fprintf(&entry, "- unresolved documentation ref=%s topic=%s reason=%s\n", docRef.ref, docRef.topic, documentationRefErrorReason(err))
+		return entry.String()
+	}
+
+	fmt.Fprintf(&entry, "- ref=%s topic=%s title=%q source=%s href=%s\n", docRef.ref, doc.Topic.Topic, doc.Topic.Title, doc.Topic.SourcePath, doc.Topic.Href)
+	excerptBudget := entryBudget - entry.Len() - len("  excerpt:\n")
+	if excerptBudget <= 0 {
+		appendLineWithinBudget(&entry, entryBudget, "  excerpt: omitted because documentation reference metadata filled its budget\n")
+		return entry.String()
+	}
+	excerpt := documentationExcerpt(doc.Markdown, excerptBudget)
+	if strings.TrimSpace(excerpt) == "" {
+		appendLineWithinBudget(&entry, entryBudget, "  excerpt: empty documentation topic\n")
+		return entry.String()
+	}
+	entry.WriteString("  excerpt:\n")
+	for _, line := range strings.Split(excerpt, "\n") {
+		appendLineWithinBudget(&entry, entryBudget, "    "+line+"\n")
+		if entry.Len() >= entryBudget {
+			break
+		}
+	}
+	return entry.String()
 }
 
 func (b *AssistantContextBuilder) appendResolvedResources(ctx context.Context, out *strings.Builder, routeContext map[string]string, selectedRefs []string) error {
@@ -310,6 +412,105 @@ func sortedMapKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+type documentationRef struct {
+	ref   string
+	topic string
+}
+
+func selectedDocumentationRefs(selectedRefs []string) []documentationRef {
+	seen := map[string]bool{}
+	refs := []documentationRef{}
+	for _, ref := range selectedRefs {
+		topic, ok := documentationTopicFromRef(ref)
+		if !ok {
+			continue
+		}
+		key := topic
+		if key == "" {
+			key = strings.TrimSpace(ref)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		refs = append(refs, documentationRef{ref: strings.TrimSpace(ref), topic: topic})
+	}
+	return refs
+}
+
+func documentationTopicFromRef(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", false
+	}
+	lower := strings.ToLower(ref)
+	if strings.HasPrefix(lower, "docs:") {
+		return strings.TrimSpace(ref[len("docs:"):]), true
+	}
+	parsed, err := url.Parse(ref)
+	if err != nil {
+		return "", false
+	}
+	if strings.EqualFold(parsed.Scheme, "bahia") && strings.EqualFold(parsed.Host, "docs") {
+		return strings.Trim(strings.TrimSpace(parsed.Path), "/"), true
+	}
+	return "", false
+}
+
+func documentationRefErrorReason(err error) string {
+	switch {
+	case errors.Is(err, userdocs.ErrNotFound):
+		return "documentation topic not found"
+	case errors.Is(err, userdocs.ErrInvalidTopic):
+		return "invalid documentation topic"
+	case errors.Is(err, userdocs.ErrOutsideDocsRoot):
+		return "documentation path rejected"
+	default:
+		return err.Error()
+	}
+}
+
+func appendLineWithinBudget(out *strings.Builder, maxChars int, line string) {
+	remaining := maxChars - out.Len()
+	if remaining <= 0 {
+		return
+	}
+	out.WriteString(truncateToBudget(line, remaining))
+}
+
+func truncateToBudget(value string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	if len(value) <= maxChars {
+		return value
+	}
+	marker := "..."
+	if maxChars <= len(marker) {
+		return value[:maxChars]
+	}
+	return value[:maxChars-len(marker)] + marker
+}
+
+func documentationExcerpt(markdown string, maxChars int) string {
+	markdown = strings.TrimSpace(strings.ReplaceAll(markdown, "\r\n", "\n"))
+	if maxChars <= 0 || markdown == "" {
+		return ""
+	}
+	if len(markdown) <= maxChars {
+		return markdown
+	}
+	marker := "\n...[documentation excerpt truncated]..."
+	if maxChars <= len(marker) {
+		return strings.TrimSpace(markdown[:maxChars])
+	}
+	cut := maxChars - len(marker)
+	if newline := strings.LastIndex(markdown[:cut], "\n"); newline > 0 && cut-newline < 160 {
+		cut = newline
+	}
+	return strings.TrimSpace(markdown[:cut]) + marker
 }
 
 func splitRef(ref string) (string, string) {
