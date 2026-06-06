@@ -135,18 +135,23 @@ type DNSProjectionConfig struct {
 
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
-	Enabled               bool          `koanf:"enabled" yaml:"enabled"`
-	Relays                []string      `koanf:"relays" yaml:"relays"`
-	AdditionalRelays      []string      `koanf:"additional_relays" yaml:"additional_relays"`
-	AuthorizedPubkeys     []string      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
-	SoulFactoryPubkey     string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
-	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
-	StartupTimeout        time.Duration `koanf:"startup_timeout" yaml:"startup_timeout"`
-	LLMBaseURL            string        `koanf:"llm_base_url" yaml:"llm_base_url"`
-	LLMModel              string        `koanf:"llm_model" yaml:"llm_model"`
-	LLMAPIKey             string        `koanf:"llm_api_key" yaml:"llm_api_key"`
-	LLMTimeout            time.Duration `koanf:"llm_timeout" yaml:"llm_timeout"`
+	Enabled                       bool          `koanf:"enabled" yaml:"enabled"`
+	Relays                        []string      `koanf:"relays" yaml:"relays"`
+	AdditionalRelays              []string      `koanf:"additional_relays" yaml:"additional_relays"`
+	AuthorizedPubkeys             []string      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
+	SoulFactoryPubkey             string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
+	SignetBunkerURI               string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetClientSecretKey         string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	StartupTimeout                time.Duration `koanf:"startup_timeout" yaml:"startup_timeout"`
+	LLMBaseURL                    string        `koanf:"llm_base_url" yaml:"llm_base_url"`
+	LLMModel                      string        `koanf:"llm_model" yaml:"llm_model"`
+	LLMAPIKey                     string        `koanf:"llm_api_key" yaml:"llm_api_key"`
+	LLMTimeout                    time.Duration `koanf:"llm_timeout" yaml:"llm_timeout"`
+	WorkspaceGiteaURL             string        `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
+	WorkspaceTemplateDir          string        `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
+	WorkspacePrivateKeyRef        string        `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
+	WorkspaceAgentMemoryMCPURLRef string        `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
+	WorkspaceGatewayPort          int           `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -1341,6 +1346,10 @@ func (c *Config) validateSoulFactory() error {
 	sf.LLMBaseURL = strings.TrimRight(strings.TrimSpace(sf.LLMBaseURL), "/")
 	sf.LLMModel = strings.TrimSpace(sf.LLMModel)
 	sf.LLMAPIKey = strings.TrimSpace(sf.LLMAPIKey)
+	sf.WorkspaceGiteaURL = strings.TrimRight(strings.TrimSpace(sf.WorkspaceGiteaURL), "/")
+	sf.WorkspaceTemplateDir = strings.TrimSpace(sf.WorkspaceTemplateDir)
+	sf.WorkspacePrivateKeyRef = strings.TrimSpace(sf.WorkspacePrivateKeyRef)
+	sf.WorkspaceAgentMemoryMCPURLRef = strings.TrimSpace(sf.WorkspaceAgentMemoryMCPURLRef)
 	if sf.StartupTimeout == 0 {
 		sf.StartupTimeout = 15 * time.Second
 	}
@@ -1392,6 +1401,21 @@ func (c *Config) validateSoulFactory() error {
 	}
 	if sf.LLMTimeout <= 0 {
 		return fmt.Errorf("config validation failed: soul_factory.llm_timeout must be > 0 when soul_factory.enabled=true")
+	}
+	if sf.WorkspaceGiteaURL != "" {
+		parsedWorkspace, err := url.Parse(sf.WorkspaceGiteaURL)
+		if err != nil || parsedWorkspace.Scheme == "" || parsedWorkspace.Host == "" {
+			return fmt.Errorf("config validation failed: soul_factory.workspace_gitea_url must be a valid URL")
+		}
+		if sf.WorkspacePrivateKeyRef == "" {
+			return fmt.Errorf("config validation failed: soul_factory.workspace_private_key_ref is required when soul_factory.workspace_gitea_url is set")
+		}
+		if sf.WorkspaceAgentMemoryMCPURLRef == "" {
+			return fmt.Errorf("config validation failed: soul_factory.workspace_agent_memory_mcp_url_ref is required when soul_factory.workspace_gitea_url is set")
+		}
+		if sf.WorkspaceGatewayPort < 0 || sf.WorkspaceGatewayPort > 65535 {
+			return fmt.Errorf("config validation failed: soul_factory.workspace_gateway_port must be between 0 and 65535")
+		}
 	}
 	return nil
 }

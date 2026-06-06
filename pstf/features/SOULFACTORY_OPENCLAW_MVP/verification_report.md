@@ -119,6 +119,54 @@ Review follow-up applied:
 - Runtime artifact projection now requires an explicit runtime artifact envelope and validates `sha256:<64 hex>` digest shape before registering Bahia artifacts/intents.
 - Added deterministic runtime failure coverage to prove no final `31951` or success `7950` is published when the runtime adapter fails.
 
+## Item 3 verification — Workspace/Nostr client/web/docs alignment
+
+Scope implemented for Bead `bahia-euu6`:
+
+- Workspace OpenClaw config generation now requires operator-supplied relays, trusted controller pubkeys, model, Nostr private-key secret reference, and agent-memory MCP URL reference before writing `config/openclaw.json`.
+- Generated workspace config no longer embeds Sharegap relay placeholders, static controller placeholders, inline/private-key placeholders, a hardcoded Claude model, or fake agent-memory MCP URLs.
+- Invalid or short soul/controller pubkeys and invalid gateway ports fail explicitly in the workspace manager before slicing or writing production workspace config.
+- App-level `soul_factory.workspace_*` config fields thread optional workspace repository generation inputs into `FullProvisionerConfig.Workspace`; workspace secret/config references are required when `workspace_gitea_url` is configured.
+- `NostrClient.PublishProvisionRequest` now publishes browser-compatible kind `5950` requests with `draft`, `draft-event`, draft `e` marker, `spec-hash`, runtime/capability tags, `method=soulfactory.provision`, `request-kind=5950`, and `schema=soulfactory-provisioning/v1` content.
+- The browser Soul creation path was reviewed and already uses the Nostr-first publisher; no REST provisioning or lifecycle calls were added.
+- Docs now describe the signed `31952`/`5950` → `6950` → `38384`/`38386` → `31951` → `7950` flow and state that REST provisioning/lifecycle routes are non-goals.
+
+Focused verification on 2026-06-06:
+
+```text
+go test ./internal/soulfactory ./internal/config ./internal/app
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.342s
+ok  	github.com/openagentsinc/bahia/internal/config	(cached)
+ok  	github.com/openagentsinc/bahia/internal/app	0.378s
+```
+
+REST-route source check:
+
+```text
+grep -R "soul_factory\|soulfactory" internal/api
+# exit code 1, no matches
+```
+
+Full Go test gate after Item 3 changes:
+
+```text
+go test ./...
+ok  	github.com/openagentsinc/bahia/cmd/cli	0.236s
+...
+ok  	github.com/openagentsinc/bahia/test/integration	0.296s
+```
+
+Item 3 acceptance mapping:
+
+- SFOM-AC-010: covered by `TestWorkspaceOpenClawConfigUsesConfiguredValues`, `TestWorkspaceOpenClawConfigRejectsInvalidOrMissingValues`, and `TestLoadSoulFactoryConfigFromYAMLAndEnv`.
+- SFOM-AC-011: covered by `TestNostrClientPublishProvisionRequestMatchesBrowserEventShape`.
+- SFOM-AC-012: covered by docs updates and source inspection confirming no SoulFactory REST provisioning/lifecycle route was added under `internal/api`.
+
+Review follow-up applied:
+
+- Optional provisioning request fields are trimmed before tags are appended, preventing whitespace-only empty `draft-event`, `spec-hash`, runtime, or capability tags.
+- Workspace manager validates gateway port range directly, so direct construction fails closed even outside app config validation.
+
 ## Result
 
-Verified for Items 1 and 2.
+Verified for Items 1, 2, and 3.

@@ -79,6 +79,37 @@
       "name": "Runtime provisioning failure publishes error without final soul or success result",
       "command": "go test ./internal/soulfactory -run TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess",
       "criteria": ["SFOM-AC-008"]
+    },
+    {
+      "id": "SFOM-T-014",
+      "name": "Workspace OpenClaw config uses configured values and no placeholders",
+      "command": "go test ./internal/soulfactory -run TestWorkspaceOpenClawConfigUsesConfiguredValues",
+      "criteria": ["SFOM-AC-010"]
+    },
+    {
+      "id": "SFOM-T-015",
+      "name": "Workspace OpenClaw config rejects invalid or missing values",
+      "command": "go test ./internal/soulfactory -run TestWorkspaceOpenClawConfigRejectsInvalidOrMissingValues",
+      "criteria": ["SFOM-AC-010"]
+    },
+    {
+      "id": "SFOM-T-016",
+      "name": "SoulFactory workspace config loads and validates secret references",
+      "command": "go test ./internal/config -run TestLoadSoulFactoryConfigFromYAMLAndEnv",
+      "criteria": ["SFOM-AC-010"]
+    },
+    {
+      "id": "SFOM-T-017",
+      "name": "Go Nostr client provisioning request matches browser event shape",
+      "command": "go test ./internal/soulfactory -run TestNostrClientPublishProvisionRequestMatchesBrowserEventShape",
+      "criteria": ["SFOM-AC-011"]
+    },
+    {
+      "id": "SFOM-T-018",
+      "name": "No SoulFactory REST provisioning or lifecycle route added",
+      "command": "! grep -R \"soul_factory\\\\|soulfactory\" internal/api",
+      "criteria": ["SFOM-AC-012"],
+      "expected": "No SoulFactory provisioning/lifecycle REST handlers under internal/api."
     }
   ]
 }

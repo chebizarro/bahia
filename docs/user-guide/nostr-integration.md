@@ -36,6 +36,17 @@ Bahia clients now separate private mutation intent from public observable truth.
 | **Collections/relays** | `30002` | NIP-51 relay sets and topology |
 | **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` | Legacy custom kinds retained only for startup migration, historical conversion, and fail-closed fixtures; they are not production runtime subscriptions |
 
+### SoulFactory/OpenClaw provisioning
+
+SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle API:
+
+1. Operators publish signed `31952` Soul drafts.
+2. Operators publish signed `5950` provisioning requests tagged with `draft`, `draft-event`, `spec-hash`, runtime/capability tags, `method=soulfactory.provision`, and `request-kind=5950`; content uses `schema=soulfactory-provisioning/v1`.
+3. Bahia publishes correlated `6950` progress, sends scoped `38384` runtime-control events to trusted OpenClaw runtimes, validates `38386` results, publishes the final `31951` Soul read model, and publishes terminal `7950`.
+4. Clients subscribe to scoped `6950`, `7950`, and `31951` events for durable progress/completion. Relay `OK` verifies event acceptance, not runtime completion.
+
+REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed Nostr events and subscriptions instead of HTTP create/provision/suspend/resume calls.
+
 ## Migrating Existing Deployments to the New Kinds
 
 Bahia includes a startup migration app in `internal/nostrmigration` that converts historical Bahia custom events into the canonical ContextVM/canonical observable contract. Operators should run the migrated app with the migration app enabled rather than keeping legacy subscribers in the runtime.

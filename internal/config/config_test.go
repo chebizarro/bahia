@@ -280,6 +280,10 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
   llm_model: "soul-model"
   llm_api_key: "from-yaml"
   llm_timeout: 45s
+  workspace_gitea_url: "https://git.example/"
+  workspace_private_key_ref: "secret://souls/openclaw/nostr-private-key"
+  workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory-mcp-url"
+  workspace_gateway_port: 18781
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
@@ -316,6 +320,18 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	}
 	if cfg.SoulFactory.LLMTimeout != 45*time.Second {
 		t.Fatalf("SoulFactory llm_timeout = %s", cfg.SoulFactory.LLMTimeout)
+	}
+	if cfg.SoulFactory.WorkspaceGiteaURL != "https://git.example" {
+		t.Fatalf("SoulFactory workspace_gitea_url = %q", cfg.SoulFactory.WorkspaceGiteaURL)
+	}
+	if cfg.SoulFactory.WorkspacePrivateKeyRef != "secret://souls/openclaw/nostr-private-key" {
+		t.Fatalf("SoulFactory workspace_private_key_ref = %q", cfg.SoulFactory.WorkspacePrivateKeyRef)
+	}
+	if cfg.SoulFactory.WorkspaceAgentMemoryMCPURLRef != "config://souls/agent-memory-mcp-url" {
+		t.Fatalf("SoulFactory workspace_agent_memory_mcp_url_ref = %q", cfg.SoulFactory.WorkspaceAgentMemoryMCPURLRef)
+	}
+	if cfg.SoulFactory.WorkspaceGatewayPort != 18781 {
+		t.Fatalf("SoulFactory workspace_gateway_port = %d", cfg.SoulFactory.WorkspaceGatewayPort)
 	}
 }
 
@@ -385,6 +401,21 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   llm_api_key: "secret"
 `,
 			want: "soul_factory.llm_base_url must be an API origin without a path",
+		},
+		{
+			name: "workspace missing private key ref",
+			yaml: `soul_factory:
+  enabled: true
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+  workspace_gitea_url: "https://git.example"
+  workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory"
+`,
+			want: "soul_factory.workspace_private_key_ref is required",
 		},
 	}
 

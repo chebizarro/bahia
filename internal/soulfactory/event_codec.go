@@ -91,6 +91,12 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 			req.DraftEventID = strings.TrimSpace(tag[1])
 		case tagSpecHash:
 			req.SpecHash = strings.TrimSpace(tag[1])
+		case tagRuntime:
+			req.Runtime.Target = domain.RuntimeTarget(strings.TrimSpace(tag[1]))
+		case tagRuntimePubkey:
+			req.Runtime.RuntimePubkey = strings.TrimSpace(tag[1])
+		case tagCapability:
+			req.Runtime.CapabilityRef = strings.TrimSpace(tag[1])
 		case tagEvent:
 			if isDraftEventTag(tag) && req.DraftEventID == "" {
 				req.DraftEventID = strings.TrimSpace(tag[1])
@@ -100,14 +106,15 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 
 	if strings.TrimSpace(event.Content) != "" {
 		var content struct {
-			AgentID      string          `json:"agent_id"`
-			Name         string          `json:"name"`
-			Tier         domain.SoulTier `json:"tier"`
-			TemplateRef  string          `json:"template_ref"`
-			DraftRef     string          `json:"draft_ref"`
-			DraftEventID string          `json:"draft_event_id"`
-			SpecHash     string          `json:"spec_hash"`
-			Brief        string          `json:"brief"`
+			AgentID      string                 `json:"agent_id"`
+			Name         string                 `json:"name"`
+			Tier         domain.SoulTier        `json:"tier"`
+			TemplateRef  string                 `json:"template_ref"`
+			DraftRef     string                 `json:"draft_ref"`
+			DraftEventID string                 `json:"draft_event_id"`
+			SpecHash     string                 `json:"spec_hash"`
+			Runtime      domain.SoulRuntimeSpec `json:"runtime"`
+			Brief        string                 `json:"brief"`
 		}
 		if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 			return nil, fmt.Errorf("parse provisioning content: %w", err)
@@ -121,6 +128,13 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 		req.DraftRef = firstNonEmpty(req.DraftRef, content.DraftRef)
 		req.DraftEventID = firstNonEmpty(req.DraftEventID, content.DraftEventID)
 		req.SpecHash = firstNonEmpty(req.SpecHash, content.SpecHash)
+		if req.Runtime.Target == "" {
+			req.Runtime.Target = content.Runtime.Target
+		}
+		req.Runtime.RuntimePubkey = firstNonEmpty(req.Runtime.RuntimePubkey, content.Runtime.RuntimePubkey)
+		req.Runtime.CapabilityRef = firstNonEmpty(req.Runtime.CapabilityRef, content.Runtime.CapabilityRef)
+		req.Runtime.RuntimeBinding = firstNonEmpty(req.Runtime.RuntimeBinding, content.Runtime.RuntimeBinding)
+		req.Runtime.State = firstNonEmpty(req.Runtime.State, content.Runtime.State)
 		req.Brief = strings.TrimSpace(content.Brief)
 	}
 

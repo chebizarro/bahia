@@ -264,6 +264,17 @@ bahia souls templates get research-agent
 | 7950 | ProvisioningResult | Final result |
 | 1950 | SoulAction | Lifecycle actions |
 
+## Nostr-First Provisioning Flow
+
+Soul creation is signer-first and event-driven:
+
+1. The browser/operator signs a `31952` Soul draft containing the desired identity, runtime target, relay policy, permissions, workspace, assets, and `spec_hash`.
+2. The browser/operator signs a `5950` provisioning request with tags such as `agent-id`, `draft`, `draft-event`, `spec-hash`, `runtime`, `runtime-pubkey`, `capability`, `method=soulfactory.provision`, and `request-kind=5950`. The JSON content uses `schema=soulfactory-provisioning/v1`.
+3. Bahia SoulFactory publishes `6950` progress, sends scoped runtime control kind `38384` events to OpenClaw, validates correlated `38386` runtime results, publishes final `31951`, and then publishes terminal `7950`.
+4. Clients subscribe to the correlated Nostr events for durable truth. A ContextVM or MCP acknowledgment is not completion.
+
+REST provisioning and lifecycle routes are intentionally not part of SoulFactory. Do not integrate against a REST create/provision/suspend/resume path; use signed Nostr events and scoped subscriptions.
+
 ## Agent Self-Provisioning
 
 Agents can provision other agents:
@@ -300,9 +311,15 @@ soul_factory:
   llm_model: "soul-model"
   llm_api_key: "${SOUL_FACTORY_LLM_API_KEY}"
   llm_timeout: 120s
+  workspace_gitea_url: "https://git.example.com" # optional; enables workspace repo generation
+  workspace_private_key_ref: "secret://souls/openclaw/nostr-private-key"
+  workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory-mcp-url"
+  workspace_gateway_port: 18780
 ```
 
 When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runtime adapter. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory.
+
+If `workspace_gitea_url` is set, generated OpenClaw workspace config uses the configured SoulFactory relays, Signet/controller pubkey, LLM model, and secret/config references above. Bahia fails configuration or workspace generation explicitly when required values are missing or pubkeys are not 64-character hex strings; it does not write placeholder relays, controllers, inline private keys, or fake MCP URLs into production workspace files.
 
 ## Authorization
 

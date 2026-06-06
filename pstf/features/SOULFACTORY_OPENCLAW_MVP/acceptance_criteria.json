@@ -46,6 +46,21 @@
       "id": "SFOM-AC-009",
       "statement": "Bahia service projection does not create synthetic deployable artifacts or deployment intents; deployment intent creation requires explicit opt-in plus runtime artifact metadata containing a digest.",
       "tests": ["SFOM-T-010", "SFOM-T-011", "SFOM-T-012"]
+    },
+    {
+      "id": "SFOM-AC-010",
+      "statement": "Workspace OpenClaw config generation uses config-supplied relays, controller pubkeys, model, and secret/config references, and fails explicitly for missing values or invalid/short pubkeys instead of panicking or writing placeholders.",
+      "tests": ["SFOM-T-014", "SFOM-T-015", "SFOM-T-016"]
+    },
+    {
+      "id": "SFOM-AC-011",
+      "statement": "The Go Nostr client publishes kind:5950 provisioning requests with browser-compatible draft, spec-hash, runtime, schema, method, and correlation fields.",
+      "tests": ["SFOM-T-017"]
+    },
+    {
+      "id": "SFOM-AC-012",
+      "statement": "SoulFactory web/docs remain Nostr-first and explicitly document REST provisioning/lifecycle routes as non-goals.",
+      "tests": ["SFOM-T-018"]
     }
   ]
 }

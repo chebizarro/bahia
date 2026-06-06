@@ -3,11 +3,14 @@ package soulfactory
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -15,15 +18,29 @@ import (
 
 // WorkspaceManager handles agent workspace initialization.
 type WorkspaceManager struct {
-	giteaURL    string
-	templateDir string
-	logger      *slog.Logger
+	giteaURL                 string
+	templateDir              string
+	openClawRelays           []string
+	openClawControllerPubkey []string
+	openClawModel            string
+	openClawPrivateKeyRef    string
+	agentMemoryMCPURLRef     string
+	ngitRelays               []string
+	gatewayPort              int
+	logger                   *slog.Logger
 }
 
 // WorkspaceConfig holds workspace manager configuration.
 type WorkspaceConfig struct {
-	GiteaURL    string // Gitea URL (e.g., https://git.sharegap.net)
-	TemplateDir string // Directory containing workspace templates
+	GiteaURL              string   // Gitea URL (e.g., https://git.sharegap.net)
+	TemplateDir           string   // Directory containing workspace templates
+	OpenClawRelays        []string // Nostr relays the generated OpenClaw workspace should use
+	OpenClawControllers   []string // SoulFactory controller pubkeys trusted by the generated OpenClaw workspace
+	OpenClawModel         string   // Runtime model identifier supplied by operator config
+	OpenClawPrivateKeyRef string   // Secret reference resolved by the runtime, never inline private key material
+	AgentMemoryMCPURLRef  string   // Secret/config reference for the agent-memory MCP URL
+	NgitRelays            []string // Relays used for ngit/NIP-34 repository publication
+	GatewayPort           int      // Local OpenClaw gateway port written into workspace config
 }
 
 // NewWorkspaceManager creates a new workspace manager.
@@ -33,9 +50,16 @@ func NewWorkspaceManager(config WorkspaceConfig, logger *slog.Logger) *Workspace
 	}
 
 	return &WorkspaceManager{
-		giteaURL:    config.GiteaURL,
-		templateDir: config.TemplateDir,
-		logger:      logger.With("component", "workspace"),
+		giteaURL:                 strings.TrimSpace(config.GiteaURL),
+		templateDir:              strings.TrimSpace(config.TemplateDir),
+		openClawRelays:           normalizeSoulRelays(config.OpenClawRelays),
+		openClawControllerPubkey: normalizePubkeyHexList(config.OpenClawControllers),
+		openClawModel:            strings.TrimSpace(config.OpenClawModel),
+		openClawPrivateKeyRef:    strings.TrimSpace(config.OpenClawPrivateKeyRef),
+		agentMemoryMCPURLRef:     strings.TrimSpace(config.AgentMemoryMCPURLRef),
+		ngitRelays:               normalizeSoulRelays(firstNonEmptyStringSlice(config.NgitRelays, config.OpenClawRelays)),
+		gatewayPort:              config.GatewayPort,
+		logger:                   logger.With("component", "workspace"),
 	}
 }
 
@@ -92,6 +116,9 @@ func (m *WorkspaceManager) InitWorkspace(ctx context.Context, soul *domain.Agent
 
 // createWorkspaceFiles generates the workspace template files.
 func (m *WorkspaceManager) createWorkspaceFiles(dir string, soul *domain.AgentSoul) error {
+	if err := m.validateOpenClawWorkspaceConfig(soul); err != nil {
+		return err
+	}
 	data := map[string]interface{}{
 		"AgentID":      soul.AgentID,
 		"Name":         soul.Name,
@@ -128,16 +155,98 @@ func (m *WorkspaceManager) createWorkspaceFiles(dir string, soul *domain.AgentSo
 		return err
 	}
 
-	// Create config/openclaw.json (placeholder)
+	// Create config/openclaw.json from operator-supplied runtime configuration.
 	configDir := filepath.Join(dir, "config")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return err
 	}
-	if err := m.writeTemplate(filepath.Join(configDir, "openclaw.json"), openclawTemplate, data); err != nil {
+	openClawConfig, err := m.renderOpenClawConfig(soul)
+	if err != nil {
 		return err
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "openclaw.json"), openClawConfig, 0644); err != nil {
+		return fmt.Errorf("write openclaw config: %w", err)
 	}
 
 	return nil
+}
+
+func (m *WorkspaceManager) validateOpenClawWorkspaceConfig(soul *domain.AgentSoul) error {
+	if soul == nil {
+		return fmt.Errorf("soul is required")
+	}
+	if strings.TrimSpace(soul.NostrPubkey) == "" {
+		return fmt.Errorf("soul Nostr pubkey is required")
+	}
+	if err := validateHexPubkey(strings.TrimSpace(soul.NostrPubkey)); err != nil {
+		return fmt.Errorf("soul Nostr pubkey is invalid: %w", err)
+	}
+	if len(m.openClawRelays) == 0 {
+		return fmt.Errorf("OpenClaw workspace relays are required")
+	}
+	if len(m.openClawControllerPubkey) == 0 {
+		return fmt.Errorf("OpenClaw workspace controller pubkeys are required")
+	}
+	for _, pubkey := range m.openClawControllerPubkey {
+		if err := validateHexPubkey(pubkey); err != nil {
+			return fmt.Errorf("OpenClaw workspace controller pubkey %q is invalid: %w", pubkey, err)
+		}
+	}
+	if m.openClawModel == "" {
+		return fmt.Errorf("OpenClaw workspace model is required")
+	}
+	if m.openClawPrivateKeyRef == "" {
+		return fmt.Errorf("OpenClaw workspace private key secret reference is required")
+	}
+	if m.agentMemoryMCPURLRef == "" {
+		return fmt.Errorf("OpenClaw workspace agent-memory MCP URL reference is required")
+	}
+	if len(m.ngitRelays) == 0 {
+		return fmt.Errorf("workspace ngit relays are required")
+	}
+	if m.gatewayPort < 0 || m.gatewayPort > 65535 {
+		return fmt.Errorf("OpenClaw workspace gateway port must be between 0 and 65535")
+	}
+	return nil
+}
+
+func (m *WorkspaceManager) renderOpenClawConfig(soul *domain.AgentSoul) ([]byte, error) {
+	if err := m.validateOpenClawWorkspaceConfig(soul); err != nil {
+		return nil, err
+	}
+	port := m.gatewayPort
+	if port == 0 {
+		port = 18780
+	}
+	config := map[string]interface{}{
+		"gateway": map[string]interface{}{
+			"port":      port,
+			"agentName": soul.Name,
+		},
+		"model": m.openClawModel,
+		"channels": map[string]interface{}{
+			"nostr": map[string]interface{}{
+				"enabled":          true,
+				"relays":           m.openClawRelays,
+				"pubkey":           strings.TrimSpace(soul.NostrPubkey),
+				"privateKeyRef":    m.openClawPrivateKeyRef,
+				"allowedPubkeys":   m.openClawControllerPubkey,
+				"policy":           "allowlist",
+				"controllerPolicy": "allowlist",
+			},
+		},
+		"mcpServers": map[string]interface{}{
+			"agent-memory": map[string]interface{}{
+				"transport": "http",
+				"urlRef":    m.agentMemoryMCPURLRef,
+			},
+		},
+	}
+	out, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal openclaw config: %w", err)
+	}
+	return append(out, '\n'), nil
 }
 
 func (m *WorkspaceManager) writeTemplate(path, tmplContent string, data interface{}) error {
@@ -177,6 +286,15 @@ func (m *WorkspaceManager) runGit(ctx context.Context, dir string, args ...strin
 }
 
 func (m *WorkspaceManager) pushWithNgit(ctx context.Context, dir string, soul *domain.AgentSoul) (string, error) {
+	if soul == nil {
+		return "", fmt.Errorf("soul is required")
+	}
+	if err := validateHexPubkey(strings.TrimSpace(soul.NostrPubkey)); err != nil {
+		return "", fmt.Errorf("soul Nostr pubkey is invalid: %w", err)
+	}
+	if len(m.ngitRelays) == 0 {
+		return "", fmt.Errorf("workspace ngit relays are required")
+	}
 	// Check if ngit is available
 	if _, err := exec.LookPath("ngit"); err != nil {
 		return "", fmt.Errorf("ngit not found: %w", err)
@@ -185,7 +303,7 @@ func (m *WorkspaceManager) pushWithNgit(ctx context.Context, dir string, soul *d
 	// Initialize ngit
 	cmd := exec.CommandContext(ctx, "ngit", "init",
 		"--name", soul.AgentID,
-		"--relay", "wss://relay.sharegap.net",
+		"--relay", m.ngitRelays[0],
 	)
 	cmd.Dir = dir
 
@@ -199,6 +317,43 @@ func (m *WorkspaceManager) pushWithNgit(ctx context.Context, dir string, soul *d
 	}
 
 	return fmt.Sprintf("%s/%s/%s", m.giteaURL, soul.NostrPubkey[:20], soul.AgentID), nil
+}
+
+func normalizePubkeyHexList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func validateHexPubkey(pubkey string) error {
+	pubkey = strings.TrimSpace(pubkey)
+	if len(pubkey) != 64 {
+		return fmt.Errorf("expected 64 hex characters")
+	}
+	if _, err := hex.DecodeString(pubkey); err != nil {
+		return fmt.Errorf("expected valid hex: %w", err)
+	}
+	return nil
+}
+
+func firstNonEmptyStringSlice(values ...[]string) []string {
+	for _, value := range values {
+		if len(normalizeSoulRelays(value)) > 0 {
+			return value
+		}
+	}
+	return nil
 }
 
 // Workspace templates
@@ -255,35 +410,4 @@ Scopes: {{range .Scopes}}` + "`{{.}}`" + ` {{end}}
 
 This agent's tools are configured at provisioning time by Soul Factory.
 To request additional tools, contact a fleet operator.
-`
-
-const openclawTemplate = `{
-  "gateway": {
-    "port": 18780,
-    "agentName": "{{.Name}}"
-  },
-  "model": "anthropic/claude-sonnet-4-6",
-  "channels": {
-    "nostr": {
-      "enabled": true,
-      "relays": [
-        "wss://relay.sharegap.net",
-        "wss://armada.sharegap.net"
-      ],
-      "pubkey": "{{.NostrPubkey}}",
-      "privateKey": "__INJECTED_AT_RUNTIME_VIA_SIGNET__",
-      "allowedPubkeys": [
-        "cdee943cbb19c51ab847a66d5d774373aa9f63d287246bb59b0827fa5e637400",
-        "14907326f89ebdfc9cfdabe17bd492aa48abbd59ad5d8cc25295760bdf0e5015"
-      ],
-      "policy": "allowlist"
-    }
-  },
-  "mcpServers": {
-    "agent-memory": {
-      "transport": "http",
-      "url": "__AGENT_MEMORY_MCP_URL__"
-    }
-  }
-}
 `

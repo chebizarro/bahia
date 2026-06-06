@@ -16,7 +16,7 @@ Soul Factory remains Nostr-first. The absence of dedicated REST provisioning/lif
 **Key files/modules:** `internal/config/config.go`, `internal/app/app.go`, new `internal/app/soulfactory.go`, `internal/soulfactory/*`, `pstf/features/SOULFACTORY_OPENCLAW_MVP/*`.
 **Dependencies:** none.
 
-### [ ] Item 2 — Reactor publication hardening + runtime/Bahia projection correctness
+### [x] Item 2 — Reactor publication hardening + runtime/Bahia projection correctness
 **Goal:** Make provisioning publication and Bahia projection production-safe: relay OK visibility, terminal ordering, runtime result propagation, no synthetic deployable artifacts.
 **Done when:**
 - `6950`, error `7950`, success `7950`, and `31951` are published to the normalized primary/additional relay set where appropriate and publish errors are not silently ignored.
@@ -26,7 +26,7 @@ Soul Factory remains Nostr-first. The absence of dedicated REST provisioning/lif
 **Key files/modules:** `internal/soulfactory/reactor.go`, `internal/soulfactory/provisioner_full.go`, `internal/soulfactory/bahia_integration.go`, tests under `internal/soulfactory`.
 **Dependencies:** Item 1 preferred, but reactor/Bahia pieces can proceed with care.
 
-### [ ] Item 3 — Workspace/Nostr client/web/docs alignment
+### [x] Item 3 — Workspace/Nostr client/web/docs alignment
 **Goal:** Remove placeholder/hardcoded production-path SoulFactory config in touched areas and keep UX/client/docs aligned with Nostr-first MVP.
 **Done when:**
 - Workspace OpenClaw config generation uses config-supplied relays/controllers/model/secret references; invalid pubkeys fail instead of panic; no hardcoded production relay/controller placeholders remain in touched path.

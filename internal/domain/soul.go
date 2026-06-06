@@ -365,16 +365,17 @@ type SoulDraft struct {
 
 // ProvisioningRequest represents a request to provision a soul.
 type ProvisioningRequest struct {
-	EventID      string   `json:"event_id"`
-	AgentID      string   `json:"agent_id"`
-	Name         string   `json:"name"`
-	Tier         SoulTier `json:"tier"`
-	TemplateRef  string   `json:"template_ref"`
-	DraftRef     string   `json:"draft_ref,omitempty"`
-	DraftEventID string   `json:"draft_event_id,omitempty"`
-	SpecHash     string   `json:"spec_hash,omitempty"`
-	Brief        string   `json:"brief"`
-	Requester    string   `json:"requester"` // pubkey
+	EventID      string          `json:"event_id"`
+	AgentID      string          `json:"agent_id"`
+	Name         string          `json:"name"`
+	Tier         SoulTier        `json:"tier"`
+	TemplateRef  string          `json:"template_ref"`
+	DraftRef     string          `json:"draft_ref,omitempty"`
+	DraftEventID string          `json:"draft_event_id,omitempty"`
+	SpecHash     string          `json:"spec_hash,omitempty"`
+	Runtime      SoulRuntimeSpec `json:"runtime,omitempty"`
+	Brief        string          `json:"brief"`
+	Requester    string          `json:"requester"` // pubkey
 }
 
 // ProvisioningRun tracks the multi-step provisioning workflow.

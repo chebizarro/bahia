@@ -2,6 +2,8 @@
 
 Bahia owns the OpenClaw SoulFactory adapter as a separate sidecar. It does not require direct upstream OpenClaw changes or REST lifecycle control APIs.
 
+Soul provisioning is initiated by signed Nostr events, not by REST. Operators publish a `31952` Soul draft and a correlated `5950` provisioning request; SoulFactory then drives OpenClaw with runtime control events and publishes observable progress/read-model events. Adding REST provisioning or lifecycle routes is a non-goal for this MVP.
+
 ## Nostr contract
 
 The sidecar:
@@ -12,6 +14,15 @@ The sidecar:
 - publishes signed, correlated kind `38386` results with `#e`, `#p`, `method`, `idempotency-key`, `soul`, `agent-id`, `spec-hash`, `schema`, and `status` tags;
 - uses EOSE only for backfill transition and never infers terminal completion from timeout, relay closure, or polling;
 - persists idempotency/result fingerprints in a local JSON store so exact replays after restart republish a cached result instead of repeating side effects.
+
+The browser/server provisioning request shape is:
+
+- `31952` draft: editable desired soul spec, including runtime, relay policy, permissions, workspace, assets, and `spec_hash`.
+- `5950` request: tags include `agent-id`, `draft`, `draft-event`, `e=<draft-event-id>;marker=draft`, `spec-hash`, `runtime`, `runtime-pubkey`, `capability`, `method=soulfactory.provision`, and `request-kind=5950`; content includes `schema=soulfactory-provisioning/v1`, `method=soulfactory.provision`, identity fields, draft refs, `spec_hash`, `brief`, and `requested_at`.
+- `6950` progress and terminal `7950` result remain correlated to the operator request.
+- Final `31951` is the durable Soul read model; runtime truth comes from `38386` and the projected `31951`, not from an HTTP response.
+
+Generated OpenClaw workspace config must use operator-supplied relays, controller pubkeys, model, and secret/config references. It must not embed placeholder relay URLs, controller keys, inline private keys, or fake MCP URLs.
 
 ## Local OpenClaw control surface
 

@@ -128,6 +128,17 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			AllowUnauthenticatedLocal: cfg.Qdrant.AllowUnauthenticatedLocal,
 		},
 		AgentMemory: agentmemory.Config{},
+		Workspace: soulfactory.WorkspaceConfig{
+			GiteaURL:              sf.WorkspaceGiteaURL,
+			TemplateDir:           sf.WorkspaceTemplateDir,
+			OpenClawRelays:        allRelays,
+			OpenClawControllers:   []string{controllerPubkey},
+			OpenClawModel:         sf.LLMModel,
+			OpenClawPrivateKeyRef: sf.WorkspacePrivateKeyRef,
+			AgentMemoryMCPURLRef:  sf.WorkspaceAgentMemoryMCPURLRef,
+			NgitRelays:            allRelays,
+			GatewayPort:           sf.WorkspaceGatewayPort,
+		},
 		RuntimeAdapters: map[domain.RuntimeTarget]soulfactory.RuntimeAdapter{
 			domain.RuntimeTargetOpenClaw: runtimeAdapter,
 		},

@@ -188,18 +188,68 @@ func (c *NostrClient) ListTemplates(ctx context.Context, limit int, tier string)
 }
 
 func (c *NostrClient) PublishProvisionRequest(ctx context.Context, req domain.ProvisioningRequest) (*SoulFactoryRequestReceipt, error) {
-	tags := nostr.Tags{{"agent-id", strings.TrimSpace(req.AgentID)}, {"name", firstNonEmpty(strings.TrimSpace(req.Name), strings.TrimSpace(req.AgentID))}, {"tier", string(req.Tier)}, {"output", "application/json"}}
-	if req.TemplateRef != "" {
-		tags = append(tags, nostr.Tag{"template", req.TemplateRef})
+	agentID := strings.TrimSpace(req.AgentID)
+	if agentID == "" {
+		return nil, fmt.Errorf("agent_id is required")
 	}
-	if req.DraftRef != "" {
-		tags = append(tags, nostr.Tag{"draft", req.DraftRef})
+	name := firstNonEmpty(strings.TrimSpace(req.Name), agentID)
+	tier := req.Tier
+	if tier == "" {
+		tier = domain.SoulTierStandard
 	}
-	content, err := json.Marshal(map[string]string{"brief": req.Brief})
+	now := nostr.Now()
+	templateRef := strings.TrimSpace(req.TemplateRef)
+	draftRef := strings.TrimSpace(req.DraftRef)
+	draftEventID := strings.TrimSpace(req.DraftEventID)
+	specHash := strings.TrimSpace(req.SpecHash)
+	runtimePubkey := strings.TrimSpace(req.Runtime.RuntimePubkey)
+	capabilityRef := strings.TrimSpace(req.Runtime.CapabilityRef)
+	tags := nostr.Tags{
+		{tagAgentID, agentID},
+		{tagName, name},
+		{tagTier, string(tier)},
+		{"output", "application/json"},
+		{"method", RuntimeMethodProvision},
+		{tagRequestKind, fmt.Sprint(domain.KindProvisioningRequest)},
+	}
+	if templateRef != "" {
+		tags = append(tags, nostr.Tag{tagTemplate, templateRef})
+	}
+	if draftRef != "" {
+		tags = append(tags, nostr.Tag{tagDraft, draftRef})
+	}
+	if draftEventID != "" {
+		tags = append(tags, nostr.Tag{tagDraftEvent, draftEventID}, nostr.Tag{tagEvent, draftEventID, "", "draft"})
+	}
+	if specHash != "" {
+		tags = append(tags, nostr.Tag{tagSpecHash, specHash})
+	}
+	if req.Runtime.Target != "" {
+		tags = append(tags, nostr.Tag{tagRuntime, string(req.Runtime.Target)})
+	}
+	if runtimePubkey != "" {
+		tags = append(tags, nostr.Tag{tagRuntimePubkey, runtimePubkey})
+	}
+	if capabilityRef != "" {
+		tags = append(tags, nostr.Tag{tagCapability, capabilityRef})
+	}
+	content, err := json.Marshal(map[string]interface{}{
+		"schema":         "soulfactory-provisioning/v1",
+		"method":         RuntimeMethodProvision,
+		"agent_id":       agentID,
+		"name":           name,
+		"tier":           string(tier),
+		"template_ref":   templateRef,
+		"draft_ref":      draftRef,
+		"draft_event_id": draftEventID,
+		"spec_hash":      specHash,
+		"brief":          strings.TrimSpace(req.Brief),
+		"requested_at":   int64(now),
+	})
 	if err != nil {
 		return nil, err
 	}
-	event := &nostr.Event{Kind: domain.KindProvisioningRequest, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	event := &nostr.Event{Kind: domain.KindProvisioningRequest, CreatedAt: now, Tags: tags, Content: string(content)}
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign provisioning request: %w", err)
 	}
@@ -567,7 +617,7 @@ func normalizeSoulRelays(relays []string) []string {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, relay)
+		out = append(out, key)
 	}
 	return out
 }

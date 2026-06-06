@@ -219,3 +219,7 @@ Bahia MUST capability-gate runtime target choices on live, trusted, compatible `
 4. SoulFactory validates the runtime result, publishes final `31951` with runtime binding/capability/spec refs, then publishes terminal `7950` correlated to the original operator request.
 
 No step may infer terminal completion from timeout, missing events, or relay/subscription closure.
+
+The `5950` request is the Bahia-facing provisioning intent for this SoulFactory flow. Browser and Go clients MUST keep its wire shape aligned: tags carry `draft`, `draft-event`, `spec-hash`, runtime/capability tags, `method=soulfactory.provision`, and `request-kind=5950`; content carries `schema=soulfactory-provisioning/v1`, `method=soulfactory.provision`, draft refs, `spec_hash`, `brief`, and `requested_at`. Durable completion still comes from subscribed `6950`/`7950`/`31951` events and validated `38386` runtime results.
+
+REST provisioning and lifecycle endpoints are intentionally not part of this control plane. HTTP may serve docs or MCP tooling, but it must not become the source of truth for SoulFactory provisioning, lifecycle, progress, or terminal completion.
