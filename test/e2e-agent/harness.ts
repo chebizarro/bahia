@@ -7,6 +7,63 @@ import type { HarnessConfig, ServiceHealth } from './types.js';
 
 const execAsync = promisify(exec);
 
+export class DockerPreflightError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DockerPreflightError';
+  }
+}
+
+function commandFailureDetails(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const details: string[] = [];
+    const maybeError = error as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: unknown };
+
+    if (typeof maybeError.code !== 'undefined') {
+      details.push(`exit code ${String(maybeError.code)}`);
+    }
+    if (typeof maybeError.stderr === 'string' && maybeError.stderr.trim()) {
+      details.push(maybeError.stderr.trim());
+    }
+    if (typeof maybeError.stdout === 'string' && maybeError.stdout.trim()) {
+      details.push(maybeError.stdout.trim());
+    }
+    if (details.length > 0) {
+      return details.join('; ');
+    }
+    if (typeof maybeError.message === 'string' && maybeError.message.trim()) {
+      return maybeError.message.trim();
+    }
+  }
+
+  return String(error);
+}
+
+function dockerPreflightMessage(details: string): string {
+  return `Docker daemon is not available for the e2e-agent harness. Start Docker Desktop or a compatible Docker daemon, verify \`docker info\` succeeds, then rerun \`pnpm test:smoke\`. Details: ${details}`;
+}
+
+function outputIncludesDaemonFailure(output: string): boolean {
+  return /cannot connect to the docker daemon|is the docker daemon running/i.test(output);
+}
+
+export async function assertDockerDaemonAvailable(): Promise<void> {
+  try {
+    const { stdout, stderr } = await execAsync('docker info --format "{{.ServerVersion}}"');
+    const output = `${stdout}\n${stderr}`.trim();
+
+    if (!stdout.trim() || outputIncludesDaemonFailure(output)) {
+      throw new DockerPreflightError(dockerPreflightMessage(output || 'docker info returned no daemon version'));
+    }
+  } catch (error) {
+    if (error instanceof DockerPreflightError) {
+      throw error;
+    }
+
+    throw new DockerPreflightError(dockerPreflightMessage(commandFailureDetails(error)));
+  }
+}
+
 /**
  * Default configuration
  */
@@ -44,6 +101,8 @@ export class TestHarness {
       return;
     }
 
+    await assertDockerDaemonAvailable();
+
     console.log('🚀 Starting docker-compose stack...');
     
     const composeCmd = `docker compose -f ${this.config.composeFile} -p ${this.config.projectName} up -d`;
@@ -73,6 +132,10 @@ export class TestHarness {
       return;
     }
 
+    if (!this.isRunning) {
+      return;
+    }
+
     console.log('🛑 Stopping docker-compose stack...');
     
     const composeCmd = `docker compose -f ${this.config.composeFile} -p ${this.config.projectName} down`;
@@ -93,6 +156,10 @@ export class TestHarness {
     if (this.config.skipStackManagement) {
       console.log('⏭️  Skipping docker-compose cleanup (using external stack)');
       this.isRunning = false;
+      return;
+    }
+
+    if (!this.isRunning) {
       return;
     }
 

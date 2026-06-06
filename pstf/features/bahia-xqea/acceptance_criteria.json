@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-xqea",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "When the harness manages docker-compose, it verifies Docker daemon availability before invoking docker compose up.",
+      "tests": ["pnpm test:smoke", "pnpm exec tsx -e helper preflight invocation"]
+    },
+    {
+      "id": "AC2",
+      "statement": "With Docker unavailable, pnpm test:smoke exits before scenario execution with one clear actionable DockerPreflightError and no cleanup failure.",
+      "tests": ["pnpm test:smoke"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Cleanup for a managed stack is skipped when the stack never started, while successful starts still use the real docker-compose lifecycle.",
+      "tests": ["pnpm test:smoke", "pnpm exec tsc --noEmit"]
+    }
+  ]
+}

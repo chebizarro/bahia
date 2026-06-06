@@ -42,6 +42,18 @@ cd test/e2e-agent
 npm install
 ```
 
+## Docker preflight
+
+The smoke harness manages the Bahia docker-compose stack by default. Before it runs `docker compose up`, it verifies that a Docker daemon is reachable with `docker info`. If Docker Desktop or another compatible daemon is not running, the harness exits before scenario execution with `DockerPreflightError` and remediation text.
+
+To resolve the preflight failure:
+
+1. Start Docker Desktop or a compatible Docker daemon.
+2. Verify `docker info` succeeds in the same shell.
+3. Re-run `pnpm test:smoke`.
+
+When `skipStackManagement` is enabled, the harness uses the existing stack and performs HTTP health checks instead of managing docker-compose.
+
 ## Usage
 
 ### Smoke Test
