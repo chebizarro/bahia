@@ -138,6 +138,12 @@
     error: '🔴 Relay error'
   }[controlplaneConnection.status] || '⚪ Unknown');
 
+  let relayProvenance = $derived(
+    controlplaneConnection.relays.length > 0
+      ? `Relays: ${controlplaneConnection.relays.join(', ')}`
+      : 'No relays advertised/configured/connected.'
+  );
+
   // Count SBOM events for badge
   let sbomEventCount = $derived(
     events.filter(e =>
@@ -165,9 +171,7 @@
 
   <p class="hint">
     Events are rendered from relay-backed Bahia read-model/status/audit subscriptions.
-    {#if controlplaneConnection.relays.length > 0}
-      Relays: {controlplaneConnection.relays.join(', ')}
-    {/if}
+    {relayProvenance}
   </p>
 
   {#if controlplaneConnection.lastError}

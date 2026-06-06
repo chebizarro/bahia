@@ -182,14 +182,22 @@
       </article>
     </section>
 
-    {#if section === 'repositories' && capabilities.length > 0}
+    {#if section === 'repositories'}
       <section class="panel">
         <h2>Advertised backend capabilities</h2>
-        <div class="chips">
-          {#each capabilities as capability}
-            <StatusPill value={capability.enabled ? 'success' : 'unsupported'} label={`${capability.key}: ${capability.enabled ? 'yes' : 'no'}`} />
-          {/each}
-        </div>
+        {#if capabilities.length > 0}
+          <div class="chips">
+            {#each capabilities as capability}
+              <StatusPill value={capability.enabled ? 'success' : 'unsupported'} label={`${capability.key}: ${capability.enabled ? 'yes' : 'no'}`} />
+            {/each}
+          </div>
+        {:else}
+          <EmptyState
+            iconComponent={RepositoryIcon}
+            title="No backend capabilities advertised"
+            message="This repository record does not advertise backend capability metadata yet."
+          />
+        {/if}
       </section>
     {/if}
 
@@ -245,5 +253,6 @@
   dd a:hover { text-decoration: underline; }
   code { border: 1px solid var(--border-color); border-radius: 0.3rem; padding: 0.1rem 0.3rem; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .panel :global(.empty-state) { padding: 1.5rem 0; }
   pre { background: #080812; border: 1px solid var(--border-color); border-radius: 0.55rem; color: var(--text-primary); margin-top: 0.75rem; max-height: 24rem; overflow: auto; padding: 0.75rem; white-space: pre-wrap; }
 </style>

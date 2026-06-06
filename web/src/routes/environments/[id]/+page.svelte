@@ -156,10 +156,29 @@
     states.length === 0 ? 'unknown' : driftedStates.length > 0 ? 'drifted' : 'in_sync'
   );
   let workerPolicy = $derived(environment?.runtime_config?.worker_policy && typeof environment.runtime_config.worker_policy === 'object' ? environment.runtime_config.worker_policy : {});
+  let runtimeConfigEmpty = $derived(runtimeConfigIsEmpty(environment?.runtime_config));
+  let runtimeConfigDisplay = $derived(formatRuntimeConfig(environment?.runtime_config));
   let estimatedPolicyEligibleCount = $derived(countWorkersMatchingPolicy(workers, workerPolicy));
   let driftStatusIcon = $derived(
     environmentDriftStatus === 'drifted' ? WarningIcon : environmentDriftStatus === 'in_sync' ? SuccessIcon : UnknownIcon
   );
+
+  function runtimeConfigIsEmpty(value) {
+    if (value == null) return true;
+    if (typeof value === 'string') return value.trim().length === 0;
+    if (typeof value === 'object' && !Array.isArray(value)) return Object.keys(value).length === 0;
+    return false;
+  }
+
+  function formatRuntimeConfig(value) {
+    try {
+      const formatted = JSON.stringify(value, null, 2);
+      if (formatted !== undefined) return formatted;
+    } catch {
+      // Fall through to string formatting so unexpected runtime config values remain visible.
+    }
+    return String(value);
+  }
 
   function serviceDisplayName(serviceId) {
     const svc = serviceById[serviceId];
@@ -429,12 +448,18 @@
       <p class="hint">Changes publish <code>worker-policy.apply.request</code> and wait for a Nostr result before the environment read model refreshes.</p>
     </section>
 
-    {#if environment.runtime_config && Object.keys(environment.runtime_config).length > 0}
-      <section>
-        <h2 class="section-title"><EnvironmentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Runtime Configuration</span></h2>
-        <pre class="config-json">{JSON.stringify(environment.runtime_config, null, 2)}</pre>
-      </section>
-    {/if}
+    <section>
+      <h2 class="section-title"><EnvironmentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Runtime Configuration</span></h2>
+      {#if runtimeConfigEmpty}
+        <EmptyState
+          iconComponent={EnvironmentIcon}
+          title="No runtime configuration"
+          message="This environment does not currently have runtime configuration projected."
+        />
+      {:else}
+        <pre class="config-json">{runtimeConfigDisplay}</pre>
+      {/if}
+    </section>
 
     <section>
       <h2 class="section-title"><ServiceIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Deployed Services ({states.length})</span></h2>
