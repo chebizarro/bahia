@@ -1,7 +1,7 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
   "updated_at": "2026-06-05",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
@@ -90,7 +90,7 @@
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/environments/+page.svelte", "web/src/routes/environments/[id]/+page.svelte"],
       "control_files": ["web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/stores/index.svelte.js"],
-      "evidence": ["Environment routes read via Nostr stores and create/update through public Nostr command helpers.", "Detail route waits for explicit Nostr result events for worker policy changes."],
+      "evidence": ["Environment routes read via Nostr stores and create/update/delete through encrypted ContextVM kind 25910 command helpers with OK/result/projection trace coverage in web/tests/e2e/environments-crud-smoke.spec.js.", "Detail route waits for explicit Nostr result events for worker policy changes and hydrates environment/state/history rows from canonical 30900 read models."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
       "pstf_status": "current_audit_evidence"
     },

@@ -1,20 +1,15 @@
 # SBOM_WORKFLOW_E2E Verification Report
 
 ## Status
-Feature-specific verification passed; full-suite gate failed due to existing out-of-scope E2E drift.
+Feature-specific verification passed for Bead `bahia-wbgi` canonical relay fixture alignment.
 
 ## Evidence
-- `npx playwright test tests/e2e/sbom-workflow.spec.js`
+- `cd web && pnpm test:e2e --reporter=line tests/e2e/environments-crud-smoke.spec.js tests/e2e/sbom-workflow.spec.js`
   - Result: PASS
-  - Evidence: 5 passed in the focused SBOM workflow spec.
-- `npx playwright test`
-  - Result: FAIL
-  - Evidence: 62 passed, 59 failed.
-  - The new `web/tests/e2e/sbom-workflow.spec.js` tests all ran in this full-suite invocation and passed.
+  - Evidence: 14 passed across the environment CRUD smoke and SBOM workflow specs.
+- Previous full-suite gate evidence remains out of scope for this Bead; this update verifies the requested targeted specs.
 
 ## Notes
 - Chromium had to be run outside the sandbox after the sandboxed launch failed with macOS Mach port permission errors.
-- Full-suite failures are concentrated in existing non-SBOM suites (auth guard compatibility, dashboard payment history, legacy CRUD/detail tests, soul/gallery tests, worker pricing/event labels). They appear unrelated to the SBOM workflow changes and many reflect stale REST-mocking assumptions against relay-backed pages.
-- During E2E implementation, two product defects surfaced and were fixed:
-  - Artifact SBOM empty responses retriggered loading forever because `sbomData` stayed null.
-  - PolicyRuleBuilder buttons inside a form implicitly submitted the outer create form.
+- SBOM workflow fixtures now seed canonical relay-backed observables: artifact/service registry rows use `30900` with `domain`, `schema`, and `d` tags, while SBOM attestation/index activity uses canonical NIP-78 `30078` app-data events with `domain`, `schema`, `type`, and `d` tags.
+- Artifact SBOM HTTP endpoints remain the documented HTTP-native SBOM/attestation detail surface; artifact registry row/detail hydration remains relay-backed.

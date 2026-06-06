@@ -56,6 +56,23 @@ No remaining work is known for `bahia-piy8` in the touched scope.
 - `bahia-dg3t` stale-verification cleanup is recorded below; AI Fabric fake/no-network harness evidence is now explicitly labeled non-production.
 - Route-semantic follow-ups remain owned by sibling beads: org encrypted CRUD facade (`bahia-sv0j`), ML signer-first versus REST compatibility policy (`bahia-jxm3`), request/result lifecycle (`bahia-qtoq`), incomplete EOSE degraded read models (`bahia-zui7`), and kind constants (`bahia-piy8`).
 
+## Bead bahia-wbgi — Canonical resource E2E fixtures
+
+### Observed changes
+
+- Updated `web/tests/e2e/environments-crud-smoke.spec.js` to seed canonical relay read models instead of REST CRUD mocks: environment registry, service registry, service state, and deployment intent rows are all canonical `30900` observables with `domain`, `schema`, `d`, and resource tags.
+- Environment create/update/delete assertions now inspect encrypted ContextVM kind `25910` request transport, relay `OK`, correlated result events, and canonical `30900` projections instead of legacy REST `POST`/`PUT`/`DELETE` calls.
+- Extended the public E2E relay harness to project environment create/update/delete and service-state read models through event-driven subscriptions, without sleeps or broad local filtering.
+
+### Verification
+
+- `cd web && pnpm test:e2e --reporter=line tests/e2e/environments-crud-smoke.spec.js tests/e2e/sbom-workflow.spec.js` — passed, 14 passed.
+- Initial sandboxed Playwright run failed before test logic with macOS Chromium Mach-port permission errors; the verification command passed when rerun outside the sandbox.
+
+### Remaining issue scope
+
+No remaining work is known for `bahia-wbgi` in the `/environments` route transport scope.
+
 ## Bead bahia-dg3t — PSTF stale verification cleanup
 
 ### Observed changes

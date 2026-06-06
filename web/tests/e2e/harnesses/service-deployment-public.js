@@ -68,6 +68,7 @@ export function createPublicState(overrides = {}) {
         created_at: '2026-05-03T10:06:00.000Z'
       }
     ]).map((item) => ({ ...item, metadata: item.metadata ? { ...item.metadata } : item.metadata })),
+    serviceStates: (overrides.serviceStates || []).map((item) => ({ ...item })),
     deploymentIntents: (overrides.deploymentIntents || []).map((item) => ({ ...item })),
     deploymentRuns: (overrides.deploymentRuns || []).map((item) => ({ ...item }))
   };
@@ -126,6 +127,7 @@ export async function installPublicServiceDeploymentHarness(
         environments: (initialState.environments || []).map((item) => ({ ...item })),
         builds: (initialState.builds || []).map((item) => ({ ...item })),
         artifacts: (initialState.artifacts || []).map((item) => ({ ...item })),
+        serviceStates: (initialState.serviceStates || []).map((item) => ({ ...item })),
         deploymentIntents: (initialState.deploymentIntents || []).map((item) => ({ ...item })),
         deploymentRuns: (initialState.deploymentRuns || []).map((item) => ({ ...item }))
       };
@@ -152,6 +154,7 @@ export async function installPublicServiceDeploymentHarness(
       environment: 'bahia.registry.environment.v1',
       build: 'bahia.registry.build.v1',
       artifact: 'bahia.registry.artifact.v1',
+      serviceState: 'bahia.state.service.v1',
       intent: 'bahia.registry.deployment-intent.v1',
       run: 'bahia.registry.deployment-run.v1'
     };
@@ -277,6 +280,12 @@ export async function installPublicServiceDeploymentHarness(
           kind: KIND_CONTROL_STATE,
           tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.artifact], ['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
           content: { schema: STATE_SCHEMAS.artifact, ...artifact }
+        })),
+        ...state.serviceStates.map((serviceState, index) => nostrEvent({
+          id: `service-state-${serviceState.service_id}-${serviceState.environment_id}-${index}`,
+          kind: KIND_CONTROL_STATE,
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.serviceState], ['d', serviceState.id || `${serviceState.service_id}:${serviceState.environment_id}`], ['service', serviceState.service_id], ['environment', serviceState.environment_id], ['deleted', String(Boolean(serviceState.deleted))]],
+          content: { schema: STATE_SCHEMAS.serviceState, ...serviceState }
         })),
         ...state.deploymentIntents.map((intent, index) => nostrEvent({
           id: `intent-reg-${intent.id}-${index}`,
@@ -456,6 +465,98 @@ export async function installPublicServiceDeploymentHarness(
           kind: KIND_CONTEXTVM,
           tags: [['e', requestEvent.id]],
           content: { status: 'ok', service_id: tombstone.id, deleted: true, force: Boolean(payload.force) }
+        })
+      };
+    }
+
+    function environmentProjection(environment, idPrefix) {
+      return nostrEvent({
+        id: `${idPrefix}-${environment.id}`,
+        kind: KIND_CONTROL_STATE,
+        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.environment], ['d', environment.id], ['deleted', String(Boolean(environment.deleted))], ['name', environment.name]],
+        content: { schema: STATE_SCHEMAS.environment, ...environment }
+      });
+    }
+
+    function environmentCreateResult(payload) {
+      const state = window.__BAHIA_E2E_PUBLIC_STATE;
+      const environment = {
+        id: `env-created-${state.environments.length + 1}`,
+        name: payload.name,
+        loom_worker_selector: payload.loom_worker_selector || '',
+        runtime_config: payload.runtime_config || {},
+        deploy_strategy: payload.deploy_strategy || 'replace',
+        protected: Boolean(payload.protected),
+        deleted: false,
+        created_at: new Date().toISOString()
+      };
+      state.environments = [...state.environments, environment];
+      persistReadModelEvents();
+      return {
+        projections: [environmentProjection(environment, 'env-reg-live-create')],
+        resultEvent: (requestEvent) => nostrEvent({
+          id: `result-${requestEvent.id}`,
+          kind: KIND_CONTEXTVM,
+          tags: [['e', requestEvent.id]],
+          content: { status: 'ok', environment_id: environment.id, environment }
+        })
+      };
+    }
+
+    function environmentUpdateResult(requestEvent, payload) {
+      const state = window.__BAHIA_E2E_PUBLIC_STATE;
+      const index = state.environments.findIndex((environment) => environment.id === payload.id);
+      if (index === -1) {
+        return {
+          projections: [],
+          resultEvent: () => nostrEvent({
+            id: `result-${requestEvent.id}`,
+            kind: KIND_CONTEXTVM,
+            tags: [['e', requestEvent.id], ['status', 'failed'], ['error', 'environment not found']],
+            content: { status: 'failed', error: 'environment not found' }
+          })
+        };
+      }
+      const current = state.environments[index];
+      const next = { ...current, ...payload, updated_at: new Date().toISOString() };
+      state.environments = state.environments.map((environment, i) => (i === index ? next : environment));
+      persistReadModelEvents();
+      return {
+        projections: [environmentProjection(next, 'env-reg-live-update')],
+        resultEvent: () => nostrEvent({
+          id: `result-${requestEvent.id}`,
+          kind: KIND_CONTEXTVM,
+          tags: [['e', requestEvent.id]],
+          content: { status: 'ok', environment_id: next.id, environment: next }
+        })
+      };
+    }
+
+    function environmentDeleteResult(requestEvent, payload) {
+      const state = window.__BAHIA_E2E_PUBLIC_STATE;
+      const index = state.environments.findIndex((environment) => environment.id === payload.id);
+      if (index === -1) {
+        return {
+          projections: [],
+          resultEvent: () => nostrEvent({
+            id: `result-${requestEvent.id}`,
+            kind: KIND_CONTEXTVM,
+            tags: [['e', requestEvent.id], ['status', 'failed'], ['error', 'environment not found']],
+            content: { status: 'failed', error: 'environment not found' }
+          })
+        };
+      }
+      const current = state.environments[index];
+      const tombstone = { ...current, deleted: true, updated_at: new Date().toISOString() };
+      state.environments = state.environments.map((environment, i) => (i === index ? tombstone : environment));
+      persistReadModelEvents();
+      return {
+        projections: [environmentProjection(tombstone, 'env-reg-live-delete')],
+        resultEvent: () => nostrEvent({
+          id: `result-${requestEvent.id}`,
+          kind: KIND_CONTEXTVM,
+          tags: [['e', requestEvent.id]],
+          content: { status: 'ok', environment_id: tombstone.id, deleted: true, force: Boolean(payload.force) }
         })
       };
     }
@@ -684,6 +785,9 @@ export async function installPublicServiceDeploymentHarness(
         case 'approval/reject': return approvalResult(requestEvent, payload);
         case 'service/update': return serviceUpdateResult(requestEvent, payload);
         case 'service/delete': return serviceDeleteResult(requestEvent, payload);
+        case 'environment/create': return environmentCreateResult(payload);
+        case 'environment/update': return environmentUpdateResult(requestEvent, payload);
+        case 'environment/delete': return environmentDeleteResult(requestEvent, payload);
         case 'artifact/register': return artifactRegisterResult(requestEvent, payload);
         case 'policy/evaluate': return policyEvaluateResult(requestEvent, payload);
         default:
@@ -751,6 +855,9 @@ export async function installPublicServiceDeploymentHarness(
           'approval/reject',
           'service/update',
           'service/delete',
+          'environment/create',
+          'environment/update',
+          'environment/delete',
           'artifact/register',
           'policy/evaluate'
         ].includes(decodedRequest.operation)) {

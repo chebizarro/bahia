@@ -1,49 +1,58 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
+import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
-// Mock data
-const mockEnvironments = [
-  {
-    id: 'env-1',
-    name: 'production',
-    loom_worker_selector: 'role=prod',
-    runtime_config: { cpu_limit: '2', memory_limit: '4Gi' },
-    protected: true,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'env-2',
-    name: 'staging',
-    loom_worker_selector: 'role=staging',
-    runtime_config: { cpu_limit: '1', memory_limit: '2Gi' },
-    protected: false,
-    created_at: new Date().toISOString()
-  }
-];
-
-const mockStates = [
-  {
-    id: 'state-1',
-    service_id: 'svc-1',
-    environment_id: 'env-1',
-    artifact_id: 'artifact-aaa111',
-    status: 'running',
-    drift_status: 'in_sync',
-    deployed_at: new Date().toISOString()
-  },
-  {
-    id: 'state-2',
-    service_id: 'svc-2',
-    environment_id: 'env-1',
-    artifact_id: 'artifact-bbb222',
-    status: 'running',
-    drift_status: 'drifted',
-    deployed_at: new Date().toISOString()
-  }
-];
-
-const mockIntentsByService = {
-  'svc-1': [
+const systemInfo = createPublicSystemInfo();
+const initialState = createPublicState({
+  services: [
+    { id: 'svc-1', name: 'api-service', runtime_type: 'docker', artifact_repo: 'ghcr.io/example/api', deleted: false, created_at: '2026-05-03T10:00:00.000Z' },
+    { id: 'svc-2', name: 'worker-service', runtime_type: 'docker', artifact_repo: 'ghcr.io/example/worker', deleted: false, created_at: '2026-05-03T10:01:00.000Z' }
+  ],
+  environments: [
+    {
+      id: 'env-1',
+      name: 'production',
+      loom_worker_selector: 'role=prod',
+      runtime_config: { cpu_limit: '2', memory_limit: '4Gi' },
+      deploy_strategy: 'replace',
+      protected: true,
+      deleted: false,
+      created_at: '2026-05-03T10:02:00.000Z'
+    },
+    {
+      id: 'env-2',
+      name: 'staging',
+      loom_worker_selector: 'role=staging',
+      runtime_config: { cpu_limit: '1', memory_limit: '2Gi' },
+      deploy_strategy: 'canary',
+      protected: false,
+      deleted: false,
+      created_at: '2026-05-03T10:03:00.000Z'
+    }
+  ],
+  serviceStates: [
+    {
+      id: 'state-1',
+      service_id: 'svc-1',
+      environment_id: 'env-1',
+      artifact_id: 'artifact-aaa111',
+      status: 'running',
+      drift_status: 'in_sync',
+      deployed_at: '2026-05-03T10:04:00.000Z',
+      deleted: false
+    },
+    {
+      id: 'state-2',
+      service_id: 'svc-2',
+      environment_id: 'env-1',
+      artifact_id: 'artifact-bbb222',
+      status: 'running',
+      drift_status: 'drifted',
+      deployed_at: '2026-05-03T10:05:00.000Z',
+      deleted: false
+    }
+  ],
+  deploymentIntents: [
     {
       id: 'intent-1',
       service_id: 'svc-1',
@@ -51,10 +60,8 @@ const mockIntentsByService = {
       artifact_id: 'artifact-aaa111',
       approval_status: 'approved',
       deployment_status: 'completed',
-      created_at: new Date().toISOString()
-    }
-  ],
-  'svc-2': [
+      created_at: '2026-05-03T10:06:00.000Z'
+    },
     {
       id: 'intent-2',
       service_id: 'svc-2',
@@ -62,157 +69,64 @@ const mockIntentsByService = {
       artifact_id: 'artifact-bbb222',
       approval_status: 'pending',
       deployment_status: '',
-      created_at: new Date(Date.now() - 60_000).toISOString()
+      created_at: '2026-05-03T10:07:00.000Z'
     }
   ]
-};
+});
+
+async function environmentTrace(page) {
+  return page.evaluate(() => ({
+    relays: window.__BAHIA_E2E_PUBLIC_PUBLISHES.map((entry) => entry.relay),
+    requests: window.__BAHIA_E2E_PUBLIC_REQUESTS,
+    oks: window.__BAHIA_E2E_PUBLIC_OKS,
+    results: window.__BAHIA_E2E_PUBLIC_RESULTS,
+    projections: window.__BAHIA_E2E_PUBLIC_PROJECTIONS,
+    kinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]
+  }));
+}
+
+async function expectContextVMOperation(page, operation) {
+  await expect.poll(() => environmentTrace(page)).toMatchObject({
+    requests: expect.arrayContaining([expect.objectContaining({ kind: 25910, operation })]),
+    oks: expect.arrayContaining([expect.objectContaining({ kind: 25910, accepted: true })]),
+    results: expect.arrayContaining([expect.objectContaining({ kind: 25910 })]),
+    projections: expect.arrayContaining([expect.objectContaining({ kind: 30900 })]),
+    kinds: expect.arrayContaining([25910])
+  });
+  const trace = await environmentTrace(page);
+  expect(trace.kinds).not.toContain(5980);
+  const request = trace.requests.find((entry) => entry.operation === operation);
+  expect(trace.results).toEqual(expect.arrayContaining([expect.objectContaining({ requestEventId: request.eventId })]));
+  expect(trace.projections).toEqual(expect.arrayContaining([expect.objectContaining({ requestEventId: request.eventId, kind: 30900 })]));
+  return request;
+}
 
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page);
-
-  // Mock environments list
-  await page.route('**/api/v1/environments', (route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ data: mockEnvironments })
-      });
-    } else if (route.request().method() === 'POST') {
-      const postData = route.request().postDataJSON();
-      return route.fulfill({
-        status: 201,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          data: {
-            id: 'env-new-123',
-            ...postData,
-            created_at: new Date().toISOString()
-          }
-        })
-      });
-    }
-    
-    return route.fulfill({
-      status: 404,
-      contentType: 'application/json',
-      body: JSON.stringify({ error: 'Not found' })
-    });
-  });
-  
-  // Mock individual environment detail
-  await page.route('**/api/v1/environments/*', (route) => {
-    const method = route.request().method();
-    const url = route.request().url();
-    const envId = url.match(/environments\/([^\/\?]+)/)?.[1];
-    
-    if (method === 'GET') {
-      const env = mockEnvironments.find(e => e.id === envId);
-      if (env) {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ data: env })
-        });
-      }
-      return route.fulfill({
-        status: 404,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'Environment not found' })
-      });
-    } else if (method === 'PUT' || method === 'PATCH') {
-      const putData = route.request().postDataJSON();
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          data: {
-            id: envId,
-            ...putData,
-            updated_at: new Date().toISOString()
-          }
-        })
-      });
-    } else if (method === 'DELETE') {
-      return route.fulfill({
-        status: 204,
-        contentType: 'application/json',
-        body: ''
-      });
-    }
-    
-    return route.fulfill({
-      status: 404,
-      contentType: 'application/json',
-      body: JSON.stringify({ error: 'Not found' })
-    });
-  });
-  
-  await page.route('**/api/v1/state', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: mockStates })
-    });
-  });
-
-  await page.route('**/api/v1/services/*/environments/*/intents', (route) => {
-    const url = route.request().url();
-    const match = url.match(/\/services\/([^\/]+)\/environments\/([^\/\?]+)\/intents/);
-    const serviceId = match?.[1];
-    const envId = match?.[2];
-
-    const intents = envId === 'env-1' && serviceId ? (mockIntentsByService[serviceId] || []) : [];
-
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: intents })
-    });
-  });
-  
-  
-  // Mock other common endpoints
-  await page.route('**/api/v1/services', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: [] })
-    });
-  });
+  await installE2EMocks(page, { systemInfo });
+  await installPublicServiceDeploymentHarness(page, { initialState });
 });
 
 test.describe('Environments CRUD Smoke Test', () => {
-  test('should load environments page', async ({ page }) => {
+  test('should load environments page from canonical relay read models', async ({ page }) => {
     await page.goto('/environments');
-    await page.waitForLoadState('networkidle');
-    
-    // Check page renders
+
     await expect(page.locator('h1:has-text("Environments")')).toBeVisible();
-    
-    // Check environments are listed
     await expect(page.locator('text=production')).toBeVisible();
     await expect(page.locator('text=staging')).toBeVisible();
   });
-  
+
   test('should open Create Environment modal', async ({ page }) => {
     await page.goto('/environments');
-    await page.waitForLoadState('networkidle');
 
-    // Click Create Environment button
-    await page.click('text=Create Environment');
+    await page.getByRole('button', { name: 'Create Environment' }).click();
 
-    // Wait for modal to appear
     await expect(page.getByRole('dialog', { name: 'Create Environment' })).toBeVisible();
-
-    // Modal should have required fields
     await expect(page.getByLabel('Name *')).toBeVisible();
     await expect(page.getByLabel('Loom Worker Selector')).toBeVisible();
     await expect(page.getByLabel('Runtime Config (JSON)')).toBeVisible();
     await expect(page.getByLabel('Deploy Strategy *')).toBeVisible();
     await expect(page.getByLabel('Protected (requires approval for deployments)')).toBeVisible();
 
-    // Deploy strategy options should match product language
     const strategySelect = page.getByLabel('Deploy Strategy *');
     await strategySelect.selectOption('rolling');
     await expect(strategySelect).toHaveValue('rolling');
@@ -221,219 +135,104 @@ test.describe('Environments CRUD Smoke Test', () => {
     await strategySelect.selectOption('canary');
     await expect(strategySelect).toHaveValue('canary');
   });
-  
-  test('should create environment with valid JSON runtime config', async ({ page }) => {
-    const apiCalls = {
-      post: null
-    };
-    
-    await page.route('**/api/v1/environments', (route) => {
-      if (route.request().method() === 'GET') {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ data: mockEnvironments })
-        });
-      } else if (route.request().method() === 'POST') {
-        apiCalls.post = route.request().postDataJSON();
-        return route.fulfill({
-          status: 201,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            data: {
-              id: 'env-new-123',
-              ...route.request().postDataJSON(),
-              created_at: new Date().toISOString()
-            }
-          })
-        });
-      }
-    });
-    
+
+  test('should create environment through ContextVM and canonical 30900 projection', async ({ page }) => {
     await page.goto('/environments');
-    await page.waitForLoadState('networkidle');
-    
-    // Open Create Environment modal
-    await page.click('text=Create Environment');
-    await page.waitForTimeout(300);
-    
-    // Fill out the form
+
+    await page.getByRole('button', { name: 'Create Environment' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Create Environment' });
+    await expect(dialog).toBeVisible();
+
     await page.getByLabel('Name *').fill('development');
     await page.getByLabel('Loom Worker Selector').fill('role=dev');
-    
-    // Fill runtime config as JSON
-    const runtimeConfigField = page.locator('#runtime-config, [name="runtime_config"], textarea[placeholder*="JSON"], textarea[placeholder*="runtime"]').first();
-    await runtimeConfigField.fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
-    
-    // Select strategy and set protected toggle
+    await page.getByLabel('Runtime Config (JSON)').fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
     await page.getByLabel('Deploy Strategy *').selectOption('blue-green');
     await page.getByLabel('Protected (requires approval for deployments)').check();
+    await dialog.getByRole('button', { name: 'Create' }).click();
 
-    // Submit the form
-    await page.click('button[type="submit"]:has-text("Create")');
-    
-    // Wait for the request to complete
-    await page.waitForTimeout(500);
-    
-    // Verify POST was called with correct data
-    expect(apiCalls.post).not.toBeNull();
-    expect(apiCalls.post).toMatchObject({
-      name: 'development',
-      loom_worker_selector: 'role=dev',
-      deploy_strategy: 'blue_green',
-      protected: true
-    });
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole('cell', { name: 'development', exact: true })).toBeVisible();
 
-    // Verify runtime_config is parsed JSON
-    expect(apiCalls.post.runtime_config).toEqual({ cpu_limit: '1', memory_limit: '1Gi' });
+    const request = await expectContextVMOperation(page, 'environment/create');
+    expect(request.tags).toEqual(expect.arrayContaining([
+      ['p', 'b'.repeat(64)],
+      ['encrypted', 'contextvm-jsonrpc-v1'],
+      ['method', 'environment/create']
+    ]));
   });
-  
+
   test('should navigate to environment detail page', async ({ page }) => {
     await page.goto('/environments');
-    await page.waitForLoadState('networkidle');
-    
-    // Verify the row renders, then load the detail route directly. The table row
-    // click behavior is covered by component tests; this smoke test focuses on route rendering.
+
     await expect(page.getByRole('row', { name: /production/ })).toBeVisible();
     await page.goto('/environments/env-1');
-    await page.waitForLoadState('networkidle');
-    
-    // Verify URL contains environment ID
+
     expect(page.url()).toMatch(/\/environments\/env-1/);
+    await expect(page.getByRole('heading', { name: 'production' })).toBeVisible();
   });
-  
+
   test('should show environment config, state/drift, deployment history, and edit action on detail page', async ({ page }) => {
     await page.goto('/environments/env-1');
-    await page.waitForLoadState('networkidle');
-    
-    // Should show environment name
-    await expect(page.locator('text=production')).toBeVisible();
 
-    // Should show config/state sections
+    await expect(page.locator('text=production')).toBeVisible();
     await expect(page.locator('h2:has-text("Runtime Configuration")')).toBeVisible();
     await expect(page.locator('h2:has-text("Deployed Services (2)")')).toBeVisible();
     await expect(page.locator('h2:has-text("Deployment History (2)")')).toBeVisible();
-
-    // Should show current drift state summary
     await expect(page.locator('text=Current State')).toBeVisible();
     await expect(page.locator('text=Drifted Services')).toBeVisible();
     await expect(page.locator('text=In-Sync Services')).toBeVisible();
+    await expect(page.locator('button:has-text("Edit"), a:has-text("Edit")').first()).toBeVisible();
+  });
 
-    // Should have an edit button or action
-    const editButton = page.locator('button:has-text("Edit"), a:has-text("Edit")');
-    await expect(editButton.first()).toBeVisible();
-  });
-  
-  test('should update environment', async ({ page }) => {
-    const apiCalls = {
-      put: null
-    };
-    
-    await page.route('**/api/v1/environments/env-1', (route) => {
-      if (route.request().method() === 'GET') {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ data: mockEnvironments[0] })
-        });
-      } else if (route.request().method() === 'PUT' || route.request().method() === 'PATCH') {
-        apiCalls.put = route.request().postDataJSON();
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            data: {
-              ...mockEnvironments[0],
-              ...route.request().postDataJSON(),
-              updated_at: new Date().toISOString()
-            }
-          })
-        });
-      }
-    });
-    
+  test('should update environment through ContextVM and canonical 30900 projection', async ({ page }) => {
     await page.goto('/environments/env-1');
-    await page.waitForLoadState('networkidle');
-    
-    // Click edit button
-    await page.click('button:has-text("Edit")');
-    await page.waitForTimeout(300);
-    
-    // Modify a field
-    await page.getByLabel('Loom Worker Selector').fill('role=prod-updated');
-    
-    // Submit
-    await page.click('button[type="submit"]:has-text("Save"), button[type="submit"]:has-text("Update")');
-    
-    // Wait for the request
-    await page.waitForTimeout(500);
-    
-    // Verify PUT/PATCH was called
-    expect(apiCalls.put).not.toBeNull();
+
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Edit Environment' });
+    await expect(dialog).toBeVisible();
+    await page.getByLabel('Worker Selector').fill('role=prod-updated');
+    await dialog.getByRole('button', { name: /Save|Update/ }).click();
+
+    await expect(dialog).not.toBeVisible();
+    const request = await expectContextVMOperation(page, 'environment/update');
+    expect(request.tags).toEqual(expect.arrayContaining([
+      ['environment', 'env-1'],
+      ['p', 'b'.repeat(64)],
+      ['encrypted', 'contextvm-jsonrpc-v1'],
+      ['method', 'environment/update']
+    ]));
   });
-  
+
   test('should show delete environment confirmation', async ({ page }) => {
     await page.goto('/environments/env-2');
-    await page.waitForLoadState('networkidle');
-    
-    // Click delete button
-    await page.click('button:has-text("Delete")');
-    
-    // Should show confirmation dialog
+
+    await page.getByRole('button', { name: 'Delete' }).click();
+
     await expect(page.getByRole('dialog', { name: 'Delete Environment' })).toBeVisible();
   });
-  
-  test('should delete environment after confirmation', async ({ page }) => {
-    const apiCalls = {
-      delete: false
-    };
-    
-    await page.route('**/api/v1/environments/env-2', (route) => {
-      if (route.request().method() === 'GET') {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ data: mockEnvironments[1] })
-        });
-      } else if (route.request().method() === 'DELETE') {
-        apiCalls.delete = true;
-        return route.fulfill({
-          status: 204,
-          contentType: 'application/json',
-          body: ''
-        });
-      }
-    });
-    
+
+  test('should delete environment through ContextVM and canonical tombstone projection', async ({ page }) => {
     await page.goto('/environments/env-2');
-    await page.waitForLoadState('networkidle');
-    
-    // Click delete
-    await page.click('button:has-text("Delete")');
-    await page.waitForTimeout(300);
-    
-    // Confirm deletion
+
+    await page.getByRole('button', { name: 'Delete' }).click();
     await page.getByRole('dialog', { name: 'Delete Environment' }).getByRole('button', { name: 'Delete' }).click();
-    
-    // Wait for the request
-    await page.waitForTimeout(500);
-    
-    // Verify DELETE was called
-    expect(apiCalls.delete).toBe(true);
+
+    await expect(page).toHaveURL(/\/environments$/);
+    const request = await expectContextVMOperation(page, 'environment/delete');
+    expect(request.tags).toEqual(expect.arrayContaining([
+      ['environment', 'env-2'],
+      ['p', 'b'.repeat(64)],
+      ['encrypted', 'contextvm-jsonrpc-v1'],
+      ['method', 'environment/delete']
+    ]));
   });
-  
+
   test('should cancel environment deletion', async ({ page }) => {
     await page.goto('/environments/env-2');
-    await page.waitForLoadState('networkidle');
-    
-    // Click delete
-    await page.click('button:has-text("Delete")');
-    await page.waitForTimeout(300);
-    
-    // Click cancel
-    await page.click('button:has-text("Cancel"):visible');
-    
-    // Confirmation dialog should be closed
+
+    await page.getByRole('button', { name: 'Delete' }).click();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
     await expect(page.locator('text=Are you sure').first()).not.toBeVisible();
   });
 });

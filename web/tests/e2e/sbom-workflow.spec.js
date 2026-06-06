@@ -10,7 +10,7 @@ const KINDS = {
   SERVICE_REGISTRY: 30900,
   ARTIFACT_REGISTRY: 30900,
   SBOM_ATTESTATION: 30078,
-  SBOM_INDEX: 30079,
+  SBOM_INDEX: 30078,
   AUDIT: 4903
 };
 
@@ -42,8 +42,9 @@ function serviceEvent() {
   return nostrEvent({
     id: 'svc-sbom-event',
     kind: KINDS.SERVICE_REGISTRY,
-    tags: [['d', SERVICE_ID], ['deleted', 'false'], ['name', 'sbom-service']],
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['d', SERVICE_ID], ['deleted', 'false'], ['name', 'sbom-service']],
     content: {
+      schema: 'bahia.registry.service.v1',
       id: SERVICE_ID,
       name: 'sbom-service',
       runtime_type: 'docker',
@@ -56,8 +57,9 @@ function artifactEvent({ id = ARTIFACT_ID, packages = [] } = {}) {
   return nostrEvent({
     id: `${id}-event`,
     kind: KINDS.ARTIFACT_REGISTRY,
-    tags: [['d', id], ['artifact', id], ['service', SERVICE_ID], ['deleted', 'false']],
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['d', id], ['artifact', id], ['service', SERVICE_ID], ['deleted', 'false']],
     content: {
+      schema: 'bahia.registry.artifact.v1',
       id,
       service_id: SERVICE_ID,
       name: id === ARTIFACT_ID ? 'registry.example.com/bahia/sbom-demo' : 'registry.example.com/bahia/no-sbom',
@@ -160,19 +162,19 @@ test.describe('SBOM workflow', () => {
     await mockSBOMEndpoints(page, ARTIFACT_ID, { sbom, attestation });
 
     await page.goto(`/artifacts/${ARTIFACT_ID}`);
-    await expect(page.getByRole('heading', { name: 'Artifact Details' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/sbom-demo' })).toBeVisible();
     await page.getByRole('button', { name: /^SBOM/ }).click();
 
     await expect(page.getByRole('heading', { name: 'Attestation Details' })).toBeVisible();
     await expect(page.locator('.attestation-item').filter({ hasText: 'Format' }).getByText('SPDX', { exact: true })).toBeVisible();
     await expect(page.getByText('syft@0.95.0')).toBeVisible();
-    await expect(page.getByText('🌸 Blossom')).toBeVisible();
+    await expect(page.getByText('Blossom', { exact: true })).toBeVisible();
     await expect(page.getByText('blossom://sboms/artifact-sbom-1.spdx.json')).toBeVisible();
     await expect(page.locator(`code[title="${sbomHash}"]`)).toBeVisible();
     await expect(page.locator(`code[title="sha256:${subjectDigest}"]`)).toBeVisible();
     await expect(page.locator('.attestation-item:has-text("Package Count")')).toContainText('2');
     await expect(page.getByRole('heading', { name: 'NTIA Minimum Elements' })).toBeVisible();
-    await expect(page.getByText('✓ Compliant')).toBeVisible();
+    await expect(page.getByText('Compliant', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Packages (2)' })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'openssl', exact: true })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'svelte', exact: true })).toBeVisible();
@@ -186,7 +188,7 @@ test.describe('SBOM workflow', () => {
     await mockSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
 
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}`);
-    await expect(page.getByRole('heading', { name: 'Artifact Details' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();
     await page.getByRole('button', { name: /^SBOM/ }).click();
 
     await expect(page.getByRole('heading', { name: 'No SBOM available' })).toBeVisible();
@@ -238,8 +240,11 @@ test.describe('SBOM workflow', () => {
         id: 'sbom-attestation-event',
         kind: KINDS.SBOM_ATTESTATION,
         created_at: now,
-        tags: [['d', `${ARTIFACT_ID}:attestation`], ['artifact', ARTIFACT_ID]],
+        tags: [['domain', 'artifact'], ['schema', 'bahia.sbom.attestation.v1'], ['type', 'sbom.attestation'], ['op', 'sbom.attestation'], ['d', `${ARTIFACT_ID}:attestation`], ['artifact', ARTIFACT_ID]],
         content: {
+          schema: 'bahia.sbom.attestation.v1',
+          domain: 'artifact',
+          event_type: 'sbom.attestation',
           artifact_id: ARTIFACT_ID,
           format: 'spdx',
           generator: 'syft'
@@ -249,8 +254,11 @@ test.describe('SBOM workflow', () => {
         id: 'sbom-index-event',
         kind: KINDS.SBOM_INDEX,
         created_at: now - 1,
-        tags: [['d', `${ARTIFACT_ID}:index`], ['artifact', ARTIFACT_ID]],
+        tags: [['domain', 'artifact'], ['schema', 'bahia.sbom.index.v1'], ['type', 'sbom.index'], ['op', 'sbom.index'], ['d', `${ARTIFACT_ID}:index`], ['artifact', ARTIFACT_ID]],
         content: {
+          schema: 'bahia.sbom.index.v1',
+          domain: 'artifact',
+          event_type: 'sbom.index',
           artifact_id: ARTIFACT_ID,
           package_count: 2
         }
@@ -281,8 +289,7 @@ test.describe('SBOM workflow', () => {
 
     await expect(page.getByText('Showing 2 of 3 events')).toBeVisible();
     const filteredRows = page.locator('tbody tr');
-    await expect(filteredRows.filter({ hasText: 'SBOM Attestation' })).toHaveCount(1);
-    await expect(filteredRows.filter({ hasText: 'SBOM Index' })).toHaveCount(1);
+    await expect(filteredRows.filter({ hasText: 'SBOM Attestation' })).toHaveCount(2);
     await expect(filteredRows.filter({ hasText: 'SBOM' })).toHaveCount(2);
     await expect(page.getByText('deployment.started')).toBeHidden();
 
