@@ -95,6 +95,8 @@ nostr:
 2. Click **Sign In**
 3. Connect with your Nostr signer (NIP-07 extension or NIP-46 bunker)
 
+Protected routes, including Settings, fail closed until a signer-first session is present. Routes that still depend on REST compatibility require the backend to advertise `direct_nostr_http_auth`; otherwise the UI shows a compatibility-required state instead of making REST calls.
+
 ### Step 2: Create a Service
 
 A **service** represents an application you want to deploy.

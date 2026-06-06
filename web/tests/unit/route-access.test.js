@@ -7,11 +7,12 @@ describe('route access', () => {
     delete window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS;
   });
 
-  it('marks /souls and /llm as protected routes while leaving /settings public for auth setup', () => {
+  it('marks signer-first protected routes and REST compatibility contracts', () => {
     expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
     expect(routeAccessConfig.protectedPrefixes).toContain('/fleet-health');
-    expect(routeAccessConfig.protectedPrefixes).not.toContain('/settings');
+    expect(routeAccessConfig.protectedPrefixes).toContain('/settings');
+    expect(routeAccessConfig.compatibilityRequirements).toMatchObject({ '/orgs': true });
     expect(getRouteAccess('/souls')).toMatchObject({
       pathname: '/souls',
       protectedRoute: true,
@@ -26,9 +27,15 @@ describe('route access', () => {
     });
     expect(getRouteAccess('/settings')).toMatchObject({
       pathname: '/settings',
-      protectedRoute: false,
+      protectedRoute: true,
       requiredRoles: [],
       requiresRestCompatibility: false
+    });
+    expect(getRouteAccess('/orgs')).toMatchObject({
+      pathname: '/orgs',
+      protectedRoute: true,
+      requiredRoles: [],
+      requiresRestCompatibility: true
     });
   });
 
@@ -49,10 +56,22 @@ describe('route access', () => {
 
     expect(canAccessRoute({ pathname: '/settings', authState: {}, isAuthenticated: false })).toMatchObject({
       pathname: '/settings',
-      protectedRoute: false,
-      authorized: true,
+      protectedRoute: true,
+      authorized: false,
+      roleAuthorized: false,
+      compatibilityAuthorized: false
+    });
+
+    expect(canAccessRoute({
+      pathname: '/orgs',
+      authState: { compatibility: { restNip98Ready: false }, directNip98Ready: false },
+      isAuthenticated: true
+    })).toMatchObject({
+      protectedRoute: true,
+      authorized: false,
       roleAuthorized: true,
-      compatibilityAuthorized: true
+      compatibilityAuthorized: false,
+      requiresRestCompatibility: true
     });
 
     expect(canAccessRoute({ pathname: 'plain-path', authState: {}, isAuthenticated: false })).toMatchObject({

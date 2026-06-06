@@ -13,6 +13,8 @@ Organizations enable:
 
 ### Web UI
 
+The Organizations web route is protected by signer-first authentication and currently requires backend REST compatibility auth. If the backend does not advertise `direct_nostr_http_auth`, the page fails closed with a compatibility message and does not issue organization REST requests.
+
 1. Navigate to **Organizations** in the sidebar
 2. Click **New Organization**
 3. Fill in:

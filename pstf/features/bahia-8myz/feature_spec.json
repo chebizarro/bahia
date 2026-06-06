@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-8myz",
+  "title": "Auth guard REST-compatibility route contracts",
+  "observed_behavior": [
+    "/settings with an insufficient route role did not render the permission-denied state.",
+    "/orgs rendered without the REST compatibility guard when direct_nostr_http_auth was unavailable, allowing org REST requests."
+  ],
+  "intended_behavior": [
+    "Protected routes fail closed under signer-first authentication.",
+    "Routes that still depend on REST compatibility render an explicit compatibility-required state when direct_nostr_http_auth is unavailable and do not mount child pages that issue REST requests.",
+    "Route contracts are represented in route-access metadata rather than hardcoded production auth state."
+  ],
+  "touched_scope": [
+    "web/src/lib/auth/route-access.js",
+    "web/tests/unit/route-access.test.js",
+    "web/tests/e2e/auth-guard-redirect.spec.js behavior verification",
+    "docs/user-guide/features/organizations.md",
+    "docs/user-guide/getting-started.md"
+  ]
+}

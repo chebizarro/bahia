@@ -11,14 +11,17 @@ const PROTECTED_PREFIXES = [
   '/payments',
   '/notifications',
   '/events',
-  '/orgs'
+  '/orgs',
+  '/settings'
 ];
 
 // Route-level RBAC hooks. Empty arrays mean "any authenticated user".
 const ROUTE_ROLE_REQUIREMENTS = {};
 
 // Routes that still require REST compatibility in the signer-first migration.
-const ROUTE_COMPATIBILITY_REQUIREMENTS = {};
+const ROUTE_COMPATIBILITY_REQUIREMENTS = {
+  '/orgs': true
+};
 
 function getRoleRequirements() {
   const overrides = typeof window !== 'undefined' ? window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS : null;

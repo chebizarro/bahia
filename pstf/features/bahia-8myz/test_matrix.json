@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-8myz",
+  "tests": [
+    {
+      "command": "cd web && pnpm exec vitest run --config vitest.config.js tests/unit/route-access.test.js",
+      "criteria": ["AC2", "AC3"],
+      "result": "passed"
+    },
+    {
+      "command": "cd web && pnpm test:e2e -- auth-guard-redirect.spec.js --reporter=line",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "result": "passed"
+    }
+  ]
+}

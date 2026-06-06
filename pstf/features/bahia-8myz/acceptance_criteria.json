@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-8myz",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Unauthenticated users are redirected away from protected routes."
+    },
+    {
+      "id": "AC2",
+      "description": "/settings is protected and renders the permission-denied state when the authenticated signer lacks the required route role."
+    },
+    {
+      "id": "AC3",
+      "description": "/orgs requires REST compatibility auth and renders the compatibility-required state when direct_nostr_http_auth is unavailable."
+    },
+    {
+      "id": "AC4",
+      "description": "When /orgs compatibility is unavailable, the guarded child route does not issue organization REST requests."
+    }
+  ]
+}
