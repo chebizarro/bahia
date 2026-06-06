@@ -14,6 +14,7 @@
     ArtifactIcon,
     CameraIcon,
     ConfiguredIcon,
+    NotificationIcon,
     MoonIcon,
     ProtectedIcon,
     RelayIcon,
@@ -25,7 +26,41 @@
   const systemLoading = $derived(sharedSystemInfo.loading);
   const systemError = $derived(sharedSystemInfo.error);
   const serviceRelayList = $derived(systemInfo?.nostr?.service_relays || []);
+  const featureEntries = $derived(Object.entries(systemInfo?.features || {}).sort(([a], [b]) => a.localeCompare(b)));
+  const registryRows = $derived(systemInfo?.registries || []);
   const versionRows = $derived(componentVersionRows(systemInfo));
+  const settingsAreas = [
+    {
+      href: '/notifications',
+      title: 'Notifications',
+      description: 'Configure webhook and Nostr DM notification channels.'
+    },
+    {
+      href: '/notifications/log',
+      title: 'Notification log',
+      description: 'Review delivery attempts, failures, and event history.'
+    },
+    {
+      href: '/policies',
+      title: 'Policies',
+      description: 'Manage approval and deployment policy configuration.'
+    },
+    {
+      href: '/payments',
+      title: 'Payments',
+      description: 'Review cost and payment configuration surfaces.'
+    },
+    {
+      href: '/dns',
+      title: 'DNS',
+      description: 'Manage DNS orchestration records and requests.'
+    },
+    {
+      href: '/backup',
+      title: 'Backup',
+      description: 'Configure and monitor backup operations.'
+    }
+  ];
 
   // Relay configuration (client-side)
   let relayInput = $state('');
@@ -352,6 +387,23 @@
       </div>
     </section>
 
+    <!-- Operational Settings Section -->
+    <section class="settings-section">
+      <h2><NotificationIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Operational Settings</h2>
+      <p class="section-description">
+        Configuration areas with dedicated management screens. These are linked here so documented settings are not hidden behind sidebar navigation.
+      </p>
+
+      <div class="settings-area-grid">
+        {#each settingsAreas as area}
+          <a class="settings-area-card" href={area.href}>
+            <span class="settings-area-title">{area.title}</span>
+            <span class="settings-area-description">{area.description}</span>
+          </a>
+        {/each}
+      </div>
+    </section>
+
     <!-- Server Configuration Section -->
     <section class="settings-section">
       <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Server Configuration</h2>
@@ -363,128 +415,146 @@
         <div class="loading">Loading server configuration...</div>
       {:else if systemError}
         <div class="error-box">{systemError}</div>
-      {:else if systemInfo}
-        <!-- Nostr Server Config -->
-        <div class="config-group">
-          <h3>Nostr</h3>
-          {#if systemInfo.nostr?.service_npub}
-            <div class="config-row">
-              <span class="config-label">Service Identity</span>
-              <button type="button" class="config-value monospace clickable" onclick={() => copyToClipboard(systemInfo.nostr.service_npub)} title="Click to copy">
-                {systemInfo.nostr.service_npub.slice(0, 20)}...
-              </button>
-            </div>
-          {/if}
-          {#if serviceRelayList.length > 0}
-            <div class="config-row">
-              <span class="config-label">Service Relay List (NIP-51)</span>
-              <span class="config-value">
-                {serviceRelayList.join(', ')}
-              </span>
-            </div>
-          {:else}
-            <div class="config-row">
-              <span class="config-label">Service Relay List (NIP-51)</span>
-              <span class="config-value">Not advertised</span>
-            </div>
-          {/if}
+      {/if}
+
+      <!-- Nostr Server Config -->
+      <div class="config-group">
+        <h3>Nostr</h3>
+        {#if systemInfo?.nostr?.service_npub}
           <div class="config-row">
-            <span class="config-label">Publishing</span>
+            <span class="config-label">Service Identity</span>
+            <button type="button" class="config-value monospace clickable" onclick={() => copyToClipboard(systemInfo.nostr.service_npub)} title="Click to copy">
+              {systemInfo.nostr.service_npub.slice(0, 20)}...
+            </button>
+          </div>
+        {:else}
+          <div class="config-row">
+            <span class="config-label">Service Identity</span>
+            <span class="config-value">Not advertised</span>
+          </div>
+        {/if}
+        {#if serviceRelayList.length > 0}
+          <div class="config-row">
+            <span class="config-label">Service Relay List (NIP-51)</span>
             <span class="config-value">
-              {systemInfo.nostr?.publish_enabled ? 'Enabled' : 'Disabled'}
+              {serviceRelayList.join(', ')}
             </span>
           </div>
+        {:else}
+          <div class="config-row">
+            <span class="config-label">Service Relay List (NIP-51)</span>
+            <span class="config-value">Not advertised</span>
+          </div>
+        {/if}
+        <div class="config-row">
+          <span class="config-label">Publishing</span>
+          <span class="config-value">
+            {systemInfo?.nostr?.publish_enabled ? 'Enabled' : 'Disabled'}
+          </span>
         </div>
+      </div>
 
-        <!-- Blossom Config -->
-        {#if systemInfo.blossom}
-          <div class="config-group">
-            <h3>Blossom Storage</h3>
-            <div class="config-row">
-              <span class="config-label">Status</span>
-              <span class="config-value">
-                {systemInfo.blossom.enabled ? 'Enabled' : 'Disabled'}
-              </span>
-            </div>
-            {#if systemInfo.blossom.enabled}
-              {#if systemInfo.blossom.url}
-                <div class="config-row">
-                  <span class="config-label">Primary Server</span>
-                  <span class="config-value monospace">{systemInfo.blossom.url}</span>
-                </div>
-              {/if}
-              {#if systemInfo.blossom.servers?.length > 0}
-                <div class="config-row">
-                  <span class="config-label">Servers</span>
-                  <span class="config-value">{systemInfo.blossom.servers.join(', ')}</span>
-                </div>
-              {/if}
-            {/if}
+      <!-- Blossom Config -->
+      <div class="config-group">
+        <h3>Blossom Storage</h3>
+        {#if systemInfo?.blossom}
+          <div class="config-row">
+            <span class="config-label">Status</span>
+            <span class="config-value">
+              {systemInfo.blossom.enabled ? 'Enabled' : 'Disabled'}
+            </span>
           </div>
-        {/if}
-
-        <!-- OCI Registry Config -->
-        {#if systemInfo.oci}
-          <div class="config-group">
-            <h3>Container Registry</h3>
-            <div class="config-row">
-              <span class="config-label">Native Registry</span>
-              <span class="config-value">
-                {systemInfo.oci.enabled ? 'Enabled' : 'Disabled'}
-              </span>
-            </div>
-            {#if systemInfo.oci.enabled && systemInfo.oci.public_host}
+          {#if systemInfo.blossom.enabled}
+            {#if systemInfo.blossom.url}
               <div class="config-row">
-                <span class="config-label">Public Host</span>
-                <span class="config-value monospace">{systemInfo.oci.public_host}</span>
+                <span class="config-label">Primary Server</span>
+                <span class="config-value monospace">{systemInfo.blossom.url}</span>
               </div>
             {/if}
-          </div>
-        {/if}
-
-        <!-- Runtime Config -->
-        {#if systemInfo.runtime}
-          <div class="config-group">
-            <h3>Runtime</h3>
-            <div class="config-row">
-              <span class="config-label">Type</span>
-              <span class="config-value">{systemInfo.runtime.type || 'Not configured'}</span>
-            </div>
-            {#if systemInfo.runtime.environments?.length > 0}
+            {#if systemInfo.blossom.servers?.length > 0}
               <div class="config-row">
-                <span class="config-label">Environments</span>
-                <span class="config-value">{systemInfo.runtime.environments.join(', ')}</span>
+                <span class="config-label">Servers</span>
+                <span class="config-value">{systemInfo.blossom.servers.join(', ')}</span>
               </div>
             {/if}
+          {/if}
+        {:else}
+          <div class="config-row">
+            <span class="config-label">Status</span>
+            <span class="config-value">Not advertised</span>
           </div>
         {/if}
+      </div>
 
-        <!-- Feature Flags -->
-        {#if systemInfo.features}
-          <div class="config-group">
-            <h3>Features</h3>
-            <div class="features-grid">
-              {#each Object.entries(systemInfo.features) as [feature, enabled]}
-                <div class="feature-badge" class:enabled>
-                  {enabled ? 'Enabled' : 'Disabled'} · {feature}
-                </div>
-              {/each}
+      <!-- OCI Registry Config -->
+      <div class="config-group">
+        <h3>Container Registry</h3>
+        {#if systemInfo?.oci}
+          <div class="config-row">
+            <span class="config-label">Native Registry</span>
+            <span class="config-value">
+              {systemInfo.oci.enabled ? 'Enabled' : 'Disabled'}
+            </span>
+          </div>
+          {#if systemInfo.oci.enabled && systemInfo.oci.public_host}
+            <div class="config-row">
+              <span class="config-label">Public Host</span>
+              <span class="config-value monospace">{systemInfo.oci.public_host}</span>
             </div>
+          {/if}
+        {:else}
+          <div class="config-row">
+            <span class="config-label">Native Registry</span>
+            <span class="config-value">Not advertised</span>
           </div>
         {/if}
-      {/if}
+      </div>
+
+      <!-- Runtime Config -->
+      <div class="config-group">
+        <h3>Runtime</h3>
+        <div class="config-row">
+          <span class="config-label">Type</span>
+          <span class="config-value">{systemInfo?.runtime?.type || 'Not configured'}</span>
+        </div>
+        {#if systemInfo?.runtime?.environments?.length > 0}
+          <div class="config-row">
+            <span class="config-label">Environments</span>
+            <span class="config-value">{systemInfo.runtime.environments.join(', ')}</span>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Feature Flags -->
+      <div class="config-group">
+        <h3>Features</h3>
+        {#if featureEntries.length > 0}
+          <div class="features-grid">
+            {#each featureEntries as [feature, enabled]}
+              <div class="feature-badge" class:enabled>
+                {enabled ? 'Enabled' : 'Disabled'} · {feature}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="config-row">
+            <span class="config-label">Feature discovery</span>
+            <span class="config-value">Unavailable</span>
+          </div>
+        {/if}
+      </div>
     </section>
 
     <!-- Available Registries Section -->
-    {#if systemInfo?.registries?.length > 0}
-      <section class="settings-section">
-        <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Available Registries</h2>
-        <p class="section-description">
-          Container registries available for artifact storage.
-        </p>
+    <section class="settings-section">
+      <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Available Registries</h2>
+      <p class="section-description">
+        Container registries available for artifact storage.
+      </p>
 
+      {#if registryRows.length > 0}
         <div class="registry-list">
-          {#each systemInfo.registries as registry}
+          {#each registryRows as registry}
             <div class="registry-item" class:default={registry.default}>
               <div class="registry-info">
                 <span class="registry-name">{registry.name}</span>
@@ -497,8 +567,18 @@
             </div>
           {/each}
         </div>
-      </section>
-    {/if}
+      {:else}
+        <div class="empty-config">
+          {#if systemLoading}
+            Loading registry configuration…
+          {:else if systemError}
+            Registry configuration unavailable: {systemError}
+          {:else}
+            No registries are advertised by discovery.
+          {/if}
+        </div>
+      {/if}
+    </section>
 
     <!-- Version Section -->
     <section class="settings-section">
@@ -579,6 +659,47 @@
     color: var(--text-muted);
     font-size: 0.875rem;
     margin: 0 0 1rem 0;
+  }
+
+  .settings-area-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .settings-area-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 1rem;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .settings-area-card:hover {
+    border-color: var(--primary);
+  }
+
+  .settings-area-title {
+    font-weight: 600;
+  }
+
+  .settings-area-description {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.4;
+  }
+
+  .empty-config {
+    padding: 0.875rem 1rem;
+    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    font-size: 0.875rem;
   }
 
   /* Relay styles */
