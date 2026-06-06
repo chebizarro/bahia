@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-8znb",
+  "title": "Fix web NIP-07 unit regressions for availability timers and NIP-44 queue semantics",
+  "observed_behavior": [
+    "NIP-07 availability tests failed when test window objects did not expose window.setInterval.",
+    "Late browser extension provider injection needed deterministic notification without fake signer behavior.",
+    "NIP-44 queue tests needed to distinguish retryable transient bridge failures from terminal signer rejections."
+  ],
+  "intended_behavior": [
+    "Availability probing remains browser-safe and test-deterministic, using timers only for browser extension availability probing and not for Nostr relay delivery or completion.",
+    "Late NIP-07 provider injection notifies subscribers without introducing production-path fake signer behavior.",
+    "NIP-44 encrypt/decrypt operations serialize against the signer, retry legitimate transient bridge failures, reject terminal signer errors, and leave the queue usable after rejection."
+  ],
+  "scope": [
+    "web/src/lib/nostr/nip07.js",
+    "web/tests/unit/nip07.test.js"
+  ]
+}

@@ -364,7 +364,7 @@ describe('NIP-07 Utilities', () => {
 
     it('keeps the internal NIP-44 queue usable after a rejected operation', async () => {
       const encrypt = vi.fn()
-        .mockRejectedValueOnce(new Error('aka-profiles: Could not establish connection. Receiving end does not exist.'))
+        .mockRejectedValueOnce(new Error('User rejected encryption request'))
         .mockResolvedValueOnce('ciphertext');
 
       global.window.nostr = {

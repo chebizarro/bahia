@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-8znb",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "NIP-07 availability waiting and watching do not require window.setInterval when a test or browser environment only exposes global timers.",
+      "tests": ["web/tests/unit/nip07.test.js: waitForNip07 and watchNip07Availability cases"]
+    },
+    {
+      "id": "AC2",
+      "description": "A provider injected after watcher startup is observed deterministically without installing a fake signer.",
+      "tests": ["web/tests/unit/nip07.test.js: notifies subscribers when a provider is injected after startup"]
+    },
+    {
+      "id": "AC3",
+      "description": "Transient NIP-44 bridge failures retry to success, while terminal signer rejections reject and do not poison the serialized queue.",
+      "tests": ["web/tests/unit/nip07.test.js: NIP-44 encryption wrappers"]
+    }
+  ]
+}

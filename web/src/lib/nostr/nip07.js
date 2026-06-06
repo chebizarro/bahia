@@ -38,6 +38,27 @@ let lastKnownNip07Provider = null;
 let nip07CryptoQueue = Promise.resolve();
 let nip07AvailabilityPoller = null;
 
+function getTimerHost() {
+  if (typeof window !== 'undefined' && typeof window.setInterval === 'function') {
+    return window;
+  }
+  if (typeof globalThis.setInterval === 'function') {
+    return globalThis;
+  }
+  return null;
+}
+
+function clearNip07AvailabilityPoller() {
+  if (!nip07AvailabilityPoller) return;
+  const timerHost = getTimerHost();
+  if (timerHost && typeof timerHost.clearInterval === 'function') {
+    timerHost.clearInterval(nip07AvailabilityPoller);
+  } else if (typeof globalThis.clearInterval === 'function') {
+    globalThis.clearInterval(nip07AvailabilityPoller);
+  }
+  nip07AvailabilityPoller = null;
+}
+
 function notifyNip07AvailabilityWatchers({ force = false } = {}) {
   const result = detectNip07();
   const providerChanged = result.provider !== lastKnownNip07Provider;
@@ -64,6 +85,22 @@ function installNip07Observer() {
     });
   };
 
+  const nostrDescriptor = Object.getOwnPropertyDescriptor(window, 'nostr');
+  if (!nostrDescriptor || nostrDescriptor.configurable) {
+    let currentProvider = window.nostr;
+    Object.defineProperty(window, 'nostr', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return currentProvider;
+      },
+      set(provider) {
+        currentProvider = provider;
+        scheduleCheck();
+      }
+    });
+  }
+
   window.addEventListener?.('focus', scheduleCheck);
   window.addEventListener?.('pageshow', scheduleCheck);
   document?.addEventListener?.('visibilitychange', scheduleCheck);
@@ -72,20 +109,19 @@ function installNip07Observer() {
 function updateNip07Polling() {
   if (typeof window === 'undefined') return;
   const needsPolling = nip07AvailabilityWatchers.size > 0 && !detectNip07().available;
-  if (needsPolling && !nip07AvailabilityPoller) {
-    nip07AvailabilityPoller = window.setInterval(() => {
+  const timerHost = getTimerHost();
+  if (needsPolling && !nip07AvailabilityPoller && timerHost) {
+    nip07AvailabilityPoller = timerHost.setInterval(() => {
       const result = notifyNip07AvailabilityWatchers();
-      if (result.available && nip07AvailabilityPoller) {
-        clearInterval(nip07AvailabilityPoller);
-        nip07AvailabilityPoller = null;
+      if (result.available) {
+        clearNip07AvailabilityPoller();
       }
     }, 100);
     return;
   }
 
-  if (!needsPolling && nip07AvailabilityPoller) {
-    clearInterval(nip07AvailabilityPoller);
-    nip07AvailabilityPoller = null;
+  if (!needsPolling) {
+    clearNip07AvailabilityPoller();
   }
 }
 
