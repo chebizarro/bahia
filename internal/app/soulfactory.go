@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -66,12 +67,14 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		return nil, fmt.Errorf("creating SoulFactory Signet client: %w", err)
 	}
 	closeSigner := func() error { return signer.Close() }
-	if err := signer.Connect(ctx); err != nil {
+	startupCtx, cancelStartup := context.WithTimeout(ctx, sf.StartupTimeout)
+	defer cancelStartup()
+	if err := signer.Connect(startupCtx); err != nil {
 		_ = closeSigner()
 		return nil, fmt.Errorf("connecting SoulFactory Signet client: %w", err)
 	}
 
-	controllerPubkey, err := resolveSoulFactoryControllerPubkey(ctx, sf.SoulFactoryPubkey, signer)
+	controllerPubkey, err := resolveSoulFactoryControllerPubkey(startupCtx, sf.SoulFactoryPubkey, signer)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -152,16 +155,32 @@ func resolveSoulFactoryControllerPubkey(ctx context.Context, configured string, 
 	}
 	signerPubkey = strings.ToLower(strings.TrimSpace(signerPubkey))
 	configured = strings.ToLower(strings.TrimSpace(configured))
+	if signerPubkey == "" {
+		return "", fmt.Errorf("SoulFactory Signet pubkey is empty")
+	}
+	if err := validateSoulFactoryHexPubkey(signerPubkey); err != nil {
+		return "", fmt.Errorf("SoulFactory Signet pubkey is invalid: %w", err)
+	}
 	if configured == "" {
-		if signerPubkey == "" {
-			return "", fmt.Errorf("SoulFactory Signet pubkey is empty")
-		}
 		return signerPubkey, nil
 	}
-	if signerPubkey != "" && signerPubkey != configured {
+	if err := validateSoulFactoryHexPubkey(configured); err != nil {
+		return "", fmt.Errorf("SoulFactory configured pubkey is invalid: %w", err)
+	}
+	if signerPubkey != configured {
 		return "", fmt.Errorf("SoulFactory configured pubkey %s does not match Signet pubkey %s", configured, signerPubkey)
 	}
 	return configured, nil
+}
+
+func validateSoulFactoryHexPubkey(pubkey string) error {
+	if len(pubkey) != 64 {
+		return fmt.Errorf("expected 64 hex characters")
+	}
+	if _, err := hex.DecodeString(pubkey); err != nil {
+		return fmt.Errorf("expected valid hex: %w", err)
+	}
+	return nil
 }
 
 func mergeSoulFactoryRelays(cfg config.SoulFactoryConfig) []string {

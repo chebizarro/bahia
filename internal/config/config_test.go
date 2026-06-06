@@ -275,7 +275,8 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
     - "` + authorized + `"
   soul_factory_pubkey: "` + controller + `"
   signet_bunker_uri: "bunker://` + controller + `?relay=wss://relay.example"
-  llm_base_url: "https://llm.example/v1/"
+  startup_timeout: 20s
+  llm_base_url: "https://llm.example/"
   llm_model: "soul-model"
   llm_api_key: "from-yaml"
   llm_timeout: 45s
@@ -304,7 +305,10 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	if cfg.SoulFactory.AuthorizedPubkeys[0] != authorized {
 		t.Fatalf("SoulFactory authorized pubkeys = %v", cfg.SoulFactory.AuthorizedPubkeys)
 	}
-	if cfg.SoulFactory.LLMBaseURL != "https://llm.example/v1" {
+	if cfg.SoulFactory.StartupTimeout != 20*time.Second {
+		t.Fatalf("SoulFactory startup_timeout = %s", cfg.SoulFactory.StartupTimeout)
+	}
+	if cfg.SoulFactory.LLMBaseURL != "https://llm.example" {
 		t.Fatalf("SoulFactory llm_base_url = %q", cfg.SoulFactory.LLMBaseURL)
 	}
 	if cfg.SoulFactory.LLMAPIKey != "from-env" {
@@ -368,6 +372,19 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   signet_bunker_uri: "bunker://` + validPubkey + `"
 `,
 			want: "soul_factory.llm_base_url is required",
+		},
+		{
+			name: "llm base url with path",
+			yaml: `soul_factory:
+  enabled: true
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example/v1"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "soul_factory.llm_base_url must be an API origin without a path",
 		},
 	}
 

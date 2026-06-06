@@ -44,6 +44,32 @@ ok   github.com/openagentsinc/bahia/cmd/cli 0.465s
 ok   github.com/openagentsinc/bahia/test/integration 2.077s
 ```
 
+Post-review hardening verification on 2026-06-06:
+
+```text
+go test ./internal/config ./internal/app ./internal/soulfactory
+ok  	github.com/openagentsinc/bahia/internal/config	0.282s
+ok  	github.com/openagentsinc/bahia/internal/app	0.328s
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	(cached)
+```
+
+A first post-review full-suite run exposed an unrelated transient timeout in `internal/service` (`TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting`). The focused rerun passed, and the full suite then passed:
+
+```text
+go test ./internal/service -run TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting -count=1
+ok  	github.com/openagentsinc/bahia/internal/service	0.264s
+
+go test ./...
+ok   github.com/openagentsinc/bahia/test/integration (cached)
+```
+
+Review follow-up applied:
+
+- Signet clients opened during app startup are closed if later app construction fails.
+- Signet startup connection and public-key resolution are bounded by `soul_factory.startup_timeout`.
+- `llm_base_url` validation requires an API origin with no path because Bahia appends `/v1/messages`.
+- Inferred Signet public keys are validated before reactor/runtime construction.
+
 Beads closeout:
 
 - Worked/closed: `bahia-0wc4`.

@@ -142,6 +142,7 @@ type SoulFactoryConfig struct {
 	SoulFactoryPubkey     string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
 	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
 	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	StartupTimeout        time.Duration `koanf:"startup_timeout" yaml:"startup_timeout"`
 	LLMBaseURL            string        `koanf:"llm_base_url" yaml:"llm_base_url"`
 	LLMModel              string        `koanf:"llm_model" yaml:"llm_model"`
 	LLMAPIKey             string        `koanf:"llm_api_key" yaml:"llm_api_key"`
@@ -607,6 +608,7 @@ func Defaults() *Config {
 			Enabled:          false,
 			Relays:           []string{},
 			AdditionalRelays: []string{},
+			StartupTimeout:   15 * time.Second,
 			LLMTimeout:       120 * time.Second,
 		},
 		Packages: PackageControlplaneConfig{
@@ -1339,6 +1341,9 @@ func (c *Config) validateSoulFactory() error {
 	sf.LLMBaseURL = strings.TrimRight(strings.TrimSpace(sf.LLMBaseURL), "/")
 	sf.LLMModel = strings.TrimSpace(sf.LLMModel)
 	sf.LLMAPIKey = strings.TrimSpace(sf.LLMAPIKey)
+	if sf.StartupTimeout == 0 {
+		sf.StartupTimeout = 15 * time.Second
+	}
 	if sf.LLMTimeout == 0 {
 		sf.LLMTimeout = 120 * time.Second
 	}
@@ -1366,12 +1371,18 @@ func (c *Config) validateSoulFactory() error {
 		}
 		sf.SoulFactoryPubkey = normalized[0]
 	}
+	if sf.StartupTimeout <= 0 {
+		return fmt.Errorf("config validation failed: soul_factory.startup_timeout must be > 0 when soul_factory.enabled=true")
+	}
 	if sf.LLMBaseURL == "" {
 		return fmt.Errorf("config validation failed: soul_factory.llm_base_url is required when soul_factory.enabled=true")
 	}
 	parsed, err := url.Parse(sf.LLMBaseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return fmt.Errorf("config validation failed: soul_factory.llm_base_url must be a valid URL")
+	}
+	if strings.Trim(parsed.Path, "/") != "" {
+		return fmt.Errorf("config validation failed: soul_factory.llm_base_url must be an API origin without a path because the SoulFactory generator appends /v1/messages")
 	}
 	if sf.LLMModel == "" {
 		return fmt.Errorf("config validation failed: soul_factory.llm_model is required when soul_factory.enabled=true")

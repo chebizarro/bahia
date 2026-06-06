@@ -366,6 +366,12 @@ func New(cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring SoulFactory OpenClaw runtime: %w", err)
 	}
+	soulFactoryRuntimeReleased := false
+	defer func() {
+		if !soulFactoryRuntimeReleased && soulFactoryRuntime != nil && soulFactoryRuntime.close != nil {
+			_ = soulFactoryRuntime.close()
+		}
+	}()
 	if soulFactoryRuntime != nil {
 		bgManager.RegisterWithOptions(soulFactoryRuntime.runner, RunnerTier(Tier2))
 		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
@@ -956,7 +962,7 @@ func New(cfg *config.Config) (*App, error) {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
-	return &App{
+	application := &App{
 		Config:             cfg,
 		Logger:             logger,
 		DB:                 pool,
@@ -977,7 +983,9 @@ func New(cfg *config.Config) (*App, error) {
 		RelayFirstRegistry: relayFirstRegistry,
 		SoulFactory:        soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:  soulFactoryCloserFromRuntime(soulFactoryRuntime),
-	}, nil
+	}
+	soulFactoryRuntimeReleased = true
+	return application, nil
 }
 
 func soulFactoryReactorFromRuntime(runtime *soulFactoryRuntime) *soulfactory.Reactor {

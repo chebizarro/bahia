@@ -295,7 +295,8 @@ soul_factory:
     - "<64-char requester pubkey>"
   soul_factory_pubkey: "<64-char Signet/controller pubkey>"
   signet_bunker_uri: "bunker://..."
-  llm_base_url: "https://llm.example.com"
+  startup_timeout: 15s
+  llm_base_url: "https://llm.example.com" # API origin; Bahia appends /v1/messages
   llm_model: "soul-model"
   llm_api_key: "${SOUL_FACTORY_LLM_API_KEY}"
   llm_timeout: 120s
