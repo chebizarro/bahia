@@ -1,5 +1,4 @@
 <script>
-  import Card from '$lib/components/Card.svelte';
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { nostr, saveRelayConfig, getDefaultRelays } from '$lib/nostr/client.js';
@@ -8,7 +7,7 @@
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
   import { componentVersionRows } from '$lib/version.js';
-  import QRCode from 'qrcode';
+  import * as QRCode from 'qrcode';
   import jsQR from 'jsqr';
   import {
     AppearanceIcon,
@@ -969,4 +968,3 @@
     margin-top: 0.25rem;
   }
 </style>
-

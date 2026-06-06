@@ -288,7 +288,7 @@
 
     <div class="form-field">
       <div class="rules-header">
-        <label>Rules *</label>
+        <span class="field-heading">Rules *</span>
         <div class="builder-toggle">
           <button
             type="button"
@@ -426,7 +426,8 @@
     flex-direction: column;
     gap: 0.5rem;
   }
-  .form-field label {
+  .form-field label,
+  .field-heading {
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--text-primary);

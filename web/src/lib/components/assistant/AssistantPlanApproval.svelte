@@ -5,10 +5,10 @@
 
   let submitting = $state(false);
   let error = $state('');
-  let editedPlan = $state(clone(plan));
-  let originalPlanJSON = $state(JSON.stringify(editedPlan || null));
-  let lastPlanJSON = originalPlanJSON;
-  let argsTextByStep = $state(initialArgsText(editedPlan));
+  let editedPlan = $state(null);
+  let originalPlanJSON = $state('null');
+  let lastPlanJSON = '';
+  let argsTextByStep = $state({});
   const riskLevel = $derived(String(editedPlan?.risk_level || editedPlan?.riskLevel || 'low').toLowerCase());
   const steps = $derived(Array.isArray(editedPlan?.steps) ? editedPlan.steps : []);
   const isModified = $derived(plan && editedPlan && JSON.stringify(editedPlan) !== originalPlanJSON);
@@ -45,7 +45,7 @@
     error = '';
   }
 
-  $effect(() => {
+  $effect.pre(() => {
     const nextPlanJSON = JSON.stringify(plan || null);
     if (nextPlanJSON !== lastPlanJSON) {
       lastPlanJSON = nextPlanJSON;
