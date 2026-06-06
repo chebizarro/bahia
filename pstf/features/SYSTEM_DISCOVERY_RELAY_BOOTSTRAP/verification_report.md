@@ -16,6 +16,8 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `go tool cover -func=/tmp/go-discovery-bootstrap.coverprofile > pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/coverage/go-discovery-bootstrap-summary.txt`
 - `cd web && npm test -- --coverage --run tests/unit/system-store.test.js`
 - `cd web && pnpm test:unit -- --run tests/unit/discovery-store.test.js`
+- `cd web && pnpm exec vitest run --config vitest.config.js tests/unit/controlplane-store.test.js` (2026-06-06: 12 tests passed)
+- `cd web && pnpm test:unit` (2026-06-06: 64 files / 482 tests passed)
 
 ## Acceptance Criteria Status
 - `SDRB-AC-001` — **Verified**
@@ -25,7 +27,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `SDRB-AC-003` — **Verified**
   - Evidence: `web/tests/unit/system-store.test.js` proves cache, concurrent dedupe, and force reload.
 - `SDRB-AC-004` — **Verified**
-  - Evidence: `web/tests/unit/controlplane-store.test.js` and `web/tests/e2e/controlplane-nostr-smoke.spec.js` prove discovered public bootstrap, EOSE-bounded query, and live subscription handoff.
+  - Evidence: `web/tests/unit/controlplane-store.test.js` and `web/tests/e2e/controlplane-nostr-smoke.spec.js` prove discovered public bootstrap, scoped subscription bootstrap, immediate EVENT application, and live transition only after EOSE from every connected bootstrap relay.
 - `SDRB-AC-005` — **Verified**
   - Evidence: `web/tests/unit/controlplane-store.test.js` covers shared bootstrap fail-closed branches: missing `relay_read_models`, missing browser bootstrap URLs, and unreachable advertised relays. `web/tests/unit/discovery-store.test.js` additionally proves the discovery store fails closed after EOSE when no trusted system discovery event or browser relay set is delivered.
 - `SDRB-AC-006` — **Verified**
@@ -59,6 +61,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 
 ## Confidence Assessment
 - Confidence is **high** for the approved sidecar-first discovery/bootstrap slice.
+- The 2026-06-06 controlplane-store unit verification proves EOSE-gated bootstrap without sleeps or timeout-based completion by deterministically injecting EVENT and EOSE callbacks before awaiting bootstrap resolution.
 - The remaining noise in the E2E run is limited to unrelated Vite proxy `ECONNREFUSED` warnings for REST endpoints; the relay-backed discovery assertions still pass and do not rely on REST fallback for this slice.
 
 ## Recommendation

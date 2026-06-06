@@ -70,6 +70,8 @@ describe('controlplane store', () => {
   let NIP38_STATUS;
   let BAHIA_STATE_SCHEMAS;
   let subscriptionHandlers;
+  let subscriptionRegistered;
+  let resolveSubscriptionRegistered;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -87,8 +89,12 @@ describe('controlplane store', () => {
     });
     nostrMock.queryUntilEose.mockResolvedValue([]);
     subscriptionHandlers = [];
+    subscriptionRegistered = new Promise((resolve) => {
+      resolveSubscriptionRegistered = resolve;
+    });
     nostrMock.subscribe.mockImplementation((_filters, handlers) => {
       subscriptionHandlers.push(handlers);
+      resolveSubscriptionRegistered(handlers);
       return vi.fn();
     });
 
@@ -112,6 +118,22 @@ describe('controlplane store', () => {
     store.resetControlplaneStore();
   });
 
+  async function startBootstrapAndWaitForSubscription(options) {
+    const bootstrap = store.bootstrapControlplane(options);
+    await subscriptionRegistered;
+    return { bootstrap };
+  }
+
+  function completeBootstrapEose(relays = ['ws://localhost:10547/relay'], handlers = subscriptionHandlers[0]) {
+    for (const relay of relays) handlers.onEose(relay);
+  }
+
+  async function bootstrapWithEose(options, relays) {
+    const { bootstrap } = await startBootstrapAndWaitForSubscription(options);
+    completeBootstrapEose(relays);
+    return bootstrap;
+  }
+
   it('resolves browser relay discovery from Nostr discovery', () => {
     expect(store.resolveBrowserRelays({
       nostr: {
@@ -128,7 +150,7 @@ describe('controlplane store', () => {
   it('bootstraps from the canonical Nostr discovery fixture used by other consumers', async () => {
     systemInfoMock.loadSystemInfo.mockResolvedValueOnce(structuredClone(canonicalDiscoveryFixture));
 
-    const result = await store.bootstrapControlplane();
+    const result = await bootstrapWithEose(undefined, ['wss://public.example', 'ws://localhost:3000/relay']);
 
     expect(result.ok).toBe(true);
     expect(store.controlplaneConnection.relays).toEqual(['wss://public.example', 'ws://localhost:3000/relay']);
@@ -182,9 +204,12 @@ describe('controlplane store', () => {
       event({ id: 'worker-1-event', kind: KINDS.LOOM_WORKER_AD, pubkey: 'c'.repeat(64), content: { name: 'Worker 1', description: 'test worker' } })
     ];
 
-    const result = await store.bootstrapControlplane();
+    const { bootstrap: resultPromise } = await startBootstrapAndWaitForSubscription();
 
-    expect(result.ok).toBe(true);
+    expect(store.controlplaneConnection.ready).toBe(true);
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
+    expect(store.controlplaneConnection.status).toBe('syncing');
+    expect(store.services).toHaveLength(0);
     expect(systemInfoMock.loadSystemInfo).toHaveBeenCalledTimes(1);
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
@@ -197,11 +222,6 @@ describe('controlplane store', () => {
       ]),
       expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function) })
     );
-    expect(store.controlplaneConnection.ready).toBe(true);
-    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
-    expect(store.controlplaneConnection.status).toBe('syncing');
-    expect(store.services).toHaveLength(0);
-
     for (const relayEvent of bootstrapEvents) subscriptionHandlers[0].onEvent(relayEvent);
 
     expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
@@ -212,7 +232,9 @@ describe('controlplane store', () => {
     expect(store.workers).toHaveLength(1);
 
     subscriptionHandlers[0].onEose('ws://localhost:10547/relay');
+    const result = await resultPromise;
 
+    expect(result.ok).toBe(true);
     expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
     expect(store.controlplaneConnection.status).toBe('live');
   });
@@ -223,15 +245,17 @@ describe('controlplane store', () => {
       features: { relay_read_models: true, legacy_sse: false }
     });
 
-    const result = await store.bootstrapControlplane();
+    const { bootstrap: resultPromise } = await startBootstrapAndWaitForSubscription();
 
-    expect(result.ok).toBe(true);
+    expect(store.controlplaneConnection.ready).toBe(true);
     expect(store.controlplaneConnection.status).toBe('syncing');
 
     subscriptionHandlers[0].onEose('wss://relay-one.example');
     expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
 
     subscriptionHandlers[0].onEose('wss://relay-two.example');
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
     expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
     expect(store.controlplaneConnection.status).toBe('live');
   });
@@ -251,7 +275,7 @@ describe('controlplane store', () => {
   });
 
   it('applies LLM route, route-state, worker state, and eligibility read models from schema-routed relay events', async () => {
-    await store.bootstrapControlplane();
+    await bootstrapWithEose();
     const workerPubkey = 'c'.repeat(64);
 
     expect(store.applyControlplaneEvent(event({
@@ -293,10 +317,12 @@ describe('controlplane store', () => {
     let liveHandlers;
     nostrMock.subscribe.mockImplementation((_filters, handlers) => {
       liveHandlers = handlers;
+      subscriptionHandlers.push(handlers);
+      resolveSubscriptionRegistered(handlers);
       return vi.fn();
     });
 
-    await store.bootstrapControlplane();
+    await bootstrapWithEose(undefined, ['ws://localhost:10547/relay']);
     liveHandlers.onEvent(event({
       id: 'audit-1',
       kind: NIP38_STATUS,
@@ -311,7 +337,7 @@ describe('controlplane store', () => {
   });
 
   it('ignores canonical Bahia events not authored by the advertised service pubkey', async () => {
-    await store.bootstrapControlplane();
+    await bootstrapWithEose();
 
     expect(store.applyControlplaneEvent(event({
       id: 'spoofed-service',

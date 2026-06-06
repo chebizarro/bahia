@@ -111,15 +111,15 @@
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/controlplane-store.test.js",
-      "description": "Reuse the existing control-plane store unit test that resolves browser relays from Nostr discovery, connects the shared Nostr client, performs `queryUntilEose`, subscribes live, and applies read-model plus activity events.",
+      "description": "Reuse the existing control-plane store unit test that resolves browser relays from Nostr discovery, connects the shared Nostr client, opens a scoped read-model subscription, applies bootstrap EVENT callbacks before EOSE, and marks live only after every connected bootstrap relay sends EOSE.",
       "preconditions": [
-        "Mock Nostr client supports deterministic `connect`, `queryUntilEose`, and `subscribe` behavior."
+        "Mock Nostr client supports deterministic `connect` and scoped `subscribe` behavior with injectable EVENT and EOSE callbacks."
       ],
       "steps": [
         "Bootstrap the control-plane store from a deterministic Nostr discovery payload.",
-        "Assert relay resolution, connection, `queryUntilEose`, live subscription, and populated shared state."
+        "Assert relay resolution, connection, scoped subscription filters, immediate EVENT application, EOSE gating from each connected relay, and populated shared state."
       ],
-      "expected_result": "Bootstrap reaches `live` only after the EOSE-bounded query, and canonical state collections are populated from the returned events.",
+      "expected_result": "Bootstrap applies canonical state during subscription catch-up, remains `syncing` until every connected bootstrap relay sends EOSE, then resolves and reaches `live`.",
       "fixtures": [
         "Mock Nostr events for service registry, environment registry, service state, worker ad, and optional LLM/state events."
       ],
@@ -132,7 +132,7 @@
         "Replaceable events with stable ids, kinds, tags, and created_at values."
       ],
       "determinism_notes": [
-        "EOSE is simulated by `queryUntilEose` resolution, not sleeps or timers."
+        "EVENT and EOSE are simulated through captured subscription callbacks before awaiting bootstrap resolution, not sleeps or timers."
       ],
       "status": "pass",
       "failure_reason": null
