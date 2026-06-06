@@ -56,9 +56,9 @@ const nostrEvents = [
   }),
   nostrEvent({
     id: 'audit-1-event',
-    kind: 31006,
-    tags: [['event_type', 'service.created'], ['d', 'svc-1'], ['service', 'svc-1']],
-    content: { event_type: 'service.created', entity_id: 'svc-1', data: { name: 'web-app' } }
+    kind: 4903,
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', 'service.created'], ['event_type', 'service.created'], ['d', 'svc-1'], ['service', 'svc-1']],
+    content: { schema: 'bahia.audit.v1', type: 'service.created', event_type: 'service.created', entity_id: 'svc-1', data: { name: 'web-app' } }
   })
 ];
 
@@ -90,6 +90,6 @@ test.describe('Relay-backed controlplane smoke', () => {
     await expect(page.getByRole('heading', { name: 'Live Events' })).toBeVisible();
     await expect(page.locator('.status')).toContainText('Nostr relay');
     await expect(page.getByText('service.created')).toBeVisible();
-    await expect(page.getByText('ws://relay.test.local')).toBeVisible();
+    await expect(page.locator('.hint')).toContainText('ws://relay.test.local');
   });
 });

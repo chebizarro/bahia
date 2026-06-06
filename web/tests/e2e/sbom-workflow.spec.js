@@ -11,7 +11,7 @@ const KINDS = {
   ARTIFACT_REGISTRY: 30900,
   SBOM_ATTESTATION: 30078,
   SBOM_INDEX: 30079,
-  AUDIT: 31006
+  AUDIT: 4903
 };
 
 const relaySystemInfo = {
@@ -259,8 +259,10 @@ test.describe('SBOM workflow', () => {
         id: 'deployment-audit-event',
         kind: KINDS.AUDIT,
         created_at: now - 2,
-        tags: [['event_type', 'deployment.started'], ['service', SERVICE_ID]],
+        tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', 'deployment.started'], ['event_type', 'deployment.started'], ['service', SERVICE_ID]],
         content: {
+          schema: 'bahia.audit.v1',
+          type: 'deployment.started',
           event_type: 'deployment.started',
           entity_id: SERVICE_ID,
           data: { environment_id: 'prod' }

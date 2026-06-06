@@ -57,9 +57,9 @@ const nostrEvents = [
   }),
   nostrEvent({
     id: 'audit-1-event',
-    kind: 31006,
-    tags: [['event_type', 'service.created'], ['d', 'svc-1'], ['service', 'svc-1']],
-    content: { event_type: 'service.created', entity_id: 'svc-1', data: { name: 'web-app' } }
+    kind: 4903,
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', 'service.created'], ['event_type', 'service.created'], ['d', 'svc-1'], ['service', 'svc-1']],
+    content: { schema: 'bahia.audit.v1', type: 'service.created', event_type: 'service.created', entity_id: 'svc-1', data: { name: 'web-app' } }
   })
 ];
 

@@ -46,9 +46,24 @@ function completeBootstrapIfCurrent(generation) {
   setAllLoading(false);
 }
 
-function startStreamingSubscription(expectedRelays) {
+function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}) {
   if (liveUnsubscribe) liveUnsubscribe();
   liveUnsubscribe = null;
+
+  let resolveEose;
+  let rejectEose;
+  let eoseSettled = !waitForEose;
+  const eosePromise = waitForEose
+    ? new Promise((resolve, reject) => {
+      resolveEose = resolve;
+      rejectEose = reject;
+    })
+    : Promise.resolve();
+  const settleEose = (fn, value) => {
+    if (eoseSettled) return;
+    eoseSettled = true;
+    fn?.(value);
+  };
 
   bootstrapExpectedRelays = [...expectedRelays];
   const generation = ++bootstrapSubscriptionGeneration;
@@ -56,21 +71,33 @@ function startStreamingSubscription(expectedRelays) {
   const markRelayEose = (relay) => {
     if (generation !== bootstrapSubscriptionGeneration) return;
     pendingEoseRelays.delete(normalizeRelayUrl(relay));
-    if (pendingEoseRelays.size === 0) completeBootstrapIfCurrent(generation);
+    if (pendingEoseRelays.size === 0) {
+      completeBootstrapIfCurrent(generation);
+      settleEose(resolveEose, true);
+    }
   };
 
   liveUnsubscribe = nostr.subscribe(readModelFilters(), {
     onEvent: (event) => applyControlplaneEvent(event),
     onEose: (relay) => markRelayEose(relay),
     onClosed: (reason, relay) => {
-      controlplaneConnection.lastError = reason || `subscription closed by ${relay}`;
+      const message = reason || `subscription closed by ${relay}`;
+      controlplaneConnection.lastError = message;
       if (['syncing', 'live'].includes(controlplaneConnection.status)) {
         controlplaneConnection.status = 'disconnected';
+      }
+      if (generation === bootstrapSubscriptionGeneration && pendingEoseRelays.has(normalizeRelayUrl(relay))) {
+        settleEose(rejectEose, new Error(message));
       }
     }
   });
 
-  if (pendingEoseRelays.size === 0) completeBootstrapIfCurrent(generation);
+  if (pendingEoseRelays.size === 0) {
+    completeBootstrapIfCurrent(generation);
+    settleEose(resolveEose, true);
+  }
+
+  return eosePromise;
 }
 
 export function resetControlplaneStore() {
@@ -123,7 +150,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.ready = true;
       controlplaneConnection.bootstrapComplete = false;
       controlplaneConnection.status = 'syncing';
-      startStreamingSubscription(connectedRelays);
+      await startStreamingSubscription(connectedRelays, { waitForEose: true });
       refreshCollections();
       schedulePersistCachedCollections();
       return { ok: true };

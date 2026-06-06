@@ -102,13 +102,18 @@ function mockNostrActivityEvents(events) {
     id: `nostr-${event.id}`,
     pubkey,
     created_at: base - index * 60,
-    kind: 31000 + index,
+    kind: 4903,
     tags: [
+      ['domain', 'controlplane'],
+      ['schema', 'bahia.audit.v1'],
+      ['type', event.type],
       ['event_type', event.type],
       ['d', event.id],
       ['service', event.data?.service_id || event.entity_id || '']
     ],
     content: JSON.stringify({
+      schema: 'bahia.audit.v1',
+      type: event.type,
       event_type: event.type,
       entity_id: event.entity_id,
       data: event.data
@@ -118,21 +123,34 @@ function mockNostrActivityEvents(events) {
 
 function mockNostrWorkerEvents(workers) {
   const base = Math.floor(Date.now() / 1000);
+  const pubkey = 'b'.repeat(64);
   return workers.map((worker, index) => ({
     id: `nostr-worker-${index}`,
-    pubkey: worker.pubkey,
+    pubkey,
     created_at: base - index,
-    kind: 10100,
+    kind: 30900,
     tags: [
+      ['domain', 'controlplane'],
+      ['schema', 'bahia.state.worker.v1'],
+      ['d', worker.pubkey],
+      ['worker', worker.pubkey],
       ['status', worker.status],
-      ['endpoint', worker.relay_url || '']
+      ['endpoint', worker.relay_url || ''],
+      ['deleted', 'false']
     ],
     content: JSON.stringify({
+      schema: 'bahia.state.worker.v1',
+      worker_pubkey: worker.pubkey,
+      pubkey: worker.pubkey,
       status: worker.status,
-      capabilities: worker.capabilities || [],
+      capabilities: { runtimes: worker.capabilities || [] },
       metadata: worker.metadata || {},
       relay_url: worker.relay_url,
-      last_seen: worker.last_seen
+      preferred_relays: worker.relay_url ? [worker.relay_url] : [],
+      pricing: worker.pubkey === 'npub1worker1abc123def456' ? mockWorkerPricing : [],
+      software: Object.entries(worker.metadata || {}).map(([name, version]) => ({ name, version })),
+      last_seen: worker.last_seen,
+      deleted: false
     })
   }));
 }
@@ -282,7 +300,7 @@ test.describe('Workers and Events Smoke Test', () => {
     await expect(page.getByText('npub1worker1...')).toBeVisible();
     
     // Public key should be shown on the detail page
-    await expect(page.getByRole('heading', { name: 'Public Key' })).toBeVisible();
+    await expect(page.locator('code.summary-pubkey')).toHaveText('npub1worker1abc123def456');
   });
   
   test('should display worker metadata on detail page', async ({ page }) => {
@@ -290,9 +308,11 @@ test.describe('Workers and Events Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
     
-    // Metadata fields should be visible
-    await expect(page.locator('text=1.0.0')).toBeVisible();
-    await expect(page.locator('text=us-east-1')).toBeVisible();
+    // Metadata-derived software fields should be visible
+    await expect(page.getByRole('cell', { name: 'version' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '1.0.0' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'region' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'us-east-1' })).toBeVisible();
   });
   
   test('should display worker capabilities', async ({ page }) => {
@@ -309,7 +329,7 @@ test.describe('Workers and Events Smoke Test', () => {
     await page.goto('/workers/npub1worker1abc123def456');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByRole('heading', { name: 'Pricing tiers' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Pricing Tiers' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Mint URL' })).toBeVisible();
     await expect(page.getByText('https://mint.example.com')).toBeVisible();
     await expect(page.getByText('10 sat/sec')).toBeVisible();
@@ -334,11 +354,9 @@ test.describe('Workers and Events Smoke Test', () => {
 
     await page.goto('/workers/npub1worker1abc123def456');
 
-    await expect(page.getByRole('heading', { name: 'Public Key' })).toBeVisible();
-    await expect(page.getByText('Loading pricing tiers...')).toBeVisible();
+    await expect(page.locator('code.summary-pubkey')).toHaveText('npub1worker1abc123def456');
+    await expect(page.getByRole('heading', { name: 'Pricing Tiers' })).toBeVisible();
 
-    expect(typeof releasePricing).toBe('function');
-    releasePricing();
     await expect(page.getByText('https://mint.example.com')).toBeVisible();
   });
   
@@ -346,8 +364,9 @@ test.describe('Workers and Events Smoke Test', () => {
     await page.goto('/workers/npub1worker1abc123def456');
     await page.waitForLoadState('networkidle');
     
-    // Current detail page focuses on identity, pricing, last-seen, capabilities, and metadata.
-    await expect(page.getByRole('heading', { name: 'Public Key' })).toBeVisible();
+    // Current detail page focuses on identity, pricing, last-seen, capabilities, and relay-backed details.
+    await expect(page.getByRole('heading', { name: 'Preferred Relays' })).toBeVisible();
+    await expect(page.getByText('wss://relay.example.com')).toBeVisible();
   });
   
   test('should load events page', async ({ page }) => {

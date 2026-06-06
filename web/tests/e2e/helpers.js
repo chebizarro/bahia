@@ -73,8 +73,10 @@ export async function installE2EMocks(
       sig: '0'.repeat(128)
     });
     const existingNostrEvents = localStorage.getItem('__bahia_e2e_nostr_events');
-    if (!existingNostrEvents || (Array.isArray(nostrEvents) && nostrEvents.length > 0)) {
+    const seedAlreadyApplied = sessionStorage.getItem('__bahia_e2e_nostr_seeded') === 'true';
+    if (!existingNostrEvents || (Array.isArray(nostrEvents) && nostrEvents.length > 0 && !seedAlreadyApplied)) {
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...discoveryEvents, ...(nostrEvents || [])]));
+      sessionStorage.setItem('__bahia_e2e_nostr_seeded', 'true');
     }
     if (routeRoleRequirements && typeof routeRoleRequirements === 'object') {
       window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = routeRoleRequirements;
@@ -414,6 +416,13 @@ export async function seedSseEvents(page, events) {
 
 export async function seedNostrEvents(page, events) {
   await page.addInitScript((events) => {
-    localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(events || []));
+    let existing = [];
+    try {
+      existing = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
+    } catch {
+      existing = [];
+    }
+    const bootstrapEvents = existing.filter((event) => event?.kind === 11316 || event?.kind === 30002);
+    localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...bootstrapEvents, ...(events || [])]));
   }, events);
 }

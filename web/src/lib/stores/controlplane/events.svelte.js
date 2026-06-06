@@ -183,7 +183,7 @@ export function applyControlplaneEvent(event) {
   const handler = handlers.get(route);
   const changed = handler
     ? handler(event, replaceableEvents)
-    : applyActivityEvent(event);
+    : (ACTIVITY_KINDS.includes(event.kind) ? applyActivityEvent(event) : false);
 
   if (changed) {
     controlplaneConnection.lastEventAt = new Date().toISOString();

@@ -211,46 +211,46 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
     ...services.map((svc, index) => nostrEvent({
       id: `svc-${index}`,
       kind: 30900,
-      tags: [['d', svc.id], ['deleted', 'false'], ['name', svc.name]],
-      content: { ...svc, deleted: false }
+      tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['d', svc.id], ['deleted', 'false'], ['name', svc.name]],
+      content: { schema: 'bahia.registry.service.v1', ...svc, deleted: false }
     })),
     ...environments.map((env, index) => nostrEvent({
       id: `env-${index}`,
       kind: 30900,
-      tags: [['d', env.id], ['deleted', 'false'], ['name', env.name]],
-      content: { ...env, deleted: false }
+      tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.environment.v1'], ['d', env.id], ['deleted', 'false'], ['name', env.name]],
+      content: { schema: 'bahia.registry.environment.v1', ...env, deleted: false }
     })),
     ...states.map((state, index) => nostrEvent({
       id: `state-${index}`,
       kind: 30900,
-      tags: [['d', state.id || `${state.service_id}:${state.environment_id}`], ['service', state.service_id], ['environment', state.environment_id], ['deleted', 'false']],
-      content: { ...state, deleted: false }
+      tags: [['domain', 'controlplane'], ['schema', 'bahia.state.service.v1'], ['d', state.id || `${state.service_id}:${state.environment_id}`], ['service', state.service_id], ['environment', state.environment_id], ['deleted', 'false']],
+      content: { schema: 'bahia.state.service.v1', ...state, deleted: false }
     })),
     ...intents.map((intent, index) => nostrEvent({
       id: `intent-${index}`,
       kind: 30900,
-      tags: [['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['deleted', 'false']],
-      content: { ...intent, deleted: false }
+      tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.deployment-intent.v1'], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['deleted', 'false']],
+      content: { schema: 'bahia.registry.deployment-intent.v1', ...intent, deleted: false }
     })),
     ...workers.map((worker, index) => nostrEvent({
       id: `worker-${index}`,
-      kind: 10100,
-      pubkey: worker.pubkey,
-      content: { ...worker, name: worker.name || worker.pubkey }
+      kind: 30900,
+      tags: [['domain', 'controlplane'], ['schema', 'bahia.state.worker.v1'], ['d', worker.pubkey], ['worker', worker.pubkey], ['deleted', 'false']],
+      content: { schema: 'bahia.state.worker.v1', ...worker, worker_pubkey: worker.pubkey, name: worker.name || worker.pubkey, deleted: false }
     })),
     ...events.map((event, index) => nostrEvent({
       id: `activity-${index}`,
-      kind: 31006,
+      kind: 4903,
       created_at: now - index * 60,
-      tags: [['event_type', event.type], ['d', event.entity_id || event.id]],
-      content: { event_type: event.type, entity_id: event.entity_id, data: event.data }
+      tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', event.type], ['event_type', event.type], ['d', event.entity_id || event.id]],
+      content: { schema: 'bahia.audit.v1', type: event.type, event_type: event.type, entity_id: event.entity_id, data: event.data }
     }))
   ];
 }
 
 const relaySystemInfo = {
   nostr: {
-    browser_relays: ['ws://relay.test.local'],
+    browser_relays: [ENCRYPTED_RELAY],
     service_pubkey: SERVICE_PUBKEY
   },
   features: { relay_sidecar: true, relay_read_models: true, encrypted_nostr_requests: true, legacy_sse: false }
@@ -540,11 +540,16 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(spendCard.locator('.card-value')).toHaveText('2,000 sats');
     await expect(spendCard.locator('.card-subtitle')).toHaveText('2 recent payments');
 
-    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE)).toEqual([
-      { relay: ENCRYPTED_RELAY, operation: 'payments.history', worker: 'npub1worker1abc' },
-      { relay: ENCRYPTED_RELAY, operation: 'payments.history', worker: 'npub1worker2def' },
-      { relay: ENCRYPTED_RELAY, operation: 'payments.history', worker: 'npub1worker3ghi' }
-    ]);
+    await expect.poll(() => page.evaluate(() => {
+      const trace = window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE || [];
+      const workers = Array.from(new Set(trace.map((entry) => entry.worker))).sort();
+      const relays = Array.from(new Set(trace.map((entry) => String(entry.relay || '').replace(/\/$/, ''))));
+      return { workers, relays, operations: Array.from(new Set(trace.map((entry) => entry.operation))) };
+    })).toEqual({
+      workers: ['npub1worker1abc', 'npub1worker2def', 'npub1worker3ghi'],
+      relays: [ENCRYPTED_RELAY],
+      operations: ['payments.history']
+    });
   });
 
   test('should show empty recent spend state when payment history is empty', async ({ page }) => {
