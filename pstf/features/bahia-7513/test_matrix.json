@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-7513",
+  "tests": [
+    {
+      "name": "pnpm run test:mcp-config",
+      "type": "deterministic TypeScript helper",
+      "acceptance_criteria": ["AC1", "AC3"],
+      "notes": "Verifies default MCP URL derivation, explicit endpoint override, HTTP-only fail-closed validation, and JSON-RPC tools/list connection behavior with an injected fetch implementation."
+    },
+    {
+      "name": "pnpm run typecheck",
+      "type": "TypeScript compile",
+      "acceptance_criteria": ["AC1", "AC2"],
+      "notes": "Compiles the e2e-agent harness, runner, smoke path, and MCP driver."
+    },
+    {
+      "name": "pnpm test:smoke",
+      "type": "smoke preflight",
+      "acceptance_criteria": ["AC2", "AC4"],
+      "notes": "In this Docker-unavailable environment it should fail at Docker preflight before stack execution. In Docker-available environments it proceeds to API, web, and MCP tool discovery."
+    }
+  ]
+}

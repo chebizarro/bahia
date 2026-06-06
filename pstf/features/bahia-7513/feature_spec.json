@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-7513",
+  "title": "Replace e2e-agent MCP placeholder configuration with real harness wiring",
+  "observed_behavior": "test/e2e-agent/harness.ts used a stdio-style placeholder MCP server URL, and smoke-test.ts skipped MCP execution pending additional configuration.",
+  "intended_behavior": "The e2e-agent harness uses Bahia's real native HTTP MCP JSON-RPC endpoint by default, allows explicit external endpoint configuration, and fails closed on invalid or unreachable MCP configuration unless MCP is explicitly skipped.",
+  "scope": [
+    "test/e2e-agent/harness.ts",
+    "test/e2e-agent/drivers/mcp.ts",
+    "test/e2e-agent/smoke-test.ts",
+    "test/e2e-agent/runner.ts",
+    "test/e2e-agent/cli.ts",
+    "test/e2e-agent/README.md"
+  ],
+  "authoritative_contract": "Bahia exposes native MCP JSON-RPC over HTTP at POST /mcp and POST /api/v1/mcp. Tool discovery uses JSON-RPC method tools/list. This is documented in docs/user-guide/mcp-tools.md and docs/api.md and implemented by internal/api/handlers/mcp.go."
+}

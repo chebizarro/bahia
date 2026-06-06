@@ -1,78 +1,91 @@
 /**
- * MCP client driver for Bahia MCP server
+ * MCP HTTP JSON-RPC client driver for Bahia MCP server
  */
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { MCPToolCall, MCPToolResult } from '../types.js';
 
+interface JSONRPCResponse<T> {
+  jsonrpc: '2.0';
+  id: number;
+  result?: T;
+  error?: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
+}
+
+interface MCPToolDefinition {
+  name: string;
+  description?: string;
+}
+
+interface ListToolsResult {
+  tools: MCPToolDefinition[];
+}
+
+interface CallToolResult {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+}
+
+export interface MCPHTTPConnectionOptions {
+  serverUrl: string;
+  headers?: Record<string, string>;
+  fetchImpl?: typeof fetch;
+}
+
 /**
- * MCPDriver provides MCP client functionality for testing Bahia MCP tools
+ * MCPDriver provides MCP client functionality for testing Bahia MCP tools.
+ * Bahia exposes MCP as HTTP JSON-RPC at /mcp and /api/v1/mcp.
  */
 export class MCPDriver {
-  private client: Client | null = null;
-  private transport: StdioClientTransport | null = null;
+  private serverUrl: string | null = null;
+  private headers: Record<string, string> = {};
+  private fetchImpl: typeof fetch = fetch;
   private connected = false;
+  private nextID = 1;
 
   /**
-   * Connect to the MCP server
-   * 
-   * For stdio-based MCP servers (like Bahia), we need to launch the server process
-   * and communicate via stdin/stdout.
+   * Connect to the Bahia MCP HTTP JSON-RPC endpoint and verify tool discovery.
    */
-  async connect(options: {
-    command: string;
-    args?: string[];
-    env?: Record<string, string>;
-  }): Promise<void> {
-    console.log('🔌 Connecting to MCP server...');
+  async connect(options: MCPHTTPConnectionOptions): Promise<void> {
+    const serverUrl = options.serverUrl.trim();
+    if (!serverUrl) {
+      throw new Error('MCP server URL is required. Configure BAHIA_E2E_MCP_URL or use TestHarness.getMcpUrl().');
+    }
+    if (!/^https?:\/\//.test(serverUrl)) {
+      throw new Error(`MCP server URL must be an HTTP(S) URL for Bahia native MCP; received ${serverUrl}`);
+    }
 
-    // Create stdio transport
-    this.transport = new StdioClientTransport({
-      command: options.command,
-      args: options.args ?? [],
-      env: options.env,
-    });
+    console.log(`🔌 Connecting to MCP server at ${serverUrl}...`);
 
-    // Create MCP client
-    this.client = new Client(
-      {
-        name: 'bahia-e2e-test-client',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {},
-      }
-    );
+    this.serverUrl = serverUrl;
+    this.headers = options.headers ?? {};
+    this.fetchImpl = options.fetchImpl ?? fetch;
 
-    // Connect client to transport
-    await this.client.connect(this.transport);
+    await this.request<ListToolsResult>('tools/list');
     this.connected = true;
 
     console.log('✅ Connected to MCP server');
   }
 
   /**
-   * Disconnect from the MCP server
+   * Disconnect from the MCP server.
    */
   async disconnect(): Promise<void> {
-    if (this.client) {
-      await this.client.close();
-      this.client = null;
-    }
-    if (this.transport) {
-      await this.transport.close();
-      this.transport = null;
-    }
+    this.serverUrl = null;
+    this.headers = {};
+    this.fetchImpl = fetch;
     this.connected = false;
     console.log('🔌 Disconnected from MCP server');
   }
 
   /**
-   * List available tools
+   * List available tools.
    */
   async listTools(): Promise<Array<{ name: string; description: string }>> {
     this.ensureConnected();
-    const response = await this.client!.listTools();
+    const response = await this.request<ListToolsResult>('tools/list');
     return response.tools.map(tool => ({
       name: tool.name,
       description: tool.description ?? '',
@@ -80,34 +93,70 @@ export class MCPDriver {
   }
 
   /**
-   * Call an MCP tool
+   * Call an MCP tool.
    */
   async callTool(call: MCPToolCall): Promise<MCPToolResult> {
     this.ensureConnected();
 
-    const response = await this.client!.callTool({
+    const response = await this.request<CallToolResult>('tools/call', {
       name: call.name,
       arguments: call.arguments,
     });
 
     return {
-      content: response.content as Array<{ type: string; text: string }>,
-      isError: response.isError as boolean | undefined,
+      content: response.content,
+      isError: response.isError,
     };
   }
 
   /**
-   * Check if connected
+   * Check if connected.
    */
   isConnected(): boolean {
     return this.connected;
   }
 
+  private async request<T>(method: string, params?: unknown): Promise<T> {
+    if (!this.serverUrl) {
+      throw new Error('MCP client not configured. Call connect() first.');
+    }
+
+    const id = this.nextID++;
+    const response = await this.fetchImpl(this.serverUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.headers,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        method,
+        ...(typeof params === 'undefined' ? {} : { params }),
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`MCP ${method} request failed with HTTP ${response.status}${body ? `: ${body}` : ''}`);
+    }
+
+    const payload = await response.json() as JSONRPCResponse<T>;
+    if (payload.error) {
+      throw new Error(`MCP ${method} JSON-RPC error ${payload.error.code}: ${payload.error.message}`);
+    }
+    if (typeof payload.result === 'undefined') {
+      throw new Error(`MCP ${method} response did not include a result`);
+    }
+
+    return payload.result;
+  }
+
   /**
-   * Ensure client is connected
+   * Ensure client is connected.
    */
   private ensureConnected(): void {
-    if (!this.connected || !this.client) {
+    if (!this.connected) {
       throw new Error('MCP client not connected. Call connect() first.');
     }
   }
@@ -115,7 +164,7 @@ export class MCPDriver {
   // ==================== Bahia-specific helpers ====================
 
   /**
-   * List services via MCP
+   * List services via MCP.
    */
   async bahiaListServices(): Promise<MCPToolResult> {
     return this.callTool({
@@ -140,7 +189,7 @@ export class MCPDriver {
   }
 
   /**
-   * Get service via MCP
+   * Get service via MCP.
    */
   async bahiaGetService(serviceId: string): Promise<MCPToolResult> {
     return this.callTool({
@@ -150,7 +199,7 @@ export class MCPDriver {
   }
 
   /**
-   * List environments via MCP
+   * List environments via MCP.
    */
   async bahiaListEnvironments(): Promise<MCPToolResult> {
     return this.callTool({
@@ -174,7 +223,7 @@ export class MCPDriver {
   }
 
   /**
-   * Deploy via MCP
+   * Deploy via MCP.
    */
   async bahiaDeploy(data: {
     service_id: string;

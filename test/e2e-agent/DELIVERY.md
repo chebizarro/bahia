@@ -35,8 +35,8 @@ All deliverables from the plan have been completed:
 - ✅ Dashboard loading verification
 
 ### 4. MCP Driver (`drivers/mcp.ts`)
-- ✅ MCP SDK client integration
-- ✅ Stdio transport for connecting to Bahia MCP server
+- ✅ HTTP JSON-RPC client integration
+- ✅ Native Bahia MCP endpoint wiring (`/mcp` or `/api/v1/mcp`)
 - ✅ Tool listing and invocation
 - ✅ Typed helpers for Bahia MCP operations
 - ✅ Connection lifecycle management
@@ -65,7 +65,7 @@ All deliverables from the plan have been completed:
 - ✅ Stack launch and health verification
 - ✅ API driver testing (services, environments CRUD)
 - ✅ Playwright driver testing (navigation, screenshots)
-- ✅ MCP driver placeholder (requires server endpoint)
+- ✅ MCP driver testing via Bahia native HTTP JSON-RPC endpoint
 - ✅ Automatic cleanup on exit
 
 ### 9. Documentation (`README.md`)
@@ -135,17 +135,17 @@ This will:
 2. Wait for all services to be healthy
 3. Test REST API (create service, environment)
 4. Test Web UI navigation with Playwright
-5. Clean up the stack
+5. Test MCP tool discovery over `http://localhost:8080/mcp`
+6. Clean up the stack
 
 ## MCP Driver Notes
 
-The MCP driver is fully implemented but requires the Bahia server to expose an MCP stdio interface. The current implementation assumes:
+The MCP driver uses Bahia's native HTTP JSON-RPC MCP endpoint. The harness derives `http://localhost:8080/mcp` from the API base URL by default and supports explicit external configuration with `mcpServerUrl` or `BAHIA_E2E_MCP_URL`.
 
-- A CLI entrypoint exists to run the MCP server (e.g., `bahia mcp-server`)
-- The server communicates via stdio (stdin/stdout)
-- Tools are registered as documented in `internal/mcp/server.go`
-
-The smoke test includes a placeholder for MCP testing but skips it with a note about required configuration.
+- Bahia exposes MCP at `POST /mcp` and `POST /api/v1/mcp`
+- Tool discovery uses JSON-RPC method `tools/list`
+- Invalid non-HTTP MCP URLs fail closed with an explicit configuration error
+- Runner MCP failures are fatal unless `--skip-mcp` is provided explicitly
 
 ## Next Steps
 

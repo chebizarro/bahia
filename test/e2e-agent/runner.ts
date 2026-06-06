@@ -22,8 +22,7 @@ export interface RunnerOptions {
   continueOnFailure?: boolean;
   headless?: boolean;
   skipMcp?: boolean;
-  mcpCommand?: string;
-  mcpArgs?: string[];
+  mcpServerUrl?: string;
   skipStackManagement?: boolean;
 }
 
@@ -56,7 +55,10 @@ export function selectScenarios(options: RunnerOptions): Scenario[] {
 export async function runScenarios(options: RunnerOptions = {}): Promise<RunReport> {
   const startedAt = new Date();
   const startTime = Date.now();
-  const harness = new TestHarness({ skipStackManagement: options.skipStackManagement });
+  const harness = new TestHarness({
+    skipStackManagement: options.skipStackManagement,
+    mcpServerUrl: options.mcpServerUrl,
+  });
   const scenarios = selectScenarios(options);
 
   if (scenarios.length === 0) {
@@ -77,13 +79,7 @@ export async function runScenarios(options: RunnerOptions = {}): Promise<RunRepo
     await drivers.web.launch({ headless: options.headless ?? true });
 
     if (!options.skipMcp) {
-      const mcpCommand = options.mcpCommand ?? 'bahia';
-      const mcpArgs = options.mcpArgs ?? ['mcp'];
-      try {
-        await drivers.mcp.connect({ command: mcpCommand, args: mcpArgs });
-      } catch (error) {
-        console.warn(`⚠️ MCP connection failed: ${String(error)}`);
-      }
+      await drivers.mcp.connect({ serverUrl: harness.getMcpUrl() });
     }
 
     for (let i = 0; i < scenarios.length; i += 1) {

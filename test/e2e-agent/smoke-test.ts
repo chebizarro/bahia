@@ -7,7 +7,7 @@
 import { TestHarness } from './harness.js';
 import { BahiaAPIDriver } from './drivers/api.js';
 import { PlaywrightDriver } from './drivers/playwright.js';
-// MCP driver requires bahia server to expose MCP interface - skipping for now
+import { MCPDriver } from './drivers/mcp.js';
 
 async function runSmokeTests() {
   const harness = new TestHarness();
@@ -90,10 +90,13 @@ async function runSmokeTests() {
     console.log('  ✅ Browser closed');
     console.log();
 
-    // ==================== MCP Driver (Placeholder) ====================
+    // ==================== MCP Driver ====================
     console.log('🔌 Test 4: MCP Driver');
-    console.log('  ⚠️  Skipped: MCP server connection requires additional configuration');
-    console.log('  ℹ️  MCP driver implementation is ready but needs bahia MCP server endpoint');
+    const mcpDriver = new MCPDriver();
+    await mcpDriver.connect({ serverUrl: harness.getMcpUrl() });
+    const tools = await mcpDriver.listTools();
+    console.log('  ✅ Listed MCP tools:', tools.length);
+    await mcpDriver.disconnect();
     console.log();
 
     console.log('✅ All smoke tests passed!\n');

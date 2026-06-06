@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-7513",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The e2e-agent harness identifies Bahia's real MCP command/connection contract as HTTP JSON-RPC at /mcp or /api/v1/mcp, not a stdio placeholder.",
+      "tests": ["pnpm run test:mcp-config", "pnpm run typecheck"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The smoke path attempts MCP tool discovery against the configured Bahia MCP endpoint and does not encode placeholder skip behavior.",
+      "tests": ["pnpm test:smoke"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Invalid non-HTTP MCP placeholder configuration fails closed with an explicit configuration error.",
+      "tests": ["pnpm run test:mcp-config"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Docker-unavailable environments still fail at the Docker preflight before stack execution when the harness manages docker-compose.",
+      "tests": ["pnpm test:smoke"]
+    }
+  ]
+}

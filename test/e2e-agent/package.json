@@ -7,6 +7,8 @@
     "test": "tsx cli.ts --all",
     "test:smoke": "tsx cli.ts --tags smoke",
     "test:json": "tsx cli.ts --all --json",
+    "test:mcp-config": "tsx mcp-config.test.ts",
+    "typecheck": "tsc --noEmit",
     "smoke": "tsx smoke-test.ts",
     "demo": "tsx scenarios/demo.ts",
     "scenarios": "tsx -e \"import('./scenarios/index.js').then(m => m.printSummary())\"",

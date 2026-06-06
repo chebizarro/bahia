@@ -72,9 +72,9 @@ const DEFAULT_CONFIG: Required<HarnessConfig> = {
   projectName: 'bahia-e2e-test',
   healthCheckTimeout: 60000, // 60 seconds
   healthCheckInterval: 2000, // 2 seconds
-  apiBaseUrl: 'http://localhost:8080',
-  webBaseUrl: 'http://localhost:3000',
-  mcpServerUrl: 'stdio://bahia-mcp', // placeholder for MCP server connection
+  apiBaseUrl: process.env.BAHIA_E2E_API_URL ?? 'http://localhost:8080',
+  webBaseUrl: process.env.BAHIA_E2E_WEB_URL ?? 'http://localhost:3000',
+  mcpServerUrl: `${process.env.BAHIA_E2E_API_URL ?? 'http://localhost:8080'}/mcp`,
   skipStackManagement: false, // if true, use existing stack instead of managing docker-compose
 };
 
@@ -86,7 +86,11 @@ export class TestHarness {
   private isRunning = false;
 
   constructor(config: Partial<HarnessConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = {
+      ...DEFAULT_CONFIG,
+      ...config,
+      mcpServerUrl: config.mcpServerUrl ?? `${config.apiBaseUrl ?? DEFAULT_CONFIG.apiBaseUrl}/mcp`,
+    };
   }
 
   /**
@@ -307,6 +311,13 @@ export class TestHarness {
    */
   getWebUrl(): string {
     return this.config.webBaseUrl;
+  }
+
+  /**
+   * Get MCP JSON-RPC endpoint URL
+   */
+  getMcpUrl(): string {
+    return process.env.BAHIA_E2E_MCP_URL ?? this.config.mcpServerUrl;
   }
 
   /**

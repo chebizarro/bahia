@@ -65,16 +65,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--skip-mcp':
         options.skipMcp = true;
         break;
-      case '--mcp-command': {
+      case '--mcp-url': {
         const value = argv[++i];
-        if (!value) throw new Error('--mcp-command requires a value');
-        options.mcpCommand = value;
-        break;
-      }
-      case '--mcp-args': {
-        const value = argv[++i];
-        if (!value) throw new Error('--mcp-args requires a comma-separated value');
-        options.mcpArgs = value.split(',').map(v => v.trim()).filter(Boolean);
+        if (!value) throw new Error('--mcp-url requires a value');
+        options.mcpServerUrl = value;
         break;
       }
       case '--heal':
@@ -126,9 +120,8 @@ Options:
   --html <path>             Write optional HTML report
   --continue-on-failure     Continue after scenario failures
   --headed                  Run browser in headed mode
-  --skip-mcp                Skip MCP driver initialization
-  --mcp-command <command>   MCP server command (default: bahia)
-  --mcp-args <a,b,c>        MCP server args (default: mcp)
+  --skip-mcp                Explicitly skip MCP driver initialization
+  --mcp-url <url>           MCP JSON-RPC URL (default: BAHIA_E2E_MCP_URL or http://localhost:8080/mcp)
   --heal                    Enable self-healing loop
   --max-iterations <n>      Max healing attempts (default: 3)
   --approve-fixes           Require approval before applying each fix

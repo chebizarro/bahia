@@ -24,7 +24,7 @@ Agent-driven end-to-end testing infrastructure for Bahia. This harness provides 
   - Screenshot and DOM inspection capabilities
 
 - **`drivers/mcp.ts`** - MCP client driver
-  - Connects to Bahia MCP server via stdio
+  - Connects to Bahia's native HTTP JSON-RPC MCP endpoint (`/mcp` or `/api/v1/mcp`)
   - Invokes MCP tools for deployment operations
   - Typed helpers for common Bahia MCP operations
 
@@ -69,7 +69,8 @@ This will:
 2. Wait for all services to be healthy
 3. Test REST API operations (create service, environment)
 4. Test Web UI navigation with Playwright
-5. Clean up the stack
+5. Test MCP tool discovery over `http://localhost:8080/mcp`
+6. Clean up the stack
 
 ### Manual Testing
 
@@ -104,7 +105,9 @@ await harness.cleanup();
 
 ### MCP Driver
 
-The MCP driver requires the Bahia server to expose an MCP interface. Example usage:
+The MCP driver uses Bahia's native HTTP JSON-RPC MCP endpoint. By default the harness derives `http://localhost:8080/mcp` from `apiBaseUrl`; set `BAHIA_E2E_MCP_URL` or pass `mcpServerUrl` to use `/api/v1/mcp` or an externally managed stack. MCP connection failures are fatal unless the runner is invoked with `--skip-mcp`.
+
+Example usage:
 
 ```typescript
 import { MCPDriver } from './drivers/mcp.js';
@@ -113,9 +116,7 @@ const mcp = new MCPDriver();
 
 // Connect to Bahia MCP server
 await mcp.connect({
-  command: 'bahia-mcp-server',  // Replace with actual command
-  args: [],
-  env: { BAHIA_DB_HOST: 'localhost' },
+  serverUrl: harness.getMcpUrl(),
 });
 
 // List available tools
@@ -141,6 +142,7 @@ const harness = new TestHarness({
   healthCheckInterval: 2000,  // 2 seconds
   apiBaseUrl: 'http://localhost:8080',
   webBaseUrl: 'http://localhost:3000',
+  mcpServerUrl: 'http://localhost:8080/mcp',
 });
 ```
 
@@ -161,7 +163,7 @@ const harness = new TestHarness({
            │
            ├─────► Playwright Driver ──► Web UI (:3000)
            │
-           └─────► MCP Driver ──────► MCP Server (stdio)
+           └─────► MCP Driver ──────► MCP HTTP JSON-RPC (:8080/mcp)
 ```
 
 ## Docker Compose Ports
@@ -202,8 +204,8 @@ Or modify the docker-compose.yml port mappings.
 
 ### MCP connection issues
 
-The MCP driver requires the Bahia server to expose an MCP stdio interface. Verify:
+The MCP driver requires the Bahia server HTTP endpoint to expose native MCP JSON-RPC. Verify:
 
 1. Bahia MCP server is implemented in `internal/mcp/server.go`
-2. A CLI entrypoint exists to run the MCP server
-3. The command path is correct in `MCPDriver.connect()`
+2. The API router exposes `POST /mcp` or `POST /api/v1/mcp`
+3. `BAHIA_E2E_MCP_URL`, `mcpServerUrl`, or `apiBaseUrl` points to the running Bahia stack
