@@ -1,14 +1,21 @@
-// Package kinds provides the single source of truth for all Bahia Nostr event kinds.
-// All other packages should import kinds from here rather than defining their own.
+// Package kinds provides the single source of truth for Bahia Nostr event kind
+// numbers used by runtime code, migration code, and historical transforms.
 //
-// Kind families:
-//   - 5xxx: Request kinds (operator → Bahia)
-//   - 6xxx: Status kinds (Bahia → operator, progress updates)
-//   - 7xxx: Result kinds (Bahia → operator, terminal results)
-//   - 30xxx: NIP-51 style parameterized lists
-//   - 31xxx: Replaceable read-model projections
-//   - 32xxx: Worker state projections
-//   - 38xxx: AI/ML and backup command/result kinds
+// Production runtime code must prefer Bahia's canonical Nostr-native policy:
+//   - ContextVM kind 25910 for mutation intents, optionally wrapped with
+//     CEP-4/NIP-59 kind 1059 or 21059.
+//   - NIP-38 kind 30315 for operational status.
+//   - Kind 30900 for canonical control-plane state projections.
+//   - Kind 4903 for audit facts and attestations.
+//   - ContextVM discovery kinds 11316-11320 and NIP-51 relay sets kind 30002
+//     for bootstrap and capability discovery.
+//   - NIP-78 kind 30078 for app-specific data.
+//
+// Legacy request/status/result/read-model constants remain here so migration,
+// fixtures, and fail-closed compatibility tests can identify old events. They
+// are not permission to publish or subscribe to those kinds in production
+// runtime paths. See docs/nostr-event-implementation-guide.md before adding or
+// reusing any event kind.
 package kinds
 
 // =============================================================================

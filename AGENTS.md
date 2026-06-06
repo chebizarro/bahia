@@ -28,6 +28,8 @@ Do not build:
 
 Approved exception: ContextVM JSON-RPC kind `25910`, optionally wrapped with CEP-4/NIP-59 `1059` or `21059`, is Bahia's canonical mutation intent transport. A ContextVM response is only an acknowledgment; durable progress and terminal truth still come from scoped subscriptions to canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, and relevant standard NIPs).
 
+For event-kind selection, event shapes, legacy-kind migration boundaries, and Cascadia fleet interoperability, follow `docs/nostr-event-implementation-guide.md`. Treat that guide as the Bahia-specific authority before introducing or reusing any Nostr kind.
+
 If code is “waiting and checking” instead of “subscribing and reacting,” it is wrong.
 
 ---
@@ -332,7 +334,7 @@ Nostr
 * reconnect uses exponential backoff
 * subscriptions are cleaned up
 * relay capabilities checked with NIP-11
-* no ad hoc queue/RPC abstraction replaces Nostr semantics; ContextVM use follows `docs/control-planes.md`, `docs/nostr-commands.md`, and `docs/event-spec.md`
+* no ad hoc queue/RPC abstraction replaces Nostr semantics; ContextVM use and event-kind selection follow `docs/nostr-event-implementation-guide.md`, `docs/control-planes.md`, `docs/nostr-commands.md`, and `docs/event-spec.md`
 
 PSTF
 
@@ -379,8 +381,8 @@ Documentation scope:
 | Payments | `docs/user-guide/features/payments.md` |
 | MCP tools | `docs/user-guide/mcp-tools.md` |
 | CLI commands | `docs/user-guide/cli-reference.md` |
-| Nostr events | `docs/user-guide/nostr-integration.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md` |
-| Nostr control planes / migration app | `docs/control-planes.md`, `docs/user-guide/nostr-integration.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `pstf/features/NOSTR_NATIVE_CONTEXTVM_MIGRATION/verification_report.md` |
+| Nostr events | `docs/nostr-event-implementation-guide.md`, `docs/user-guide/nostr-integration.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md` |
+| Nostr control planes / migration app | `docs/nostr-event-implementation-guide.md`, `docs/control-planes.md`, `docs/user-guide/nostr-integration.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `pstf/features/NOSTR_NATIVE_CONTEXTVM_MIGRATION/verification_report.md` |
 | Core concepts | `docs/user-guide/core-concepts.md` |
 | Setup/config | `docs/user-guide/getting-started.md` |
 
@@ -388,8 +390,8 @@ Rules:
 
 1. When adding a new MCP tool, document it in `docs/user-guide/mcp-tools.md`.
 2. When adding a new CLI command, document it in `docs/user-guide/cli-reference.md`.
-3. When changing Nostr event kinds or payloads, update `docs/user-guide/nostr-integration.md`, `docs/control-planes.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, and `docs/protocol-compatibility.md`.
-4. When changing legacy-kind migration behavior, update the startup migration app documentation and PSTF verification evidence; legacy kind support must remain migration-only unless a Bead explicitly reopens runtime compatibility.
+3. When changing Nostr event kinds or payloads, update `docs/nostr-event-implementation-guide.md`, `docs/user-guide/nostr-integration.md`, `docs/control-planes.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, and `docs/protocol-compatibility.md`.
+4. When changing legacy-kind migration behavior, update `docs/nostr-event-implementation-guide.md`, the startup migration app documentation, and PSTF verification evidence; legacy kind support must remain migration-only unless a Bead explicitly reopens runtime compatibility.
 5. When adding a new feature area, create a new file in `docs/user-guide/features/` and add it to the index in `docs/user-guide/index.md`.
 6. When changing behavior described in existing docs, update those docs to match.
 7. Documentation uses markdown. Include code examples for CLI, MCP, and Nostr where relevant.

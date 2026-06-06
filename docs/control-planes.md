@@ -1,6 +1,6 @@
 # Bahia Control Planes
 
-Bahia's supported control-plane contract is now sidecar-first and Nostr-native:
+Bahia's supported control-plane contract is now sidecar-first and Nostr-native. Agents implementing Nostr events should use `docs/nostr-event-implementation-guide.md` as the Bahia-specific authority for event-kind selection, event shapes, migration boundaries, and Cascadia fleet interoperability.
 
 1. **Nostr relay sidecar** — primary async/realtime plane for browser state, ContextVM intent transport, agent progress, and read models.
 2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp` / `/api/v1/mcp`.
