@@ -352,37 +352,6 @@
       </div>
     </section>
 
-    <!-- Version Section -->
-    <section class="settings-section">
-      <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Versions</h2>
-      <p class="section-description">
-        Semantic versions for Bahia artifacts packaged and deployed independently. Versions use the <code>0.1.0-&lt;commit-hash&gt;</code> format unless release automation provides an explicit override.
-      </p>
-
-      <div class="version-list">
-        {#each versionRows as component}
-          <div class="version-item">
-            <div class="version-info">
-              <span class="version-name">{component.name}</span>
-              <span class="version-kind">{component.kind}</span>
-            </div>
-            <div class="version-values">
-              <span class="config-value monospace">{component.version}</span>
-              {#if component.packaged_as}
-                <span class="version-package monospace">{component.packaged_as}</span>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-
-      {#if systemLoading}
-        <p class="section-description version-note">Loading backend component versions…</p>
-      {:else if systemError}
-        <p class="section-description version-note">Backend component versions unavailable: {systemError}</p>
-      {/if}
-    </section>
-
     <!-- Server Configuration Section -->
     <section class="settings-section">
       <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Server Configuration</h2>
@@ -530,6 +499,38 @@
         </div>
       </section>
     {/if}
+
+    <!-- Version Section -->
+    <section class="settings-section">
+      <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Versions</h2>
+      <p class="section-description">
+        Semantic versions for Bahia artifacts packaged and deployed independently. Versions use the <code>0.1.0-&lt;commit-hash&gt;</code> format unless release automation provides an explicit override.
+      </p>
+
+      <div class="version-list">
+        {#each versionRows as component}
+          <div class="version-item">
+            <div class="version-info">
+              <span class="version-name">{component.name}</span>
+              <span class="version-kind">{component.kind}</span>
+            </div>
+            <div class="version-values">
+              <span class="config-value monospace">{component.version}</span>
+              {#if component.packaged_as}
+                <span class="version-package monospace">{component.packaged_as}</span>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </div>
+
+      {#if systemLoading}
+        <p class="section-description version-note">Loading backend component versions…</p>
+      {:else if systemError}
+        <p class="section-description version-note">Backend component versions unavailable: {systemError}</p>
+      {/if}
+    </section>
+
   </div>
 </div>
 
