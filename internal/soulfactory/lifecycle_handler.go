@@ -208,16 +208,10 @@ func (h *LifecycleHandler) parseAction(event *nostr.Event) (*domain.SoulAction, 
 	return ParseSoulActionEvent(event)
 }
 
-// isAuthorized checks if the initiator can perform the action.
+// isAuthorized checks whether the signing pubkey is explicitly configured
+// for SoulFactory provisioning and lifecycle control.
 func (h *LifecycleHandler) isAuthorized(pubkey string, soul *domain.AgentSoul) bool {
-	// For now, allow if the pubkey matches any authorized key in reactor config.
-	// In production, this would check admin keys, ownership, and delegated permissions.
-	authorizedKeys := h.reactor.config.AuthorizedPubkeys
-	if len(authorizedKeys) == 0 {
-		authorizedKeys = AuthorizedProvisioners
-	}
-
-	for _, authorizedKey := range authorizedKeys {
+	for _, authorizedKey := range h.reactor.config.AuthorizedPubkeys {
 		if pubkey == authorizedKey {
 			return true
 		}

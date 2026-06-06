@@ -656,5 +656,5 @@ func TestLifecycleHandlerSkipsExecutionWhenTerminalResultAlreadyExists(t *testin
 }
 
 func buildSoulRefForTest(soul *domain.AgentSoul) string {
-	return fmt.Sprintf("%d:%s:%s", domain.KindAgentSoul, SoulFactoryPubkey, soul.AgentID)
+	return fmt.Sprintf("%d:%s:%s", domain.KindAgentSoul, strings.Repeat("f", 64), soul.AgentID)
 }

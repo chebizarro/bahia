@@ -21,16 +21,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// AuthorizedProvisioners is the list of pubkeys allowed to request provisioning.
-var AuthorizedProvisioners = []string{
-	"cdee943cbb19c51ab847a66d5d774373aa9f63d287246bb59b0827fa5e637400", // Biz
-	"14907326f89ebdfc9cfdabe17bd492aa48abbd59ad5d8cc25295760bdf0e5015", // Stew
-}
-
-// SoulFactoryPubkey is the pubkey used by Soul Factory to sign events.
-// This should be loaded from config in production.
-var SoulFactoryPubkey = "14907326f89ebdfc9cfdabe17bd492aa48abbd59ad5d8cc25295760bdf0e5015"
-
 // Config holds reactor configuration.
 type Config struct {
 	Relays                        []string
@@ -254,6 +244,15 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		return
 	}
 
+	factoryPubkey := strings.TrimSpace(r.config.SoulFactoryPubkey)
+	if factoryPubkey == "" {
+		logger.Error("SoulFactory pubkey is not configured")
+		if err := r.publishError(ctx, event, "config_error", "SoulFactory pubkey is required"); err != nil {
+			logger.Error("failed to publish provisioning error", "error", err)
+		}
+		return
+	}
+
 	// Parse request
 	req, err := r.parseProvisioningRequest(event)
 	if err != nil {
@@ -343,11 +342,7 @@ func (r *Reactor) handleSoulAction(ctx context.Context, event *nostr.Event) {
 
 // isAuthorizedProvisioner checks if a pubkey is authorized to provision.
 func (r *Reactor) isAuthorizedProvisioner(pubkey string) bool {
-	provisioners := r.config.AuthorizedPubkeys
-	if len(provisioners) == 0 {
-		provisioners = AuthorizedProvisioners
-	}
-	return slices.Contains(provisioners, pubkey)
+	return slices.Contains(r.config.AuthorizedPubkeys, pubkey)
 }
 
 // parseProvisioningRequest extracts request data from a kind:5950 event.
@@ -373,7 +368,7 @@ func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, 
 
 // publishResult publishes a kind:7950 success result event.
 func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, soul *domain.AgentSoul) error {
-	event, err := BuildProvisioningSuccessResultEvent(requestEvent, soul, firstNonEmpty(r.config.SoulFactoryPubkey, SoulFactoryPubkey))
+	event, err := BuildProvisioningSuccessResultEvent(requestEvent, soul, r.config.SoulFactoryPubkey)
 	if err != nil {
 		return err
 	}

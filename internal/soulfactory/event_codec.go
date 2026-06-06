@@ -728,6 +728,10 @@ func BuildProvisioningStatusEvent(requestEvent *nostr.Event, step domain.Provisi
 
 // BuildProvisioningSuccessResultEvent builds a kind:7950 provisioning success event.
 func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain.AgentSoul, factoryPubkey string) (*nostr.Event, error) {
+	factoryPubkey = strings.TrimSpace(factoryPubkey)
+	if factoryPubkey == "" {
+		return nil, fmt.Errorf("SoulFactory pubkey is required for provisioning success result")
+	}
 	content, err := json.Marshal(map[string]interface{}{
 		"soul_id":           soul.AgentID,
 		"npub":              soul.NostrNpub,
@@ -745,7 +749,7 @@ func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain
 		{tagEvent, requestEvent.ID, "", "reply"},
 		{tagPubkey, requestEvent.PubKey},
 		{tagStatus, "success"},
-		{tagSoul, soulCoordinate(firstNonEmpty(factoryPubkey, SoulFactoryPubkey), soul.AgentID)},
+		{tagSoul, soulCoordinate(factoryPubkey, soul.AgentID)},
 		{tagAgentPubkey, soul.NostrPubkey},
 		{tagNpub, soul.NostrNpub},
 	}

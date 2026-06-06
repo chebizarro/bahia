@@ -10,7 +10,7 @@
     {
       "id": "SFOM-AC-002",
       "statement": "Enabled SoulFactory config requires explicit relays, authorized requester pubkeys, a real Signet bunker URI, and explicit LLM endpoint/model/key settings.",
-      "tests": ["SFOM-T-002", "SFOM-T-003"]
+      "tests": ["SFOM-T-002", "SFOM-T-003", "SFOM-T-019", "SFOM-T-020"]
     },
     {
       "id": "SFOM-AC-003",
@@ -35,7 +35,7 @@
     {
       "id": "SFOM-AC-007",
       "statement": "Provisioning status, error result, success result, and final read-model publications target the normalized primary/additional relay set and propagate publish failures.",
-      "tests": ["SFOM-T-008"]
+      "tests": ["SFOM-T-008", "SFOM-T-021"]
     },
     {
       "id": "SFOM-AC-008",

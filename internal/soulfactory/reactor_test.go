@@ -139,7 +139,7 @@ func TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors(t 
 func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *testing.T) {
 	authorized := strings.Repeat("1", 64)
 	reactor := NewReactor(
-		Config{AuthorizedPubkeys: []string{authorized}, AdditionalRelays: []string{"wss://private.example"}},
+		Config{AuthorizedPubkeys: []string{authorized}, AdditionalRelays: []string{"wss://private.example"}, SoulFactoryPubkey: authorized},
 		fakeGenerator{},
 		newFakeSigner(t),
 		slog.Default(),
@@ -239,11 +239,84 @@ func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *
 	}
 }
 
+func TestReactorRequiresExplicitAuthorizedPubkeys(t *testing.T) {
+	signer := newFakeSigner(t)
+	engine := &fakeProvisioningEngine{}
+	reactor := NewReactor(
+		Config{SoulFactoryPubkey: signer.pubkey},
+		fakeGenerator{},
+		signer,
+		slog.Default(),
+		WithProvisioningEngine(engine),
+	)
+	capture := attachPublishCapture(reactor)
+	request := buildProvisioningEvent(t, signer.pubkey, "missing-authorized-pubkeys", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
+
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if engine.called {
+		t.Fatal("provisioning engine was called without explicit authorized pubkeys")
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("provisioning result count = %d, want one explicit authorization error", len(results))
+	}
+	if got := findTag(results[0], "step"); got != "unauthorized" {
+		t.Fatalf("result step = %q, want unauthorized", got)
+	}
+	if len(capture.eventsByKind(domain.KindAgentSoul)) != 0 {
+		t.Fatalf("unexpected soul publication without explicit authorized pubkeys")
+	}
+}
+
+func TestProvisioningRequiresExplicitFactoryPubkeyBeforeSideEffects(t *testing.T) {
+	signer := newFakeSigner(t)
+	engine := &fakeProvisioningEngine{}
+	reactor := NewReactor(
+		Config{AuthorizedPubkeys: []string{signer.pubkey}},
+		fakeGenerator{},
+		signer,
+		slog.Default(),
+		WithProvisioningEngine(engine),
+	)
+	capture := attachPublishCapture(reactor)
+	request := buildProvisioningEvent(t, signer.pubkey, "missing-factory-pubkey", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
+
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if engine.called {
+		t.Fatal("provisioning engine was called without explicit SoulFactory pubkey")
+	}
+	if run := reactor.GetRun(request.ID); run != nil {
+		t.Fatalf("run tracked without explicit SoulFactory pubkey: %+v", run)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("provisioning result count = %d, want one explicit config error", len(results))
+	}
+	if got := findTag(results[0], "step"); got != "config_error" {
+		t.Fatalf("result step = %q, want config_error", got)
+	}
+	if !strings.Contains(results[0].Content, "SoulFactory pubkey is required") {
+		t.Fatalf("result content = %q, want explicit factory pubkey requirement", results[0].Content)
+	}
+	if len(capture.eventsByKind(domain.KindAgentSoul)) != 0 {
+		t.Fatalf("unexpected soul publication without explicit SoulFactory pubkey")
+	}
+}
+
+func TestProvisioningSuccessResultRequiresExplicitFactoryPubkey(t *testing.T) {
+	signer := newFakeSigner(t)
+	request := buildProvisioningEvent(t, signer.pubkey, "success-missing-factory", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
+	soul := &domain.AgentSoul{AgentID: "scout", NostrPubkey: signer.pubkey, NostrNpub: "npub1test"}
+
+	if _, err := BuildProvisioningSuccessResultEvent(request, soul, " "); err == nil || !strings.Contains(err.Error(), "SoulFactory pubkey is required") {
+		t.Fatalf("BuildProvisioningSuccessResultEvent() error = %v, want explicit factory pubkey requirement", err)
+	}
+}
+
 func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testing.T) {
 	signer := newFakeSigner(t)
-	oldPubkey := SoulFactoryPubkey
-	SoulFactoryPubkey = signer.pubkey
-	defer func() { SoulFactoryPubkey = oldPubkey }()
 
 	reactor := NewReactor(
 		Config{
@@ -479,9 +552,6 @@ func TestProvisioningReplaySkipsExternalSideEffectsWhenTerminalResultExists(t *t
 
 func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *testing.T) {
 	signer := newFakeSigner(t)
-	oldPubkey := SoulFactoryPubkey
-	SoulFactoryPubkey = signer.pubkey
-	defer func() { SoulFactoryPubkey = oldPubkey }()
 
 	generator := &capturingGenerator{}
 	reactor := NewReactor(
@@ -656,7 +726,7 @@ func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testi
 
 func TestDraftSpecHashMismatchFailsBeforeRuntimeProvisioning(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, &capturingGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, &capturingGenerator{}, signer, slog.Default())
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:   "mismatched-draft-event",
@@ -703,9 +773,6 @@ func eventKindBefore(events []*nostr.Event, firstKind, secondKind int) bool {
 
 func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *testing.T) {
 	signer := newFakeSigner(t)
-	oldPubkey := SoulFactoryPubkey
-	SoulFactoryPubkey = signer.pubkey
-	defer func() { SoulFactoryPubkey = oldPubkey }()
 
 	reactor := NewReactor(
 		Config{

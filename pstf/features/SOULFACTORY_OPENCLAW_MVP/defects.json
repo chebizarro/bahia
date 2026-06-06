@@ -1,5 +1,17 @@
 {
   "feature_id": "SOULFACTORY_OPENCLAW_MVP",
   "issue": "bahia-0wc4",
-  "defects": []
+  "defects": [
+    {
+      "id": "SFOM-D-001",
+      "title": "Dormant legacy SoulFactory Provisioner still contains placeholder provisioning logic",
+      "status": "tracked",
+      "bead": "bahia-j28b",
+      "severity": "P2",
+      "affected_files": ["internal/soulfactory/provisioner.go"],
+      "observed_behavior": "The legacy Provisioner path contains TODO/for-now/skipped-stage logic, but hardening coverage keeps it fail-closed through soulFactoryReady=false and app startup installs FullProvisioner instead.",
+      "intended_behavior": "Remove the dormant path or replace it with production FullProvisioner/OpenClaw wiring so no placeholder provisioning implementation can become reachable.",
+      "verification_notes": "Not part of the live Item 4 production path; tracked as Bead bahia-j28b during closeout."
+    }
+  ]
 }

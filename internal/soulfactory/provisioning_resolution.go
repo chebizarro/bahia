@@ -307,7 +307,7 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 	if requestEvent == nil {
 		return nil, nil
 	}
-	factoryPubkey := firstNonEmpty(r.config.SoulFactoryPubkey, SoulFactoryPubkey)
+	factoryPubkey := strings.TrimSpace(r.config.SoulFactoryPubkey)
 	if r.findProvisioningResultFn != nil {
 		result, err := r.findProvisioningResultFn(ctx, requestEvent.ID)
 		if err != nil || !authoritativeProvisioningResult(result, requestEvent, factoryPubkey) {
@@ -340,10 +340,11 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 }
 
 func authoritativeProvisioningResult(result, requestEvent *nostr.Event, factoryPubkey string) bool {
-	if result == nil || requestEvent == nil || result.Kind != domain.KindProvisioningResult {
+	factoryPubkey = strings.TrimSpace(factoryPubkey)
+	if factoryPubkey == "" || result == nil || requestEvent == nil || result.Kind != domain.KindProvisioningResult {
 		return false
 	}
-	if factoryPubkey != "" && result.PubKey != factoryPubkey {
+	if result.PubKey != factoryPubkey {
 		return false
 	}
 	if tagValue(result.Tags, tagEvent) != requestEvent.ID || tagValue(result.Tags, tagPubkey) != requestEvent.PubKey {

@@ -110,6 +110,24 @@
       "command": "! grep -R \"soul_factory\\\\|soulfactory\" internal/api",
       "criteria": ["SFOM-AC-012"],
       "expected": "No SoulFactory provisioning/lifecycle REST handlers under internal/api."
+    },
+    {
+      "id": "SFOM-T-019",
+      "name": "Reactor requires explicit authorized pubkeys before provisioning side effects",
+      "command": "go test ./internal/soulfactory -run TestReactorRequiresExplicitAuthorizedPubkeys",
+      "criteria": ["SFOM-AC-002"]
+    },
+    {
+      "id": "SFOM-T-020",
+      "name": "Reactor requires explicit SoulFactory factory pubkey before provisioning side effects",
+      "command": "go test ./internal/soulfactory -run TestProvisioningRequiresExplicitFactoryPubkeyBeforeSideEffects",
+      "criteria": ["SFOM-AC-002"]
+    },
+    {
+      "id": "SFOM-T-021",
+      "name": "Provisioning success result requires explicit factory pubkey",
+      "command": "go test ./internal/soulfactory -run TestProvisioningSuccessResultRequiresExplicitFactoryPubkey",
+      "criteria": ["SFOM-AC-007"]
     }
   ]
 }

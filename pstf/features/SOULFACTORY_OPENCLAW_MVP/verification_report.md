@@ -167,6 +167,60 @@ Review follow-up applied:
 - Optional provisioning request fields are trimmed before tags are appended, preventing whitespace-only empty `draft-event`, `spec-hash`, runtime, or capability tags.
 - Workspace manager validates gateway port range directly, so direct construction fails closed even outside app config validation.
 
+## Item 4 verification — closeout, production-readiness scan, Beads, and push prep
+
+Scope implemented for Bead `bahia-2r4y`:
+
+- Verified Items 1–3 evidence against `docs/plans/soulfactory-openclaw-mvp-orchestration.md`.
+- Confirmed no SoulFactory REST provisioning/lifecycle handlers exist under `internal/api`.
+- Removed closeout hardcoded production-path fallbacks in `internal/soulfactory`: the reactor no longer carries global authorized provisioner pubkeys or a global SoulFactory signing pubkey fallback; authorization, replay detection, and success-result coordinates now require explicit config.
+- Added deterministic regression coverage for explicit `authorized_pubkeys`, explicit SoulFactory factory pubkey preflight before provisioning side effects, and success-result factory pubkey requirements.
+- Re-scanned `internal/soulfactory` for the removed hardcoded fallback pubkeys; only test forbidden-value assertions remain.
+- Found the dormant legacy `Provisioner` placeholder path remains fail-closed and is not wired into app startup; tracked removal/productionization as Bead `bahia-j28b` rather than treating it as completed work.
+
+Focused verification on 2026-06-06 after closeout hardening:
+
+```text
+go test -count=1 ./internal/soulfactory ./internal/config ./internal/app
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.394s
+ok  	github.com/openagentsinc/bahia/internal/config	0.172s
+ok  	github.com/openagentsinc/bahia/internal/app	2.007s
+```
+
+REST-route source check on 2026-06-06:
+
+```text
+grep -R "soul_factory\|soulfactory" internal/api
+# exit code 1, no matches
+```
+
+Hardcoded fallback source check on 2026-06-06:
+
+```text
+Search under internal/soulfactory for AuthorizedProvisioners, SoulFactoryPubkey assignment, and the removed Biz/Stew hardcoded pubkeys.
+Result: no production-code matches; only workspace_test.go forbidden-value assertions matched.
+```
+
+Full Go quality gate on 2026-06-06 after closeout hardening:
+
+```text
+go test -count=1 ./...
+ok  	github.com/openagentsinc/bahia/cmd/cli	0.473s
+...
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	1.869s
+...
+ok  	github.com/openagentsinc/bahia/test/integration	1.828s
+```
+
+Review evidence:
+
+- Oracle review identified a preflight gap where missing `SoulFactoryPubkey` could be detected after provisioning side effects; this was fixed before final verification by failing closed before run creation/provisioning and by requiring configured factory authors for replay checks.
+
+Item 4 Beads closeout:
+
+- Worked/closing: `bahia-2r4y`.
+- Remaining SoulFactory follow-up tracked: `bahia-j28b` for removing or productionizing dormant `internal/soulfactory/provisioner.go` placeholder logic that is currently fail-closed and not wired into production startup.
+
 ## Result
 
-Verified for Items 1, 2, and 3.
+Verified for Items 1, 2, 3, and 4.
