@@ -31,6 +31,21 @@
       "id": "SFOM-AC-006",
       "statement": "The Item 1 slice does not add REST SoulFactory provisioning or lifecycle routes.",
       "tests": ["SFOM-T-007"]
+    },
+    {
+      "id": "SFOM-AC-007",
+      "statement": "Provisioning status, error result, success result, and final read-model publications target the normalized primary/additional relay set and propagate publish failures.",
+      "tests": ["SFOM-T-008"]
+    },
+    {
+      "id": "SFOM-AC-008",
+      "statement": "The OpenClaw runtime result is returned to the provisioner and applied to the soul before the final 31951 read model and terminal 7950 success result are published.",
+      "tests": ["SFOM-T-009", "SFOM-T-013"]
+    },
+    {
+      "id": "SFOM-AC-009",
+      "statement": "Bahia service projection does not create synthetic deployable artifacts or deployment intents; deployment intent creation requires explicit opt-in plus runtime artifact metadata containing a digest.",
+      "tests": ["SFOM-T-010", "SFOM-T-011", "SFOM-T-012"]
     }
   ]
 }

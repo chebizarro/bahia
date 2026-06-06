@@ -192,7 +192,8 @@ func runIntegrationProvisionForRuntime(t *testing.T, signer fakeSigner, target d
 	content.Runtime.CapabilityRef = string(target) + "-capability"
 	content.SpecHash = "sha256:" + string(target)
 	draft := &domain.SoulDraft{EventID: string(target) + "-draft", AgentID: "parity-" + string(target), Name: "Parity", Tier: domain.SoulTierHeavy, CreatedBy: signer.pubkey, Content: content}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	runtime := &integrationRuntimeAdapter{runtime: target, bindingPrefix: binding, methods: []string{RuntimeMethodProvision, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure, RuntimeMethodPersonaUpdate, RuntimeMethodAvatarGenerate}}
 	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{target: runtime}}, nil)

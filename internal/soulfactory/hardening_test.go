@@ -75,7 +75,8 @@ func TestLegacyProvisionerCannotProduceSuccess(t *testing.T) {
 }
 
 func TestFullProvisionerSkipsUnconfiguredOptionalSteps(t *testing.T) {
-	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), slog.Default())
+	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full
 	run := &domain.ProvisioningRun{

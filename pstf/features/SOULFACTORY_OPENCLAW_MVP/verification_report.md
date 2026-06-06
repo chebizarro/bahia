@@ -73,7 +73,7 @@ Review follow-up applied:
 Beads closeout:
 
 - Worked/closed: `bahia-0wc4`.
-- Remaining tracked work: `bahia-23at` for Item 2, `bahia-euu6` for Item 3, and `bahia-2r4y` for full MVP closeout after Items 2 and 3.
+- Item 1 remaining tracked work at that time: `bahia-23at` for Item 2, `bahia-euu6` for Item 3, and `bahia-2r4y` for full MVP closeout after Items 2 and 3.
 
 ## Acceptance mapping
 
@@ -84,6 +84,41 @@ Beads closeout:
 - SFOM-AC-005: covered by `TestNewRejectsInvalidSoulFactoryConfig`.
 - SFOM-AC-006: covered by source inspection confirming no SoulFactory REST provisioning/lifecycle route was added under `internal/api`.
 
+## Item 2 verification — reactor publication hardening + runtime/Bahia projection correctness
+
+Scope implemented for Bead `bahia-23at`:
+
+- `6950`, error `7950`, success `7950`, and final `31951` provisioning publications now use a normalized primary/additional relay target set and return publish errors instead of silently continuing.
+- Full provisioning treats progress publication failures as provisioning failures; terminal error/result publication failures are logged and reflected on the in-memory run state where applicable.
+- Runtime provisioning returns the `38386` result envelope to `ProvisionFull`; the result is applied before Bahia projection, final `31951`, and terminal success `7950` publication.
+- Bahia service projection no longer fabricates `agents/<id>:latest` artifacts, empty digests, synthetic builds, or initial deployment intents. Initial deployment intent creation is disabled unless explicitly opted in via `BahiaIntegrationConfig.DeployRuntimeArtifacts` and requires runtime artifact metadata with image repo plus digest.
+- Lifecycle resume/redeploy no longer falls back to creating synthetic initial deployables when no desired artifact exists.
+- No REST provisioning or lifecycle route was added.
+
+Focused verification on 2026-06-06:
+
+```text
+go test ./internal/soulfactory
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.346s
+```
+
+Item 2 acceptance mapping:
+
+- SFOM-AC-007: covered by `TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors`.
+- SFOM-AC-008: covered by `TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields` and `TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess`.
+- SFOM-AC-009: covered by `TestBahiaIntegrationDoesNotCreateSyntheticInitialDeployment`, `TestBahiaIntegrationCreatesInitialDeploymentFromRuntimeArtifactMetadata`, and `TestBahiaIntegrationRuntimeArtifactOptInRequiresDigestMetadata`.
+
+Beads closeout:
+
+- Worked/closed: `bahia-23at`.
+- Remaining tracked work: `bahia-euu6` for Item 3 and `bahia-2r4y` for full MVP closeout after Items 2 and 3.
+
+Review follow-up applied:
+
+- Bahia lifecycle resume/redeploy treats missing desired artifacts as a no-op instead of fabricating initial deployables or blocking signer/read-model lifecycle side effects.
+- Runtime artifact projection now requires an explicit runtime artifact envelope and validates `sha256:<64 hex>` digest shape before registering Bahia artifacts/intents.
+- Added deterministic runtime failure coverage to prove no final `31951` or success `7950` is published when the runtime adapter fails.
+
 ## Result
 
-Verified for Item 1.
+Verified for Items 1 and 2.

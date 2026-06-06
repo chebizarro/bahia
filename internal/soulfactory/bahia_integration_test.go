@@ -2,6 +2,7 @@ package soulfactory
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -55,8 +56,8 @@ func newSoulFactoryRegistryHarness() (*service.RegistryService, *sfMockBuildRepo
 	return registry, builds, artifacts, intents, observations, states
 }
 
-func TestBahiaIntegrationCreatesInitialDeploymentHookup(t *testing.T) {
-	registry, builds, artifacts, intents, _, states := newSoulFactoryRegistryHarness()
+func TestBahiaIntegrationDoesNotCreateSyntheticInitialDeployment(t *testing.T) {
+	registry, builds, artifacts, intents, _, _ := newSoulFactoryRegistryHarness()
 	envID := uuid.New()
 	if err := registry.CreateEnvironment(t.Context(), &domain.Environment{ID: envID, Name: "agents", Protected: false, DeployStrategy: domain.DeployStrategyReplace, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("CreateEnvironment() error = %v", err)
@@ -74,7 +75,38 @@ func TestBahiaIntegrationCreatesInitialDeploymentHookup(t *testing.T) {
 	}
 	soul.BahiaServiceID = &serviceID
 
-	intent, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID)
+	intent, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID, nil)
+	if err != nil {
+		t.Fatalf("CreateInitialDeployment() error = %v", err)
+	}
+	if intent != nil {
+		t.Fatalf("CreateInitialDeployment() = %+v, want nil without explicit runtime artifact opt-in", intent)
+	}
+	if len(builds.builds) != 0 || len(artifacts.artifacts) != 0 || len(intents.intents) != 0 {
+		t.Fatalf("synthetic Bahia deployables created: builds=%d artifacts=%d intents=%d", len(builds.builds), len(artifacts.artifacts), len(intents.intents))
+	}
+}
+
+func TestBahiaIntegrationCreatesInitialDeploymentFromRuntimeArtifactMetadata(t *testing.T) {
+	registry, builds, artifacts, intents, _, states := newSoulFactoryRegistryHarness()
+	envID := uuid.New()
+	if err := registry.CreateEnvironment(t.Context(), &domain.Environment{ID: envID, Name: "agents", Protected: false, DeployStrategy: domain.DeployStrategyReplace, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("CreateEnvironment() error = %v", err)
+	}
+
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String(), DeployRuntimeArtifacts: true}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration() error = %v", err)
+	}
+
+	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard, NostrNpub: "npub1", Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw}, CreatedAt: time.Now().UTC()}
+	serviceID, err := integration.RegisterSoulAsService(t.Context(), soul)
+	if err != nil {
+		t.Fatalf("RegisterSoulAsService() error = %v", err)
+	}
+	soul.BahiaServiceID = &serviceID
+
+	intent, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID, runtimeArtifactResult())
 	if err != nil {
 		t.Fatalf("CreateInitialDeployment() error = %v", err)
 	}
@@ -86,6 +118,11 @@ func TestBahiaIntegrationCreatesInitialDeploymentHookup(t *testing.T) {
 	}
 	if len(artifacts.artifacts) != 1 {
 		t.Fatalf("artifact count = %d, want 1", len(artifacts.artifacts))
+	}
+	for _, artifact := range artifacts.artifacts {
+		if artifact.ImageRepo != "registry.example/openclaw/scout" || artifact.ImageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+			t.Fatalf("artifact = %+v, want runtime repo+digest", artifact)
+		}
 	}
 	if len(intents.intents) != 1 {
 		t.Fatalf("intent count = %d, want 1", len(intents.intents))
@@ -112,24 +149,61 @@ func TestBahiaIntegrationCreatesInitialDeploymentHookup(t *testing.T) {
 	}
 }
 
-func TestBahiaIntegrationLifecycleUpdatesState(t *testing.T) {
-	registry, _, _, intents, observations, _ := newSoulFactoryRegistryHarness()
+func TestBahiaIntegrationRuntimeArtifactOptInRequiresDigestMetadata(t *testing.T) {
+	registry, builds, artifacts, intents, _, _ := newSoulFactoryRegistryHarness()
 	envID := uuid.New()
 	if err := registry.CreateEnvironment(t.Context(), &domain.Environment{ID: envID, Name: "agents", Protected: false, DeployStrategy: domain.DeployStrategyReplace, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("CreateEnvironment() error = %v", err)
 	}
-	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String()}, slogDefaultLogger())
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String(), DeployRuntimeArtifacts: true}, slogDefaultLogger())
 	if err != nil {
 		t.Fatalf("NewBahiaIntegration() error = %v", err)
 	}
-
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard, CreatedAt: time.Now().UTC()}
 	serviceID, err := integration.RegisterSoulAsService(t.Context(), soul)
 	if err != nil {
 		t.Fatalf("RegisterSoulAsService() error = %v", err)
 	}
 	soul.BahiaServiceID = &serviceID
-	if _, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID); err != nil {
+
+	for name, mutate := range map[string]func(map[string]interface{}){
+		"missing digest": func(artifact map[string]interface{}) { delete(artifact, "image_digest") },
+		"malformed digest": func(artifact map[string]interface{}) {
+			artifact["image_digest"] = "latest"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := runtimeArtifactResult()
+			mutate(result.Result["artifact"].(map[string]interface{}))
+			_, err = integration.CreateInitialDeployment(t.Context(), soul, serviceID, result)
+			if !errors.Is(err, ErrDeployableArtifactRequired) {
+				t.Fatalf("CreateInitialDeployment() error = %v, want ErrDeployableArtifactRequired", err)
+			}
+			if len(builds.builds) != 0 || len(artifacts.artifacts) != 0 || len(intents.intents) != 0 {
+				t.Fatalf("Bahia deployables created despite invalid digest: builds=%d artifacts=%d intents=%d", len(builds.builds), len(artifacts.artifacts), len(intents.intents))
+			}
+		})
+	}
+}
+
+func TestBahiaIntegrationLifecycleUpdatesState(t *testing.T) {
+	registry, _, _, intents, observations, _ := newSoulFactoryRegistryHarness()
+	envID := uuid.New()
+	if err := registry.CreateEnvironment(t.Context(), &domain.Environment{ID: envID, Name: "agents", Protected: false, DeployStrategy: domain.DeployStrategyReplace, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("CreateEnvironment() error = %v", err)
+	}
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String(), DeployRuntimeArtifacts: true}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration() error = %v", err)
+	}
+
+	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard, Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw}, CreatedAt: time.Now().UTC()}
+	serviceID, err := integration.RegisterSoulAsService(t.Context(), soul)
+	if err != nil {
+		t.Fatalf("RegisterSoulAsService() error = %v", err)
+	}
+	soul.BahiaServiceID = &serviceID
+	if _, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID, runtimeArtifactResult()); err != nil {
 		t.Fatalf("CreateInitialDeployment() error = %v", err)
 	}
 
@@ -182,6 +256,29 @@ func latestObservation(repo *sfMockObservationRepo, serviceID, envID uuid.UUID) 
 	}
 	last := items[len(items)-1]
 	return &last
+}
+
+func runtimeArtifactResult() *RuntimeControlResultEnvelope {
+	return &RuntimeControlResultEnvelope{
+		Method:         RuntimeMethodProvision,
+		RequestEvent:   "runtime-request-event",
+		IdempotencyKey: "sha256:runtime-idempotency",
+		Status:         "success",
+		Result: map[string]interface{}{
+			"artifact": map[string]interface{}{
+				"image_repo":          "registry.example/openclaw/scout",
+				"image_tag":           "runtime-build-7",
+				"image_digest":        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
+			},
+			"build": map[string]interface{}{
+				"git_sha":   "abcdef1",
+				"git_ref":   "refs/heads/main",
+				"ci_system": "openclaw-ci",
+				"ci_run_id": "openclaw-run-7",
+			},
+		},
+	}
 }
 
 func (m *sfMockServiceRepo) Create(_ context.Context, svc *domain.Service) error {

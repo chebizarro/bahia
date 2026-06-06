@@ -42,6 +42,16 @@ func (c *capturedPublish) eventsByKind(kind int) []*nostr.Event {
 	return out
 }
 
+func (c *capturedPublish) relaysByKind(kind int) [][]string {
+	var out [][]string
+	for i, event := range c.events {
+		if event.Kind == kind {
+			out = append(out, c.relays[i])
+		}
+	}
+	return out
+}
+
 func buildProvisioningEvent(t *testing.T, pubkey, eventID string, tags nostr.Tags, content string) *nostr.Event {
 	t.Helper()
 	if eventID == "" {
@@ -85,6 +95,45 @@ type failingWorkspaceManager struct{ err error }
 
 func (m failingWorkspaceManager) InitWorkspace(context.Context, *domain.AgentSoul) (string, error) {
 	return "", m.err
+}
+
+func TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(
+		Config{
+			Relays:            []string{" wss://public.example/", "wss://shared.example"},
+			AdditionalRelays:  []string{"wss://private.example", "wss://public.example"},
+			AuthorizedPubkeys: []string{signer.pubkey},
+			SoulFactoryPubkey: signer.pubkey,
+		},
+		scriptedGenerator{},
+		signer,
+		slog.Default(),
+	)
+	capture := attachPublishCapture(reactor)
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
+	reactor.provisioner = full
+
+	request := buildProvisioningEvent(t, signer.pubkey, "relay-targets", nostr.Tags{{"agent-id", "scout"}, {"name", "Scout"}}, `{"brief":"Track relays"}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	wantRelays := []string{"wss://public.example", "wss://shared.example", "wss://private.example"}
+	for _, kind := range []int{domain.KindProvisioningStatus, domain.KindAgentSoul, domain.KindProvisioningResult} {
+		for _, got := range capture.relaysByKind(kind) {
+			if !slices.Equal(got, wantRelays) {
+				t.Fatalf("kind %d relays = %+v, want %+v", kind, got, wantRelays)
+			}
+		}
+	}
+
+	publishErr := errors.New("relay OK rejected")
+	reactor.publishFn = func(context.Context, *nostr.Event, []string) error { return publishErr }
+	if err := reactor.PublishStatus(t.Context(), request, domain.StepGenerate, 1, 1, "status"); !errors.Is(err, publishErr) {
+		t.Fatalf("PublishStatus() error = %v, want publishErr", err)
+	}
+	if err := reactor.publishError(t.Context(), request, "generate", "failed"); !errors.Is(err, publishErr) {
+		t.Fatalf("publishError() error = %v, want publishErr", err)
+	}
 }
 
 func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *testing.T) {
@@ -291,7 +340,7 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 }
 
 func TestOptionalIntegrationFailureIsRecordedWithoutFabricatedSuccess(t *testing.T) {
-	reactor := NewReactor(Config{}, scriptedGenerator{}, newFakeSigner(t), slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, newFakeSigner(t), slog.Default())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	full.workspaceManager = failingWorkspaceManager{err: errors.New("workspace remote down")}
@@ -357,6 +406,7 @@ func (e *fakeProvisioningEngine) Provision(context.Context, *domain.Provisioning
 
 type trackingRuntimeAdapter struct {
 	requests []RuntimeAdapterRequest
+	fail     error
 }
 
 func (a *trackingRuntimeAdapter) Runtime() domain.RuntimeTarget { return domain.RuntimeTargetOpenClaw }
@@ -365,6 +415,16 @@ func (a *trackingRuntimeAdapter) DiscoverCapabilities(context.Context, domain.So
 }
 func (a *trackingRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapterRequest) (*RuntimeControlResultEnvelope, error) {
 	a.requests = append(a.requests, req)
+	if a.fail != nil {
+		return &RuntimeControlResultEnvelope{
+			Schema:               domain.SoulFactoryRuntimeControlSchema,
+			Method:               req.Method,
+			IdempotencyKey:       "sha256:test",
+			OperatorRequestEvent: req.Operator.RequestEvent,
+			Status:               "failed",
+			Error:                &RuntimeControlError{Code: "runtime_error", Message: a.fail.Error()},
+		}, a.fail
+	}
 	return &RuntimeControlResultEnvelope{
 		Schema:               domain.SoulFactoryRuntimeControlSchema,
 		Method:               req.Method,
@@ -546,6 +606,51 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 	}
 	if !eventKindBefore(capture.events, domain.KindAgentSoul, domain.KindProvisioningResult) {
 		t.Fatalf("final 31951 was not published before terminal 7950: %#v", capture.events)
+	}
+}
+
+func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(
+		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
+		&capturingGenerator{},
+		signer,
+		slog.Default(),
+	)
+	capture := attachPublishCapture(reactor)
+	draft := &domain.SoulDraft{
+		EventID:   "runtime-failure-draft",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Brief:    "Runtime must fail",
+			SpecHash: "sha256:runtime-failure",
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+		},
+	}
+	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
+	runtime := &trackingRuntimeAdapter{fail: errors.New("runtime rejected provision")}
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	reactor.provisioner = full
+
+	request := buildProvisioningEvent(t, signer.pubkey, "runtime-failure", nostr.Tags{{"agent-id", "scout"}, {"draft-event", draft.EventID}, {"spec-hash", "sha256:runtime-failure"}}, `{}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if len(runtime.requests) != 1 {
+		t.Fatalf("runtime requests = %d, want 1", len(runtime.requests))
+	}
+	if len(capture.eventsByKind(domain.KindAgentSoul)) != 0 {
+		t.Fatalf("final soul was published despite runtime failure: %#v", capture.eventsByKind(domain.KindAgentSoul))
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("result count = %d, want one error result", len(results))
+	}
+	if got := findTag(results[0], "status"); got != "error" {
+		t.Fatalf("result status = %q, want error; tags=%#v", got, results[0].Tags)
+	}
+	if !strings.Contains(results[0].Content, "runtime rejected provision") {
+		t.Fatalf("error result content = %q, want runtime error", results[0].Content)
 	}
 }
 

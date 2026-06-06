@@ -248,7 +248,9 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	// Validate authorization
 	if !r.isAuthorizedProvisioner(event.PubKey) {
 		logger.Warn("unauthorized provisioning request")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized provisioners list")
+		if err := r.publishError(ctx, event, "unauthorized", "requester not in authorized provisioners list"); err != nil {
+			logger.Error("failed to publish provisioning error", "error", err)
+		}
 		return
 	}
 
@@ -256,7 +258,9 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	req, err := r.parseProvisioningRequest(event)
 	if err != nil {
 		logger.Error("failed to parse request", "error", err)
-		r.publishError(ctx, event, "parse_error", err.Error())
+		if publishErr := r.publishError(ctx, event, "parse_error", err.Error()); publishErr != nil {
+			logger.Error("failed to publish provisioning error", "error", publishErr)
+		}
 		return
 	}
 
@@ -304,7 +308,9 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishError(ctx, event, string(run.CurrentStep), err.Error())
+		if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error()); publishErr != nil {
+			logger.Error("failed to publish provisioning error", "error", publishErr)
+		}
 		return
 	}
 
@@ -318,7 +324,11 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		"service_id", result.BahiaServiceID,
 	)
 
-	r.publishResult(ctx, event, result)
+	if err := r.publishResult(ctx, event, result); err != nil {
+		logger.Error("failed to publish provisioning result", "error", err)
+		run.Status = domain.ProvisioningStatusFailed
+		run.Error = fmt.Sprintf("publish provisioning result: %v", err)
+	}
 }
 
 // handleSoulAction processes a kind:1950 lifecycle action through the single
@@ -358,7 +368,7 @@ func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign status event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.config.AdditionalRelays)
+	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
 
 // publishResult publishes a kind:7950 success result event.
@@ -372,9 +382,7 @@ func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign result event: %w", err)
 	}
 
-	// Publish to both supplemental and public relays
-	allRelays := append(r.config.AdditionalRelays, r.config.Relays...)
-	return r.publish(ctx, event, allRelays)
+	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
 
 func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Event, action *domain.SoulAction, message string) error {
@@ -388,7 +396,7 @@ func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Eve
 	if err := r.signer.Sign(ctx, event); err != nil {
 		return fmt.Errorf("sign action error event: %w", err)
 	}
-	return r.publish(ctx, event, r.config.AdditionalRelays)
+	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
 
 // publishError publishes a kind:7950 error result event.
@@ -399,7 +407,7 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 		return fmt.Errorf("sign error event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.config.AdditionalRelays)
+	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
 
 // publishSoul publishes a kind:31951 agent soul event.
@@ -412,19 +420,38 @@ func (r *Reactor) PublishSoul(ctx context.Context, soul *domain.AgentSoul) error
 
 	soul.EventID = event.ID
 
-	// Publish to public relay
-	return r.publish(ctx, event, r.config.Relays)
+	return r.publish(ctx, event, r.provisioningPublicationRelays())
+}
+
+func (r *Reactor) provisioningPublicationRelays() []string {
+	return normalizeUsablePublishRelays(append(append([]string{}, r.config.Relays...), r.config.AdditionalRelays...))
+}
+
+func normalizeUsablePublishRelays(relays []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(relays))
+	for _, relay := range relays {
+		relay = strings.TrimRight(strings.TrimSpace(relay), "/")
+		if relay == "" {
+			continue
+		}
+		if _, ok := seen[relay]; ok {
+			continue
+		}
+		seen[relay] = struct{}{}
+		out = append(out, relay)
+	}
+	return out
 }
 
 // publish sends an event to the specified relays.
 func (r *Reactor) publish(ctx context.Context, event *nostr.Event, relays []string) error {
+	relays = normalizeUsablePublishRelays(relays)
 	if r.publishFn != nil {
 		return r.publishFn(ctx, event, relays)
 	}
-	relays = normalizeSoulRelays(relays)
 	if len(relays) == 0 {
-		r.logger.Warn("no relays configured for publish; preserving local provisioning flow without relay publication", "kind", event.Kind, "event_id", event.ID)
-		return nil
+		return fmt.Errorf("no Soul Factory relays configured for publishing kind %d", event.Kind)
 	}
 	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(r.signer), WithRelayBusLogger(r.logger))
 	if err != nil {

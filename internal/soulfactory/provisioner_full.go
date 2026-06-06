@@ -114,7 +114,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 1: Generate soul content
 	logger.Info("step 1/8: generating soul content")
 	run.CurrentStep = domain.StepGenerate
-	p.publishProgress(ctx, requestEvent, domain.StepGenerate, 1, totalSteps, "Generating soul content via LLM...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepGenerate, 1, totalSteps, "Generating soul content via LLM..."); err != nil {
+		return nil, err
+	}
 
 	stepStart := time.Now()
 	output, err := p.reactor.generator.Generate(ctx, domain.SoulGeneratorInput{
@@ -154,7 +156,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 2: Register with Signet
 	logger.Info("step 2/8: registering with Signet")
 	run.CurrentStep = domain.StepSignet
-	p.publishProgress(ctx, requestEvent, domain.StepSignet, 2, totalSteps, "Registering keypair with Signet...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepSignet, 2, totalSteps, "Registering keypair with Signet..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 	pubkey, npub, bunkerURI, err := p.reactor.signer.ProvisionAgent(ctx, resolved.AgentID, soul.AllowedKinds)
@@ -174,7 +178,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 3: Generate and upload avatar
 	logger.Info("step 3/8: generating avatar")
 	run.CurrentStep = domain.StepAvatar
-	p.publishProgress(ctx, requestEvent, domain.StepAvatar, 3, totalSteps, "Generating avatar via FLUX...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepAvatar, 3, totalSteps, "Generating avatar via FLUX..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 	if p.avatarGenerator == nil {
@@ -207,7 +213,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 4: Publish Nostr profile
 	logger.Info("step 4/8: publishing Nostr profile")
 	run.CurrentStep = domain.StepProfile
-	p.publishProgress(ctx, requestEvent, domain.StepProfile, 4, totalSteps, "Publishing Nostr profile (kind:0)...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepProfile, 4, totalSteps, "Publishing Nostr profile (kind:0)..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 	if p.nip05Manager != nil {
@@ -225,7 +233,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 5: Create Qdrant collection
 	logger.Info("step 5/8: creating Qdrant collection")
 	run.CurrentStep = domain.StepQdrant
-	p.publishProgress(ctx, requestEvent, domain.StepQdrant, 5, totalSteps, "Creating vector memory collection...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepQdrant, 5, totalSteps, "Creating vector memory collection..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 	if p.qdrantClient == nil || !p.qdrantClient.Configured() {
@@ -248,7 +258,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 6: Seed agent-memory
 	logger.Info("step 6/8: seeding agent memory")
 	run.CurrentStep = domain.StepMemory
-	p.publishProgress(ctx, requestEvent, domain.StepMemory, 6, totalSteps, "Seeding agent memory...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepMemory, 6, totalSteps, "Seeding agent memory..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 	if p.agentMemory == nil || !p.agentMemory.Configured() {
@@ -278,7 +290,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 7: Initialize workspace
 	logger.Info("step 7/8: initializing workspace")
 	run.CurrentStep = domain.StepWorkspace
-	p.publishProgress(ctx, requestEvent, domain.StepWorkspace, 7, totalSteps, "Initializing workspace repository...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepWorkspace, 7, totalSteps, "Initializing workspace repository..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 	if p.workspaceManager == nil {
@@ -302,7 +316,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 8: Register NIP-05 and finalize
 	logger.Info("step 8/8: registering NIP-05 and finalizing")
 	run.CurrentStep = domain.StepDeploy
-	p.publishProgress(ctx, requestEvent, domain.StepDeploy, 8, totalSteps, "Registering NIP-05 and finalizing...")
+	if err := p.publishProgress(ctx, requestEvent, domain.StepDeploy, 8, totalSteps, "Registering NIP-05 and finalizing..."); err != nil {
+		return nil, err
+	}
 
 	stepStart = time.Now()
 
@@ -345,9 +361,12 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	now := time.Now()
 	soul.ProvisionedAt = &now
 
+	var runtimeResult *RuntimeControlResultEnvelope
 	if resolved.Runtime.Target != "" {
 		logger.Info("binding runtime through SoulFactory runtime adapter", "runtime", resolved.Runtime.Target)
-		if err := p.executeRuntimeProvision(ctx, soul, resolved, run); err != nil {
+		var err error
+		runtimeResult, err = p.executeRuntimeProvision(ctx, soul, resolved, run)
+		if err != nil {
 			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 			return nil, err
 		}
@@ -362,8 +381,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 		} else {
 			soul.BahiaServiceID = &serviceID
 
-			// Create initial deployment intent
-			if _, err := p.bahiaIntegration.CreateInitialDeployment(ctx, soul, serviceID); err != nil {
+			if _, err := p.bahiaIntegration.CreateInitialDeployment(ctx, soul, serviceID, runtimeResult); err != nil {
 				logger.Warn("bahia initial deployment failed", "error", err)
 			}
 
@@ -549,10 +567,12 @@ func (p *FullProvisioner) RedeploySoul(ctx context.Context, soulRef string) erro
 	return nil
 }
 
-func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) {
+func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) error {
 	if err := p.reactor.PublishStatus(ctx, requestEvent, step, current, total, message); err != nil {
-		p.reactor.logger.Warn("failed to publish progress", "step", step, "error", err)
+		p.reactor.logger.Error("failed to publish progress", "step", step, "error", err)
+		return fmt.Errorf("publish progress %s: %w", step, err)
 	}
+	return nil
 }
 
 func cloneRuntimeAdapters(adapters map[domain.RuntimeTarget]RuntimeAdapter) map[domain.RuntimeTarget]RuntimeAdapter {
@@ -568,10 +588,10 @@ func cloneRuntimeAdapters(adapters map[domain.RuntimeTarget]RuntimeAdapter) map[
 	return out
 }
 
-func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *domain.AgentSoul, resolved *resolvedProvisioningSpec, run *domain.ProvisioningRun) error {
+func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *domain.AgentSoul, resolved *resolvedProvisioningSpec, run *domain.ProvisioningRun) (*RuntimeControlResultEnvelope, error) {
 	adapter := p.runtimeAdapters[resolved.Runtime.Target]
 	if adapter == nil {
-		return fmt.Errorf("no runtime adapter configured for %s", resolved.Runtime.Target)
+		return nil, fmt.Errorf("no runtime adapter configured for %s", resolved.Runtime.Target)
 	}
 	result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
 		Method: RuntimeMethodProvision,
@@ -594,10 +614,10 @@ func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *dom
 		RequestKind: domain.KindProvisioningRequest,
 	})
 	if err != nil {
-		return fmt.Errorf("runtime provision %s: %w", resolved.Runtime.Target, err)
+		return nil, fmt.Errorf("runtime provision %s: %w", resolved.Runtime.Target, err)
 	}
 	applyRuntimeProvisionResult(soul, resolved, result)
-	return nil
+	return result, nil
 }
 
 func applyRuntimeProvisionResult(soul *domain.AgentSoul, resolved *resolvedProvisioningSpec, result *RuntimeControlResultEnvelope) {

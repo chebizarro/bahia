@@ -41,22 +41,23 @@ func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T)
 	if err := registry.CreateEnvironment(t.Context(), &domain.Environment{ID: envID, Name: "agents", Protected: false, DeployStrategy: domain.DeployStrategyReplace, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("CreateEnvironment() error = %v", err)
 	}
-	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String()}, slogDefaultLogger())
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String(), DeployRuntimeArtifacts: true}, slogDefaultLogger())
 	if err != nil {
 		t.Fatalf("NewBahiaIntegration() error = %v", err)
 	}
 
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
 	_ = NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
 
-	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard, Status: domain.SoulStatusActive, NostrPubkey: signer.pubkey, CreatedAt: time.Now().UTC()}
+	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard, Status: domain.SoulStatusActive, NostrPubkey: signer.pubkey, Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw}, CreatedAt: time.Now().UTC()}
 	serviceID, err := integration.RegisterSoulAsService(t.Context(), soul)
 	if err != nil {
 		t.Fatalf("RegisterSoulAsService() error = %v", err)
 	}
 	soul.BahiaServiceID = &serviceID
-	if _, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID); err != nil {
+	if _, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID, runtimeArtifactResult()); err != nil {
 		t.Fatalf("CreateInitialDeployment() error = %v", err)
 	}
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
@@ -112,7 +113,8 @@ func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T)
 
 func TestLifecycleHandlerResumeRequiresSuspendedSoul(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) {
 		return &domain.AgentSoul{AgentID: "scout", Status: domain.SoulStatusActive}, nil
 	}

@@ -43,6 +43,42 @@
       "command": "! grep -R \"soul_factory\\|soulfactory\" internal/api",
       "criteria": ["SFOM-AC-006"],
       "expected": "No SoulFactory provisioning/lifecycle REST handlers under internal/api."
+    },
+    {
+      "id": "SFOM-T-008",
+      "name": "Provisioning publications use normalized combined relays and return publish errors",
+      "command": "go test ./internal/soulfactory -run TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors",
+      "criteria": ["SFOM-AC-007"]
+    },
+    {
+      "id": "SFOM-T-009",
+      "name": "Runtime result fields land before final 31951 and terminal 7950",
+      "command": "go test ./internal/soulfactory -run TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields",
+      "criteria": ["SFOM-AC-008"]
+    },
+    {
+      "id": "SFOM-T-010",
+      "name": "Bahia projection does not create synthetic initial deployables",
+      "command": "go test ./internal/soulfactory -run TestBahiaIntegrationDoesNotCreateSyntheticInitialDeployment",
+      "criteria": ["SFOM-AC-009"]
+    },
+    {
+      "id": "SFOM-T-011",
+      "name": "Bahia projection creates deployment only from opt-in runtime artifact metadata",
+      "command": "go test ./internal/soulfactory -run TestBahiaIntegrationCreatesInitialDeploymentFromRuntimeArtifactMetadata",
+      "criteria": ["SFOM-AC-009"]
+    },
+    {
+      "id": "SFOM-T-012",
+      "name": "Bahia runtime artifact opt-in requires digest metadata",
+      "command": "go test ./internal/soulfactory -run TestBahiaIntegrationRuntimeArtifactOptInRequiresDigestMetadata",
+      "criteria": ["SFOM-AC-009"]
+    },
+    {
+      "id": "SFOM-T-013",
+      "name": "Runtime provisioning failure publishes error without final soul or success result",
+      "command": "go test ./internal/soulfactory -run TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess",
+      "criteria": ["SFOM-AC-008"]
     }
   ]
 }
