@@ -6,13 +6,23 @@ const SERVICE_PUBKEY = 'b'.repeat(64);
 const WORKER_PUBKEY = 'c'.repeat(64);
 const now = Math.floor(Date.now() / 1000);
 
+const canonicalSchemaByLegacyKind = {
+  31980: 'bahia.registry.ml-model.v1',
+  31981: 'bahia.registry.ml-model-version.v1',
+  31985: 'bahia.registry.ml-inference-endpoint.v1',
+  31986: 'bahia.state.ml-inference-endpoint.v1',
+  31988: 'bahia.state.ml-provenance.v1',
+  31989: 'bahia.state.ml-runtime-capability.v1'
+};
+
 function nostrEvent({ kind, pubkey = SERVICE_PUBKEY, tags = [], content = {} }) {
   const body = typeof content === 'string' ? content : JSON.stringify(content);
+  const schema = canonicalSchemaByLegacyKind[kind];
   const event = {
-    kind,
+    kind: schema ? 30900 : kind,
     pubkey,
     created_at: now,
-    tags,
+    tags: schema ? [['schema', schema], ['legacy_kind', String(kind)], ...tags] : tags,
     content: body,
     sig: '0'.repeat(128)
   };
@@ -121,7 +131,7 @@ const nostrEvents = [
   }),
   nostrEvent({
     kind: 31989,
-    pubkey: WORKER_PUBKEY,
+    pubkey: SERVICE_PUBKEY,
     tags: [['d', `worker:${WORKER_PUBKEY}:ai-capability`], ['runtime', 'vllm'], ['artifact_format', 'safetensors'], ['task', 'chat_completions'], ['accelerator', 'gpu_nvidia_cuda'], ['vram_gb', '48'], ['status', 'ready']],
     content: { pubkey: WORKER_PUBKEY, name: 'gpu-worker', status: 'ready' }
   })
@@ -138,7 +148,7 @@ test('Inference page renders HF to GPU/vLLM deployed state from Nostr read model
   await page.goto('/ml');
   await page.waitForLoadState('networkidle');
 
-  await expect(page.getByRole('heading', { name: /Inference/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
   await expect(page.locator('[data-testid="ml-model-catalog"]')).toContainText('Qwen2.5-Coder-32B-Instruct');
   await expect(page.locator('[data-testid="ml-model-catalog"]')).toContainText('huggingface');
   await expect(page.locator('[data-testid="ml-endpoints"]')).toContainText('qwen-coder');

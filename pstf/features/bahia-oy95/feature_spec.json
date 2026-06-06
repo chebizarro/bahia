@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-oy95",
+  "title": "Stabilize Playwright UI route contracts and accessible selectors after web UI drift",
+  "observed_behavior": [
+    "Inference and Settings smoke specs used ambiguous heading locators after route content added matching subsection headings.",
+    "Dashboard smoke expected a desktop Bahia logo at least 60px tall while the nav rendered 40px.",
+    "Soul provisioning smoke tests targeted legacy wizard labels and IDs after the route became a runtime-aware signed draft and provisioning flow.",
+    "Navigation smoke observed console errors when tests advertised no relay-backed read-model capability."
+  ],
+  "intended_behavior": [
+    "Routes expose stable accessible headings and controls without ambiguous current-step state.",
+    "Soul provisioning remains signer-first, saves signed 31952 draft checkpoints, publishes 5950 provisioning requests, and verifies relay OK acceptance/rejection.",
+    "UI smoke tests seed canonical relay-backed read-model events instead of depending on legacy-kind runtime hydration.",
+    "Navigation renders against a relay-backed mock discovery contract without unexpected console errors."
+  ],
+  "scope": [
+    "web/src/lib/components/Nav.svelte",
+    "web/src/routes/souls/new/+page.svelte",
+    "web/tests/e2e/helpers.js",
+    "web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js",
+    "web/tests/e2e/settings-relay-visibility.spec.js",
+    "web/tests/e2e/navigation.spec.js",
+    "web/tests/e2e/soul-signing-smoke.spec.js",
+    "web/tests/e2e/soul-provisioned-visibility.spec.js"
+  ]
+}

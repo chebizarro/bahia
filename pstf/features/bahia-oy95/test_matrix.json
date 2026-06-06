@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-oy95",
+  "test_matrix": [
+    { "acceptance_criteria": ["AC1"], "command": "npx playwright test tests/e2e/ml-hf-vllm-fabric-smoke.spec.js tests/e2e/settings-relay-visibility.spec.js", "covered_in_focused_run": true },
+    { "acceptance_criteria": ["AC2"], "command": "npx playwright test tests/e2e/dashboard-smoke.spec.js -g \"should expose logo, menu, and linked dashboard cards\" --workers=1", "covered_in_focused_run": true },
+    { "acceptance_criteria": ["AC3"], "command": "npx playwright test tests/e2e/soul-signing-smoke.spec.js tests/e2e/soul-provisioned-visibility.spec.js", "covered_in_focused_run": true },
+    { "acceptance_criteria": ["AC4"], "command": "npx playwright test tests/e2e/navigation.spec.js", "covered_in_focused_run": true }
+  ]
+}

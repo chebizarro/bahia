@@ -3,6 +3,57 @@ import { installE2EMocks } from './helpers.js';
 
 const FACTORY_PUBKEY = 'b'.repeat(64);
 const AGENT_PUBKEY = 'c'.repeat(64);
+const RUNTIME_PUBKEY = 'd'.repeat(64);
+const BROWSER_RELAY = 'ws://relay.test.local';
+
+const systemInfo = {
+  nostr: {
+    browser_relays: [BROWSER_RELAY],
+    service_pubkey: FACTORY_PUBKEY
+  },
+  features: {
+    relay_sidecar: true,
+    relay_read_models: true,
+    legacy_sse: false
+  }
+};
+
+function runtimeCapabilityEvent() {
+  return {
+    id: 'runtime-capability-openclaw-provision',
+    kind: 30317,
+    pubkey: RUNTIME_PUBKEY,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', 'openclaw-soulfactory-provision'],
+      ['runtime', 'openclaw'],
+      ['schema', 'soulfactory-runtime-capability/v1'],
+      ['control-schema', 'soulfactory-runtime-control/v1'],
+      ['method', 'soulfactory.provision'],
+      ['relay', BROWSER_RELAY, 'control']
+    ],
+    content: JSON.stringify({
+      schema: 'soulfactory-runtime-capability/v1',
+      runtime: 'openclaw',
+      control_schema: 'soulfactory-runtime-control/v1',
+      methods: ['soulfactory.provision'],
+      relay_hints: { control: [BROWSER_RELAY] }
+    }),
+    sig: '0'.repeat(128)
+  };
+}
+
+async function fillRequiredIdentity(page, { name, agentId, brief }) {
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Agent ID').fill(agentId);
+  await page.getByLabel('Purpose').fill(brief);
+}
+
+async function openPreview(page) {
+  await page.getByRole('button', { name: /Runtime/ }).click();
+  await page.getByRole('button', { name: /Preview draft/ }).click();
+  await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Preview")')).toBeVisible();
+}
 
 function provisioningResultEvent({ requestId, soulId, npub }) {
   return {
@@ -50,20 +101,20 @@ function soulEvent({ agentId, name, purpose }) {
 }
 
 test('A newly provisioned soul becomes visible through relay-backed browsing', async ({ page }) => {
-  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [] });
+  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [runtimeCapabilityEvent()], systemInfo });
 
   await page.goto('/souls/new');
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByRole('button', { name: 'Continue' }).click();
-
-  await page.fill('#agentName', 'Scout Prime');
-  await page.fill('#agentId', 'scout-prime');
-  await page.fill('#brief', 'Guide release operators safely');
+  await fillRequiredIdentity(page, {
+    name: 'Scout Prime',
+    agentId: 'scout-prime',
+    brief: 'Guide release operators safely'
+  });
+  await openPreview(page);
 
   await page.getByRole('button', { name: 'Provision Soul' }).click();
   await expect(page.getByText('Event Signed & Published')).toBeVisible();
 
-  const requestId = (await page.locator('.event-details code').first().textContent())?.trim();
+  const requestId = (await page.locator('dt:has-text("Request ID:") + dd code').textContent())?.trim();
   if (!requestId) {
     throw new Error('request id was not rendered');
   }

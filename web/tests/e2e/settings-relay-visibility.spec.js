@@ -29,7 +29,7 @@ test.describe('Settings relay visibility', () => {
 
     await page.goto('/settings');
 
-    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     const serverConfig = page.locator('section', { hasText: 'Server Configuration' });
     await expect(serverConfig.getByText('Service Relay List (NIP-51)')).toBeVisible();
     await expect(serverConfig.getByText(SERVICE_RELAYS.join(', '))).toBeVisible();

@@ -1,8 +1,62 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
 
+const SERVICE_PUBKEY = 'b'.repeat(64);
+const RUNTIME_PUBKEY = 'd'.repeat(64);
+const BROWSER_RELAY = 'ws://relay.test.local';
+const systemInfo = {
+  nostr: {
+    browser_relays: [BROWSER_RELAY],
+    service_pubkey: SERVICE_PUBKEY
+  },
+  features: {
+    relay_sidecar: true,
+    relay_read_models: true,
+    legacy_sse: false
+  }
+};
+
+function runtimeCapabilityEvent() {
+  return {
+    id: 'runtime-capability-openclaw-provision',
+    kind: 30317,
+    pubkey: RUNTIME_PUBKEY,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', 'openclaw-soulfactory-provision'],
+      ['runtime', 'openclaw'],
+      ['schema', 'soulfactory-runtime-capability/v1'],
+      ['control-schema', 'soulfactory-runtime-control/v1'],
+      ['method', 'soulfactory.provision'],
+      ['relay', BROWSER_RELAY, 'control']
+    ],
+    content: JSON.stringify({
+      schema: 'soulfactory-runtime-capability/v1',
+      runtime: 'openclaw',
+      control_schema: 'soulfactory-runtime-control/v1',
+      methods: ['soulfactory.provision'],
+      relay_hints: { control: [BROWSER_RELAY] }
+    }),
+    sig: '0'.repeat(128)
+  };
+}
+
+async function fillRequiredIdentity(page, { name = 'Test Agent', agentId = 'test-agent', brief = 'This is a test agent for smoke testing', tier = 'standard' } = {}) {
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Agent ID').fill(agentId);
+  await page.getByLabel('Purpose').fill(brief);
+  await page.getByLabel('Tier').selectOption(tier);
+}
+
+async function openPreview(page) {
+  await page.getByRole('button', { name: /Runtime/ }).click();
+  await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Customize")')).toBeVisible();
+  await page.getByRole('button', { name: /Preview draft/ }).click();
+  await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Preview")')).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [] });
+  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [runtimeCapabilityEvent()], systemInfo });
 });
 
 test.describe('Soul Signing Smoke Test', () => {
@@ -10,30 +64,21 @@ test.describe('Soul Signing Smoke Test', () => {
     await page.goto('/souls/new');
 
     await expect(page.getByRole('heading', { name: 'Create New Soul' })).toBeVisible();
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
-
-    await page.fill('#agentName', 'Test Agent');
-    await page.fill('#agentId', 'test-agent');
-    await page.selectOption('#tier', 'standard');
-    await page.fill('#brief', 'This is a test agent for smoke testing');
+    await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Customize")')).toBeVisible();
+    await fillRequiredIdentity(page);
 
     await expect(page.locator('.auth-status:has-text("Authenticated")')).toBeVisible();
 
+    await openPreview(page);
     await page.getByRole('button', { name: 'Provision Soul' }).click();
 
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Provision")')).toBeVisible();
+    await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Provision")')).toBeVisible();
     await expect(page.getByText('Event Signed & Published')).toBeVisible();
     await expect(page.getByText('Request ID:')).toBeVisible();
   });
 
   test('should show NIP-07 extension status', async ({ page }) => {
     await page.goto('/souls/new');
-
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
 
     await expect(page.locator('.auth-status')).toBeVisible();
     await expect(page.locator('.auth-status:has-text("Authenticated")')).toBeVisible();
@@ -52,9 +97,6 @@ test.describe('Soul Signing Smoke Test', () => {
   test('should generate agent ID from name', async ({ page }) => {
     await page.goto('/souls/new');
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-
     await page.fill('#agentName', 'My Test Agent');
     await page.locator('#agentName').blur();
 
@@ -64,16 +106,13 @@ test.describe('Soul Signing Smoke Test', () => {
   test('should allow navigation between wizard steps', async ({ page }) => {
     await page.goto('/souls/new');
 
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Template")')).toBeVisible();
+    await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Customize")')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
+    await fillRequiredIdentity(page, { name: 'Navigation Agent', agentId: 'navigation-agent', brief: 'Verify wizard navigation' });
+    await openPreview(page);
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
-
-    await page.getByRole('button', { name: 'Back' }).click();
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
+    await page.getByRole('button', { name: /Back/ }).click();
+    await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Customize")')).toBeVisible();
   });
 
   test('should show relay rejection error when publish is not accepted', async ({ page }) => {
@@ -94,13 +133,23 @@ test.describe('Soul Signing Smoke Test', () => {
         send(data) {
           setTimeout(() => {
             if (!this.onmessage) return;
-            const event = JSON.parse(data);
-            if (Array.isArray(event) && event[0] === 'REQ') {
-              this.onmessage({ data: JSON.stringify(['EOSE', event[1]]) });
+            const message = JSON.parse(data);
+            if (Array.isArray(message) && message[0] === 'REQ') {
+              const subId = message[1];
+              const filters = message.slice(2);
+              const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
+              for (const storedEvent of events) {
+                if (filters.some((filter) => !Array.isArray(filter.kinds) || filter.kinds.includes(storedEvent.kind))) {
+                  this.onmessage({ data: JSON.stringify(['EVENT', subId, storedEvent]) });
+                }
+              }
+              this.onmessage({ data: JSON.stringify(['EOSE', subId]) });
               return;
             }
-            if (Array.isArray(event) && event[0] === 'EVENT') {
-              this.onmessage({ data: JSON.stringify(['OK', event[1]?.id, false, 'auth required']) });
+            if (Array.isArray(message) && message[0] === 'EVENT') {
+              const event = message[1];
+              const accepted = event?.kind === 31952;
+              this.onmessage({ data: JSON.stringify(['OK', event?.id, accepted, accepted ? '' : 'auth required']) });
             }
           }, 0);
         }
@@ -116,17 +165,13 @@ test.describe('Soul Signing Smoke Test', () => {
 
     await page.goto('/souls/new');
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-
-    await page.fill('#agentName', 'Reject Agent');
-    await page.fill('#agentId', 'reject-agent');
-    await page.fill('#brief', 'Should fail due to relay rejection');
+    await fillRequiredIdentity(page, { name: 'Reject Agent', agentId: 'reject-agent', brief: 'Should fail due to relay rejection' });
+    await openPreview(page);
 
     await page.getByRole('button', { name: 'Provision Soul' }).click();
 
     await expect(page.locator('.error-banner')).toContainText('not accepted by any relay');
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
+    await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Preview")')).toBeVisible();
   });
 
   test('should include provisioning request tags', async ({ page }) => {
@@ -140,13 +185,8 @@ test.describe('Soul Signing Smoke Test', () => {
 
     await page.goto('/souls/new');
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-
-    await page.fill('#agentName', 'Test Agent');
-    await page.fill('#agentId', 'test-agent');
-    await page.fill('#brief', 'Test brief');
-    await page.selectOption('#tier', 'lightweight');
+    await fillRequiredIdentity(page, { name: 'Test Agent', agentId: 'test-agent', brief: 'Test brief', tier: 'lightweight' });
+    await openPreview(page);
 
     await page.getByRole('button', { name: 'Provision Soul' }).click();
     await page.waitForFunction(() => Boolean(window._capturedEvent));

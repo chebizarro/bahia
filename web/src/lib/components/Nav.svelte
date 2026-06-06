@@ -210,7 +210,7 @@
     align-items: center;
     gap: 0.875rem;
     padding: 0.5rem 2rem;
-    min-height: 56px;
+    min-height: 76px;
   }
 
   .brand {
@@ -221,7 +221,7 @@
 
   .brand-logo {
     display: block;
-    height: 40px;
+    height: 60px;
     width: auto;
     max-width: min(220px, 100%);
   }

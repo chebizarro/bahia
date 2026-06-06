@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-oy95",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Inference and Settings page heading assertions target the page-level heading without strict-mode collisions.",
+      "tests": ["web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js", "web/tests/e2e/settings-relay-visibility.spec.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Desktop navigation exposes the Bahia logo at the smoke-test contract size and preserves linked dashboard card accessibility.",
+      "tests": ["web/tests/e2e/dashboard-smoke.spec.js -g 'should expose logo, menu, and linked dashboard cards'"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Soul provisioning exposes stable accessible labels and current-step state, requires a discovered runtime capability, and preserves NIP-07 OK/rejection coverage for 31952 drafts and 5950 provisioning requests.",
+      "tests": ["web/tests/e2e/soul-signing-smoke.spec.js", "web/tests/e2e/soul-provisioned-visibility.spec.js"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Navigation smoke uses a relay-backed discovery contract and renders without unexpected console errors.",
+      "tests": ["web/tests/e2e/navigation.spec.js"]
+    }
+  ]
+}

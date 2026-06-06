@@ -1,7 +1,24 @@
 import { test, expect } from '@playwright/test';
+import { installE2EMocks } from './helpers.js';
+
+const BROWSER_RELAY = 'ws://relay.test.local';
+const SERVICE_PUBKEY = 'b'.repeat(64);
+const systemInfo = {
+  nostr: {
+    browser_relays: [BROWSER_RELAY],
+    service_pubkey: SERVICE_PUBKEY
+  },
+  features: {
+    relay_sidecar: true,
+    relay_read_models: true,
+    legacy_sse: false
+  }
+};
 
 // Mock API responses to avoid needing a running Go backend
 test.beforeEach(async ({ page }) => {
+  await installE2EMocks(page, { authenticated: false, extension: false, nostrEvents: [], systemInfo });
+
   // Mock all API endpoints with empty/default responses
   await page.route('**/api/v1/**', (route) => {
     const url = route.request().url();
@@ -13,8 +30,8 @@ test.beforeEach(async ({ page }) => {
         contentType: 'application/json',
         body: JSON.stringify({
           data: {
-            nostr: { browser_relays: [] },
-            features: { legacy_sse: false, relay_read_models: false }
+            nostr: systemInfo.nostr,
+            features: systemInfo.features
           }
         })
       });

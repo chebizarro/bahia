@@ -426,13 +426,13 @@
 <div class="page">
   <header class="page-header">
     <a href="/souls" class="back-link">← Back to Gallery</a>
-    <h1><SoulIcon size={28} strokeWidth={1.75} ariaHidden="true" /> Create Runtime-Aware Soul</h1>
+    <h1><SoulIcon size={28} strokeWidth={1.75} ariaHidden="true" /> Create New Soul</h1>
     <p class="subtitle">Customize a v2 31952 draft, preview the full spec, then publish a 5950 provisioning request that references it.</p>
   </header>
 
   <div class="wizard-progress">
     {#each ['Customize', 'Preview', 'Provision'] as label, index}
-      <div class="progress-step" class:active={step >= index + 1} class:complete={step > index + 1}>
+      <div class="progress-step" class:active={step === index + 1} class:complete={step > index + 1} aria-current={step === index + 1 ? 'step' : undefined}>
         <span class="step-num">{index + 1}</span>
         <span class="step-label">{label}</span>
       </div>
@@ -502,11 +502,11 @@
           {#if activeTab === 'identity'}
             <div class="form-section">
               <h3>Identity draft</h3>
-              <label>Name<input bind:value={agentName} onblur={generateAgentId} placeholder="Scout" /></label>
-              <label>Agent ID<input bind:value={agentId} placeholder="scout" /></label>
-              <label>Purpose<textarea rows="5" bind:value={purpose} placeholder="What should this soul do?"></textarea></label>
+              <label>Name<input id="agentName" bind:value={agentName} onblur={generateAgentId} placeholder="Scout" /></label>
+              <label>Agent ID<input id="agentId" bind:value={agentId} placeholder="scout" /></label>
+              <label>Purpose<textarea id="brief" rows="5" bind:value={purpose} placeholder="What should this soul do?"></textarea></label>
               <div class="two-col">
-                <label>Tier<select bind:value={tier}><option value="lightweight">Lightweight</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
+                <label>Tier<select id="tier" bind:value={tier}><option value="lightweight">Lightweight</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
                 <label>NIP-05 target<input bind:value={nip05} placeholder="optional" /></label>
               </div>
               {#if showAdvanced}
@@ -634,7 +634,7 @@
       <div class="wizard-actions">
         <button class="btn-secondary" onclick={prevPanel} disabled={submitting || savingDraft}>← Back</button>
         <button class="btn-primary" onclick={submitProvisioning} disabled={submitting || savingDraft || runtimeChoices.length === 0 || (!hasExtension && !isAuthenticated)}>
-          {#if publishing}<span class="spinner"></span>Signing & publishing…{:else}<SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" />Provision from preview{/if}
+          {#if publishing}<span class="spinner"></span>Signing & publishing…{:else}<SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" />Provision Soul{/if}
         </button>
       </div>
     </section>
@@ -642,12 +642,12 @@
     <section class="wizard-content">
       <div class="publish-success">
         <SuccessIcon size={28} strokeWidth={2} ariaHidden="true" />
-        <h3>Draft and request published</h3>
+        <h3>Event Signed & Published</h3>
         <p>Terminal status will come only from explicit 7950 result events.</p>
         <dl>
           <dt>31952 draft</dt><dd><code>{draftEventId}</code></dd>
           <dt>spec hash</dt><dd><code>{draftSpecHash}</code></dd>
-          <dt>5950 request</dt><dd><code>{requestEventId}</code></dd>
+          <dt>Request ID:</dt><dd><code>{requestEventId}</code></dd>
           <dt>accepted relays</dt><dd>{publishResults.filter((result) => result.accepted).length}</dd>
         </dl>
       </div>
