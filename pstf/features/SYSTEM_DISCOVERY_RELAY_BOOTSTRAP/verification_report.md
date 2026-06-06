@@ -15,6 +15,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `go test ./internal/api/handlers ./pkg/client ./cmd/cli -coverprofile=/tmp/go-discovery-bootstrap.coverprofile -covermode=atomic`
 - `go tool cover -func=/tmp/go-discovery-bootstrap.coverprofile > pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/coverage/go-discovery-bootstrap-summary.txt`
 - `cd web && npm test -- --coverage --run tests/unit/system-store.test.js`
+- `cd web && pnpm test:unit -- --run tests/unit/discovery-store.test.js`
 
 ## Acceptance Criteria Status
 - `SDRB-AC-001` — **Verified**
@@ -26,7 +27,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `SDRB-AC-004` — **Verified**
   - Evidence: `web/tests/unit/controlplane-store.test.js` and `web/tests/e2e/controlplane-nostr-smoke.spec.js` prove discovered public bootstrap, EOSE-bounded query, and live subscription handoff.
 - `SDRB-AC-005` — **Verified**
-  - Evidence: `web/tests/unit/controlplane-store.test.js` now covers all required fail-closed branches: missing `relay_read_models`, missing browser bootstrap URLs, and unreachable advertised relays.
+  - Evidence: `web/tests/unit/controlplane-store.test.js` covers shared bootstrap fail-closed branches: missing `relay_read_models`, missing browser bootstrap URLs, and unreachable advertised relays. `web/tests/unit/discovery-store.test.js` additionally proves the discovery store fails closed after EOSE when no trusted system discovery event or browser relay set is delivered.
 - `SDRB-AC-006` — **Verified**
   - Evidence: replaceable latest-wins, tombstones, and spoofed-author rejection pass in `web/tests/unit/controlplane-store.test.js`.
 - `SDRB-AC-007` — **Verified**
@@ -47,7 +48,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 ## Defects
 - `SDRB-D-001` verified — raw `nostr.relays` is no longer exposed or normalized for approved browser bootstrap
 - `SDRB-D-002` verified — sidecar-first public bootstrap handler coverage includes the approved service-key-backed success case
-- `SDRB-D-003` verified — fail-closed browser bootstrap negatives are covered
+- `SDRB-D-003` verified — fail-closed browser bootstrap negatives are covered, including discovery-store EOSE completion without trusted required events
 - `SDRB-D-004` verified — operator discovery fallback covers the required empty-discovery negative case
 - `SDRB-D-005` verified — encrypted capability gating and multi-consumer Nostr discovery coherence are proven against the approved contract
 

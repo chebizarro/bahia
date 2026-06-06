@@ -7,7 +7,7 @@
   let retryFeedback = $state('');
 
   const STATUS_PRESENTATION = {
-    idle: { tone: 'connecting', label: 'Starting', detail: 'Loading dashboard snapshot' },
+    idle: { tone: 'disconnected', label: 'Disconnected', detail: 'Not connected' },
     disconnected: { tone: 'disconnected', label: 'Disconnected', detail: 'Not connected' },
     discovering: { tone: 'connecting', label: 'Connecting', detail: 'Discovering relays' },
     connecting: { tone: 'connecting', label: 'Connecting', detail: 'Connecting to relays' },

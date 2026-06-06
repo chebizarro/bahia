@@ -5,12 +5,12 @@ Implemented a Nav relay connection status indicator backed by `controlplaneConne
 
 ## Evidence
 - `web/src/lib/components/Nav.svelte` imports and renders `ConnectionStatus` near the auth controls.
-- `web/src/lib/components/ConnectionStatus.svelte` maps controlplane statuses to visible disconnected, connecting, syncing, live, and error states.
+- `web/src/lib/components/ConnectionStatus.svelte` maps controlplane statuses to visible disconnected, connecting, syncing, live, and error states; idle and disconnected both present as user-facing `Disconnected`.
 - Expanded details show relay count/list, last event time, and last EOSE time.
 - Error state exposes `lastError` in the trigger tooltip and expanded details.
 
 ## Tests Run
-- `npm run test:unit -- --run tests/unit/connection-status.test.js` — passed, 3 tests.
+- `pnpm test:unit --run tests/unit/connection-status.test.js` — passed, 5 tests.
 - `npm run build` — passed. Existing unrelated Svelte warnings were emitted from `src/routes/policies/+page.svelte` and `src/lib/components/assistant/AssistantPlanApproval.svelte`.
 
 ## Acceptance Criteria Mapping

@@ -171,41 +171,6 @@ function persistDiscoveryCache(seed, normalized, events) {
   }
 }
 
-function fallbackSystemInfoFromSeed(seed, reason = 'bootstrap_discovery_fallback') {
-  const relayUrls = Array.isArray(seed?.relay_urls) ? seed.relay_urls.map(normalizeRelayUrl).filter(Boolean) : [];
-  const servicePubkey = Array.isArray(seed?.service_pubkeys) ? String(seed.service_pubkeys[0] || '').trim() : '';
-  if (relayUrls.length === 0 || !servicePubkey) return null;
-
-  return {
-    schema: DISCOVERY_SCHEMA,
-    registries: [],
-    runtime: { type: 'compose', environments: [] },
-    features: {
-      relay_read_models: true,
-      relay_sidecar: true,
-      encrypted_nostr_requests: true,
-      publish_enabled: true,
-      bootstrap_fallback: true
-    },
-    nostr: {
-      browser_relays: relayUrls,
-      sidecar_url: relayUrls[0] || '',
-      service_relays: relayUrls,
-      service_pubkey: servicePubkey,
-      service_npub: '',
-      publish_enabled: true
-    },
-    _discovery: {
-      fallback: true,
-      reason,
-      relay_sets: {
-        [BROWSER_RELAY_SET_DTAG]: relayUrls,
-        [SERVICE_RELAY_SET_DTAG]: relayUrls
-      }
-    }
-  };
-}
-
 export async function discoverSystemInfo({ force = false } = {}) {
   if (!browser) return null;
   if (discoveryState.events.length > 0 && !force) return normalizeDiscoveryEvents(discoveryState.events, discoveryState.seed?.service_pubkeys || []);
@@ -248,15 +213,7 @@ export async function discoverSystemInfo({ force = false } = {}) {
         bootstrapClient.disconnect();
       }
 
-      let normalized;
-      try {
-        normalized = normalizeDiscoveryEvents(events, seed.service_pubkeys);
-      } catch (error) {
-        const fallback = fallbackSystemInfoFromSeed(seed, error?.message || 'bootstrap_discovery_failed');
-        if (!fallback) throw error;
-        console.warn('Falling back to injected Bahia bootstrap seed after discovery query failure:', error);
-        normalized = fallback;
-      }
+      const normalized = normalizeDiscoveryEvents(events, seed.service_pubkeys);
       discoveryState.events = events;
       discoveryState.relaySets = normalized._discovery.relay_sets;
       discoveryState.loadedAt = new Date().toISOString();
