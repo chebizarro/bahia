@@ -7,6 +7,7 @@
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
+  import { componentVersionRows } from '$lib/version.js';
   import QRCode from 'qrcode';
   import jsQR from 'jsqr';
   import {
@@ -25,6 +26,7 @@
   const systemLoading = $derived(sharedSystemInfo.loading);
   const systemError = $derived(sharedSystemInfo.error);
   const serviceRelayList = $derived(systemInfo?.nostr?.service_relays || []);
+  const versionRows = $derived(componentVersionRows(systemInfo));
 
   // Relay configuration (client-side)
   let relayInput = $state('');
@@ -351,6 +353,37 @@
       </div>
     </section>
 
+    <!-- Version Section -->
+    <section class="settings-section">
+      <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Versions</h2>
+      <p class="section-description">
+        Semantic versions for Bahia artifacts packaged and deployed independently. Versions use the <code>0.1.0-&lt;commit-hash&gt;</code> format unless release automation provides an explicit override.
+      </p>
+
+      <div class="version-list">
+        {#each versionRows as component}
+          <div class="version-item">
+            <div class="version-info">
+              <span class="version-name">{component.name}</span>
+              <span class="version-kind">{component.kind}</span>
+            </div>
+            <div class="version-values">
+              <span class="config-value monospace">{component.version}</span>
+              {#if component.packaged_as}
+                <span class="version-package monospace">{component.packaged_as}</span>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </div>
+
+      {#if systemLoading}
+        <p class="section-description version-note">Loading backend component versions…</p>
+      {:else if systemError}
+        <p class="section-description version-note">Backend component versions unavailable: {systemError}</p>
+      {/if}
+    </section>
+
     <!-- Server Configuration Section -->
     <section class="settings-section">
       <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Server Configuration</h2>
@@ -658,6 +691,52 @@
     background: var(--primary);
     border-color: var(--primary);
     color: white;
+  }
+
+  /* Version display styles */
+  .version-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .version-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+  }
+
+  .version-info,
+  .version-values {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .version-values {
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  .version-name {
+    font-weight: 500;
+  }
+
+  .version-kind,
+  .version-package,
+  .version-note {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  .version-kind {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   /* Config display styles */

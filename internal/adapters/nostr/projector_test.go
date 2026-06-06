@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/version"
 	"go.uber.org/zap"
 )
 
@@ -449,6 +450,7 @@ func (s *fakeProjectionSource) List(_ context.Context, status string, limit int)
 
 func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	ctx := context.Background()
+	withProjectorVersionVars(t, "0.1.0", "abcdef1234567890", "")
 	cfg := config.Defaults()
 	cfg.Nostr.PrivateKey = projectorTestPrivateKey
 	cfg.Nostr.PublishEnabled = true
@@ -466,6 +468,7 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertTag(t, discovery, "schema", "bahia.system-discovery.v1")
 	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
+	assertDiscoveryVersions(t, discovery.Content)
 	browserSet := assertOneRelaySet(t, sink, "bahia-browser-v1")
 	assertTag(t, browserSet, "relay", "ws://localhost:3000/relay")
 	serviceSet := assertOneRelaySet(t, sink, "bahia-service-v1")
@@ -1196,6 +1199,48 @@ func assertNoTag(t *testing.T, ev gonostr.Event, key, value string) {
 			t.Fatalf("event kind %d unexpectedly had tag %s=%s; tags=%v", ev.Kind, key, tag[1], ev.Tags)
 		}
 	}
+}
+
+func assertDiscoveryVersions(t *testing.T, content string) {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		t.Fatalf("unmarshal discovery content: %v", err)
+	}
+	versions, ok := payload["versions"].(map[string]any)
+	if !ok {
+		t.Fatalf("discovery versions missing or invalid: %#v", payload["versions"])
+	}
+	if got, want := versions["backend"], "0.1.0-abcdef1234567890"; got != want {
+		t.Fatalf("versions.backend = %#v, want %#v", got, want)
+	}
+	components, ok := versions["components"].([]any)
+	if !ok || len(components) == 0 {
+		t.Fatalf("versions.components missing or invalid: %#v", versions["components"])
+	}
+	foundBackend := false
+	for _, item := range components {
+		component, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if component["id"] == "backend" {
+			foundBackend = true
+			if component["packaged_as"] != "cmd/server" || component["version"] != "0.1.0-abcdef1234567890" {
+				t.Fatalf("backend component metadata = %#v", component)
+			}
+		}
+	}
+	if !foundBackend {
+		t.Fatalf("backend component missing from %#v", components)
+	}
+}
+
+func withProjectorVersionVars(t *testing.T, base, commit, full string) {
+	t.Helper()
+	oldBase, oldCommit, oldFull := version.Base, version.Commit, version.Full
+	version.Base, version.Commit, version.Full = base, commit, full
+	t.Cleanup(func() { version.Base, version.Commit, version.Full = oldBase, oldCommit, oldFull })
 }
 
 func assertJSONField(t *testing.T, content, key string, want any) {

@@ -18,6 +18,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/internal/version"
 	"go.uber.org/zap"
 )
 
@@ -2015,6 +2016,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	payload := map[string]any{
 		"schema":        "bahia.system-discovery.v1",
 		"registries":    discoveryRegistries(cfg),
+		"versions":      discoveryVersions(),
 		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
@@ -2064,6 +2066,13 @@ func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []s
 		tags = append(tags, gonostr.Tag{"relay", relay})
 	}
 	return p.publishSigned(ctx, 30002, tags, "", "system.discovery.relay_set", nil)
+}
+
+func discoveryVersions() map[string]any {
+	return map[string]any{
+		"backend":    version.Semantic(),
+		"components": version.Components(),
+	}
 }
 
 func discoveryRegistries(cfg *config.Config) []map[string]any {

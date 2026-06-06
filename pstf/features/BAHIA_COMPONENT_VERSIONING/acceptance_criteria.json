@@ -1,0 +1,20 @@
+{
+  "feature_id": "BAHIA_COMPONENT_VERSIONING",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Backend-side packaged Go artifacts derive SemVer-compatible versions from base version 0.1.0 plus git commit hash metadata.",
+      "tests": ["go test ./internal/version", "make build"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Bahia system discovery advertises backend component version records for packaged Go commands.",
+      "tests": ["go test ./internal/adapters/nostr"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The web frontend is versioned separately from backend artifacts and Settings renders web plus discovered backend components.",
+      "tests": ["npm run test:unit -- --run tests/unit/version.test.js", "npm run build"]
+    }
+  ]
+}

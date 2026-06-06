@@ -19,6 +19,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VERSION_BASE: ${VERSION_BASE:-0.1.0}
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
+        VERSION: ${VERSION:-}
     ports:
       - "8080:8080"
     volumes:
@@ -55,6 +59,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VERSION_BASE: ${VERSION_BASE:-0.1.0}
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
+        VERSION: ${VERSION:-}
     entrypoint: ["bahia-relay"]
     ports:
       - "3334:3334"
@@ -84,6 +92,9 @@ services:
       args:
         PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:-ws://localhost:3334/relay}
         PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:-}
+        PUBLIC_BAHIA_WEB_BASE_VERSION: ${VERSION_BASE:-0.1.0}
+        PUBLIC_BAHIA_GIT_COMMIT: ${GIT_COMMIT:-dev}
+        PUBLIC_BAHIA_WEB_VERSION: ${WEB_VERSION:-}
     ports:
       - "3000:80"
     depends_on:

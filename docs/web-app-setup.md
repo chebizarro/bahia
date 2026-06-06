@@ -52,7 +52,17 @@ For production deployments, configure your reverse proxy/ingress to route `/api/
 
 ### Environment Variables
 
-The web app does not currently use environment variables. All configuration is compile-time.
+The web app uses compile-time environment variables for Nostr bootstrap discovery and frontend artifact versioning:
+
+| Variable | Purpose |
+| --- | --- |
+| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Comma-separated relay URLs used to discover the Bahia system announcement. |
+| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for discovery events. |
+| `PUBLIC_BAHIA_WEB_BASE_VERSION` | Frontend SemVer base, default `0.1.0`. |
+| `PUBLIC_BAHIA_GIT_COMMIT` | Commit hash stamped into the frontend version. |
+| `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |
+
+The Settings page shows the web app as a separately packaged frontend component and shows backend-side packaged components advertised by Bahia system discovery. Release builds should stamp versions as `0.1.0-<commit-hash>` unless release automation intentionally provides another SemVer-compatible value.
 
 ## Authentication & Authorization
 

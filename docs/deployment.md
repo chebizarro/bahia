@@ -91,6 +91,8 @@ docker run -p 8080:8080 \
   bahia:latest
 ```
 
+Backend, relay, CLI, bridge, sidecar, and web artifacts are stamped with SemVer component versions. The backend Dockerfile accepts `VERSION_BASE` (default `0.1.0`), `GIT_COMMIT` (default `dev`), and optional full `VERSION` build args; Compose passes the same defaults to the backend and relay images. The web Dockerfile accepts `PUBLIC_BAHIA_WEB_BASE_VERSION`, `PUBLIC_BAHIA_GIT_COMMIT`, and optional `PUBLIC_BAHIA_WEB_VERSION`. Release automation should pass the same commit hash to both backend and web builds so Settings displays matching `0.1.0-<commit-hash>` provenance.
+
 ### Environment Variables
 
 See `.env.example` for all available configuration options.

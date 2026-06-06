@@ -25,11 +25,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/internal/version"
 	"go.uber.org/zap"
 )
 
-// Version is set at build time.
-var Version = "dev"
+// Version is set at build time and defaults to the shared Bahia source version.
+var Version = version.Semantic()
 
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.

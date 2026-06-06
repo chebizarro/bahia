@@ -1,16 +1,27 @@
-.PHONY: build run test lint clean migrate docker docker-compose pstf-soulfactory-coverage
+.PHONY: build run test lint clean migrate docker docker-compose pstf-soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags "-X github.com/openagentsinc/bahia/internal/api/router.Version=$(VERSION)"
+VERSION_BASE ?= 0.1.0
+GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "dev")
+VERSION ?= $(VERSION_BASE)-$(GIT_COMMIT)
+LDFLAGS := -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=$(VERSION_BASE) -X github.com/openagentsinc/bahia/internal/version.Commit=$(GIT_COMMIT) -X github.com/openagentsinc/bahia/internal/version.Full=$(VERSION)"
 
 # Build
-build: build-server build-cli
+build: build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar
 
 build-server:
 	go build $(LDFLAGS) -o bin/bahia-server ./cmd/server
 
 build-cli:
 	go build $(LDFLAGS) -o bin/bahia ./cmd/cli
+
+build-relay:
+	go build $(LDFLAGS) -o bin/bahia-relay ./cmd/relay
+
+build-fips-bahia-bridge:
+	go build $(LDFLAGS) -o bin/fips-bahia-bridge ./cmd/fips-bahia-bridge
+
+build-openclaw-soulfactory-sidecar:
+	go build $(LDFLAGS) -o bin/openclaw-soulfactory-sidecar ./cmd/openclaw-soulfactory-sidecar
 
 # Run
 run: build-server
@@ -55,7 +66,7 @@ migrate:
 
 # Docker
 docker:
-	docker build -t bahia:$(VERSION) .
+	docker build --build-arg VERSION_BASE=$(VERSION_BASE) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg VERSION=$(VERSION) -t bahia:$(VERSION) .
 
 docker-compose:
 	docker compose up --build

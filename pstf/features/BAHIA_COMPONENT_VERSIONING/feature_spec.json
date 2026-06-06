@@ -1,0 +1,18 @@
+{
+  "feature_id": "BAHIA_COMPONENT_VERSIONING",
+  "title": "Packaged component version surfacing",
+  "intent": "Bahia exposes semantic versions for separately packaged backend-side artifacts and the separately deployed web frontend, starting at 0.1.0 with build commit metadata.",
+  "components": [
+    "backend",
+    "cli",
+    "relay",
+    "fips-bahia-bridge",
+    "openclaw-soulfactory-sidecar",
+    "web"
+  ],
+  "version_format": "0.1.0-<commit-hash>",
+  "surfaces": [
+    "signed Bahia system discovery payload versions object",
+    "web Settings page Versions section"
+  ]
+}
