@@ -3,12 +3,18 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip19"
+	"github.com/openagentsinc/bahia/internal/adapters/llm"
+	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -43,6 +49,84 @@ func TestNewKeepsFullModeWhenDatabaseAvailable(t *testing.T) {
 	require.Equal(t, Tier3, app.ModePolicy.ActiveTier)
 	require.Equal(t, Tier3, app.ModePolicy.RequestedTier)
 	require.NotNil(t, app.Health)
+}
+
+func TestNewDoesNotRegisterSoulFactoryWhenDisabled(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	signetFactoryCalls := 0
+	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, &fakeSoulFactorySigner{}, func(cfg soulfactory.RuntimeAdapterConfig) {
+		t.Fatalf("OpenClaw adapter factory called while SoulFactory disabled: %+v", cfg)
+	})
+	previousSignetFactory := newSoulFactorySignetClient
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+		signetFactoryCalls++
+		return previousSignetFactory(cfg, logger)
+	}
+	defer func() {
+		newSoulFactorySignetClient = previousSignetFactory
+		restoreSoulFactoryHooks()
+	}()
+
+	cfg := startupTestConfig(ModeEmergency)
+	cfg.SoulFactory.Enabled = false
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer app.Logger.Sync()
+	defer closeRelayPools(app.relayPools...)
+
+	require.Nil(t, app.SoulFactory)
+	require.False(t, appHasRunner(app, "soulfactory"))
+	require.Zero(t, signetFactoryCalls)
+}
+
+func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	signer := newFakeSoulFactorySigner(t)
+	var adapterConfig soulfactory.RuntimeAdapterConfig
+	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, func(cfg soulfactory.RuntimeAdapterConfig) {
+		adapterConfig = cfg
+	})
+	defer restoreSoulFactoryHooks()
+
+	cfg := startupTestConfig(ModeFull)
+	configureValidSoulFactory(t, cfg, signer.pubkey)
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer app.Logger.Sync()
+	defer closeRelayPools(app.relayPools...)
+	defer app.soulFactoryCloser()
+
+	require.NotNil(t, app.SoulFactory)
+	require.True(t, appHasRunner(app, "soulfactory"))
+	require.True(t, signer.connected)
+	require.Equal(t, domain.RuntimeTargetOpenClaw, adapterConfig.Target)
+	require.Equal(t, signer.pubkey, adapterConfig.ControllerPubkey)
+	require.Equal(t, []string{"wss://relay.example", "wss://private.example"}, adapterConfig.Relays)
+	require.Same(t, signer, adapterConfig.Signer)
+}
+
+func TestNewRejectsInvalidSoulFactoryConfig(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	factoryCalled := false
+	previousSignetFactory := newSoulFactorySignetClient
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+		factoryCalled = true
+		return previousSignetFactory(cfg, logger)
+	}
+	defer func() { newSoulFactorySignetClient = previousSignetFactory }()
+
+	cfg := startupTestConfig(ModeFull)
+	cfg.SoulFactory.Enabled = true
+	_, err := New(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "soul_factory.relays requires at least one relay")
+	require.False(t, factoryCalled)
 }
 
 func TestStartBackgroundRunnersRespectsActiveTier(t *testing.T) {
@@ -92,6 +176,61 @@ func stubDBHooks(t *testing.T, connectErr error, migrateErr error) func() {
 	}
 }
 
+func appHasRunner(app *App, name string) bool {
+	if app == nil || app.Background == nil {
+		return false
+	}
+	for _, status := range app.Background.RunnerStatuses() {
+		if status.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func configureValidSoulFactory(t *testing.T, cfg *config.Config, controllerPubkey string) {
+	t.Helper()
+	cfg.SoulFactory = config.SoulFactoryConfig{
+		Enabled:           true,
+		Relays:            []string{"wss://relay.example"},
+		AdditionalRelays:  []string{"wss://private.example", "wss://relay.example"},
+		AuthorizedPubkeys: []string{controllerPubkey},
+		SoulFactoryPubkey: controllerPubkey,
+		SignetBunkerURI:   "bunker://" + controllerPubkey + "?relay=wss://relay.example",
+		LLMBaseURL:        "https://llm.example",
+		LLMModel:          "soul-model",
+		LLMAPIKey:         "test-api-key",
+		LLMTimeout:        30 * time.Second,
+	}
+}
+
+func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAdapterConfig func(soulfactory.RuntimeAdapterConfig)) func() {
+	t.Helper()
+	previousSignetFactory := newSoulFactorySignetClient
+	previousAdapterFactory := newSoulFactoryOpenClawRuntimeAdapter
+	previousGeneratorFactory := newSoulFactorySoulGenerator
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+		if cfg.AllowMock {
+			t.Fatal("SoulFactory app wiring must not enable Signet mock mode")
+		}
+		return signer, nil
+	}
+	newSoulFactoryOpenClawRuntimeAdapter = func(cfg soulfactory.RuntimeAdapterConfig) (soulfactory.RuntimeAdapter, error) {
+		if captureAdapterConfig != nil {
+			captureAdapterConfig(cfg)
+		}
+		return fakeSoulFactoryRuntimeAdapter{}, nil
+	}
+	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *slog.Logger) soulfactory.SoulGenerator {
+		return fakeSoulFactoryGenerator{}
+	}
+	return func() {
+		newSoulFactorySignetClient = previousSignetFactory
+		newSoulFactoryOpenClawRuntimeAdapter = previousAdapterFactory
+		newSoulFactorySoulGenerator = previousGeneratorFactory
+	}
+}
+
 func startupTestConfig(mode Mode) *config.Config {
 	cfg := config.Defaults()
 	cfg.Mode = string(mode)
@@ -101,6 +240,66 @@ func startupTestConfig(mode Mode) *config.Config {
 	cfg.Reconcile.Enabled = true
 	cfg.Server.Port = 0
 	return cfg
+}
+
+type fakeSoulFactorySigner struct {
+	secret    string
+	pubkey    string
+	connected bool
+	closed    bool
+}
+
+func newFakeSoulFactorySigner(t *testing.T) *fakeSoulFactorySigner {
+	t.Helper()
+	secret := nostr.GeneratePrivateKey()
+	pubkey, err := nostr.GetPublicKey(secret)
+	require.NoError(t, err)
+	return &fakeSoulFactorySigner{secret: secret, pubkey: pubkey}
+}
+
+func (s *fakeSoulFactorySigner) Connect(context.Context) error {
+	s.connected = true
+	return nil
+}
+
+func (s *fakeSoulFactorySigner) GetPublicKey(context.Context) (string, error) {
+	return s.pubkey, nil
+}
+
+func (s *fakeSoulFactorySigner) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *fakeSoulFactorySigner) Sign(_ context.Context, event *nostr.Event) error {
+	return event.Sign(s.secret)
+}
+
+func (s *fakeSoulFactorySigner) ProvisionAgent(context.Context, string, []int) (string, string, string, error) {
+	npub, err := nip19.EncodePublicKey(s.pubkey)
+	return s.pubkey, npub, "bunker://" + s.pubkey, err
+}
+
+func (s *fakeSoulFactorySigner) RevokeAgent(context.Context, string) error  { return nil }
+func (s *fakeSoulFactorySigner) SuspendAgent(context.Context, string) error { return nil }
+func (s *fakeSoulFactorySigner) ResumeAgent(context.Context, string) error  { return nil }
+
+type fakeSoulFactoryGenerator struct{}
+
+func (fakeSoulFactoryGenerator) Generate(context.Context, domain.SoulGeneratorInput) (*domain.SoulGeneratorOutput, error) {
+	return &domain.SoulGeneratorOutput{SoulMD: "# Soul", IdentityMD: "# Identity", AllowedKinds: []int{0, 1}}, nil
+}
+
+type fakeSoulFactoryRuntimeAdapter struct{}
+
+func (fakeSoulFactoryRuntimeAdapter) Runtime() domain.RuntimeTarget {
+	return domain.RuntimeTargetOpenClaw
+}
+func (fakeSoulFactoryRuntimeAdapter) DiscoverCapabilities(context.Context, domain.SoulRelayPolicySpec) ([]soulfactory.RuntimeCapability, error) {
+	return nil, nil
+}
+func (fakeSoulFactoryRuntimeAdapter) Execute(context.Context, soulfactory.RuntimeAdapterRequest) (*soulfactory.RuntimeControlResultEnvelope, error) {
+	return nil, nil
 }
 
 type gatedRunner struct {

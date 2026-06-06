@@ -102,6 +102,21 @@ func WithLifecycleHandler(handler *LifecycleHandler) ReactorOption {
 	}
 }
 
+// InstallProvisioningEngine installs the production provisioning engine after
+// dependent adapters have been constructed around this reactor.
+func (r *Reactor) InstallProvisioningEngine(engine ProvisioningEngine) error {
+	if r == nil {
+		return fmt.Errorf("soul factory reactor is not configured")
+	}
+	if engine == nil {
+		return fmt.Errorf("soul factory provisioning engine is not configured")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.provisioner = engine
+	return nil
+}
+
 // Signer handles Nostr event signing via NIP-46.
 type Signer interface {
 	Sign(ctx context.Context, event *nostr.Event) error

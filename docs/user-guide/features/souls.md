@@ -282,28 +282,30 @@ Agents can provision other agents:
 
 ## Configuration
 
-Soul Factory requires configuration:
+The app-level Soul Factory reactor is disabled by default. Enable it only with explicit Nostr relays, a real Signet bunker URI, authorized requester pubkeys, and LLM settings:
 
 ```yaml
 soul_factory:
+  enabled: true
   relays:
     - wss://relay.example.com
+  additional_relays:
+    - wss://private-relay.example.com
+  authorized_pubkeys:
+    - "<64-char requester pubkey>"
+  soul_factory_pubkey: "<64-char Signet/controller pubkey>"
   signet_bunker_uri: "bunker://..."
-  blossom_url: "https://blossom.example.com"
-  qdrant_url: "http://localhost:6333"
-  agent_memory_url: "http://localhost:3000"
-  lemmy_url: "http://localhost:8188"  # ComfyUI for avatars
+  llm_base_url: "https://llm.example.com"
+  llm_model: "soul-model"
+  llm_api_key: "${SOUL_FACTORY_LLM_API_KEY}"
+  llm_timeout: 120s
 ```
+
+When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runtime adapter. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory.
 
 ## Authorization
 
-Provisioning requires authorization:
-
-```go
-AuthorizedProvisioners = []string{
-    "npub1admin...",
-}
-```
+Provisioning requires configured requester pubkeys in `soul_factory.authorized_pubkeys`. Use 64-character hex Nostr pubkeys, not npub strings, in server config.
 
 ## Best Practices
 

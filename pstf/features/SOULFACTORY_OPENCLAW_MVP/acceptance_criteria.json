@@ -1,0 +1,36 @@
+{
+  "feature_id": "SOULFACTORY_OPENCLAW_MVP",
+  "issue": "bahia-0wc4",
+  "criteria": [
+    {
+      "id": "SFOM-AC-001",
+      "statement": "SoulFactory app-level configuration is additive and disabled by default.",
+      "tests": ["SFOM-T-001"]
+    },
+    {
+      "id": "SFOM-AC-002",
+      "statement": "Enabled SoulFactory config requires explicit relays, authorized requester pubkeys, a real Signet bunker URI, and explicit LLM endpoint/model/key settings.",
+      "tests": ["SFOM-T-002", "SFOM-T-003"]
+    },
+    {
+      "id": "SFOM-AC-003",
+      "statement": "App construction does not build a SoulFactory signer, OpenClaw runtime adapter, reactor, or background runner when soul_factory.enabled=false.",
+      "tests": ["SFOM-T-004"]
+    },
+    {
+      "id": "SFOM-AC-004",
+      "statement": "App construction with valid enabled config builds the SoulFactory reactor, FullProvisioner, and OpenClaw runtime adapter and registers the reactor runner without enabling Signet mock mode.",
+      "tests": ["SFOM-T-005"]
+    },
+    {
+      "id": "SFOM-AC-005",
+      "statement": "Invalid enabled SoulFactory config fails deterministically before production Signet/runtime construction.",
+      "tests": ["SFOM-T-006"]
+    },
+    {
+      "id": "SFOM-AC-006",
+      "statement": "The Item 1 slice does not add REST SoulFactory provisioning or lifecycle routes.",
+      "tests": ["SFOM-T-007"]
+    }
+  ]
+}

@@ -75,6 +75,8 @@ type App struct {
 	ModePolicy         *ModePolicy
 	Health             *HealthProvider
 	RelayFirstRegistry *service.RelayFirstRegistry
+	SoulFactory        *soulfactory.Reactor
+	soulFactoryCloser  func() error
 }
 
 var (
@@ -358,6 +360,16 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
+
+	var soulFactoryRuntime *soulFactoryRuntime
+	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configuring SoulFactory OpenClaw runtime: %w", err)
+	}
+	if soulFactoryRuntime != nil {
+		bgManager.RegisterWithOptions(soulFactoryRuntime.runner, RunnerTier(Tier2))
+		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
+	}
 
 	catalog := nostrAdapter.NewKindCatalog()
 	cursorPlanner := nostrAdapter.NewReplayCursorPlanner(time.Second, nostrAdapter.NewNostrEventRepositoryCursorSource(nostrEventRepo))
@@ -963,7 +975,23 @@ func New(cfg *config.Config) (*App, error) {
 		ModePolicy:         policy,
 		Health:             healthProvider,
 		RelayFirstRegistry: relayFirstRegistry,
+		SoulFactory:        soulFactoryReactorFromRuntime(soulFactoryRuntime),
+		soulFactoryCloser:  soulFactoryCloserFromRuntime(soulFactoryRuntime),
 	}, nil
+}
+
+func soulFactoryReactorFromRuntime(runtime *soulFactoryRuntime) *soulfactory.Reactor {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.reactor
+}
+
+func soulFactoryCloserFromRuntime(runtime *soulFactoryRuntime) func() error {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.close
 }
 
 func configuredMode(mode string) Mode {
@@ -1517,6 +1545,12 @@ func (a *App) Run() error {
 
 	// Wait for background runners to finish (they should stop when ctx is cancelled).
 	a.Background.Wait()
+
+	if a.soulFactoryCloser != nil {
+		if err := a.soulFactoryCloser(); err != nil {
+			a.Logger.Warn("SoulFactory Signet client close failed", zap.Error(err))
+		}
+	}
 
 	// Shutdown telemetry.
 	if a.Telemetry != nil {

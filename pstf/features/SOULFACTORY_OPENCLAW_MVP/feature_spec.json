@@ -1,0 +1,23 @@
+{
+  "feature_id": "SOULFACTORY_OPENCLAW_MVP",
+  "issue": "bahia-0wc4",
+  "summary": "Nostr-first SoulFactory OpenClaw MVP app startup wiring behind explicit disabled-by-default config.",
+  "observed_context": [
+    "docs/plans/soulfactory-openclaw-mvp-orchestration.md Item 1 requires Beads/PSTF skeleton, additive disabled config, app construction wiring, and deterministic disabled/enabled/invalid config tests.",
+    "internal/soulfactory contains an event-driven reactor, FullProvisioner, Signet-backed signer interface, and OpenClaw runtime-control adapter.",
+    "internal/app/app.go previously imported SoulFactory only for operator-assistant bootstrap and did not register a SoulFactory app reactor."
+  ],
+  "intended_behavior": [
+    "SoulFactory remains Nostr-first and app startup does not add REST provisioning or lifecycle routes.",
+    "soul_factory configuration is disabled by default and must be explicitly enabled with relays, authorized requester pubkeys, Signet bunker URI, and LLM settings.",
+    "When enabled with valid config, Bahia constructs a real Signet-backed SoulFactory reactor, FullProvisioner, and OpenClaw runtime adapter and registers the reactor as a background runner.",
+    "When disabled, Bahia constructs no SoulFactory Signet client, runtime adapter, reactor, or runner.",
+    "Invalid enabled config fails deterministically before production signer/runtime construction."
+  ],
+  "out_of_scope": [
+    "Item 2 publication hardening and Bahia projection changes.",
+    "Item 3 workspace/client/web alignment beyond documentation of app-level config.",
+    "REST provisioning or lifecycle routes.",
+    "Fake OpenClaw deployment artifacts or synthetic deployable image digests."
+  ]
+}

@@ -44,6 +44,7 @@ type Config struct {
 	Assistant      AssistantConfig           `koanf:"assistant"`
 	DNS            DNSConfig                 `koanf:"dns"`
 	FIPS           FIPSConfig                `koanf:"fips"`
+	SoulFactory    SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
 }
 
 // WorkerPressureConfig controls Bahia-owned worker pressure and dynamic admission thresholds.
@@ -130,6 +131,21 @@ type DNSProjectionConfig struct {
 	EnvironmentZones  map[string]string `koanf:"environment_zones"`
 	WorkerZone        string            `koanf:"worker_zone"`
 	MeshZone          string            `koanf:"mesh_zone"`
+}
+
+// SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
+type SoulFactoryConfig struct {
+	Enabled               bool          `koanf:"enabled" yaml:"enabled"`
+	Relays                []string      `koanf:"relays" yaml:"relays"`
+	AdditionalRelays      []string      `koanf:"additional_relays" yaml:"additional_relays"`
+	AuthorizedPubkeys     []string      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
+	SoulFactoryPubkey     string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
+	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	LLMBaseURL            string        `koanf:"llm_base_url" yaml:"llm_base_url"`
+	LLMModel              string        `koanf:"llm_model" yaml:"llm_model"`
+	LLMAPIKey             string        `koanf:"llm_api_key" yaml:"llm_api_key"`
+	LLMTimeout            time.Duration `koanf:"llm_timeout" yaml:"llm_timeout"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -250,9 +266,9 @@ type LoomConfig struct {
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey string   `koanf:"private_key"`
-	Relays     []string `koanf:"relays"`
-	BrowserRelays          []string `koanf:"browser_relays"`
+	PrivateKey    string   `koanf:"private_key"`
+	Relays        []string `koanf:"relays"`
+	BrowserRelays []string `koanf:"browser_relays"`
 
 	// PrivateRelays and PrivateBrowserRelays are internal mirrors for runtime
 	// callers that have not moved to the canonical field names yet. They are not
@@ -587,6 +603,12 @@ func Defaults() *Config {
 			AllowedNpubs:         []string{},
 			OverlayAddressPrefix: "fd00",
 		},
+		SoulFactory: SoulFactoryConfig{
+			Enabled:          false,
+			Relays:           []string{},
+			AdditionalRelays: []string{},
+			LLMTimeout:       120 * time.Second,
+		},
 		Packages: PackageControlplaneConfig{
 			Enabled:            false,
 			AllowedSourceHosts: []string{},
@@ -686,6 +708,9 @@ func Load(configPath string) (*Config, error) {
 		key = strings.ReplaceAll(key, "__", ".")
 		if strings.HasPrefix(key, "worker_pressure_") {
 			return "worker_pressure." + strings.TrimPrefix(key, "worker_pressure_")
+		}
+		if strings.HasPrefix(key, "soul_factory_") {
+			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
 		}
 		switch key {
 		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key":
@@ -846,6 +871,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateFIPS(); err != nil {
+		return err
+	}
+	if err := c.validateSoulFactory(); err != nil {
 		return err
 	}
 	if err := c.validateWorkerPressure(); err != nil {
@@ -1301,6 +1329,62 @@ func (c *Config) validateFIPS() error {
 	return nil
 }
 
+func (c *Config) validateSoulFactory() error {
+	sf := &c.SoulFactory
+	sf.Relays = normalizeRelayList(sf.Relays)
+	sf.AdditionalRelays = normalizeRelayList(sf.AdditionalRelays)
+	sf.SoulFactoryPubkey = strings.ToLower(strings.TrimSpace(sf.SoulFactoryPubkey))
+	sf.SignetBunkerURI = strings.TrimSpace(sf.SignetBunkerURI)
+	sf.SignetClientSecretKey = strings.TrimSpace(sf.SignetClientSecretKey)
+	sf.LLMBaseURL = strings.TrimRight(strings.TrimSpace(sf.LLMBaseURL), "/")
+	sf.LLMModel = strings.TrimSpace(sf.LLMModel)
+	sf.LLMAPIKey = strings.TrimSpace(sf.LLMAPIKey)
+	if sf.LLMTimeout == 0 {
+		sf.LLMTimeout = 120 * time.Second
+	}
+	if !sf.Enabled {
+		return nil
+	}
+	if len(sf.Relays) == 0 {
+		return fmt.Errorf("config validation failed: soul_factory.relays requires at least one relay when soul_factory.enabled=true")
+	}
+	if sf.SignetBunkerURI == "" {
+		return fmt.Errorf("config validation failed: soul_factory.signet_bunker_uri is required when soul_factory.enabled=true")
+	}
+	authorized, err := normalizePubkeyList(sf.AuthorizedPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: soul_factory.authorized_pubkeys: %w", err)
+	}
+	if len(authorized) == 0 {
+		return fmt.Errorf("config validation failed: soul_factory.authorized_pubkeys requires at least one pubkey when soul_factory.enabled=true")
+	}
+	sf.AuthorizedPubkeys = authorized
+	if sf.SoulFactoryPubkey != "" {
+		normalized, err := normalizePubkeyList([]string{sf.SoulFactoryPubkey})
+		if err != nil {
+			return fmt.Errorf("config validation failed: soul_factory.soul_factory_pubkey: %w", err)
+		}
+		sf.SoulFactoryPubkey = normalized[0]
+	}
+	if sf.LLMBaseURL == "" {
+		return fmt.Errorf("config validation failed: soul_factory.llm_base_url is required when soul_factory.enabled=true")
+	}
+	parsed, err := url.Parse(sf.LLMBaseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("config validation failed: soul_factory.llm_base_url must be a valid URL")
+	}
+	if sf.LLMModel == "" {
+		return fmt.Errorf("config validation failed: soul_factory.llm_model is required when soul_factory.enabled=true")
+	}
+	if sf.LLMAPIKey == "" {
+		return fmt.Errorf("config validation failed: soul_factory.llm_api_key is required when soul_factory.enabled=true")
+	}
+	if sf.LLMTimeout <= 0 {
+		return fmt.Errorf("config validation failed: soul_factory.llm_timeout must be > 0 when soul_factory.enabled=true")
+	}
+	return nil
+}
+
 func (c *Config) validateWorkerPressure() error {
 	p := c.WorkerPressure
 	if p.MemoryWarningMinGB <= 0 || p.MemoryCriticalMinGB <= 0 || p.DiskWarningMinGB <= 0 || p.DiskCriticalMinGB <= 0 || p.VRAMWarningMinGB <= 0 || p.VRAMCriticalMinGB <= 0 {
@@ -1409,6 +1493,14 @@ func (c *Config) validateRuntimeEndpointRefs() error {
 		}
 	}
 	return nil
+}
+
+// Validate applies the same normalization and validation as Load to an in-memory config.
+func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config validation failed: config is required")
+	}
+	return c.validate()
 }
 
 // ServerAddress returns the host:port string for the HTTP server.

@@ -61,6 +61,12 @@ func TestDefaults(t *testing.T) {
 	if cfg.Nostr.Sidecar.MaxQueryLimit != 500 {
 		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
 	}
+	if cfg.SoulFactory.Enabled {
+		t.Error("expected SoulFactory disabled by default")
+	}
+	if len(cfg.SoulFactory.Relays) != 0 || len(cfg.SoulFactory.AdditionalRelays) != 0 {
+		t.Errorf("expected default SoulFactory relays to be empty, got relays=%v additional=%v", cfg.SoulFactory.Relays, cfg.SoulFactory.AdditionalRelays)
+	}
 	if cfg.WorkerPressure.MemoryWarningMinGB != 4 || cfg.WorkerPressure.DiskWarningMinGB != 40 || cfg.WorkerPressure.VRAMWarningMinGB != 4 {
 		t.Errorf("worker pressure defaults = %#v", cfg.WorkerPressure)
 	}
@@ -254,6 +260,131 @@ func TestLoadFromEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
+	controller := strings.Repeat("a", 64)
+	authorized := strings.Repeat("b", 64)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`soul_factory:
+  enabled: true
+  relays:
+    - " wss://relay.example "
+    - "wss://relay.example"
+  additional_relays:
+    - "wss://private.example"
+  authorized_pubkeys:
+    - "` + authorized + `"
+  soul_factory_pubkey: "` + controller + `"
+  signet_bunker_uri: "bunker://` + controller + `?relay=wss://relay.example"
+  llm_base_url: "https://llm.example/v1/"
+  llm_model: "soul-model"
+  llm_api_key: "from-yaml"
+  llm_timeout: 45s
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	t.Setenv("BAHIA_SOUL_FACTORY_LLM_API_KEY", "from-env")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.SoulFactory.Enabled {
+		t.Fatal("SoulFactory should be enabled")
+	}
+	if got := cfg.SoulFactory.Relays; len(got) != 1 || got[0] != "wss://relay.example" {
+		t.Fatalf("SoulFactory relays = %v", got)
+	}
+	if got := cfg.SoulFactory.AdditionalRelays; len(got) != 1 || got[0] != "wss://private.example" {
+		t.Fatalf("SoulFactory additional relays = %v", got)
+	}
+	if cfg.SoulFactory.SoulFactoryPubkey != controller {
+		t.Fatalf("SoulFactory pubkey = %q", cfg.SoulFactory.SoulFactoryPubkey)
+	}
+	if cfg.SoulFactory.AuthorizedPubkeys[0] != authorized {
+		t.Fatalf("SoulFactory authorized pubkeys = %v", cfg.SoulFactory.AuthorizedPubkeys)
+	}
+	if cfg.SoulFactory.LLMBaseURL != "https://llm.example/v1" {
+		t.Fatalf("SoulFactory llm_base_url = %q", cfg.SoulFactory.LLMBaseURL)
+	}
+	if cfg.SoulFactory.LLMAPIKey != "from-env" {
+		t.Fatalf("SoulFactory llm_api_key = %q", cfg.SoulFactory.LLMAPIKey)
+	}
+	if cfg.SoulFactory.LLMTimeout != 45*time.Second {
+		t.Fatalf("SoulFactory llm_timeout = %s", cfg.SoulFactory.LLMTimeout)
+	}
+}
+
+func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
+	validPubkey := strings.Repeat("c", 64)
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "missing relays",
+			yaml: `soul_factory:
+  enabled: true
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "soul_factory.relays requires at least one relay",
+		},
+		{
+			name: "missing signet",
+			yaml: `soul_factory:
+  enabled: true
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "soul_factory.signet_bunker_uri is required",
+		},
+		{
+			name: "invalid authorized pubkey",
+			yaml: `soul_factory:
+  enabled: true
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["not-hex"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "soul_factory.authorized_pubkeys",
+		},
+		{
+			name: "missing llm",
+			yaml: `soul_factory:
+  enabled: true
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+`,
+			want: "soul_factory.llm_base_url is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("writing temp config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadWorkerPressureConfigOverridesDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`worker_pressure:
@@ -405,7 +536,7 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 
 func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-content := []byte(`nostr:
+	content := []byte(`nostr:
   private_key: ""
   browser_relays:
     - "ws://localhost:3000/relay"

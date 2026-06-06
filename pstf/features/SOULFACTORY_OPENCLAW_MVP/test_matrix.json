@@ -1,0 +1,48 @@
+{
+  "feature_id": "SOULFACTORY_OPENCLAW_MVP",
+  "tests": [
+    {
+      "id": "SFOM-T-001",
+      "name": "SoulFactory defaults disabled",
+      "command": "go test ./internal/config -run TestDefaults",
+      "criteria": ["SFOM-AC-001"]
+    },
+    {
+      "id": "SFOM-T-002",
+      "name": "SoulFactory YAML/env config loads and normalizes",
+      "command": "go test ./internal/config -run TestLoadSoulFactoryConfigFromYAMLAndEnv",
+      "criteria": ["SFOM-AC-002"]
+    },
+    {
+      "id": "SFOM-T-003",
+      "name": "Invalid SoulFactory config rejects missing/invalid required fields",
+      "command": "go test ./internal/config -run TestLoadRejectsInvalidSoulFactoryConfig",
+      "criteria": ["SFOM-AC-002"]
+    },
+    {
+      "id": "SFOM-T-004",
+      "name": "App startup leaves SoulFactory unconstructed when disabled",
+      "command": "go test ./internal/app -run TestNewDoesNotRegisterSoulFactoryWhenDisabled",
+      "criteria": ["SFOM-AC-003"]
+    },
+    {
+      "id": "SFOM-T-005",
+      "name": "App startup registers enabled SoulFactory reactor/OpenClaw adapter",
+      "command": "go test ./internal/app -run TestNewRegistersSoulFactoryWhenEnabled",
+      "criteria": ["SFOM-AC-004"]
+    },
+    {
+      "id": "SFOM-T-006",
+      "name": "App startup rejects invalid enabled SoulFactory config before construction",
+      "command": "go test ./internal/app -run TestNewRejectsInvalidSoulFactoryConfig",
+      "criteria": ["SFOM-AC-005"]
+    },
+    {
+      "id": "SFOM-T-007",
+      "name": "No SoulFactory REST route added in Item 1",
+      "command": "! grep -R \"soul_factory\\|soulfactory\" internal/api",
+      "criteria": ["SFOM-AC-006"],
+      "expected": "No SoulFactory provisioning/lifecycle REST handlers under internal/api."
+    }
+  ]
+}
