@@ -168,10 +168,6 @@ This harness is **Item 2** of the E2E testing plan. The remaining items are:
 
 ## Troubleshooting
 
-### Docker daemon preflight
-
-When the harness manages the stack, it runs `docker info` before `docker compose up`. If Docker is not reachable, `pnpm test:smoke` fails before scenario execution with an actionable preflight error. Start Docker Desktop or a compatible Docker daemon, verify `docker info` succeeds, and rerun the smoke command.
-
 ### Health check timeout
 
 If services don't become healthy within 60 seconds, check the logs:
