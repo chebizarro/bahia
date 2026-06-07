@@ -351,6 +351,114 @@ func TestOperatorPublishNoRelayAcceptedIsPreAcceptanceFailure(t *testing.T) {
 	}
 }
 
+func TestOperatorPublishOKFalseAuthRequiredPreservesPreAcceptanceReason(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishResultsFn = func(ctx context.Context, ev nostr.Event) ([]nostrpool.PublishResult, error) {
+		transport.mu.Lock()
+		transport.calls = append(transport.calls, "publish")
+		transport.published = append(transport.published, ev)
+		transport.mu.Unlock()
+		return []nostrpool.PublishResult{{RelayURL: "wss://auth.example", Accepted: false, Reason: "auth-required: sign in"}}, errors.New("failed to publish to any relay: wss://auth.example rejected event: auth-required: sign in")
+	}
+
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var reqErr *ControlPlaneRequestError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	if reqErr.RequestAccepted || reqErr.PublishedRelays != 0 {
+		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want pre-acceptance zero-accepted failure", reqErr.RequestAccepted, reqErr.PublishedRelays)
+	}
+	if !strings.Contains(reqErr.Error(), "auth-required: sign in") {
+		t.Fatalf("error = %v, want auth-required reason", reqErr)
+	}
+}
+
+func TestOperatorReplyAuthClosedAuthenticatesAndResubscribesWithoutRepublish(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	replyKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.relays = []string{"wss://auth.example"}
+	var published nostr.Event
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		published = ev
+		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
+		return 1, nil
+	}
+	transport.authFn = func(ctx context.Context, relayURL string) error {
+		transport.mu.Lock()
+		transport.calls = append(transport.calls, "auth")
+		transport.mu.Unlock()
+		if relayURL != "wss://auth.example" {
+			t.Fatalf("AuthenticateRelay relay = %q, want auth relay", relayURL)
+		}
+		transport.events <- signedContextVMResult(t, replyKey, published, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return nil
+	}
+
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil {
+		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
+	}
+	if result.Action != "restart" {
+		t.Fatalf("result action = %q, want restart", result.Action)
+	}
+	if len(transport.published) != 1 {
+		t.Fatalf("published count = %d, want no republish after AUTH", len(transport.published))
+	}
+	if got := transport.calls; len(got) != 4 || got[0] != "subscribe" || got[1] != "publish" || got[2] != "auth" || got[3] != "subscribe" {
+		t.Fatalf("calls = %#v, want subscribe, publish, auth, subscribe", got)
+	}
+}
+
+func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	replyKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.relays = []string{"wss://auth.example", "wss://open.example"}
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil {
+		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
+	}
+	if result.Action != "restart" {
+		t.Fatalf("result action = %q, want restart", result.Action)
+	}
+}
+
+func TestOperatorReplyClosedAllRelaysAfterPublishIsPostAcceptanceFailure(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.relays = []string{"wss://auth.example", "wss://closed.example"}
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
+		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://closed.example", Reason: "closed: maintenance"}
+		return 1, nil
+	}
+
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var reqErr *ControlPlaneRequestError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	if !reqErr.RequestAccepted || reqErr.PublishedRelays != 1 {
+		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want accepted post-publish failure", reqErr.RequestAccepted, reqErr.PublishedRelays)
+	}
+	if !strings.Contains(reqErr.Error(), "wss://auth.example (auth-required: sign in)") || !strings.Contains(reqErr.Error(), "wss://closed.example (closed: maintenance)") {
+		t.Fatalf("error = %v, want closed relay summary", reqErr)
+	}
+}
+
 func TestOperatorSubscribeFailureIsPreAcceptanceFailure(t *testing.T) {
 	requestKey := nostr.GeneratePrivateKey()
 	transport := newFakeOperatorTransport()
@@ -381,19 +489,22 @@ func TestOperatorAdoptionRejectsDockerHostBeforePublish(t *testing.T) {
 }
 
 type fakeOperatorTransport struct {
-	mu           sync.Mutex
-	events       chan *nostr.Event
-	eose         chan struct{}
-	publishFn    func(context.Context, nostr.Event) (int, error)
-	subscribeErr error
-	published    []nostr.Event
-	filters      []nostr.Filter
-	calls        []string
-	closed       bool
+	mu               sync.Mutex
+	events           chan *nostr.Event
+	eose             chan struct{}
+	closedEvents     chan nostrpool.RelayClosed
+	publishFn        func(context.Context, nostr.Event) (int, error)
+	publishResultsFn func(context.Context, nostr.Event) ([]nostrpool.PublishResult, error)
+	authFn           func(context.Context, string) error
+	subscribeErr     error
+	published        []nostr.Event
+	filters          []nostr.Filter
+	calls            []string
+	closed           bool
 }
 
 func newFakeOperatorTransport() *fakeOperatorTransport {
-	return &fakeOperatorTransport{events: make(chan *nostr.Event, 32), eose: make(chan struct{})}
+	return &fakeOperatorTransport{events: make(chan *nostr.Event, 32), eose: make(chan struct{}), closedEvents: make(chan nostrpool.RelayClosed, 8)}
 }
 
 func (f *fakeOperatorTransport) Publish(ctx context.Context, ev nostr.Event) (int, error) {
@@ -408,6 +519,34 @@ func (f *fakeOperatorTransport) Publish(ctx context.Context, ev nostr.Event) (in
 	return 1, nil
 }
 
+func (f *fakeOperatorTransport) PublishWithResults(ctx context.Context, ev nostr.Event) ([]nostrpool.PublishResult, error) {
+	f.mu.Lock()
+	fn := f.publishResultsFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, ev)
+	}
+	published, err := f.Publish(ctx, ev)
+	if published <= 0 {
+		return nil, err
+	}
+	results := make([]nostrpool.PublishResult, 0, published)
+	for i := 0; i < published; i++ {
+		results = append(results, nostrpool.PublishResult{RelayURL: "wss://relay.example", Accepted: true})
+	}
+	return results, err
+}
+
+func (f *fakeOperatorTransport) AuthenticateRelay(ctx context.Context, relayURL string) error {
+	f.mu.Lock()
+	fn := f.authFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, relayURL)
+	}
+	return errors.New("no private key configured for NIP-42 AUTH")
+}
+
 func (f *fakeOperatorTransport) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "subscribe")
@@ -417,7 +556,7 @@ func (f *fakeOperatorTransport) SubscribeAllWithEOSE(ctx context.Context, filter
 	if err != nil {
 		return nil, err
 	}
-	return &nostrpool.MergedSubscription{Events: f.events, EndOfStoredEvents: f.eose}, nil
+	return &nostrpool.MergedSubscription{Events: f.events, EndOfStoredEvents: f.eose, Closed: f.closedEvents}, nil
 }
 
 func (f *fakeOperatorTransport) Close() {

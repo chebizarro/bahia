@@ -393,6 +393,65 @@ describe('Nostr Client - Parsing Functions', () => {
         relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'relay reconnect attempts exhausted before EOSE' }]
       });
     });
+
+    it('excludes AUTH-required relays and completes when remaining relays reach EOSE', async () => {
+      const authRelay = createRelay('ws://auth.example');
+      const openRelay = createRelay('ws://open.example');
+      const pool = createPool([authRelay, openRelay]);
+      const client = createNostrPoolClient({ relays: ['ws://auth.example', 'ws://open.example'], pool });
+
+      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      await flushPromises();
+      authRelay.subscriptions[0].params.onclose('auth-required: sign in first');
+      openRelay.subscriptions[0].params.oneose();
+      await flushPromises();
+
+      const events = await query;
+      expect(events).toEqual([]);
+      expect(events.eose).toMatchObject({
+        complete: true,
+        degraded: { reason: 'auth_required_relays_excluded' },
+        relaySummary: [
+          { relay: 'ws://auth.example', status: 'excluded', reason: 'auth-required: sign in first' },
+          { relay: 'ws://open.example', status: 'eose', reason: '' }
+        ]
+      });
+      expect(get(client.connectionStatus)['ws://auth.example']).toBe('auth-required');
+    });
+
+    it('fails when every query relay is excluded for unavailable AUTH', async () => {
+      const relay = createRelay('ws://auth.example');
+      const pool = createPool([relay]);
+      const client = createNostrPoolClient({ relays: ['ws://auth.example'], pool });
+
+      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      await flushPromises();
+      relay.subscriptions[0].params.onclose('auth-required');
+      await flushPromises();
+
+      await expect(query).rejects.toMatchObject({
+        name: 'NostrIncompleteEOSEError',
+        reason: 'all_relays_excluded',
+        relaySummary: [{ relay: 'ws://auth.example', status: 'excluded', reason: 'auth-required' }]
+      });
+    });
+
+    it('does not classify non-prefix auth-required text as NIP-42 AUTH', async () => {
+      const relay = createRelay('ws://relay.example');
+      const pool = createPool([relay]);
+      const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
+
+      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      await flushPromises();
+      relay.subscriptions[0].params.onclose('closed: not auth-required; maintenance');
+      await flushPromises();
+
+      await expect(query).rejects.toMatchObject({
+        reason: 'all_relays_closed',
+        relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'closed: not auth-required; maintenance' }]
+      });
+      expect(get(client.connectionStatus)['ws://relay.example']).toBe('connected');
+    });
   });
 
   describe('publish', () => {

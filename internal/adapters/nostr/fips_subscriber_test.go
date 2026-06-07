@@ -86,6 +86,19 @@ func TestFIPSSubscriberFilterUsesFixedDTagAndOptionalProtocolNamespace(t *testin
 	require.Equal(t, []string{"bahia-mesh-v1"}, scoped.filter().Tags["protocol"])
 }
 
+func TestFIPSSubscriberRecordsAuthUnavailableClosedMetadata(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://auth.example")
+	subscriber := NewFIPSSubscriber(pool, newFIPSTestWorkerRepo(), zap.NewNop())
+
+	retry := subscriber.handleRelayClosed(context.Background(), RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}, map[string]struct{}{})
+	require.False(t, retry)
+
+	snapshot := pool.HealthSnapshot()
+	require.Len(t, snapshot.Relays, 1)
+	require.Contains(t, snapshot.Relays[0].LastError, "auth-unavailable")
+	require.Contains(t, snapshot.Relays[0].LastError, "auth-required: sign in")
+}
+
 func TestFIPSSubscriberMatchesWorkerByPubkeyAndAppliesAdvert(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	ev := signedFIPSAdvertEvent(t, now, `{

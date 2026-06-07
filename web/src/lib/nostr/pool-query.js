@@ -1,6 +1,32 @@
 import { NostrIncompleteEOSEError } from './pool-errors.js';
 import { relaySummaryFromStates, uniqueRelays } from './pool-utils.js';
 
+function isAuthRequiredReason(reason = '') {
+  const normalized = String(reason || '').toLowerCase().trim();
+  return normalized === 'auth-required' || normalized.startsWith('auth-required:');
+}
+
+function withEoseMetadata(events, relayStates) {
+  const relaySummary = relaySummaryFromStates(relayStates);
+  Object.defineProperty(events, 'eose', {
+    value: {
+      complete: relaySummary.every((relay) => relay.status === 'eose' || relay.status === 'excluded'),
+      degraded: relaySummary.some((relay) => relay.status === 'excluded')
+        ? {
+            incomplete: false,
+            reason: 'auth_required_relays_excluded',
+            message: 'One or more AUTH-required relays were excluded from this EOSE query because no AUTH event was available.',
+            relaySummary
+          }
+        : null,
+      relaySummary
+    },
+    enumerable: false,
+    configurable: true
+  });
+  return events;
+}
+
 export function queryUntilEose(client, filters, options = {}) {
   const queryOptions = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const { timeoutMs = null, signal = null, relays = null } = queryOptions;
@@ -37,12 +63,17 @@ export function queryUntilEose(client, filters, options = {}) {
       if (settled) return;
       const states = Array.from(relayStates.values());
       if (states.length === 0) return;
-      if (states.every((state) => state.status === 'eose')) {
-        settle(resolve, events);
+      const activeStates = states.filter((state) => state.status !== 'excluded');
+      if (activeStates.length === 0) {
+        settle(reject, incomplete('all_relays_excluded', 'All Nostr query relays require AUTH, and no AUTH event was available'));
         return;
       }
-      if (states.every((state) => state.status !== 'pending')) {
-        settle(reject, incomplete('all_relays_closed', 'Nostr query relays closed before all EOSE messages were received'));
+      if (activeStates.every((state) => state.status === 'eose')) {
+        settle(resolve, withEoseMetadata(events, relayStates));
+        return;
+      }
+      if (activeStates.every((state) => state.status !== 'pending')) {
+        settle(reject, incomplete('all_relays_closed', 'Nostr query relays closed before remaining relays satisfied EOSE'));
       }
     };
 
@@ -75,9 +106,13 @@ export function queryUntilEose(client, filters, options = {}) {
         if (relayStates.has(relay)) {
           const current = relayStates.get(relay);
           if (current?.status !== 'eose') {
+            const reasonText = String(reason || '');
+            const excluded = meta?.authRequired === true || isAuthRequiredReason(reasonText);
             relayStates.set(relay, meta?.terminal === false
-              ? { status: 'pending', reason: String(reason || '') }
-              : { status: 'closed', reason: String(reason || '') });
+              ? { status: 'pending', reason: reasonText }
+              : excluded
+                ? { status: 'excluded', reason: reasonText || 'auth-required' }
+                : { status: 'closed', reason: reasonText });
           }
         }
         if (meta?.terminal !== false) evaluateCompletion();

@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-8epx.10",
+  "title": "Optional NIP-86 managed relay administration",
+  "source_plan": "docs/plans/relay-strategy-2026-06-06.md",
+  "observed_behavior_before": [
+    "Bahia documented NIP-86 as optional relay-owner administration but had no opt-in configuration model for managed relay targets.",
+    "There was no isolated NIP-86 HTTP client that required NIP-98 payload-bound authorization and rejected non-NIP-86 application/control-plane methods.",
+    "Existing NIP-42 websocket AUTH work is owned by bahia-8epx.7 and must not be replaced by HTTP relay administration."
+  ],
+  "intended_behavior": [
+    "NIP-86 relay administration remains disabled by default with no configured targets.",
+    "Enabling relay administration requires an administrator private-key secret reference and explicitly Bahia-owned or Bahia-authorized target relays with secure relay/admin URLs and allowed administrator pubkeys.",
+    "The NIP-86 client sends only relay-owner administration methods over HTTP, signs every request with NIP-98 kind 27235, and includes the SHA-256 hash of the exact JSON request body in the required payload tag.",
+    "The client refuses disabled, unconfigured, administrator-pubkey-mismatched, HTTP-error, relay-error, and non-NIP-86 ContextVM/application method paths deterministically."
+  ],
+  "out_of_scope": [
+    "Changing NIP-42 websocket AUTH behavior in existing relay clients.",
+    "Routing ContextVM kind 25910 app/control-plane mutations through NIP-86.",
+    "Adding a UI, CLI command, or automatic relay policy reconciler for relay administration.",
+    "NIP-11, NIP-66, and NIP-51 10050 DM relay-list implementation slices."
+  ]
+}

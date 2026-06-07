@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-8epx.7",
+  "title": "NIP-42 AUTH and relay-unavailable handling across clients",
+  "status": "implemented_pending_verification",
+  "beads": ["bahia-8epx.7", "bahia-8epx.7.1", "bahia-8epx.7.2", "bahia-8epx.7.3"],
+  "intent": "Browser, backend, operator, and FIPS-adjacent relay clients handle NIP-42 AUTH-required and unavailable relay outcomes consistently without polling or non-Nostr mutation fallback after relay acceptance.",
+  "scope": [
+    "Browser relay subscription/query lifecycle treats AUTH-required relays without an AUTH event as excluded from the current operation and preserves relay metadata.",
+    "Backend relay pool/publisher records AUTH-unavailable metadata and configures NIP-42 private-key support when credentials are available.",
+    "Operator ContextVM client preserves OK rejection reasons and consumes CLOSED metadata during result waits.",
+    "FIPS subscriber/bridge record AUTH-unavailable metadata through existing event-driven CLOSED handling."
+  ],
+  "out_of_scope": [
+    "NIP-86 relay administration and client-admin implementation files",
+    "New relay routing kinds",
+    "REST or legacy mutation fallback after any relay accepts signed ContextVM traffic"
+  ],
+  "source_evidence": [
+    "docs/plans/relay-strategy-2026-06-06.md Item 7",
+    "bd show bahia-8epx.7",
+    "web/src/lib/nostr/pool-query.js",
+    "web/src/lib/nostr/pool-subscriptions.js",
+    "internal/adapters/nostr/relay_pool.go",
+    "internal/adapters/nostr/publisher.go",
+    "pkg/client/operator_nostr.go",
+    "internal/adapters/nostr/fips_subscriber.go",
+    "internal/fipsbridge/bridge.go"
+  ]
+}

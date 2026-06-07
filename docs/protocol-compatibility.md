@@ -38,7 +38,7 @@ For the canonical control-plane contract, prefer:
 | NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
 | NIP-34 | Repository relay hints and repository state | ✅ repository/ngit-specific routing input |
 | NIP-11 / NIP-66 | Relay metadata and optional monitor events | ✅ advisory capability/liveness metadata only |
-| NIP-86 + NIP-98 | Optional relay-owner HTTP administration with signed HTTP authorization | 🟡 optional administration surface, not ContextVM transport |
+| NIP-86 + NIP-98 | Optional relay-owner HTTP administration with payload-bound signed HTTP authorization | 🟡 opt-in administration surface for Bahia-owned/authorized relays only; not ContextVM transport |
 | Loom | Distributed job execution protocol | ✅ implemented as external protocol interop |
 | Hive-CI | Workflow event ingestion protocol | ✅ implemented as external protocol interop |
 | OCI Distribution API | Registry push/pull | ✅ implemented |

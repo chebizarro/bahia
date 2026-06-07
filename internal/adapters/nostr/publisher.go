@@ -130,7 +130,11 @@ type Publisher struct {
 // eventRepo is optional; when non-nil, all published events are recorded to the audit table.
 func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger) *Publisher {
 	if pool == nil {
-		pool = NewRelayPool(cfg.Relays, logger)
+		poolOpts := []RelayPoolOption(nil)
+		if cfg.PrivateKey != "" {
+			poolOpts = append(poolOpts, WithPrivateKey(cfg.PrivateKey))
+		}
+		pool = NewRelayPool(cfg.Relays, logger, poolOpts...)
 		pool.Connect(context.Background())
 	}
 

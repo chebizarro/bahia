@@ -1,0 +1,41 @@
+{
+  "feature_id": "bahia-8epx.7",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "AUTH callbacks remain event-driven and no polling/timeout completion is introduced for relay AUTH.",
+      "tests": [
+        "web/tests/unit/nostr-client-parsing.test.js::forwards relay AUTH challenges to the subscription onAuth handler",
+        "internal/adapters/nostr/relay_pool_test.go::TestMergeRelaySubscriptionsEmitsClosedReason"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "Auth-required relays without credentials are excluded from the current operation with visible relay health/error metadata.",
+      "tests": [
+        "web/tests/unit/nostr-client-parsing.test.js::excludes AUTH-required relays and completes when remaining relays reach EOSE",
+        "web/tests/unit/nostr-client-parsing.test.js::fails when every query relay is excluded for unavailable AUTH",
+        "internal/adapters/nostr/relay_pool_test.go::TestRelayPoolRecordRelayErrorSurfacesAuthUnavailableMetadata",
+        "internal/adapters/nostr/fips_subscriber_test.go::TestFIPSSubscriberRecordsAuthUnavailableClosedMetadata"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "Backend/operator clients attempt NIP-42 AUTH only when credentials are available and preserve OK=false rejection reasons.",
+      "tests": [
+        "internal/adapters/nostr/relay_pool_test.go::TestNewPublisherConfiguresPrivateKeyForRelayAuth",
+        "pkg/client/operator_nostr_test.go::TestOperatorPublishOKFalseAuthRequiredPreservesPreAcceptanceReason"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "Operations fail when remaining relays cannot satisfy success rules and do not use fallback mutation paths after relay acceptance.",
+      "tests": [
+        "pkg/client/operator_nostr_test.go::TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult",
+        "pkg/client/operator_nostr_test.go::TestOperatorReplyClosedAllRelaysAfterPublishIsPostAcceptanceFailure",
+        "pkg/client/operator_nostr_test.go::TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort",
+        "cmd/cli/operator_nostr_test.go::TestOperatorHTTPFallbackOnlyForExplicitPreAcceptanceFailures"
+      ]
+    }
+  ]
+}

@@ -70,7 +70,9 @@ func (e *ControlPlaneRequestError) Unwrap() error {
 
 type operatorRelayTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
+	PublishWithResults(context.Context, nostr.Event) ([]nostrpool.PublishResult, error)
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrpool.MergedSubscription, error)
+	AuthenticateRelay(context.Context, string) error
 	Close()
 }
 
@@ -100,9 +102,19 @@ func (t *relayPoolOperatorTransport) Publish(ctx context.Context, ev nostr.Event
 	return t.pool.Publish(ctx, ev)
 }
 
+func (t *relayPoolOperatorTransport) PublishWithResults(ctx context.Context, ev nostr.Event) ([]nostrpool.PublishResult, error) {
+	t.ensureConnected(ctx)
+	return t.pool.PublishWithResults(ctx, ev)
+}
+
 func (t *relayPoolOperatorTransport) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error) {
 	t.ensureConnected(ctx)
 	return t.pool.SubscribeAllWithEOSE(ctx, filters)
+}
+
+func (t *relayPoolOperatorTransport) AuthenticateRelay(ctx context.Context, relayURL string) error {
+	t.ensureConnected(ctx)
+	return t.pool.AuthenticateRelay(ctx, relayURL)
 }
 
 func (t *relayPoolOperatorTransport) Close() {
@@ -347,12 +359,13 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	if c.servicePubkey != "" {
 		filter.Authors = []string{c.servicePubkey}
 	}
-	sub, err := c.transport.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	filters := []nostr.Filter{filter}
+	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: err}
 	}
 
-	published, err := c.transport.Publish(ctx, *event)
+	published, err := c.publishOperatorEvent(ctx, *event)
 	if published == 0 {
 		if err == nil {
 			err = fmt.Errorf("request was not accepted by any relay")
@@ -362,12 +375,51 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 
 	seen := map[string]struct{}{}
 	eose := sub.EndOfStoredEvents
+	closed := sub.Closed
+	pendingRelays := append([]string(nil), c.relays...)
+	closedRelays := map[string]string{}
+	authAttempted := map[string]struct{}{}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: ctx.Err()}
 		case <-eose:
 			eose = nil
+		case relayClosed, ok := <-closed:
+			if !ok {
+				closed = nil
+				continue
+			}
+			reason := strings.TrimSpace(relayClosed.Reason)
+			if reason == "" {
+				reason = "subscription closed"
+			}
+			if relayClosed.RelayURL == "" {
+				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result: %s", reason)}
+			}
+			if nostrpool.IsAuthRequiredReason(reason) {
+				if _, attempted := authAttempted[relayClosed.RelayURL]; !attempted {
+					authAttempted[relayClosed.RelayURL] = struct{}{}
+					if authErr := c.transport.AuthenticateRelay(ctx, relayClosed.RelayURL); authErr == nil {
+						sub.Close()
+						resub, subErr := c.transport.SubscribeAllWithEOSE(ctx, filters)
+						if subErr != nil {
+							return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr)}
+						}
+						sub = resub
+						eose = sub.EndOfStoredEvents
+						closed = sub.Closed
+						pendingRelays = append([]string(nil), c.relays...)
+						closedRelays = map[string]string{}
+						continue
+					}
+				}
+			}
+			closedRelays[relayClosed.RelayURL] = reason
+			pendingRelays = removeRelayURL(pendingRelays, relayClosed.RelayURL)
+			if len(pendingRelays) == 0 {
+				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays))}
+			}
 		case reply, ok := <-sub.Events:
 			if !ok {
 				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result")}
@@ -408,6 +460,48 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			return &synthetic, nil
 		}
 	}
+}
+
+func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, error) {
+	results, err := c.transport.PublishWithResults(ctx, event)
+	if len(results) == 0 {
+		return 0, err
+	}
+	published := 0
+	for _, result := range results {
+		if result.Accepted || result.IsDuplicate() {
+			published++
+		}
+	}
+	return published, err
+}
+
+func removeRelayURL(relays []string, relayURL string) []string {
+	if relayURL == "" || len(relays) == 0 {
+		return relays
+	}
+	out := relays[:0]
+	for _, relay := range relays {
+		if relay != relayURL {
+			out = append(out, relay)
+		}
+	}
+	return out
+}
+
+func formatOperatorClosedRelays(closed map[string]string) string {
+	if len(closed) == 0 {
+		return "all relays closed"
+	}
+	parts := make([]string, 0, len(closed))
+	for relay, reason := range closed {
+		if strings.TrimSpace(reason) == "" {
+			parts = append(parts, relay)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", relay, reason))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func contextVMParams(payload any, progressToken string) (map[string]any, error) {

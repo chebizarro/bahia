@@ -274,11 +274,12 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey      string   `koanf:"private_key"`
-	Relays          []string `koanf:"relays"`
-	ServiceRelays   []string `koanf:"service_relays"`
-	BrowserRelays   []string `koanf:"browser_relays"`
-	ContextVMRelays []string `koanf:"contextvm_relays"`
+	PrivateKey          string                    `koanf:"private_key"`
+	Relays              []string                  `koanf:"relays"`
+	ServiceRelays       []string                  `koanf:"service_relays"`
+	BrowserRelays       []string                  `koanf:"browser_relays"`
+	ContextVMRelays     []string                  `koanf:"contextvm_relays"`
+	RelayAdministration RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
 
 	// RelayAuthUnavailablePolicy is fixed to exclude_and_fail: if a relay requires
 	// NIP-42 AUTH and no valid signer is available for the operation, consumers
@@ -319,6 +320,36 @@ type RelaySidecarConfig struct {
 	RequestRetention time.Duration `koanf:"request_retention"`
 	AuthPrivateKey   string        `koanf:"auth_private_key"`
 	MaxQueryLimit    int           `koanf:"max_query_limit"`
+}
+
+// RelayAdministrationAuthorization values declare why a NIP-86 target is in
+// scope. They are operator assertions for Bahia-owned/Bahia-authorized relays;
+// relay-side authorization is still enforced by the relay against the signed
+// NIP-98 administrator pubkey.
+const (
+	RelayAdministrationBahiaOwned      = "bahia_owned"
+	RelayAdministrationBahiaAuthorized = "bahia_authorized"
+)
+
+// RelayAdministrationConfig holds optional NIP-86 HTTP relay-owner management
+// settings. It is disabled by default and intentionally separate from NIP-42
+// websocket AUTH and ContextVM application/control-plane mutation transport.
+type RelayAdministrationConfig struct {
+	Enabled                    bool                        `koanf:"enabled" yaml:"enabled"`
+	AdministratorPrivateKeyRef string                      `koanf:"administrator_private_key_ref" yaml:"administrator_private_key_ref"`
+	Targets                    []RelayAdministrationTarget `koanf:"targets" yaml:"targets"`
+}
+
+// RelayAdministrationTarget is one explicitly allowed NIP-86 management target.
+// RelayURL is the websocket relay URL used in the NIP-98 `u` tag. HTTPURL may
+// be set when the relay's HTTP management endpoint differs from the ws/wss URL
+// converted to http/https.
+type RelayAdministrationTarget struct {
+	Ref                  string   `koanf:"ref" yaml:"ref"`
+	RelayURL             string   `koanf:"relay_url" yaml:"relay_url"`
+	HTTPURL              string   `koanf:"http_url" yaml:"http_url"`
+	Authorization        string   `koanf:"authorization" yaml:"authorization"`
+	AdministratorPubkeys []string `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys"`
 }
 
 // ReconcileConfig holds reconciliation loop settings.
@@ -899,6 +930,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateRelaySidecar(); err != nil {
+		return err
+	}
+	if err := c.validateRelayAdministration(); err != nil {
 		return err
 	}
 	c.normalizeNostrRelays()
@@ -1537,6 +1571,118 @@ func (c *Config) validateNostrRelayPolicy() error {
 		return nil
 	default:
 		return fmt.Errorf("config validation failed: nostr.relay_auth_unavailable must be %q", RelayAuthUnavailableExcludeAndFail)
+	}
+}
+
+func (c *Config) validateRelayAdministration() error {
+	admin := &c.Nostr.RelayAdministration
+	admin.AdministratorPrivateKeyRef = strings.TrimSpace(admin.AdministratorPrivateKeyRef)
+	if !admin.Enabled {
+		return nil
+	}
+	if admin.AdministratorPrivateKeyRef == "" {
+		return fmt.Errorf("config validation failed: nostr.relay_administration.administrator_private_key_ref is required when relay administration is enabled")
+	}
+	if looksLikeRawNostrPrivateKey(admin.AdministratorPrivateKeyRef) {
+		return fmt.Errorf("config validation failed: nostr.relay_administration.administrator_private_key_ref must be a secret reference, not private key material")
+	}
+	if len(admin.Targets) == 0 {
+		return fmt.Errorf("config validation failed: nostr.relay_administration.targets requires at least one Bahia-owned or Bahia-authorized relay when enabled")
+	}
+	seen := map[string]struct{}{}
+	for i := range admin.Targets {
+		target := &admin.Targets[i]
+		target.Ref = strings.TrimSpace(target.Ref)
+		target.RelayURL = strings.TrimSpace(target.RelayURL)
+		target.HTTPURL = strings.TrimSpace(target.HTTPURL)
+		target.Authorization = strings.ToLower(strings.TrimSpace(target.Authorization))
+		if target.Ref == "" {
+			return fmt.Errorf("config validation failed: nostr.relay_administration.targets[%d].ref is required", i)
+		}
+		if _, exists := seen[target.Ref]; exists {
+			return fmt.Errorf("config validation failed: nostr.relay_administration target ref %q is duplicated", target.Ref)
+		}
+		seen[target.Ref] = struct{}{}
+		if err := validateWebsocketRelayURL(target.RelayURL); err != nil {
+			return fmt.Errorf("config validation failed: nostr.relay_administration target %q relay_url: %w", target.Ref, err)
+		}
+		if target.HTTPURL != "" {
+			if err := validateHTTPManagementURL(target.HTTPURL); err != nil {
+				return fmt.Errorf("config validation failed: nostr.relay_administration target %q http_url: %w", target.Ref, err)
+			}
+		}
+		switch target.Authorization {
+		case RelayAdministrationBahiaOwned, RelayAdministrationBahiaAuthorized:
+		default:
+			return fmt.Errorf("config validation failed: nostr.relay_administration target %q authorization must be %q or %q", target.Ref, RelayAdministrationBahiaOwned, RelayAdministrationBahiaAuthorized)
+		}
+		pubkeys, err := normalizePubkeyList(target.AdministratorPubkeys)
+		if err != nil {
+			return fmt.Errorf("config validation failed: nostr.relay_administration target %q administrator_pubkeys: %w", target.Ref, err)
+		}
+		if len(pubkeys) == 0 {
+			return fmt.Errorf("config validation failed: nostr.relay_administration target %q requires administrator_pubkeys", target.Ref)
+		}
+		target.AdministratorPubkeys = pubkeys
+	}
+	return nil
+}
+
+func looksLikeRawNostrPrivateKey(value string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(trimmed, "nsec1") {
+		return true
+	}
+	if len(trimmed) == 64 {
+		if _, err := hex.DecodeString(trimmed); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func validateWebsocketRelayURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("must be an absolute ws/wss URL")
+	}
+	switch parsed.Scheme {
+	case "wss":
+		return nil
+	case "ws":
+		if isLoopbackHost(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("ws relay administration URLs are allowed only for localhost or loopback targets; use wss")
+	default:
+		return fmt.Errorf("scheme must be ws or wss")
+	}
+}
+
+func validateHTTPManagementURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("must be an absolute http/https URL")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("http relay administration URLs are allowed only for localhost or loopback targets; use https")
+	default:
+		return fmt.Errorf("scheme must be http or https")
+	}
+}
+
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
 	}
 }
 

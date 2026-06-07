@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-8epx.10",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "NIP-86 relay administration is opt-in and disabled by default with no configured targets.",
+      "tests": ["TestNostrRelayAdministrationDefaultDisabled", "TestDisabledClientFailsClosed"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Enabled config requires an administrator private-key secret reference, explicit Bahia-owned or Bahia-authorized targets, secure wss/https relay administration URLs except localhost/loopback development targets, and administrator pubkeys.",
+      "tests": ["TestNostrRelayAdministrationEnabledValidation", "TestNostrRelayAdministrationRejectsUnsafeEnabledConfig"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The NIP-86 client refuses unconfigured targets, targets that do not authorize the signing administrator pubkey, and external plaintext ws/http administration endpoints.",
+      "tests": ["TestClientRequiresAuthorizedConfiguredTarget", "TestClientRejectsExternalPlaintextAdministrationEndpoints"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Every NIP-86 HTTP request uses application/nostr+json+rpc and NIP-98 kind 27235 authorization with method=POST, u=relay URL, and a payload tag bound to the exact JSON request body.",
+      "tests": ["TestCallSignsPayloadBoundNIP98Authorization"]
+    },
+    {
+      "id": "AC5",
+      "statement": "The client only permits NIP-86 relay-owner administration methods and rejects ContextVM/app/control-plane mutation method names before HTTP I/O.",
+      "tests": ["TestCallRejectsContextVMMutationMethodsBeforeHTTP"]
+    },
+    {
+      "id": "AC6",
+      "statement": "HTTP status failures and relay JSON errors are surfaced explicitly.",
+      "tests": ["TestCallReportsHTTPAndRelayErrors"]
+    }
+  ]
+}

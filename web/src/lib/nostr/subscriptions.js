@@ -99,11 +99,13 @@ function degradedMetadataFromIncompleteEose(error, events) {
 }
 
 function queryResult(events, degraded = null) {
+  const eose = events?.eose;
+  const effectiveDegraded = degraded || eose?.degraded || null;
   return {
     events,
-    complete: !degraded,
-    degraded,
-    relaySummary: degraded?.relaySummary || []
+    complete: !effectiveDegraded,
+    degraded: effectiveDegraded,
+    relaySummary: effectiveDegraded?.relaySummary || eose?.relaySummary || []
   };
 }
 

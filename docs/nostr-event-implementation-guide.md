@@ -132,7 +132,7 @@ Use existing relay-list NIPs and existing protocol relay hints. Bahia does not a
 - `10050`: DM relay lists when direct-message routing is required.
 - NIP-34 `30617` repository `relays` tags: repository/ngit routing hints for that repository only.
 - NIP-11 metadata and optional NIP-66 monitor events: advisory relay capability/liveness inputs only; they do not establish Bahia service trust.
-- NIP-86: optional HTTP relay-owner administration with NIP-98 authorization for Bahia-owned or Bahia-authorized relays. It is not ContextVM mutation transport and does not replace NIP-42 websocket AUTH.
+- NIP-86: optional HTTP relay-owner administration with NIP-98 payload-bound authorization for explicitly configured Bahia-owned or Bahia-authorized relays. It is not ContextVM mutation transport and does not replace NIP-42 websocket AUTH.
 
 Do not invent relay routing kinds.
 

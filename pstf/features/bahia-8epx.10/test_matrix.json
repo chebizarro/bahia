@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-8epx.10",
+  "tests": [
+    {
+      "name": "go test ./internal/config",
+      "type": "unit",
+      "acceptance_criteria": ["AC1", "AC2"],
+      "expected": "Config defaults keep NIP-86 disabled, valid opt-in relay administration config normalizes safely, and unsafe enabled config is rejected."
+    },
+    {
+      "name": "go test ./internal/adapters/nostr/relayadmin",
+      "type": "unit",
+      "acceptance_criteria": ["AC1", "AC3", "AC4", "AC5", "AC6"],
+      "expected": "The isolated NIP-86 client fails closed unless enabled and authorized, signs payload-bound NIP-98 auth, rejects non-NIP-86 mutation methods, and surfaces HTTP/relay failures."
+    }
+  ]
+}

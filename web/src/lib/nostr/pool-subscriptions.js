@@ -60,8 +60,13 @@ export function subscribeOnRelays(client, relays, filters, { onEvent, onEose, on
         onclose: (reason = '') => {
           client.enqueueRelayCallback(queues, callbackRelay, async () => {
             if (!active) return;
-            if (String(reason).startsWith('auth-required') && onAuth) onAuth(reason, callbackRelay);
-            onClosed?.(reason, callbackRelay, { terminal: true, source: 'closed' });
+            const reasonText = String(reason || '');
+            const normalizedReason = reasonText.toLowerCase().trim();
+            const authRequired = normalizedReason === 'auth-required'
+              || normalizedReason.startsWith('auth-required:');
+            if (authRequired) client.markRelayStatus(callbackRelay, 'auth-required');
+            if (authRequired && onAuth) onAuth(reasonText || 'auth-required', callbackRelay);
+            onClosed?.(reasonText, callbackRelay, { terminal: true, source: authRequired ? 'auth' : 'closed', authRequired });
           });
         },
         oninvalidevent: (event) => {

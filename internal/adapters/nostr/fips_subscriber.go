@@ -249,6 +249,7 @@ func (s *FIPSSubscriber) handleRelayClosed(ctx context.Context, closed RelayClos
 	}
 	authAttempted[closed.RelayURL] = struct{}{}
 	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		s.pool.RecordRelayError(closed.RelayURL, "auth-unavailable: "+closed.Reason+": "+err.Error())
 		s.logger.Warn("relay FIPS subscription auth failed", zap.String("relay", closed.RelayURL), zap.String("reason", closed.Reason), zap.Error(err))
 		return false
 	}

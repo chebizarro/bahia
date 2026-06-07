@@ -282,6 +282,9 @@ func (b *Bridge) handleClosed(ctx context.Context, closed nostradapter.RelayClos
 	}
 	authAttempted[closed.RelayURL] = struct{}{}
 	if err := b.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		if recorder, ok := b.pool.(interface{ RecordRelayError(string, string) }); ok {
+			recorder.RecordRelayError(closed.RelayURL, "auth-unavailable: "+closed.Reason+": "+err.Error())
+		}
 		b.logger.Warn("relay authentication failed", "relay", closed.RelayURL, "error", err)
 		return false
 	}

@@ -270,6 +270,7 @@ func (s *Subscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, 
 	}
 	authAttempted[closed.RelayURL] = struct{}{}
 	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		s.pool.RecordRelayError(closed.RelayURL, "auth-unavailable: "+closed.Reason+": "+err.Error())
 		s.logger.Warn("relay subscription auth failed",
 			zap.String("relay", closed.RelayURL),
 			zap.String("reason", closed.Reason),

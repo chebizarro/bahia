@@ -46,7 +46,7 @@ export function summarizeRelayConnections(relays, statusMap = {}) {
     status: statusMap[url] || 'unknown'
   }));
   const connected = relayStatuses.filter((relay) => relay.status === 'connected').length;
-  const failed = relayStatuses.filter((relay) => ['error', 'failed', 'disconnected'].includes(relay.status)).length;
+  const failed = relayStatuses.filter((relay) => ['error', 'failed', 'disconnected', 'auth-required'].includes(relay.status)).length;
   const connecting = relayStatuses.filter((relay) => relay.status === 'connecting').length;
   return { total: relays.length, connected, failed, connecting, relays: relayStatuses };
 }

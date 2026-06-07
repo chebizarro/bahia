@@ -1,0 +1,58 @@
+{
+  "feature_id": "bahia-8epx.7",
+  "test_slices": [
+    {
+      "target": "browser relay pool",
+      "paths": [
+        "web/src/lib/nostr/pool-query.js",
+        "web/src/lib/nostr/pool-subscriptions.js",
+        "web/tests/unit/nostr-client-parsing.test.js",
+        "web/tests/unit/discovery-store.test.js"
+      ],
+      "coverage": [
+        "AUTH challenge callback is event-driven.",
+        "AUTH-required CLOSED excludes that relay and preserves relay summary metadata.",
+        "All AUTH-excluded relays fail deterministically."
+      ]
+    },
+    {
+      "target": "backend relay pool and subscribers",
+      "paths": [
+        "internal/adapters/nostr/relay_pool.go",
+        "internal/adapters/nostr/publisher.go",
+        "internal/adapters/nostr/subscriber.go",
+        "internal/adapters/nostr/fips_subscriber.go",
+        "internal/adapters/nostr/*_test.go"
+      ],
+      "coverage": [
+        "AUTH-required reasons classify with and without a colon.",
+        "Publisher-created pools receive configured private keys for NIP-42 AUTH.",
+        "AUTH-unavailable CLOSED outcomes are visible in relay health metadata."
+      ]
+    },
+    {
+      "target": "operator ContextVM client",
+      "paths": [
+        "pkg/client/operator_nostr.go",
+        "pkg/client/operator_nostr_test.go",
+        "cmd/cli/operator_nostr.go",
+        "cmd/cli/operator_nostr_test.go"
+      ],
+      "coverage": [
+        "OK=false auth-required publish failure is pre-acceptance and preserves relay reason.",
+        "CLOSED result subscriptions exclude failed relays while remaining relays can complete.",
+        "All closed result relays after publish are post-acceptance failures."
+      ]
+    },
+    {
+      "target": "FIPS-adjacent bridge",
+      "paths": [
+        "internal/fipsbridge/bridge.go",
+        "internal/fipsbridge/bridge_test.go"
+      ],
+      "coverage": [
+        "Existing event-driven CLOSED handling records AUTH-unavailable metadata when supported by the relay pool."
+      ]
+    }
+  ]
+}

@@ -146,7 +146,8 @@ type PublishResult struct {
 
 // IsAuthRequiredReason returns true if a relay protocol reason requires authentication.
 func IsAuthRequiredReason(reason string) bool {
-	return strings.HasPrefix(reason, "auth-required:")
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	return normalized == "auth-required" || strings.HasPrefix(normalized, "auth-required:")
 }
 
 func subscribeAuthRequired(err error) bool {
@@ -731,6 +732,7 @@ type RelayStatus struct {
 	Healthy   bool
 	LastSeen  time.Time
 	Errors    int
+	LastError string
 }
 
 // HealthSnapshot returns a point-in-time summary of configured relay state.
@@ -753,6 +755,7 @@ func (p *RelayPool) HealthSnapshot() RelayHealthSnapshot {
 			status.Healthy = status.Connected && stats.IsHealthy()
 			status.LastSeen = stats.LastConnected
 			status.Errors = int(stats.ErrorCount)
+			status.LastError = stats.LastError
 		} else {
 			status.Healthy = connected
 		}
@@ -822,6 +825,15 @@ func (p *RelayPool) recordRelayError(relayURL, reason string) {
 		return
 	}
 	p.health.GetOrCreate(relayURL).RecordError(reason)
+}
+
+// RecordRelayError records relay-level protocol or transport metadata for
+// callers that observe CLOSED/AUTH failures outside the pool internals.
+func (p *RelayPool) RecordRelayError(relayURL, reason string) {
+	if p == nil || strings.TrimSpace(relayURL) == "" {
+		return
+	}
+	p.recordRelayError(relayURL, strings.TrimSpace(reason))
 }
 
 // URLs returns the list of configured relay URLs.

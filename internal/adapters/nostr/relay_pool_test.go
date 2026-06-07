@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gonostr "github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -119,6 +120,8 @@ func TestMergeRelaySubscriptionsEmitsClosedReason(t *testing.T) {
 	require.Equal(t, "wss://relay.example", closed.RelayURL)
 	require.Equal(t, "auth-required: sign in first", closed.Reason)
 	require.True(t, IsAuthRequiredReason(closed.Reason))
+	require.True(t, IsAuthRequiredReason("auth-required"))
+	require.False(t, IsAuthRequiredReason("closed: not auth-required; maintenance"))
 
 	close(sub.Events)
 }
@@ -200,6 +203,26 @@ func TestRelayPool_HealthSnapshotReturnsPerRelayStatus(t *testing.T) {
 	require.False(t, statuses["wss://relay-two.example"].Connected)
 	require.False(t, statuses["wss://relay-two.example"].Healthy)
 	require.Equal(t, 1, statuses["wss://relay-two.example"].Errors)
+	require.Equal(t, "dial tcp: connection refused", statuses["wss://relay-two.example"].LastError)
+}
+
+func TestRelayPoolRecordRelayErrorSurfacesAuthUnavailableMetadata(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://auth.example")
+	pool.RecordRelayError("wss://auth.example", "auth-unavailable: auth-required: sign in: no private key configured for NIP-42 AUTH")
+
+	snapshot := pool.HealthSnapshot()
+	require.Len(t, snapshot.Relays, 1)
+	require.Equal(t, 1, snapshot.Relays[0].Errors)
+	require.Contains(t, snapshot.Relays[0].LastError, "auth-unavailable")
+	require.False(t, snapshot.Relays[0].Healthy)
+}
+
+func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {
+	privateKey := gonostr.GeneratePrivateKey()
+	publisher := NewPublisher(config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true}, nil, nil, zap.NewNop())
+	require.NotNil(t, publisher)
+	require.NotNil(t, publisher.pool)
+	require.Equal(t, privateKey, publisher.pool.privateKey)
 }
 
 func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {

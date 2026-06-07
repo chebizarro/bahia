@@ -713,6 +713,150 @@ func TestNostrRelayPolicyLoadsFromEnvironment(t *testing.T) {
 	assertStringSlice(t, cfg.Nostr.ContextVMRelayPolicyRelays(), []string{"wss://contextvm.example"})
 }
 
+func TestNostrRelayAdministrationDefaultDisabled(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Nostr.RelayAdministration.Enabled {
+		t.Fatal("relay administration must be disabled by default")
+	}
+	if cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef != "" {
+		t.Fatalf("AdministratorPrivateKeyRef = %q, want empty", cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef)
+	}
+	if len(cfg.Nostr.RelayAdministration.Targets) != 0 {
+		t.Fatalf("Targets = %#v, want empty", cfg.Nostr.RelayAdministration.Targets)
+	}
+}
+
+func TestNostrRelayAdministrationEnabledValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(strings.Join([]string{
+		"nostr:",
+		"  relay_administration:",
+		"    enabled: true",
+		"    administrator_private_key_ref: \"secret://relay-admin/sidecar\"",
+		"    targets:",
+		"      - ref: \" sidecar \"",
+		"        relay_url: \" wss://relay.example.com/nostr/ \"",
+		"        http_url: \" https://relay.example.com/relay/ \"",
+		"        authorization: \" BAHIA_OWNED \"",
+		"        administrator_pubkeys:",
+		"          - \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
+		"          - \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+		"",
+	}, "\n"))
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	admin := cfg.Nostr.RelayAdministration
+	if !admin.Enabled {
+		t.Fatal("RelayAdministration.Enabled = false")
+	}
+	if admin.AdministratorPrivateKeyRef != "secret://relay-admin/sidecar" {
+		t.Fatalf("AdministratorPrivateKeyRef = %q", admin.AdministratorPrivateKeyRef)
+	}
+	if len(admin.Targets) != 1 {
+		t.Fatalf("Targets len = %d", len(admin.Targets))
+	}
+	target := admin.Targets[0]
+	if target.Ref != "sidecar" || target.RelayURL != "wss://relay.example.com/nostr/" || target.HTTPURL != "https://relay.example.com/relay/" {
+		t.Fatalf("target normalized incorrectly or pathful URL not preserved: %#v", target)
+	}
+	if target.Authorization != RelayAdministrationBahiaOwned {
+		t.Fatalf("Authorization = %q", target.Authorization)
+	}
+	assertStringSlice(t, target.AdministratorPubkeys, []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+}
+
+func TestNostrRelayAdministrationRejectsUnsafeEnabledConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{
+			name: "missing secret ref",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = RelayAdministrationConfig{Enabled: true}
+			},
+			want: "administrator_private_key_ref is required",
+		},
+		{
+			name: "raw private key ref rejected",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = validRelayAdministrationConfig()
+				cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef = strings.Repeat("a", 64)
+			},
+			want: "must be a secret reference",
+		},
+		{
+			name: "unasserted authorization rejected",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = validRelayAdministrationConfig()
+				cfg.Nostr.RelayAdministration.Targets[0].Authorization = "public_relay"
+			},
+			want: "authorization must be",
+		},
+		{
+			name: "missing administrator pubkey rejected",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = validRelayAdministrationConfig()
+				cfg.Nostr.RelayAdministration.Targets[0].AdministratorPubkeys = nil
+			},
+			want: "requires administrator_pubkeys",
+		},
+		{
+			name: "non relay url rejected",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = validRelayAdministrationConfig()
+				cfg.Nostr.RelayAdministration.Targets[0].RelayURL = "https://relay.example.com"
+			},
+			want: "scheme must be ws or wss",
+		},
+		{
+			name: "external plaintext relay rejected",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = validRelayAdministrationConfig()
+				cfg.Nostr.RelayAdministration.Targets[0].RelayURL = "ws://relay.example.com"
+			},
+			want: "use wss",
+		},
+		{
+			name: "external plaintext http endpoint rejected",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.RelayAdministration = validRelayAdministrationConfig()
+				cfg.Nostr.RelayAdministration.Targets[0].HTTPURL = "http://relay.example.com"
+			},
+			want: "use https",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Defaults()
+			tt.mutate(cfg)
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validate() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func validRelayAdministrationConfig() RelayAdministrationConfig {
+	return RelayAdministrationConfig{
+		Enabled:                    true,
+		AdministratorPrivateKeyRef: "secret://relay-admin/sidecar",
+		Targets: []RelayAdministrationTarget{{
+			Ref:                  "sidecar",
+			RelayURL:             "wss://relay.example.com",
+			Authorization:        RelayAdministrationBahiaAuthorized,
+			AdministratorPubkeys: []string{strings.Repeat("b", 64)},
+		}},
+	}
+}
+
 func TestNostrRelayAuthUnavailablePolicyValidation(t *testing.T) {
 	valid := Defaults()
 	valid.Nostr.RelayAuthUnavailablePolicy = " EXCLUDE_AND_FAIL "

@@ -147,6 +147,28 @@ nostr:
 
 `nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 
+### Optional NIP-86 relay administration
+
+NIP-86 relay administration is an optional relay-owner HTTP management surface for Bahia-owned or Bahia-authorized relays. It is disabled by default and is not used for Bahia app/control-plane mutations. ContextVM kind `25910` remains the mutation intent transport, and NIP-42 websocket `AUTH` remains the relay authentication mechanism for websocket relay sessions.
+
+```yaml
+nostr:
+  relay_administration:
+    enabled: true
+    # A secret reference resolved by deployment tooling; do not put private-key material in config.
+    administrator_private_key_ref: "secret://relay-admin/sidecar"
+    targets:
+      - ref: "sidecar"
+        relay_url: "wss://sidecar.example.com"
+        # Optional when the HTTP endpoint differs from relay_url converted from wss/ws to https/http.
+        http_url: "https://sidecar.example.com"
+        authorization: "bahia_owned" # or "bahia_authorized"
+        administrator_pubkeys:
+          - "<64-hex-admin-pubkey-authorized-by-the-relay>"
+```
+
+When enabled, Bahia support code may call only NIP-86 relay-owner methods such as `supportedmethods`, `allowpubkey`, `banpubkey`, `allowkind`, `disallowkind`, `changerelayname`, `changerelaydescription`, and IP/event moderation methods. Relay administration URLs must use `wss://` and `https://` except for localhost/loopback development targets. Each HTTP request uses `Content-Type: application/nostr+json+rpc` and a NIP-98 `Authorization: Nostr <event>` header. The signed kind `27235` event includes `u=<relay_url>`, `method=POST`, and the required `payload=<sha256-of-exact-json-body>` tag. The client refuses disabled config, unknown target refs, administrator pubkeys not authorized for that target, non-NIP-86 method names, HTTP status failures, and relay JSON errors.
+
 The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstrap and an advisory NIP-65 `10002` relay list for wider Nostr routing. The `10002` list advertises ContextVM request relays as `read` and service publish/backfill relays as `write`; clients must still use ContextVM discovery plus the NIP-51 `30002` relay sets for Bahia bootstrap.
 
 ### Repository Relay Hints

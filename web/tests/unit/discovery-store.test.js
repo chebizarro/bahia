@@ -180,9 +180,9 @@ describe('Nostr system discovery store', () => {
   });
 
   it('fails closed when an auth-required CLOSED arrives before EOSE', async () => {
-    poolClientHarness.closedRelays = [{ relay: 'ws://localhost:10547/relay', reason: 'auth-required: restricted discovery', meta: { terminal: true, source: 'closed' } }];
+    poolClientHarness.closedRelays = [{ relay: 'ws://localhost:10547/relay', reason: 'auth-required: restricted discovery', meta: { terminal: true, source: 'auth', authRequired: true } }];
 
-    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('Nostr query relays closed before all EOSE messages were received');
+    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('All Nostr query relays require AUTH');
     expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
       ['ws://localhost:10547/relay'],
       [{ kinds: [11316, 30002], authors: [trustedPubkey] }],
