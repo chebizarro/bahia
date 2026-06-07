@@ -20,10 +20,10 @@
 **Status:** active
 
 **Context Summary:**
-`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is the shared discovery contract for browser public bootstrap, encrypted browser gating, and operator relay fallback. Current code still exposes `nostr.relays` when `relay_sidecar=false`, and the browser helper can normalize that field. At the same time, the documented/current product shape is sidecar-first, the browser bootstrap requires `features.relay_read_models=true`, and operator CLI fallback only consumes `browser_relays` plus `sidecar_url`. The spec could not safely infer whether direct `nostr.relays` exposure remained intended product behavior.
+`canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` is the shared discovery contract for browser public bootstrap, encrypted browser gating, and operator relay fallback. Current code still exposes `nostr.relays` when `relay_sidecar=false`, and the browser helper can normalize that field. At the same time, the documented/current product shape is sidecar-first, the browser bootstrap requires `features.relay_read_models=true`, and operator CLI fallback only consumes `browser_relays` plus `sidecar_url`. The spec could not safely infer whether direct `nostr.relays` exposure remained intended product behavior.
 
 **Question Asked:**
-How should sidecar-disabled `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` relay exposure be treated in the `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` spec?
+How should sidecar-disabled `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` relay exposure be treated in the `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` spec?
 
 **Options Presented:**
 - A) KEEP as intended contract: direct `nostr.relays` discovery remains supported behavior for this feature
@@ -101,7 +101,7 @@ APPROVE_WITH_EDITS
 **Status:** active
 
 **Context Summary:**
-Current code and docs advertise `features.encrypted_nostr_requests` and browser-facing encrypted discovery fields in `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, but the user rejected describing this as an “encrypted relay” requirement. The AC set needed a product-correct way to classify whether encrypted-request discovery remains part of this slice at all.
+Current code and docs advertise `features.encrypted_nostr_requests` and browser-facing encrypted discovery fields in `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)`, but the user rejected describing this as an “encrypted relay” requirement. The AC set needed a product-correct way to classify whether encrypted-request discovery remains part of this slice at all.
 
 **Question Asked:**
 For SYSTEM_DISCOVERY_RELAY_BOOTSTRAP, should encrypted-request discovery stay out of scope?
@@ -141,7 +141,7 @@ KEEP_MINIMAL_ENCRYPTED_CAPABILITY_GATING_BUT_NOT_AS_RELAY_BEHAVIOR
 **Status:** active
 
 **Context Summary:**
-`SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` now verifies the approved sidecar-first discovery contract and no longer exposes raw `nostr.relays` in `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`. However, `web/src/routes/settings/+page.svelte` still renders `systemInfo.nostr.relays` as an operator-facing “Server Relays” setting, and the current PSTF artifacts do not define whether that visibility should remain through another field, be removed, or be deferred.
+`SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` now verifies the approved sidecar-first discovery contract and no longer exposes raw `nostr.relays` in `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)`. However, `web/src/routes/settings/+page.svelte` still renders `systemInfo.nostr.relays` as an operator-facing “Server Relays” setting, and the current PSTF artifacts do not define whether that visibility should remain through another field, be removed, or be deferred.
 
 **Question Asked:**
 After removing raw `nostr.relays` from the approved system discovery contract, how should the operator settings page handle server relay visibility?

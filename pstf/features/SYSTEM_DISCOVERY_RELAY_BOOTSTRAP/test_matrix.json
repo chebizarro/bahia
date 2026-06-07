@@ -18,7 +18,7 @@
       ],
       "steps": [
         "Construct a sidecar-enabled system config with publish enabled and a service key.",
-        "Call `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` through the projector test.",
+        "Call `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` through the projector test.",
         "Assert `browser_relays`, `sidecar_url`, `relay_sidecar`, `relay_read_models`, `service_pubkey`, and absence of approved browser-bootstrap reliance on raw `nostr.relays`."
       ],
       "expected_result": "The handler advertises the full sidecar-first public bootstrap contract for the approved slice.",
@@ -146,9 +146,9 @@
       "type": "e2e",
       "existing_or_new": "existing",
       "target_path": "web/tests/e2e/controlplane-nostr-smoke.spec.js",
-      "description": "Reuse the existing Playwright smoke test that bootstraps from a mocked `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payload and renders relay-backed dashboard and events-page state from Nostr mock data.",
+      "description": "Reuse the existing Playwright smoke test that bootstraps from a mocked `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` payload and renders relay-backed dashboard and events-page state from Nostr mock data.",
       "preconditions": [
-        "Browser E2E harness can mock `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and WebSocket relay traffic before app mount."
+        "Browser E2E harness can mock `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` and WebSocket relay traffic before app mount."
       ],
       "steps": [
         "Install E2E Nostr discovery and Nostr-event mocks.",
@@ -161,7 +161,7 @@
         "Mock Nostr event list for services, environments, state, workers, and activity."
       ],
       "mocks": [
-        "Playwright route for `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.",
+        "Playwright route for `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)`.",
         "Mock WebSocket implementation in `web/tests/e2e/helpers.js`."
       ],
       "data_requirements": [
@@ -282,7 +282,7 @@
       "type": "unit",
       "existing_or_new": "modify_existing",
       "target_path": "cmd/cli/operator_nostr_test.go",
-      "description": "Extend the existing CLI precedence tests to add the missing negative branch where `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is consulted but provides no `browser_relays` or `sidecar_url`, which should yield the deterministic discovery error.",
+      "description": "Extend the existing CLI precedence tests to add the missing negative branch where `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` is consulted but provides no `browser_relays` or `sidecar_url`, which should yield the deterministic discovery error.",
       "preconditions": [
         "CLI relay resolution is exercised with explicit-flag, environment, and discovery-only configurations."
       ],
@@ -355,7 +355,7 @@
       "type": "integration",
       "existing_or_new": "new",
       "target_path": "test/fixtures/system_discovery_sidecar_first.json",
-      "description": "Use one canonical Nostr discovery fixture across browser and CLI consumers: `web/tests/unit/controlplane-store.test.js` bootstraps the shared control-plane store from the fixture, `web/tests/unit/encrypted-controlplane.test.js` proves encrypted capability gating from the same payload, and `cmd/cli/operator_nostr_test.go` serves the same fixture through the real `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` client path to prove operator relay discovery coherence.",
+      "description": "Use one canonical Nostr discovery fixture across browser and CLI consumers: `web/tests/unit/controlplane-store.test.js` bootstraps the shared control-plane store from the fixture, `web/tests/unit/encrypted-controlplane.test.js` proves encrypted capability gating from the same payload, and `cmd/cli/operator_nostr_test.go` serves the same fixture through the real `canonical ContextVM discovery events (kinds 11316-11320) plus NIP-51 relay sets (kind 30002)` client path to prove operator relay discovery coherence.",
       "preconditions": [
         "A canonical Nostr discovery fixture is available with sidecar-first public bootstrap fields, a service pubkey, explicit encrypted capability indicators, and enabled optional capabilities."
       ],

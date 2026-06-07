@@ -6,7 +6,17 @@
 
 The discovery/bootstrap slice now has complete proof across the approved contract. The handler no longer exposes raw `nostr.relays`, the browser bootstrap path fails closed on missing capability or missing relay advertisement, the encrypted helper proves explicit capability gating separate from public bootstrap, and the operator CLI proves both precedence and deterministic discovery-empty failure. One canonical Nostr discovery fixture is now reused across browser and CLI tests to demonstrate shared consumer coherence.
 
+## 2026-06-07 Relay-strategy wording cleanup
+- Scope: documentation/PSTF wording only for Beads epic `bahia-8epx.1`.
+- Verified that canonical discovery wording now names ContextVM discovery `11316`-`11320` plus NIP-51 relay sets `30002`; legacy `31974` is retained only as historical/migration context.
+- Verified that FIPS relay guidance separates public overlay advert relays from sensitive Bahia endpoint/control relays and treats shared public exposure as an explicit deployment decision.
+- Verified that the relay-purpose taxonomy documents owner, canonical mechanism, and trust/exposure boundary without adding relay-routing kinds.
+
 ## Commands Run
+- `python3 -m json.tool pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/acceptance_criteria.json >/tmp/acceptance_criteria.json.check` (2026-06-07 docs/PSTF wording cleanup)
+- `python3 -m json.tool pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json >/tmp/feature_spec.json.check` (2026-06-07 docs/PSTF wording cleanup)
+- `python3 -m json.tool pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/test_matrix.json >/tmp/test_matrix.json.check` (2026-06-07 docs/PSTF wording cleanup)
+- Grep for the former normative `31974` discovery phrase across the scoped docs/PSTF files (2026-06-07 docs/PSTF wording cleanup; expected no matches).
 - `go test ./internal/api/handlers ./pkg/client ./cmd/cli`
 - `cd web && npm test -- --run tests/unit/system-store.test.js tests/unit/controlplane-store.test.js tests/unit/stores-index.test.js tests/unit/encrypted-controlplane.test.js tests/unit/api-client-retry-and-edges.test.js`
 - `cd web && npm run test:e2e -- tests/e2e/controlplane-nostr-smoke.spec.js`

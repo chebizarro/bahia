@@ -36,6 +36,9 @@ For the canonical control-plane contract, prefer:
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
 | NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
+| NIP-34 | Repository relay hints and repository state | ✅ repository/ngit-specific routing input |
+| NIP-11 / NIP-66 | Relay metadata and optional monitor events | ✅ advisory capability/liveness metadata only |
+| NIP-86 + NIP-98 | Optional relay-owner HTTP administration with signed HTTP authorization | 🟡 optional administration surface, not ContextVM transport |
 | Loom | Distributed job execution protocol | ✅ implemented as external protocol interop |
 | Hive-CI | Workflow event ingestion protocol | ✅ implemented as external protocol interop |
 | OCI Distribution API | Registry push/pull | ✅ implemented |
@@ -92,7 +95,7 @@ Historical Bahia-specific ranges are retained only for startup migration, histor
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |
 
-Production clients must not publish or subscribe to these numbers as runtime contracts.
+Production clients must not publish or subscribe to these numbers as runtime contracts. Legacy discovery kind `31974` is historical/migration-only; production bootstrap uses ContextVM discovery `11316`-`11320` plus NIP-51 relay sets `30002`.
 
 ---
 

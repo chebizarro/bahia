@@ -15,7 +15,11 @@ This document analyzes how the two systems can be integrated, identifies concret
 
 ### Key Finding
 
-The strongest near-term integration is a **read-only Nostr event bridge** — Bahia subscribes to FIPS Kind 37195 overlay adverts to auto-discover mesh nodes, and FIPS nodes subscribe to Bahia Kind 31976 endpoint events to populate their `.fips` host aliases. This requires no protocol changes in either system and leverages the shared Nostr relay infrastructure both already use.
+The strongest near-term integration is a **read-only Nostr event bridge** — Bahia subscribes to FIPS Kind 37195 overlay adverts to auto-discover mesh nodes, and FIPS-side bridge components subscribe to canonical Bahia endpoint state (`30900`/`30078` with DNS endpoint schemas) to populate their `.fips` host aliases. This requires no protocol changes in either system and leverages Nostr relay infrastructure both already use.
+
+### 2026 relay-strategy compatibility note
+
+This design predates Bahia's fully canonical Nostr-native control-plane wording. Treat references to Bahia DNS kinds `31975`-`31978` as historical design context only. Current Bahia discovery and relay bootstrap are ContextVM discovery `11316`-`11320` plus NIP-51 relay sets `30002`; legacy discovery kind `31974` is migration-only. FIPS public overlay adverts may use public advert relays, but Bahia endpoint/control traffic is sensitive and must use ContextVM relay sets or explicit bridge relay configuration. Sharing endpoint/control relays with public advert relays is an explicit deployment exposure decision, not a default.
 
 
 ### Implemented operator UX status
@@ -72,16 +76,18 @@ The event is signed by the node's FIPS identity key (= Nostr key). The `d` tag i
 
 ### 2.3 Bahia DNS Event Surface
 
-| Kind | Name | Purpose | Storage |
+Current Bahia DNS/FIPS state is projected through canonical Nostr observables, not the historical `31975`-`31978` DNS range:
+
+| Canonical kind | Name | Purpose | Storage |
 |---|---|---|---|
-| 31975 | `DNSZoneState` | Zone definitions | Parameterized replaceable |
-| 31976 | `DNSEndpointState` | Canonical endpoint projection | Parameterized replaceable |
-| 31977 | `DNSPolicyState` | Active DNS policies | Parameterized replaceable |
-| 31978 | `DNSBackendState` | Backend health/sync | Parameterized replaceable |
+| `30900` | DNS/FIPS control-plane state | Zone, endpoint, policy, backend, and FIPS mesh state projections with explicit `domain`, `schema`, and `d` tags | Parameterized replaceable |
+| `30078` | DNS/FIPS app data | Operator-visible DNS/FIPS registries and UI projection data where app-data semantics fit better than fleet state | Parameterized replaceable |
+| `30315` | DNS/FIPS status | Operational progress/health where a short-lived status event is more appropriate than durable state | Parameterized replaceable |
+| `4903` | DNS/FIPS audit | Immutable audit/provenance facts for DNS/FIPS actions | Regular event |
 
-**Key file**: `bahia/docs/designs/dns-orchestration-layer.md` §3, `bahia/internal/adapters/nostr/projector.go`
+**Key files**: `bahia/docs/control-planes.md`, `bahia/docs/nostr-event-implementation-guide.md`, `bahia/internal/adapters/nostr/projector.go`
 
-**Kind 31976 content shape** (published by `publishDNSEndpoint` in `projector.go`):
+**Endpoint-state content shape** (published as canonical Bahia endpoint state with DNS endpoint schema):
 ```json
 {
   "service": "drydock",
@@ -152,10 +158,10 @@ The projector (`dns_projector.go`) materializes `DNSEndpoint` from four sources:
 │                     Shared Nostr Relays                          │
 │                                                                  │
 │   FIPS publishes:              Bahia publishes:                  │
-│   • Kind 37195 (adverts)       • Kind 31976 (endpoints)          │
-│   • Kind 10050 (inbox relays)  • Kind 31975 (zones)              │
-│   • Kind 21059 (signaling)     • Kind 31977 (policies)           │
-│                                • Kind 31978 (backends)           │
+│   • Kind 37195 (adverts)       • canonical Bahia endpoint state (endpoints)          │
+│   • Kind 10050 (inbox relays)  • canonical Bahia DNS zone state (zones)              │
+│   • Kind 21059 (signaling)     • canonical Bahia DNS policy state (policies)           │
+│                                • canonical Bahia DNS backend state (backends)           │
 └──────────┬──────────────────────────────────┬────────────────────┘
            │                                  │
            ▼                                  ▼
@@ -190,7 +196,7 @@ FIPS Kind 37195 overlay adverts publish transport endpoints for mesh nodes. Bahi
 
 **B. Bahia endpoint events → FIPS host aliases**
 
-Bahia publishes Kind 31976 `DNSEndpointState` events with FQDN, address, health, and capabilities. A FIPS node (or a bridge daemon) can subscribe to these events and write corresponding entries to `/etc/fips/hosts`, making Bahia-managed services reachable as `<service>.fips` from any FIPS mesh node.
+Bahia publishes canonical Bahia endpoint state `DNSEndpointState` events with FQDN, address, health, and capabilities. A FIPS node (or a bridge daemon) can subscribe to these events and write corresponding entries to `/etc/fips/hosts`, making Bahia-managed services reachable as `<service>.fips` from any FIPS mesh node.
 
 **C. Bahia DNS backend → FIPS hosts file**
 
@@ -293,7 +299,7 @@ The `DNSEndpoint` type already carries `WorkerPubkey`, but `DNSRecord` does not.
 
 ### 4.5 Recommendation
 
-A FIPS backend adapter is **feasible but limited** to worker-sourced endpoints. Rather than implementing a full `Backend` adapter that participates in the reconciler loop, a better approach is a **standalone bridge process** that subscribes to Bahia's Kind 31976 endpoint events and writes matching entries to `/etc/fips/hosts`. This:
+A FIPS backend adapter is **feasible but limited** to worker-sourced endpoints. Rather than implementing a full `Backend` adapter that participates in the reconciler loop, a better approach is a **standalone bridge process** that subscribes to Bahia's canonical endpoint-state events and writes matching entries to `/etc/fips/hosts`. This:
 
 - Decouples the FIPS hosts file lifecycle from Bahia's reconciler
 - Works over Nostr (no direct filesystem access needed between systems)
@@ -381,7 +387,7 @@ The event bridge is the highest-value, lowest-risk integration. Both systems alr
 │                   │                      │  Worker/Endpoint      │
 │                   │                      │  registration         │
 │                   │                      │                      │
-│  /etc/fips/hosts  │◄────subscribe────────│  Kind 31976           │
+│  /etc/fips/hosts  │◄────subscribe────────│  canonical Bahia endpoint state           │
 │  (written by      │                      │  (endpoint state)    │
 │   bridge daemon)  │                      │                      │
 └──────────────────┘                      └──────────────────────┘
@@ -432,14 +438,14 @@ type MeshEndpoint struct {
 
 ### 6.3 Direction B: Bahia → FIPS (Endpoint Catalog)
 
-**What**: A bridge daemon (running on FIPS nodes or as a standalone process) subscribes to Bahia's Kind 31976 endpoint events and writes matching entries to `/etc/fips/hosts`.
+**What**: A bridge daemon (running on FIPS nodes or as a standalone process) subscribes to Bahia's canonical endpoint-state events and writes matching entries to `/etc/fips/hosts`.
 
 **This is NOT a Bahia-side change** — it's a new small daemon that could live in either codebase or as a standalone tool. It uses Bahia's existing Nostr publication (no modifications needed to Bahia).
 
 **Bridge daemon logic**:
 
 ```
-Subscribe to Kind 31976 from Bahia's pubkey
+Subscribe to canonical Bahia endpoint state from Bahia's pubkey
   → For each endpoint event:
     1. Extract FQDN, address, health, capabilities from content
     2. Check health == "healthy" (skip unhealthy)
@@ -451,9 +457,9 @@ Subscribe to Kind 31976 from Bahia's pubkey
        → Skip or use address directly (not useful for hosts file)
 ```
 
-**Key limitation**: The bridge can only write hosts entries for endpoints that have an associated npub. Bahia's Kind 31976 events currently include `host` and `addr` tags but not `worker_pubkey` as a tag. The content JSON doesn't include it either.
+**Key limitation**: The bridge can only write hosts entries for endpoints that have an associated npub. Bahia's canonical endpoint-state events currently include `host` and `addr` tags but not `worker_pubkey` as a tag. The content JSON doesn't include it either.
 
-**Required Bahia change**: Add a `npub` or `worker_pubkey` tag to Kind 31976 events when the endpoint has one.
+**Required Bahia change**: Add a `npub` or `worker_pubkey` tag to canonical Bahia endpoint state events when the endpoint has one.
 
 | File | Change |
 |---|---|
@@ -584,7 +590,7 @@ This is a stretch goal — it requires Bahia to write FIPS config, which crosses
 
 **Behavior**:
 
-1. Subscribe to Kind 31976 from Bahia's configured pubkey on shared relays
+1. Subscribe to canonical Bahia endpoint state from Bahia's configured pubkey on shared relays
 2. For each endpoint event with `health == "healthy"`:
    - Extract FQDN and worker npub (from the new `npub` tag, added in §6.3)
    - If npub present: write `<service-label>.fips  <npub>` to `/etc/fips/hosts`
@@ -600,13 +606,17 @@ This is a stretch goal — it requires Bahia to write FIPS config, which crosses
 
 #### A.3: Tag Bahia endpoint events for FIPS discoverability
 
-Add `["mesh", "fips"]` tag to Kind 31976 events for endpoints that have FIPS overlay connectivity. This lets the bridge daemon efficiently filter:
+Add `["mesh", "fips"]` tag to canonical Bahia endpoint state events for endpoints that have FIPS overlay connectivity. This lets the bridge daemon efficiently filter:
 
 ```go
 nostr.Filter{
-    Kinds:   []int{31976},
+    Kinds:   []int{30900},
     Authors: []string{bahiaPubkey},
-    Tags:    nostr.TagMap{"#mesh": {"fips"}},
+    Tags: nostr.TagMap{
+        "#domain": {"dns"},
+        "#schema": {"bahia.dns-endpoint"},
+        "#mesh": {"fips"},
+    },
 }
 ```
 
@@ -789,7 +799,7 @@ Both systems use secp256k1 keypairs, but with different trust models:
 │  Both systems publish/subscribe here                        │
 │  Events are signed but relay operators see metadata         │
 │  Adverts (Kind 37195) are public by design                  │
-│  Endpoint events (Kind 31976) contain infrastructure addrs  │
+│  Endpoint events (canonical Bahia endpoint state) contain infrastructure addrs  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -797,7 +807,7 @@ Both systems use secp256k1 keypairs, but with different trust models:
 
 ### 9.3 Endpoint Event Privacy
 
-Bahia's Kind 31976 events contain IP addresses, port numbers, and service topology. Publishing these to public relays exposes infrastructure details. The FIPS event bridge should use a private relay or NIP-42 authenticated relay for Bahia endpoint events.
+Bahia's canonical Bahia endpoint state events contain IP addresses, port numbers, and service topology. Publishing these to public relays exposes infrastructure details. The FIPS event bridge should use a private relay or NIP-42 authenticated relay for Bahia endpoint events.
 
 FIPS overlay adverts (Kind 37195) are intentionally public — they advertise how to reach a node. There is no privacy concern unique to the integration.
 
@@ -848,8 +858,8 @@ If they use different keypairs:
 
 Instead of bridging through DNS, applications could resolve services directly from Nostr events:
 
-- Bahia's `pkg/discovery/resolver.go` already does this — it subscribes to Kind 31976 and maintains a live endpoint cache
-- A FIPS-side equivalent could subscribe to Kind 31976 and resolve services by name to npub, then use FIPS's native datagram API
+- Bahia's `pkg/discovery/resolver.go` already does this — it subscribes to canonical Bahia endpoint state and maintains a live endpoint cache
+- A FIPS-side equivalent could subscribe to canonical Bahia endpoint state and resolve services by name to npub, then use FIPS's native datagram API
 
 This bypasses DNS entirely and is the long-term vision mentioned in Bahia's DNS design doc (§16, "Nostr-native DNS resolution"). It's complementary to the DNS integration, not a replacement — traditional DNS remains necessary for unmodified applications.
 
@@ -874,8 +884,8 @@ No new Nostr kinds are needed for any phase. The integration uses existing kinds
 | Kind | System | Used For (Integration) |
 |---|---|---|
 | 37195 | FIPS | Bahia subscribes to discover mesh nodes |
-| 31976 | Bahia | FIPS bridge subscribes to populate hosts file |
-| 31975 | Bahia | FIPS bridge optionally reads zone definitions |
+| `30900`/`30078` | Bahia | FIPS bridge subscribes to canonical DNS endpoint state to populate hosts file |
+| `30900`/`30078` | Bahia | FIPS bridge optionally reads canonical DNS zone/app data |
 | 10050 | FIPS | Bahia could publish inbox relays for bidirectional signaling (future) |
 
 ## Appendix B: Configuration Shape (Phase A)
@@ -943,7 +953,7 @@ func FIPSOverlayAddress(hexPubkey string) (net.IP, error) {
 | File | Phase | Change |
 |---|---|---|
 | `internal/adapters/nostr/fips_subscriber.go` | A | New — Kind 37195 subscription + advert parsing |
-| `internal/adapters/nostr/projector.go` | A | Add `npub` tag to Kind 31976 for worker endpoints |
+| `internal/adapters/nostr/projector.go` | A | Add `npub` tag to canonical Bahia endpoint state for worker endpoints |
 | `internal/domain/worker.go` | A | Add `FIPSOverlayAddr`, `FIPSEndpoints` fields |
 | `internal/config/config.go` | A | Add `FIPS` config section |
 | `internal/app/app.go` | A | Wire FIPS subscriber lifecycle |
@@ -960,5 +970,5 @@ The bridge daemon is a standalone process that reads from Nostr and writes to `/
 
 | File | Phase | Purpose |
 |---|---|---|
-| `fips-bahia-bridge/src/main.rs` (or Go equivalent) | A | Subscribe to Kind 31976, write `/etc/fips/hosts` |
+| `fips-bahia-bridge/src/main.rs` (or Go equivalent) | A | Subscribe to canonical Bahia endpoint state, write `/etc/fips/hosts` |
 | `fips-bahia-bridge/src/hosts.rs` | A | Atomic hosts file writer with managed-section support |

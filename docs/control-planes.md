@@ -112,6 +112,25 @@ Browser and Bahia control-plane traffic should target the relay sidecar first.
 
 This avoids duplicate event loops: Bahia publishes canonical observables (`30900` state, `4903` audit, `30315` status, ContextVM discovery `11316`-`11320`, relay sets `30002`, and app data `30078`) to the sidecar pool only, while optional upstream mirroring is isolated behind the sidecar boundary.
 
+### Relay-purpose boundaries
+
+Relay URLs are physical endpoints; Bahia relay purpose is policy. A deployment may intentionally reuse one relay URL for multiple purposes, but the documentation, config, and tests must preserve the semantic boundary:
+
+| Purpose | Owner | Canonical mechanism | Boundary |
+|---|---|---|---|
+| Public browser bootstrap/read models | Bahia service | NIP-51 `30002`, `d=bahia-browser-v1` | Public browser bootstrap and read-model relay boundary. |
+| ContextVM request/reply | Bahia service | NIP-51 `30002`, `d=bahia-contextvm-v1` | ContextVM mutation traffic; clients prefer it when present and may fall back to browser relays only with degraded metadata. |
+| Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service publication and historical backfill; not automatically exposed to browsers. |
+| User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing preferences, not Bahia service-strategy authorization. |
+| Repository/ngit | Repository maintainer or SoulFactory | NIP-34 `30617` `relays` tags and `30618` state | Repository-specific relay hints, preferred before global Bahia relay policy for repository operations. |
+| DM receive routing | Receiving identity | NIP-51 `10050` | Direct-message routing only for DM-enabled Bahia features. |
+| FIPS public adverts | FIPS/Bahia operator | Existing FIPS overlay advert contract plus explicit bridge relay config | Public advert exposure; do not infer sensitive endpoint/control relay safety. |
+| FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets or explicit bridge relay config | Sensitive endpoint/control exposure; sharing with public relays is an explicit deployment decision. |
+| Relay capability/liveness | Relay or trusted monitor | NIP-11; optional NIP-66 `10166`/`30166` | Advisory ranking/health metadata only; never a trust root. |
+| Relay administration | Bahia relay owner/operator | Optional NIP-86 HTTP API with NIP-98 authorization | Relay-owner administration such as allow/ban/kind/metadata controls; not ContextVM app/control-plane mutation transport and not NIP-42 websocket AUTH. |
+
+No new relay-routing kinds are allocated for these purposes. ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) remain canonical; legacy `31974` is historical/migration-only.
+
 ---
 
 ## Nostr Control Plane
