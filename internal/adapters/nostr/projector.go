@@ -395,6 +395,10 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
 	}
+	if err := p.publishConfiguredDMRelayListsFromSystemConfig(ctx); err != nil {
+		p.logger.Warn("publish DM relay-list projection failed", zap.Error(err))
+		return fmt.Errorf("publish DM relay-list projection: %w", err)
+	}
 	if err := p.publishSystemDiscovery(ctx); err != nil {
 		p.logger.Warn("publish system discovery projection failed", zap.Error(err))
 		return fmt.Errorf("publish system discovery projection: %w", err)
@@ -2070,6 +2074,37 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 		return err
 	}
 	return p.publishServiceNIP65RelayPreferences(ctx, serviceRelays, contextVMRelays)
+}
+
+func (p *Projector) publishConfiguredDMRelayListsFromSystemConfig(ctx context.Context) error {
+	if p.systemConfig == nil {
+		return nil
+	}
+	return p.publishConfiguredDMRelayLists(ctx, p.systemConfig.Nostr.EnabledDMRelayLists())
+}
+
+func (p *Projector) publishConfiguredDMRelayLists(ctx context.Context, lists []config.DMRelayListConfig) error {
+	relays := []string{}
+	features := map[string]struct{}{}
+	for _, list := range lists {
+		if !list.Enabled || list.Identity != config.DMRelayListIdentityService {
+			continue
+		}
+		relays = append(relays, list.Relays...)
+		features[list.Feature] = struct{}{}
+	}
+	normalizedRelays := normalizeProjectionRelays(relays)
+	if len(normalizedRelays) == 0 {
+		return nil
+	}
+	tags := gonostr.Tags{{"title", "bahia-dm-relays"}}
+	for feature := range features {
+		tags = append(tags, gonostr.Tag{"feature", feature})
+	}
+	for _, relay := range normalizedRelays {
+		tags = append(tags, gonostr.Tag{"relay", relay})
+	}
+	return p.publishSigned(ctx, kinds.NIP51DMRelayList, tags, "", "system.discovery.dm_relay_list", nil)
 }
 
 func (p *Projector) publishServiceNIP65RelayPreferences(ctx context.Context, writeRelays, readRelays []string) error {

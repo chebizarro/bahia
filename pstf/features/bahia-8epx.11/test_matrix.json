@@ -98,6 +98,33 @@
         "AC-11-006"
       ],
       "covers": "Documentation files touched for this epic contain no current-bootstrap 31974 wording; remaining legacy encrypted-kind references are historical investigation notes only."
+    },
+    {
+      "id": "T-11-011",
+      "name": "Advisory NIP-11 relay metadata tests",
+      "command": "go test ./pkg/discovery",
+      "acceptance_criteria": [
+        "AC-11-005"
+      ],
+      "covers": "Best-effort NIP-11 metadata snapshots for configured relays; missing metadata, malformed supported_nips, and limiting auth/payment/write/max-limit metadata are visible without preventing connection or changing configured relay policy."
+    },
+    {
+      "id": "T-11-012",
+      "name": "Configured-trust NIP-66 relay monitor ingestion tests",
+      "command": "cd web && npm test -- --run tests/unit/dns-store-subscriptions.test.js",
+      "acceptance_criteria": [
+        "AC-11-005"
+      ],
+      "covers": "Browser DNS relay health subscribes to NIP-66 10166/30166 only when trusted monitor pubkeys are configured; trusted monitor events annotate relay health, untrusted or unknown-relay events are ignored, and service pubkey/configured relays remain authoritative."
+    },
+    {
+      "id": "T-11-013",
+      "name": "Explicit NIP-51 10050 notification DM relay-list tests",
+      "command": "go test ./internal/config ./internal/adapters/nostr ./internal/kinds && cd web && npm test -- --run tests/unit/discovery-store.test.js",
+      "acceptance_criteria": [
+        "AC-11-005"
+      ],
+      "covers": "No kind 10050 is published by default, notification DM service identity lists publish only from explicit nostr.dm_relay_lists config, and browser/ContextVM/service relay sets are not consumed as DM receive readiness."
     }
   ]
 }

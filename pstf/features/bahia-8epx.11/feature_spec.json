@@ -7,26 +7,33 @@
   "observed_behavior_before": [
     "Relay strategy implementation evidence existed in per-slice PSTF directories, but no epic-level artifact mapped the acceptance focus across bahia-8epx.1 through bahia-8epx.10.",
     "User-facing and protocol docs covered most relay taxonomy decisions, but some rollout/setup docs still referred to legacy discovery kind 31974 as current bootstrap evidence and some docs had thin NIP-11/NIP-66/10050 follow-up wording.",
-    "Optional NIP-11, NIP-66, and DM relay-list work was plan-scoped but not bounded by dedicated follow-up Beads."
+    "Optional NIP-11, NIP-66, and DM relay-list work was plan-scoped but not bounded by dedicated follow-up Beads.",
+    "The follow-up Beads bahia-8epx.11.5 and bahia-8epx.11.6 were open planning tasks: resolver NIP-11 metadata was log-only, browser NIP-11 health lacked explicit malformed/limiting cases, and NIP-66 monitor events were not ingested behind configured monitor trust.",
+    "The follow-up Bead bahia-8epx.11.7 was open: NIP-51 kind 10050 DM relay-list behavior was reserved for DM-enabled features but not implemented or tested."
   ],
   "intended_behavior": [
     "Cross-slice PSTF artifacts map relay strategy acceptance criteria to deterministic tests and documentation evidence for distinct browser, ContextVM, service, repository, operator, AUTH, NIP-65, NIP-86, and SoulFactory/ngit relay behavior.",
     "User-facing and protocol docs describe ContextVM discovery 11316-11320 plus NIP-51 30002 as canonical bootstrap, NIP-65 10002 as advisory, NIP-34 repository relay hints as repository-specific preference, and NIP-86 as opt-in relay-owner HTTP administration only.",
     "Optional NIP-11/NIP-66 metadata and NIP-51 10050 DM relay-list behavior remains advisory, disabled by default, and tracked in Beads rather than prose-only follow-up.",
-    "No implementation epic from bahia-8epx.1 through bahia-8epx.10 is reopened unless a blocking verification gap is found."
+    "No implementation epic from bahia-8epx.1 through bahia-8epx.10 is reopened unless a blocking verification gap is found.",
+    "The bahia-8epx.11.5 and bahia-8epx.11.6 slices implement advisory-only NIP-11 health metadata and configured-trust NIP-66 monitor ingestion without changing Bahia service pubkey trust, configured relay policy, or DM relay-list scope.",
+    "The bahia-8epx.11.7 slice implements explicit notification DM service-identity kind 10050 relay-list publication with no default publication and no inference from browser, ContextVM, or service relay sets."
   ],
   "scope": {
     "included": [
       "PSTF cross-slice acceptance and test matrix artifacts",
       "Verification report naming commands, dates, results, plan items, and covered Beads",
       "User-facing/protocol documentation updates for relay strategy behavior and optional follow-up boundaries",
-      "Creation of bounded follow-up Beads for advisory NIP-11, configured-trust NIP-66, and DM relay-list slices"
+      "Creation of bounded follow-up Beads for advisory NIP-11, configured-trust NIP-66, and DM relay-list slices",
+      "Implementation and deterministic tests for advisory NIP-11 metadata and configured-trust NIP-66 10166/30166 monitor ingestion",
+      "Implementation and deterministic tests for explicit notification DM service-identity NIP-51 10050 relay-list publication"
     ],
     "excluded": [
       "Production implementation changes for completed epics bahia-8epx.1 through bahia-8epx.10",
       "New relay routing kinds",
       "Automatic relay administration reconciliation or UI/CLI workflows",
-      "Default trust in NIP-66 monitors or default DM relay-list publication"
+      "Default trust in NIP-66 monitors or default DM relay-list publication",
+      "DM relay-list support for non-notification features or identities other than the Bahia service identity"
     ]
   },
   "related_pstf_artifacts": [
@@ -45,17 +52,20 @@
     {
       "id": "bahia-8epx.11.5",
       "title": "Plan advisory NIP-11 relay metadata probes",
-      "boundary": "best-effort metadata only; not a trust root and cannot remove all configured relays"
+      "boundary": "best-effort metadata only; not a trust root and cannot remove all configured relays",
+      "status": "implemented_in_this_slice"
     },
     {
       "id": "bahia-8epx.11.6",
       "title": "Plan configured-trust NIP-66 relay monitor ingestion",
-      "boundary": "safe default is no trusted monitors; monitor events annotate health only"
+      "boundary": "safe default is no trusted monitors; monitor events annotate health only",
+      "status": "implemented_in_this_slice"
     },
     {
       "id": "bahia-8epx.11.7",
       "title": "Plan NIP-51 10050 DM relay-list support for DM-enabled features",
-      "boundary": "not published by default; public bootstrap does not imply DM readiness"
+      "boundary": "not published by default; public bootstrap does not imply DM readiness; browser, ContextVM, and service relay sets are not DM receive lists",
+      "status": "implemented_in_this_slice"
     }
   ]
 }

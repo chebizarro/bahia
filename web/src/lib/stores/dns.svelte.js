@@ -12,7 +12,10 @@ import {
   getTagValues,
   isReplaceableTombstone,
   nostr,
-  upsertReplaceableEvent
+  replaceableKey,
+  shouldAcceptReplaceableEvent,
+  upsertReplaceableEvent,
+  validateInboundNostrEvent
 } from '$lib/nostr/client.js';
 
 import {
@@ -27,6 +30,8 @@ export const DNS_READ_MODEL_KINDS = Object.freeze({
 
 const DNS_SCHEMA_LIST = Object.values(DNS_READ_MODEL_SCHEMAS);
 const DNS_READ_MODEL_LIMIT = 5000;
+const NIP66_RELAY_MONITOR_ANNOUNCEMENT = 10166;
+const NIP66_RELAY_DISCOVERY = 30166;
 
 export const dnsState = $state({
   zones: [],
@@ -64,6 +69,10 @@ export const dnsState = $state({
     servicePubkey: '',
     relayHealth: {},
     metadata: {},
+    trustedRelayMonitors: [],
+    relayMonitorAnnouncements: {},
+    relayMonitorMetadata: {},
+    relayMonitorErrors: [],
     eoseRelays: [],
     lastEoseAt: null,
     lastEventAt: null
@@ -77,8 +86,11 @@ const zoneMap = new Map();
 const endpointMap = new Map();
 const policyMap = new Map();
 const backendMap = new Map();
+const relayMonitorEvents = new Map();
+const seenRelayMonitorEventIds = new Set();
 
 let unsubscribeDNSReadModels = null;
+let unsubscribeRelayMonitors = null;
 let commandRunSeq = 0;
 let connectedRelayCount = 0;
 
@@ -171,29 +183,83 @@ function relayMetadataUrl(relayUrl) {
   return relayUrl;
 }
 
+function normalizeSupportedNips(value) {
+  if (!Array.isArray(value)) return { supported_nips: [], warnings: ['supported_nips missing or not an array'] };
+  const supported = [];
+  const warnings = [];
+  for (const entry of value) {
+    const number = typeof entry === 'number' ? entry : Number(entry);
+    if (!Number.isInteger(number) || number <= 0) {
+      warnings.push(`invalid supported_nips value ${String(entry)}`);
+      continue;
+    }
+    if (!supported.includes(number)) supported.push(number);
+  }
+  return { supported_nips: supported, warnings };
+}
+
+function relayLimitationWarnings(limitation = {}) {
+  const warnings = [];
+  if (limitation?.auth_required === true) warnings.push('auth-required');
+  if (limitation?.payment_required === true) warnings.push('payment-required');
+  if (limitation?.restricted_writes === true) warnings.push('restricted-writes');
+  if (Number.isInteger(limitation?.max_limit) && limitation.max_limit > 0) warnings.push(`max-limit:${limitation.max_limit}`);
+  return warnings;
+}
+
+function normalizeNIP11Metadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return { ok: false, status: 'metadata-malformed', error: 'NIP-11 metadata must be a JSON object' };
+  }
+  const { supported_nips, warnings } = normalizeSupportedNips(metadata.supported_nips || []);
+  const limitation = metadata.limitation && typeof metadata.limitation === 'object' && !Array.isArray(metadata.limitation)
+    ? metadata.limitation
+    : {};
+  const limiting = relayLimitationWarnings(limitation);
+  const allWarnings = [...warnings, ...limiting];
+  const normalized = {
+    ...metadata,
+    supported_nips,
+    advisory_warnings: allWarnings,
+    advisory_limitations: {
+      auth_required: limitation.auth_required === true,
+      payment_required: limitation.payment_required === true,
+      restricted_writes: limitation.restricted_writes === true,
+      max_limit: Number.isInteger(limitation.max_limit) ? limitation.max_limit : null
+    }
+  };
+  if (warnings.length > 0) {
+    return { ok: false, status: 'metadata-malformed', error: warnings.join('; '), metadata: normalized };
+  }
+  if (limiting.length > 0) {
+    return { ok: true, status: 'metadata-limited', metadata: normalized };
+  }
+  return { ok: true, status: 'metadata-ok', metadata: normalized };
+}
+
 async function queryRelayMetadata(relays) {
   const results = await Promise.all(relays.map(async (relay) => {
     const url = relayMetadataUrl(relay);
     if (!url || typeof fetch !== 'function') {
-      return [relay, { ok: false, error: 'NIP-11 metadata fetch unavailable in this runtime' }];
+      return [relay, { ok: false, status: 'metadata-unavailable', error: 'NIP-11 metadata fetch unavailable in this runtime' }];
     }
 
     try {
       const response = await fetch(url, { headers: { Accept: 'application/nostr+json' } });
       if (!response.ok) {
-        return [relay, { ok: false, error: `NIP-11 metadata HTTP ${response.status}` }];
+        return [relay, { ok: false, status: 'metadata-unavailable', error: `NIP-11 metadata HTTP ${response.status}` }];
       }
       const metadata = await response.json();
-      return [relay, { ok: true, metadata }];
+      return [relay, normalizeNIP11Metadata(metadata)];
     } catch (error) {
-      return [relay, { ok: false, error: error?.message || String(error) }];
+      return [relay, { ok: false, status: 'metadata-unavailable', error: error?.message || String(error) }];
     }
   }));
 
   const health = {};
   const metadata = {};
   for (const [relay, result] of results) {
-    health[relay] = result.ok ? 'metadata-ok' : `metadata-error: ${result.error}`;
+    health[relay] = result.ok ? result.status : `${result.status}: ${result.error}`;
     if (result.metadata) metadata[relay] = result.metadata;
   }
   dnsState.connection.relayHealth = health;
@@ -201,22 +267,31 @@ async function queryRelayMetadata(relays) {
   return results;
 }
 
-async function resolveSubscriptionConfig(relayUrl, pubkey) {
+function normalizePubkeyList(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(',');
+  return Array.from(new Set(values.map((entry) => String(entry || '').trim().toLowerCase()).filter((entry) => /^[0-9a-f]{64}$/.test(entry))));
+}
+
+async function resolveSubscriptionConfig(relayUrl, pubkey, options = {}) {
   let relays = normalizeRelayList(relayUrl);
   let servicePubkey = String(pubkey || '').trim();
+  let trustedRelayMonitors = normalizePubkeyList(options.trustedRelayMonitorPubkeys || options.trustedRelayMonitors || []);
 
-  if ((relays.length === 0 || !servicePubkey) && browser) {
+  if ((relays.length === 0 || !servicePubkey || trustedRelayMonitors.length === 0) && browser) {
     const info = await loadSystemInfo();
     if (relays.length === 0) {
       relays = normalizeRelayList(info?.nostr?.browser_relays || info?.nostr?.sidecar_url || []);
     }
     servicePubkey = servicePubkey || String(info?.nostr?.service_pubkey || '').trim();
+    if (trustedRelayMonitors.length === 0) {
+      trustedRelayMonitors = normalizePubkeyList(info?.nostr?.trusted_relay_monitor_pubkeys || info?.nostr?.relay_monitor_pubkeys || []);
+    }
   }
 
   if (relays.length === 0) throw new Error('No DNS Nostr relay configured');
   if (!servicePubkey) throw new Error('No Bahia service pubkey configured for DNS read-model subscription');
 
-  return { relays, servicePubkey };
+  return { relays, servicePubkey, trustedRelayMonitors };
 }
 
 export function dnsReadModelFilters(pubkey = dnsState.connection.servicePubkey, { since = null } = {}) {
@@ -400,6 +475,153 @@ export function applyDNSReadModelEvent(event) {
   return changed;
 }
 
+export function relayMonitorFilters(relays = dnsState.connection.relays, trustedRelayMonitors = dnsState.connection.trustedRelayMonitors) {
+  const relayList = normalizeRelayList(relays);
+  const monitors = normalizePubkeyList(trustedRelayMonitors);
+  if (relayList.length === 0 || monitors.length === 0) return [];
+  return [
+    { kinds: [NIP66_RELAY_MONITOR_ANNOUNCEMENT], authors: monitors, limit: Math.max(monitors.length, 1) },
+    { kinds: [NIP66_RELAY_DISCOVERY], authors: monitors, '#d': relayList, limit: Math.max(relayList.length * monitors.length, 1) }
+  ];
+}
+
+function relayMonitorTagValues(event, tagName) {
+  return Array.isArray(event?.tags)
+    ? event.tags.filter((tag) => Array.isArray(tag) && tag[0] === tagName && tag[1]).map((tag) => tag.slice(1))
+    : [];
+}
+
+function parseRelayMonitorContent(event) {
+  if (!event?.content) return {};
+  const parsed = JSON.parse(event.content);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('NIP-66 content must be a JSON object when present');
+  }
+  return parsed;
+}
+
+function relayMonitorRequirements(event) {
+  return relayMonitorTagValues(event, 'R').map((values) => values[0]).filter(Boolean);
+}
+
+function relayMonitorLimitWarnings(requirements) {
+  return requirements
+    .filter((requirement) => !String(requirement).startsWith('!'))
+    .filter((requirement) => ['auth', 'payment', 'writes', 'pow'].includes(String(requirement)));
+}
+
+export function applyRelayMonitorEvent(event) {
+  if (!event?.id || seenRelayMonitorEventIds.has(event.id)) return false;
+  const trusted = new Set(normalizePubkeyList(dnsState.connection.trustedRelayMonitors));
+  if (!trusted.has(String(event.pubkey || '').toLowerCase())) return false;
+  if (![NIP66_RELAY_MONITOR_ANNOUNCEMENT, NIP66_RELAY_DISCOVERY].includes(event.kind)) return false;
+  const monitorKey = replaceableKey(event);
+  if (!monitorKey || !shouldAcceptReplaceableEvent(relayMonitorEvents.get(monitorKey), event)) return false;
+
+  let content;
+  try {
+    content = parseRelayMonitorContent(event);
+  } catch (error) {
+    dnsState.connection.relayMonitorErrors = [
+      { event_id: event.id, pubkey: event.pubkey, reason: error?.message || String(error) },
+      ...dnsState.connection.relayMonitorErrors
+    ].slice(0, 20);
+    seenRelayMonitorEventIds.add(event.id);
+    return false;
+  }
+
+  if (event.kind === NIP66_RELAY_MONITOR_ANNOUNCEMENT) {
+    dnsState.connection.relayMonitorAnnouncements = {
+      ...dnsState.connection.relayMonitorAnnouncements,
+      [event.pubkey]: {
+        pubkey: event.pubkey,
+        frequency: getTagValue(event, 'frequency'),
+        checks: getTagValues(event, 'c'),
+        timeouts: relayMonitorTagValues(event, 'timeout'),
+        geohashes: getTagValues(event, 'g'),
+        content,
+        observed_at: new Date().toISOString()
+      }
+    };
+    relayMonitorEvents.set(monitorKey, event);
+    seenRelayMonitorEventIds.add(event.id);
+    return true;
+  }
+
+  const relay = normalizeRelayUrl(getDTag(event));
+  const configuredRelays = new Set(normalizeRelayList(dnsState.connection.relays));
+  if (!relay || !configuredRelays.has(relay)) return false;
+
+  const requirements = relayMonitorRequirements(event);
+  const warnings = relayMonitorLimitWarnings(requirements);
+  const supportedNips = getTagValues(event, 'N').map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0);
+  const rtt = Object.fromEntries(['rtt-open', 'rtt-read', 'rtt-write']
+    .map((tag) => [tag, Number(getTagValue(event, tag))])
+    .filter(([, value]) => Number.isFinite(value) && value >= 0));
+  const monitorMetadata = {
+    relay,
+    monitor_pubkey: event.pubkey,
+    event_id: event.id,
+    created_at: event.created_at,
+    requirements,
+    warnings,
+    supported_nips: supportedNips,
+    rtt,
+    network: getTagValue(event, 'n'),
+    relay_types: getTagValues(event, 'T'),
+    topics: getTagValues(event, 't'),
+    geohashes: getTagValues(event, 'g'),
+    content,
+    advisory_only: true,
+    observed_at: new Date().toISOString()
+  };
+
+  dnsState.connection.relayMonitorMetadata = {
+    ...dnsState.connection.relayMonitorMetadata,
+    [relay]: monitorMetadata
+  };
+  dnsState.connection.relayHealth = {
+    ...dnsState.connection.relayHealth,
+    [relay]: warnings.length > 0 ? `monitor-limited: ${warnings.join(',')}` : 'monitor-ok'
+  };
+  relayMonitorEvents.set(monitorKey, event);
+  seenRelayMonitorEventIds.add(event.id);
+  return true;
+}
+
+function startRelayMonitorSubscription() {
+  if (unsubscribeRelayMonitors) {
+    unsubscribeRelayMonitors();
+    unsubscribeRelayMonitors = null;
+  }
+  const filters = relayMonitorFilters();
+  if (filters.length === 0) return;
+  unsubscribeRelayMonitors = nostr.subscribe(filters, {
+    onEvent: (event) => {
+      validateInboundNostrEvent(event)
+        .then(() => applyRelayMonitorEvent(event))
+        .catch((error) => {
+          dnsState.connection.relayMonitorErrors = [
+            { event_id: event?.id || '', pubkey: event?.pubkey || '', reason: error?.message || String(error) },
+            ...dnsState.connection.relayMonitorErrors
+          ].slice(0, 20);
+        });
+    },
+    onClosed: (reason = '', relay = '') => {
+      dnsState.connection.relayMonitorErrors = [
+        { relay, reason: String(reason || 'closed'), source: 'closed' },
+        ...dnsState.connection.relayMonitorErrors
+      ].slice(0, 20);
+    },
+    onAuth: (challenge = '', relay = '') => {
+      dnsState.connection.relayMonitorErrors = [
+        { relay, reason: challenge || 'auth-required', source: 'auth' },
+        ...dnsState.connection.relayMonitorErrors
+      ].slice(0, 20);
+    }
+  });
+}
+
 function startDNSReadModelSubscription(since = null) {
   if (unsubscribeDNSReadModels) {
     unsubscribeDNSReadModels();
@@ -453,7 +675,7 @@ function startDNSReadModelSubscription(since = null) {
   });
 }
 
-export async function connect(relayUrl, pubkey) {
+export async function connect(relayUrl, pubkey, options = {}) {
   if (!browser) return { ok: false, reason: 'not_browser' };
 
   disconnect({ resetData: false });
@@ -462,9 +684,15 @@ export async function connect(relayUrl, pubkey) {
   dnsState.connection.status = 'connecting';
 
   try {
-    const { relays, servicePubkey } = await resolveSubscriptionConfig(relayUrl, pubkey);
+    const { relays, servicePubkey, trustedRelayMonitors } = await resolveSubscriptionConfig(relayUrl, pubkey, options);
     dnsState.connection.relays = relays;
     dnsState.connection.servicePubkey = servicePubkey;
+    dnsState.connection.trustedRelayMonitors = trustedRelayMonitors;
+    relayMonitorEvents.clear();
+    seenRelayMonitorEventIds.clear();
+    dnsState.connection.relayMonitorAnnouncements = {};
+    dnsState.connection.relayMonitorMetadata = {};
+    dnsState.connection.relayMonitorErrors = [];
 
     await queryRelayMetadata(relays);
 
@@ -478,6 +706,7 @@ export async function connect(relayUrl, pubkey) {
     dnsState.connection.connected = true;
     dnsState.connection.status = 'subscribing';
     startDNSReadModelSubscription();
+    startRelayMonitorSubscription();
     return { ok: true, relays, servicePubkey };
   } catch (error) {
     const message = error?.message || String(error);
@@ -494,6 +723,10 @@ export function disconnect({ resetData = false } = {}) {
     unsubscribeDNSReadModels();
     unsubscribeDNSReadModels = null;
   }
+  if (unsubscribeRelayMonitors) {
+    unsubscribeRelayMonitors();
+    unsubscribeRelayMonitors = null;
+  }
   connectedRelayCount = 0;
   dnsState.connection.connected = false;
   dnsState.connection.status = 'disconnected';
@@ -507,6 +740,11 @@ export function disconnect({ resetData = false } = {}) {
     endpointMap.clear();
     policyMap.clear();
     backendMap.clear();
+    relayMonitorEvents.clear();
+    seenRelayMonitorEventIds.clear();
+    dnsState.connection.relayMonitorAnnouncements = {};
+    dnsState.connection.relayMonitorMetadata = {};
+    dnsState.connection.relayMonitorErrors = [];
     refreshCollections();
   }
 }
@@ -618,15 +856,22 @@ export function resetDnsReadModels() {
   dnsState.connection.servicePubkey = '';
   dnsState.connection.relayHealth = {};
   dnsState.connection.metadata = {};
+  dnsState.connection.trustedRelayMonitors = [];
+  dnsState.connection.relayMonitorAnnouncements = {};
+  dnsState.connection.relayMonitorMetadata = {};
+  dnsState.connection.relayMonitorErrors = [];
+  relayMonitorEvents.clear();
+  seenRelayMonitorEventIds.clear();
   dnsState.connection.lastEoseAt = null;
   dnsState.connection.lastEventAt = null;
   dnsState.connection.lastClosed = null;
 }
 
-export function bootstrapDnsDashboard({ relays = null, servicePubkey = '', systemInfo = null } = {}) {
+export function bootstrapDnsDashboard({ relays = null, servicePubkey = '', systemInfo = null, trustedRelayMonitorPubkeys = null } = {}) {
   const resolvedRelays = relays || systemInfo?.nostr?.browser_relays || systemInfo?.nostr?.sidecar_url || [];
   const resolvedPubkey = servicePubkey || systemInfo?.nostr?.service_pubkey || '';
-  return connect(resolvedRelays, resolvedPubkey);
+  const resolvedMonitors = trustedRelayMonitorPubkeys || systemInfo?.nostr?.trusted_relay_monitor_pubkeys || systemInfo?.nostr?.relay_monitor_pubkeys || [];
+  return connect(resolvedRelays, resolvedPubkey, { trustedRelayMonitorPubkeys: resolvedMonitors });
 }
 
 export function reconnectDnsDashboard(options = {}) {

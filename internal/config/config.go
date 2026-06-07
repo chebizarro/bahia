@@ -279,6 +279,7 @@ type NostrConfig struct {
 	ServiceRelays       []string                  `koanf:"service_relays"`
 	BrowserRelays       []string                  `koanf:"browser_relays"`
 	ContextVMRelays     []string                  `koanf:"contextvm_relays"`
+	DMRelayLists        []DMRelayListConfig       `koanf:"dm_relay_lists" yaml:"dm_relay_lists"`
 	RelayAdministration RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
 
 	// RelayAuthUnavailablePolicy is fixed to exclude_and_fail: if a relay requires
@@ -299,6 +300,20 @@ type NostrConfig struct {
 	PublishEnabled    bool               `koanf:"publish_enabled"`
 	RelayQuorum       RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
 	Sidecar           RelaySidecarConfig `koanf:"sidecar"`
+}
+
+const (
+	DMRelayListFeatureNotifications = "notifications"
+	DMRelayListIdentityService      = "service"
+)
+
+// DMRelayListConfig configures an explicit NIP-51 kind 10050 receive relay list.
+// It is never inferred from browser, service, or ContextVM relay policies.
+type DMRelayListConfig struct {
+	Enabled  bool     `koanf:"enabled" yaml:"enabled"`
+	Feature  string   `koanf:"feature" yaml:"feature"`
+	Identity string   `koanf:"identity" yaml:"identity"`
+	Relays   []string `koanf:"relays" yaml:"relays"`
 }
 
 // RelayQuorumConfig holds readiness quorum thresholds by operating mode.
@@ -936,6 +951,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	c.normalizeNostrRelays()
+	if err := c.validateDMRelayLists(); err != nil {
+		return err
+	}
 	if err := c.validateNostrRelayPolicy(); err != nil {
 		return err
 	}
@@ -993,6 +1011,11 @@ func (c *Config) normalizeNostrRelays() {
 	}
 	c.Nostr.BrowserRelays = normalizeRelayList(c.Nostr.BrowserRelays)
 	c.Nostr.ContextVMRelays = normalizeRelayList(c.Nostr.ContextVMRelays)
+	for i := range c.Nostr.DMRelayLists {
+		c.Nostr.DMRelayLists[i].Feature = strings.ToLower(strings.TrimSpace(c.Nostr.DMRelayLists[i].Feature))
+		c.Nostr.DMRelayLists[i].Identity = strings.ToLower(strings.TrimSpace(c.Nostr.DMRelayLists[i].Identity))
+		c.Nostr.DMRelayLists[i].Relays = normalizeRelayList(c.Nostr.DMRelayLists[i].Relays)
+	}
 	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.ServiceRelays)
 	c.Nostr.PrivateBrowserRelays = cloneStrings(c.Nostr.BrowserRelays)
 	c.Nostr.RelayAuthUnavailablePolicy = strings.ToLower(strings.TrimSpace(c.Nostr.RelayAuthUnavailablePolicy))
@@ -1017,6 +1040,18 @@ func (c NostrConfig) ContextVMRelayPolicyRelays() []string {
 		return cloneStrings(c.ContextVMRelays)
 	}
 	return cloneStrings(c.BrowserRelays)
+}
+
+func (c NostrConfig) EnabledDMRelayLists() []DMRelayListConfig {
+	out := make([]DMRelayListConfig, 0, len(c.DMRelayLists))
+	for _, list := range c.DMRelayLists {
+		if !list.Enabled {
+			continue
+		}
+		list.Relays = cloneStrings(list.Relays)
+		out = append(out, list)
+	}
+	return out
 }
 
 func (c NostrConfig) RelayAuthUnavailableSemantics() string {
@@ -1572,6 +1607,48 @@ func (c *Config) validateNostrRelayPolicy() error {
 	default:
 		return fmt.Errorf("config validation failed: nostr.relay_auth_unavailable must be %q", RelayAuthUnavailableExcludeAndFail)
 	}
+}
+
+func (c *Config) validateDMRelayLists() error {
+	seenEnabled := map[string]struct{}{}
+	for i := range c.Nostr.DMRelayLists {
+		list := &c.Nostr.DMRelayLists[i]
+		if !list.Enabled {
+			continue
+		}
+		if list.Feature == "" {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].feature is required when enabled", i)
+		}
+		if list.Feature != DMRelayListFeatureNotifications {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].feature %q is not a DM-enabled Bahia feature", i, list.Feature)
+		}
+		if !c.Notifications.Enabled || !c.Notifications.NostrDM {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d] requires notifications.enabled=true and notifications.nostr_dm=true", i)
+		}
+		if list.Identity == "" {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].identity is required when enabled", i)
+		}
+		if list.Identity != DMRelayListIdentityService {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].identity %q is not supported; only %q can be signed by Bahia", i, list.Identity, DMRelayListIdentityService)
+		}
+		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
+			return fmt.Errorf("config validation failed: nostr.private_key is required to publish nostr.dm_relay_lists[%d]", i)
+		}
+		if len(list.Relays) == 0 {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].relays requires at least one DM receive relay", i)
+		}
+		for _, relay := range list.Relays {
+			if err := validateWebsocketRelayURL(relay); err != nil {
+				return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].relays: %w", i, err)
+			}
+		}
+		key := list.Feature + ":" + list.Identity
+		if _, exists := seenEnabled[key]; exists {
+			return fmt.Errorf("config validation failed: nostr.dm_relay_lists has duplicate enabled list for feature %q identity %q", list.Feature, list.Identity)
+		}
+		seenEnabled[key] = struct{}{}
+	}
+	return nil
 }
 
 func (c *Config) validateRelayAdministration() error {

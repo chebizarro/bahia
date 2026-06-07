@@ -26,7 +26,7 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 | `11316`-`11320` | Discovery | ContextVM server, tools, resources, templates, and prompts announcements. |
 | `30002` | Collection/discovery | NIP-51 relay sets for browser, ContextVM, service, and operational relay topology. |
 | `10002` | Relay preference | Advisory NIP-65 service relay read/write hints for wider Nostr routing. |
-| `10050` | DM relay list | Optional NIP-51 DM receive routing only for explicitly DM-enabled Bahia features. |
+| `10050` | DM relay list | Optional NIP-51 DM receive routing only for explicitly configured DM-enabled Bahia features and identities. |
 | `30617`, `30618` | Repository | NIP-34 repository announcements and state; repository relay hints are repository-specific routing inputs. |
 | `5` | Deletion | NIP-09 deletion event for relay-level deletion semantics. |
 
@@ -158,7 +158,7 @@ Bahia discovery is ContextVM-compatible:
 | `11320` | Prompts list |
 | `30002` | NIP-51 relay sets such as browser, ContextVM, service, and operational relay sets; canonical Bahia bootstrap topology |
 | `10002` | NIP-65 relay preferences; advisory service read/write hints for wider Nostr routing |
-| `10050` | Optional NIP-51 DM relay list for explicitly DM-enabled features and receiving identities |
+| `10050` | Optional NIP-51 DM relay list for explicitly configured DM-enabled features and receiving identities; never inferred from browser, ContextVM, or service relay sets |
 | `30617` / `30618` | NIP-34 repository announcement and state; repository relay hints are preferred before global Bahia read relays for repository operations |
 
 The service-authored `10002` list marks ContextVM request relays with `read` and service publish/backfill relays with `write`. It does not replace ContextVM discovery or the NIP-51 `30002` relay sets. NIP-11 relay metadata and optional NIP-66 monitor events are advisory capability/liveness metadata only; they do not establish service trust, override trusted service pubkeys, or authorize removing all configured relays. NIP-86 is an optional HTTP relay-owner administration API protected with NIP-98 authorization, not a Nostr event kind and not a ContextVM mutation transport.

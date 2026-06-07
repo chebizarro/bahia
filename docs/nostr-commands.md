@@ -15,7 +15,7 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | Canonical audit/status | `4903`, `30315` | outbound | Immutable audit facts and NIP-38 operational statuses |
 | Relay sets | `30002` | outbound addressable | NIP-51 relay topology and bootstrap sets |
 | Relay preferences | `10002` | outbound replaceable | Advisory NIP-65 service read/write hints; not Bahia bootstrap |
-| DM relay lists | `10050` | optional replaceable | NIP-51 DM receive routing only for explicitly DM-enabled features |
+| DM relay lists | `10050` | optional replaceable | NIP-51 DM receive routing only for explicitly configured DM-enabled features and identities |
 | Repository state | `30617`, `30618` | inbound/outbound by repository owner | NIP-34 repository announcements and state; repository relay hints are preferred for repository operations |
 | Deletions | `5` | outbound/inbound | NIP-09 delete events where relay-level deletion semantics apply |
 
@@ -107,7 +107,7 @@ Clients bootstrap with:
 - NIP-51 relay sets `30002` such as browser, ContextVM request, and service relay sets.
 - NIP-65 relay lists where available for broader Nostr routing; Bahia's service-authored `10002` is advisory only and does not replace `30002` bootstrap sets.
 - NIP-34 `30617` repository `relays` tags and `30618` state for repository-specific routing; these hints are preferred before global Bahia read relays for repository operations.
-- Optional NIP-51 `10050` DM relay lists only when a Bahia feature is explicitly DM-enabled.
+- Optional NIP-51 `10050` DM relay lists only when a Bahia feature and receiving identity are explicitly DM-enabled; browser, ContextVM, and service relay sets do not imply DM receive readiness.
 - NIP-11 metadata and optional NIP-66 monitor events only as advisory capability/liveness metadata; they do not establish service trust or override configured relay policy.
 - Optional NIP-86 relay-owner administration over HTTP with NIP-98 authorization only for configured Bahia-owned or Bahia-authorized relays; it is not ContextVM mutation transport and does not replace NIP-42 websocket AUTH.
 

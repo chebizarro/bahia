@@ -39,6 +39,28 @@ type Endpoint struct {
 	UpdatedAt    time.Time
 }
 
+// RelayAdvisoryMetadata records best-effort relay self-reported metadata without
+// changing the configured relay set or Bahia service trust boundary.
+type RelayAdvisoryMetadata struct {
+	RelayURL      string
+	Status        string
+	Error         string
+	Name          string
+	SupportedNIPs []int
+	Warnings      []string
+	Limitations   RelayAdvisoryLimitations
+	ObservedAt    time.Time
+}
+
+// RelayAdvisoryLimitations captures NIP-11 limitation flags that may affect
+// operators but must not remove configured relays by themselves.
+type RelayAdvisoryLimitations struct {
+	AuthRequired     bool
+	PaymentRequired  bool
+	RestrictedWrites bool
+	MaxLimit         int
+}
+
 // Option configures a Resolver.
 type Option func(*Resolver)
 
@@ -77,8 +99,9 @@ type Resolver struct {
 	privateKey  string
 	poolFactory relayPoolFactory
 
-	mu      sync.RWMutex
-	records map[string]endpointRecord
+	mu            sync.RWMutex
+	records       map[string]endpointRecord
+	relayMetadata map[string]RelayAdvisoryMetadata
 
 	lifecycleMu sync.Mutex
 	pool        relayPool
@@ -108,11 +131,12 @@ type endpointContent struct {
 // New creates a Resolver connected to the given relay URLs.
 func New(relayURLs []string, authorPubkey string, opts ...Option) *Resolver {
 	r := &Resolver{
-		relayURLs:    append([]string(nil), relayURLs...),
-		authorPubkey: authorPubkey,
-		logger:       zap.NewNop(),
-		poolFactory:  newRelayPool,
-		records:      make(map[string]endpointRecord),
+		relayURLs:     append([]string(nil), relayURLs...),
+		authorPubkey:  authorPubkey,
+		logger:        zap.NewNop(),
+		poolFactory:   newRelayPool,
+		records:       make(map[string]endpointRecord),
+		relayMetadata: make(map[string]RelayAdvisoryMetadata),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -235,6 +259,21 @@ func (r *Resolver) Endpoints() []Endpoint {
 	return endpoints
 }
 
+// RelayMetadata returns advisory relay metadata collected from best-effort NIP-11
+// probes. The configured relay URLs remain authoritative even when metadata is
+// missing, malformed, or limiting.
+func (r *Resolver) RelayMetadata() map[string]RelayAdvisoryMetadata {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]RelayAdvisoryMetadata, len(r.relayMetadata))
+	for relayURL, metadata := range r.relayMetadata {
+		metadata.SupportedNIPs = append([]int(nil), metadata.SupportedNIPs...)
+		metadata.Warnings = append([]string(nil), metadata.Warnings...)
+		out[relayURL] = metadata
+	}
+	return out
+}
+
 func newRelayPool(relayURLs []string, logger *zap.Logger, privateKey string) relayPool {
 	opts := []nostradapter.RelayPoolOption(nil)
 	if privateKey != "" {
@@ -275,17 +314,116 @@ func (r *Resolver) run(ctx context.Context, pool relayPool) {
 
 func (r *Resolver) prepareRelays(ctx context.Context, pool relayPool) {
 	infos := pool.FetchAllRelayInfo(ctx)
-	for relayURL, info := range infos {
-		if info == nil {
-			r.logger.Warn("relay NIP-11 metadata unavailable", zap.String("relay", relayURL))
+	now := time.Now().UTC()
+	for _, relayURL := range r.relayURLs {
+		metadata := advisoryMetadataFromNIP11(relayURL, infos[relayURL], now)
+		r.recordRelayMetadata(metadata)
+		if metadata.Status == "metadata-unavailable" || metadata.Status == "metadata-malformed" {
+			r.logger.Warn("relay NIP-11 metadata unavailable", zap.String("relay", relayURL), zap.String("status", metadata.Status), zap.String("error", metadata.Error))
 			continue
 		}
-		r.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", info.Name), zap.Any("supported_nips", info.SupportedNIPs))
-		if info.Limitation != nil && info.Limitation.AuthRequired && r.privateKey == "" {
+		r.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", metadata.Name), zap.Ints("supported_nips", metadata.SupportedNIPs), zap.Strings("warnings", metadata.Warnings))
+		if metadata.Limitations.AuthRequired && r.privateKey == "" {
 			r.logger.Warn("relay metadata requires NIP-42 AUTH but resolver has no private key", zap.String("relay", relayURL))
 		}
 	}
 	pool.Connect(ctx)
+}
+
+func (r *Resolver) recordRelayMetadata(metadata RelayAdvisoryMetadata) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.relayMetadata[metadata.RelayURL] = metadata
+}
+
+func advisoryMetadataFromNIP11(relayURL string, info *nip11.RelayInformationDocument, observedAt time.Time) RelayAdvisoryMetadata {
+	metadata := RelayAdvisoryMetadata{
+		RelayURL:   relayURL,
+		Status:     "metadata-unavailable",
+		Error:      "NIP-11 metadata unavailable",
+		ObservedAt: observedAt,
+	}
+	if info == nil {
+		return metadata
+	}
+
+	supportedNIPs, warnings := supportedNIPsFromNIP11(info.SupportedNIPs)
+	metadata.Status = "metadata-ok"
+	metadata.Error = ""
+	metadata.Name = info.Name
+	metadata.SupportedNIPs = supportedNIPs
+	metadata.Warnings = warnings
+	if len(warnings) > 0 {
+		metadata.Status = "metadata-malformed"
+		metadata.Error = strings.Join(warnings, "; ")
+	}
+	if info.Limitation != nil {
+		metadata.Limitations = RelayAdvisoryLimitations{
+			AuthRequired:     info.Limitation.AuthRequired,
+			PaymentRequired:  info.Limitation.PaymentRequired,
+			RestrictedWrites: info.Limitation.RestrictedWrites,
+			MaxLimit:         info.Limitation.MaxLimit,
+		}
+		limitWarnings := limitationWarnings(metadata.Limitations)
+		if len(limitWarnings) > 0 {
+			metadata.Warnings = append(metadata.Warnings, limitWarnings...)
+			if metadata.Status == "metadata-ok" {
+				metadata.Status = "metadata-limited"
+			}
+		}
+	}
+	return metadata
+}
+
+func supportedNIPsFromNIP11(values []any) ([]int, []string) {
+	nips := make([]int, 0, len(values))
+	warnings := make([]string, 0)
+	seen := make(map[int]struct{})
+	for _, value := range values {
+		var nip int
+		switch typed := value.(type) {
+		case int:
+			nip = typed
+		case int64:
+			nip = int(typed)
+		case float64:
+			if typed != float64(int(typed)) {
+				warnings = append(warnings, fmt.Sprintf("unsupported non-integer supported_nips value %v", typed))
+				continue
+			}
+			nip = int(typed)
+		default:
+			warnings = append(warnings, fmt.Sprintf("unsupported supported_nips value %T", value))
+			continue
+		}
+		if nip <= 0 {
+			warnings = append(warnings, fmt.Sprintf("invalid supported_nips value %d", nip))
+			continue
+		}
+		if _, ok := seen[nip]; ok {
+			continue
+		}
+		seen[nip] = struct{}{}
+		nips = append(nips, nip)
+	}
+	return nips, warnings
+}
+
+func limitationWarnings(limitations RelayAdvisoryLimitations) []string {
+	warnings := make([]string, 0)
+	if limitations.AuthRequired {
+		warnings = append(warnings, "auth-required")
+	}
+	if limitations.PaymentRequired {
+		warnings = append(warnings, "payment-required")
+	}
+	if limitations.RestrictedWrites {
+		warnings = append(warnings, "restricted-writes")
+	}
+	if limitations.MaxLimit > 0 {
+		warnings = append(warnings, fmt.Sprintf("max-limit:%d", limitations.MaxLimit))
+	}
+	return warnings
 }
 
 func (r *Resolver) subscribeUntilClosed(ctx context.Context, pool relayPool) error {

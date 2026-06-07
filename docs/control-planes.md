@@ -123,7 +123,7 @@ Relay URLs are physical endpoints; Bahia relay purpose is policy. A deployment m
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service publication and historical backfill; not automatically exposed to browsers. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing preferences, not Bahia service-strategy authorization. |
 | Repository/ngit | Repository maintainer or SoulFactory | NIP-34 `30617` `relays` tags and `30618` state | Repository-specific relay hints, preferred before global Bahia relay policy for repository operations. |
-| DM receive routing | Receiving identity | NIP-51 `10050` | Direct-message routing only for DM-enabled Bahia features. |
+| DM receive routing | Receiving identity | NIP-51 `10050` | Direct-message routing only for explicitly configured DM-enabled Bahia features and identities; not inferred from browser, ContextVM, or service relay sets. |
 | FIPS public adverts | FIPS/Bahia operator | Existing FIPS overlay advert contract plus explicit bridge relay config | Public advert exposure; do not infer sensitive endpoint/control relay safety. |
 | FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets or explicit bridge relay config | Sensitive endpoint/control exposure; sharing with public relays is an explicit deployment decision. |
 | Relay capability/liveness | Relay or trusted monitor | NIP-11; optional NIP-66 `10166`/`30166` | Advisory ranking/health metadata only; never a trust root. |

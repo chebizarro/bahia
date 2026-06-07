@@ -148,6 +148,52 @@ func TestResolverPreparesRelayMetadataBeforeConnecting(t *testing.T) {
 	resolver.prepareRelays(context.Background(), pool)
 
 	require.Equal(t, []string{"fetch_info", "connect"}, pool.calls)
+	metadata := resolver.RelayMetadata()
+	require.Equal(t, "metadata-ok", metadata["wss://relay.example.test"].Status)
+	require.Equal(t, []int{1, 11}, metadata["wss://relay.example.test"].SupportedNIPs)
+	require.Equal(t, "metadata-unavailable", metadata["wss://down.example.test"].Status)
+}
+
+func TestResolverNIP11MetadataIsAdvisoryForMissingMalformedAndLimitingRelays(t *testing.T) {
+	pool := &fakeRelayPool{
+		infos: map[string]*nip11.RelayInformationDocument{
+			"wss://malformed.example.test": {Name: "malformed", SupportedNIPs: []any{float64(1.5), map[string]any{"bad": true}, float64(11)}},
+			"wss://limited.example.test": {
+				Name:          "limited",
+				SupportedNIPs: []any{float64(1), float64(11), float64(42)},
+				Limitation: &nip11.RelayLimitationDocument{
+					AuthRequired:     true,
+					PaymentRequired:  true,
+					RestrictedWrites: true,
+					MaxLimit:         25,
+				},
+			},
+		},
+	}
+	resolver := New([]string{
+		"wss://missing.example.test",
+		"wss://malformed.example.test",
+		"wss://limited.example.test",
+	}, "author")
+
+	resolver.prepareRelays(context.Background(), pool)
+
+	require.Equal(t, []string{"fetch_info", "connect"}, pool.calls)
+	metadata := resolver.RelayMetadata()
+	require.Len(t, metadata, 3)
+	require.Equal(t, "metadata-unavailable", metadata["wss://missing.example.test"].Status)
+	require.Equal(t, "metadata-malformed", metadata["wss://malformed.example.test"].Status)
+	require.Contains(t, metadata["wss://malformed.example.test"].Error, "supported_nips")
+	require.Equal(t, []int{11}, metadata["wss://malformed.example.test"].SupportedNIPs)
+
+	limited := metadata["wss://limited.example.test"]
+	require.Equal(t, "metadata-limited", limited.Status)
+	require.Equal(t, []int{1, 11, 42}, limited.SupportedNIPs)
+	require.True(t, limited.Limitations.AuthRequired)
+	require.True(t, limited.Limitations.PaymentRequired)
+	require.True(t, limited.Limitations.RestrictedWrites)
+	require.Equal(t, 25, limited.Limitations.MaxLimit)
+	require.ElementsMatch(t, []string{"auth-required", "payment-required", "restricted-writes", "max-limit:25"}, limited.Warnings)
 }
 
 func TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker(t *testing.T) {

@@ -699,6 +699,102 @@ func TestNostrRelayPolicyCompatibilityFallbacks(t *testing.T) {
 	}
 }
 
+func TestNostrDMRelayListsAreExplicitAndSeparated(t *testing.T) {
+	cfg := Defaults()
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() error: %v", err)
+	}
+	if len(cfg.Nostr.EnabledDMRelayLists()) != 0 {
+		t.Fatalf("EnabledDMRelayLists() = %#v, want no default DM receive readiness", cfg.Nostr.EnabledDMRelayLists())
+	}
+
+	cfg = Defaults()
+	cfg.Nostr.PrivateKey = "test-secret-key"
+	cfg.Notifications.Enabled = true
+	cfg.Notifications.NostrDM = true
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.DMRelayLists = []DMRelayListConfig{{
+		Enabled:  true,
+		Feature:  " Notifications ",
+		Identity: " Service ",
+		Relays:   []string{" wss://dm.example "},
+	}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() explicit DM relay list error: %v", err)
+	}
+	enabled := cfg.Nostr.EnabledDMRelayLists()
+	if len(enabled) != 1 {
+		t.Fatalf("EnabledDMRelayLists() length = %d", len(enabled))
+	}
+	if enabled[0].Feature != DMRelayListFeatureNotifications || enabled[0].Identity != DMRelayListIdentityService {
+		t.Fatalf("DM relay list not normalized: %#v", enabled[0])
+	}
+	assertStringSlice(t, enabled[0].Relays, []string{"wss://dm.example"})
+	assertStringSlice(t, cfg.Nostr.BrowserRelayPolicyRelays(), []string{"wss://browser.example"})
+	assertStringSlice(t, cfg.Nostr.ContextVMRelayPolicyRelays(), []string{"wss://contextvm.example"})
+}
+
+func TestNostrDMRelayListValidationRequiresDMEnabledFeature(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{
+			name: "notifications dm disabled",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.PrivateKey = "test-secret-key"
+				cfg.Notifications.Enabled = true
+				cfg.Nostr.DMRelayLists = []DMRelayListConfig{{Enabled: true, Feature: DMRelayListFeatureNotifications, Identity: DMRelayListIdentityService, Relays: []string{"wss://dm.example"}}}
+			},
+			want: "notifications.enabled=true and notifications.nostr_dm=true",
+		},
+		{
+			name: "unsupported feature",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.PrivateKey = "test-secret-key"
+				cfg.Notifications.Enabled = true
+				cfg.Notifications.NostrDM = true
+				cfg.Nostr.DMRelayLists = []DMRelayListConfig{{Enabled: true, Feature: "browser", Identity: DMRelayListIdentityService, Relays: []string{"wss://dm.example"}}}
+			},
+			want: "not a DM-enabled Bahia feature",
+		},
+		{
+			name: "unsupported identity",
+			mutate: func(cfg *Config) {
+				cfg.Nostr.PrivateKey = "test-secret-key"
+				cfg.Notifications.Enabled = true
+				cfg.Notifications.NostrDM = true
+				cfg.Nostr.DMRelayLists = []DMRelayListConfig{{Enabled: true, Feature: DMRelayListFeatureNotifications, Identity: "browser", Relays: []string{"wss://dm.example"}}}
+			},
+			want: "only \"service\" can be signed by Bahia",
+		},
+		{
+			name: "no private key",
+			mutate: func(cfg *Config) {
+				cfg.Notifications.Enabled = true
+				cfg.Notifications.NostrDM = true
+				cfg.Nostr.DMRelayLists = []DMRelayListConfig{{Enabled: true, Feature: DMRelayListFeatureNotifications, Identity: DMRelayListIdentityService, Relays: []string{"wss://dm.example"}}}
+			},
+			want: "nostr.private_key is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Defaults()
+			tt.mutate(cfg)
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validate() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestNostrRelayPolicyLoadsFromEnvironment(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_SERVICE_RELAYS", "wss://service1.example, wss://service2.example")
 	t.Setenv("BAHIA_NOSTR_BROWSER_RELAYS", "wss://browser.example")

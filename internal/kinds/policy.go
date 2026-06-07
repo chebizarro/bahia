@@ -20,7 +20,7 @@ func IsCanonicalObservableKind(kind int) bool {
 	case CASControlState, CASAudit, NIP38Status,
 		ContextVMServerAnnouncement, ContextVMToolsList, ContextVMResourcesList,
 		ContextVMResourceTemplatesList, ContextVMPromptsList,
-		RelaySetDiscovery, NIP65RelayList, SBOMAttestation,
+		RelaySetDiscovery, NIP65RelayList, NIP51DMRelayList, SBOMAttestation,
 		BahiaIdentityDefinition, BahiaReplayCheckpoint, BahiaReadinessStatus:
 		return true
 	default:
@@ -120,6 +120,7 @@ func AllReadModelKinds() []int {
 		ContextVMPromptsList,
 		RelaySetDiscovery,
 		NIP65RelayList,
+		NIP51DMRelayList,
 		SBOMAttestation,
 	}
 }

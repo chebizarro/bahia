@@ -2,11 +2,11 @@
 
 Date: 2026-06-07
 
-Beads: `bahia-8epx.11`, `bahia-8epx.11.1`, `bahia-8epx.11.2`, `bahia-8epx.11.3`, `bahia-8epx.11.4`
+Beads: `bahia-8epx.11`, `bahia-8epx.11.1`, `bahia-8epx.11.2`, `bahia-8epx.11.3`, `bahia-8epx.11.4`, `bahia-8epx.11.5`, `bahia-8epx.11.6`, `bahia-8epx.11.7`
 
 ## Scope
 
-This report covers relay strategy plan Items 10 and 11 only: cross-slice PSTF verification, user-facing/protocol documentation, and bounded optional NIP-11/NIP-66/DM relay-list follow-up. Production implementation epics `bahia-8epx.1` through `bahia-8epx.10` were not reopened.
+This report covers relay strategy plan Items 10 and 11 only: cross-slice PSTF verification, user-facing/protocol documentation, bounded optional NIP-11/NIP-66 planning, and the explicit NIP-51 kind `10050` notification DM relay-list slice for `bahia-8epx.11.7`. Production implementation epics `bahia-8epx.1` through `bahia-8epx.10` were not reopened.
 
 ## Cross-slice evidence map
 
@@ -22,7 +22,8 @@ This report covers relay strategy plan Items 10 and 11 only: cross-slice PSTF ve
 | Item 8 / `bahia-8epx.8` NIP-34 | `pstf/features/bahia-8epx.8` | `30617` relay hints preserved, `30618` state queries prefer repository relays, degraded fallback and incomplete EOSE metadata. |
 | Item 9 / `bahia-8epx.9` SoulFactory/ngit | `pstf/features/bahia-8epx.9` | OpenClaw runtime/control relays remain distinct from required Ngit publication relays; repeated ngit `--relay` support. |
 | Item 10 / `bahia-8epx.10` NIP-86 | `pstf/features/bahia-8epx.10` | Disabled-by-default relay-owner HTTP administration, Bahia-owned/authorized target checks, payload-bound NIP-98, ContextVM mutation rejection. |
-| Item 10 follow-up / `bahia-8epx.11.4` | `pstf/features/bahia-8epx.11` | NIP-11/NIP-66 advisory metadata and NIP-51 `10050` DM relay-list work bounded by follow-up Beads. |
+| Item 10 follow-up / `bahia-8epx.11.4` | `pstf/features/bahia-8epx.11` | NIP-11/NIP-66 advisory metadata bounded by follow-up Beads. |
+| DM relay-list slice / `bahia-8epx.11.7` | `pstf/features/bahia-8epx.11` | NIP-51 `10050` remains absent by default, publishes only from explicit `nostr.dm_relay_lists` config for notification DM service identity, and stays separate from browser, ContextVM, and service relay sets. |
 
 ## Commands run
 
@@ -46,6 +47,21 @@ ngit init --help
 
 cd web && npm test -- --run   tests/unit/discovery-store.test.js   tests/unit/encrypted-controlplane.test.js   tests/unit/nostr-client-parsing.test.js   tests/unit/controlplane-requests.test.js   tests/unit/test-utils-and-fixtures.test.js   tests/unit/repositories-store.test.js
 # Test Files 6 passed (6); Tests 92 passed (92)
+
+# bahia-8epx.11.7 focused verification
+
+go test ./internal/config ./internal/adapters/nostr ./internal/kinds
+# ok github.com/openagentsinc/bahia/internal/config
+# ok github.com/openagentsinc/bahia/internal/adapters/nostr
+# ok github.com/openagentsinc/bahia/internal/kinds
+
+cd web && npm test -- --run tests/unit/discovery-store.test.js
+# Test Files 1 passed (1); Tests 9 passed (9)
+
+python3 -m json.tool pstf/features/bahia-8epx.11/acceptance_criteria.json >/tmp/bahia-8epx.11-acceptance.json
+python3 -m json.tool pstf/features/bahia-8epx.11/test_matrix.json >/tmp/bahia-8epx.11-test-matrix.json
+python3 -m json.tool pstf/features/bahia-8epx.11/feature_spec.json >/tmp/bahia-8epx.11-feature-spec.json
+# Result: pass
 ```
 
 ## Documentation validation
@@ -54,21 +70,44 @@ Targeted RepoPrompt searches confirmed:
 
 - No docs now present `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` or `kind 31974 + NIP-51` as current bootstrap wording.
 - User-facing docs now name ContextVM discovery `11316`-`11320` plus NIP-51 `30002` relay sets as canonical bootstrap.
-- `docs/user-guide/nostr-integration.md`, `docs/protocol-compatibility.md`, `docs/nostr-commands.md`, and `docs/event-spec.md` document NIP-11/NIP-66 advisory-only metadata and NIP-51 `10050` DM relay-list boundaries.
+- `docs/user-guide/nostr-integration.md`, `docs/protocol-compatibility.md`, `docs/nostr-commands.md`, and `docs/event-spec.md` document NIP-11/NIP-66 advisory-only metadata and NIP-51 `10050` DM relay-list boundaries, including explicit `notifications.nostr_dm` plus `nostr.dm_relay_lists` opt-in and no inference from browser/ContextVM/service relay sets.
 - `docs/user-guide/cli-reference.md` documents CLI relay precedence and no REST fallback after relay acceptance.
 - `docs/relay-sidecar.md` documents `service_relays`, `browser_relays`, `contextvm_relays`, and `relay_auth_unavailable` behavior.
 - Remaining `5980`/`7980` search hits are historical investigation notes, not user-facing current behavior.
 
-## Follow-up Beads created
+## Follow-up Beads status
 
-The optional metadata/DM work is tracked in Beads rather than comments or prose-only follow-up. These tasks were created during `bahia-8epx.11` verification on 2026-06-07, then parented to the overall relay-strategy epic `bahia-8epx` so this verification/docs slice can close while later optional implementation planning remains tracked:
+The optional metadata/DM work is tracked in Beads rather than comments or prose-only follow-up. These tasks were created during `bahia-8epx.11` verification on 2026-06-07, then parented to the overall relay-strategy epic `bahia-8epx`:
 
 - `bahia-8epx.11.5` — Plan advisory NIP-11 relay metadata probes.
 - `bahia-8epx.11.6` — Plan configured-trust NIP-66 relay monitor ingestion.
-- `bahia-8epx.11.7` — Plan NIP-51 `10050` DM relay-list support for DM-enabled features.
+- `bahia-8epx.11.7` — Implemented in this slice for explicit notification DM service-identity `10050` relay-list publication with safe defaults.
 
-These are bounded follow-ups. They preserve safe defaults: no NIP-66 trusted monitors by default, no DM relay-list publication by default, advisory metadata cannot establish trust, and optional metadata cannot remove all configured relays.
+The remaining optional metadata boundaries preserve safe defaults: no NIP-66 trusted monitors by default, advisory metadata cannot establish trust, and optional metadata cannot remove all configured relays. The DM relay-list boundary now preserves safe defaults in code: no `10050` publication by default and no public/browser/ContextVM/service relay inference.
+
+## Advisory metadata implementation evidence for `bahia-8epx.11.5` and `bahia-8epx.11.6`
+
+Completed on 2026-06-07:
+
+- `pkg/discovery/resolver.go` records best-effort NIP-11 advisory metadata for each configured relay. Missing metadata, malformed `supported_nips`, and limiting metadata such as auth/payment/restricted-write/max-limit are visible through `RelayMetadata()` and do not prevent the resolver from connecting to the configured relay set.
+- `web/src/lib/stores/dns.svelte.js` preserves browser DNS NIP-11 metadata as advisory relay health and adds configured-trust NIP-66 monitor ingestion. The browser subscribes to kind `10166` and `30166` only when trusted monitor pubkeys are configured, scopes `30166` to configured relay `d` tags, ignores untrusted monitors and unknown relays, and never changes `connection.relays` or `connection.servicePubkey` from metadata.
+- `bahia-8epx.11.7` adds explicit notification DM service-identity kind `10050` relay-list publication with no default publication and no inference from browser, ContextVM, or service relay sets.
+
+Additional commands run:
+
+```bash
+go test ./pkg/discovery
+# ok github.com/openagentsinc/bahia/pkg/discovery 0.279s
+
+cd web && npm test -- --run tests/unit/dns-store-subscriptions.test.js
+# Test Files 1 passed (1); Tests 7 passed (7)
+
+python3 -m json.tool pstf/features/bahia-8epx.11/feature_spec.json >/tmp/bahia-8epx.11.feature_spec.json
+python3 -m json.tool pstf/features/bahia-8epx.11/acceptance_criteria.json >/tmp/bahia-8epx.11.acceptance_criteria.json
+python3 -m json.tool pstf/features/bahia-8epx.11/test_matrix.json >/tmp/bahia-8epx.11.test_matrix.json
+# Result: pass
+```
 
 ## Result
 
-Cross-slice relay strategy PSTF and documentation evidence is complete for `bahia-8epx.11`. No blocking verification gap was found that requires reopening implementation epics `bahia-8epx.1` through `bahia-8epx.10`.
+Cross-slice relay strategy PSTF and documentation evidence is complete for `bahia-8epx.11`, including completed advisory NIP-11/NIP-66 slices `bahia-8epx.11.5`/`bahia-8epx.11.6` and explicit DM relay-list slice `bahia-8epx.11.7`. No blocking verification gap was found that requires reopening implementation epics `bahia-8epx.1` through `bahia-8epx.10`.

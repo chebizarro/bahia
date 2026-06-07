@@ -36,7 +36,7 @@ For the canonical control-plane contract, prefer:
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
 | NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
-| NIP-51 `10050` | DM relay lists | 🟡 only for explicitly DM-enabled features; not published by default |
+| NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
 | NIP-34 | Repository relay hints and repository state | ✅ repository/ngit-specific routing input |
 | NIP-11 / NIP-66 | Relay metadata and optional monitor events | ✅ advisory capability/liveness metadata only |
 | NIP-86 + NIP-98 | Optional relay-owner HTTP administration with payload-bound signed HTTP authorization | 🟡 opt-in administration surface for Bahia-owned/authorized relays only; not ContextVM transport |
@@ -71,6 +71,7 @@ A ContextVM response is command acknowledgment only. Clients must follow canonic
 | `11316`-`11320` | ContextVM discovery and capability announcements |
 | `30002` | NIP-51 relay sets; canonical Bahia bootstrap relay topology |
 | `10002` | NIP-65 service relay preferences; advisory wider-Nostr read/write hints only |
+| `10050` | NIP-51 DM relay list; explicit DM receive routing only |
 | `5` | NIP-09 deletion events |
 
 ### 3. Relay preferences and bootstrap
@@ -79,7 +80,7 @@ Bahia publishes service-key NIP-51 kind `30002` relay sets for canonical bootstr
 
 The Bahia service key also publishes an advisory NIP-65 kind `10002` relay list. Its `r` tags mark ContextVM request relays as `read` and service publish/backfill relays as `write`, giving wider Nostr clients standard author-routing hints. This event does not authorize relay use, does not replace ContextVM discovery, and must not replace the NIP-51 `30002` relay sets for Bahia bootstrap.
 
-NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-51 `10050` DM relay lists are not published by default and are reserved for future DM-enabled Bahia features with explicit receiving-identity semantics.
+NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured, and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
 
 ### 4. REST and HTTP MCP
 

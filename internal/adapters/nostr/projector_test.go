@@ -527,6 +527,95 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	assertNoRelayPreferenceTag(t, nip65, "wss://service.example", "read")
 }
 
+func TestProjectorSystemDiscoveryDoesNotInferDMRelayListFromPublicRelaySets(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+	cfg.Notifications.Enabled = true
+	cfg.Notifications.NostrDM = true
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	assertOneRelaySet(t, sink, "bahia-browser-v1")
+	assertOneRelaySet(t, sink, "bahia-contextvm-v1")
+	assertNoPublishedKind(t, sink, kinds.NIP51DMRelayList)
+}
+
+func TestProjectorPublishesExplicitNotificationDMRelayListOnly(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+	cfg.Nostr.DMRelayLists = []config.DMRelayListConfig{{
+		Enabled:  true,
+		Feature:  config.DMRelayListFeatureNotifications,
+		Identity: config.DMRelayListIdentityService,
+		Relays:   []string{"wss://dm.example", "wss://dm.example/"},
+	}}
+	cfg.Notifications.Enabled = true
+	cfg.Notifications.NostrDM = true
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	dm := assertOneSignedKind(t, sink, kinds.NIP51DMRelayList)
+	assertEventPubkey(t, dm, assertProjectorTestPubkey(t))
+	assertTag(t, dm, "feature", config.DMRelayListFeatureNotifications)
+	assertTag(t, dm, "relay", "wss://dm.example")
+	assertNoTag(t, dm, "relay", "wss://browser.example")
+	assertNoTag(t, dm, "relay", "wss://contextvm.example")
+	assertNoTag(t, dm, "relay", "wss://service.example")
+}
+
+func TestProjectorPublishesExplicitDMRelayListWithoutBrowserDiscovery(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = false
+	cfg.Nostr.BrowserRelays = nil
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+	cfg.Nostr.DMRelayLists = []config.DMRelayListConfig{{
+		Enabled:  true,
+		Feature:  config.DMRelayListFeatureNotifications,
+		Identity: config.DMRelayListIdentityService,
+		Relays:   []string{"wss://dm.example"},
+	}}
+	cfg.Notifications.Enabled = true
+	cfg.Notifications.NostrDM = true
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	dm := assertOneSignedKind(t, sink, kinds.NIP51DMRelayList)
+	assertTag(t, dm, "relay", "wss://dm.example")
+	assertNoPublishedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertNoPublishedKind(t, sink, kinds.RelaySetDiscovery)
+	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
+}
+
 func TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Defaults()

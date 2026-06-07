@@ -5,44 +5,93 @@
       "id": "AC-11-001",
       "title": "Cross-slice relay sets remain distinct",
       "statement": "PSTF evidence maps independent config sources through service-authored NIP-51 relay-set projection and client consumption for browser, ContextVM, and service relay purposes.",
-      "tests": ["T-11-001", "T-11-002", "T-11-003"],
-      "docs": ["docs/user-guide/nostr-integration.md", "docs/relay-sidecar.md", "docs/protocol-compatibility.md"]
+      "tests": [
+        "T-11-001",
+        "T-11-002",
+        "T-11-003"
+      ],
+      "docs": [
+        "docs/user-guide/nostr-integration.md",
+        "docs/relay-sidecar.md",
+        "docs/protocol-compatibility.md"
+      ]
     },
     {
       "id": "AC-11-002",
       "title": "Fail-closed and lifecycle paths are evidenced",
       "statement": "Tests and docs cover missing required relay sets, zero accepted OK outcomes, CLOSED/AUTH handling, EOSE-bounded historical catch-up, and no REST fallback after relay acceptance.",
-      "tests": ["T-11-002", "T-11-003", "T-11-004", "T-11-005"],
-      "docs": ["docs/user-guide/cli-reference.md", "docs/control-planes.md", "docs/user-guide/getting-started.md"]
+      "tests": [
+        "T-11-002",
+        "T-11-003",
+        "T-11-004",
+        "T-11-005"
+      ],
+      "docs": [
+        "docs/user-guide/cli-reference.md",
+        "docs/control-planes.md",
+        "docs/user-guide/getting-started.md"
+      ]
     },
     {
       "id": "AC-11-003",
       "title": "NIP-34 and SoulFactory relay boundaries are documented and verified",
       "statement": "Repository operations prefer NIP-34 repository relay hints before global Bahia read relays, and SoulFactory ngit publication relays remain separate from OpenClaw runtime/control relays.",
-      "tests": ["T-11-006", "T-11-007"],
-      "docs": ["docs/user-guide/nostr-integration.md", "docs/nostr-commands.md", "docs/event-spec.md"]
+      "tests": [
+        "T-11-006",
+        "T-11-007"
+      ],
+      "docs": [
+        "docs/user-guide/nostr-integration.md",
+        "docs/nostr-commands.md",
+        "docs/event-spec.md"
+      ]
     },
     {
       "id": "AC-11-004",
       "title": "NIP-86 remains an opt-in relay-owner administration boundary",
       "statement": "NIP-86 documentation and tests prove disabled-by-default config, Bahia-owned or Bahia-authorized target checks, payload-bound NIP-98 authorization, and rejection of ContextVM/app mutation methods.",
-      "tests": ["T-11-008"],
-      "docs": ["docs/user-guide/nostr-integration.md", "docs/protocol-compatibility.md", "docs/nostr-commands.md"]
+      "tests": [
+        "T-11-008"
+      ],
+      "docs": [
+        "docs/user-guide/nostr-integration.md",
+        "docs/protocol-compatibility.md",
+        "docs/nostr-commands.md"
+      ]
     },
     {
       "id": "AC-11-005",
-      "title": "Optional relay metadata and DM work is bounded",
-      "statement": "NIP-11/NIP-66 remain advisory metadata only, NIP-51 10050 DM relay-list behavior remains disabled unless a DM feature enables it, and follow-up implementation work is tracked in Beads.",
-      "tests": ["T-11-009"],
-      "docs": ["docs/user-guide/nostr-integration.md", "docs/protocol-compatibility.md", "docs/nostr-event-implementation-guide.md"],
-      "follow_up_beads": ["bahia-8epx.11.5", "bahia-8epx.11.6", "bahia-8epx.11.7"]
+      "title": "Optional relay metadata remains advisory and bounded",
+      "statement": "NIP-11 probing records missing, malformed, and limiting relay metadata as advisory health without changing configured relay policy; NIP-66 kind 10166/30166 events are ingested only from explicitly configured trusted monitor pubkeys and cannot establish Bahia service trust, override trusted service pubkeys, or remove all configured relays. NIP-51 10050 DM relay-list behavior is disabled by default, published only for explicitly configured notification DM service identity lists, and never inferred from browser, ContextVM, or service relay sets.",
+      "tests": [
+        "T-11-009",
+        "T-11-011",
+        "T-11-012",
+        "T-11-013"
+      ],
+      "docs": [
+        "docs/user-guide/nostr-integration.md",
+        "docs/protocol-compatibility.md",
+        "docs/nostr-event-implementation-guide.md"
+      ],
+      "worked_beads": [
+        "bahia-8epx.11.7"
+      ]
     },
     {
       "id": "AC-11-006",
       "title": "Documentation no longer presents legacy 31974 as current bootstrap",
       "statement": "User-facing setup, rollout, protocol, and command docs present ContextVM discovery 11316-11320 plus NIP-51 30002 relay sets as canonical bootstrap and mention legacy 31974 only as historical or migration inventory.",
-      "tests": ["T-11-009", "T-11-010"],
-      "docs": ["docs/user-guide/index.md", "docs/user-guide/nostr-integration.md", "docs/adoption-production-rollout.md", "docs/web-app-setup.md"]
+      "tests": [
+        "T-11-009",
+        "T-11-010"
+      ],
+      "docs": [
+        "docs/user-guide/index.md",
+        "docs/user-guide/nostr-integration.md",
+        "docs/adoption-production-rollout.md",
+        "docs/web-app-setup.md"
+      ]
     }
   ]
 }

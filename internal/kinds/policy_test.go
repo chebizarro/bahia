@@ -59,6 +59,7 @@ func TestIsBahiaProjectionKind(t *testing.T) {
 		{"ContextVM prompts list", ContextVMPromptsList, true},
 		{"NIP-51 relay set", RelaySetDiscovery, true},
 		{"NIP-65 relay list", NIP65RelayList, true},
+		{"NIP-51 DM relay list", NIP51DMRelayList, true},
 		{"SBOM attestation", SBOMAttestation, true},
 		{"Bahia identity", BahiaIdentityDefinition, true},
 		{"Bahia replay checkpoint", BahiaReplayCheckpoint, true},
@@ -129,6 +130,7 @@ func TestIsReadableKind(t *testing.T) {
 		{"NIP-38 status", NIP38Status, true},
 		{"ContextVM tools list", ContextVMToolsList, true},
 		{"NIP-51 relay set", RelaySetDiscovery, true},
+		{"NIP-51 DM relay list", NIP51DMRelayList, true},
 		// Interop kinds
 		{"Loom worker ad", LoomWorkerAdvertisement, true},
 		{"Hive CI workflow run", HiveCIWorkflowRun, true},

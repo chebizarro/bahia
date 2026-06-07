@@ -171,9 +171,38 @@ When enabled, Bahia support code may call only NIP-86 relay-owner methods such a
 
 ### Advisory relay metadata and DM relay lists
 
-NIP-11 relay metadata and optional NIP-66 monitor events are advisory inputs only. They may annotate relay health, capability warnings, or operator-facing ranking, but they do not establish Bahia service trust, override trusted service pubkeys, or authorize removal of all configured relays. The safe default is no configured NIP-66 monitor trust.
+NIP-11 relay metadata and optional NIP-66 monitor events are advisory inputs only. They may annotate relay health, capability warnings, or operator-facing ranking, but they do not establish Bahia service trust, override trusted service pubkeys, or authorize removal of all configured relays. Missing, malformed, or limiting NIP-11 metadata is surfaced as relay health metadata while the configured relay list remains authoritative.
 
-NIP-51 kind `10050` DM relay lists are reserved for explicitly DM-enabled Bahia features and receiving identities. Public browser bootstrap through `bahia-browser-v1` does not imply DM receive readiness, and Bahia does not publish DM relay lists by default.
+NIP-66 relay monitor trust is configured explicitly and is empty by default. When configured, browser DNS relay health uses scoped subscriptions for kind `10166` monitor announcements and kind `30166` relay discovery events from those monitor pubkeys only; untrusted monitors and reports for relays outside the configured relay set are ignored.
+
+```yaml
+nostr:
+  browser_relays:
+    - "wss://browser-relay.example.com"
+  trusted_relay_monitor_pubkeys:
+    - "<64-hex-monitor-pubkey>"
+```
+
+NIP-66 monitor tags such as `R=auth`, `R=payment`, `R=writes`, `N=<nip>`, and `rtt-open` are advisory health/capability annotations. They can warn that a configured relay is limiting, but they cannot add relays, remove relays, or make a monitor pubkey a Bahia service identity.
+
+NIP-51 kind `10050` DM relay lists are reserved for explicitly DM-enabled Bahia features and receiving identities. Public browser bootstrap through `bahia-browser-v1` does not imply DM receive readiness, ContextVM relays are not DM relays, and Bahia does not publish DM relay lists by default.
+
+To publish a Bahia service DM receive list for notification DM flows, operators must explicitly enable notifications DM delivery and configure a DM relay list for the service identity:
+
+```yaml
+notifications:
+  enabled: true
+  nostr_dm: true
+nostr:
+  dm_relay_lists:
+    - enabled: true
+      feature: "notifications"
+      identity: "service"
+      relays:
+        - "wss://dm-relay.example.com"
+```
+
+Only `feature: notifications` with `identity: service` is accepted in the current implementation. The relays above are normalized and published as a service-signed kind `10050` event with `relay` tags. They are not copied from `browser_relays`, `contextvm_relays`, or `service_relays`.
 
 The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstrap and an advisory NIP-65 `10002` relay list for wider Nostr routing. The `10002` list advertises ContextVM request relays as `read` and service publish/backfill relays as `write`; clients must still use ContextVM discovery plus the NIP-51 `30002` relay sets for Bahia bootstrap.
 

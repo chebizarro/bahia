@@ -148,6 +148,28 @@ describe('Nostr system discovery store', () => {
     expect(info._discovery.relay_sets['bahia-contextvm-v1']).toEqual(['wss://contextvm.example/relay']);
   });
 
+  it('does not infer DM receive readiness from browser or ContextVM relay discovery', () => {
+    const normalized = store.normalizeDiscoveryEvents([
+      systemDiscovery({ content: { features: { notifications: true } } }),
+      relaySet('bahia-browser-v1', ['wss://browser.example']),
+      relaySet('bahia-contextvm-v1', ['wss://contextvm.example']),
+      nostrEvent({
+        id: 'dm-relays',
+        kind: 10050,
+        pubkey: trustedPubkey,
+        tags: [['relay', 'wss://dm.example']],
+        content: ''
+      })
+    ], [trustedPubkey]);
+
+    expect(normalized.nostr.browser_relays).toEqual(['wss://browser.example']);
+    expect(normalized.nostr.contextvm_relays).toEqual(['wss://contextvm.example']);
+    expect(normalized.nostr.dm_relays).toBeUndefined();
+    expect(normalized._discovery.relay_sets['bahia-browser-v1']).toEqual(['wss://browser.example']);
+    expect(normalized._discovery.relay_sets['bahia-contextvm-v1']).toEqual(['wss://contextvm.example']);
+    expect(Object.values(normalized._discovery.relay_sets).flat()).not.toContain('wss://dm.example');
+  });
+
   it('falls back to browser relays with degraded metadata when the ContextVM relay set is absent', async () => {
     poolClientHarness.events = [
       systemDiscovery(),

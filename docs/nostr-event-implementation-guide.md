@@ -129,9 +129,9 @@ Use existing relay-list NIPs and existing protocol relay hints. Bahia does not a
 
 - `30002`: NIP-51 relay sets for Bahia browser, ContextVM, service, and other service-authored relay-purpose groups. These remain Bahia's canonical bootstrap relay topology.
 - `10002`: NIP-65 relay lists for general author relay preferences. Bahia publishes a service-authored advisory list with ContextVM request relays marked `read` and service publish/backfill relays marked `write`; it must not replace ContextVM discovery or NIP-51 relay sets.
-- `10050`: DM relay lists when direct-message routing is required.
+- `10050`: DM relay lists only when direct-message routing is explicitly enabled for a Bahia feature and receiving identity; do not infer it from browser, ContextVM, or service relay sets.
 - NIP-34 `30617` repository `relays` tags: repository/ngit routing hints for that repository only.
-- NIP-11 metadata and optional NIP-66 monitor events: advisory relay capability/liveness inputs only; they do not establish Bahia service trust.
+- NIP-11 metadata and optional NIP-66 monitor events: advisory relay capability/liveness inputs only; they do not establish Bahia service trust. NIP-66 `10166`/`30166` ingestion requires explicitly configured monitor pubkeys, uses scoped author and relay filters, and cannot add or remove configured relays.
 - NIP-86: optional HTTP relay-owner administration with NIP-98 payload-bound authorization for explicitly configured Bahia-owned or Bahia-authorized relays. It is not ContextVM mutation transport and does not replace NIP-42 websocket AUTH.
 
 Do not invent relay routing kinds.
@@ -145,7 +145,7 @@ Bahia relay-purpose taxonomy:
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service relay boundary; not automatically public browser bootstrap. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing only; not service-strategy authorization. |
 | Repository/ngit | Repository maintainer or SoulFactory | NIP-34 `30617` `relays` tags and `30618` state | Repository-specific routing hints; branch/state lookups query these relays before global Bahia read relays. Missing repository relays are a degraded fallback, not generic control-plane policy. |
-| DM receive routing | Receiving identity | NIP-51 `10050` | DM-enabled features only; public bootstrap does not imply DM readiness. |
+| DM receive routing | Receiving identity | NIP-51 `10050` | Explicit DM-enabled features and identities only; public bootstrap and ContextVM relay readiness do not imply DM readiness. |
 | FIPS public adverts | FIPS/Bahia operator | Existing FIPS overlay advert contract plus explicit bridge relay config | Public advert boundary; safe only for information intentionally exposed as FIPS overlay metadata. |
 | FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets or explicit bridge relay config | Sensitive endpoint/control boundary; sharing with public relays is an explicit exposure decision. |
 | Relay capability/liveness | Relay or trusted monitor | NIP-11; optional NIP-66 `10166`/`30166` | Advisory metadata; never overrides service pubkey trust or configured relay policy. |
