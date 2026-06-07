@@ -46,26 +46,155 @@ func WithPrivateKey(privateKeyHex string) RelayPoolOption {
 	return func(p *RelayPool) { p.privateKey = privateKeyHex }
 }
 
+// RelayPoolReconfigureResult describes an in-place relay topology update.
+type RelayPoolReconfigureResult struct {
+	Changed      bool
+	PreviousURLs []string
+	CurrentURLs  []string
+	AddedURLs    []string
+	RemovedURLs  []string
+}
+
 // NewRelayPool creates a relay pool for the given URLs.
 // Call Connect() to establish connections and Close() when done.
 func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *RelayPool {
+	normalizedURLs := normalizeRelayURLs(urls)
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &RelayPool{
 		relays:         make(map[string]*managedRelay),
 		relayInfoCache: make(map[string]*nip11.RelayInformationDocument),
 		health:         NewRelayHealthTracker(),
-		urls:           urls,
+		urls:           normalizedURLs,
 		logger:         logger,
 		ctx:            ctx,
 		cancel:         cancel,
 	}
-	for _, url := range urls {
+	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
 	}
 	for _, opt := range opts {
 		opt(p)
 	}
 	return p
+}
+
+// ReconfigureRelayURLs atomically replaces the pool's configured relay topology in place.
+// Existing RelayPool pointers remain valid. URLs are normalized and deduplicated with
+// the same rules as NewRelayPool. If the normalized URL list is unchanged, the call is a
+// no-op and existing relay connections are preserved. If the set is unchanged but order
+// differs, only the configured order is updated and existing relay entries are retained.
+// When the set changes, retained relay entries keep their connection state, removed relay
+// entries are closed and marked disconnected, and added relay entries are created
+// disconnected for the existing publish/subscribe paths to connect on use or on the next
+// Connect call.
+func (p *RelayPool) ReconfigureRelayURLs(urls []string) RelayPoolReconfigureResult {
+	nextURLs := normalizeRelayURLs(urls)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	previousURLs := cloneRelayURLs(p.urls)
+	if sameRelayURLOrder(previousURLs, nextURLs) {
+		return RelayPoolReconfigureResult{
+			Changed:      false,
+			PreviousURLs: previousURLs,
+			CurrentURLs:  cloneRelayURLs(p.urls),
+		}
+	}
+
+	previousSet := relayURLSet(previousURLs)
+	nextSet := relayURLSet(nextURLs)
+	removedURLs := make([]string, 0)
+	for _, url := range previousURLs {
+		if _, keep := nextSet[url]; !keep {
+			removedURLs = append(removedURLs, url)
+		}
+	}
+	addedURLs := make([]string, 0)
+	for _, url := range nextURLs {
+		if _, alreadyConfigured := previousSet[url]; !alreadyConfigured {
+			addedURLs = append(addedURLs, url)
+		}
+	}
+
+	for _, url := range removedURLs {
+		mr, exists := p.relays[url]
+		if !exists {
+			continue
+		}
+		mr.mu.Lock()
+		if mr.relay != nil {
+			mr.relay.Close()
+		}
+		mr.connected = false
+		mr.lastErr = nil
+		p.recordRelayConnectionState(mr.url, false)
+		mr.mu.Unlock()
+		delete(p.relays, url)
+	}
+
+	for _, url := range nextURLs {
+		p.health.GetOrCreate(url)
+		if _, exists := p.relays[url]; !exists {
+			p.relays[url] = &managedRelay{url: url}
+		}
+	}
+	p.urls = nextURLs
+
+	return RelayPoolReconfigureResult{
+		Changed:      true,
+		PreviousURLs: previousURLs,
+		CurrentURLs:  cloneRelayURLs(p.urls),
+		AddedURLs:    addedURLs,
+		RemovedURLs:  removedURLs,
+	}
+}
+
+func normalizeRelayURLs(urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(urls))
+	seen := make(map[string]struct{}, len(urls))
+	for _, url := range urls {
+		normalizedURL := nostr.NormalizeURL(url)
+		if normalizedURL == "" {
+			continue
+		}
+		if _, exists := seen[normalizedURL]; exists {
+			continue
+		}
+		seen[normalizedURL] = struct{}{}
+		normalized = append(normalized, normalizedURL)
+	}
+	return normalized
+}
+
+func cloneRelayURLs(urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	return append([]string(nil), urls...)
+}
+
+func relayURLSet(urls []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(urls))
+	for _, url := range urls {
+		set[url] = struct{}{}
+	}
+	return set
+}
+
+func sameRelayURLOrder(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Connect establishes connections to all configured relays.
@@ -75,8 +204,11 @@ func (p *RelayPool) Connect(ctx context.Context) {
 	defer p.mu.Unlock()
 
 	for _, url := range p.urls {
-		mr := &managedRelay{url: url}
-		p.relays[url] = mr
+		mr, exists := p.relays[url]
+		if !exists {
+			mr = &managedRelay{url: url}
+			p.relays[url] = mr
+		}
 		p.connectOne(ctx, mr)
 	}
 }
@@ -867,15 +999,21 @@ func (p *RelayPool) recordRelayError(relayURL, reason string) {
 // RecordRelayError records relay-level protocol or transport metadata for
 // callers that observe CLOSED/AUTH failures outside the pool internals.
 func (p *RelayPool) RecordRelayError(relayURL, reason string) {
-	if p == nil || strings.TrimSpace(relayURL) == "" {
+	if p == nil {
 		return
 	}
-	p.recordRelayError(relayURL, strings.TrimSpace(reason))
+	normalizedURL := nostr.NormalizeURL(relayURL)
+	if normalizedURL == "" {
+		return
+	}
+	p.recordRelayError(normalizedURL, strings.TrimSpace(reason))
 }
 
 // URLs returns the list of configured relay URLs.
 func (p *RelayPool) URLs() []string {
-	return p.urls
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return cloneRelayURLs(p.urls)
 }
 
 // FetchRelayInfo fetches NIP-11 relay information document for the given relay URL.
@@ -934,7 +1072,7 @@ func (p *RelayPool) FetchAllRelayInfo(ctx context.Context) map[string]*nip11.Rel
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for _, url := range p.urls {
+	for _, url := range p.URLs() {
 		wg.Add(1)
 		go func(relayURL string) {
 			defer wg.Done()
@@ -1044,13 +1182,20 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 		return fmt.Errorf("no private key configured for NIP-42 AUTH")
 	}
 
+	normalizedURL := nostr.NormalizeURL(relayURL)
+	if normalizedURL == "" {
+		return fmt.Errorf("relay not found: %s", relayURL)
+	}
+
 	p.mu.RLock()
-	mr, exists := p.relays[relayURL]
+	mr, exists := p.relays[normalizedURL]
 	p.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("relay not found: %s", relayURL)
+		return fmt.Errorf("relay not found: %s", normalizedURL)
 	}
+
+	relayURL = normalizedURL
 
 	mr.mu.Lock()
 	relay := mr.relay

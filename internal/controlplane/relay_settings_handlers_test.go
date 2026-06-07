@@ -93,6 +93,47 @@ func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
 	}
 }
 
+func TestRelaySettingsApplyDoesNotMutateRuntimeConfig(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	signer, _ := NewPrivateKeySigner(testServiceKey)
+	cfg := &config.Config{Nostr: config.NostrConfig{
+		Relays:          []string{"wss://initial-service.example"},
+		ServiceRelays:   []string{"wss://initial-service.example"},
+		BrowserRelays:   []string{"wss://initial-browser.example"},
+		ContextVMRelays: []string{"wss://initial-contextvm.example"},
+	}}
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, Logger: zap.NewNop()})
+	h.publisher = publisher
+	h.signer = signer
+	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+
+	params := RelayPolicyState{
+		BrowserRelays:   []string{"wss://updated-browser.example"},
+		ContextVMRelays: []string{"wss://updated-contextvm.example"},
+		ServiceRelays:   []string{"wss://updated-service.example"},
+	}
+	raw, _ := json.Marshal(params)
+	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	if err != nil {
+		t.Fatalf("ApplyPolicy error: %v", err)
+	}
+	if result == nil || len(publisher.events) != 5 {
+		t.Fatalf("ApplyPolicy result=%#v published events=%d, want accepted publish without config mutation", result, len(publisher.events))
+	}
+	if got := strings.Join(cfg.Nostr.BrowserRelays, ","); got != "wss://initial-browser.example" {
+		t.Fatalf("BrowserRelays mutated to %q", got)
+	}
+	if got := strings.Join(cfg.Nostr.ContextVMRelays, ","); got != "wss://initial-contextvm.example" {
+		t.Fatalf("ContextVMRelays mutated to %q", got)
+	}
+	if got := strings.Join(cfg.Nostr.ServiceRelays, ","); got != "wss://initial-service.example" {
+		t.Fatalf("ServiceRelays mutated to %q", got)
+	}
+	if got := strings.Join(cfg.Nostr.Relays, ","); got != "wss://initial-service.example" {
+		t.Fatalf("Relays mutated to %q", got)
+	}
+}
+
 func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -102,6 +143,8 @@ func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 		{name: "empty relay topology", policy: `{"browser_relays":[],"contextvm_relays":[],"service_relays":[]}`},
 		{name: "invalid trusted monitor pubkey", policy: `{"browser_relays":["wss://browser.example"],"trusted_relay_monitor_pubkeys":["not-hex"]}`},
 		{name: "invalid relay admin pubkey", policy: `{"browser_relays":["wss://browser.example"],"relay_administration":{"enabled":true,"targets":[{"ref":"sidecar","relay_url":"wss://sidecar.example","authorization":"bahia-owned","administrator_pubkeys":["not-hex"]}]}}`},
+		{name: "external plaintext relay admin relay url", policy: `{"browser_relays":["wss://browser.example"],"relay_administration":{"enabled":true,"targets":[{"ref":"sidecar","relay_url":"ws://relay.example.com","authorization":"bahia_owned","administrator_pubkeys":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}]}}`},
+		{name: "external plaintext relay admin http url", policy: `{"browser_relays":["wss://browser.example"],"relay_administration":{"enabled":true,"targets":[{"ref":"sidecar","relay_url":"wss://relay.example.com","http_url":"http://relay.example.com","authorization":"bahia_owned","administrator_pubkeys":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

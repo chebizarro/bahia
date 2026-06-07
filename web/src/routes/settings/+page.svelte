@@ -2,7 +2,7 @@
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { nostr, saveRelayConfig, getDefaultRelays } from '$lib/nostr/client.js';
-  import { applyRelayPolicy, callRelayAdmin, subscribeRelayPolicyReadModel } from '$lib/nostr/relay-settings-controlplane.js';
+  import { applyRelayPolicy, buildRelayPolicyPayload, callRelayAdmin, subscribeRelayPolicyReadModel } from '$lib/nostr/relay-settings-controlplane.js';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
@@ -89,6 +89,7 @@
   let operatorPolicyDirty = $state(false);
   let pendingCanonicalRelayPolicyState = $state(null);
   let pendingCanonicalRelayPolicyReceivedAt = $state('');
+  let pendingPublishedRelayPolicyPayload = $state(null);
 
   $effect(() => {
     const unsubscribe = nostr.connectionStatus.subscribe(status => {
@@ -124,7 +125,8 @@
     const servicePubkey = nostrConfig?.service_pubkey || '';
     const policyRelays = [
       ...(nostrConfig?.contextvm_relays || []),
-      ...(nostrConfig?.browser_relays || [])
+      ...(nostrConfig?.browser_relays || []),
+      ...(nostrConfig?.service_relays || [])
     ];
     if (!servicePubkey || policyRelays.length === 0) return;
 
@@ -143,9 +145,17 @@
           operatorPolicyHydrationError = '';
           return;
         }
+        if (pendingPublishedRelayPolicyPayload && !relayPolicyPayloadMatchesState(pendingPublishedRelayPolicyPayload, state)) {
+          pendingCanonicalRelayPolicyState = state;
+          pendingCanonicalRelayPolicyReceivedAt = receivedAt;
+          operatorPolicyHydrationStatus = 'canonical 30900 state pending; published mutation awaiting confirmation';
+          operatorPolicyHydrationError = '';
+          return;
+        }
         applyOperatorRelayPolicyState(state, { markClean: true });
         pendingCanonicalRelayPolicyState = null;
         pendingCanonicalRelayPolicyReceivedAt = '';
+        pendingPublishedRelayPolicyPayload = null;
         operatorPolicyHydrationStatus = 'hydrated from canonical 30900 state';
         operatorPolicyHydrationError = '';
         operatorPolicyHydratedAt = receivedAt;
@@ -197,6 +207,12 @@
     operatorPolicyDirty = true;
   }
 
+  function relayPolicyPayloadMatchesState(payload, state) {
+    const canonicalPayload = buildRelayPolicyPayload(payload || {});
+    const canonicalState = buildRelayPolicyPayload(state || {});
+    return JSON.stringify(canonicalPayload) === JSON.stringify(canonicalState);
+  }
+
   function applyPendingCanonicalRelayPolicy() {
     if (!pendingCanonicalRelayPolicyState) return;
     applyOperatorRelayPolicyState(pendingCanonicalRelayPolicyState, { markClean: true });
@@ -205,6 +221,7 @@
     operatorPolicyHydratedAt = pendingCanonicalRelayPolicyReceivedAt || new Date().toISOString();
     pendingCanonicalRelayPolicyState = null;
     pendingCanonicalRelayPolicyReceivedAt = '';
+    pendingPublishedRelayPolicyPayload = null;
   }
 
   function keepLocalRelayPolicyEdits() {
@@ -245,11 +262,14 @@
   async function saveOperatorRelayPolicy() {
     operatorPolicySaving = true;
     try {
-      const response = await applyRelayPolicy({ policy: buildOperatorRelayPolicy() });
+      const policy = buildRelayPolicyPayload(buildOperatorRelayPolicy());
+      const response = await applyRelayPolicy({ policy });
       const accepted = response?.acceptedRelays?.length || response?.ok?.length || 0;
       operatorPolicyDirty = false;
+      pendingPublishedRelayPolicyPayload = policy;
       pendingCanonicalRelayPolicyState = null;
       pendingCanonicalRelayPolicyReceivedAt = '';
+      operatorPolicyHydrationStatus = 'relay policy mutation accepted; awaiting canonical 30900 confirmation';
       toast.success(`Relay policy mutation accepted${accepted ? ` by ${accepted} relay${accepted === 1 ? '' : 's'}` : ''}`);
     } catch (err) {
       toast.error(err?.message || 'Failed to publish relay policy mutation');

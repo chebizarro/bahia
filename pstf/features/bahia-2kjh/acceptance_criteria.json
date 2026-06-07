@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-2kjh",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "RelayPool can atomically reconfigure normalized relay URLs in place, preserving retained relays, closing removed relays, adding new relays disconnected, and returning immutable URL snapshots."
+    },
+    {
+      "id": "AC-2",
+      "description": "Relay-settings hydration exposes a validated canonical snapshot callback so runtime topology consumers react to EVENT handling rather than polling shared config."
+    },
+    {
+      "id": "AC-3",
+      "description": "App relay topology convergence updates control-plane and service pools from canonical relay-settings snapshots while preserving sidecar precedence, Loom relay inclusion, and existing pools when topology-empty snapshots arrive."
+    },
+    {
+      "id": "AC-4",
+      "description": "Deterministic tests verify topology convergence without sleeps, polling, or config.Config mutation."
+    }
+  ]
+}

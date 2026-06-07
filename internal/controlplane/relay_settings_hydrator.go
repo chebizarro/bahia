@@ -26,11 +26,14 @@ var (
 	}
 )
 
+type RelaySettingsSnapshotHandler func(context.Context, RelayPolicyState) error
+
 type RelaySettingsHydratorConfig struct {
-	Pool          *nostradapter.RelayPool
-	ServicePubkey string
-	Logger        *zap.Logger
-	Now           func() time.Time
+	Pool              *nostradapter.RelayPool
+	ServicePubkey     string
+	Logger            *zap.Logger
+	Now               func() time.Time
+	OnSnapshotApplied RelaySettingsSnapshotHandler
 }
 
 // RelaySettingsHydrator backfills and tails the canonical relay-settings state
@@ -41,6 +44,7 @@ type RelaySettingsHydrator struct {
 	servicePubkey string
 	logger        *zap.Logger
 	now           func() time.Time
+	onSnapshot    RelaySettingsSnapshotHandler
 
 	mu             sync.Mutex
 	seenEventIDs   map[string]struct{}
@@ -65,6 +69,7 @@ func NewRelaySettingsHydrator(cfg RelaySettingsHydratorConfig) *RelaySettingsHyd
 		servicePubkey: strings.ToLower(strings.TrimSpace(cfg.ServicePubkey)),
 		logger:        logger.Named("relay-settings-hydrator"),
 		now:           now,
+		onSnapshot:    cfg.OnSnapshotApplied,
 		seenEventIDs:  make(map[string]struct{}),
 	}
 }
@@ -212,6 +217,11 @@ func (h *RelaySettingsHydrator) handleEvent(ctx context.Context, ev *gonostr.Eve
 		return false
 	}
 	h.storeSnapshot(*state)
+	if h.onSnapshot != nil {
+		if err := h.onSnapshot(ctx, cloneRelayPolicyState(*state)); err != nil {
+			h.logger.Warn("relay settings snapshot callback failed", zap.String("event_id", ev.ID), zap.Error(err))
+		}
+	}
 	h.logger.Info("hydrated relay settings policy snapshot from canonical state", zap.String("event_id", ev.ID), zap.Int("browser_relays", len(state.BrowserRelays)), zap.Int("contextvm_relays", len(state.ContextVMRelays)), zap.Int("service_relays", len(state.ServiceRelays)))
 	return true
 }

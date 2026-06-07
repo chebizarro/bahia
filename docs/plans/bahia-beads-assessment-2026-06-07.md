@@ -216,3 +216,7 @@ If any element is missing, keep `bahia-sqfx.5` open and reclassify it as actiona
 - `pstf/features/NOSTR_NATIVE_CONTEXTVM_MIGRATION/verification_report.md`
 - `pstf/features/AI_FABRIC_HF_VLLM_DEPLOYMENT/verification_report.md`
 - `pstf/features/AI_FABRIC_SIGNER_FIRST_PROTOCOL/verification_report.md`
+
+## Relay Blocker Closeout — 2026-06-07
+- `bahia-2kjh`: closeout evidence added under `pstf/features/bahia-2kjh/`; targeted backend gate passed for relay-pool reconfiguration, hydrator snapshot callbacks, topology coordinator convergence, and relay-settings/NIP-86 validation seams.
+- `bahia-ho1r`: follow-up web evidence resolved the dirty-edit/canonical-state blocker by using current valid Nostr timestamps in `web/tests/e2e/settings-relay-visibility.spec.js`; unit relay-settings helpers pass (8 tests), dirty-edit E2E passes (1 test), and the full settings relay visibility E2E passes (4 tests). PSTF defect `DEF-2026-06-07-DIRTY-CANONICAL-E2E` is resolved and `bahia-ho1r` is eligible for Beads closeout.

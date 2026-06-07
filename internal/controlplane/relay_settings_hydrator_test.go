@@ -199,6 +199,56 @@ func TestRelaySettingsHydratorHandlesClosedAuthWithoutPolling(t *testing.T) {
 	}
 }
 
+func TestRelaySettingsHydratorInvokesSnapshotCallbackAfterStorage(t *testing.T) {
+	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
+	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0).UTC(), RelayPolicyState{
+		Schema:          RelaySettingsSchema,
+		ContextVMRelays: []string{"wss://contextvm.example"},
+		ServiceRelays:   []string{"wss://service.example"},
+	})
+	callbackCount := 0
+	var callbackSnapshot RelayPolicyState
+	var h *RelaySettingsHydrator
+	h = NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
+		ServicePubkey: servicePubkey,
+		Logger:        zap.NewNop(),
+		Now:           func() time.Time { return time.Unix(2_000, 0).UTC() },
+		OnSnapshotApplied: func(_ context.Context, state RelayPolicyState) error {
+			callbackCount++
+			callbackSnapshot = state
+			stored, ok := h.Snapshot()
+			if !ok {
+				t.Fatalf("callback ran before hydrator stored the snapshot")
+			}
+			if len(stored.ServiceRelays) != 1 || stored.ServiceRelays[0] != "wss://service.example" {
+				t.Fatalf("stored snapshot not visible to callback: %#v", stored.ServiceRelays)
+			}
+			return nil
+		},
+	})
+
+	if !h.handleEvent(context.Background(), event) {
+		t.Fatalf("expected canonical relay settings event to apply")
+	}
+	if callbackCount != 1 {
+		t.Fatalf("callback count = %d, want 1", callbackCount)
+	}
+	if got := callbackSnapshot.ContextVMRelays; len(got) != 1 || got[0] != "wss://contextvm.example" {
+		t.Fatalf("callback received unexpected snapshot: %#v", got)
+	}
+	callbackSnapshot.ServiceRelays[0] = "wss://caller-mutated.example"
+	stored, ok := h.Snapshot()
+	if !ok || stored.ServiceRelays[0] != "wss://service.example" {
+		t.Fatalf("callback snapshot mutation leaked into hydrator state: %#v", stored.ServiceRelays)
+	}
+	if h.handleEvent(context.Background(), event) {
+		t.Fatalf("duplicate canonical event should not apply")
+	}
+	if callbackCount != 1 {
+		t.Fatalf("duplicate event invoked callback: count=%d", callbackCount)
+	}
+}
+
 func signedRelaySettingsStateEvent(t *testing.T, createdAt time.Time, state RelayPolicyState) *nostr.Event {
 	t.Helper()
 	return signedRelaySettingsStateEventWithKey(t, testServiceKey, createdAt, state)

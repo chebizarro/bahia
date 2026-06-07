@@ -1,0 +1,23 @@
+{
+  "feature_id": "RELAY_SETTINGS_UI_NIP86",
+  "defects": [
+    {
+      "id": "DEF-2026-06-07-DIRTY-CANONICAL-E2E",
+      "bead": "bahia-ho1r",
+      "status": "resolved",
+      "observed_behavior": "Earlier closeout evidence found `npm run test:e2e -- settings-relay-visibility.spec.js` failed because the dirty-edit/canonical-state test expected `canonical 30900 state pending; local edits preserved` after injecting ancient created_at values (`20` and `30`) that the mock relay normalized non-deterministically.",
+      "intended_behavior": "When an operator has dirty relay-policy inputs, a newer trusted canonical 30900 relay-settings EVENT must not overwrite the dirty inputs; the UI must surface pending canonical state with explicit Apply Canonical State / Keep Local Edits actions.",
+      "resolution": "Web closeout fixed the E2E test data in `web/tests/e2e/settings-relay-visibility.spec.js` to use current valid Nostr timestamps (`now - 1`, `now`) instead of ancient `20`/`30` values. The dirty-edit E2E and full settings relay visibility E2E now pass.",
+      "acceptance_criteria": [
+        "The dirty-edit/canonical-state E2E test passes without sleeps or polling-based completion.",
+        "The canonical hydration path still subscribes through advertised service relays and protects stale post-publish canonical overwrite behavior.",
+        "Bead bahia-ho1r is closed only after the full settings relay visibility E2E gate passes or the failing assertion is proven to be an invalid test assumption with updated PSTF evidence."
+      ],
+      "verification": [
+        "PASS: `npm run test:e2e -- settings-relay-visibility.spec.js --grep \"preserves dirty operator relay edits\"` (1 passed).",
+        "PASS: `npm run test:unit -- --run tests/unit/relay-settings-controlplane.test.js` (8 passed).",
+        "PASS: `npm run test:e2e -- settings-relay-visibility.spec.js` (4 passed)."
+      ]
+    }
+  ]
+}

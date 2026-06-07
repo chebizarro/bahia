@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-2kjh",
+  "tests": [
+    {
+      "criterion": "AC-1",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/adapters/nostr -run TestRelayPool",
+      "proves": "RelayPool normalizes/deduplicates URLs, returns immutable snapshots, normalizes relay error/AUTH lookup URLs, and reconfigures changed topology while preserving retained relay state and closing removed relays."
+    },
+    {
+      "criterion": "AC-2 AC-3 AC-4",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/app ./internal/controlplane -run 'TestRelayTopologyCoordinator|TestRelaySettings'",
+      "proves": "Hydrator snapshot callbacks and the app relay topology coordinator apply canonical 30900 relay-settings snapshots to control-plane/service pools, retain sidecar precedence and Loom relays, avoid collapsing pools for topology-empty snapshots, and avoid mutating shared config."
+    },
+    {
+      "criterion": "AC-1 AC-2 AC-3 AC-4",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/adapters/nostr ./internal/app ./internal/controlplane -run 'TestRelayPool|TestRelayTopologyCoordinator|TestRelaySettings|TestRelayAdmin'",
+      "proves": "Combined closeout gate for relay-pool topology convergence and relay-settings/NIP-86 validation seams."
+    }
+  ]
+}

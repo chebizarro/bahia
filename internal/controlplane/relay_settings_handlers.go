@@ -130,7 +130,6 @@ func (h *RelaySettingsHandlers) ApplyPolicy(ctx context.Context, req ContextVMRe
 	if err := normalizeAndValidateRelayPolicy(&state); err != nil {
 		return nil, err
 	}
-	applyRelayPolicyToRuntimeConfig(h.cfg, state)
 	if err := h.publishState(ctx, req, state, "updated"); err != nil {
 		return nil, err
 	}
@@ -374,11 +373,11 @@ func normalizeAndValidateRelayPolicyForSettings(state *RelayPolicyState, require
 		if target.Ref == "" || target.RelayURL == "" {
 			return fmt.Errorf("relay_administration.targets[%d] requires ref and relay_url", i)
 		}
-		if err := validateWebsocketRelayURLForSettings(target.RelayURL); err != nil {
+		if err := validateRelayAdministrationRelayURLForSettings(target.RelayURL); err != nil {
 			return fmt.Errorf("relay_administration target %q: %w", target.Ref, err)
 		}
 		if target.HTTPURL != "" {
-			if err := validateHTTPURLForSettings(target.HTTPURL); err != nil {
+			if err := validateRelayAdministrationHTTPURLForSettings(target.HTTPURL); err != nil {
 				return fmt.Errorf("relay_administration target %q: %w", target.Ref, err)
 			}
 		}
@@ -390,23 +389,6 @@ func normalizeAndValidateRelayPolicyForSettings(state *RelayPolicyState, require
 		}
 	}
 	return nil
-}
-
-func applyRelayPolicyToRuntimeConfig(cfg *config.Config, state RelayPolicyState) {
-	cfg.Nostr.BrowserRelays = cloneStrings(state.BrowserRelays)
-	cfg.Nostr.ContextVMRelays = cloneStrings(state.ContextVMRelays)
-	cfg.Nostr.ServiceRelays = cloneStrings(state.ServiceRelays)
-	cfg.Nostr.Relays = cloneStrings(state.ServiceRelays)
-	cfg.Nostr.TrustedRelayMonitorPubkeys = cloneStrings(state.TrustedRelayMonitorPubkeys)
-	cfg.Nostr.DMRelayLists = make([]config.DMRelayListConfig, 0, len(state.DMRelayLists))
-	for _, list := range state.DMRelayLists {
-		cfg.Nostr.DMRelayLists = append(cfg.Nostr.DMRelayLists, config.DMRelayListConfig{Enabled: list.Enabled, Feature: list.Feature, Identity: list.Identity, Relays: cloneStrings(list.Relays)})
-	}
-	cfg.Nostr.RelayAdministration.Enabled = state.RelayAdministration.Enabled
-	cfg.Nostr.RelayAdministration.Targets = make([]config.RelayAdministrationTarget, 0, len(state.RelayAdministration.Targets))
-	for _, target := range state.RelayAdministration.Targets {
-		cfg.Nostr.RelayAdministration.Targets = append(cfg.Nostr.RelayAdministration.Targets, config.RelayAdministrationTarget{Ref: target.Ref, RelayURL: target.RelayURL, HTTPURL: target.HTTPURL, Authorization: target.Authorization, AdministratorPubkeys: cloneStrings(target.AdministratorPubkeys)})
-	}
 }
 
 func relayAdministrationTargetConfigured(cfg *config.Config, ref string) bool {
@@ -475,15 +457,49 @@ func validateWebsocketRelayURLForSettings(raw string) error {
 	return nil
 }
 
-func validateHTTPURLForSettings(raw string) error {
+func validateRelayAdministrationRelayURLForSettings(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("HTTP URL %q must be absolute", raw)
+		return fmt.Errorf("relay administration URL %q must be an absolute ws/wss URL", raw)
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return fmt.Errorf("HTTP URL %q must use http or https", raw)
+	switch parsed.Scheme {
+	case "wss":
+		return nil
+	case "ws":
+		if isLoopbackHostForSettings(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("relay administration URL %q uses ws; external relay administration targets must use wss", raw)
+	default:
+		return fmt.Errorf("relay administration URL %q must use ws or wss", raw)
 	}
-	return nil
+}
+
+func validateRelayAdministrationHTTPURLForSettings(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("relay administration HTTP URL %q must be absolute", raw)
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHostForSettings(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("relay administration HTTP URL %q uses http; external relay administration targets must use https", raw)
+	default:
+		return fmt.Errorf("relay administration HTTP URL %q must use http or https", raw)
+	}
+}
+
+func isLoopbackHostForSettings(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneStrings(values []string) []string {

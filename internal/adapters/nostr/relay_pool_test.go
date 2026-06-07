@@ -217,6 +217,17 @@ func TestRelayPoolRecordRelayErrorSurfacesAuthUnavailableMetadata(t *testing.T) 
 	require.False(t, snapshot.Relays[0].Healthy)
 }
 
+func TestRelayPoolRecordRelayErrorNormalizesRelayURL(t *testing.T) {
+	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop())
+	pool.RecordRelayError("relay.example", "auth-required: sign in")
+
+	snapshot := pool.HealthSnapshot()
+	require.Len(t, snapshot.Relays, 1)
+	require.Equal(t, "wss://relay.example", snapshot.Relays[0].URL)
+	require.Equal(t, 1, snapshot.Relays[0].Errors)
+	require.Equal(t, "auth-required: sign in", snapshot.Relays[0].LastError)
+}
+
 func TestRelayPoolSubscribeAuthRequiredWithoutCredentialsRecordsAuthUnavailableMetadata(t *testing.T) {
 	const relayURL = "wss://auth.example"
 	pool := newRelayPoolWithManagedRelays(relayURL)
@@ -269,9 +280,131 @@ func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {
 	require.Equal(t, privateKey, publisher.pool.privateKey)
 }
 
+func TestNewRelayPoolNormalizesAndDeduplicatesConfiguredURLs(t *testing.T) {
+	pool := NewRelayPool([]string{
+		" https://Relay.Example/path/ ",
+		"wss://relay.example/path",
+		"relay.example/path",
+		"",
+	}, zap.NewNop())
+
+	require.Equal(t, []string{"wss://relay.example/path"}, pool.URLs())
+	require.Equal(t, 1, pool.health.TotalCount())
+}
+
+func TestRelayPoolURLsReturnsImmutableSnapshot(t *testing.T) {
+	pool := NewRelayPool([]string{"wss://relay.example", "wss://other.example"}, zap.NewNop())
+	urls := pool.URLs()
+	urls[0] = "wss://mutated.example"
+
+	require.Equal(t, []string{"wss://relay.example", "wss://other.example"}, pool.URLs())
+}
+
+func TestRelayPoolAuthenticateRelayNormalizesRelayURLForLookup(t *testing.T) {
+	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop(), WithPrivateKey(gonostr.GeneratePrivateKey()))
+	pool.relays["wss://relay.example"] = &managedRelay{url: "wss://relay.example"}
+
+	err := pool.AuthenticateRelay(context.Background(), "relay.example")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "relay not connected: wss://relay.example")
+	require.NotContains(t, err.Error(), "relay not found")
+}
+
+func TestRelayPoolReconfigureRelayURLsNoopsForUnchangedURLOrder(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("https://Relay-One.example/", "wss://relay-two.example")
+	relayOne := pool.relays["wss://relay-one.example"]
+	relayTwo := pool.relays["wss://relay-two.example"]
+	markRelayConnectedForSubscribeTest(pool, "wss://relay-one.example")
+	markRelayConnectedForSubscribeTest(pool, "wss://relay-two.example")
+
+	result := pool.ReconfigureRelayURLs([]string{
+		"relay-one.example",
+		"wss://relay-two.example/",
+		"wss://relay-one.example/",
+	})
+
+	require.False(t, result.Changed)
+	require.Equal(t, []string{"wss://relay-one.example", "wss://relay-two.example"}, result.PreviousURLs)
+	require.Equal(t, []string{"wss://relay-one.example", "wss://relay-two.example"}, result.CurrentURLs)
+	require.Empty(t, result.AddedURLs)
+	require.Empty(t, result.RemovedURLs)
+	require.Equal(t, []string{"wss://relay-one.example", "wss://relay-two.example"}, pool.URLs())
+	require.Same(t, relayOne, pool.relays["wss://relay-one.example"])
+	require.Same(t, relayTwo, pool.relays["wss://relay-two.example"])
+	require.True(t, pool.relays["wss://relay-one.example"].connected)
+	require.True(t, pool.relays["wss://relay-two.example"].connected)
+}
+
+func TestRelayPoolReconfigureRelayURLsUpdatesOrderForSameSet(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://relay-one.example", "wss://relay-two.example")
+	relayOne := pool.relays["wss://relay-one.example"]
+	relayTwo := pool.relays["wss://relay-two.example"]
+	markRelayConnectedForSubscribeTest(pool, "wss://relay-one.example")
+	markRelayConnectedForSubscribeTest(pool, "wss://relay-two.example")
+	relayOneConn := relayOne.relay
+	relayTwoConn := relayTwo.relay
+
+	result := pool.ReconfigureRelayURLs([]string{
+		"wss://RELAY-TWO.example/",
+		"relay-one.example",
+	})
+
+	require.True(t, result.Changed)
+	require.Equal(t, []string{"wss://relay-one.example", "wss://relay-two.example"}, result.PreviousURLs)
+	require.Equal(t, []string{"wss://relay-two.example", "wss://relay-one.example"}, result.CurrentURLs)
+	require.Empty(t, result.AddedURLs)
+	require.Empty(t, result.RemovedURLs)
+	require.Equal(t, []string{"wss://relay-two.example", "wss://relay-one.example"}, pool.URLs())
+	require.Same(t, relayOne, pool.relays["wss://relay-one.example"])
+	require.Same(t, relayTwo, pool.relays["wss://relay-two.example"])
+	require.Same(t, relayOneConn, pool.relays["wss://relay-one.example"].relay)
+	require.Same(t, relayTwoConn, pool.relays["wss://relay-two.example"].relay)
+	require.NoError(t, relayOneConn.Context().Err())
+	require.NoError(t, relayTwoConn.Context().Err())
+	require.True(t, pool.relays["wss://relay-one.example"].connected)
+	require.True(t, pool.relays["wss://relay-two.example"].connected)
+}
+
+func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://old.example", "wss://keep.example")
+	keepRelay := pool.relays["wss://keep.example"]
+	markRelayConnectedForSubscribeTest(pool, "wss://old.example")
+	markRelayConnectedForSubscribeTest(pool, "wss://keep.example")
+	oldRelay := pool.relays["wss://old.example"].relay
+
+	result := pool.ReconfigureRelayURLs([]string{
+		"https://KEEP.example/",
+		"wss://new.example/",
+		"new.example",
+	})
+
+	require.True(t, result.Changed)
+	require.Equal(t, []string{"wss://old.example", "wss://keep.example"}, result.PreviousURLs)
+	require.Equal(t, []string{"wss://keep.example", "wss://new.example"}, result.CurrentURLs)
+	require.Equal(t, []string{"wss://new.example"}, result.AddedURLs)
+	require.Equal(t, []string{"wss://old.example"}, result.RemovedURLs)
+	require.Equal(t, []string{"wss://keep.example", "wss://new.example"}, pool.URLs())
+	require.NotContains(t, pool.relays, "wss://old.example")
+	require.Error(t, oldRelay.Context().Err())
+	require.Same(t, keepRelay, pool.relays["wss://keep.example"])
+	require.True(t, pool.relays["wss://keep.example"].connected)
+	require.NotNil(t, pool.relays["wss://new.example"])
+	require.False(t, pool.relays["wss://new.example"].connected)
+
+	snapshot := pool.HealthSnapshot()
+	require.Equal(t, 2, snapshot.Total)
+	statuses := make(map[string]RelayStatus, len(snapshot.Relays))
+	for _, relay := range snapshot.Relays {
+		statuses[relay.URL] = relay
+	}
+	require.NotContains(t, statuses, "wss://old.example")
+	require.Contains(t, statuses, "wss://keep.example")
+	require.Contains(t, statuses, "wss://new.example")
+}
+
 func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
 	pool := NewRelayPool(urls, zap.NewNop())
-	for _, url := range urls {
+	for _, url := range pool.URLs() {
 		pool.relays[url] = &managedRelay{url: url}
 	}
 	return pool

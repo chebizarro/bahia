@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-2kjh",
+  "bead": "bahia-2kjh",
+  "title": "Atomic relay-pool reconfiguration from hydrated relay-settings policy",
+  "observed_behavior_before": [
+    "Canonical 30900 relay-settings hydration stored a safe snapshot, but relay pools were constructed before hydration and did not converge to hydrated ContextVM/service relay topology."
+  ],
+  "intended_behavior": [
+    "RelayPool exposes an in-place, locked reconfiguration API that normalizes and deduplicates relay URLs, preserves unchanged relay entries, closes removed entries, and adds new entries without replacing pool pointers.",
+    "The relay-settings hydrator invokes a snapshot callback after trusted canonical 30900 state is validated and stored.",
+    "The app relay topology coordinator applies hydrated ContextVM and service relay policy to already-constructed control-plane and service pools without mutating shared config.Config and without polling or timeout-based convergence."
+  ],
+  "out_of_scope": [
+    "Changing relay-settings event kinds or ContextVM mutation methods.",
+    "Changing NIP-86 authorization semantics beyond the separate bahia-ho1r validation closeout.",
+    "Replacing existing reconnect/backoff behavior."
+  ]
+}
