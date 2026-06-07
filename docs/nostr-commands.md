@@ -80,6 +80,16 @@ Use these rules:
 5. Apply replaceable semantics for `(kind, pubkey, d)` on `30900`, `30078`, `11316`-`11320`, and `30002`.
 6. Treat relay `OK`, `CLOSED`, and `AUTH` messages as protocol outcomes, not log noise.
 
+## Desired-State Runtime Metadata
+
+Compose/Docker desired-state deploys do not add new Nostr kinds or d-tag coordinates. They enrich existing ContextVM responses and canonical observables with optional metadata that older readers can ignore:
+
+- Status `step` values: `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`.
+- Result/state fields or tags when available: `desired_hash`, `renderer`, `target`, runtime target/apply summaries, environment or unit revision metadata, and `observation_id`.
+- Sanitized content only: no resolved secret values, generated `.bahia/env/*.env` contents, raw Docker transport material, Docker TLS material, bearer credentials, or NIP-98 credentials.
+
+Historical `6961`/`7961`/`7962` and `31961`/`31967`/`31968` shapes may contain analogous fields in migration fixtures, but production clients follow `30315`, ContextVM responses, `30900`, `4903`, and `30078`.
+
 ## Canonical Observable Tags
 
 Use tags for routing and correlation so subscribers do not need to parse content to filter:
@@ -97,6 +107,8 @@ Use tags for routing and correlation so subscribers do not need to parse content
 - `["intent", "<intent_id>"]`
 - `["run", "<run_id>"]`
 - `["status", "running" | "success" | "failed" | ...]`
+- `["step", "building_desired_state" | "locking_environment" | "rendering" | "applying" | "observing" | "projecting" | ...]`
+- `["desired_hash", "<sha256:...>"]`, `["renderer", "compose" | "docker" | ...]`, and `["target", "<stable-runtime-service-key>"]` when desired-state metadata is available
 
 ## Discovery and Relay Sets
 

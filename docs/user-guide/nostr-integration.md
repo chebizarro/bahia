@@ -99,6 +99,8 @@ The migration is idempotent and safe to run every startup. Non-dry-run migration
 
 For `(kind, pubkey, d-tag)`, the **latest event wins**.
 
+Desired-state runtime deploys add metadata to existing ContextVM responses and canonical observables instead of adding new kinds. Compose/Docker status events may include the steps `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`; result/state projections may include `desired_hash`, `renderer`, `target`, revision/apply summaries, and `observation_id`. These fields are optional and backward-compatible. Public relay content is sanitized: secret values, generated Compose env-file contents, raw Docker endpoint URLs, Docker TLS material, bearer credentials, and NIP-98 credentials are not projected.
+
 Worker resource-pressure and cleanup projections use the same canonical state layer:
 
 | Schema | Domain | Purpose |
@@ -326,6 +328,8 @@ When a page has route documentation metadata, the assistant composer shows a dis
 The backend resolves `docs:<topic>` and `bahia://docs/<topic>` references from the central `docs/user-guide` catalog into a bounded `Documentation References` section before calling the assistant model. Missing docs refs are reported in context as unresolved references; they do not convert the prompt into a failed control-plane mutation. If the assistant later performs or follows an operational command, durable progress and terminal truth still come from the canonical observable event stream described above.
 
 ### Example: Deployment Follow
+
+Desired-state deploy followers should display optional `step`, `desired_hash`, `renderer`, `target`, and `observation_id` metadata when present, but should not require those fields to conclude whether an event is valid. The ContextVM response is an acknowledgment; completion and convergence still come from the subscribed observable stream.
 
 ```javascript
 // Subscribe to deployment events

@@ -103,7 +103,9 @@ Nested runtime target settings use double underscores in environment variables:
 export BAHIA_RUNTIME__DEFAULT__TYPE=compose
 export BAHIA_RUNTIME__DEFAULT__EXECUTION_MODE=cli
 export BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR=/srv/bahia/compose/default
+export BAHIA_RUNTIME__DEFAULT__BAHIA_OWNED=true
 export BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/compose/production
+export BAHIA_RUNTIME__ENVIRONMENTS__production__BAHIA_OWNED=false
 export BAHIA_RUNTIME__ENVIRONMENTS__production__ENDPOINT_REF=prod-docker
 export BAHIA_RUNTIME__ENDPOINTS__prod-docker__DOCKER_HOST=tcp://docker-prod.example.com:2376
 export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CA_CERT_FILE=/etc/bahia/docker/ca.pem
@@ -127,6 +129,7 @@ runtime:
     execution_mode: cli
     docker_host: unix:///var/run/docker.sock
     compose_dir: /srv/bahia/compose/default
+    bahia_owned: true
 
   endpoints:
     prod-docker:
@@ -140,12 +143,16 @@ runtime:
   environments:
     staging:
       compose_dir: /srv/bahia/compose/staging
+      # false records that the operator has not approved authoritative generation.
+      # A valid .bahia/render-state.json marker can still prove Bahia ownership.
+      bahia_owned: false
     production:
       endpoint_ref: prod-docker
       compose_dir: /srv/bahia/compose/production
+      bahia_owned: false
 ```
 
-Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `podman_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
+Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `podman_host`, `compose_dir`, `bahia_owned`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
 
 Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
 
@@ -159,6 +166,10 @@ Runtime apply results report `execution_mode`:
 Compose compatibility mode is not implicit. Any Compose runtime target must set `execution_mode: cli` (or `BAHIA_RUNTIME__...__EXECUTION_MODE=cli`). Docker and Podman use `engine_api`; operators should not configure Compose as an Engine API target because Compose project convergence is CLI-backed.
 
 In desired-state apply, Compose business logic remains above the CLI transport. Bahia selects the target deployment unit, renders the unit-owned full Compose project into that unit's `compose_dir`, enforces the Compose ownership gate for that directory before writing, validates the staged render through the Compose executor control seam, and then applies the full project with `up -d --remove-orphans`. The desired-state path does not use per-service image environment substitution, service-scoped `up`, or unconditional `--force-recreate`.
+
+Compose ownership is recordable per runtime target with `bahia_owned`. Set `bahia_owned: true` only after an operator has confirmed the directory is dedicated to Bahia authoritative generation. `bahia_owned: false` or an unset value does not grant ownership; Bahia will still allow the target if the directory contains a valid `.bahia/render-state.json` marker written by prior Bahia rendering. Unknown, missing, malformed, or operator-authored directories are blocked before staging or file writes. Checked-in staging/production examples record `bahia_owned: false`, so rollout remains blocked until an operator confirms ownership or Bahia has written a valid marker.
+
+Generated Compose env files live under `.bahia/env/` inside the Bahia-owned project. They may contain resolved secret values required by Docker Compose, so operators must protect the directory with deployment-appropriate ownership and permissions and treat it as runtime secret material. Nostr events, apply metadata summaries, logs, desired-state snapshots, and normalized observations must use redacted secret refs or key-presence metadata instead of those values.
 
 ## Deployment Units and Targeting
 
@@ -254,17 +265,9 @@ export BAHIA_RUNTIME__DEFAULT__TYPE=podman
 export BAHIA_RUNTIME__DEFAULT__PODMAN_HOST=unix:///run/user/1000/podman/podman.sock
 ```
 
-For Compose, Bahia intentionally uses **one Compose project directory per Bahia environment**. Multiple environments can point to different `compose_dir` values, but services in the same environment share that Compose project.
+For Compose desired-state deploys, Bahia intentionally owns the generated Compose project for the environment or deployment unit. Multiple environments can point to different `compose_dir` values, and services in the same Compose-owned unit share that generated project. Bahia writes the service image directly into the rendered model from the desired-state snapshot; operators should not rely on the old service-name-derived `<SERVICE>_IMAGE` override pattern for desired-state-managed deploys.
 
-Compose files should expose image overrides using the service-name-derived environment variable pattern. For example, service `agent-api` maps to `AGENT_API_IMAGE`:
-
-```yaml
-services:
-  agent-api:
-    image: ${AGENT_API_IMAGE:-registry.example.com/agent-api:latest}
-```
-
-When running Bahia inside a container with the Compose runtime, mount both `/var/run/docker.sock` and the configured compose project directory at the same path used by `runtime.default.compose_dir` or the per-environment `compose_dir`.
+When running Bahia inside a container with the Compose runtime, mount both `/var/run/docker.sock` and the configured Compose project directory at the same path used by `runtime.default.compose_dir` or the per-environment `compose_dir`. The mounted directory must be Bahia-owned or carry a valid `.bahia/render-state.json` marker before authoritative generation is allowed.
 
 ## OCI Registry Configuration
 

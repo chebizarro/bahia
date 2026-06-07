@@ -914,7 +914,17 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 		return
 	}
 
-	// Execute rollback
+	if r.runtimeLifecycle == nil {
+		logger.Error("runtime lifecycle service is not configured")
+		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
+		return
+	}
+
+	r.publishStatus(ctx, event, "creating_rollback_intent", "Creating rollback deployment intent")
+
+	// Select the rollback artifact by creating an approved rollback intent, then
+	// execute that artifact through the same desired-state deploy helper used by
+	// normal deploy requests and direct runtime action=deploy.
 	intent, err := r.registry.Rollback(ctx, serviceID, envID, event.PubKey)
 	if err != nil {
 		logger.Error("rollback failed", "error", err)
@@ -922,8 +932,92 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 		return
 	}
 
-	logger.Info("rollback initiated", "intent_id", intent.ID)
+	desiredState := intent.DesiredState
+	if desiredState == nil || intent.DesiredHash == "" {
+		desiredState, err = r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, envID, intent.ArtifactID)
+		if err != nil {
+			logger.Error("failed to build rollback desired state", "error", err)
+			r.recordRollbackPreparationFailure(ctx, logger, event, intent, err)
+			r.publishError(ctx, event, "desired_state_error", err.Error())
+			return
+		}
+		intent.DesiredState = desiredState
+		intent.DesiredHash = desiredState.DesiredHash
+	}
+
+	startedAt := time.Now().UTC()
+	run := &domain.DeploymentRun{
+		ID:                 uuid.New(),
+		DeploymentIntentID: intent.ID,
+		Status:             domain.RunStatusRunning,
+		StartedAt:          &startedAt,
+		Metadata: map[string]any{
+			"nostr_event_id":        event.ID,
+			"nostr_request_command": "service_rollback",
+		},
+		ApplyMetadata: map[string]any{
+			"desired_hash":                 intent.DesiredHash,
+			"desired_state_schema_version": desiredState.SchemaVersion,
+			"source_kind":                  string(domain.SourceKindRollback),
+		},
+	}
+	if err := r.registry.CreateDeploymentRun(ctx, run); err != nil {
+		logger.Error("failed to create rollback deployment run", "error", err)
+		r.publishError(ctx, event, "run_error", err.Error())
+		return
+	}
+
+	r.publishStatus(ctx, event, "applying_desired_state", "Applying rollback desired runtime state")
+	artifactID := intent.ArtifactID
+	obs, err := r.runtimeLifecycle.DeployWithStatus(ctx, serviceID, envID, &artifactID, r.deploymentStatusCallbackFor(ctx, event))
+	if err != nil {
+		logger.Error("rollback deployment execution failed", "error", err)
+		failureExitCode := 1
+		_ = r.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusFailed, &failureExitCode)
+		r.publishError(ctx, event, "rollback_failed", err.Error())
+		return
+	}
+
+	successExitCode := 0
+	if err := r.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, &successExitCode); err != nil {
+		logger.Error("failed to complete rollback deployment run", "error", err)
+		r.publishError(ctx, event, "run_completion_error", err.Error())
+		return
+	}
+	intent.Status = domain.IntentStatusDeployed
+	if obs != nil {
+		logger.Info("rollback desired-state apply observed runtime", "observation_id", obs.ID.String())
+	}
+
+	logger.Info("rollback applied", "intent_id", intent.ID, "desired_hash", intent.DesiredHash)
 	r.publishDeploymentResult(ctx, event, intent)
+}
+
+func (r *Reactor) recordRollbackPreparationFailure(ctx context.Context, logger *slog.Logger, event *nostr.Event, intent *domain.DeploymentIntent, cause error) {
+	startedAt := time.Now().UTC()
+	run := &domain.DeploymentRun{
+		ID:                 uuid.New(),
+		DeploymentIntentID: intent.ID,
+		Status:             domain.RunStatusRunning,
+		StartedAt:          &startedAt,
+		Metadata: map[string]any{
+			"nostr_event_id":        event.ID,
+			"nostr_request_command": "service_rollback",
+			"failure_step":          "building_desired_state",
+			"error":                 cause.Error(),
+		},
+		ApplyMetadata: map[string]any{
+			"source_kind": string(domain.SourceKindRollback),
+		},
+	}
+	if err := r.registry.CreateDeploymentRun(ctx, run); err != nil {
+		logger.Error("failed to create failed rollback deployment run", "error", err)
+		return
+	}
+	failureExitCode := 1
+	if err := r.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusFailed, &failureExitCode); err != nil {
+		logger.Error("failed to complete failed rollback deployment run", "error", err)
+	}
 }
 
 // handleServiceAction processes a legacy service action in direct tests.

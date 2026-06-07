@@ -111,13 +111,19 @@ service_id: "svc-123"
 environment_id: "env-456"
 desired_state:
   artifact_id: "art-789"
+  desired_hash: "sha256:..."
+  renderer: "compose"
+  target: "payment-api-prod"
   deployed_at: "2024-01-15T10:00:00Z"
 observed_state:
   artifact_id: "art-789"
+  normalized_hash: "sha256:..."
   container_status: "running"
   observed_at: "2024-01-15T10:05:00Z"
-drift: false
+drift_status: "in_sync"
 ```
+
+Desired-state fields are additive. Compose/Docker deploys store a canonical desired runtime snapshot and hash; observations store normalized runtime state and hash. Public projections may include hashes, renderer, target, revision, and observation IDs, but never secret plaintext, generated Compose env-file values, raw Docker hosts, or TLS credentials.
 
 ### State Lifecycle
 
@@ -131,7 +137,7 @@ drift: false
 
 Deploy, restart, and stop are signer-first Nostr control-plane operations.
 
-- Deploy by publishing a ContextVM `service/deploy` intent and subscribing for canonical deployment status, audit, and state events.
+- Deploy by publishing a ContextVM `service/deploy` intent and subscribing for canonical deployment status, audit, and state events. For Compose/Docker desired-state deploys, status events include the shared step progression and state/result observables may include sanitized desired-state metadata.
 - Restart or stop an adopted direct-runtime workload with ContextVM `service/restart` or `service/stop`.
 
 Legacy Bahia request/status/result kinds and legacy REST-backed service action endpoints are migration-only and are not live service control-plane guidance.

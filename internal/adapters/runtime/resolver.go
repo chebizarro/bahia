@@ -74,6 +74,7 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 		Type:          target.Type,
 		DockerHost:    target.DockerHost,
 		ComposeDir:    target.ComposeDir,
+		BahiaOwned:    target.BahiaOwned,
 		ExecutionMode: target.ExecutionMode,
 		Endpoint:      target.ResolvedEndpoint,
 		RegistryAuth:  r.registryAuth,
@@ -94,6 +95,7 @@ func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.R
 		DockerHost:    r.cfg.DockerHost,
 		EndpointRef:   "",
 		ComposeDir:    r.cfg.ComposeDir,
+		BahiaOwned:    r.cfg.BahiaOwned,
 		ExecutionMode: r.cfg.ExecutionMode,
 		KubeContext:   r.cfg.KubeContext,
 		KubeNamespace: r.cfg.KubeNamespace,
@@ -137,6 +139,9 @@ func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTarg
 	if override.ComposeDir != "" {
 		base.ComposeDir = override.ComposeDir
 	}
+	if override.BahiaOwned != nil {
+		base.BahiaOwned = override.BahiaOwned
+	}
 	if override.ExecutionMode != "" {
 		base.ExecutionMode = override.ExecutionMode
 	}
@@ -155,6 +160,12 @@ func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTarg
 func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any) (config.RuntimeTargetConfig, bool) {
 	typeExplicit := false
 	for _, key := range sortedRuntimeConfigKeys(values) {
+		if key == "bahia_owned" {
+			if boolValue, ok := boolValue(values[key]); ok {
+				base.BahiaOwned = &boolValue
+			}
+			continue
+		}
 		value, ok := stringValue(values[key])
 		if !ok || value == "" {
 			continue
@@ -218,6 +229,28 @@ func stringValue(v any) (string, bool) {
 	return strings.TrimSpace(s), true
 }
 
+func boolValue(v any) (bool, bool) {
+	switch typed := v.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "y", "on":
+			return true, true
+		case "false", "0", "no", "n", "off":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func targetOwnershipCacheValue(v *bool) string {
+	if v == nil {
+		return "unset"
+	}
+	return fmt.Sprintf("%t", *v)
+}
+
 func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 	return strings.Join([]string{
 		target.Type,
@@ -228,6 +261,7 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 		target.ResolvedEndpoint.ClientKeyFile,
 		fmt.Sprintf("%t", target.ResolvedEndpoint.InsecureSkipVerify),
 		target.ComposeDir,
+		targetOwnershipCacheValue(target.BahiaOwned),
 		target.ExecutionMode,
 		target.KubeContext,
 		target.KubeNamespace,

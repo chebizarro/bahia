@@ -2,7 +2,7 @@
 
 ## Status: draft
 
-No defects recorded yet. This feature is in pre-implementation specification phase.
+No defects recorded yet for the bahia-zu2p.8.8 ownership inventory scope.
 
 ---
 
@@ -38,9 +38,9 @@ These are not defects yet, but areas where the plan identifies elevated risk tha
 
 ### Concern 1 — Compose directory ownership validation
 
-The current Compose adapter does not validate whether a `compose_dir` is Bahia-owned before writing files. If the ownership gate (DSR-AC-014) is not implemented before any rendering work, existing non-Bahia-owned directories could be overwritten. This should be the first safety check implemented in DSR-WI-05.
+The Compose adapter now validates ownership before desired-state generation or legacy Compose deploy writes. Ownership is recordable through `runtime.*.bahia_owned` and still requires either explicit operator approval (`true`) or a valid `.bahia/render-state.json` marker. Checked-in staging and production targets remain recorded as `bahia_owned: false` until an operator confirms they are Bahia-owned.
 
-**Related ACs:** DSR-AC-014  
+**Related ACs:** DSR-AC-014, DSR-AC-016
 **Related risks:** DSR-RISK-001
 
 ### Concern 2 — Legacy sibling services without desired-state snapshots
@@ -52,7 +52,7 @@ Current environments may have managed services that have never had a desired-sta
 
 ### Concern 3 — Secret exposure in generated Compose env files
 
-Generated `.bahia/env/<service-key>.env` files may contain resolved secret values needed by Docker Compose. Ownership, permissions, cleanup lifecycle, and redaction policy must be tested and documented before production use.
+Generated `.bahia/env/<service-key>.env` files may contain resolved secret values needed by Docker Compose. Documentation now states these files are runtime secret material inside a Bahia-owned generated layout and must not be projected into Nostr events, apply metadata summaries, logs, desired-state snapshots, or normalized observations. Ownership, permissions, and cleanup lifecycle still need implementation-level verification before broad production use.
 
 **Related ACs:** DSR-AC-005, DSR-AC-008  
 **Related risks:** DSR-RISK-005

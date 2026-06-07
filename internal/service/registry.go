@@ -557,11 +557,13 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 
 	// Update the environment service state desired artifact.
 	state := &domain.EnvironmentServiceState{
-		ServiceID:         di.ServiceID,
-		EnvironmentID:     di.EnvironmentID,
-		DesiredArtifactID: &di.ArtifactID,
-		DesiredIntentID:   &di.ID,
-		DriftStatus:       domain.DriftStatusDeploying,
+		ServiceID:           di.ServiceID,
+		EnvironmentID:       di.EnvironmentID,
+		DesiredArtifactID:   &di.ArtifactID,
+		DesiredIntentID:     &di.ID,
+		DesiredRuntimeState: di.DesiredState,
+		DesiredHash:         di.DesiredHash,
+		DriftStatus:         domain.DriftStatusDeploying,
 	}
 	if err := s.state.Upsert(ctx, state); err != nil {
 		s.logger.Error("failed to update environment service state", zap.Error(err))
@@ -850,6 +852,8 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 				EnvironmentID:       intent.EnvironmentID,
 				DesiredArtifactID:   &intent.ArtifactID,
 				DesiredIntentID:     &intent.ID,
+				DesiredRuntimeState: intent.DesiredState,
+				DesiredHash:         intent.DesiredHash,
 				LastSuccessfulRunID: &id,
 				DriftStatus:         domain.DriftStatusUnknown,
 				LastReconciledAt:    &now,
@@ -919,6 +923,8 @@ func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UU
 	// Find the most recent successfully-deployed intent whose artifact differs
 	// from the current desired artifact.
 	var rollbackTargetArtifactID *uuid.UUID
+	var rollbackTargetDesiredState *domain.DesiredServiceSpec
+	var rollbackTargetDesiredHash string
 	var supersedesIntentID *uuid.UUID
 
 	for i := range intents {
@@ -938,6 +944,8 @@ func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UU
 
 		// This is a previously successful deployment with a different artifact.
 		rollbackTargetArtifactID = &intent.ArtifactID
+		rollbackTargetDesiredState = intent.DesiredState
+		rollbackTargetDesiredHash = intent.DesiredHash
 		if supersedesIntentID == nil {
 			supersedesIntentID = &intent.ID
 		}
@@ -966,6 +974,8 @@ func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UU
 		ApprovalStatus:     domain.ApprovalStatusNotRequired,
 		Status:             domain.IntentStatusApproved,
 		SupersedesIntentID: supersedesIntentID,
+		DesiredState:       rollbackTargetDesiredState,
+		DesiredHash:        rollbackTargetDesiredHash,
 	}
 
 	if err := s.CreateDeploymentIntent(ctx, rollbackIntent); err != nil {

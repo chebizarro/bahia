@@ -275,13 +275,13 @@ All desired-state operations in this feature must complete through explicit term
 **Priority:** must  
 **Work items:** DSR-WI-08
 
-**Assertion:** Existing status kinds must carry additive step progression metadata: `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`. No new kinds or d-tag coordinates may be added.
+**Assertion:** Existing canonical status observables must carry additive step progression metadata: `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`. No new kinds or d-tag coordinates may be added.
 
 **Preconditions:**
 - Status publication path in `RuntimeLifecycleService` emits step progression.
 
 **Expected result:**
-- Status events within existing `6961` kind carry step metadata tags.
+- Status events on the canonical status path carry step metadata tags; legacy `6961` fixtures remain migration inventory only.
 - Step progression is emitted from the lifecycle path at each meaningful phase.
 - Older readers that ignore the new tags continue to function.
 
@@ -297,14 +297,14 @@ All desired-state operations in this feature must complete through explicit term
 **Priority:** must  
 **Work items:** DSR-WI-08
 
-**Assertion:** Result (`7961`/`7962`) and read-model (`31961`/`31967`/`31968`) payloads must carry additive metadata: renderer, desired-state hash, environment revision, runtime target, apply metadata summary, and observation ID. Catalog decoders must tolerate richer content. Replaceable semantics must be preserved.
+**Assertion:** ContextVM result responses and canonical read-model payloads must carry additive metadata where available: renderer, desired-state hash, environment or unit revision, runtime target, apply metadata summary, and observation ID. Catalog/projector decoders must tolerate richer content. Replaceable semantics must be preserved. Legacy `7961`/`7962` and `31961`/`31967`/`31968` shapes remain migration inventory only.
 
 **Preconditions:**
-- Projector and catalog changes exist in `internal/adapters/nostr/`.
+- ContextVM response, projector, and catalog changes exist in `internal/controlplane/` and `internal/adapters/nostr/`.
 
 **Expected result:**
-- Result events include renderer, desired hash, environment revision, and observation ID where available.
-- Read-model events expose sanitized desired/apply metadata.
+- ContextVM result responses include renderer, desired hash, environment or unit revision, and observation ID where available.
+- Canonical read-model events expose sanitized desired/apply metadata.
 - Tolerant decoding in catalog does not reject enriched events.
 - Replaceable semantics and validation are preserved.
 - Tests inject events directly and prove backward-compatible decoding.

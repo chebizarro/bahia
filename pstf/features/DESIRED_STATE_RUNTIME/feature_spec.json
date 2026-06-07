@@ -3,7 +3,7 @@
   "title": "Desired-State Runtime: Environment-Scoped Compose and Docker Engine Apply",
   "priority": "P1",
   "status": "draft",
-  "description": "Move Bahia from environment-level, monolithic Compose operations toward Nostr-native structured service desired state that can render to Compose and Docker Engine targets first, while keeping Kubernetes and Podman as later renderer/adapter targets. This feature introduces typed desired-state domain models, environment-scoped apply locking, full-project Compose synthesis, Docker Engine desired-state apply, observation normalization and drift detection, legacy environment hydration, and additive Nostr status/result/read-model enrichment -- all without adding new Nostr event kinds or breaking existing control-plane semantics.",
+  "description": "Move Bahia from environment-level, monolithic Compose operations toward Nostr-native structured service desired state that can render to Compose and Docker Engine targets first, while keeping Kubernetes and Podman as later renderer/adapter targets. This feature introduces typed desired-state domain models, environment-scoped apply locking, full-project Compose synthesis, Docker Engine desired-state apply, observation normalization and drift detection, legacy environment hydration, and additive Nostr/ContextVM status/result/read-model enrichment -- all without adding new Nostr event kinds or d-tag coordinates or breaking existing control-plane semantics.",
   "source_plan": "docs/plans/desired-state-runtime-architecture-2026-05-26.md",
   "source_evidence": [
     "docs/plans/desired-state-runtime-architecture-2026-05-26.md",
@@ -24,7 +24,7 @@
     "internal/repository/pg_observation.go"
   ],
   "dependencies": [
-    "Existing Nostr request/status/result event families (5961/6961/7961) and replaceable read-model kinds (31961/31967/31968)",
+    "Existing ContextVM mutation flow (25910), canonical status/state/audit observables (30315/30900/30078/4903), and migration-only historical request/status/result/read-model fixtures where needed",
     "Existing runtime resolver, factory, and adapter infrastructure",
     "Existing deployment intent/run/state persistence",
     "Docker Compose CLI (docker compose config, up, pull)",
@@ -64,7 +64,7 @@
     },
     {
       "name": "nostr_projector",
-      "role": "Enriches existing status/result/read-model events with desired-state metadata additively",
+      "role": "Enriches existing ContextVM response and canonical status/read-model projections with desired-state metadata additively",
       "evidence": ["internal/adapters/nostr/projector.go", "internal/adapters/nostr/catalog.go"]
     }
   ],
@@ -82,7 +82,7 @@
       "Observation normalization for Compose and Docker into comparable subset",
       "Drift detection: in_sync / drifted / unknown based on desired vs observed hash",
       "Additive Nostr status step progression (building_desired_state, locking_environment, rendering, applying, observing, projecting)",
-      "Additive result/read-model payload enrichment without new kinds or d-tag coordinates",
+      "Additive ContextVM response and read-model payload enrichment without new kinds or d-tag coordinates",
       "Compose ownership gate for Bahia-owned compose_dir validation",
       "Renderer-specific typed extension payloads (Compose, Docker) stored as JSONB"
     ],
@@ -101,7 +101,7 @@
     "details": [
       "Deploy execution completes when the runtime adapter returns a terminal apply result (success or failure), not after elapsed time",
       "Advisory locks are released deterministically via defer, not via timeout expiry",
-      "Nostr status events report explicit step progression; terminal results are published as correlated 7961 events with explicit success/failure payloads",
+      "Nostr status events report explicit step progression; terminal results are published as correlated ContextVM responses and canonical observables with explicit success/failure payloads",
       "Observation is attempted synchronously after apply; failure paths persist explicit failure state rather than leaving unknown state",
       "Drift detection compares deterministic hashes, not polling-derived snapshots",
       "No ticker-based reconciliation or periodic polling is part of the approved desired-state contract"
@@ -128,6 +128,6 @@
   ],
   "open_questions": [
     "Does 5961 deploy currently reach RuntimeLifecycleService directly, or through an intermediate orchestration layer that must be refactored before the shared deploy helper lands?",
-    "Is every configured production compose_dir Bahia-owned and safe for authoritative regeneration, or does rollout need a per-environment opt-in flag before Item 5 can be enabled?"
+    "Operators must decide which staging/production compose_dir targets are Bahia-owned before rollout; bahia_owned records that decision per runtime target and defaults checked-in staging/production targets to blocked unless markers prove ownership."
   ]
 }

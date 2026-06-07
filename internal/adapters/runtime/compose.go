@@ -20,11 +20,12 @@ import (
 
 // ComposeRuntime implements Runtime using Docker Compose CLI.
 type ComposeRuntime struct {
-	projectDir   string // working directory with docker-compose.yml
-	dockerHost   string // optional DOCKER_HOST override for compose commands
-	dockerTLSEnv []string
-	binary       string // "docker-compose" or "docker compose"
-	logger       *zap.Logger
+	projectDir      string // working directory with docker-compose.yml
+	dockerHost      string // optional DOCKER_HOST override for compose commands
+	dockerTLSEnv    []string
+	ownershipConfig ComposeOwnershipConfig
+	binary          string // "docker-compose" or "docker compose"
+	logger          *zap.Logger
 }
 
 // NewComposeRuntime creates a new Docker Compose runtime.
@@ -134,11 +135,18 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 // is Bahia-owned and safe for authoritative writes. It returns nil if owned,
 // or a *ComposeOwnershipError with a machine-readable reason code if not.
 func (r *ComposeRuntime) ValidateOwnership(cfg ComposeOwnershipConfig) error {
-	status := ValidateComposeOwnership(r.projectDir, cfg)
+	status := ValidateComposeOwnership(r.projectDir, r.effectiveOwnershipConfig(cfg))
 	if status.Owned {
 		return nil
 	}
 	return NewComposeOwnershipError(status)
+}
+
+func (r *ComposeRuntime) effectiveOwnershipConfig(override ComposeOwnershipConfig) ComposeOwnershipConfig {
+	if override.BahiaOwned != nil {
+		return override
+	}
+	return r.ownershipConfig
 }
 
 // Deploy updates a Compose service with a new image and restarts it.

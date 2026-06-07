@@ -221,6 +221,96 @@ func TestRuntimeLifecycleDeployFallsBackToAdoptedEnvironmentWithoutSecretRepo(t 
 	}
 }
 
+func TestRuntimeLifecycleDesiredStateDeployHydratesLegacySiblingsAndRecordsDrift(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _, obsRepo, stateRepo := newTestRegistryAll()
+	rt := &desiredStateLifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	env := &domain.Environment{Name: "prod-compose", RuntimeConfig: map[string]any{"type": "compose", "host_alias": "local", "management_mode": "direct_runtime"}}
+	if err := registry.CreateEnvironment(ctx, env); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	targetSvc, targetArtifact := seedComposeManagedService(t, registry, buildRepo, env, "api", "api-prod", "ghcr.io/org/api", "sha256:target")
+	storedSvc, storedArtifact := seedComposeManagedService(t, registry, buildRepo, env, "worker", "worker-prod", "ghcr.io/org/worker", "sha256:stored")
+	legacySvc, legacyArtifact := seedComposeManagedService(t, registry, buildRepo, env, "admin", "admin-prod", "ghcr.io/org/admin", "sha256:legacy")
+
+	storedSpec, err := NewDesiredStateBuilder().Build(BuildInput{
+		Service:       storedSvc,
+		Environment:   env,
+		Artifact:      storedArtifact,
+		RuntimeConfig: storedSvc.RuntimeConfig,
+	})
+	if err != nil {
+		t.Fatalf("build stored sibling spec: %v", err)
+	}
+
+	if err := stateRepo.Upsert(ctx, &domain.EnvironmentServiceState{ServiceID: targetSvc.ID, EnvironmentID: env.ID, DesiredArtifactID: &targetArtifact.ID, DriftStatus: domain.DriftStatusUnknown}); err != nil {
+		t.Fatalf("seed target state: %v", err)
+	}
+	if err := stateRepo.Upsert(ctx, &domain.EnvironmentServiceState{ServiceID: storedSvc.ID, EnvironmentID: env.ID, DesiredArtifactID: &storedArtifact.ID, DesiredRuntimeState: storedSpec, DesiredHash: storedSpec.DesiredHash, DriftStatus: domain.DriftStatusInSync}); err != nil {
+		t.Fatalf("seed stored sibling state: %v", err)
+	}
+	if err := stateRepo.Upsert(ctx, &domain.EnvironmentServiceState{ServiceID: legacySvc.ID, EnvironmentID: env.ID, DesiredArtifactID: &legacyArtifact.ID, DriftStatus: domain.DriftStatusUnknown}); err != nil {
+		t.Fatalf("seed legacy sibling state: %v", err)
+	}
+
+	obs, err := lifecycle.Deploy(ctx, targetSvc.ID, env.ID, &targetArtifact.ID)
+	if err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+	if obs == nil {
+		t.Fatal("expected runtime observation")
+	}
+	if !rt.applied {
+		t.Fatal("desired-state applier was not called")
+	}
+	if rt.applyReq.EnvironmentPlan == nil {
+		t.Fatal("desired-state apply request missing environment plan")
+	}
+
+	gotServices := map[string]domain.DesiredServiceSpec{}
+	for _, spec := range rt.applyReq.EnvironmentPlan.Services {
+		gotServices[spec.StableServiceKey] = spec
+	}
+	for _, key := range []string{"admin-prod", "api-prod", "worker-prod"} {
+		if _, ok := gotServices[key]; !ok {
+			t.Fatalf("first desired-state plan omitted managed service %q; got keys %#v", key, gotServices)
+		}
+	}
+	if gotServices["admin-prod"].ImageRef != "ghcr.io/org/admin@sha256:legacy" {
+		t.Fatalf("legacy sibling image was not reconstructed from persisted artifact: %#v", gotServices["admin-prod"])
+	}
+	if gotServices["worker-prod"].DesiredHash != storedSpec.DesiredHash {
+		t.Fatalf("stored sibling desired state was not preserved: got %q want %q", gotServices["worker-prod"].DesiredHash, storedSpec.DesiredHash)
+	}
+
+	legacyState := stateRepo.states[stateKey(legacySvc.ID, env.ID)]
+	if legacyState == nil || legacyState.DesiredRuntimeState == nil || legacyState.DesiredHash == "" {
+		t.Fatalf("legacy sibling desired spec was not persisted opportunistically: %#v", legacyState)
+	}
+	if legacyState.DesiredRuntimeState.StableServiceKey != "admin-prod" {
+		t.Fatalf("persisted legacy sibling has wrong stable key: %#v", legacyState.DesiredRuntimeState)
+	}
+
+	targetState := stateRepo.states[stateKey(targetSvc.ID, env.ID)]
+	if targetState == nil || targetState.DesiredRuntimeState == nil || targetState.CurrentObservationID == nil {
+		t.Fatalf("target state did not persist desired state and observation: %#v", targetState)
+	}
+	if targetState.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("target drift status = %q, want %q", targetState.DriftStatus, domain.DriftStatusInSync)
+	}
+	if targetState.LastReconciledAt == nil {
+		t.Fatal("target state did not record reconciliation timestamp after observation")
+	}
+	if len(obsRepo.observations) != 1 {
+		t.Fatalf("expected one recorded post-apply observation, got %d", len(obsRepo.observations))
+	}
+	if len(rt.applyResultNames) != 3 {
+		t.Fatalf("desired-state apply should cover all managed services, got resources %v", rt.applyResultNames)
+	}
+}
+
 func TestRuntimeLifecycleDeployRejectsForeignArtifact(t *testing.T) {
 	ctx := context.Background()
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
@@ -306,6 +396,90 @@ func seedRuntimeLifecycleFixtures(t *testing.T, registry *RegistryService) (*dom
 	}
 	return svc, env, artifact
 }
+
+func seedComposeManagedService(t *testing.T, registry *RegistryService, buildRepo *mockBuildRepo, env *domain.Environment, name, targetName, imageRepo, digest string) (*domain.Service, *domain.Artifact) {
+	t.Helper()
+	ctx := context.Background()
+	svc := &domain.Service{
+		Name:         name,
+		ArtifactRepo: imageRepo,
+		RuntimeType:  domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
+			TargetName:  targetName,
+			HostAlias:   "local",
+			Environment: map[string]string{"APP_ENV": env.Name},
+			Restart:     "unless-stopped",
+		}},
+	}
+	if err := registry.CreateService(ctx, svc); err != nil {
+		t.Fatalf("CreateService(%s): %v", name, err)
+	}
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: digest, GitRef: "main", CISystem: "test", CIRunID: uuid.NewString(), Status: domain.BuildStatusSucceeded}
+	if err := buildRepo.Create(ctx, build); err != nil {
+		t.Fatalf("Create build(%s): %v", name, err)
+	}
+	artifact := &domain.Artifact{BuildID: build.ID, ServiceID: svc.ID, ImageRepo: imageRepo, ImageTag: "v1", ImageDigest: digest, ScanStatus: domain.ScanStatusUnknown}
+	if err := registry.artifacts.Create(ctx, artifact); err != nil {
+		t.Fatalf("Create artifact(%s): %v", name, err)
+	}
+	return svc, artifact
+}
+
+type desiredStateLifecycleMockRuntime struct {
+	applyReq         runtime.DesiredStateApplyRequest
+	applyResultNames []string
+	lastDesiredHash  string
+	applied          bool
+}
+
+func (m *desiredStateLifecycleMockRuntime) Type() domain.RuntimeType {
+	return domain.RuntimeTypeCompose
+}
+func (m *desiredStateLifecycleMockRuntime) SupportsDesiredState() bool { return true }
+func (m *desiredStateLifecycleMockRuntime) Deploy(_ context.Context, _, _ string, _ runtime.DeployOptions) error {
+	return errors.New("legacy deploy path must not be used for desired-state runtime")
+}
+func (m *desiredStateLifecycleMockRuntime) Undeploy(_ context.Context, _ string) error { return nil }
+func (m *desiredStateLifecycleMockRuntime) StreamLogs(_ context.Context, _ string, _ runtime.LogOptions) (<-chan runtime.LogEntry, error) {
+	ch := make(chan runtime.LogEntry)
+	close(ch)
+	return ch, nil
+}
+func (m *desiredStateLifecycleMockRuntime) ApplyDesiredState(_ context.Context, req runtime.DesiredStateApplyRequest) (*runtime.DesiredStateApplyResult, error) {
+	m.applied = true
+	m.applyReq = req
+	m.applyResultNames = nil
+	if req.EnvironmentPlan != nil {
+		for _, spec := range req.EnvironmentPlan.Services {
+			m.applyResultNames = append(m.applyResultNames, spec.StableServiceKey)
+		}
+	}
+	if req.TargetService != nil {
+		m.lastDesiredHash = req.TargetService.DesiredHash
+	}
+	return &runtime.DesiredStateApplyResult{
+		Renderer:            "compose",
+		ExecutionMode:       runtime.ExecutionModeCLI,
+		DesiredHash:         m.lastDesiredHash,
+		EnvironmentRevision: req.EnvironmentPlan.RevisionHash,
+		ResourceNames:       append([]string(nil), m.applyResultNames...),
+	}, nil
+}
+func (m *desiredStateLifecycleMockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	return &domain.RuntimeObservation{
+		ServiceID:           serviceID,
+		EnvironmentID:       envID,
+		ObservedImageDigest: "sha256:target",
+		ObservedImageRepo:   "ghcr.io/org/api",
+		ObservedContainerID: serviceName + "-container",
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "desired-state-mock",
+		NormalizedHash:      m.lastDesiredHash,
+		ObservedAt:          time.Now().UTC(),
+	}, nil
+}
+
+var _ runtime.DesiredStateApplier = (*desiredStateLifecycleMockRuntime)(nil)
 
 type mockRuntimeResolver struct {
 	rt runtime.Runtime

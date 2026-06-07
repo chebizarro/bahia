@@ -530,11 +530,13 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
     execution_mode: cli
     docker_host: tcp://default:2375
     compose_dir: /srv/bahia/default
+    bahia_owned: true
   environments:
     production:
       endpoint_ref: prod-docker
       execution_mode: cli
       compose_dir: /srv/bahia/production
+      bahia_owned: false
       docker_host: tcp://prod:2375
     staging:
       type: kubernetes
@@ -568,9 +570,15 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 	if cfg.Runtime.Default.ExecutionMode != "cli" {
 		t.Errorf("Runtime.Default.ExecutionMode = %q", cfg.Runtime.Default.ExecutionMode)
 	}
+	if cfg.Runtime.Default.BahiaOwned == nil || !*cfg.Runtime.Default.BahiaOwned {
+		t.Errorf("Runtime.Default.BahiaOwned = %v, want true", cfg.Runtime.Default.BahiaOwned)
+	}
 	prod := cfg.Runtime.Environments["production"]
 	if prod.ComposeDir != "/srv/bahia/production" || prod.ExecutionMode != "cli" || prod.DockerHost != "tcp://prod:2375" || prod.EndpointRef != "prod-docker" {
 		t.Errorf("production runtime target = %+v", prod)
+	}
+	if prod.BahiaOwned == nil || *prod.BahiaOwned {
+		t.Errorf("production BahiaOwned = %v, want false", prod.BahiaOwned)
 	}
 	staging := cfg.Runtime.Environments["staging"]
 	if staging.Type != "kubernetes" || staging.KubeContext != "staging-cluster" || staging.KubeNamespace != "staging" {
@@ -1337,9 +1345,11 @@ llm:
 func TestLoadNestedRuntimeConfigFromEnvVars(t *testing.T) {
 	t.Setenv("BAHIA_RUNTIME__DEFAULT__TYPE", "compose")
 	t.Setenv("BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR", "/srv/bahia/default")
+	t.Setenv("BAHIA_RUNTIME__DEFAULT__BAHIA_OWNED", "true")
 	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__DOCKER_HOST", "tcp://prod:2375")
 	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__ENDPOINT_REF", "prod")
 	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR", "/srv/bahia/production")
+	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__BAHIA_OWNED", "false")
 	t.Setenv("BAHIA_RUNTIME__ENDPOINTS__prod__DOCKER_HOST", "tcp://docker-prod:2376")
 
 	cfg, err := Load("")
@@ -1353,12 +1363,18 @@ func TestLoadNestedRuntimeConfigFromEnvVars(t *testing.T) {
 	if cfg.Runtime.Default.ComposeDir != "/srv/bahia/default" {
 		t.Errorf("Runtime.Default.ComposeDir = %q", cfg.Runtime.Default.ComposeDir)
 	}
+	if cfg.Runtime.Default.BahiaOwned == nil || !*cfg.Runtime.Default.BahiaOwned {
+		t.Errorf("Runtime.Default.BahiaOwned = %v, want true", cfg.Runtime.Default.BahiaOwned)
+	}
 	prod, ok := cfg.Runtime.Environments["production"]
 	if !ok {
 		t.Fatalf("missing production environment target: %+v", cfg.Runtime.Environments)
 	}
 	if prod.DockerHost != "tcp://prod:2375" || prod.ComposeDir != "/srv/bahia/production" || prod.EndpointRef != "prod" {
 		t.Errorf("production runtime target = %+v", prod)
+	}
+	if prod.BahiaOwned == nil || *prod.BahiaOwned {
+		t.Errorf("production BahiaOwned = %v, want false", prod.BahiaOwned)
 	}
 	if cfg.Runtime.Endpoints["prod"].DockerHost != "tcp://docker-prod:2376" {
 		t.Errorf("runtime endpoint env config = %+v", cfg.Runtime.Endpoints)

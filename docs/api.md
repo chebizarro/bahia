@@ -291,7 +291,7 @@ Use `endpoint_ref` targets for production. `docker_host` targets remain a signer
 
 Direct runtime deploy/restart/stop REST endpoints are removed. Operators should call ContextVM methods such as `service/deploy`, `service/restart`, and `service/stop` over kind `25910` and subscribe for correlated ContextVM responses plus canonical observables (`30900`, `4903`, `30315`).
 
-Direct runtime actions remain limited to adopted `direct_runtime` workloads and authorized operator pubkeys.
+Direct runtime actions remain limited to adopted `direct_runtime` workloads and authorized operator pubkeys. Deploy responses may include optional `desired_hash` when persisted desired-state metadata is available; restart/stop responses do not create desired-state snapshots.
 
 ## Sensitive browser flows that may not use REST even when REST routes exist
 

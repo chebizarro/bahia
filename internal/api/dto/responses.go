@@ -105,6 +105,7 @@ type RuntimeActionResponse struct {
 	Action        string                      `json:"action"`
 	ServiceID     uuid.UUID                   `json:"service_id"`
 	EnvironmentID uuid.UUID                   `json:"environment_id"`
+	DesiredHash   string                      `json:"desired_hash,omitempty"`
 	Observation   *RuntimeObservationResponse `json:"observation,omitempty"`
 }
 

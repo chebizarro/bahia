@@ -86,9 +86,11 @@ runtime:
   environments:
     staging:
       compose_dir: "/srv/bahia/compose/staging"
+      bahia_owned: false
       docker_host: "unix:///var/run/docker.sock"
     production:
       compose_dir: "/srv/bahia/compose/production"
+      bahia_owned: false
       docker_host: "tcp://docker-prod.example.com:2375"
 
 log:

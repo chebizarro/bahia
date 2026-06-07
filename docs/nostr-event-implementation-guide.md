@@ -85,6 +85,8 @@ Use NIP-38 status.
 
 Status events are for short-lived operational state such as `running`, `healthy`, `degraded`, `available`, `draining`, `failed`, or `completed`.
 
+Desired-state runtime deploys report additive step progression on existing status events without allocating new kinds or changing `d` coordinates. The expected service deploy steps are `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`. Operators and agents should treat these as progress breadcrumbs only; terminal truth still comes from the correlated ContextVM response plus canonical state/audit/status observables.
+
 ### 3. Is this durable current state or a read-model projection?
 
 Use canonical state.
@@ -298,6 +300,8 @@ After unwrap, Bahia must verify the inner event signature and authorize the inne
 ```
 
 Projection decoders must reject canonical events with an empty or missing family/entity coordinate. A valid `30900`, `30315`, `4903`, or `30078` event must decode into an explicit projection family.
+
+Desired-state runtime metadata is additive on existing service/deployment observables. Bahia may include `desired_hash`, `renderer`, `target`, environment or unit revision metadata, runtime target metadata, apply metadata summaries, and `observation_id` when available. Decoders must ignore unknown fields and tags. Secret plaintext, raw Docker hosts, Docker TLS material, and generated Compose env-file contents must not appear in public Nostr content or tags; only redacted secret refs or key-presence metadata may be projected.
 
 ### Audit fact
 

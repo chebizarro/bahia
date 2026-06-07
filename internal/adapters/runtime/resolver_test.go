@@ -103,6 +103,68 @@ func TestConfigRuntimeResolver_ComposeRequiresComposeDir(t *testing.T) {
 	}
 }
 
+func TestConfigRuntimeResolver_ComposeBahiaOwnedConfigFeedsOwnershipGate(t *testing.T) {
+	dir := t.TempDir()
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{
+			Type:          "compose",
+			ComposeDir:    dir,
+			BahiaOwned:    boolPtr(true),
+			ExecutionMode: "cli",
+		},
+	}, zap.NewNop(), nil)
+
+	rt, err := resolver.Resolve(
+		resolverTestService(domain.RuntimeTypeCompose),
+		resolverTestEnv("production", nil),
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	compose, ok := rt.(*ComposeRuntime)
+	if !ok {
+		t.Fatalf("Resolve() returned %T, want *ComposeRuntime", rt)
+	}
+	if err := compose.ValidateOwnership(ComposeOwnershipConfig{}); err != nil {
+		t.Fatalf("expected configured bahia_owned=true to pass ownership gate, got: %v", err)
+	}
+}
+
+func TestConfigRuntimeResolver_ComposeRuntimeConfigBahiaOwnedFalseBlocksUnmarkedDir(t *testing.T) {
+	dir := t.TempDir()
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{
+			Type:          "compose",
+			ComposeDir:    dir,
+			BahiaOwned:    boolPtr(true),
+			ExecutionMode: "cli",
+		},
+	}, zap.NewNop(), nil)
+
+	rt, err := resolver.Resolve(
+		resolverTestService(domain.RuntimeTypeCompose),
+		resolverTestEnv("production", map[string]any{"bahia_owned": false}),
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	compose, ok := rt.(*ComposeRuntime)
+	if !ok {
+		t.Fatalf("Resolve() returned %T, want *ComposeRuntime", rt)
+	}
+	err = compose.ValidateOwnership(ComposeOwnershipConfig{})
+	if err == nil {
+		t.Fatal("expected bahia_owned=false with no marker to block ownership gate")
+	}
+	ownershipErr, ok := AsComposeOwnershipError(err)
+	if !ok {
+		t.Fatalf("expected ComposeOwnershipError, got %T: %v", err, err)
+	}
+	if ownershipErr.Reason != OwnershipNotOwned {
+		t.Fatalf("ownership reason = %s, want not_owned", ownershipErr.ReasonCode)
+	}
+}
+
 func TestConfigRuntimeResolver_EnvironmentTypeConflict(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{Type: "docker"},

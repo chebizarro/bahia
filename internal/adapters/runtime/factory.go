@@ -16,6 +16,7 @@ type RuntimeConfig struct {
 	DockerHost    string // Docker socket or TCP address
 	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
+	BahiaOwned    *bool  // Explicit operator assertion that compose_dir is Bahia-owned
 	ExecutionMode string // "engine_api" or "cli"; compose requires explicit "cli"
 	Endpoint      config.RuntimeEndpointConfig
 	RegistryAuth  *RegistryAuthConfig
@@ -59,7 +60,12 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		if strings.TrimSpace(endpoint.DockerHost) == "" {
 			endpoint.DockerHost = cfg.DockerHost
 		}
-		return NewComposeRuntimeWithEndpoint(dir, endpoint, logger)
+		rt, err := NewComposeRuntimeWithEndpoint(dir, endpoint, logger)
+		if err != nil {
+			return nil, err
+		}
+		rt.ownershipConfig = ComposeOwnershipConfig{BahiaOwned: cfg.BahiaOwned}
+		return rt, nil
 
 	case domain.RuntimeTypeK8s:
 		return NewKubernetesRuntime(

@@ -62,6 +62,8 @@ A ContextVM response is command acknowledgment only. Clients must follow canonic
 
 ### 2. Canonical Nostr observables
 
+Desired-state runtime metadata is an additive observable contract, not a new protocol family. Compose/Docker deploys may add `step`, `desired_hash`, `renderer`, `target`, revision, apply-summary, and `observation_id` metadata to existing ContextVM responses, `30315` statuses, and `30900`/`30078` projections. Legacy custom result/read-model numbers remain migration inventory even when historical fixtures contain similar fields.
+
 | Kind(s) | Purpose |
 |---------|---------|
 | `30900` | Canonical control-plane state projection |
@@ -169,4 +171,5 @@ Clients and agents should:
 5. Wait for `EOSE` for historical catch-up, then keep subscriptions open.
 6. Treat ContextVM responses as acknowledgments, not durable long-running completion.
 7. Avoid REST polling and legacy-kind subscriptions for runtime truth.
+8. Treat desired-state metadata as optional and sanitized; never expect public relay events to expose secret plaintext, generated Compose env-file contents, or raw Docker endpoint credentials.
 

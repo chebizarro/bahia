@@ -373,6 +373,12 @@ func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *
 		{"service", serviceID.String()},
 		{"environment", environmentID.String()},
 	}
+	if action == "deploy" && r.registry != nil {
+		if state, err := r.registry.GetEnvironmentServiceState(ctx, serviceID, environmentID); err == nil && state != nil && state.DesiredHash != "" {
+			payload.DesiredHash = state.DesiredHash
+			tags = append(tags, nostr.Tag{"desired_hash", state.DesiredHash})
+		}
+	}
 	if obs != nil {
 		tags = append(tags, nostr.Tag{"observation_id", obs.ID.String()})
 		if obs.NormalizedHash != "" {

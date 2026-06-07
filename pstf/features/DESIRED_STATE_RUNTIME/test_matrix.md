@@ -84,18 +84,19 @@
 |-------|-------|
 | **AC IDs** | DSR-AC-003 |
 | **Type** | integration |
-| **Status** | not_implemented |
-| **Target path** | `internal/service/runtime_lifecycle_test.go` |
+| **Status** | implemented |
+| **Target path** | `internal/controlplane/reactor_policy_gate_test.go::TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState`, `internal/controlplane/reactor_policy_gate_test.go::TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath`, `internal/controlplane/reactor_policy_gate_test.go::TestDirectRuntimeDeployResultCarriesDesiredHashFromState`, `internal/service/runtime_lifecycle_locking_test.go::TestConvergence_DeployAndDeployWithStatusUseSameHelper` |
 | **Work item** | DSR-WI-02 |
 
-**Description:** Prove that deployment request execution and direct runtime `action=deploy` both flow through the same internal deploy helper. Assert that `restart` and `stop` do not create desired-state snapshots.
+**Description:** Prove that deployment request execution, direct runtime `action=deploy`, and rollback-to-artifact all flow through the same internal desired-state deploy helper for Compose/Docker-managed deploys. Assert that `restart` and `stop` do not create desired-state snapshots.
 
 **Steps:**
-1. Execute a deploy via the deployment request path; capture the desired-state builder call.
-2. Execute a deploy via direct `action=deploy`; capture the same builder call.
-3. Execute `restart` and `stop`; assert no desired-state snapshot creation.
+1. Execute a deploy via the deployment request path; assert a desired-state snapshot/hash is persisted and `RuntimeLifecycleService.DeployWithStatus` is invoked.
+2. Execute a deploy via direct `action=deploy`; assert terminal result metadata carries the desired hash from persisted desired state.
+3. Execute rollback-to-artifact; assert the rollback intent/run carry desired snapshot/hash, status progression is emitted, and `RuntimeLifecycleService.DeployWithStatus` applies the selected artifact.
+4. Execute `restart` and `stop`; assert no desired-state snapshot creation.
 
-**Expected result:** Both deploy paths invoke the same helper; restart/stop skip desired-state assembly.
+**Expected result:** Deploy request, direct deploy action, and rollback all converge through the shared desired-state helper; restart/stop skip desired-state assembly.
 
 ---
 
@@ -131,14 +132,14 @@
 | **Target path** | `internal/service/runtime_lifecycle_test.go` |
 | **Work item** | DSR-WI-02 |
 
-**Description:** Prove that status events emitted during desired-state deploy include the step progression metadata: `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, `projecting`.
+**Description:** Prove that status events emitted during desired-state deploy include the step progression metadata on the canonical status path: `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, `projecting`.
 
 **Steps:**
 1. Execute a desired-state deploy with a captured status publisher.
 2. Collect all emitted status events.
 3. Assert the expected step progression sequence.
 
-**Expected result:** Status events carry step metadata in the expected order within existing `6961` kind.
+**Expected result:** Status events carry step metadata in the expected order on existing canonical observables; legacy `6961` fixtures remain migration inventory only.
 
 ---
 
@@ -392,12 +393,12 @@
 | **Target path** | `internal/adapters/nostr/catalog_test.go` |
 | **Work item** | DSR-WI-08 |
 
-**Description:** Prove that enriched `7961`/`7962`, `31961`/`31967`/`31968` events carry the new metadata and that catalog decoders tolerate richer content without breaking.
+**Description:** Prove that desired-state metadata is additive on the canonical ContextVM/state projection contract and that catalog/projection decoders tolerate richer content without breaking. Legacy `7961`/`7962` and `31961`/`31967`/`31968` shapes may remain only as migration fixtures.
 
 **Steps:**
-1. Build enriched result and read-model events with renderer, desired hash, environment revision, and observation ID.
-2. Decode with the current catalog.
-3. Assert new fields are accessible.
+1. Build enriched canonical result/status/read-model events with renderer, desired hash, environment or unit revision, and observation ID.
+2. Decode with the current catalog/projector path.
+3. Assert new fields are accessible when present.
 4. Decode enriched events with a pre-enrichment decoder mock; assert no parsing failure.
 
 **Expected result:** Enriched events decode correctly; older decoders tolerate the extra data.
@@ -452,21 +453,66 @@
 
 | Field | Value |
 |-------|-------|
-| **AC IDs** | DSR-AC-016 |
+| **AC IDs** | DSR-AC-006, DSR-AC-011, DSR-AC-016 |
 | **Type** | integration |
-| **Status** | not_implemented |
-| **Target path** | Integration test suite (TBD) |
+| **Status** | implemented |
+| **Target path** | `internal/service/runtime_lifecycle_test.go::TestRuntimeLifecycleDesiredStateDeployHydratesLegacySiblingsAndRecordsDrift` |
 | **Work item** | DSR-WI-09 |
 
-**Description:** Prove that existing environments with managed services but no stored desired-state snapshots hydrate correctly on the first full-project Compose deploy.
+**Description:** Prove that existing environments with managed services but no stored desired-state snapshots hydrate correctly on the first full-project Compose deploy path.
 
 **Steps:**
-1. Set up a staging environment with existing managed services and no desired-state snapshots.
-2. Trigger a full-project Compose deploy.
-3. Assert all existing siblings are included in the rendered project.
-4. Assert the deploy completes successfully.
+1. Set up an environment with target, stored-snapshot sibling, and legacy sibling state rows.
+2. Trigger `RuntimeLifecycleService.Deploy` through a Compose-capable desired-state runtime seam.
+3. Assert the desired-state apply request includes target, stored sibling, and reconstructed legacy sibling specs.
+4. Assert the legacy sibling spec is persisted opportunistically.
+5. Assert post-apply observation records a current observation and advances target drift to `in_sync` when the normalized observed hash matches the desired hash.
 
-**Expected result:** First deploy includes all legacy services without data loss.
+**Expected result:** First deploy includes all managed services without data loss, persists hydrated legacy specs, and records observation/drift evidence after apply.
+
+---
+
+### DSR-T-022 — Rollout: Compose ownership inventory and gate config
+
+| Field | Value |
+|-------|-------|
+| **AC IDs** | DSR-AC-014, DSR-AC-016 |
+| **Type** | unit + config verification |
+| **Status** | implemented |
+| **Target path** | `internal/config/config_test.go`, `internal/adapters/runtime/resolver_test.go`, `config.yaml` |
+| **Work item** | DSR-WI-09 |
+
+**Description:** Prove that staging/production Compose ownership decisions are recordable through runtime target config and enforced by the Compose ownership gate before rollout.
+
+**Steps:**
+1. Load YAML and environment-variable runtime target config containing `bahia_owned`.
+2. Resolve a Compose runtime with `bahia_owned=true` and an unmarked temp directory; assert the ownership gate passes by explicit operator config.
+3. Resolve a Compose runtime where persisted `Environment.runtime_config` sets `bahia_owned=false` over a true default; assert an unmarked temp directory is blocked with `not_owned`.
+4. Verify `config.yaml` records staging and production `compose_dir` targets with `bahia_owned: false`, requiring a valid marker or later operator approval before authoritative generation.
+
+**Expected result:** Each configured staging/production `compose_dir` has a recordable ownership status, and unsafe/unknown directories remain blocked by gate behavior.
+
+---
+
+### DSR-T-023 — Rollout: deploy request/direct action/rollback desired-state convergence
+
+| Field | Value |
+|-------|-------|
+| **AC IDs** | DSR-AC-003, DSR-AC-016 |
+| **Type** | integration |
+| **Status** | implemented |
+| **Target path** | `internal/controlplane/reactor_policy_gate_test.go`, `internal/controlplane/reactor_nostr_event_semantics_test.go`, `internal/adapters/runtime/compose_desired_state_test.go`, `internal/adapters/runtime/docker_apply_test.go` |
+| **Work item** | DSR-WI-09 |
+
+**Description:** Prove that deploy request, direct runtime deploy action, and rollback-to-artifact use the desired-state apply path for Compose/Docker-covered deploys and expose terminal desired-state evidence.
+
+**Steps:**
+1. Execute the deploy request path and assert desired snapshot/hash persistence, run apply metadata, status progression, and terminal result metadata.
+2. Execute direct runtime `action=deploy` and assert desired-state status/result evidence, including terminal desired hash when persisted state is available.
+3. Execute rollback-to-artifact and assert the selected rollback artifact is applied through `RuntimeLifecycleService.DeployWithStatus`, with desired hash, apply metadata, status progression, and terminal result.
+4. Run Compose/Docker desired-state adapter tests and assert Compose desired-state apply does not use `<SERVICE>_IMAGE`, service-scoped `up`, or unconditional `--force-recreate`.
+
+**Expected result:** All three entrypoints share the desired-state apply path for Compose/Docker deploys, publish progression and terminal results, persist desired/apply metadata where available, and avoid legacy Compose image substitution in desired-state-managed deploys.
 
 ---
 
@@ -476,7 +522,7 @@
 |-----------|----------|---------|
 | DSR-AC-001 | DSR-T-001, DSR-T-002 | yes |
 | DSR-AC-002 | DSR-T-003 | yes |
-| DSR-AC-003 | DSR-T-004, DSR-T-006 | yes |
+| DSR-AC-003 | DSR-T-004, DSR-T-006, DSR-T-023 | yes |
 | DSR-AC-004 | DSR-T-005 | yes |
 | DSR-AC-005 | DSR-T-007 | yes |
 | DSR-AC-006 | DSR-T-008 | yes |
@@ -487,13 +533,13 @@
 | DSR-AC-011 | DSR-T-017 | yes |
 | DSR-AC-012 | DSR-T-006 | yes |
 | DSR-AC-013 | DSR-T-018 | yes |
-| DSR-AC-014 | DSR-T-019 | yes |
+| DSR-AC-014 | DSR-T-019, DSR-T-022 | yes |
 | DSR-AC-015 | DSR-T-020 | yes |
-| DSR-AC-016 | DSR-T-021 | yes |
+| DSR-AC-016 | DSR-T-021, DSR-T-022, DSR-T-023 | partial |
 
 ## Implementation Notes
 
 - **Determinism:** All tests must use deterministic fixtures, fake clocks, and captured publishers. No live Docker/Compose/relay dependencies in unit or integration tests.
 - **Golden fixtures:** Hash stability tests (DSR-T-001) must lock golden values in committed fixture files so serialization changes are caught explicitly.
 - **Observation parity:** DSR-T-016 is critical for preventing false drift across renderers. Maintain this test as a cross-cutting regression guard.
-- **Recommended sequence:** Start with domain/hash tests (DSR-T-001, DSR-T-002), then persistence (DSR-T-003), then builder/plan (DSR-T-007, DSR-T-008), then adapter capability (DSR-T-009), then renderer tests (DSR-T-010-014), then observation/drift (DSR-T-015-017), then Nostr (DSR-T-018), and finally rollout (DSR-T-021).
+- **Recommended sequence:** Start with domain/hash tests (DSR-T-001, DSR-T-002), then persistence (DSR-T-003), then builder/plan (DSR-T-007, DSR-T-008), then adapter capability (DSR-T-009), then renderer tests (DSR-T-010-014), then observation/drift (DSR-T-015-017), then Nostr (DSR-T-018), and finally rollout (DSR-T-021 and DSR-T-022).

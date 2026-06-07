@@ -3,12 +3,15 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -94,6 +97,457 @@ func TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState(t *te
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
 	assertReactorTag(t, capture.events[len(capture.events)-1].Tags, "desired_hash", desired.DesiredHash)
+}
+
+func TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	previousArtifactID := uuid.New()
+	currentArtifactID := uuid.New()
+	previousIntentID := uuid.New()
+	currentIntentID := uuid.New()
+	obsID := uuid.New()
+
+	previousDesired := &domain.DesiredServiceSpec{
+		SchemaVersion:    domain.DesiredStateSchemaVersion,
+		ServiceID:        serviceID,
+		EnvironmentID:    environmentID,
+		ArtifactID:       previousArtifactID,
+		StableServiceKey: "api",
+		ImageRef:         "registry.example.com/api@sha256:previous",
+	}
+	previousDesired.ComputeDesiredHash()
+
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod", Protected: false}}
+	artifactRepo := &testArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{
+		previousArtifactID: {ID: previousArtifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:previous"},
+		currentArtifactID:  {ID: currentArtifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v2", ImageDigest: "sha256:current"},
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
+		previousIntentID: {
+			ID:            previousIntentID,
+			ServiceID:     serviceID,
+			EnvironmentID: environmentID,
+			ArtifactID:    previousArtifactID,
+			RequestedBy:   "operator",
+			SourceKind:    domain.SourceKindManual,
+			Status:        domain.IntentStatusDeployed,
+			DesiredState:  previousDesired,
+			DesiredHash:   previousDesired.DesiredHash,
+			CreatedAt:     time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC),
+		},
+		currentIntentID: {
+			ID:            currentIntentID,
+			ServiceID:     serviceID,
+			EnvironmentID: environmentID,
+			ArtifactID:    currentArtifactID,
+			RequestedBy:   "operator",
+			SourceKind:    domain.SourceKindManual,
+			Status:        domain.IntentStatusDeployed,
+			CreatedAt:     time.Date(2026, 5, 26, 12, 1, 0, 0, time.UTC),
+		},
+	}}
+	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		serviceID.String() + ":" + environmentID.String(): {
+			ServiceID:         serviceID,
+			EnvironmentID:     environmentID,
+			DesiredArtifactID: &currentArtifactID,
+			DesiredIntentID:   &currentIntentID,
+		},
+	}}
+
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		&testBuildRepo{},
+		artifactRepo,
+		intentRepo,
+		runRepo,
+		&testObservationRepo{},
+		stateRepo,
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		desiredState: previousDesired,
+		deployResp:   &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
+		emitSteps:    true,
+	}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+
+	request := &nostr.Event{
+		ID:      "rollback-request",
+		PubKey:  "operator",
+		Kind:    KindRollbackRequest,
+		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
+	}
+
+	reactor.handleRollbackRequest(ctx, request)
+
+	if !runtimeStub.deployCalled {
+		t.Fatal("rollback request did not execute RuntimeLifecycleService.DeployWithStatus")
+	}
+	if runtimeStub.deployServiceID != serviceID || runtimeStub.deployEnvID != environmentID || runtimeStub.deployArtifact == nil || *runtimeStub.deployArtifact != previousArtifactID {
+		t.Fatalf("rollback deploy call mismatch: %#v", runtimeStub)
+	}
+
+	var rollbackIntent *domain.DeploymentIntent
+	for _, intent := range intentRepo.intents {
+		if intent.SourceKind == domain.SourceKindRollback {
+			rollbackIntent = intent
+			break
+		}
+	}
+	if rollbackIntent == nil {
+		t.Fatal("rollback intent was not persisted")
+	}
+	if rollbackIntent.ArtifactID != previousArtifactID || rollbackIntent.DesiredHash != previousDesired.DesiredHash || rollbackIntent.DesiredState == nil {
+		t.Fatalf("rollback intent did not carry previous desired snapshot/hash: %#v", rollbackIntent)
+	}
+	if rollbackIntent.Status != domain.IntentStatusDeployed {
+		t.Fatalf("rollback intent status = %q, want %q", rollbackIntent.Status, domain.IntentStatusDeployed)
+	}
+
+	if got := len(runRepo.runs); got != 1 {
+		t.Fatalf("deployment runs created = %d, want 1", got)
+	}
+	for _, deploymentRun := range runRepo.runs {
+		if deploymentRun.Status != domain.RunStatusSucceeded {
+			t.Fatalf("rollback run status = %q, want %q", deploymentRun.Status, domain.RunStatusSucceeded)
+		}
+		if deploymentRun.ApplyMetadata["desired_hash"] != previousDesired.DesiredHash {
+			t.Fatalf("rollback run desired_hash = %#v, want %q", deploymentRun.ApplyMetadata["desired_hash"], previousDesired.DesiredHash)
+		}
+		if deploymentRun.ApplyMetadata["source_kind"] != string(domain.SourceKindRollback) {
+			t.Fatalf("rollback run source_kind = %#v", deploymentRun.ApplyMetadata["source_kind"])
+		}
+	}
+
+	updatedState := stateRepo.states[serviceID.String()+":"+environmentID.String()]
+	if updatedState == nil || updatedState.DesiredHash != previousDesired.DesiredHash || updatedState.DesiredRuntimeState == nil {
+		t.Fatalf("state did not retain rollback desired metadata: %#v", updatedState)
+	}
+
+	steps := map[string]bool{}
+	var final *nostr.Event
+	for i := range capture.events {
+		ev := capture.events[i]
+		if ev.Kind == KindNIP38Status {
+			for _, tag := range ev.Tags {
+				if len(tag) >= 2 && tag[0] == "step" {
+					steps[tag[1]] = true
+				}
+			}
+		}
+		if ev.Kind == KindContextVMMessage {
+			final = &capture.events[i]
+		}
+	}
+	for _, step := range []string{"creating_rollback_intent", "applying_desired_state", string(service.DeployStepBuildingDesiredState), string(service.DeployStepLockingEnvironment), string(service.DeployStepRendering), string(service.DeployStepApplying), string(service.DeployStepObserving), string(service.DeployStepProjecting)} {
+		if !steps[step] {
+			t.Fatalf("missing rollback status step %q in events %#v", step, capture.events)
+		}
+	}
+	if final == nil {
+		t.Fatal("rollback did not publish terminal ContextVM result")
+	}
+	assertReactorTag(t, final.Tags, "desired_hash", previousDesired.DesiredHash)
+	assertNoLegacyStatusResultEvents(t, capture.events)
+}
+
+func TestHandleRollbackRequestRecordsFailedRunWhenDesiredStateBuildFails(t *testing.T) {
+	fixture := newRollbackRequestTestFixture(t, false)
+	fixture.runtime.buildErr = errors.New("desired state unavailable")
+
+	fixture.reactor.handleRollbackRequest(context.Background(), fixture.request)
+
+	if fixture.runtime.deployCalled {
+		t.Fatal("rollback should not deploy when desired-state build fails")
+	}
+	rollbackIntent := fixture.rollbackIntent(t)
+	if rollbackIntent.Status != domain.IntentStatusFailed {
+		t.Fatalf("rollback intent status = %q, want %q", rollbackIntent.Status, domain.IntentStatusFailed)
+	}
+	if got := len(fixture.runs.runs); got != 1 {
+		t.Fatalf("rollback runs created = %d, want 1", got)
+	}
+	for _, run := range fixture.runs.runs {
+		if run.Status != domain.RunStatusFailed {
+			t.Fatalf("rollback preparation run status = %q, want %q", run.Status, domain.RunStatusFailed)
+		}
+		if run.ApplyMetadata["source_kind"] != string(domain.SourceKindRollback) {
+			t.Fatalf("rollback preparation run source_kind = %#v", run.ApplyMetadata["source_kind"])
+		}
+		if run.Metadata["failure_step"] != "building_desired_state" {
+			t.Fatalf("rollback preparation failure_step = %#v", run.Metadata["failure_step"])
+		}
+	}
+	assertRollbackErrorStep(t, fixture.capture.events, "desired_state_error")
+}
+
+func TestHandleRollbackRequestRecordsFailedRunWhenDeployFails(t *testing.T) {
+	fixture := newRollbackRequestTestFixture(t, true)
+	fixture.runtime.deployErr = errors.New("runtime apply failed")
+
+	fixture.reactor.handleRollbackRequest(context.Background(), fixture.request)
+
+	if !fixture.runtime.deployCalled {
+		t.Fatal("rollback should attempt deploy before recording deploy failure")
+	}
+	rollbackIntent := fixture.rollbackIntent(t)
+	if rollbackIntent.Status != domain.IntentStatusFailed {
+		t.Fatalf("rollback intent status = %q, want %q", rollbackIntent.Status, domain.IntentStatusFailed)
+	}
+	if got := len(fixture.runs.runs); got != 1 {
+		t.Fatalf("rollback runs created = %d, want 1", got)
+	}
+	for _, run := range fixture.runs.runs {
+		if run.Status != domain.RunStatusFailed {
+			t.Fatalf("rollback deploy run status = %q, want %q", run.Status, domain.RunStatusFailed)
+		}
+		if run.ApplyMetadata["desired_hash"] != fixture.previousDesired.DesiredHash {
+			t.Fatalf("rollback deploy run desired_hash = %#v, want %q", run.ApplyMetadata["desired_hash"], fixture.previousDesired.DesiredHash)
+		}
+	}
+	assertRollbackErrorStep(t, fixture.capture.events, "rollback_failed")
+}
+
+type rollbackRequestTestFixture struct {
+	serviceID       uuid.UUID
+	environmentID   uuid.UUID
+	previousDesired *domain.DesiredServiceSpec
+	intents         *testDeploymentIntentRepo
+	runs            *testDeploymentRunRepo
+	runtime         *stubRuntimeLifecycleOperatorService
+	capture         *captureNostrPublisher
+	reactor         *Reactor
+	request         *nostr.Event
+}
+
+func newRollbackRequestTestFixture(t *testing.T, includePreviousDesired bool) *rollbackRequestTestFixture {
+	t.Helper()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	previousArtifactID := uuid.New()
+	currentArtifactID := uuid.New()
+	previousIntentID := uuid.New()
+	currentIntentID := uuid.New()
+
+	previousDesired := &domain.DesiredServiceSpec{
+		SchemaVersion:    domain.DesiredStateSchemaVersion,
+		ServiceID:        serviceID,
+		EnvironmentID:    environmentID,
+		ArtifactID:       previousArtifactID,
+		StableServiceKey: "api",
+		ImageRef:         "registry.example.com/api@sha256:previous",
+	}
+	previousDesired.ComputeDesiredHash()
+
+	previousIntent := &domain.DeploymentIntent{
+		ID:            previousIntentID,
+		ServiceID:     serviceID,
+		EnvironmentID: environmentID,
+		ArtifactID:    previousArtifactID,
+		RequestedBy:   "operator",
+		SourceKind:    domain.SourceKindManual,
+		Status:        domain.IntentStatusDeployed,
+		CreatedAt:     time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC),
+	}
+	if includePreviousDesired {
+		previousIntent.DesiredState = previousDesired
+		previousIntent.DesiredHash = previousDesired.DesiredHash
+	}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
+		previousIntentID: previousIntent,
+		currentIntentID: {
+			ID:            currentIntentID,
+			ServiceID:     serviceID,
+			EnvironmentID: environmentID,
+			ArtifactID:    currentArtifactID,
+			RequestedBy:   "operator",
+			SourceKind:    domain.SourceKindManual,
+			Status:        domain.IntentStatusDeployed,
+			CreatedAt:     time.Date(2026, 5, 26, 12, 1, 0, 0, time.UTC),
+		},
+	}}
+	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		serviceID.String() + ":" + environmentID.String(): {
+			ServiceID:         serviceID,
+			EnvironmentID:     environmentID,
+			DesiredArtifactID: &currentArtifactID,
+			DesiredIntentID:   &currentIntentID,
+		},
+	}}
+	registry := service.NewRegistryService(
+		&testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}},
+		&testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod", Protected: false}},
+		&testBuildRepo{},
+		&testArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{
+			previousArtifactID: {ID: previousArtifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:previous"},
+			currentArtifactID:  {ID: currentArtifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v2", ImageDigest: "sha256:current"},
+		}},
+		intentRepo,
+		runRepo,
+		&testObservationRepo{},
+		stateRepo,
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	runtimeStub := &stubRuntimeLifecycleOperatorService{desiredState: previousDesired, deployResp: &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"}}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+	request := &nostr.Event{
+		ID:      "rollback-request",
+		PubKey:  "operator",
+		Kind:    KindRollbackRequest,
+		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
+	}
+	return &rollbackRequestTestFixture{serviceID: serviceID, environmentID: environmentID, previousDesired: previousDesired, intents: intentRepo, runs: runRepo, runtime: runtimeStub, capture: capture, reactor: reactor, request: request}
+}
+
+func (f *rollbackRequestTestFixture) rollbackIntent(t *testing.T) *domain.DeploymentIntent {
+	t.Helper()
+	for _, intent := range f.intents.intents {
+		if intent.SourceKind == domain.SourceKindRollback {
+			return intent
+		}
+	}
+	t.Fatal("rollback intent was not persisted")
+	return nil
+}
+
+func assertRollbackErrorStep(t *testing.T, events []nostr.Event, step string) {
+	t.Helper()
+	for _, ev := range events {
+		for _, tag := range ev.Tags {
+			if len(tag) >= 2 && tag[0] == "step" && tag[1] == step {
+				return
+			}
+		}
+	}
+	t.Fatalf("missing rollback error step %q in events %#v", step, events)
+}
+
+func TestDirectRuntimeDeployResultCarriesDesiredHashFromState(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+	desiredHash := "sha256:direct-action-desired"
+
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		serviceID.String() + ":" + environmentID.String(): {
+			ServiceID:         serviceID,
+			EnvironmentID:     environmentID,
+			DesiredArtifactID: &artifactID,
+			DesiredHash:       desiredHash,
+		},
+	}}
+	registry := service.NewRegistryService(
+		&testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}},
+		&testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod"}},
+		&testBuildRepo{},
+		&testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID}},
+		&testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}},
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}},
+		&testObservationRepo{},
+		stateRepo,
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	runtimeStub := &stubRuntimeLifecycleOperatorService{deployResp: &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"}}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+
+	reactor.handleServiceAction(ctx, &nostr.Event{
+		ID:      "direct-deploy-request",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, environmentID, artifactID),
+	})
+
+	var result *nostr.Event
+	for i := range capture.events {
+		if capture.events[i].Kind == KindContextVMMessage {
+			result = &capture.events[i]
+		}
+	}
+	if result == nil {
+		t.Fatal("direct runtime deploy did not publish terminal result")
+	}
+	assertReactorTag(t, result.Tags, "desired_hash", desiredHash)
+	var payload dto.RuntimeActionResponse
+	decodeContextVMResult(t, *result, &payload)
+	if payload.DesiredHash != desiredHash {
+		t.Fatalf("result desired_hash = %q, want %q", payload.DesiredHash, desiredHash)
+	}
+}
+
+func TestDirectRuntimeRestartResultDoesNotCarryDesiredHashFromState(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	desiredHash := "sha256:existing-desired"
+
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		serviceID.String() + ":" + environmentID.String(): {
+			ServiceID:     serviceID,
+			EnvironmentID: environmentID,
+			DesiredHash:   desiredHash,
+		},
+	}}
+	registry := service.NewRegistryService(
+		&testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}},
+		&testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod"}},
+		&testBuildRepo{},
+		&testArtifactRepo{},
+		&testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}},
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}},
+		&testObservationRepo{},
+		stateRepo,
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	runtimeStub := &stubRuntimeLifecycleOperatorService{restartResp: &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"}}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+
+	reactor.handleServiceAction(ctx, &nostr.Event{
+		ID:      "direct-restart-request",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: fmt.Sprintf(`{"action":"restart","service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
+	})
+
+	var result *nostr.Event
+	for i := range capture.events {
+		if capture.events[i].Kind == KindContextVMMessage {
+			result = &capture.events[i]
+		}
+	}
+	if result == nil {
+		t.Fatal("direct runtime restart did not publish terminal result")
+	}
+	for _, tag := range result.Tags {
+		if len(tag) >= 1 && tag[0] == "desired_hash" {
+			t.Fatalf("restart result unexpectedly carried desired_hash tag: %v", result.Tags)
+		}
+	}
+	var payload dto.RuntimeActionResponse
+	decodeContextVMResult(t, *result, &payload)
+	if payload.DesiredHash != "" {
+		t.Fatalf("restart result desired_hash = %q, want empty", payload.DesiredHash)
+	}
 }
 
 func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
@@ -251,11 +705,25 @@ func (r *testBuildRepo) UpdateStatus(context.Context, uuid.UUID, domain.BuildSta
 }
 
 type testArtifactRepo struct {
-	artifact *domain.Artifact
+	artifact  *domain.Artifact
+	artifacts map[uuid.UUID]*domain.Artifact
 }
 
-func (r *testArtifactRepo) Create(context.Context, *domain.Artifact) error { return nil }
+func (r *testArtifactRepo) Create(_ context.Context, artifact *domain.Artifact) error {
+	if r.artifacts == nil {
+		r.artifacts = map[uuid.UUID]*domain.Artifact{}
+	}
+	cp := *artifact
+	r.artifacts[artifact.ID] = &cp
+	return nil
+}
 func (r *testArtifactRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Artifact, error) {
+	if r.artifacts != nil {
+		if artifact, ok := r.artifacts[id]; ok {
+			cp := *artifact
+			return &cp, nil
+		}
+	}
 	if r.artifact != nil && r.artifact.ID == id {
 		cp := *r.artifact
 		return &cp, nil
@@ -305,6 +773,12 @@ func (r *testDeploymentIntentRepo) ListByServiceEnv(_ context.Context, serviceID
 			out = append(out, *intent)
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID.String() < out[j].ID.String()
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
 	return out, nil
 }
 func (r *testDeploymentIntentRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error {

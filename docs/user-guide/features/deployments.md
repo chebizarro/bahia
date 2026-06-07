@@ -49,6 +49,18 @@ After deployment:
 - State is compared to desired
 - Drift is detected if mismatch
 
+## Desired-State Runtime Behavior
+
+For Compose and Docker runtimes, deploy and rollback flows build a canonical desired-state snapshot and hash before apply. Bahia persists the snapshot on the deployment intent, stores apply metadata on the deployment run, records the latest desired runtime state on the service/environment row, and compares it with normalized runtime observations for drift.
+
+Compose desired-state deploys require a Bahia-owned Compose directory. Bahia renders the whole managed project for the environment or deployment unit into `docker-compose.yml`, generated `.bahia/env/<service-key>.env` files, and `.bahia/render-state.json`, validates the staged project, then applies with full-project `up -d --remove-orphans`. Unknown, operator-authored, or explicitly non-owned directories are blocked before file writes unless a valid Bahia render marker proves prior ownership or an operator has set `bahia_owned: true` after confirming the directory is dedicated to Bahia generation.
+
+Docker desired-state deploys use Bahia labels and `desired_hash` to decide whether the existing managed container already matches the requested state. A matching hash is a no-op apply followed by observation; a hash mismatch triggers pull per policy, prerequisite network/volume ensure, replacement container create/start, and observation. Endpoint connection material remains server-managed through runtime endpoint aliases; public deployment events expose IDs, hashes, and target keys, not raw Docker hosts or TLS credentials.
+
+Generated Compose env files may contain resolved secret values because Docker Compose needs them at apply time. They are written only under the Bahia-owned generated layout and are not included in Nostr events, apply metadata summaries, logs, or normalized observations. Desired-state and observation JSON store redacted secret refs or key-presence metadata only.
+
+Kubernetes desired-state apply and Compose per-service fragments are deferred. Until those follow-up slices land, Kubernetes remains outside the Compose/Docker desired-state behavior and Compose uses the authoritative full-project output.
+
 ## Creating Deployments
 
 ### Web UI
@@ -126,9 +138,9 @@ Subscribe to canonical deployment observables:
 }
 ```
 
-- **30315**: NIP-38 operational status and progress
+- **30315**: NIP-38 operational status and progress, including desired-state steps such as `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`
 - **4903**: immutable audit/provenance facts
-- **30900**: current desired/observed deployment state
+- **30900**: current desired/observed deployment state, with optional sanitized `desired_hash`, renderer/target, revision/apply, and `observation_id` metadata
 
 Add `#e=<ContextVM request event id>` when the emitted observable includes request correlation.
 
@@ -265,7 +277,7 @@ Deployment state is published as canonical Nostr observables:
 | `30315` | `status`, `service`, `environment`, optional `intent`/`run`, correlation `e` | Progress and operational status |
 | `4903` | requester `p`, resource tags, correlation `e` | Audit, policy, approval, and deployment facts |
 
-Historical `31961`/`31967`/`31968`, `6961`, and `7961` events are startup migration inputs only.
+Historical `31961`/`31967`/`31968`, `6961`, and `7961` events are startup migration inputs only. Desired-state metadata is additive on the canonical observable contract and does not revive those legacy live subscriptions.
 
 ## Best Practices
 

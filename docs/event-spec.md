@@ -104,9 +104,11 @@ Kind `30900` is addressable. The `d` tag identifies the entity coordinate, and `
 
 For `(kind, pubkey, d)`, latest replacement wins. Clients query historical state, wait for `EOSE`, and keep the subscription open for realtime updates.
 
+Desired-state runtime projections may add `desired_hash`, renderer/target metadata, environment or deployment-unit revision metadata, apply metadata summaries, and `observation_id`. These additions are optional and backward-compatible. Projection content must remain sanitized: no secret plaintext, generated Compose env-file content, raw Docker transport material, Docker TLS material, bearer credentials, or NIP-98 credentials.
+
 ## Operational Status — Kind `30315`
 
-Bahia uses NIP-38 status events for operational status and progress where a status fact is more appropriate than a full state replacement.
+Bahia uses NIP-38 status events for operational status and progress where a status fact is more appropriate than a full state replacement. Desired-state deploy status uses additive `step` metadata on this same kind; the shared Compose/Docker sequence is `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`.
 
 ```json
 {
