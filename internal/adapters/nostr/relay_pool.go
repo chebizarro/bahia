@@ -151,10 +151,43 @@ func IsAuthRequiredReason(reason string) bool {
 }
 
 func subscribeAuthRequired(err error) bool {
+	_, ok := subscribeAuthRequiredReason(err)
+	return ok
+}
+
+func subscribeAuthRequiredReason(err error) (string, bool) {
 	if err == nil {
-		return false
+		return "", false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "auth-required")
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "", false
+	}
+	lower := strings.ToLower(message)
+	idx := strings.Index(lower, "auth-required")
+	if idx < 0 {
+		return "", false
+	}
+	reason := strings.TrimSpace(message[idx:])
+	if !IsAuthRequiredReason(reason) {
+		return "", false
+	}
+	return reason, true
+}
+
+func authUnavailableMetadata(relayReason string, authErr error) string {
+	reason := strings.TrimSpace(relayReason)
+	if reason == "" {
+		reason = "auth-required"
+	}
+	if authErr == nil {
+		return "auth-unavailable: " + reason
+	}
+	return fmt.Sprintf("auth-unavailable: %s: %s", reason, authErr.Error())
+}
+
+var subscribeOnRelay = func(relay *nostr.Relay, ctx context.Context, filters []nostr.Filter) (*nostr.Subscription, error) {
+	return relay.Subscribe(ctx, filters)
 }
 
 // IsRateLimitedReason returns true if a relay protocol reason indicates rate limiting.
@@ -430,15 +463,17 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 			p.recordRelayConnectionState(mr.url, true)
 		}
 
-		sub, err := mr.relay.Subscribe(ctx, filters)
-		if err != nil && subscribeAuthRequired(err) {
+		sub, err := subscribeOnRelay(mr.relay, ctx, filters)
+		recordedAuthUnavailable := false
+		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
 			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-				sub, err = mr.relay.Subscribe(ctx, filters)
+				sub, err = subscribeOnRelay(mr.relay, ctx, filters)
 			} else {
-				p.recordRelayError(mr.url, authErr.Error())
+				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
+				recordedAuthUnavailable = true
 			}
 		}
-		if err != nil {
+		if err != nil && !recordedAuthUnavailable {
 			p.recordRelayError(mr.url, err.Error())
 		}
 		mr.mu.Unlock()
@@ -534,15 +569,17 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 			p.recordRelayConnectionState(mr.url, true)
 		}
 
-		sub, err := mr.relay.Subscribe(subCtx, filters)
-		if err != nil && subscribeAuthRequired(err) {
+		sub, err := subscribeOnRelay(mr.relay, subCtx, filters)
+		recordedAuthUnavailable := false
+		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
 			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-				sub, err = mr.relay.Subscribe(subCtx, filters)
+				sub, err = subscribeOnRelay(mr.relay, subCtx, filters)
 			} else {
-				p.recordRelayError(mr.url, authErr.Error())
+				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
+				recordedAuthUnavailable = true
 			}
 		}
-		if err != nil {
+		if err != nil && !recordedAuthUnavailable {
 			p.recordRelayError(mr.url, err.Error())
 		}
 		mr.mu.Unlock()

@@ -217,6 +217,50 @@ func TestRelayPoolRecordRelayErrorSurfacesAuthUnavailableMetadata(t *testing.T) 
 	require.False(t, snapshot.Relays[0].Healthy)
 }
 
+func TestRelayPoolSubscribeAuthRequiredWithoutCredentialsRecordsAuthUnavailableMetadata(t *testing.T) {
+	const relayURL = "wss://auth.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+
+	attempts := 0
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ []gonostr.Filter) (*gonostr.Subscription, error) {
+		attempts++
+		return nil, errors.New("couldn't subscribe to [{Kinds:[1]}] at wss://auth.example: auth-required: sign in")
+	})
+
+	sub, err := pool.Subscribe(context.Background(), []gonostr.Filter{{Kinds: []int{1}}})
+	require.Nil(t, sub)
+	require.Error(t, err)
+	require.Equal(t, 1, attempts, "missing AUTH credentials must not trigger a fallback subscribe path")
+
+	snapshot := pool.HealthSnapshot()
+	require.Len(t, snapshot.Relays, 1)
+	require.Equal(t, 1, snapshot.Relays[0].Errors)
+	require.Equal(t, "auth-unavailable: auth-required: sign in: no private key configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
+}
+
+func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t *testing.T) {
+	const relayURL = "wss://auth-eose.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+
+	attempts := 0
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ []gonostr.Filter) (*gonostr.Subscription, error) {
+		attempts++
+		return nil, errors.New("relay CLOSED: auth-required: sign in before replay")
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []int{30002}}})
+	require.Nil(t, merged)
+	require.Error(t, err)
+	require.Equal(t, 1, attempts, "missing AUTH credentials must fail the merged EOSE subscription without fallback")
+
+	snapshot := pool.HealthSnapshot()
+	require.Len(t, snapshot.Relays, 1)
+	require.Equal(t, 1, snapshot.Relays[0].Errors)
+	require.Equal(t, "auth-unavailable: auth-required: sign in before replay: no private key configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
+}
+
 func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {
 	privateKey := gonostr.GeneratePrivateKey()
 	publisher := NewPublisher(config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true}, nil, nil, zap.NewNop())
@@ -231,4 +275,17 @@ func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
 		pool.relays[url] = &managedRelay{url: url}
 	}
 	return pool
+}
+
+func markRelayConnectedForSubscribeTest(pool *RelayPool, relayURL string) {
+	pool.relays[relayURL].relay = gonostr.NewRelay(context.Background(), relayURL)
+	pool.relays[relayURL].connected = true
+	pool.health.GetOrCreate(relayURL).SetConnected(true)
+}
+
+func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Context, []gonostr.Filter) (*gonostr.Subscription, error)) {
+	t.Helper()
+	original := subscribeOnRelay
+	subscribeOnRelay = fn
+	t.Cleanup(func() { subscribeOnRelay = original })
 }

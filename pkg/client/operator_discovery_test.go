@@ -72,6 +72,72 @@ func TestDiscoverOperatorRelaysUsesLatestParameterizedReplaceableRelaySet(t *tes
 	}
 }
 
+func TestDiscoverOperatorRelaysUsesLowestEventIDForReplaceableTimestampTie(t *testing.T) {
+	serviceKey := nostr.GeneratePrivateKey()
+	trustedPubkey := mustPublicKey(t, serviceKey)
+	transport := newFakeOperatorTransport()
+	now := nostr.Now()
+	first := signedRelaySetEvent(t, serviceKey, operatorContextVMRelaySet, []string{"wss://first.example"}, now)
+	second := signedRelaySetEvent(t, serviceKey, operatorContextVMRelaySet, []string{"wss://second.example"}, now)
+	transport.events <- first
+	transport.events <- second
+	close(transport.eose)
+
+	expected := "wss://first.example"
+	if second.ID < first.ID {
+		expected = "wss://second.example"
+	}
+	relays, err := discoverOperatorRelaysWithTransport(context.Background(), []string{trustedPubkey}, transport)
+	if err != nil {
+		t.Fatalf("discoverOperatorRelaysWithTransport() error = %v", err)
+	}
+	if strings.Join(relays, ",") != expected {
+		t.Fatalf("relays = %#v, want lowest event ID relay set %q for equal created_at", relays, expected)
+	}
+}
+
+func TestDiscoverOperatorRelaysMultipleTrustedServicesUsePurposeThenTrustOrder(t *testing.T) {
+	t.Run("ContextVM from later trusted service beats browser from earlier trusted service", func(t *testing.T) {
+		firstServiceKey := nostr.GeneratePrivateKey()
+		secondServiceKey := nostr.GeneratePrivateKey()
+		firstTrustedPubkey := mustPublicKey(t, firstServiceKey)
+		secondTrustedPubkey := mustPublicKey(t, secondServiceKey)
+		transport := newFakeOperatorTransport()
+		now := nostr.Now()
+		transport.events <- signedRelaySetEvent(t, firstServiceKey, operatorBrowserRelaySet, []string{"wss://first-browser.example"}, now)
+		transport.events <- signedRelaySetEvent(t, secondServiceKey, operatorContextVMRelaySet, []string{"wss://second-contextvm.example"}, now)
+		close(transport.eose)
+
+		relays, err := discoverOperatorRelaysWithTransport(context.Background(), []string{firstTrustedPubkey, secondTrustedPubkey}, transport)
+		if err != nil {
+			t.Fatalf("discoverOperatorRelaysWithTransport() error = %v", err)
+		}
+		if strings.Join(relays, ",") != "wss://second-contextvm.example" {
+			t.Fatalf("relays = %#v, want ContextVM set before browser fallback across trusted services", relays)
+		}
+	})
+
+	t.Run("configured trust order beats cross-service latest timestamp for same relay-set purpose", func(t *testing.T) {
+		firstServiceKey := nostr.GeneratePrivateKey()
+		secondServiceKey := nostr.GeneratePrivateKey()
+		firstTrustedPubkey := mustPublicKey(t, firstServiceKey)
+		secondTrustedPubkey := mustPublicKey(t, secondServiceKey)
+		transport := newFakeOperatorTransport()
+		now := nostr.Now()
+		transport.events <- signedRelaySetEvent(t, firstServiceKey, operatorContextVMRelaySet, []string{"wss://first-contextvm.example"}, now)
+		transport.events <- signedRelaySetEvent(t, secondServiceKey, operatorContextVMRelaySet, []string{"wss://second-newer-contextvm.example"}, nostr.Timestamp(int64(now)+10))
+		close(transport.eose)
+
+		relays, err := discoverOperatorRelaysWithTransport(context.Background(), []string{firstTrustedPubkey, secondTrustedPubkey}, transport)
+		if err != nil {
+			t.Fatalf("discoverOperatorRelaysWithTransport() error = %v", err)
+		}
+		if strings.Join(relays, ",") != "wss://first-contextvm.example" {
+			t.Fatalf("relays = %#v, want first configured trusted service for same relay-set purpose", relays)
+		}
+	})
+}
+
 func TestDiscoverOperatorRelaysRejectsMissingTrustAndUntrustedEvents(t *testing.T) {
 	if _, err := discoverOperatorRelaysWithTransport(context.Background(), nil, newFakeOperatorTransport()); err == nil || !strings.Contains(err.Error(), "trusted service pubkey") {
 		t.Fatalf("missing trust error = %v, want deterministic trusted service pubkey failure", err)
@@ -121,8 +187,39 @@ func TestDiscoverOperatorRelaysReportsDeadlineBeforeEOSE(t *testing.T) {
 	defer cancel()
 
 	_, err := discoverOperatorRelaysWithTransport(ctx, []string{trustedPubkey}, transport)
-	if err == nil || !strings.Contains(err.Error(), "timed out before EOSE") {
-		t.Fatalf("deadline error = %v, want explicit timeout before EOSE", err)
+	if err == nil || !strings.Contains(err.Error(), "transport guard expired before EOSE") {
+		t.Fatalf("deadline error = %v, want explicit transport guard expiry before EOSE", err)
+	}
+}
+
+func TestDiscoverOperatorRelaysTransportGuardDoesNotCompleteDiscovery(t *testing.T) {
+	serviceKey := nostr.GeneratePrivateKey()
+	trustedPubkey := mustPublicKey(t, serviceKey)
+	transport := newFakeOperatorTransport()
+	transport.events = make(chan *nostr.Event)
+	transport.eose = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type discoveryResult struct {
+		relays []string
+		err    error
+	}
+	resultCh := make(chan discoveryResult, 1)
+	go func() {
+		relays, err := discoverOperatorRelaysWithTransport(ctx, []string{trustedPubkey}, transport)
+		resultCh <- discoveryResult{relays: relays, err: err}
+	}()
+
+	transport.events <- signedRelaySetEvent(t, serviceKey, operatorContextVMRelaySet, []string{"wss://candidate-before-eose.example"}, nostr.Now())
+	cancel()
+
+	result := <-resultCh
+	if result.err == nil || !strings.Contains(result.err.Error(), "transport guard canceled before EOSE") {
+		t.Fatalf("guard result error = %v, want fail-closed cancellation before EOSE", result.err)
+	}
+	if result.relays != nil {
+		t.Fatalf("relays = %#v, want no relays without EOSE", result.relays)
 	}
 }
 

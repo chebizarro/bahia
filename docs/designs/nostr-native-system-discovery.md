@@ -103,22 +103,22 @@ Standard NIP-51 relay set events for relay URL discovery. Each is a parameterize
 
 | d-tag | Purpose | Tags |
 |---|---|---|
-| `bahia-browser-v1` | Public browser bootstrap relays (sidecar URL first if sidecar-first) | `["relay", "wss://..."]` per URL |
-| `bahia-browser-v1` | Request-domain relays for encrypted event traffic | `["relay", "wss://..."]` per URL |
-| `bahia-service-v1` | Relays the service publishes to (operator/settings visibility, per HITL-004) | `["relay", "wss://..."]` per URL |
+| `bahia-browser-v1` | Public browser bootstrap/read-model relays (sidecar URL first if sidecar-first) | `["relay", "wss://..."]` per URL |
+| `bahia-contextvm-v1` | ContextVM request/reply relays for mutation intent traffic, including NIP-44 encrypted requests when enabled | `["relay", "wss://..."]` per URL |
+| `bahia-service-v1` | Relays the service publishes to for service-originated observables and settings/operator visibility (per HITL-004) | `["relay", "wss://..."]` per URL |
 
-**Sidecar URL handling:** The sidecar URL is included as the first entry in the `bahia-browser-v1` relay set, not given its own d-tag. As a **Bahia-specific convention**, consumers treat the first relay in the set as preferred (NIP-51 preserves tag order but does not define preference semantics). This avoids an artificial consumer distinction that no current code requires.
+**Sidecar URL handling:** The sidecar URL is included as the first entry in the `bahia-browser-v1` relay set, not given its own d-tag. As a **Bahia-specific convention**, consumers treat the first relay in the browser set as preferred (NIP-51 preserves tag order but does not define preference semantics). This avoids an artificial consumer distinction that no current bootstrap code requires.
 
-**Naming rationale:** `bahia-browser-v1` instead of `bahia-encrypted` avoids the "encrypted relay" framing rejected by HITL-003. The relays themselves are not encrypted; they carry events whose *content* is NIP-44 encrypted.
+**Historical browser-as-request-domain wording:** Earlier versions of this design used `bahia-browser-v1` for encrypted request-domain traffic. Current relay strategy separates that purpose into `bahia-contextvm-v1`; clients may fall back to `bahia-browser-v1` only as compatibility when the ContextVM relay set is absent and must surface degraded metadata.
 
 ### 2.3 What each consumer subscribes to
 
 | Consumer | Filter | Expected events |
 |---|---|---|
 | Browser bootstrap | `{kinds: [11316, 11317, 11318, 11319, 11320, 30002], authors: [<service-pubkey>]}` | System discovery + all relay sets |
-| CLI relay resolution | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-browser-v1"]}` | Browser relay set only |
+| CLI/operator relay resolution | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-contextvm-v1", "bahia-browser-v1"]}` | ContextVM relay set preferred; browser relay set is compatibility fallback |
 | Settings page | `{kinds: [11316, 11317, 11318, 11319, 11320, 30002], authors: [<service-pubkey>]}` | Full discovery + all relay sets |
-| Encrypted transport | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-browser-v1"]}` | Request-domain relay set |
+| Encrypted transport | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-contextvm-v1", "bahia-browser-v1"]}` | ContextVM request-domain relay set preferred; browser relay set is compatibility fallback |
 
 ### 2.4 Service identity
 
@@ -209,9 +209,9 @@ Operator commands trigger deployments, restarts, stops, and adoption flows. Trus
 1. Resolve relay URLs from --relay / env (existing logic)
 2. Resolve service pubkey from --service-pubkey / env (new)
 3. Connect to relay(s)
-4. Subscribe: {kinds: [30002], authors: [service_pubkey], "#d": ["bahia-browser-v1"]}
+4. Subscribe: {kinds: [30002], authors: [service_pubkey], "#d": ["bahia-contextvm-v1", "bahia-browser-v1"]}
 5. Wait for EOSE
-6. Extract relay URLs from bahia-browser-v1 event tags
+6. Extract relay URLs from `bahia-contextvm-v1`; if absent, use `bahia-browser-v1` as compatibility fallback with degraded metadata
 7. Use those relays for operator control-plane requests
 ```
 
@@ -331,11 +331,11 @@ Registries remain in ContextVM discovery content; legacy `31974` registry conten
 ### Encrypted request transport
 
 Encrypted capability gating reads from:
-- Kind 30002 `bahia-browser-v1` → relay URLs for request-domain traffic
+- Kind 30002 `bahia-contextvm-v1` → relay URLs for request-domain traffic; `bahia-browser-v1` is only a compatibility fallback when the ContextVM relay set is absent
 - ContextVM discovery `features.encrypted_nostr_requests` → feature flag
 - ContextVM discovery author pubkey → service pubkey for NIP-44 encryption
 
-The browser encrypted transport module (`encrypted-controlplane.js`) continues checking all three inputs coherently. Encrypted capability is NOT inferred from public relay presence (per HITL-003).
+The browser encrypted transport module (`encrypted-controlplane.js`) continues checking relay URLs, the feature flag, and the service pubkey coherently. Encrypted capability is NOT inferred from public relay presence (per HITL-003).
 
 ---
 
@@ -365,7 +365,7 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 | `web/src/lib/stores/controlplane.svelte.js` | Remove any `nostr.relays` fallback; validate works with normalized Nostr discovery |
 | `web/src/routes/settings/+page.svelte` | Read server relays from kind 30002 subscription; read other metadata from normalized discovery |
 | `web/src/lib/nostr/client.js` | Use ContextVM discovery constants (`11316`-`11320`) and ensure kind `30002` support |
-| `web/src/lib/nostr/encrypted-controlplane.js` | Read encrypted relay URLs from kind 30002 `bahia-browser-v1` instead of Nostr discovery |
+| `web/src/lib/nostr/encrypted-controlplane.js` | Read request-domain relay URLs from kind 30002 `bahia-contextvm-v1`, with historical `bahia-browser-v1` compatibility fallback, instead of legacy discovery |
 | `docs/control-planes.md` | Document discovery protocol, kind constant, relay-set d-tags, bootstrap seed, trust model |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json` | Update feature boundary and intended behavior |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md` | Add HITL decisions for seed mechanism, trust model, mirroring policy |

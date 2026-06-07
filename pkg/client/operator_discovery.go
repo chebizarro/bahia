@@ -23,9 +23,20 @@ const (
 // OperatorRelayDiscoveryConfig configures trusted NIP-51 bootstrap discovery for
 // signer-first operator ContextVM transport relays.
 type OperatorRelayDiscoveryConfig struct {
-	BootstrapRelays       []string
+	BootstrapRelays []string
+
+	// TrustedServicePubkeys is an ordered allowlist. Multiple pubkeys are allowed
+	// for deterministic deployment/operator trust lists, not implicit key
+	// rotation: relay-set selection prefers bahia-contextvm-v1 over
+	// bahia-browser-v1, then the first configured trusted pubkey with a usable
+	// set, and latest-wins only within that same pubkey and d tag.
 	TrustedServicePubkeys []string
-	DiscoveryWaitTimeout  time.Duration
+
+	// DiscoveryWaitTimeout bounds the bootstrap transport wait for relay EOSE.
+	// It is a fail-closed guard for unavailable or stalled relay transport; it is
+	// never a completion signal and discovered relay sets are not selected until
+	// EOSE is observed.
+	DiscoveryWaitTimeout time.Duration
 }
 
 type operatorDiscoveryTransport interface {
@@ -34,14 +45,17 @@ type operatorDiscoveryTransport interface {
 }
 
 type operatorRelaySetCandidate struct {
+	author    string
 	eventID   string
 	createdAt nostr.Timestamp
 	relays    []string
 }
 
 // DiscoverOperatorRelays resolves ContextVM operator relays from trusted
-// service-authored NIP-51 relay sets. It prefers bahia-contextvm-v1 and falls
-// back to bahia-browser-v1 only when no usable ContextVM relay set is present.
+// service-authored NIP-51 relay sets. It waits for relay EOSE before selecting
+// relays, prefers bahia-contextvm-v1 over bahia-browser-v1, and resolves
+// multiple trusted service pubkeys by configured trust order rather than by
+// cross-key latest timestamp.
 func DiscoverOperatorRelays(ctx context.Context, cfg OperatorRelayDiscoveryConfig) ([]string, error) {
 	bootstrapRelays := normalizeOperatorRelays(cfg.BootstrapRelays)
 	if len(bootstrapRelays) == 0 {
@@ -114,12 +128,12 @@ func discoverOperatorRelaysWithTransport(ctx context.Context, trustedPubkeys []s
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, fmt.Errorf("trusted operator relay discovery timed out before EOSE: %w", ctx.Err())
+				return nil, fmt.Errorf("trusted operator relay discovery transport guard expired before EOSE: %w", ctx.Err())
 			}
-			return nil, fmt.Errorf("trusted operator relay discovery canceled before EOSE: %w", ctx.Err())
+			return nil, fmt.Errorf("trusted operator relay discovery transport guard canceled before EOSE: %w", ctx.Err())
 		case <-eose:
 			drainTrustedOperatorRelayEvents(events, trusted, seen, relaySets)
-			return chooseOperatorRelaySet(relaySets, closedReasons)
+			return chooseOperatorRelaySet(relaySets, trustedPubkeys, closedReasons)
 		case event, ok := <-events:
 			if !ok {
 				if eose != nil {
@@ -171,8 +185,9 @@ func recordTrustedOperatorRelayEvent(event *nostr.Event, trusted map[string]stru
 		return
 	}
 	seen[event.ID] = struct{}{}
-	if existing, exists := relaySets[dTag]; !exists || candidateIsNewer(candidate, existing) {
-		relaySets[dTag] = candidate
+	key := operatorRelaySetKey(candidate.author, dTag)
+	if existing, exists := relaySets[key]; !exists || candidateIsNewer(candidate, existing) {
+		relaySets[key] = candidate
 	}
 }
 
@@ -191,15 +206,16 @@ func trustedOperatorRelaySetCandidate(event *nostr.Event, trusted map[string]str
 	if len(relays) == 0 {
 		return operatorRelaySetCandidate{}, "", false
 	}
-	return operatorRelaySetCandidate{eventID: event.ID, createdAt: event.CreatedAt, relays: relays}, dTag, true
+	return operatorRelaySetCandidate{author: event.PubKey, eventID: event.ID, createdAt: event.CreatedAt, relays: relays}, dTag, true
 }
 
-func chooseOperatorRelaySet(relaySets map[string]operatorRelaySetCandidate, closedReasons []string) ([]string, error) {
-	if candidate, ok := relaySets[operatorContextVMRelaySet]; ok && len(candidate.relays) > 0 {
-		return candidate.relays, nil
-	}
-	if candidate, ok := relaySets[operatorBrowserRelaySet]; ok && len(candidate.relays) > 0 {
-		return candidate.relays, nil
+func chooseOperatorRelaySet(relaySets map[string]operatorRelaySetCandidate, trustedPubkeys []string, closedReasons []string) ([]string, error) {
+	for _, dTag := range []string{operatorContextVMRelaySet, operatorBrowserRelaySet} {
+		for _, pubkey := range trustedPubkeys {
+			if candidate, ok := relaySets[operatorRelaySetKey(pubkey, dTag)]; ok && len(candidate.relays) > 0 {
+				return candidate.relays, nil
+			}
+		}
 	}
 	if len(closedReasons) > 0 {
 		return nil, fmt.Errorf("no trusted operator relay set events found before EOSE; relay CLOSED: %s", strings.Join(closedReasons, "; "))
@@ -207,11 +223,16 @@ func chooseOperatorRelaySet(relaySets map[string]operatorRelaySetCandidate, clos
 	return nil, fmt.Errorf("no trusted operator relay set events found before EOSE")
 }
 
+func operatorRelaySetKey(pubkey, dTag string) string {
+	return pubkey + "\x00" + dTag
+}
+
 func candidateIsNewer(candidate, existing operatorRelaySetCandidate) bool {
 	if candidate.createdAt != existing.createdAt {
 		return candidate.createdAt > existing.createdAt
 	}
-	return candidate.eventID > existing.eventID
+	// NIP-01 replaceable-event ties keep the lowest event ID for equal created_at.
+	return candidate.eventID < existing.eventID
 }
 
 func relaySetRelayTags(tags nostr.Tags) []string {

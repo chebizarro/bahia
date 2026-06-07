@@ -2,19 +2,20 @@
   "feature_id": "RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY",
   "title": "Trusted operator bootstrap discovery fallback",
   "status": "implemented",
-  "beads": ["bahia-8epx.6", "bahia-8epx.6.1", "bahia-8epx.6.2", "bahia-8epx.6.3"],
+  "beads": ["bahia-8epx.6", "bahia-8epx.6.1", "bahia-8epx.6.2", "bahia-8epx.6.3", "bahia-8epx.15"],
   "intent": "Preserve explicit operator relay precedence while allowing signer-first CLI/operator clients to discover ContextVM transport relays from trusted service-authored NIP-51 relay sets when no final relay configuration is present.",
   "scope": {
     "included": [
       "CLI operator relay resolution flags and environment inputs",
       "Shared operator client bootstrap discovery over NIP-51 kind 30002 relay sets",
-      "Deterministic tests for precedence, trust validation, relay-set selection, EOSE handling, and failure modes",
+      "Deterministic tests for precedence, trust validation, relay-set selection, EOSE handling, fail-closed transport guard behavior, and failure modes",
       "CLI user documentation for operator relay discovery"
     ],
     "excluded": [
       "NIP-42 AUTH behavior for bootstrap or operator relays",
       "NIP-34 repository relay routing and web repository helpers",
       "NIP-86 relay administration",
+      "Broad service-key rotation design beyond ordered trusted-pubkey selection",
       "Commit or push workflow for this verification-only follow-up"
     ]
   },
@@ -24,7 +25,9 @@
     "Trusted bootstrap discovery runs only when final relay sources are absent and both bootstrap relay seeds plus trusted service pubkeys are configured.",
     "Discovery subscribes to trusted service-authored kind 30002 relay sets scoped to d=bahia-contextvm-v1 and d=bahia-browser-v1 until EOSE.",
     "Discovery validates event ID, Schnorr signature, trusted author, reasonable timestamp, scoped d tag, and usable relay tags before trusting an event.",
-    "Usable bahia-contextvm-v1 relay sets are preferred over bahia-browser-v1; browser relays are used only as deterministic fallback.",
+    "The bounded discovery wait is a fail-closed transport guard only; it never completes discovery, and relay sets are not selected until EOSE.",
+    "Usable bahia-contextvm-v1 relay sets are preferred over bahia-browser-v1 across trusted service pubkeys; browser relays are used only as deterministic fallback.",
+    "Multiple trusted service pubkeys are an ordered allowlist, not implicit key rotation: after relay-set purpose preference, the first configured trusted pubkey with a usable set wins, and parameterized replaceable latest-wins applies only within the same service pubkey and d tag, using the lowest event ID for equal created_at ties.",
     "Missing bootstrap inputs, missing trusted pubkeys, untrusted/invalid events, no trusted events before EOSE, or no EOSE before the bounded wait fail with explicit errors."
   ],
   "interfaces": {

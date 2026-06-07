@@ -4,7 +4,7 @@ Beads: `bahia-8epx.3`, `bahia-8epx.3.1`, `bahia-8epx.3.2`, `bahia-8epx.3.3`
 
 ## Scope
 
-This slice implements backend discovery projection for service-authored NIP-51 kind `30002` relay sets only. Browser discovery, advisory service NIP-65 publication, CLI fallback discovery, AUTH behavior changes, NIP-86, and final docs-only verification remain outside this slice.
+This slice verifies backend discovery projection for service-authored NIP-51 kind `30002` relay sets only. Advisory service NIP-65 kind `10002` projection is verified separately in `pstf/features/RELAY_STRATEGY_NIP65_SERVICE_PREFS` / `bahia-8epx.5`; user/operator-authored NIP-65 preferences are not implemented or claimed by this report. Browser discovery, CLI fallback discovery, AUTH behavior changes, NIP-86, and final docs-only verification remain outside this slice.
 
 ## Evidence
 
@@ -31,4 +31,4 @@ go test ./internal/config ./internal/adapters/nostr
 
 ## Remaining work outside this slice
 
-Downstream Beads continue to own browser discovery normalization (`bahia-8epx.4`), advisory service NIP-65 publication (`bahia-8epx.5`), CLI fallback (`bahia-8epx.6`), AUTH behavior (`bahia-8epx.7`), NIP-86 (`bahia-8epx.10`), and final documentation/verification (`bahia-8epx.11`).
+Downstream Beads continue to own browser discovery normalization (`bahia-8epx.4`), service-authored advisory NIP-65 verification (`bahia-8epx.5` / `pstf/features/RELAY_STRATEGY_NIP65_SERVICE_PREFS`), CLI fallback (`bahia-8epx.6`), AUTH behavior (`bahia-8epx.7`), NIP-86 (`bahia-8epx.10`), and final documentation/verification (`bahia-8epx.11`).

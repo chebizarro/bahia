@@ -1,7 +1,7 @@
 {
   "feature_id": "RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY",
   "status": "implemented",
-  "beads": ["bahia-8epx.6", "bahia-8epx.6.1", "bahia-8epx.6.2", "bahia-8epx.6.3"],
+  "beads": ["bahia-8epx.6", "bahia-8epx.6.1", "bahia-8epx.6.2", "bahia-8epx.6.3", "bahia-8epx.15"],
   "criteria": [
     {
       "ac_id": "RSOBD-AC-001",
@@ -36,6 +36,20 @@
       "title": "Missing trust or trusted relay events fail deterministically",
       "assertion": "Missing trusted pubkeys, untrusted relay-set authors, invalid signatures, wrong d tags, or no trusted events before EOSE produce explicit errors and no discovered relays.",
       "tests": ["RSOBD-T-006"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSOBD-AC-006",
+      "title": "Discovery timeout is a fail-closed transport guard",
+      "assertion": "The bounded discovery wait only guards stalled or unavailable bootstrap transport; it is not a completion signal, and a usable relay-set candidate received before EOSE still returns no relays if the guard expires or is canceled before EOSE.",
+      "tests": ["RSOBD-T-007"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSOBD-AC-007",
+      "title": "Multiple trusted service pubkeys use deterministic selection order",
+      "assertion": "Multiple trusted service pubkeys are allowed as an ordered allowlist, not implicit key rotation: selection prefers bahia-contextvm-v1 over bahia-browser-v1, then the first configured trusted pubkey with a usable set, with parameterized replaceable latest-wins only within the same service pubkey and d tag, including lowest event ID for equal created_at ties.",
+      "tests": ["RSOBD-T-008"],
       "status": "pass"
     }
   ]

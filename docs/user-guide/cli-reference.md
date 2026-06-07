@@ -24,7 +24,7 @@ make build
 | `BAHIA_NOSTR_RELAYS` | Comma-separated final relay URLs for operator/ContextVM transport; takes precedence over bootstrap discovery | unset |
 | `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Comma-separated bootstrap relay seeds used only for trusted operator relay discovery when `BAHIA_NOSTR_RELAYS` and `--relay` are absent | unset |
 | `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey for signer-first routing; also accepted as single-service discovery trust | unset |
-| `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for operator bootstrap discovery | unset |
+| `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for operator bootstrap discovery, evaluated in configured order | unset |
 | `BAHIA_AUTH_ENABLED` | Enable authentication | `false` |
 | `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow HTTP fallback | `false` |
 
@@ -65,7 +65,7 @@ bahia auth status
 
 The CLI uses ContextVM JSON-RPC methods over Nostr kind `25910`, normally wrapped with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) when encrypted transport is available. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs. Legacy Bahia request kinds are not production CLI transport; they are retained only as startup migration/test fixtures.
 
-Operator relay resolution is deterministic and ordered: explicit `--relay` values are final and highest priority, `BAHIA_NOSTR_RELAYS` is second, and trusted bootstrap discovery is used only when both final relay sources are absent. Discovery requires at least one bootstrap relay (`--bootstrap-relay` or `BAHIA_NOSTR_BOOTSTRAP_RELAYS`) and at least one trusted service pubkey (`--trusted-service-pubkey`, `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS`, or single-service `--service-pubkey` / `BAHIA_NOSTR_SERVICE_PUBKEY`). The CLI queries trusted service-authored NIP-51 `30002` relay sets until EOSE, prefers `d=bahia-contextvm-v1`, and falls back to `d=bahia-browser-v1` only when no usable ContextVM relay set is present. If relay `OK`, `CLOSED`, or `AUTH` outcomes leave no usable relay after a signed ContextVM event is accepted, the CLI reports the relay failure rather than falling back to REST unless the explicit HTTP fallback is still in a pre-acceptance failure path.
+Operator relay resolution is deterministic and ordered: explicit `--relay` values are final and highest priority, `BAHIA_NOSTR_RELAYS` is second, and trusted bootstrap discovery is used only when both final relay sources are absent. Discovery requires at least one bootstrap relay (`--bootstrap-relay` or `BAHIA_NOSTR_BOOTSTRAP_RELAYS`) and at least one trusted service pubkey (`--trusted-service-pubkey`, `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS`, or single-service `--service-pubkey` / `BAHIA_NOSTR_SERVICE_PUBKEY`). The CLI queries trusted service-authored NIP-51 `30002` relay sets until EOSE; the bounded discovery wait is a fail-closed transport guard, not a completion signal, so relay sets are never selected before EOSE. Selection prefers `d=bahia-contextvm-v1` across trusted services, falls back to `d=bahia-browser-v1` only when no usable ContextVM relay set is present, and resolves multiple trusted service pubkeys by configured order with latest-wins only within the same service pubkey and `d` tag. If relay `OK`, `CLOSED`, or `AUTH` outcomes leave no usable relay after a signed ContextVM event is accepted, the CLI reports the relay failure rather than falling back to REST unless the explicit HTTP fallback is still in a pre-acceptance failure path.
 
 ## Commands
 
@@ -357,7 +357,7 @@ bahia services get payment-api -o yaml
 | `--relay` | Specify final operator relay (repeatable; highest priority) |
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
-| `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
+| `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable; evaluated in configured order) |
 | `--http-fallback` | Allow HTTP fallback |
 | `-o, --output` | Output format (table, json, yaml) |
 | `-v, --verbose` | Verbose output |

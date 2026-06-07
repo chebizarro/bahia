@@ -27,15 +27,27 @@
     },
     {
       "test_id": "RSOBD-T-005",
-      "name": "Shared discovery falls back to bahia-browser-v1 and latest replaceable event",
-      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(FallsBackToBrowserRelaySet|UsesLatestParameterizedReplaceableRelaySet)'",
+      "name": "Shared discovery falls back to bahia-browser-v1 and follows parameterized replaceable ordering",
+      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(FallsBackToBrowserRelaySet|UsesLatestParameterizedReplaceableRelaySet|UsesLowestEventIDForReplaceableTimestampTie)'",
       "acceptance_criteria": ["RSOBD-AC-004"]
     },
     {
       "test_id": "RSOBD-T-006",
       "name": "Missing or untrusted discovery inputs fail deterministically",
-      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(RejectsMissingTrustAndUntrustedEvents|RejectsUnsignedOrWrongDTagEvents|RequiresBootstrapRelaysForRealResolver|ReportsDeadlineBeforeEOSE)' && go test ./cmd/cli -run TestResolveOperatorRelaysPrecedence",
+      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(RejectsMissingTrustAndUntrustedEvents|RejectsUnsignedOrWrongDTagEvents|RequiresBootstrapRelaysForRealResolver)' && go test ./cmd/cli -run TestResolveOperatorRelaysPrecedence",
       "acceptance_criteria": ["RSOBD-AC-003", "RSOBD-AC-005"]
+    },
+    {
+      "test_id": "RSOBD-T-007",
+      "name": "Discovery transport guard fails closed before EOSE",
+      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(ReportsDeadlineBeforeEOSE|TransportGuardDoesNotCompleteDiscovery)'",
+      "acceptance_criteria": ["RSOBD-AC-006"]
+    },
+    {
+      "test_id": "RSOBD-T-008",
+      "name": "Multiple trusted service pubkeys use purpose then configured trust order",
+      "command": "go test ./pkg/client -run TestDiscoverOperatorRelaysMultipleTrustedServicesUsePurposeThenTrustOrder",
+      "acceptance_criteria": ["RSOBD-AC-007"]
     }
   ]
 }
