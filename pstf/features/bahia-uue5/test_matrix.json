@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-uue5",
+  "tests": [
+    {
+      "command": "npm run build",
+      "acceptance_criteria": ["AC1"],
+      "result": "passed",
+      "evidence": "Vite/SvelteKit static build completed successfully with no warnings for the three touched files."
+    },
+    {
+      "command": "npm run lint",
+      "acceptance_criteria": ["AC2"],
+      "result": "passed",
+      "evidence": "svelte-check found 0 errors and 0 warnings."
+    },
+    {
+      "command": "npm run test:unit -- --run tests/unit/assistant/assistant-components.test.js tests/unit/PolicyRuleBuilder.test.ts tests/unit/settings-section-order.test.js",
+      "acceptance_criteria": ["AC3"],
+      "result": "passed",
+      "evidence": "3 test files passed; 18 tests passed."
+    }
+  ]
+}

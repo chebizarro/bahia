@@ -286,9 +286,9 @@
       />
     </div>
 
-    <div class="form-field">
+    <fieldset class="form-field rules-field">
       <div class="rules-header">
-        <span class="field-heading">Rules *</span>
+        <legend class="field-heading">Rules *</legend>
         <div class="builder-toggle">
           <button
             type="button"
@@ -328,7 +328,7 @@
         />
         <span class="help-text">Enter policy rules as a JSON array</span>
       {/if}
-    </div>
+    </fieldset>
 
     <div class="form-field">
       <Checkbox
@@ -431,6 +431,12 @@
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--text-primary);
+  }
+  .rules-field {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-inline-size: 0;
   }
   .help-text {
     font-size: 0.75rem;

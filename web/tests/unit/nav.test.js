@@ -192,6 +192,7 @@ describe('nav model helpers', () => {
     expect(anonymousMenuItems.find((item) => item.id === 'nip46')).toMatchObject({ href: '/settings#nostr-connect' });
 
     expect(authenticatedMenuItems.map((item) => item.id)).toEqual(['profile', 'relays', 'logout']);
+    expect(authenticatedMenuItems.find((item) => item.id === 'relays')).toMatchObject({ href: '/settings/relays' });
     expect(authenticatedMenuItems.find((item) => item.id === 'logout')).toMatchObject({ action: 'logout' });
   });
 

@@ -2,11 +2,12 @@
   "feature_id": "CENTRAL_DOCS_INTERFACE",
   "updated_at": "2026-06-07",
   "defects": [],
-  "known_follow_ups": [
+  "known_follow_ups": [],
+  "resolved_follow_ups": [
     {
       "bead": "bahia-oikr",
       "title": "Full navigation E2E harness console errors",
-      "scope": "Existing unrelated E2E navigation harness console cleanup; not a blocker for Item 8 because deterministic unit/API/route-transport gates cover the central docs slice."
+      "resolution": "Navigation E2E now uses the shared runtime guard without broad SSE/EventSource filtering; focused docs navigation and full navigation specs passed on 2026-06-07."
     }
   ],
   "verification_disposition": "No CENTRAL_DOCS_INTERFACE implementation defects were found during Item 8 evidence review and final gate execution. The web lint script gap tracked by bahia-4ez0 is resolved: cd web && npm run lint now runs the deterministic SvelteKit svelte-check gate successfully."

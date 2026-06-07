@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-oikr",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Full navigation E2E runs against the mocked API and Nostr bootstrap harness without unexpected console or page errors.",
+      "tests": ["web/tests/e2e/navigation.spec.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The docs navigation assertion for global and contextual documentation actions remains covered.",
+      "tests": ["web/tests/e2e/navigation.spec.js -g 'exposes global and contextual documentation actions'"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Navigation error detection does not broadly mask unexpected app errors from EventSource, SSE, or bootstrap paths.",
+      "tests": ["web/tests/e2e/navigation.spec.js -g 'should render navigation without errors'"]
+    }
+  ]
+}

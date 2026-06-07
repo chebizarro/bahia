@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-zgo6",
+  "title": "Extract relay management to /settings/relays",
+  "observed_behavior": [
+    "docs/designs/unified-user-menu.md defines Manage Relays as /settings/relays, but the user menu previously linked to /settings#relays.",
+    "Persistent operator relay policy and local browser relay reconnect controls were embedded in web/src/routes/settings/+page.svelte."
+  ],
+  "intended_behavior": [
+    "/settings/relays renders the existing relay management workflow as a dedicated route.",
+    "The Settings page links to the dedicated route instead of owning relay-management controls.",
+    "Local browser relay URL validation and reconnect outcomes are visible to operators."
+  ],
+  "scope": [
+    "web/src/lib/components/settings/RelaySettingsPanel.svelte",
+    "web/src/routes/settings/relays/+page.svelte",
+    "web/src/routes/settings/+page.svelte",
+    "web/src/lib/components/user-menu-model.js",
+    "web/tests/e2e/settings-relay-visibility.spec.js",
+    "web/tests/unit/nav.test.js",
+    "docs/user-guide/getting-started.md"
+  ],
+  "out_of_scope": [
+    "Navigation E2E build-warning cleanup from completed beads bahia-oikr and bahia-uue5.",
+    "Changing Nostr event kinds or ContextVM relay-policy mutation semantics."
+  ]
+}

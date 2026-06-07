@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
+import { attachRuntimeErrorGuards } from './helpers-console.js';
 
 const BROWSER_RELAY = 'ws://relay.test.local';
 const SERVICE_PUBKEY = 'b'.repeat(64);
@@ -114,24 +115,11 @@ test.describe('Navigation', () => {
   });
 
   test('should render navigation without errors', async ({ page }) => {
-    const consoleErrors = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        consoleErrors.push(msg.text());
-      }
-    });
+    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    // Check that no console errors occurred during navigation
-    // Filter out expected SSE-related errors since we're mocking the backend
-    const unexpectedErrors = consoleErrors.filter(err => 
-      !err.includes('EventSource') && 
-      !err.includes('SSE') &&
-      !err.includes('event stream')
-    );
-    
-    expect(unexpectedErrors.length).toBe(0);
+    await assertNoRuntimeErrors();
   });
 });

@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-uue5",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "description": "npm run build emits no warnings for AssistantPlanApproval.svelte, policies/+page.svelte, or settings/+page.svelte."
+    },
+    {
+      "id": "AC2",
+      "description": "npm run lint reports zero Svelte diagnostics after the warning fixes."
+    },
+    {
+      "id": "AC3",
+      "description": "Existing focused tests covering nearby assistant, policy-builder, and settings behavior continue to pass."
+    }
+  ]
+}

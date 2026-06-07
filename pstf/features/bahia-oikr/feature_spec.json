@@ -1,0 +1,24 @@
+{
+  "feature_id": "bahia-oikr",
+  "title": "Stabilize navigation E2E mocked bootstrap console error detection",
+  "observed_behavior": [
+    "The ready bead recorded that the full navigation E2E suite previously failed its navigation error guard because mocked dashboard bootstrap and connection paths emitted three unexpected console errors.",
+    "The navigation spec's error guard filtered broad EventSource, SSE, and event stream substrings, allowing mocked-backend noise to be hidden without proving the bootstrap harness was clean."
+  ],
+  "intended_behavior": [
+    "The mocked API and Nostr bootstrap harness seeds relay-backed discovery and read-model contracts cleanly for navigation smoke tests.",
+    "The full navigation E2E suite reports real console or page regressions without broadly masking unexpected app errors.",
+    "The central documentation navigation assertion remains covered by the full navigation spec and a focused Playwright run."
+  ],
+  "scope": [
+    "web/tests/e2e/navigation.spec.js",
+    "web/tests/e2e/helpers.js",
+    "web/tests/e2e/helpers-console.js"
+  ],
+  "out_of_scope": [
+    "web/src/lib/components/assistant/AssistantPlanApproval.svelte",
+    "web/src/routes/policies/+page.svelte",
+    "web/src/routes/settings/+page.svelte",
+    "web build-warning cleanup owned by concurrent work"
+  ]
+}

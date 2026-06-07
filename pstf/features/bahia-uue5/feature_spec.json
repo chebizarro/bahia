@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-uue5",
+  "title": "Resolve existing web build warnings",
+  "observed_behavior": "Prior verification tracked Svelte/Vite warnings in AssistantPlanApproval.svelte, policies/+page.svelte, and settings/+page.svelte even though the web build completed.",
+  "intended_behavior": "Production web build and lint diagnostics remain warning-free for the touched files while preserving existing assistant plan approval, policy creation, and settings QR behavior.",
+  "scope": [
+    "web/src/lib/components/assistant/AssistantPlanApproval.svelte",
+    "web/src/routes/policies/+page.svelte",
+    "web/src/routes/settings/+page.svelte"
+  ]
+}

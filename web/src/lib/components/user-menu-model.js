@@ -25,7 +25,7 @@ export const authenticatedMenuItems = [
     id: 'relays',
     label: 'Manage Relays',
     action: 'settings',
-    href: '/settings#relays'
+    href: '/settings/relays'
   },
   {
     id: 'logout',

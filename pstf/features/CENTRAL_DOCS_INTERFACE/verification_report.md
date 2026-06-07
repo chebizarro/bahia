@@ -72,8 +72,9 @@ Reviewed scope has no fake docs catalog, placeholder UI route, ignored API failu
 
 No CENTRAL_DOCS_INTERFACE implementation work remains from evidence review. Tracked follow-ups:
 
-- `bahia-oikr`: existing unrelated full navigation E2E harness console errors.
+- None.
 
 Resolved follow-ups:
 
+- `bahia-oikr`: existing unrelated full navigation E2E harness console errors; resolved by tightening navigation E2E runtime error detection and verifying focused docs navigation plus full navigation spec on 2026-06-07.
 - `bahia-4ez0`: project-level missing `web` lint script discovered during closeout; resolved by adding and verifying the deterministic SvelteKit lint/check gate.

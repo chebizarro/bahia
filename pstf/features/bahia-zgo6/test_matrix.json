@@ -1,0 +1,54 @@
+{
+  "feature_id": "bahia-zgo6",
+  "tests": [
+    {
+      "id": "T1",
+      "criteria": [
+        "AC1",
+        "AC4"
+      ],
+      "command": "npm run test:e2e -- settings-relay-visibility.spec.js",
+      "coverage": "Settings page Relays card navigates to /settings/relays and renders relay sections.",
+      "status": "passed"
+    },
+    {
+      "id": "T2",
+      "criteria": [
+        "AC2"
+      ],
+      "command": "npm run test:e2e -- settings-relay-visibility.spec.js",
+      "coverage": "Canonical relay policy hydration, dirty-edit preservation, and separate local relay controls remain visible on the dedicated route.",
+      "status": "passed"
+    },
+    {
+      "id": "T3",
+      "criteria": [
+        "AC2",
+        "AC3"
+      ],
+      "command": "npm run test:e2e -- settings-relay-visibility.spec.js",
+      "coverage": "Invalid local relay URLs are rejected explicitly; add/remove actions reconnect and report outcomes; removing the final local relay is not overwritten by discovery fallback.",
+      "status": "passed"
+    },
+    {
+      "id": "T4",
+      "criteria": [
+        "AC4"
+      ],
+      "command": "npm run test:unit -- tests/unit/nav.test.js",
+      "coverage": "User menu model points Manage Relays to /settings/relays.",
+      "status": "passed"
+    },
+    {
+      "id": "T5",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3"
+      ],
+      "command": "npm run lint && npm run build",
+      "coverage": "Svelte route/component extraction type-checks and builds.",
+      "status": "passed"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-oikr",
+  "tests": [
+    {
+      "acceptance_criteria": ["AC1", "AC2", "AC3"],
+      "command": "npm run test:e2e -- navigation.spec.js",
+      "expected": "5 passed"
+    },
+    {
+      "acceptance_criteria": ["AC2"],
+      "command": "npm run test:e2e -- navigation.spec.js -g 'exposes global and contextual documentation actions'",
+      "expected": "1 passed"
+    },
+    {
+      "acceptance_criteria": ["AC3"],
+      "command": "npm run test:e2e -- navigation.spec.js -g 'should render navigation without errors'",
+      "expected": "1 passed with shared runtime guard and no console allowlist"
+    }
+  ]
+}

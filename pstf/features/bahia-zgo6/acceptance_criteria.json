@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-zgo6",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "/settings/relays exists and renders relay management as a dedicated route.",
+      "evidence": ["web/src/routes/settings/relays/+page.svelte", "web/tests/e2e/settings-relay-visibility.spec.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Existing persistent operator relay policy and local browser add/remove/reconnect behavior remains available.",
+      "evidence": ["web/src/lib/components/settings/RelaySettingsPanel.svelte", "web/tests/e2e/settings-relay-visibility.spec.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Relay URL validation and reconnect outcomes are explicit in the UI.",
+      "evidence": ["web/src/lib/components/settings/RelaySettingsPanel.svelte", "web/tests/e2e/settings-relay-visibility.spec.js"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Route navigation to relay settings is covered deterministically.",
+      "evidence": ["web/tests/e2e/settings-relay-visibility.spec.js", "web/tests/unit/nav.test.js"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Docs, PSTF artifacts, and Beads are updated; the Bead closes only after verification passes.",
+      "evidence": ["docs/user-guide/getting-started.md", "pstf/features/bahia-zgo6/verification_report.md", ".beads/issues.jsonl"]
+    }
+  ]
+}

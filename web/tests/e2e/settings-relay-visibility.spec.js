@@ -53,6 +53,17 @@ test.describe('Settings relay visibility', () => {
     await expect(serverConfig).not.toContainText(BROWSER_RELAY);
   });
 
+  test('navigates from settings to the dedicated relay settings route', async ({ page }) => {
+    await installE2EMocks(page, { systemInfo });
+
+    await page.goto('/settings');
+    await page.getByRole('link', { name: /Relays/ }).click();
+
+    await expect(page).toHaveURL(/\/settings\/relays$/);
+    await expect(page.getByRole('heading', { name: 'Relay Settings', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Browser Session Relays' })).toBeVisible();
+  });
+
   test('hydrates canonical relay policy and subscribes through advertised service relays', async ({ page }) => {
     await installE2EMocks(page, {
       systemInfo: {
@@ -71,7 +82,7 @@ test.describe('Settings relay visibility', () => {
       })]
     });
 
-    await page.goto('/settings');
+    await page.goto('/settings/relays');
 
     const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
     await expect(operatorPolicy.getByText('hydrated from canonical 30900 state')).toBeVisible();
@@ -94,7 +105,7 @@ test.describe('Settings relay visibility', () => {
       nostrEvents: [relaySettingsStateEvent({ browserRelays: ['wss://canonical-initial.example'], createdAt: now - 1 })]
     });
 
-    await page.goto('/settings');
+    await page.goto('/settings/relays');
 
     const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
     const browserPolicy = operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea');
@@ -121,7 +132,7 @@ test.describe('Settings relay visibility', () => {
       }
     } });
 
-    await page.goto('/settings');
+    await page.goto('/settings/relays');
 
     await expect(page.getByRole('heading', { name: 'Operator Relay Policy' })).toBeVisible();
     await expect(page.getByText('ContextVM request/reply relays')).toBeVisible();
@@ -131,5 +142,53 @@ test.describe('Settings relay visibility', () => {
     await expect(page.getByRole('button', { name: 'Publish Relay Policy Mutation' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Browser Session Relays' })).toBeVisible();
     await expect(page.getByText('Local emergency override for this browser session only')).toBeVisible();
+  });
+
+  test('validates local relay URLs and reports reconnect outcomes for add and remove', async ({ page }) => {
+    await installE2EMocks(page, { systemInfo });
+
+    await page.goto('/settings/relays');
+
+    const browserRelays = page.locator('section', { hasText: 'Browser Session Relays' });
+    const relayInput = browserRelays.getByPlaceholder('wss://relay.example.com');
+    await relayInput.fill('https://not-a-relay.example');
+    await browserRelays.getByRole('button', { name: 'Add & Reconnect Locally' }).click();
+    await expect(browserRelays.getByText('Relay URL must start with wss:// or ws://.')).toBeVisible();
+
+    await relayInput.fill('wss://added-relay.example');
+    await browserRelays.getByRole('button', { name: 'Add & Reconnect Locally' }).click();
+    await expect(browserRelays.getByText('wss://added-relay.example')).toBeVisible();
+    await expect(browserRelays.getByText(/Reconnect succeeded: connected to \d+\/\d+ local browser relays\./)).toBeVisible();
+
+    const addedRelay = browserRelays.locator('.relay-item', { hasText: 'wss://added-relay.example' });
+    await addedRelay.getByTitle('Remove and reconnect').click();
+    await expect(browserRelays.getByText('wss://added-relay.example')).toHaveCount(0);
+    await expect(browserRelays.getByText(/Reconnect succeeded: connected to \d+\/\d+ local browser relays\./)).toBeVisible();
+  });
+
+  test('removing the final local browser relay is not overwritten by discovery fallback', async ({ page }) => {
+    await installE2EMocks(page, { systemInfo });
+    await page.addInitScript(() => {
+      if (localStorage.getItem('bahia_nostr_relays') === null) {
+        localStorage.setItem('bahia_nostr_relays', JSON.stringify(['ws://single-local-relay.test.local']));
+      }
+    });
+
+    await page.goto('/settings/relays');
+
+    const browserRelays = page.locator('section', { hasText: 'Browser Session Relays' });
+    await expect(browserRelays.getByText('ws://single-local-relay.test.local')).toBeVisible();
+    await browserRelays.locator('.relay-item', { hasText: 'ws://single-local-relay.test.local' }).getByTitle('Remove and reconnect').click();
+
+    await expect(browserRelays.getByText('ws://single-local-relay.test.local')).toHaveCount(0);
+    await expect(browserRelays.getByText(BROWSER_RELAY)).toHaveCount(0);
+    await expect(browserRelays.getByText('Relay configuration saved with no local browser relays configured.')).toBeVisible();
+    await expect(browserRelays.getByText('No local browser relays configured.', { exact: true })).toBeVisible();
+
+    await page.reload();
+    const reloadedBrowserRelays = page.locator('section', { hasText: 'Browser Session Relays' });
+    await expect(reloadedBrowserRelays.getByText('ws://single-local-relay.test.local')).toHaveCount(0);
+    await expect(reloadedBrowserRelays.getByText(BROWSER_RELAY)).toHaveCount(0);
+    await expect(reloadedBrowserRelays.getByText('No local browser relays configured.', { exact: true })).toBeVisible();
   });
 });

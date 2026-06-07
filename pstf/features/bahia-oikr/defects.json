@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-oikr",
+  "updated_at": "2026-06-07",
+  "defects": [
+    {
+      "id": "D1",
+      "title": "Navigation smoke masked mocked bootstrap console noise with broad SSE string filters",
+      "status": "resolved",
+      "observed": "The navigation spec collected console errors and filtered any message containing EventSource, SSE, or event stream before asserting success.",
+      "intended": "The mocked bootstrap harness should run cleanly and the navigation smoke should fail on unexpected console or page errors instead of hiding them by substring.",
+      "resolution": "The navigation error assertion now uses the shared attachRuntimeErrorGuards helper with no allowConsole entries, covering console errors and uncaught page errors."
+    }
+  ],
+  "known_follow_ups": []
+}

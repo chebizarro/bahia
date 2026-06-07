@@ -22,9 +22,9 @@ function getConfiguredRelays() {
 
   try {
     const stored = localStorage.getItem(RELAY_CONFIG_KEY);
-    if (stored) {
+    if (stored !== null) {
       const relays = JSON.parse(stored);
-      if (Array.isArray(relays) && relays.length > 0) {
+      if (Array.isArray(relays)) {
         return relays;
       }
     }
@@ -35,6 +35,13 @@ function getConfiguredRelays() {
   return DEFAULT_RELAYS;
 }
 
+export function hasSavedRelayConfig() {
+  return typeof window !== 'undefined'
+    && typeof localStorage !== 'undefined'
+    && typeof localStorage.getItem === 'function'
+    && localStorage.getItem(RELAY_CONFIG_KEY) !== null;
+}
+
 /**
  * Save relay configuration to localStorage
  */
@@ -42,7 +49,7 @@ export function saveRelayConfig(relays) {
   if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.setItem !== 'function') return;
 
   try {
-    if (Array.isArray(relays) && relays.length > 0) {
+    if (Array.isArray(relays)) {
       localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relays));
     } else {
       localStorage.removeItem(RELAY_CONFIG_KEY);

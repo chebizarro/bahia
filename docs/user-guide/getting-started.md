@@ -220,9 +220,11 @@ auth:
 
 ### No relay connection
 
-Check relay configuration:
+Check relay discovery from the server:
 ```bash
 curl http://localhost:8080/.well-known/nostr.json
 ```
+
+In the web UI, open **Settings → Relays** (`/settings/relays`) to inspect persistent operator relay policy, validate local browser relay URLs, and reconnect the local browser session. Reconnect results explicitly report whether all, some, or no configured local browser relays connected.
 
 See [Troubleshooting](troubleshooting.md) for more solutions.

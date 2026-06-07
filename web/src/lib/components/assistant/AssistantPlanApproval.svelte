@@ -6,7 +6,7 @@
   let submitting = $state(false);
   let error = $state('');
   let editedPlan = $state(null);
-  let originalPlanJSON = $state('null');
+  let originalPlanJSON = 'null';
   let lastPlanJSON = '';
   let argsTextByStep = $state({});
   const riskLevel = $derived(String(editedPlan?.risk_level || editedPlan?.riskLevel || 'low').toLowerCase());
