@@ -1,0 +1,30 @@
+{
+  "feature_id": "RELAY_POLICY_SOURCES",
+  "criteria": [
+    {
+      "id": "AC-RELAY-POLICY-001",
+      "statement": "Service, browser, and ContextVM relay policy sources are independently configurable in backend config.",
+      "verification": ["go test ./internal/config -run TestNostrRelayPolicySourcesAreIndependent"]
+    },
+    {
+      "id": "AC-RELAY-POLICY-002",
+      "statement": "ContextVM relay resolution falls back to browser relays only when contextvm_relays is absent and does not mutate the explicit configured source.",
+      "verification": ["go test ./internal/config -run TestNostrRelayPolicyCompatibilityFallbacks"]
+    },
+    {
+      "id": "AC-RELAY-POLICY-003",
+      "statement": "nostr.relays remains a backend/service compatibility alias and is not the browser relay policy source.",
+      "verification": ["go test ./internal/config -run TestNostrRelayPolicyCompatibilityFallbacks"]
+    },
+    {
+      "id": "AC-RELAY-POLICY-004",
+      "statement": "Legacy private mirror fields remain non-configurable and rejected from YAML and environment input.",
+      "verification": ["go test ./internal/config -run TestLoadRejectsRemovedEncryptedRequestKeys"]
+    },
+    {
+      "id": "AC-RELAY-POLICY-005",
+      "statement": "AUTH-unavailable semantics are fixed to exclude_and_fail and invalid fallback policies are rejected.",
+      "verification": ["go test ./internal/config -run TestNostrRelayAuthUnavailablePolicyValidation"]
+    }
+  ]
+}

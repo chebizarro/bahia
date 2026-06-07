@@ -123,25 +123,40 @@ nostr:
 
 Browser and API traffic goes through the sidecar. Operators must configure the sidecar relay allowlists so browsers can reach only the advertised `nostr.browser_relays` / `nostr.sidecar_url` set and backend migration/runtime publishers can reach only configured backend/upstream relays. Legacy-kind backfill may read from migration-configured relays, but live runtime publication remains canonical-only.
 
-### Upstream Relays
+### Relay Policy Sources
 
-Additional relays for interop and audit:
+Backend configuration separates relay policy by purpose even when a deployment intentionally reuses the same physical relay URL:
 
 ```yaml
 nostr:
+  # Backward-compatible alias for backend/service relays. Do not treat this as browser policy.
   relays:
-    - "wss://relay.damus.io"
-    - "wss://nos.lol"
+    - "wss://service-relay.example.com"
+  # Canonical backend service publish/backfill source. If absent, nostr.relays is used as a compatibility alias.
+  service_relays:
+    - "wss://service-relay.example.com"
+  # Browser-safe bootstrap/read relays.
+  browser_relays:
+    - "wss://sidecar.example.com"
+  # Preferred ContextVM request/reply relays. If absent, clients may fall back to browser_relays with degraded metadata.
+  contextvm_relays:
+    - "wss://contextvm-relay.example.com"
+  # Fixed behavior when a relay requires NIP-42 AUTH and no signer is available.
+  relay_auth_unavailable: "exclude_and_fail"
 ```
+
+`nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 
 ### Encrypted Request Transport
 
-Sensitive operations use the same Bahia browser relay set, with encrypted capability gated by discovery metadata:
+Sensitive operations use the ContextVM relay policy where available and otherwise the Bahia browser relay set, with encrypted capability gated by discovery metadata:
 
 ```yaml
 nostr:
+  contextvm_relays:
+    - "wss://contextvm-relay.example.com"
   browser_relays:
-    - "wss://encrypted.relay.example.com"
+    - "wss://browser-relay.example.com"
 ```
 
 ## Discovery

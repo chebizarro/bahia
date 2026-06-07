@@ -92,7 +92,8 @@ func TestWorkspaceOpenClawConfigRejectsInvalidOrMissingValues(t *testing.T) {
 	}{
 		{name: "short soul pubkey", cfg: base, soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: "short"}, want: "soul Nostr pubkey is invalid"},
 		{name: "short controller", cfg: func() WorkspaceConfig { c := base; c.OpenClawControllers = []string{"short"}; return c }(), soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: validPubkey}, want: "controller pubkey"},
-		{name: "missing relays", cfg: func() WorkspaceConfig { c := base; c.OpenClawRelays = nil; c.NgitRelays = nil; return c }(), soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: validPubkey}, want: "relays are required"},
+		{name: "missing OpenClaw control relays", cfg: func() WorkspaceConfig { c := base; c.OpenClawRelays = nil; return c }(), soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: validPubkey}, want: "OpenClaw workspace relays are required"},
+		{name: "missing ngit publication relays", cfg: func() WorkspaceConfig { c := base; c.NgitRelays = nil; return c }(), soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: validPubkey}, want: "workspace ngit relays are required"},
 		{name: "missing secret ref", cfg: func() WorkspaceConfig { c := base; c.OpenClawPrivateKeyRef = ""; return c }(), soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: validPubkey}, want: "private key secret reference is required"},
 		{name: "invalid gateway port", cfg: func() WorkspaceConfig { c := base; c.GatewayPort = 70000; return c }(), soul: &domain.AgentSoul{AgentID: "scout", Name: "Scout", NostrPubkey: validPubkey}, want: "gateway port"},
 	}
@@ -104,6 +105,14 @@ func TestWorkspaceOpenClawConfigRejectsInvalidOrMissingValues(t *testing.T) {
 				t.Fatalf("createWorkspaceFiles() error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestNgitInitArgsUseEveryConfiguredPublicationRelay(t *testing.T) {
+	args := ngitInitArgs("scout", []string{" wss://git-a.example/", "wss://git-b.example", "wss://git-a.example"})
+	want := []string{"init", "--name", "scout", "--relay", "wss://git-a.example", "--relay", "wss://git-b.example"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("ngit init args = %#v, want %#v", args, want)
 	}
 }
 

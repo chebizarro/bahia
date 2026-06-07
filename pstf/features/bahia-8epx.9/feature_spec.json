@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-8epx.9",
+  "title": "Separate SoulFactory/OpenClaw control relays from ngit publication relays",
+  "source_plan": "docs/plans/relay-strategy-2026-06-06.md",
+  "observed_behavior_before": [
+    "WorkspaceManager accepted OpenClawRelays and NgitRelays but initialized ngitRelays from NgitRelays falling back to OpenClawRelays.",
+    "pushWithNgit passed only m.ngitRelays[0] to ngit init.",
+    "Installed ngit 2.4.2 reports ngit init --relay <RELAY>... support."
+  ],
+  "intended_behavior": [
+    "OpenClawRelays are agent runtime/control relays written into generated OpenClaw workspace config.",
+    "NgitRelays are NIP-34 repository publication relays required separately when workspace publication runs.",
+    "All configured NgitRelays are supplied to ngit init using repeated --relay arguments."
+  ],
+  "out_of_scope": [
+    "Backend relay policy sources in internal/config and internal/adapters/nostr.",
+    "Backend NIP-51 projection, browser discovery, CLI fallback, and NIP-86."
+  ]
+}

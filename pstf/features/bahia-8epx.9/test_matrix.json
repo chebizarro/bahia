@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-8epx.9",
+  "tests": [
+    {
+      "name": "ngit init --help",
+      "type": "tool verification",
+      "acceptance_criteria": ["AC3"],
+      "expected": "Reports --relay <RELAY>... repeated argument support."
+    },
+    {
+      "name": "go test ./internal/soulfactory",
+      "type": "unit",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"],
+      "expected": "Workspace config uses OpenClawRelays for runtime/control config, rejects missing NgitRelays, and builds ngit init args with all publication relays."
+    }
+  ]
+}

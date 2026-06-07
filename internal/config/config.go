@@ -270,11 +270,22 @@ type LoomConfig struct {
 	PollInterval time.Duration `koanf:"poll_interval"`
 }
 
+const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
+
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey    string   `koanf:"private_key"`
-	Relays        []string `koanf:"relays"`
-	BrowserRelays []string `koanf:"browser_relays"`
+	PrivateKey      string   `koanf:"private_key"`
+	Relays          []string `koanf:"relays"`
+	ServiceRelays   []string `koanf:"service_relays"`
+	BrowserRelays   []string `koanf:"browser_relays"`
+	ContextVMRelays []string `koanf:"contextvm_relays"`
+
+	// RelayAuthUnavailablePolicy is fixed to exclude_and_fail: if a relay requires
+	// NIP-42 AUTH and no valid signer is available for the operation, consumers
+	// must exclude that relay, surface the CLOSED/OK reason in health/error
+	// metadata, and fail deterministically if the remaining relays cannot satisfy
+	// the operation's read/publish success rule.
+	RelayAuthUnavailablePolicy string `koanf:"relay_auth_unavailable" yaml:"relay_auth_unavailable"`
 
 	// PrivateRelays and PrivateBrowserRelays are internal mirrors for runtime
 	// callers that have not moved to the canonical field names yet. They are not
@@ -547,7 +558,8 @@ func Defaults() *Config {
 			PollInterval: 10 * time.Second,
 		},
 		Nostr: NostrConfig{
-			PublishEnabled: true,
+			PublishEnabled:             true,
+			RelayAuthUnavailablePolicy: RelayAuthUnavailableExcludeAndFail,
 			RelayQuorum: RelayQuorumConfig{
 				FullMinHealthy:      2,
 				DegradedMinHealthy:  1,
@@ -890,6 +902,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	c.normalizeNostrRelays()
+	if err := c.validateNostrRelayPolicy(); err != nil {
+		return err
+	}
 
 	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)
 	if err != nil {
@@ -936,9 +951,46 @@ func isLocalQdrantURL(parsed *url.URL) bool {
 
 func (c *Config) normalizeNostrRelays() {
 	c.Nostr.Relays = normalizeRelayList(c.Nostr.Relays)
+	c.Nostr.ServiceRelays = normalizeRelayList(c.Nostr.ServiceRelays)
+	if len(c.Nostr.ServiceRelays) == 0 {
+		c.Nostr.ServiceRelays = cloneStrings(c.Nostr.Relays)
+	} else {
+		c.Nostr.Relays = cloneStrings(c.Nostr.ServiceRelays)
+	}
 	c.Nostr.BrowserRelays = normalizeRelayList(c.Nostr.BrowserRelays)
-	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.Relays)
+	c.Nostr.ContextVMRelays = normalizeRelayList(c.Nostr.ContextVMRelays)
+	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.ServiceRelays)
 	c.Nostr.PrivateBrowserRelays = cloneStrings(c.Nostr.BrowserRelays)
+	c.Nostr.RelayAuthUnavailablePolicy = strings.ToLower(strings.TrimSpace(c.Nostr.RelayAuthUnavailablePolicy))
+	if c.Nostr.RelayAuthUnavailablePolicy == "" {
+		c.Nostr.RelayAuthUnavailablePolicy = RelayAuthUnavailableExcludeAndFail
+	}
+}
+
+func (c NostrConfig) ServiceRelayPolicyRelays() []string {
+	if len(c.ServiceRelays) > 0 {
+		return cloneStrings(c.ServiceRelays)
+	}
+	return cloneStrings(c.Relays)
+}
+
+func (c NostrConfig) BrowserRelayPolicyRelays() []string {
+	return cloneStrings(c.BrowserRelays)
+}
+
+func (c NostrConfig) ContextVMRelayPolicyRelays() []string {
+	if len(c.ContextVMRelays) > 0 {
+		return cloneStrings(c.ContextVMRelays)
+	}
+	return cloneStrings(c.BrowserRelays)
+}
+
+func (c NostrConfig) RelayAuthUnavailableSemantics() string {
+	policy := strings.ToLower(strings.TrimSpace(c.RelayAuthUnavailablePolicy))
+	if policy == "" {
+		return RelayAuthUnavailableExcludeAndFail
+	}
+	return policy
 }
 
 func normalizeRelayList(values []string) []string {
@@ -948,15 +1000,17 @@ func normalizeRelayList(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	normalized := make([]string, 0, len(values))
 	for _, raw := range values {
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			continue
+		for _, part := range strings.Split(raw, ",") {
+			value := strings.TrimSpace(part)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			normalized = append(normalized, value)
 		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		normalized = append(normalized, value)
 	}
 	if len(normalized) == 0 {
 		return nil
@@ -1475,6 +1529,15 @@ func validatePressureRatio(name string, value float64) error {
 		return fmt.Errorf("config validation failed: worker_pressure.%s must be > 0 and <= 1", name)
 	}
 	return nil
+}
+
+func (c *Config) validateNostrRelayPolicy() error {
+	switch c.Nostr.RelayAuthUnavailablePolicy {
+	case RelayAuthUnavailableExcludeAndFail:
+		return nil
+	default:
+		return fmt.Errorf("config validation failed: nostr.relay_auth_unavailable must be %q", RelayAuthUnavailableExcludeAndFail)
+	}
 }
 
 func (c *Config) validateRelaySidecar() error {

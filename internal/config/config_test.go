@@ -646,6 +646,90 @@ func TestNormalizeNostrRelaysFromYAML(t *testing.T) {
 	assertStringSlice(t, cfg.Nostr.BrowserRelays, []string{"wss://relay-browser.example"})
 }
 
+func TestNostrRelayPolicySourcesAreIndependent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`nostr:
+  relays:
+    - " wss://legacy-service.example "
+  service_relays:
+    - "wss://service-write.example"
+    - "wss://service-write.example"
+  browser_relays:
+    - "wss://browser-read.example"
+  contextvm_relays:
+    - "wss://contextvm-request.example"
+  relay_auth_unavailable: "exclude_and_fail"
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	assertStringSlice(t, cfg.Nostr.ServiceRelays, []string{"wss://service-write.example"})
+	assertStringSlice(t, cfg.Nostr.Relays, []string{"wss://service-write.example"})
+	assertStringSlice(t, cfg.Nostr.ServiceRelayPolicyRelays(), []string{"wss://service-write.example"})
+	assertStringSlice(t, cfg.Nostr.BrowserRelayPolicyRelays(), []string{"wss://browser-read.example"})
+	assertStringSlice(t, cfg.Nostr.ContextVMRelays, []string{"wss://contextvm-request.example"})
+	assertStringSlice(t, cfg.Nostr.ContextVMRelayPolicyRelays(), []string{"wss://contextvm-request.example"})
+	if cfg.Nostr.RelayAuthUnavailableSemantics() != RelayAuthUnavailableExcludeAndFail {
+		t.Fatalf("RelayAuthUnavailableSemantics() = %q", cfg.Nostr.RelayAuthUnavailableSemantics())
+	}
+}
+
+func TestNostrRelayPolicyCompatibilityFallbacks(t *testing.T) {
+	cfg := Defaults()
+	cfg.Nostr.Relays = []string{"wss://service-compat.example"}
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() error: %v", err)
+	}
+
+	assertStringSlice(t, cfg.Nostr.ServiceRelays, []string{"wss://service-compat.example"})
+	assertStringSlice(t, cfg.Nostr.ServiceRelayPolicyRelays(), []string{"wss://service-compat.example"})
+	if len(cfg.Nostr.ContextVMRelays) != 0 {
+		t.Fatalf("ContextVMRelays = %#v, want empty configured source", cfg.Nostr.ContextVMRelays)
+	}
+	assertStringSlice(t, cfg.Nostr.ContextVMRelayPolicyRelays(), []string{"wss://browser.example"})
+	if cfg.Nostr.RelayAuthUnavailablePolicy != RelayAuthUnavailableExcludeAndFail {
+		t.Fatalf("RelayAuthUnavailablePolicy = %q", cfg.Nostr.RelayAuthUnavailablePolicy)
+	}
+}
+
+func TestNostrRelayPolicyLoadsFromEnvironment(t *testing.T) {
+	t.Setenv("BAHIA_NOSTR_SERVICE_RELAYS", "wss://service1.example, wss://service2.example")
+	t.Setenv("BAHIA_NOSTR_BROWSER_RELAYS", "wss://browser.example")
+	t.Setenv("BAHIA_NOSTR_CONTEXTVM_RELAYS", "wss://contextvm.example")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	assertStringSlice(t, cfg.Nostr.ServiceRelayPolicyRelays(), []string{"wss://service1.example", "wss://service2.example"})
+	assertStringSlice(t, cfg.Nostr.BrowserRelayPolicyRelays(), []string{"wss://browser.example"})
+	assertStringSlice(t, cfg.Nostr.ContextVMRelayPolicyRelays(), []string{"wss://contextvm.example"})
+}
+
+func TestNostrRelayAuthUnavailablePolicyValidation(t *testing.T) {
+	valid := Defaults()
+	valid.Nostr.RelayAuthUnavailablePolicy = " EXCLUDE_AND_FAIL "
+	if err := valid.validate(); err != nil {
+		t.Fatalf("exclude_and_fail policy should validate: %v", err)
+	}
+	if valid.Nostr.RelayAuthUnavailablePolicy != RelayAuthUnavailableExcludeAndFail {
+		t.Fatalf("RelayAuthUnavailablePolicy normalized to %q", valid.Nostr.RelayAuthUnavailablePolicy)
+	}
+
+	invalid := Defaults()
+	invalid.Nostr.RelayAuthUnavailablePolicy = "fallback_to_rest"
+	if err := invalid.validate(); err == nil || !strings.Contains(err.Error(), "nostr.relay_auth_unavailable") {
+		t.Fatalf("validate() error = %v, want relay_auth_unavailable validation error", err)
+	}
+}
+
 func TestLoadRejectsRemovedEncryptedRequestKeys(t *testing.T) {
 	tests := []struct {
 		name        string

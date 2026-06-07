@@ -319,7 +319,7 @@ soul_factory:
 
 When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runtime adapter. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory.
 
-If `workspace_gitea_url` is set, generated OpenClaw workspace config uses the configured SoulFactory relays, Signet/controller pubkey, LLM model, and secret/config references above. Bahia fails configuration or workspace generation explicitly when required values are missing or pubkeys are not 64-character hex strings; it does not write placeholder relays, controllers, inline private keys, or fake MCP URLs into production workspace files.
+If `workspace_gitea_url` is set, generated OpenClaw workspace config uses the configured SoulFactory/OpenClaw runtime-control relays, Signet/controller pubkey, LLM model, and secret/config references above. Workspace repository publication is a separate NIP-34/ngit operation: ngit publication relays are required independently from OpenClaw runtime-control relays and are not treated as generic control-plane substitutes. Bahia fails configuration or workspace generation explicitly when required values are missing or pubkeys are not 64-character hex strings; it does not write placeholder relays, controllers, inline private keys, fake MCP URLs, or silently substitute OpenClaw control relays for missing ngit publication relays in production workspace files.
 
 ## Authorization
 

@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-8epx.9",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "OpenClawRelays are documented and tested as agent runtime/control relays, not repository publication relays.",
+      "tests": ["TestWorkspaceOpenClawConfigUsesConfiguredValues"]
+    },
+    {
+      "id": "AC2",
+      "statement": "NgitRelays are required for NIP-34 workspace publication and do not fall back to OpenClawRelays.",
+      "tests": ["TestWorkspaceOpenClawConfigRejectsInvalidOrMissingValues/missing_ngit_publication_relays"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Installed ngit supports repeated relay arguments and Bahia passes every configured NgitRelay to ngit init.",
+      "tests": ["ngit init --help", "TestNgitInitArgsUseEveryConfiguredPublicationRelay"]
+    }
+  ]
+}

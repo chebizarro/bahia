@@ -34,12 +34,12 @@ type WorkspaceManager struct {
 type WorkspaceConfig struct {
 	GiteaURL              string   // Gitea URL (e.g., https://git.sharegap.net)
 	TemplateDir           string   // Directory containing workspace templates
-	OpenClawRelays        []string // Nostr relays the generated OpenClaw workspace should use
+	OpenClawRelays        []string // Agent runtime/control relays written to generated OpenClaw workspace config
 	OpenClawControllers   []string // SoulFactory controller pubkeys trusted by the generated OpenClaw workspace
 	OpenClawModel         string   // Runtime model identifier supplied by operator config
 	OpenClawPrivateKeyRef string   // Secret reference resolved by the runtime, never inline private key material
 	AgentMemoryMCPURLRef  string   // Secret/config reference for the agent-memory MCP URL
-	NgitRelays            []string // Relays used for ngit/NIP-34 repository publication
+	NgitRelays            []string // NIP-34 repository publication relays; required separately from OpenClawRelays
 	GatewayPort           int      // Local OpenClaw gateway port written into workspace config
 }
 
@@ -57,7 +57,7 @@ func NewWorkspaceManager(config WorkspaceConfig, logger *slog.Logger) *Workspace
 		openClawModel:            strings.TrimSpace(config.OpenClawModel),
 		openClawPrivateKeyRef:    strings.TrimSpace(config.OpenClawPrivateKeyRef),
 		agentMemoryMCPURLRef:     strings.TrimSpace(config.AgentMemoryMCPURLRef),
-		ngitRelays:               normalizeSoulRelays(firstNonEmptyStringSlice(config.NgitRelays, config.OpenClawRelays)),
+		ngitRelays:               normalizeSoulRelays(config.NgitRelays),
 		gatewayPort:              config.GatewayPort,
 		logger:                   logger.With("component", "workspace"),
 	}
@@ -300,11 +300,7 @@ func (m *WorkspaceManager) pushWithNgit(ctx context.Context, dir string, soul *d
 		return "", fmt.Errorf("ngit not found: %w", err)
 	}
 
-	// Initialize ngit
-	cmd := exec.CommandContext(ctx, "ngit", "init",
-		"--name", soul.AgentID,
-		"--relay", m.ngitRelays[0],
-	)
+	cmd := exec.CommandContext(ctx, "ngit", ngitInitArgs(soul.AgentID, m.ngitRelays)...)
 	cmd.Dir = dir
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -347,13 +343,12 @@ func validateHexPubkey(pubkey string) error {
 	return nil
 }
 
-func firstNonEmptyStringSlice(values ...[]string) []string {
-	for _, value := range values {
-		if len(normalizeSoulRelays(value)) > 0 {
-			return value
-		}
+func ngitInitArgs(name string, relays []string) []string {
+	args := []string{"init", "--name", name}
+	for _, relay := range normalizeSoulRelays(relays) {
+		args = append(args, "--relay", relay)
 	}
-	return nil
+	return args
 }
 
 // Workspace templates

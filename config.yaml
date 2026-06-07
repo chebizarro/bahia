@@ -32,13 +32,23 @@ loom:
 
 nostr:
   private_key: ""
+  # Backward-compatible alias for service_relays. Do not use this as the public browser relay policy.
   relays:
     - "wss://relay.damus.io"
     - "wss://nos.lol"
-  # Browser-safe relay endpoints advertised by Nostr discovery events (kind 31974 + NIP-51 kind 30002) only when
+  # Backend/service publish and backfill relays. If omitted, nostr.relays is used as a compatibility alias.
+  service_relays:
+    - "wss://relay.damus.io"
+    - "wss://nos.lol"
+  # Browser-safe relay endpoints advertised by ContextVM discovery plus NIP-51 kind 30002 only when
   # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
   browser_relays:
     - "ws://localhost:3000/relay"
+  # ContextVM request/reply relays. If omitted, clients may fall back to browser_relays with degraded metadata.
+  contextvm_relays:
+    - "ws://localhost:3000/relay"
+  # Fixed relay AUTH-unavailable behavior: exclude auth-required relays without credentials and fail if quorum is unmet.
+  relay_auth_unavailable: "exclude_and_fail"
   publish_enabled: false
   sidecar:
     enabled: false

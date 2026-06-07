@@ -1,0 +1,21 @@
+{
+  "feature_id": "RELAY_POLICY_SOURCES",
+  "beads": ["bahia-8epx.2", "bahia-8epx.2.1", "bahia-8epx.2.2", "bahia-8epx.2.3"],
+  "source_plan": "docs/plans/relay-strategy-2026-06-06.md",
+  "scope": "Backend configuration and validation for independent relay policy sources only.",
+  "intended_behavior": [
+    "Backend config exposes independent semantic relay sources for service publish/backfill, public browser bootstrap/read, and ContextVM request/reply relay policy.",
+    "nostr.relays remains a backward-compatible backend/service alias and is not repurposed as public browser policy.",
+    "nostr.service_relays is the canonical backend service publish/backfill source and overrides the legacy alias when configured.",
+    "nostr.contextvm_relays is an explicit ContextVM request/reply source; when absent, resolved ContextVM policy falls back to browser relays without mutating the configured source.",
+    "Legacy private mirror relay fields remain rejected from YAML and environment configuration.",
+    "AUTH-unavailable behavior is fixed to exclude_and_fail so consumers exclude auth-required relays without credentials, surface relay reasons, and fail deterministically if remaining relays cannot satisfy success rules."
+  ],
+  "out_of_scope": [
+    "NIP-51 relay-set projection and publication changes for bahia-8epx.3",
+    "Browser discovery normalization for bahia-8epx.4",
+    "Operator CLI discovery fallback for bahia-8epx.6",
+    "NIP-86 relay administration for bahia-8epx.10",
+    "SoulFactory/OpenClaw/ngit relay separation for bahia-8epx.9"
+  ]
+}

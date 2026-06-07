@@ -64,7 +64,10 @@ Bahia is configured via environment variables or a config file.
 | `DATABASE_URL` | PostgreSQL connection string | (required) |
 | `BAHIA_HTTP_ADDR` | API server address | `:8080` |
 | `BAHIA_AUTH_ENABLED` | Enable NIP-98 authentication | `false` |
-| `BAHIA_NOSTR_RELAYS` | Comma-separated relay URLs | (discovery) |
+| `BAHIA_NOSTR_RELAYS` | Backward-compatible service relay alias | (none) |
+| `BAHIA_NOSTR_SERVICE_RELAYS` | Backend service publish/backfill relays | `BAHIA_NOSTR_RELAYS` |
+| `BAHIA_NOSTR_BROWSER_RELAYS` | Browser-safe bootstrap/read relays | (discovery) |
+| `BAHIA_NOSTR_CONTEXTVM_RELAYS` | ContextVM request/reply relays; falls back to browser relays when absent | browser relays |
 
 ### Config File (bahia.yaml)
 
@@ -81,8 +84,14 @@ auth:
     - "your-nostr-pubkey-hex"
 
 nostr:
-  relays:
-    - "wss://relay.example.com"
+  # service_relays is the backend publish/backfill source; relays is only a compatibility alias.
+  service_relays:
+    - "wss://service-relay.example.com"
+  browser_relays:
+    - "wss://sidecar.example.com"
+  contextvm_relays:
+    - "wss://contextvm-relay.example.com"
+  relay_auth_unavailable: "exclude_and_fail"
   sidecar:
     public_url: "wss://sidecar.example.com"
 ```

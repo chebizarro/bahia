@@ -38,7 +38,7 @@ func (s cliSigner) Sign(_ context.Context, event *nostr.Event) error {
 
 func main() {
 	var args repeatedFlag
-	relays := flag.String("relays", env("SOULFACTORY_RELAYS", ""), "comma-separated Nostr relays for capability, request, and result events")
+	relays := flag.String("relays", env("SOULFACTORY_RELAYS", ""), "comma-separated OpenClaw runtime/control relays for capability, request, and result events; not ngit repository publication relays")
 	privateKey := flag.String("private-key", env("OPENCLAW_SOULFACTORY_PRIVATE_KEY", ""), "OpenClaw sidecar Nostr private key (hex or nsec)")
 	trustedControllers := flag.String("trusted-controller-pubkeys", env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "comma-separated trusted SoulFactory controller pubkeys")
 	identifier := flag.String("identifier", env("OPENCLAW_SOULFACTORY_IDENTIFIER", "openclaw-soulfactory-sidecar"), "kind:30317 d-tag identifier")

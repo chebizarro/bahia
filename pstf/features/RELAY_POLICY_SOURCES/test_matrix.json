@@ -1,0 +1,35 @@
+{
+  "feature_id": "RELAY_POLICY_SOURCES",
+  "tests": [
+    {
+      "test": "TestNostrRelayPolicySourcesAreIndependent",
+      "criteria": ["AC-RELAY-POLICY-001"],
+      "type": "unit",
+      "notes": "Loads YAML with distinct service, browser, and ContextVM sources and verifies resolved policy helpers."
+    },
+    {
+      "test": "TestNostrRelayPolicyCompatibilityFallbacks",
+      "criteria": ["AC-RELAY-POLICY-002", "AC-RELAY-POLICY-003"],
+      "type": "unit",
+      "notes": "Proves service_relays falls back from nostr.relays and ContextVM resolution falls back to browser_relays without filling ContextVMRelays."
+    },
+    {
+      "test": "TestNostrRelayPolicyLoadsFromEnvironment",
+      "criteria": ["AC-RELAY-POLICY-001"],
+      "type": "unit",
+      "notes": "Verifies BAHIA_NOSTR_SERVICE_RELAYS, BAHIA_NOSTR_BROWSER_RELAYS, and BAHIA_NOSTR_CONTEXTVM_RELAYS load and normalize."
+    },
+    {
+      "test": "TestLoadRejectsRemovedEncryptedRequestKeys",
+      "criteria": ["AC-RELAY-POLICY-004"],
+      "type": "unit",
+      "notes": "Existing regression remains part of this acceptance set."
+    },
+    {
+      "test": "TestNostrRelayAuthUnavailablePolicyValidation",
+      "criteria": ["AC-RELAY-POLICY-005"],
+      "type": "unit",
+      "notes": "Rejects fallback policies such as REST fallback."
+    }
+  ]
+}
