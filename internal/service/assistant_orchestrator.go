@@ -312,6 +312,7 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_cancel", map[string]any{"summary": "cancel is only valid while executing, blocked, or awaiting approval"})
 		}
 		o.cancelObserver(sessionID)
+		o.clearSubmittedPlan(sessionID + ":" + planHash)
 		session.State = domain.AssistantSessionStateFailed
 		session.PendingSteps = nil
 		_ = o.publishSession(ctx, session)
@@ -355,17 +356,21 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 		lock.Unlock()
 		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "rejected", "rejected", map[string]any{"summary": "assistant plan rejected by operator", "reason": reason, "plan_hash": planHash})
 	}
-	if session.State != domain.AssistantSessionStateAwaitingApproval && session.State != domain.AssistantSessionStateExecuting {
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_state", map[string]any{"summary": "assistant session is not awaiting approval", "state": session.State})
-	}
-
+	planSubmissionKey := sessionID + ":" + planHash
 	o.mu.Lock()
-	_, alreadySubmitted := o.submittedPlans[sessionID+":"+planHash]
+	_, alreadySubmitted := o.submittedPlans[planSubmissionKey]
+	if alreadySubmitted && session.State != domain.AssistantSessionStateExecuting {
+		delete(o.submittedPlans, planSubmissionKey)
+		alreadySubmitted = false
+	}
 	o.mu.Unlock()
 	if alreadySubmitted {
 		lock.Unlock()
-		return o.markApprovalProcessed(dedupKey, nil, nil)
+		return o.markApprovalProcessed(dedupKey, o.resultPayload(event, sessionID, "executing", "already_submitted", map[string]any{"summary": "assistant plan is already executing", "plan_hash": planHash}), nil)
+	}
+	if session.State != domain.AssistantSessionStateAwaitingApproval {
+		lock.Unlock()
+		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_state", map[string]any{"summary": "assistant session is not awaiting approval", "state": session.State})
 	}
 	session.State = domain.AssistantSessionStateExecuting
 	_ = o.publishSession(ctx, session)
@@ -401,16 +406,19 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 				lock.Unlock()
 				return nil, err
 			}
+			o.markPlanSubmitted(planSubmissionKey)
 		}
 		lock.Unlock()
 		outcome, err := o.observeDownstreamResult(ctx, sessionID, step, receipt)
 		lock.Lock()
 		if session.State == domain.AssistantSessionStateFailed {
+			o.clearSubmittedPlan(planSubmissionKey)
 			lock.Unlock()
 			return o.markApprovalProcessed(dedupKey, nil, nil)
 		}
 		if err != nil || outcome.Status == "blocked" {
 			session.State = domain.AssistantSessionStateBlocked
+			o.clearSubmittedPlan(planSubmissionKey)
 			_ = o.publishSession(ctx, session)
 			lock.Unlock()
 			msg := "downstream observation blocked before terminal result"
@@ -421,6 +429,7 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 		}
 		if outcome.Status == "failed" {
 			session.State = domain.AssistantSessionStateFailed
+			o.clearSubmittedPlan(planSubmissionKey)
 			_ = o.publishSession(ctx, session)
 			lock.Unlock()
 			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "downstream_failed", map[string]any{"summary": "downstream step failed", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
@@ -431,11 +440,9 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 		}
 		_ = o.publishSession(ctx, session)
 	}
-	o.mu.Lock()
-	o.submittedPlans[sessionID+":"+planHash] = struct{}{}
-	o.mu.Unlock()
 	session.State = domain.AssistantSessionStateCompleted
 	session.PendingSteps = nil
+	o.clearSubmittedPlan(planSubmissionKey)
 	_ = o.publishSession(ctx, session)
 	lock.Unlock()
 	return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed", "plan_hash": planHash})
@@ -871,6 +878,24 @@ func (o *AssistantOrchestrator) markApprovalProcessed(dedupKey string, result As
 		o.mu.Unlock()
 	}
 	return result, err
+}
+
+func (o *AssistantOrchestrator) markPlanSubmitted(planSubmissionKey string) {
+	if planSubmissionKey == "" {
+		return
+	}
+	o.mu.Lock()
+	o.submittedPlans[planSubmissionKey] = struct{}{}
+	o.mu.Unlock()
+}
+
+func (o *AssistantOrchestrator) clearSubmittedPlan(planSubmissionKey string) {
+	if planSubmissionKey == "" {
+		return
+	}
+	o.mu.Lock()
+	delete(o.submittedPlans, planSubmissionKey)
+	o.mu.Unlock()
 }
 
 func (o *AssistantOrchestrator) systemPrompt() string {

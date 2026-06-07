@@ -61,16 +61,33 @@ func TestDefaultReactorProvisioningFailsClosed(t *testing.T) {
 	}
 }
 
-func TestLegacyProvisionerCannotProduceSuccess(t *testing.T) {
-	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default())
-	legacy := NewProvisioner(reactor)
-	run := &domain.ProvisioningRun{ID: domain.NewUUID(), Steps: []domain.ProvisioningStepResult{}}
-	_, err := legacy.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "agent", Brief: "brief"}, run)
-	if !errors.Is(err, ErrSoulFactoryUnavailable) {
-		t.Fatalf("legacy Provision() error = %v, want ErrSoulFactoryUnavailable", err)
+func TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(Config{
+		Relays:            []string{"wss://relay.example"},
+		AuthorizedPubkeys: []string{signer.pubkey},
+		SoulFactoryPubkey: signer.pubkey,
+	}, fakeGenerator{}, signer, slog.Default())
+	capture := attachPublishCapture(reactor)
+	request := buildProvisioningEvent(t, signer.pubkey, "no-engine", nostr.Tags{{"agent-id", "agent"}}, `{"brief":"brief"}`)
+
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 0 {
+		t.Fatalf("agent soul publication count = %d, want 0", got)
 	}
-	if len(run.Steps) == 0 || run.Steps[0].Status != domain.StepStatusFailed {
-		t.Fatalf("legacy run steps = %+v, want failed step", run.Steps)
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("provisioning result count = %d, want 1", len(results))
+	}
+	if got := findTag(results[0], "status"); got != "error" {
+		t.Fatalf("result status = %q, want error", got)
+	}
+	if got := findTag(results[0], "step"); got != string(domain.StepGenerate) {
+		t.Fatalf("result step = %q, want %q", got, domain.StepGenerate)
+	}
+	if results[0].Content != ErrSoulFactoryUnavailable.Error() {
+		t.Fatalf("result content = %q, want %q", results[0].Content, ErrSoulFactoryUnavailable.Error())
 	}
 }
 

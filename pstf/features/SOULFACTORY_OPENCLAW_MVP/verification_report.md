@@ -221,6 +221,36 @@ Item 4 Beads closeout:
 - Worked/closing: `bahia-2r4y`.
 - Remaining SoulFactory follow-up tracked: `bahia-j28b` for removing or productionizing dormant `internal/soulfactory/provisioner.go` placeholder logic that is currently fail-closed and not wired into production startup.
 
+## Bead bahia-j28b verification — remove dormant legacy Provisioner placeholder
+
+Scope implemented for Bead `bahia-j28b`:
+
+- Deleted `internal/soulfactory/provisioner.go`, removing the dormant `Provisioner`, `NewProvisioner`, `soulFactoryReady` gate, skipped-stage placeholder provisioning flow, and legacy lifecycle methods that could acknowledge partial behavior if made reachable.
+- Preserved the reactor's default `unavailableProvisioningEngine` fail-close behavior when no production provisioning engine is explicitly installed.
+- Added deterministic hardening coverage proving a configured reactor without an installed production engine publishes no final `31951` soul event and emits only a terminal error `7950` result.
+- Confirmed app startup remains on `NewFullProvisioner` plus OpenClaw runtime adapter through the existing focused startup regression test.
+
+Focused verification on 2026-06-07:
+
+```text
+go test -count=1 ./internal/soulfactory
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.375s
+
+go test -count=1 ./internal/app -run TestNewRegistersSoulFactoryWhenEnabled
+ok  	github.com/openagentsinc/bahia/internal/app	0.326s
+
+if grep -R "NewProvisioner\|soulFactoryReady" internal/soulfactory --include='*.go'; then exit 1; fi
+# exit code 0, no matches
+```
+
+Bead `bahia-j28b` acceptance mapping:
+
+- SFOM-AC-013: covered by `TestDefaultReactorProvisioningFailsClosed`, `TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine`, and the legacy-symbol absence scan (`SFOM-T-022` through `SFOM-T-024`).
+
+PSTF defect closeout:
+
+- `SFOM-D-001` moved to `resolved` with verification notes for Bead `bahia-j28b`.
+
 ## Result
 
-Verified for Items 1, 2, 3, and 4.
+Verified for Items 1, 2, 3, 4, and Bead bahia-j28b.

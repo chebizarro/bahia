@@ -38,9 +38,38 @@ Milestone 1 establishes protocol/contract definitions only. Behavioral verificat
 | 8 | Pending | Requires end-to-end assistant event flow. |
 | 9 | Pending | Requires execution/cancel milestone. |
 
+## 2026-06-07 verification slice — bahia-54eo duplicate approval timeout
+
+### Observed behavior
+
+`go test ./internal/service -run TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting -count=50` reproduced the timeout before the fix: repeated failures timed out waiting for the second approval handler. Code inspection showed the first approval released the session lock while observing downstream results, while a second same-plan approval could enter `HandleApprovalRequest`, open another downstream observer, and race for the single terminal result event. The test also injected the terminal result without first proving the observer subscription existed.
+
+### Intended behavior
+
+After a plan step has an observable downstream receipt, the session/plan is already submitted. A second approval for the same executing plan must acknowledge with `status=executing` and `step=already_submitted` without dispatching another tool call or opening another downstream observer; terminal truth continues to arrive through the original scoped subscription.
+
+### Commands run
+
+- `go test ./internal/service -run TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting -count=50`
+  - Result before fix: fail, reproduced `timed out waiting for approval handler`.
+- `gofmt -w internal/service/assistant_orchestrator.go internal/service/assistant_orchestrator_test.go`
+  - Result: pass.
+- `go test ./internal/service -run TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting -count=50`
+  - Result after fix: pass.
+- `go test ./internal/service -run 'TestAssistantOrchestrator(SuppressesDuplicateApprovalWhileExecuting|AcknowledgesDuplicateApprovalForExecutingSubmittedPlan|RejectsExecutingApprovalWithoutSubmittedPlan)' -count=50`
+  - Result after review hardening: pass.
+- `go test ./internal/service`
+  - Result: pass.
+
+### Acceptance criteria status update
+
+| AC | Status | Evidence |
+| --- | --- | --- |
+| 3 | Verified for service orchestrator duplicate approval execution path | `TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting` now waits for the downstream subscription deterministically, verifies the duplicate approval returns `executing/already_submitted` before the terminal result, and verifies only one tool invocation occurs before and after the downstream completion event. |
+
 ## Defects
 
-None recorded for this protocol-only scaffold.
+- 2026-06-07: `bahia-54eo` reproduced and fixed the duplicate approval timeout in `internal/service` by marking same session/plan execution as submitted once an observable downstream receipt exists and by making the service test synchronize on the fake downstream subscription before event injection.
 
 ## Human decisions needed
 

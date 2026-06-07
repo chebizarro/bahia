@@ -73,6 +73,14 @@ npm run dev
 
 The dev server proxies `/api` requests to `http://localhost:8080`.
 
+## Quality Gates
+
+```bash
+npm run lint
+```
+
+The lint gate runs SvelteKit sync followed by `svelte-check --tsconfig ./tsconfig.json`.
+
 ## Svelte 5 Rune Architecture
 
 The dashboard runs with global Svelte 5 rune mode enabled. Components and routes use `$state`, `$derived`, `$effect`, callback props such as `onClose`/`onConfirm`, and DOM event props such as `onclick`.

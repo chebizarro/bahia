@@ -1,6 +1,6 @@
 # CENTRAL_DOCS_INTERFACE Verification Report
 
-Updated: 2026-06-05
+Updated: 2026-06-07
 Bead: `bahia-521z`
 Plan: `docs/plans/central-docs-interface-2026-06-05.md` Item 8
 
@@ -50,7 +50,7 @@ Final command evidence from Item 8 closeout:
 - Passed: `go test ./internal/docs ./internal/mcp ./internal/api/router ./internal/service`
 - Passed: `go test ./...`
 - Passed: `cd web && npm test -- --run tests/unit/docs-ui.test.js tests/unit/nav.test.js tests/unit/assistant/assistant-components.test.js tests/unit/assistant/assistant-store.test.js tests/unit/route-transport-matrix.test.js` — 5 files / 27 tests passed; emitted existing Svelte compiler advisories in `AssistantPlanApproval.svelte`.
-- Unavailable and tracked: `cd web && npm run lint` exits with `Missing script: "lint"` because `web/package.json` does not define a lint script. Follow-up Bead `bahia-4ez0` tracks adding a deterministic web lint quality gate.
+- Passed: `cd web && npm run lint` — deterministic SvelteKit `svelte-check --tsconfig ./tsconfig.json` gate completed with 0 errors and 0 warnings.
 - Passed: `cd web && npm run build` — production build completed; emitted existing Svelte/SvelteKit advisories for `web/src/routes/policies/+page.svelte`, `AssistantPlanApproval.svelte`, the SvelteKit tsconfig extension, and an unused `qrcode` default import warning.
 
 ## Route transport disposition
@@ -73,4 +73,7 @@ Reviewed scope has no fake docs catalog, placeholder UI route, ignored API failu
 No CENTRAL_DOCS_INTERFACE implementation work remains from evidence review. Tracked follow-ups:
 
 - `bahia-oikr`: existing unrelated full navigation E2E harness console errors.
-- `bahia-4ez0`: project-level missing `web` lint script discovered during closeout.
+
+Resolved follow-ups:
+
+- `bahia-4ez0`: project-level missing `web` lint script discovered during closeout; resolved by adding and verifying the deterministic SvelteKit lint/check gate.

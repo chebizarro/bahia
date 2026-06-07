@@ -160,6 +160,7 @@
     color: var(--text-muted);
     margin: 0 0 0.25rem 0;
     display: -webkit-box;
+    line-clamp: 2;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;

@@ -61,6 +61,11 @@
       "id": "SFOM-AC-012",
       "statement": "SoulFactory web/docs remain Nostr-first and explicitly document REST provisioning/lifecycle routes as non-goals.",
       "tests": ["SFOM-T-018"]
+    },
+    {
+      "id": "SFOM-AC-013",
+      "statement": "The dormant legacy SoulFactory Provisioner placeholder path is removed, and the default reactor fails closed without publishing success when no production provisioning engine is installed.",
+      "tests": ["SFOM-T-022", "SFOM-T-023", "SFOM-T-024"]
     }
   ]
 }

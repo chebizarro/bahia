@@ -6,7 +6,7 @@ function splitList(value: unknown): string[] {
 }
 
 export const load: PageLoad = async () => {
-  const env = import.meta.env || {};
+  const env = (import.meta.env || {}) as Record<string, string | undefined>;
   const relayUrls = splitList(env.PUBLIC_BAHIA_BOOTSTRAP_RELAYS || env.VITE_BAHIA_BOOTSTRAP_RELAYS);
   const servicePubkeys = splitList(
     env.PUBLIC_BAHIA_SERVICE_PUBKEYS ||

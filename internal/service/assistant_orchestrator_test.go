@@ -88,29 +88,103 @@ func TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting(t *testi
 		PendingSteps:   plan.Steps,
 	}})
 
-	firstDone := make(chan error, 1)
+	firstDone := make(chan assistantApprovalCallResult, 1)
 	go func() {
-		_, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-1"), assistantApprovalRequest("session-1", planHash, "approve"))
-		firstDone <- err
+		result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-1"), assistantApprovalRequest("session-1", planHash, "approve"))
+		firstDone <- assistantApprovalCallResult{result: result, err: err}
 	}()
-	invoker.waitForCalls(t, 1)
+	subscriber.waitForSubscription(t)
 
-	secondDone := make(chan error, 1)
+	secondDone := make(chan assistantApprovalCallResult, 1)
 	go func() {
-		_, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-2"), assistantApprovalRequest("session-1", planHash, "approve"))
-		secondDone <- err
+		result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-2"), assistantApprovalRequest("session-1", planHash, "approve"))
+		secondDone <- assistantApprovalCallResult{result: result, err: err}
 	}()
+	second := waitApprovalResult(t, secondDone)
+	if second.err != nil {
+		t.Fatalf("second HandleApproval: %v", second.err)
+	}
+	if got := second.result["status"]; got != "executing" {
+		t.Fatalf("second result status = %q, want executing", got)
+	}
+	if got := second.result["step"]; got != "already_submitted" {
+		t.Fatalf("second result step = %q, want already_submitted", got)
+	}
+	if got := invoker.callCount(); got != 1 {
+		t.Fatalf("tool invocations before downstream result = %d, want 1", got)
+	}
 
 	subscriber.publishResult(&nostr.Event{ID: "result-1", Kind: 7961, Tags: nostr.Tags{{"e", "downstream-1"}, {"status", "completed"}}, Content: `{"status":"completed"}`})
 
-	if err := waitErr(t, firstDone); err != nil {
-		t.Fatalf("first HandleApproval: %v", err)
-	}
-	if err := waitErr(t, secondDone); err != nil {
-		t.Fatalf("second HandleApproval: %v", err)
+	first := waitApprovalResult(t, firstDone)
+	if first.err != nil {
+		t.Fatalf("first HandleApproval: %v", first.err)
 	}
 	if got := invoker.callCount(); got != 1 {
-		t.Fatalf("tool invocations = %d, want 1", got)
+		t.Fatalf("tool invocations after downstream result = %d, want 1", got)
+	}
+}
+
+func TestAssistantOrchestratorAcknowledgesDuplicateApprovalForExecutingSubmittedPlan(t *testing.T) {
+	ctx := context.Background()
+	plan := executableTestPlan()
+	planHash := domain.ComputePlanHash(*plan, "session-1")
+	publisher := &assistantTestPublisher{}
+	invoker := &assistantTestToolInvoker{}
+	orchestrator := newTestAssistantOrchestrator(t, publisher, invoker, nil, nil, []domain.AssistantSession{{
+		SessionID:      "session-1",
+		State:          domain.AssistantSessionStateExecuting,
+		OperatorPubkey: "operator",
+		LastPlanHash:   planHash,
+		CurrentPlan:    plan,
+		PendingSteps:   plan.Steps,
+	}})
+	orchestrator.markPlanSubmitted("session-1:" + planHash)
+
+	result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-duplicate"), assistantApprovalRequest("session-1", planHash, "approve"))
+	if err != nil {
+		t.Fatalf("HandleApprovalRequest: %v", err)
+	}
+
+	if got := result["status"]; got != "executing" {
+		t.Fatalf("result status = %q, want executing", got)
+	}
+	if got := result["step"]; got != "already_submitted" {
+		t.Fatalf("result step = %q, want already_submitted", got)
+	}
+	if got := invoker.callCount(); got != 0 {
+		t.Fatalf("duplicate executing approval dispatched tool calls: %d", got)
+	}
+}
+
+func TestAssistantOrchestratorRejectsExecutingApprovalWithoutSubmittedPlan(t *testing.T) {
+	ctx := context.Background()
+	plan := executableTestPlan()
+	planHash := domain.ComputePlanHash(*plan, "session-1")
+	publisher := &assistantTestPublisher{}
+	invoker := &assistantTestToolInvoker{}
+	orchestrator := newTestAssistantOrchestrator(t, publisher, invoker, nil, nil, []domain.AssistantSession{{
+		SessionID:      "session-1",
+		State:          domain.AssistantSessionStateExecuting,
+		OperatorPubkey: "operator",
+		LastPlanHash:   planHash,
+		CurrentPlan:    plan,
+		PendingSteps:   plan.Steps,
+	}})
+
+	result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "approval-duplicate"), assistantApprovalRequest("session-1", planHash, "approve"))
+	if err != nil {
+		t.Fatalf("HandleApprovalRequest: %v", err)
+	}
+
+	if got := result["status"]; got != "failed" {
+		t.Fatalf("result status = %q, want failed", got)
+	}
+	if got := result["step"]; got != "invalid_state" {
+		t.Fatalf("result step = %q, want invalid_state", got)
+	}
+	if got := invoker.callCount(); got != 0 {
+		t.Fatalf("executing approval without submitted marker dispatched tool calls: %d", got)
 	}
 }
 
@@ -324,7 +398,6 @@ type assistantTestToolInvoker struct {
 	mu      sync.Mutex
 	calls   []assistantToolCall
 	receipt *domain.AsyncToolReceipt
-	called  chan struct{}
 }
 
 type assistantToolCall struct {
@@ -335,13 +408,6 @@ type assistantToolCall struct {
 func (i *assistantTestToolInvoker) InvokeAssistantAsyncTool(_ context.Context, name string, args map[string]interface{}) (*domain.AsyncToolReceipt, error) {
 	i.mu.Lock()
 	i.calls = append(i.calls, assistantToolCall{name: name, args: args})
-	if i.called != nil {
-		select {
-		case <-i.called:
-		default:
-			close(i.called)
-		}
-	}
 	receipt := i.receipt
 	i.mu.Unlock()
 	if receipt == nil {
@@ -361,36 +427,36 @@ func (i *assistantTestToolInvoker) callCount() int {
 	return len(i.calls)
 }
 
-func (i *assistantTestToolInvoker) waitForCalls(t *testing.T, n int) {
-	t.Helper()
-	deadline := time.After(2 * time.Second)
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		if i.callCount() >= n {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("timed out waiting for %d tool calls; got %d", n, i.callCount())
-		case <-tick.C:
-		}
-	}
-}
-
 type assistantTestSubscriber struct {
-	mu  sync.Mutex
-	sub *assistantTestMergedSubscription
+	mu         sync.Mutex
+	sub        *assistantTestMergedSubscription
+	subscribed chan struct{}
 }
 
-func newBlockingAssistantTestSubscriber() *assistantTestSubscriber { return &assistantTestSubscriber{} }
+func newBlockingAssistantTestSubscriber() *assistantTestSubscriber {
+	return &assistantTestSubscriber{subscribed: make(chan struct{})}
+}
 
 func (s *assistantTestSubscriber) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (AssistantMergedSubscription, error) {
 	sub := &assistantTestMergedSubscription{events: make(chan *nostr.Event, 1), closed: make(chan AssistantRelayClosed, 1), eose: make(chan struct{}, 1)}
 	s.mu.Lock()
 	s.sub = sub
+	select {
+	case <-s.subscribed:
+	default:
+		close(s.subscribed)
+	}
 	s.mu.Unlock()
 	return sub, nil
+}
+
+func (s *assistantTestSubscriber) waitForSubscription(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.subscribed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for downstream result subscription")
+	}
 }
 
 func (s *assistantTestSubscriber) publishResult(ev *nostr.Event) {
@@ -428,13 +494,18 @@ func mustUnmarshalEventContent(t *testing.T, ev *nostr.Event, dst any) {
 	}
 }
 
-func waitErr(t *testing.T, ch <-chan error) error {
+type assistantApprovalCallResult struct {
+	result AssistantOperationResult
+	err    error
+}
+
+func waitApprovalResult(t *testing.T, ch <-chan assistantApprovalCallResult) assistantApprovalCallResult {
 	t.Helper()
 	select {
-	case err := <-ch:
-		return err
+	case result := <-ch:
+		return result
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for approval handler")
-		return nil
+		return assistantApprovalCallResult{}
 	}
 }

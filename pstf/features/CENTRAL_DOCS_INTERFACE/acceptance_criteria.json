@@ -1,6 +1,6 @@
 {
   "feature_id": "CENTRAL_DOCS_INTERFACE",
-  "updated_at": "2026-06-05",
+  "updated_at": "2026-06-07",
   "criteria": [
     {
       "id": "CDI-AC-01",
@@ -136,8 +136,8 @@
         "docs/user-guide/mcp-tools.md",
         "docs/user-guide/nostr-integration.md"
       ],
-      "status": "verified_with_followup",
-      "notes": "Required docs/API/web tests and build passed. npm run lint is unavailable because web/package.json has no lint script; follow-up bahia-4ez0 tracks adding a deterministic web lint gate."
+      "status": "verified",
+      "notes": "Required docs/API/web tests, lint, and build pass. npm run lint is available via the deterministic SvelteKit svelte-check gate added under bahia-4ez0."
     }
   ]
 }

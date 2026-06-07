@@ -128,6 +128,25 @@
       "name": "Provisioning success result requires explicit factory pubkey",
       "command": "go test ./internal/soulfactory -run TestProvisioningSuccessResultRequiresExplicitFactoryPubkey",
       "criteria": ["SFOM-AC-007"]
+    },
+    {
+      "id": "SFOM-T-022",
+      "name": "Default reactor provisioning fails closed without a production engine",
+      "command": "go test ./internal/soulfactory -run TestDefaultReactorProvisioningFailsClosed",
+      "criteria": ["SFOM-AC-013"]
+    },
+    {
+      "id": "SFOM-T-023",
+      "name": "Default reactor without a production engine publishes only terminal error output",
+      "command": "go test ./internal/soulfactory -run TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine",
+      "criteria": ["SFOM-AC-013"]
+    },
+    {
+      "id": "SFOM-T-024",
+      "name": "Legacy Provisioner constructor and readiness gate are absent from SoulFactory code",
+      "command": "! grep -R \"NewProvisioner\\|soulFactoryReady\" internal/soulfactory --include='*.go'",
+      "criteria": ["SFOM-AC-013"],
+      "expected": "No NewProvisioner constructor, soulFactoryReady gate, or dormant provisioner.go placeholder implementation remains under internal/soulfactory."
     }
   ]
 }

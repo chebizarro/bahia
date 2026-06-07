@@ -5,13 +5,13 @@
     {
       "id": "SFOM-D-001",
       "title": "Dormant legacy SoulFactory Provisioner still contains placeholder provisioning logic",
-      "status": "tracked",
+      "status": "resolved",
       "bead": "bahia-j28b",
       "severity": "P2",
-      "affected_files": ["internal/soulfactory/provisioner.go"],
-      "observed_behavior": "The legacy Provisioner path contains TODO/for-now/skipped-stage logic, but hardening coverage keeps it fail-closed through soulFactoryReady=false and app startup installs FullProvisioner instead.",
-      "intended_behavior": "Remove the dormant path or replace it with production FullProvisioner/OpenClaw wiring so no placeholder provisioning implementation can become reachable.",
-      "verification_notes": "Not part of the live Item 4 production path; tracked as Bead bahia-j28b during closeout."
+      "affected_files": ["internal/soulfactory/provisioner.go", "internal/soulfactory/hardening_test.go"],
+      "observed_behavior": "The legacy Provisioner path contained TODO/for-now/skipped-stage logic behind soulFactoryReady=false, while app startup installed FullProvisioner instead.",
+      "intended_behavior": "Remove the dormant path so no placeholder provisioning implementation can become reachable; a reactor without an explicitly installed production engine must fail closed and publish only terminal error output.",
+      "verification_notes": "Resolved by deleting internal/soulfactory/provisioner.go, preserving default unavailableProvisioningEngine behavior, and adding TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine. Verified by SFOM-T-022 through SFOM-T-024 for Bead bahia-j28b."
     }
   ]
 }
