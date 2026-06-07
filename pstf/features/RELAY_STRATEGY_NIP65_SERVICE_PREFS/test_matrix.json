@@ -1,0 +1,23 @@
+{
+  "feature_id": "RELAY_STRATEGY_NIP65_SERVICE_PREFS",
+  "tests": [
+    {
+      "test": "TestProjectorPublishesSystemDiscoverySnapshot",
+      "criteria": ["NIP65-SERVICE-AC-001", "NIP65-SERVICE-AC-002"],
+      "type": "unit",
+      "notes": "Asserts the service pubkey signs kind 10002 and that r tags use read for ContextVM relays and write for service relays while excluding browser-only relays."
+    },
+    {
+      "test": "TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRelays",
+      "criteria": ["NIP65-SERVICE-AC-003"],
+      "type": "unit",
+      "notes": "Injects a zero-accepted NIP-65 publish result and verifies RepublishSnapshot returns the no-accepted-relay error after the canonical discovery and NIP-51 relay-set events succeed."
+    },
+    {
+      "test": "documentation review",
+      "criteria": ["NIP65-SERVICE-AC-004"],
+      "type": "docs",
+      "notes": "Protocol docs and user guide describe NIP-65 as advisory and preserve ContextVM plus NIP-51 as canonical Bahia bootstrap."
+    }
+  ]
+}

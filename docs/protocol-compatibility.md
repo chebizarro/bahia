@@ -68,10 +68,17 @@ A ContextVM response is command acknowledgment only. Clients must follow canonic
 | `30315` | NIP-38 operational status |
 | `4903` | Immutable audit fact / attestation / provenance breadcrumb |
 | `11316`-`11320` | ContextVM discovery and capability announcements |
-| `30002` | NIP-51 relay sets |
+| `30002` | NIP-51 relay sets; canonical Bahia bootstrap relay topology |
+| `10002` | NIP-65 service relay preferences; advisory wider-Nostr read/write hints only |
 | `5` | NIP-09 deletion events |
 
-### 3. REST and HTTP MCP
+### 3. Relay preferences and bootstrap
+
+Bahia publishes service-key NIP-51 kind `30002` relay sets for canonical bootstrap and topology. `bahia-browser-v1` remains the browser-safe discovery/read set, `bahia-contextvm-v1` is the preferred ContextVM request/reply set, and `bahia-service-v1` is the backend service publish/backfill set.
+
+The Bahia service key also publishes an advisory NIP-65 kind `10002` relay list. Its `r` tags mark ContextVM request relays as `read` and service publish/backfill relays as `write`, giving wider Nostr clients standard author-routing hints. This event does not authorize relay use, does not replace ContextVM discovery, and must not replace the NIP-51 `30002` relay sets for Bahia bootstrap.
+
+### 4. REST and HTTP MCP
 
 - HTTP MCP (`/mcp`, `/api/v1/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
 - REST remains for narrowed CRUD/query/log/registry compatibility.

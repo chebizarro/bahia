@@ -69,7 +69,23 @@ describe('encrypted controlplane transport', () => {
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
 
-  it('returns configured Bahia browser relays for encrypted requests', () => {
+  it('prefers discovered ContextVM relays for encrypted ContextVM requests', () => {
+    const info = {
+      features: {
+        encrypted_nostr_requests: true
+      },
+      nostr: {
+        service_pubkey: 'b'.repeat(64),
+        browser_relays: ['wss://public.example'],
+        contextvm_relays: ['wss://contextvm.example']
+      }
+    };
+
+    expect(module.encryptedRelayUrlsFromSystemInfo(info)).toEqual(['wss://contextvm.example']);
+    expect(module.encryptedRequestsAvailable(info)).toBe(true);
+  });
+
+  it('returns configured Bahia browser relays for encrypted requests when ContextVM relays are absent', () => {
     expect(module.encryptedRelayUrlsFromSystemInfo({
       features: {
         encrypted_nostr_requests: true
@@ -165,9 +181,10 @@ describe('encrypted controlplane transport', () => {
       },
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        browser_relays: ['wss://relay.example']
+        browser_relays: ['wss://relay.example'],
+        contextvm_relays: ['wss://contextvm.example']
       }
-    })).toEqual(['wss://relay.example']);
+    })).toEqual(['wss://contextvm.example']);
   });
 
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {

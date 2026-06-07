@@ -1,0 +1,15 @@
+{
+  "feature_id": "RELAY_STRATEGY_NIP65_SERVICE_PREFS",
+  "beads": ["bahia-8epx.5", "bahia-8epx.5.1", "bahia-8epx.5.2", "bahia-8epx.5.3"],
+  "title": "Publish advisory service-authored NIP-65 relay preferences",
+  "intent": "Expose standard service read/write relay hints for wider Nostr routing without replacing Bahia ContextVM discovery and NIP-51 relay-set bootstrap.",
+  "observed_before": "System discovery projection published ContextVM discovery plus service-authored NIP-51 30002 relay sets, but no service-authored NIP-65 10002 relay preference event.",
+  "intended_behavior": "When sidecar system discovery projection runs, the configured Bahia service key signs and publishes kind 10002. The event contains r tags with read markers for ContextVM request/read relays and write markers for service publish/backfill relays. Bahia clients continue treating ContextVM discovery and NIP-51 30002 relay sets as canonical bootstrap; kind 10002 remains advisory.",
+  "out_of_scope": [
+    "browser discovery normalization",
+    "operator CLI discovery fallback",
+    "NIP-42 AUTH behavior changes",
+    "NIP-86 relay administration",
+    "relay metadata and DM relay-list follow-up"
+  ]
+}

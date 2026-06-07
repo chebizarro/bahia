@@ -25,6 +25,8 @@ const projectorTestPrivateKey = "11111111111111111111111111111111111111111111111
 type captureProjectionPublisher struct {
 	mu                 sync.Mutex
 	events             []gonostr.Event
+	errorsByKind       map[int]error
+	zeroAcceptedKind   map[int]bool
 	errorsByRelayD     map[string]error
 	zeroAcceptedRelayD map[string]bool
 }
@@ -32,6 +34,14 @@ type captureProjectionPublisher struct {
 func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.errorsByKind != nil {
+		if err := p.errorsByKind[ev.Kind]; err != nil {
+			return 0, err
+		}
+	}
+	if p.zeroAcceptedKind != nil && p.zeroAcceptedKind[ev.Kind] {
+		return 0, nil
+	}
 	if ev.Kind == kinds.RelaySetDiscovery {
 		dTag := eventDTag(ev)
 		if p.errorsByRelayD != nil {
@@ -506,6 +516,15 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	assertTag(t, serviceSet, "relay", "wss://service.example")
 	assertNoTag(t, serviceSet, "relay", "wss://browser.example")
 	assertNoTag(t, serviceSet, "relay", "wss://contextvm.example")
+
+	nip65 := assertOneSignedKind(t, sink, kinds.NIP65RelayList)
+	assertEventPubkey(t, nip65, wantPubkey)
+	assertRelayPreferenceTag(t, nip65, "wss://contextvm.example", "read")
+	assertRelayPreferenceTag(t, nip65, "wss://service.example", "write")
+	assertNoRelayPreferenceTag(t, nip65, "wss://browser.example", "read")
+	assertNoRelayPreferenceTag(t, nip65, "wss://browser.example", "write")
+	assertNoRelayPreferenceTag(t, nip65, "wss://contextvm.example", "write")
+	assertNoRelayPreferenceTag(t, nip65, "wss://service.example", "read")
 }
 
 func TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent(t *testing.T) {
@@ -527,6 +546,7 @@ func TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent(t *testing.
 	}
 	assertNoPublishedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertNoPublishedKind(t, sink, kinds.RelaySetDiscovery)
+	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
 }
 
 func TestProjectorSystemDiscoverySurfacesRelaySetPublishFailure(t *testing.T) {
@@ -551,6 +571,7 @@ func TestProjectorSystemDiscoverySurfacesRelaySetPublishFailure(t *testing.T) {
 	assertOneRelaySet(t, sink, "bahia-browser-v1")
 	assertNoRelaySet(t, sink, "bahia-contextvm-v1")
 	assertNoRelaySet(t, sink, "bahia-service-v1")
+	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
 }
 
 func TestProjectorSystemDiscoveryFailsWhenRelaySetHasNoAcceptedRelays(t *testing.T) {
@@ -574,6 +595,31 @@ func TestProjectorSystemDiscoveryFailsWhenRelaySetHasNoAcceptedRelays(t *testing
 	assertNoRelaySet(t, sink, "bahia-browser-v1")
 	assertNoRelaySet(t, sink, "bahia-contextvm-v1")
 	assertNoRelaySet(t, sink, "bahia-service-v1")
+	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
+}
+
+func TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRelays(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+
+	sink := &captureProjectionPublisher{zeroAcceptedKind: map[int]bool{kinds.NIP65RelayList: true}}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	err := projector.RepublishSnapshot(ctx)
+	if err == nil || !strings.Contains(err.Error(), "no relays accepted event kind 10002") {
+		t.Fatalf("republish snapshot error = %v, want no accepted NIP-65 failure", err)
+	}
+	assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertOneRelaySet(t, sink, "bahia-browser-v1")
+	assertOneRelaySet(t, sink, "bahia-contextvm-v1")
+	assertOneRelaySet(t, sink, "bahia-service-v1")
+	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
 }
 
 func TestProjectorRepublishesSnapshot(t *testing.T) {
@@ -1333,6 +1379,25 @@ func assertNoTag(t *testing.T, ev gonostr.Event, key, value string) {
 		}
 		if value == "" || tag[1] == value {
 			t.Fatalf("event kind %d unexpectedly had tag %s=%s; tags=%v", ev.Kind, key, tag[1], ev.Tags)
+		}
+	}
+}
+
+func assertRelayPreferenceTag(t *testing.T, ev gonostr.Event, relay, marker string) {
+	t.Helper()
+	for _, tag := range ev.Tags {
+		if len(tag) >= 3 && tag[0] == "r" && tag[1] == relay && tag[2] == marker {
+			return
+		}
+	}
+	t.Fatalf("event kind %d missing NIP-65 relay preference %s/%s; tags=%v", ev.Kind, relay, marker, ev.Tags)
+}
+
+func assertNoRelayPreferenceTag(t *testing.T, ev gonostr.Event, relay, marker string) {
+	t.Helper()
+	for _, tag := range ev.Tags {
+		if len(tag) >= 3 && tag[0] == "r" && tag[1] == relay && tag[2] == marker {
+			t.Fatalf("event kind %d unexpectedly had NIP-65 relay preference %s/%s; tags=%v", ev.Kind, relay, marker, ev.Tags)
 		}
 	}
 }

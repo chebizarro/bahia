@@ -1,0 +1,34 @@
+{
+  "feature_id": "RELAY_STRATEGY_CONTEXTVM_BROWSER_DISCOVERY",
+  "status": "verified",
+  "tests": [
+    {
+      "test_id": "RSCBD-T-001",
+      "ac_ids": ["RSCBD-AC-001"],
+      "target_path": "web/tests/unit/discovery-store.test.js",
+      "description": "Normalizes explicit bahia-contextvm-v1 relay set from a trusted service author.",
+      "status": "pass"
+    },
+    {
+      "test_id": "RSCBD-T-002",
+      "ac_ids": ["RSCBD-AC-002"],
+      "target_path": "web/tests/unit/discovery-store.test.js",
+      "description": "Verifies missing or untrusted ContextVM relay sets fall back to browser relays with degraded metadata.",
+      "status": "pass"
+    },
+    {
+      "test_id": "RSCBD-T-003",
+      "ac_ids": ["RSCBD-AC-003"],
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Verifies encrypted ContextVM transport prefers contextvm_relays when present and still requires explicit encrypted capability advertisement.",
+      "status": "pass"
+    },
+    {
+      "test_id": "RSCBD-T-004",
+      "ac_ids": ["RSCBD-AC-004"],
+      "target_path": "web/tests/unit/discovery-store.test.js",
+      "description": "Injects EVENT, EOSE, and auth-required CLOSED callbacks through the pool harness with no sleeps or timeout-as-completion assertions.",
+      "status": "pass"
+    }
+  ]
+}

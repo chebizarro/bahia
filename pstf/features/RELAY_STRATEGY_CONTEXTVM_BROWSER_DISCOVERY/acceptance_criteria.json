@@ -1,0 +1,34 @@
+{
+  "feature_id": "RELAY_STRATEGY_CONTEXTVM_BROWSER_DISCOVERY",
+  "status": "verified",
+  "criteria": [
+    {
+      "ac_id": "RSCBD-AC-001",
+      "title": "Browser discovery normalizes bahia-contextvm-v1",
+      "assertion": "Trusted service-authored NIP-51 relay set events tagged d=bahia-contextvm-v1 are normalized into nostr.contextvm_relays and retained in _discovery.relay_sets.",
+      "tests": ["RSCBD-T-001"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSCBD-AC-002",
+      "title": "Missing ContextVM relay set falls back with degraded metadata",
+      "assertion": "When bahia-contextvm-v1 is absent, nostr.contextvm_relays falls back to nostr.browser_relays and exposes contextvm_relay_metadata.degraded=true with a missing-contextvm reason.",
+      "tests": ["RSCBD-T-002"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSCBD-AC-003",
+      "title": "Encrypted capability gating remains separate",
+      "assertion": "ContextVM relay discovery does not enable encrypted ContextVM requests unless features.encrypted_nostr_requests, service_pubkey, and relay availability are all present.",
+      "tests": ["RSCBD-T-003"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSCBD-AC-004",
+      "title": "Discovery lifecycle remains event driven",
+      "assertion": "The browser discovery query uses scoped filters and deterministic EVENT/EOSE/CLOSED handling, including auth-required CLOSED failure, without polling or sleep-based completion.",
+      "tests": ["RSCBD-T-004"],
+      "status": "pass"
+    }
+  ]
+}

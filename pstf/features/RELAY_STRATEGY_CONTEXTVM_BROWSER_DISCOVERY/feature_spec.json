@@ -1,0 +1,31 @@
+{
+  "feature_id": "RELAY_STRATEGY_CONTEXTVM_BROWSER_DISCOVERY",
+  "status": "verified",
+  "source_beads": [
+    "bahia-8epx.4",
+    "bahia-8epx.4.1",
+    "bahia-8epx.4.2",
+    "bahia-8epx.4.3"
+  ],
+  "plan_ref": "docs/plans/relay-strategy-2026-06-06.md#item-4--normalize-contextvm-relays-in-browser-discovery",
+  "intent": "Browser discovery consumes service-authored NIP-51 bahia-contextvm-v1 relay sets for ContextVM request/reply traffic while preserving browser bootstrap fail-closed behavior and a permanent degraded fallback to bahia-browser-v1 for older deployments.",
+  "observed_behavior_before": [
+    "web/src/lib/stores/discovery.svelte.js normalized bahia-browser-v1 and bahia-service-v1 relay sets but ignored bahia-contextvm-v1.",
+    "Browser encrypted ContextVM transport resolved relays from nostr.browser_relays only."
+  ],
+  "intended_behavior": [
+    "Trusted service-authored bahia-contextvm-v1 relay sets are normalized into nostr.contextvm_relays.",
+    "When bahia-contextvm-v1 is missing or empty, nostr.contextvm_relays falls back to browser_relays and exposes degraded metadata rather than failing browser bootstrap.",
+    "Untrusted relay-set authors are ignored.",
+    "Encrypted ContextVM capability remains gated by features.encrypted_nostr_requests plus service_pubkey and relay availability; relay presence alone does not enable encrypted transport.",
+    "Discovery remains event-driven through scoped REQ, EVENT, EOSE, CLOSED, and AUTH/CLOSED handling; no polling or timeout-based completion was added."
+  ],
+  "out_of_scope": [
+    "Backend service NIP-65 publication",
+    "Backend projector/kinds event-shape changes",
+    "CLI operator discovery fallback",
+    "NIP-34 repository relay routing",
+    "NIP-42 AUTH implementation changes beyond preserving discovery CLOSED handling",
+    "NIP-86 relay administration"
+  ]
+}

@@ -2066,7 +2066,21 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	if err := p.publishRelaySet(ctx, "bahia-contextvm-v1", contextVMRelays); err != nil {
 		return err
 	}
-	return p.publishRelaySet(ctx, "bahia-service-v1", serviceRelays)
+	if err := p.publishRelaySet(ctx, "bahia-service-v1", serviceRelays); err != nil {
+		return err
+	}
+	return p.publishServiceNIP65RelayPreferences(ctx, serviceRelays, contextVMRelays)
+}
+
+func (p *Projector) publishServiceNIP65RelayPreferences(ctx context.Context, writeRelays, readRelays []string) error {
+	tags := gonostr.Tags{}
+	for _, relay := range normalizeProjectionRelays(readRelays) {
+		tags = append(tags, gonostr.Tag{"r", relay, "read"})
+	}
+	for _, relay := range normalizeProjectionRelays(writeRelays) {
+		tags = append(tags, gonostr.Tag{"r", relay, "write"})
+	}
+	return p.publishSigned(ctx, kinds.NIP65RelayList, tags, "", "system.discovery.nip65_relay_preferences", nil)
 }
 
 func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []string) error {

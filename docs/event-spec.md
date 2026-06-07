@@ -153,7 +153,10 @@ Bahia discovery is ContextVM-compatible:
 | `11318` | Resources list |
 | `11319` | Resource templates list |
 | `11320` | Prompts list |
-| `30002` | NIP-51 relay sets such as browser, service, and operational relay sets |
+| `30002` | NIP-51 relay sets such as browser, ContextVM, service, and operational relay sets; canonical Bahia bootstrap topology |
+| `10002` | NIP-65 relay preferences; advisory service read/write hints for wider Nostr routing |
+
+The service-authored `10002` list marks ContextVM request relays with `read` and service publish/backfill relays with `write`. It does not replace ContextVM discovery or the NIP-51 `30002` relay sets.
 
 Legacy discovery kind `31974` is migration input only.
 

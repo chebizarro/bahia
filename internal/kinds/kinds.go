@@ -9,6 +9,7 @@
 //   - Kind 4903 for audit facts and attestations.
 //   - ContextVM discovery kinds 11316-11320 and NIP-51 relay sets kind 30002
 //     for bootstrap and capability discovery.
+//   - NIP-65 kind 10002 for advisory service relay preferences.
 //   - NIP-78 kind 30078 for app-specific data.
 //
 // Legacy request/status/result/read-model constants remain here so migration,

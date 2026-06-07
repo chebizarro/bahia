@@ -147,6 +147,8 @@ nostr:
 
 `nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 
+The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstrap and an advisory NIP-65 `10002` relay list for wider Nostr routing. The `10002` list advertises ContextVM request relays as `read` and service publish/backfill relays as `write`; clients must still use ContextVM discovery plus the NIP-51 `30002` relay sets for Bahia bootstrap.
+
 ### Encrypted Request Transport
 
 Sensitive operations use the ContextVM relay policy where available and otherwise the Bahia browser relay set, with encrypted capability gated by discovery metadata:

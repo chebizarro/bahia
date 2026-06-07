@@ -6,6 +6,7 @@ export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
 export const DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
 export const SYSTEM_DISCOVERY_DTAG = 'bahia-system-v1';
 export const BROWSER_RELAY_SET_DTAG = 'bahia-browser-v1';
+export const CONTEXTVM_RELAY_SET_DTAG = 'bahia-contextvm-v1';
 export const SERVICE_RELAY_SET_DTAG = 'bahia-service-v1';
 const DISCOVERY_CACHE_KEY = 'bahia_system_discovery_cache_v1';
 const DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -76,7 +77,7 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
     if (![KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET].includes(event.kind)) return false;
     const d = getDTag(event);
     if (event.kind === KINDS.BAHIA_SYSTEM_DISCOVERY) return d === SYSTEM_DISCOVERY_DTAG;
-    return [BROWSER_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG].includes(d);
+    return [BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG].includes(d);
   }));
 
   const discoveryEvent = filtered
@@ -101,10 +102,29 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
     throw new Error('No trusted Bahia browser relay set received before EOSE');
   }
 
+  const advertisedContextVMRelays = relaySets[CONTEXTVM_RELAY_SET_DTAG] || [];
+  const contextVMFallback = advertisedContextVMRelays.length === 0;
+  const contextVMRelays = contextVMFallback ? browserRelays : advertisedContextVMRelays;
+  const contextVMRelayMetadata = contextVMFallback
+    ? {
+        source: BROWSER_RELAY_SET_DTAG,
+        degraded: true,
+        reason: relaySets[CONTEXTVM_RELAY_SET_DTAG]
+          ? 'empty_contextvm_relay_set'
+          : 'missing_contextvm_relay_set'
+      }
+    : {
+        source: CONTEXTVM_RELAY_SET_DTAG,
+        degraded: false,
+        reason: ''
+      };
+
   return {
     ...payload,
     nostr: {
       browser_relays: browserRelays,
+      contextvm_relays: contextVMRelays,
+      contextvm_relay_metadata: contextVMRelayMetadata,
       sidecar_url: browserRelays[0] || '',
       service_relays: relaySets[SERVICE_RELAY_SET_DTAG] || [],
       service_pubkey: discoveryEvent.pubkey,
@@ -115,7 +135,8 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
       event_id: discoveryEvent.id,
       pubkey: discoveryEvent.pubkey,
       created_at: discoveryEvent.created_at,
-      relay_sets: relaySets
+      relay_sets: relaySets,
+      contextvm_relay_metadata: contextVMRelayMetadata
     }
   };
 }
@@ -144,6 +165,8 @@ function loadCachedDiscovery(seed) {
     if (cached?.schema !== DISCOVERY_CACHE_KEY || age > DISCOVERY_CACHE_TTL_MS) return null;
     if (trustedPubkeys.length > 0 && cachedPubkey && !trustedPubkeys.includes(cachedPubkey)) return null;
     if (!cached?.normalized?.nostr?.browser_relays?.length) return null;
+    if (!Array.isArray(cached?.normalized?.nostr?.contextvm_relays)) return null;
+    if (!cached?.normalized?.nostr?.contextvm_relay_metadata) return null;
 
     return cached;
   } catch (error) {

@@ -127,7 +127,7 @@ function formatClosedRelays(closedRelays) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  return normalizeRelays(systemInfo?.nostr?.browser_relays);
+  return normalizeRelays(systemInfo?.nostr?.contextvm_relays || systemInfo?.nostr?.browser_relays);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {

@@ -5,6 +5,7 @@ const poolClientHarness = vi.hoisted(() => ({
   events: [],
   connectedRelays: ['ws://localhost:10547/relay'],
   instance: null,
+  closedRelays: [],
   unsubscribe: vi.fn(),
   PoolBackedClient: vi.fn(function PoolBackedClient() {
     const client = {
@@ -14,12 +15,17 @@ const poolClientHarness = vi.hoisted(() => ({
       }),
       getConnectedRelays: vi.fn(() => [...poolClientHarness.connectedRelays]),
       subscribeOnRelays: vi.fn((relays, filters, handlers = {}) => {
-        poolClientHarness.lastSubscription = { relays, filters };
+        poolClientHarness.lastSubscription = { relays, filters, handlers };
         for (const event of poolClientHarness.events) {
           handlers.onEvent?.(event, relays[0]);
         }
+        for (const closure of poolClientHarness.closedRelays) {
+          handlers.onClosed?.(closure.reason, closure.relay, closure.meta);
+        }
         for (const relay of relays) {
-          handlers.onEose?.(relay);
+          if (!poolClientHarness.closedRelays.some((closure) => closure.relay === relay && closure.meta?.terminal !== false)) {
+            handlers.onEose?.(relay);
+          }
         }
         return poolClientHarness.unsubscribe;
       }),
@@ -100,11 +106,13 @@ describe('Nostr system discovery store', () => {
     };
     poolClientHarness.events = [
       systemDiscovery(),
-      relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example'])
+      relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example']),
+      relaySet('bahia-contextvm-v1', ['https://contextvm.example/relay'])
     ];
     poolClientHarness.connectedRelays = ['ws://localhost:10547/relay'];
     poolClientHarness.instance = null;
     poolClientHarness.lastSubscription = null;
+    poolClientHarness.closedRelays = [];
     poolClientHarness.unsubscribe.mockClear();
     store = await import('../../src/lib/stores/discovery.svelte.js');
     store.resetDiscoveryStore();
@@ -130,7 +138,60 @@ describe('Nostr system discovery store', () => {
     expect(info.features.relay_read_models).toBe(true);
     expect(info.nostr.service_pubkey).toBe(trustedPubkey);
     expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
+    expect(info.nostr.contextvm_relays).toEqual(['wss://contextvm.example/relay']);
+    expect(info.nostr.contextvm_relay_metadata).toEqual({
+      source: 'bahia-contextvm-v1',
+      degraded: false,
+      reason: ''
+    });
     expect(info._discovery.relay_sets['bahia-browser-v1']).toHaveLength(2);
+    expect(info._discovery.relay_sets['bahia-contextvm-v1']).toEqual(['wss://contextvm.example/relay']);
+  });
+
+  it('falls back to browser relays with degraded metadata when the ContextVM relay set is absent', async () => {
+    poolClientHarness.events = [
+      systemDiscovery(),
+      relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example'])
+    ];
+
+    const info = await store.discoverSystemInfo({ force: true });
+
+    expect(info.nostr.contextvm_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
+    expect(info.nostr.contextvm_relay_metadata).toEqual({
+      source: 'bahia-browser-v1',
+      degraded: true,
+      reason: 'missing_contextvm_relay_set'
+    });
+    expect(info.features.encrypted_nostr_requests).toBeUndefined();
+  });
+
+  it('ignores untrusted ContextVM relay sets and reports browser-relay fallback metadata', async () => {
+    poolClientHarness.events = [
+      systemDiscovery(),
+      relaySet('bahia-browser-v1', ['wss://public.example']),
+      relaySet('bahia-contextvm-v1', ['wss://untrusted-contextvm.example'], { pubkey: otherPubkey })
+    ];
+
+    const info = await store.discoverSystemInfo({ force: true });
+
+    expect(info.nostr.contextvm_relays).toEqual(['wss://public.example']);
+    expect(info.nostr.contextvm_relay_metadata.degraded).toBe(true);
+    expect(info._discovery.relay_sets['bahia-contextvm-v1']).toBeUndefined();
+  });
+
+  it('fails closed when an auth-required CLOSED arrives before EOSE', async () => {
+    poolClientHarness.closedRelays = [{ relay: 'ws://localhost:10547/relay', reason: 'auth-required: restricted discovery', meta: { terminal: true, source: 'closed' } }];
+
+    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('Nostr query relays closed before all EOSE messages were received');
+    expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
+      ['ws://localhost:10547/relay'],
+      [{ kinds: [11316, 30002], authors: [trustedPubkey] }],
+      expect.objectContaining({
+        onEvent: expect.any(Function),
+        onEose: expect.any(Function),
+        onClosed: expect.any(Function)
+      })
+    );
   });
 
   it('fails closed when the bootstrap seed is absent', async () => {
@@ -160,10 +221,13 @@ describe('Nostr system discovery store', () => {
       systemDiscovery({ id: 'old', created_at: 1, content: { features: { relay_read_models: false } } }),
       systemDiscovery({ id: 'new', created_at: 2, content: { features: { relay_read_models: true } } }),
       relaySet('bahia-browser-v1', ['wss://old.example'], { id: 'old-relay', created_at: 1 }),
-      relaySet('bahia-browser-v1', ['wss://new.example'], { id: 'new-relay', created_at: 2 })
+      relaySet('bahia-browser-v1', ['wss://new.example'], { id: 'new-relay', created_at: 2 }),
+      relaySet('bahia-contextvm-v1', ['wss://old-contextvm.example'], { id: 'old-contextvm-relay', created_at: 1 }),
+      relaySet('bahia-contextvm-v1', ['wss://new-contextvm.example'], { id: 'new-contextvm-relay', created_at: 2 })
     ], [trustedPubkey]);
 
     expect(normalized.features.relay_read_models).toBe(true);
     expect(normalized.nostr.browser_relays).toEqual(['wss://new.example']);
+    expect(normalized.nostr.contextvm_relays).toEqual(['wss://new-contextvm.example']);
   });
 });

@@ -1,0 +1,25 @@
+{
+  "feature_id": "RELAY_STRATEGY_NIP65_SERVICE_PREFS",
+  "criteria": [
+    {
+      "id": "NIP65-SERVICE-AC-001",
+      "statement": "System discovery projection publishes a service-key-signed NIP-65 kind 10002 relay preference event.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorPublishesSystemDiscoverySnapshot"]
+    },
+    {
+      "id": "NIP65-SERVICE-AC-002",
+      "statement": "The service-authored 10002 marks ContextVM request/read relays with read and service publish/backfill relays with write, without bleeding browser-only relays into the advisory list.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorPublishesSystemDiscoverySnapshot"]
+    },
+    {
+      "id": "NIP65-SERVICE-AC-003",
+      "statement": "A 10002 publish attempt with zero relay acceptances is returned as a projection failure instead of being treated as successful advisory publication.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRelays"]
+    },
+    {
+      "id": "NIP65-SERVICE-AC-004",
+      "statement": "Docs state that service NIP-65 10002 is advisory wider-Nostr routing metadata and does not replace ContextVM discovery plus NIP-51 30002 bootstrap relay sets.",
+      "verification": ["docs/protocol-compatibility.md", "docs/event-spec.md", "docs/nostr-commands.md", "docs/user-guide/nostr-integration.md", "docs/nostr-event-implementation-guide.md"]
+    }
+  ]
+}

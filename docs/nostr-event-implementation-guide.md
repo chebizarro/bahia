@@ -127,8 +127,8 @@ Use NIP-89 kind `31990` only when advertising application handler capability to 
 
 Use existing relay-list NIPs and existing protocol relay hints. Bahia does not allocate relay-routing kinds.
 
-- `30002`: NIP-51 relay sets for Bahia browser, ContextVM, service, and other service-authored relay-purpose groups.
-- `10002`: NIP-65 relay lists for general author relay preferences.
+- `30002`: NIP-51 relay sets for Bahia browser, ContextVM, service, and other service-authored relay-purpose groups. These remain Bahia's canonical bootstrap relay topology.
+- `10002`: NIP-65 relay lists for general author relay preferences. Bahia publishes a service-authored advisory list with ContextVM request relays marked `read` and service publish/backfill relays marked `write`; it must not replace ContextVM discovery or NIP-51 relay sets.
 - `10050`: DM relay lists when direct-message routing is required.
 - NIP-34 `30617` repository `relays` tags: repository/ngit routing hints for that repository only.
 - NIP-11 metadata and optional NIP-66 monitor events: advisory relay capability/liveness inputs only; they do not establish Bahia service trust.
@@ -196,7 +196,8 @@ These are the main event kinds production runtime code should publish or subscri
 | `30900` | Cascadia/Bahia control state | Durable state/read-model projection |
 | `4903` | Cascadia/Bahia audit | Immutable audit facts and attestations |
 | `11316`-`11320` | ContextVM discovery | Server/tool/resource/prompt/template discovery |
-| `30002` | NIP-51 relay set | Browser/service/operator relay topology |
+| `30002` | NIP-51 relay set | Browser/ContextVM/service/operator relay topology |
+| `10002` | NIP-65 relay list | Advisory service relay preferences for wider Nostr routing |
 | `30078` | NIP-78 app data | App-specific data, settings, registries, detailed projections |
 | `5` | NIP-09 deletion | Delete event references |
 

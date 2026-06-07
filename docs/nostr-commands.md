@@ -14,6 +14,7 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | Canonical state | `30900`, `30078` | outbound replaceable/addressable | Control-plane state projections and NIP-78 app-specific data |
 | Canonical audit/status | `4903`, `30315` | outbound | Immutable audit facts and NIP-38 operational statuses |
 | Relay sets | `30002` | outbound addressable | NIP-51 relay topology and bootstrap sets |
+| Relay preferences | `10002` | outbound replaceable | Advisory NIP-65 service read/write hints; not Bahia bootstrap |
 | Deletions | `5` | outbound/inbound | NIP-09 delete events where relay-level deletion semantics apply |
 
 ## ContextVM Mutation Methods
@@ -101,8 +102,8 @@ Clients bootstrap with:
 
 - ContextVM server announcement `11316`.
 - ContextVM capability announcements `11317`-`11320`.
-- NIP-51 relay sets `30002` such as browser relay and service relay sets.
-- NIP-65 relay lists where available for broader Nostr routing.
+- NIP-51 relay sets `30002` such as browser, ContextVM request, and service relay sets.
+- NIP-65 relay lists where available for broader Nostr routing; Bahia's service-authored `10002` is advisory only and does not replace `30002` bootstrap sets.
 
 Legacy Bahia discovery kind `31974` is not a production bootstrap contract. It may appear only in migration inputs or compatibility fixtures.
 
