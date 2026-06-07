@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-65zb",
+  "title": "Transitional REST mutation routes return Nostr command receipts",
+  "intent": "Representative REST compatibility write routes that have Nostr control-plane analogs publish signer-first ContextVM commands and return command-receipt metadata instead of synchronous domain objects.",
+  "scope": [
+    "POST /api/v1/services",
+    "POST /api/v1/deployments/intents",
+    "POST /api/v1/llm/routes",
+    "POST /api/v1/policies",
+    "PUT /api/v1/policies/{id}",
+    "DELETE /api/v1/policies/{id}"
+  ],
+  "transport": {
+    "request_kind": 25910,
+    "methods": [
+      "service/create",
+      "service/deploy",
+      "llm/route-create",
+      "policy/create",
+      "policy/update",
+      "policy/delete"
+    ],
+    "durable_truth": [30900, 30315, 4903]
+  },
+  "non_goals": [
+    "Changing integration compile-fix files covered by bahia-iz8j",
+    "Adding fake production publishers",
+    "Making REST receipts indicate workflow completion"
+  ]
+}

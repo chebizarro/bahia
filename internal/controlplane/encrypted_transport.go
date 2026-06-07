@@ -31,7 +31,11 @@ const (
 	KindEncryptedRequest = KindContextVMGiftWrap
 	KindEncryptedResult  = KindContextVMMessage
 
+	ContextVMMethodServiceCreate   = "service/create"
 	ContextVMMethodServiceDeploy   = "service/deploy"
+	ContextVMMethodPolicyCreate    = "policy/create"
+	ContextVMMethodPolicyUpdate    = "policy/update"
+	ContextVMMethodPolicyDelete    = "policy/delete"
 	ContextVMMethodWorkerCordon    = "worker/cordon"
 	ContextVMMethodPackagePromote  = "package/promote"
 	ContextVMMethodDNSZoneCreate   = "dns/zone-create"

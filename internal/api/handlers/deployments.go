@@ -1,24 +1,36 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
+// DeploymentIntentCommandPublisher publishes signer-first deployment intent commands.
+type DeploymentIntentCommandPublisher interface {
+	PublishDeployRequest(ctx context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error)
+}
+
 // DeploymentHandler handles HTTP requests for deployment intents and runs.
 type DeploymentHandler struct {
 	registry *service.RegistryService
+	commands DeploymentIntentCommandPublisher
 }
 
 func NewDeploymentHandler(registry *service.RegistryService) *DeploymentHandler {
 	return &DeploymentHandler{registry: registry}
+}
+
+func NewDeploymentHandlerWithCommands(registry *service.RegistryService, commands DeploymentIntentCommandPublisher) *DeploymentHandler {
+	return &DeploymentHandler{registry: registry, commands: commands}
 }
 
 // resolveActor determines the actor identity for a request.
@@ -33,6 +45,52 @@ func resolveActor(r *http.Request, clientSupplied string) string {
 }
 
 // --- Deployment Intents ---
+
+func (h *DeploymentHandler) CreateIntent(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteDeployments) {
+		return
+	}
+	if h.commands == nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment command publisher is not configured")
+		return
+	}
+	var req dto.CreateDeploymentIntentRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := domain.ValidateRequiredUUID(req.ServiceID, "service_id"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := domain.ValidateRequiredUUID(req.EnvironmentID, "environment_id"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := domain.ValidateRequiredUUID(req.ArtifactID, "artifact_id"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.validateServiceEnvInOrg(w, r, req.ServiceID, req.EnvironmentID) {
+		return
+	}
+	req.RequestedBy = resolveActor(r, req.RequestedBy)
+	receipt, err := h.commands.PublishDeployRequest(r.Context(), controlplane.ServiceDeployCommand{
+		ServiceID:        req.ServiceID,
+		EnvironmentID:    req.EnvironmentID,
+		DeploymentUnitID: req.DeploymentUnitID,
+		ArtifactID:       req.ArtifactID,
+		RequestedBy:      req.RequestedBy,
+		SourceKind:       req.SourceKind,
+		Metadata:         req.Metadata,
+		IdempotencyKey:   req.IdempotencyKey,
+	})
+	if err != nil {
+		writeCommandPublishError(w, err)
+		return
+	}
+	writeAcceptedCommandReceipt(w, commandReceiptFromService(receipt))
+}
 
 func (h *DeploymentHandler) GetIntent(w http.ResponseWriter, r *http.Request) {
 	if !requireMember(w, r) {

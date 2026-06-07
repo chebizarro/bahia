@@ -35,6 +35,8 @@ type LLMRouteCreateCommand struct {
 	DefaultPlacementPolicy *domain.LLMPlacementPolicy
 	DefaultPromotionGate   *domain.LLMPromotionGateConfig
 	Metadata               map[string]any
+	IdempotencyKey         string
+	AgentID                string
 }
 
 // LLMReleaseRegisterCommand describes a canonical LLM release-register request.
@@ -106,8 +108,12 @@ type LLMCommandReceipt struct {
 
 // PublishLLMRouteCreateRequest publishes a ContextVM route-create request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, cmd LLMRouteCreateCommand) (*LLMCommandReceipt, error) {
+	name := strings.TrimSpace(cmd.Name)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
 	content := map[string]any{
-		"name": cmd.Name,
+		"name": name,
 	}
 	if cmd.Description != "" {
 		content["description"] = cmd.Description
@@ -124,7 +130,9 @@ func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, 
 	if len(cmd.Metadata) > 0 {
 		content["metadata"] = cmd.Metadata
 	}
-	return p.publish(ctx, "llm/route-create", KindNIP38Status, KindContextVMMessage, nil, content)
+	tags := nostr.Tags{{"route", name}}
+	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
+	return p.publish(ctx, "llm/route-create", KindNIP38Status, KindContextVMMessage, tags, content)
 }
 
 // PublishLLMReleaseRegisterRequest publishes a ContextVM release-register request and returns correlation metadata.

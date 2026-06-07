@@ -61,9 +61,9 @@ type Organization struct {
 // OrgMember represents a user's membership in an organization.
 type OrgMember struct {
 	OrgID     uuid.UUID `json:"org_id"`
-	Pubkey    string    `json:"pubkey"`     // Canonical lowercase hex Nostr pubkey
-	Role      Role      `json:"role"`       // viewer, deployer, admin, owner
-	NIP05     string    `json:"nip05"`      // Resolved NIP-05 identifier (cached)
+	Pubkey    string    `json:"pubkey"` // Canonical lowercase hex Nostr pubkey
+	Role      Role      `json:"role"`   // viewer, deployer, admin, owner
+	NIP05     string    `json:"nip05"`  // Resolved NIP-05 identifier (cached)
 	JoinedAt  time.Time `json:"joined_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -72,8 +72,8 @@ type OrgMember struct {
 type OrgInvite struct {
 	ID        uuid.UUID `json:"id"`
 	OrgID     uuid.UUID `json:"org_id"`
-	Pubkey    string    `json:"pubkey"`    // Invitee's canonical lowercase hex Nostr pubkey
-	Role      Role      `json:"role"`      // Role to grant upon acceptance
+	Pubkey    string    `json:"pubkey"`     // Invitee's canonical lowercase hex Nostr pubkey
+	Role      Role      `json:"role"`       // Role to grant upon acceptance
 	InvitedBy string    `json:"invited_by"` // Inviter's canonical lowercase hex Nostr pubkey
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
@@ -94,16 +94,19 @@ const (
 	PermReadDeployments  Permission = "deployments:read"
 	PermReadLogs         Permission = "logs:read"
 	PermReadSecrets      Permission = "secrets:read"
+	PermReadPolicies     Permission = "policies:read"
 
 	// Write permissions
-	PermWriteServices     Permission = "services:write"
-	PermWriteEnvironments Permission = "environments:write"
-	PermWriteDeployments  Permission = "deployments:write"
-	PermWriteSecrets      Permission = "secrets:write"
+	PermWriteServices      Permission = "services:write"
+	PermWriteEnvironments  Permission = "environments:write"
+	PermWriteDeployments   Permission = "deployments:write"
+	PermWriteSecrets       Permission = "secrets:write"
+	PermWritePolicies      Permission = "policies:write"
+	PermWriteLLMRoutes     Permission = "llm_routes:write"
 	PermApproveDeployments Permission = "deployments:approve"
 
 	// Admin permissions
-	PermManageMembers Permission = "members:manage"
+	PermManageMembers  Permission = "members:manage"
 	PermManageSettings Permission = "settings:manage"
 )
 
@@ -114,12 +117,14 @@ var RolePermissions = map[Role][]Permission{
 		PermReadEnvironments,
 		PermReadDeployments,
 		PermReadLogs,
+		PermReadPolicies,
 	},
 	RoleDeployer: {
 		PermReadServices,
 		PermReadEnvironments,
 		PermReadDeployments,
 		PermReadLogs,
+		PermReadPolicies,
 		PermWriteDeployments,
 		PermApproveDeployments,
 	},
@@ -129,10 +134,13 @@ var RolePermissions = map[Role][]Permission{
 		PermReadDeployments,
 		PermReadLogs,
 		PermReadSecrets,
+		PermReadPolicies,
 		PermWriteServices,
 		PermWriteEnvironments,
 		PermWriteDeployments,
 		PermWriteSecrets,
+		PermWritePolicies,
+		PermWriteLLMRoutes,
 		PermApproveDeployments,
 	},
 	RoleOwner: {
@@ -141,10 +149,13 @@ var RolePermissions = map[Role][]Permission{
 		PermReadDeployments,
 		PermReadLogs,
 		PermReadSecrets,
+		PermReadPolicies,
 		PermWriteServices,
 		PermWriteEnvironments,
 		PermWriteDeployments,
 		PermWriteSecrets,
+		PermWritePolicies,
+		PermWriteLLMRoutes,
 		PermApproveDeployments,
 		PermManageMembers,
 		PermManageSettings,

@@ -1,0 +1,78 @@
+{
+  "feature_id": "bahia-65zb",
+  "tests": [
+    {
+      "name": "TestRoleHasPermission",
+      "file": "internal/domain/tenant_test.go",
+      "acceptance_criteria": ["AC5"],
+      "verification_command": "go test ./internal/domain"
+    },
+    {
+      "name": "TestServiceCommandPublisherPublishesCanonicalServiceCreateRequest",
+      "file": "internal/controlplane/service_policy_command_publisher_test.go",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"],
+      "verification_command": "go test ./internal/controlplane"
+    },
+    {
+      "name": "TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteRequests",
+      "file": "internal/controlplane/service_policy_command_publisher_test.go",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC5"],
+      "verification_command": "go test ./internal/controlplane"
+    },
+    {
+      "name": "TestPolicyCommandPublisherFailsWhenNoRelayAccepts",
+      "file": "internal/controlplane/service_policy_command_publisher_test.go",
+      "acceptance_criteria": ["AC2", "AC3"],
+      "verification_command": "go test ./internal/controlplane"
+    },
+    {
+      "name": "TestLLMCommandPublisherPublishesCanonicalRouteCreateRequest",
+      "file": "internal/controlplane/llm_command_publisher_test.go",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"],
+      "verification_command": "go test ./internal/controlplane"
+    },
+    {
+      "name": "TestLLMCommandPublisherRejectsEmptyRouteCreateName",
+      "file": "internal/controlplane/llm_command_publisher_test.go",
+      "acceptance_criteria": ["AC3", "AC5"],
+      "verification_command": "go test ./internal/controlplane"
+    },
+    {
+      "name": "TestLLMCommandPublisherFailsWhenNoRelayAcceptsRouteCreateDeployOrRollback",
+      "file": "internal/controlplane/llm_command_publisher_test.go",
+      "acceptance_criteria": ["AC2", "AC3"],
+      "verification_command": "go test ./internal/controlplane"
+    },
+
+    {
+      "name": "TestLLMRouteCreateRequiresOrgScopedWritePermissionBeforePublish",
+      "file": "internal/api/router/command_receipt_routes_test.go",
+      "acceptance_criteria": ["AC5"],
+      "verification_command": "go test ./internal/api/router"
+    },
+    {
+      "name": "TestPolicyWritesResolveTargetOrgBeforePublish",
+      "file": "internal/api/router/command_receipt_routes_test.go",
+      "acceptance_criteria": ["AC5"],
+      "verification_command": "go test ./internal/api/router"
+    },
+    {
+      "name": "TestTransitionalRESTWritesReturnCommandReceipts",
+      "file": "internal/api/router/command_receipt_routes_test.go",
+      "acceptance_criteria": ["AC1", "AC3", "AC6"],
+      "verification_command": "go test ./internal/api/router"
+    },
+    {
+      "name": "TestTransitionalRESTWritePublishRejectionDoesNotReturnSubmittedReceipt",
+      "file": "internal/api/router/command_receipt_routes_test.go",
+      "acceptance_criteria": ["AC2", "AC3"],
+      "verification_command": "go test ./internal/api/router"
+    },
+    {
+      "name": "Documentation update review",
+      "file": "docs/api.md; docs/user-guide/features/services.md; docs/user-guide/features/deployments.md; docs/user-guide/features/llm-routes.md; docs/user-guide/features/policies.md; docs/user-guide/features/organizations.md",
+      "acceptance_criteria": ["AC4"],
+      "verification_command": "manual documentation diff review"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-65zb",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Representative transitional REST writes for services, deployment intents, LLM route creation, and policy create/update/delete publish signer-first ContextVM/Nostr commands and return HTTP 202 CommandReceipt metadata, including request_event_id, request_pubkey, request_kind, status/result/read-model kinds, idempotency key, and published relay count."
+    },
+    {
+      "id": "AC2",
+      "description": "Command publishers verify relay OK acceptance through publisher receipts and fail the REST request when no relay accepts the command."
+    },
+    {
+      "id": "AC3",
+      "description": "Tests are deterministic and event-driven: they inspect captured publishes and handler responses directly without sleeps or timeout-based completion detection."
+    },
+    {
+      "id": "AC4",
+      "description": "API and user-guide documentation describe the transitional receipt behavior and preserve the rule that durable completion comes from scoped Nostr observables, not the REST response."
+    },
+    {
+      "id": "AC5",
+      "description": "Policy mutation receipt routes require explicit policies:write authorization scoped to the target environment or existing policy, partial policy updates do not emit omitted fields as false/empty values, LLM route-create requires org-scoped llm_routes:write authorization, and LLM route-create rejects empty names before publishing."
+    },
+    {
+      "id": "AC6",
+      "description": "CommandReceipt REST adapters preserve publisher-supplied correlation metadata, including d_tag and non-default timeout_seconds; timeout defaults are applied only when omitted by the publisher."
+    }
+  ]
+}

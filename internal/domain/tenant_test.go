@@ -65,6 +65,9 @@ func TestRoleHasPermission(t *testing.T) {
 		{RoleViewer, PermReadLogs, true},
 		{RoleViewer, PermWriteServices, false},
 		{RoleViewer, PermWriteDeployments, false},
+		{RoleViewer, PermReadPolicies, true},
+		{RoleViewer, PermWritePolicies, false},
+		{RoleViewer, PermWriteLLMRoutes, false},
 
 		// Deployer
 		{RoleDeployer, PermReadServices, true},
@@ -72,17 +75,25 @@ func TestRoleHasPermission(t *testing.T) {
 		{RoleDeployer, PermApproveDeployments, true},
 		{RoleDeployer, PermWriteServices, false},
 		{RoleDeployer, PermReadSecrets, false},
+		{RoleDeployer, PermReadPolicies, true},
+		{RoleDeployer, PermWritePolicies, false},
+		{RoleDeployer, PermWriteLLMRoutes, false},
 
 		// Admin
 		{RoleAdmin, PermWriteServices, true},
 		{RoleAdmin, PermWriteSecrets, true},
 		{RoleAdmin, PermReadSecrets, true},
+		{RoleAdmin, PermReadPolicies, true},
+		{RoleAdmin, PermWritePolicies, true},
+		{RoleAdmin, PermWriteLLMRoutes, true},
 		{RoleAdmin, PermManageMembers, false},
 
 		// Owner
 		{RoleOwner, PermManageMembers, true},
 		{RoleOwner, PermManageSettings, true},
 		{RoleOwner, PermWriteServices, true},
+		{RoleOwner, PermWritePolicies, true},
+		{RoleOwner, PermWriteLLMRoutes, true},
 	}
 
 	for _, tt := range tests {

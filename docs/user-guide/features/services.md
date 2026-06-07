@@ -12,7 +12,7 @@ Services are the primary organizational unit in Bahia. Each service:
 
 ## Creating a Service
 
-Service creation is signer-first. Bahia no longer accepts REST `POST /api/v1/services`; clients publish a ContextVM JSON-RPC `service/create` intent as Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 `1059` or `21059` for encrypted transport. The immediate JSON-RPC response is only an acknowledgment; clients follow canonical `30900`, `30315`, and `4903` observables for durable state, progress, and audit truth.
+Service creation is signer-first. Clients publish a ContextVM JSON-RPC `service/create` intent as Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 `1059` or `21059` for encrypted transport. Bahia also exposes transitional REST `POST /api/v1/services` when a control-plane command publisher is configured; that route publishes the same signed command, verifies relay `OK` acceptance, and returns a `202` command receipt with `request_event_id`, requester pubkey, request kind, status/result/read-model kinds, and published relay count. The immediate JSON-RPC response or REST receipt is only an acknowledgment; clients follow canonical `30900`, `30315`, and `4903` observables for durable state, progress, and audit truth.
 
 ### Web UI
 

@@ -735,9 +735,13 @@ func New(cfg *config.Config) (*App, error) {
 	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
-	var serviceCommandPublisher mcp.ServiceCommandPublisher
+	var serviceCommandPublisher *controlplane.ServiceCommandPublisher
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		serviceCommandPublisher = controlplane.NewServiceCommandPublisher(controlPlanePool, controlPlaneSigner)
+	}
+	var policyCommandPublisher *controlplane.PolicyCommandPublisher
+	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		policyCommandPublisher = controlplane.NewPolicyCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
 	var packageCommandPublisher mcp.PackageCommandPublisher
 	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
@@ -976,6 +980,9 @@ func New(cfg *config.Config) (*App, error) {
 			MLRegistry:       mlRegistry,
 			MLCommands:       mlCommandPublisher,
 			LLMRegistry:      llmRegistry,
+			LLMCommands:      llmCommandPublisher,
+			ServiceCommands:  serviceCommandPublisher,
+			PolicyCommands:   policyCommandPublisher,
 			HealthProvider:   healthProvider,
 			ModePolicy:       policy,
 		}, cfg.Auth)

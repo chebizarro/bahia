@@ -61,7 +61,7 @@ The `control_plane` payload is a compatibility discovery subset. Production comm
 | POST | `/mcp` | Native MCP JSON-RPC endpoint |
 | POST | `/api/v1/mcp` | Alternate native MCP JSON-RPC endpoint |
 
-MCP tool responses for long-running writes return the same receipt fields as REST Nostr-backed writes: `request_event_id`, `request_kind`, `status_kind`, `result_kind`, `idempotency_key`, `status`, `published_relays`, and `timeout_seconds`.
+MCP tool responses for long-running writes return the same receipt fields as REST Nostr-backed writes: `request_event_id`, `request_kind`, `status_kind`, `result_kind`, `d_tag`, `idempotency_key`, `status`, `published_relays`, and `timeout_seconds`.
 
 ## Command receipts for long-running writes
 
@@ -73,6 +73,7 @@ Long-running HTTP writes that publish canonical Nostr command events return `202
     "request_event_id": "<nostr-event-id>",
     "request_kind": 38391,
     "result_kind": 38396,
+    "d_tag": "ml-inference-deploy:<key>",
     "idempotency_key": "ml-inference-deploy:<key>",
     "status": "submitted",
     "published_relays": 1,
@@ -82,11 +83,11 @@ Long-running HTTP writes that publish canonical Nostr command events return `202
 }
 ```
 
-`timeout_seconds` is the publish-and-wait compatibility timeout and defaults to 30 seconds. A relay-unreachable failure returns an immediate HTTP error with a retry hint in the message because no relay accepted the request. A partial relay failure returns a receipt with `status="error"`, `published_relays > 0`, and an `error` field; clients must not fall back to a second business path after any relay has accepted the command.
+`timeout_seconds` is the publisher-provided publish-and-wait compatibility timeout when available; if the publisher omits it, REST compatibility responses default it to 30 seconds. A relay-unreachable failure returns an immediate HTTP error with a retry hint in the message because no relay accepted the request. A partial relay failure returns a receipt with `status="error"`, `published_relays > 0`, and an `error` field; clients must not fall back to a second business path after any relay has accepted the command.
 
 Idempotency keys are represented as the Nostr `d` tag. Clients may provide `idempotency_key`; otherwise publishers generate one and signer-first CLI operator requests derive deterministic keys from the command kind, scoped tags, and payload. Consumers should subscribe for the receipt's status/result kinds using `request_event_id` and resource tags rather than polling REST for completion.
 
-Compatibility note: frontend pre-work found existing synchronous REST consumers under `web/src/lib/api/client.js` for deployment, adoption, and direct-runtime actions. Those REST defaults remain compatibility responses unless explicitly documented as Nostr-backed `202` receipt routes.
+Compatibility note: representative transitional REST mutation routes for services, deployment intents, LLM route creation, policy writes, and ML writes are Nostr-backed `202` receipt routes. They publish signed ContextVM/Nostr commands, verify relay `OK` acceptance through publisher receipts, and return command metadata. Durable completion still comes from scoped Nostr subscriptions to the receipt's status/result/read-model kinds. Legacy synchronous REST consumers outside those documented routes remain compatibility responses until explicitly migrated.
 
 ## Core registry routes
 
@@ -94,7 +95,7 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/services` | Create a service |
+| POST | `/api/v1/services` | Publish `service/create` ContextVM command and return `202` command receipt |
 | GET | `/api/v1/services` | List services |
 | GET | `/api/v1/services/{id}` | Get a service |
 | PUT | `/api/v1/services/{id}` | Update a service |
@@ -133,7 +134,7 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/deployments/intents` | Create deployment intent |
+| POST | `/api/v1/deployments/intents` | Publish `service/deploy` ContextVM command and return `202` command receipt |
 | GET | `/api/v1/deployments/intents/{id}` | Get deployment intent |
 | POST | `/api/v1/deployments/intents/{id}/approve` | Approve intent |
 | POST | `/api/v1/deployments/intents/{id}/reject` | Reject intent |
@@ -188,9 +189,9 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 |--------|------|-------------|
 | GET | `/api/v1/policies` | List policies |
 | GET | `/api/v1/policies/{id}` | Get policy |
-| POST | `/api/v1/policies` | Create policy |
-| PUT | `/api/v1/policies/{id}` | Update policy |
-| DELETE | `/api/v1/policies/{id}` | Delete policy |
+| POST | `/api/v1/policies` | Publish `policy/create` ContextVM command and return `202` command receipt |
+| PUT | `/api/v1/policies/{id}` | Publish `policy/update` ContextVM command and return `202` command receipt |
+| DELETE | `/api/v1/policies/{id}` | Publish `policy/delete` ContextVM command and return `202` command receipt |
 | POST | `/api/v1/policies/evaluate` | Evaluate policy |
 
 ### Payments
@@ -267,6 +268,7 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 |--------|------|-------------|
 | GET | `/api/v1/llm/routes` | List LLM routes |
 | GET | `/api/v1/llm/routes/{id}` | Get route |
+| POST | `/api/v1/llm/routes` | Publish `llm/route-create` ContextVM command and return `202` command receipt |
 | PUT | `/api/v1/llm/routes/{id}` | Update route |
 | GET | `/api/v1/llm/routes/{routeId}/releases` | List releases |
 | GET | `/api/v1/llm/releases/{id}` | Get release |
@@ -279,7 +281,7 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 | GET | `/api/v1/llm/environments/{envId}/state` | List LLM state by environment |
 | GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/state` | Get LLM route state |
 
-Deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes`, `POST /api/v1/llm/routes/{routeId}/releases`, `POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. Use the signer-first Nostr LLM control-plane request kinds `5971`-`5975` instead.
+Most deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes/{routeId}/releases`, `POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. `POST /api/v1/llm/routes` remains as a transitional compatibility route when the control-plane command publisher is configured: it publishes `llm/route-create` and returns a command receipt. Prefer signer-first Nostr LLM control-plane requests and subscribe to canonical observables for completion.
 
 ## Adoption / import (operator only)
 

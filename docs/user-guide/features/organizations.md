@@ -161,7 +161,7 @@ bahia environments create \
 
 ### Policies
 
-Policy creation is signer-first. Publish a signed Nostr `PolicyCreate` event scoped to the organization instead of using the deprecated REST-backed policy mutation command path.
+Policy creation is signer-first. Publish a ContextVM `policy/create` command scoped to the organization, or use transitional REST policy mutations when the control-plane command publisher is configured. Policy mutation routes require the `policies:write` permission, granted to admin and owner roles.
 
 ## Access Control
 
@@ -183,7 +183,8 @@ Policy creation is signer-first. Publish a signed Nostr `PolicyCreate` event sco
 | View resources | viewer+ |
 | Create services | editor+ |
 | Deploy | editor+ |
-| Manage policies | admin+ |
+| Manage policies | admin+ (`policies:write`) |
+| Manage LLM routes | admin+ (`llm_routes:write`) |
 | Manage members | admin+ |
 | Delete org | owner |
 

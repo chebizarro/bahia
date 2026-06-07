@@ -19,9 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -258,7 +256,7 @@ func TestBridgeIdempotency(t *testing.T) {
 	t.Run("same CI run ID returns same build", func(t *testing.T) {
 		// Simulates GetByCISystemRunID behavior
 		ciSystem := "hive-ci"
-		ciRunID := "event-" + uuid.New().String()
+		ciRunID := ciSystem + ":event-" + uuid.New().String()
 
 		// First call would create
 		buildID1 := uuid.New()

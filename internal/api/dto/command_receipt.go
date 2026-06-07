@@ -9,6 +9,7 @@ type CommandReceipt struct {
 	StatusKind      int            `json:"status_kind,omitempty"`
 	ResultKind      int            `json:"result_kind,omitempty"`
 	ReadModelKinds  map[string]int `json:"read_model_kinds,omitempty"`
+	DTag            string         `json:"d_tag,omitempty"`
 	IdempotencyKey  string         `json:"idempotency_key"`
 	Status          string         `json:"status"`
 	Error           string         `json:"error,omitempty"`

@@ -75,7 +75,7 @@ Kubernetes desired-state apply and Compose per-service fragments are deferred. U
 
 ### CLI and MCP
 
-Deployment intent creation is signer-first. The legacy `POST /api/v1/deployments/intents` REST mutation has been removed. CLI, MCP, web, and agent flows use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) and then follow canonical observables for durable progress.
+Deployment intent creation is signer-first. CLI, MCP, web, and agent flows use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) and then follow canonical observables for durable progress. Transitional REST `POST /api/v1/deployments/intents` is available when a control-plane command publisher is configured; it publishes the same signed `service/deploy` command, requires relay `OK` acceptance through the publisher receipt, and returns `202` command metadata instead of a synchronous deployment-intent domain object.
 
 ### Nostr (ContextVM)
 

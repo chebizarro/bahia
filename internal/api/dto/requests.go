@@ -25,12 +25,13 @@ type DeploymentUnitRequest struct {
 
 // CreateServiceRequest represents a request to register a new service.
 type CreateServiceRequest struct {
-	Name          string                `json:"name"`
-	RepoURL       string                `json:"repo_url,omitempty"`
-	Repository    *RepositoryRefRequest `json:"repository,omitempty"`
-	ArtifactRepo  string                `json:"artifact_repo"`
-	DefaultBranch string                `json:"default_branch,omitempty"`
-	RuntimeType   string                `json:"runtime_type,omitempty"`
+	Name           string                `json:"name"`
+	RepoURL        string                `json:"repo_url,omitempty"`
+	Repository     *RepositoryRefRequest `json:"repository,omitempty"`
+	ArtifactRepo   string                `json:"artifact_repo"`
+	DefaultBranch  string                `json:"default_branch,omitempty"`
+	RuntimeType    string                `json:"runtime_type,omitempty"`
+	IdempotencyKey string                `json:"idempotency_key,omitempty"`
 }
 
 // UpdateServiceRequest represents a request to update a service.
@@ -125,6 +126,7 @@ type CreateDeploymentIntentRequest struct {
 	RequestedBy      string         `json:"requested_by"`
 	SourceKind       string         `json:"source_kind,omitempty"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
+	IdempotencyKey   string         `json:"idempotency_key,omitempty"`
 }
 
 // CreateDeploymentRunRequest represents a request to create a deployment run.
@@ -200,6 +202,7 @@ type CreateLLMRouteRequest struct {
 	DefaultPlacementPolicy *LLMPlacementPolicyRequest `json:"default_placement_policy,omitempty"`
 	DefaultPromotionGate   *LLMPromotionGateRequest   `json:"default_promotion_gate,omitempty"`
 	Metadata               map[string]any             `json:"metadata,omitempty"`
+	IdempotencyKey         string                     `json:"idempotency_key,omitempty"`
 }
 
 // UpdateLLMRouteRequest updates mutable LLM route fields. Name is intentionally omitted.

@@ -53,7 +53,7 @@ func TestLLMCommandPublisherPublishesCanonicalRouteCreateRequest(t *testing.T) {
 	}
 	publisher := NewLLMCommandPublisher(capture, signer)
 
-	receipt, err := publisher.PublishLLMRouteCreateRequest(ctx, LLMRouteCreateCommand{Name: "chat", Description: "chat completions", Metadata: map[string]any{"owner": "operator"}})
+	receipt, err := publisher.PublishLLMRouteCreateRequest(ctx, LLMRouteCreateCommand{Name: " chat ", Description: "chat completions", Metadata: map[string]any{"owner": "operator"}, IdempotencyKey: "llm-route-create:chat"})
 	if err != nil {
 		t.Fatalf("publish route create: %v", err)
 	}
@@ -65,12 +65,35 @@ func TestLLMCommandPublisherPublishesCanonicalRouteCreateRequest(t *testing.T) {
 	}
 	ev := capture.events[0]
 	content := assertContextVMCommand(t, ev, "llm/route-create")
+	assertReactorTag(t, ev.Tags, "route", "chat")
+	assertReactorTag(t, ev.Tags, "d", "llm-route-create:chat")
+	if receipt.IdempotencyKey != "llm-route-create:chat" || receipt.PublishedRelays != 1 {
+		t.Fatalf("unexpected route-create receipt metadata: %#v", receipt)
+	}
 	if content["name"] != "chat" || content["description"] != "chat completions" {
 		t.Fatalf("unexpected route-create content: %#v", content)
 	}
 	metadata, ok := content["metadata"].(map[string]any)
 	if !ok || metadata["owner"] != "operator" {
 		t.Fatalf("unexpected route-create metadata: %#v", content)
+	}
+}
+
+func TestLLMCommandPublisherRejectsEmptyRouteCreateName(t *testing.T) {
+	ctx := context.Background()
+	capture := &captureNostrPublisher{published: 1}
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	publisher := NewLLMCommandPublisher(capture, signer)
+
+	_, err = publisher.PublishLLMRouteCreateRequest(ctx, LLMRouteCreateCommand{Name: "  "})
+	if err == nil {
+		t.Fatalf("expected empty route name error")
+	}
+	if len(capture.events) != 0 {
+		t.Fatalf("empty route name must not publish events: %d", len(capture.events))
 	}
 }
 
@@ -170,7 +193,7 @@ func TestLLMCommandPublisherPublishesCanonicalDeployRequest(t *testing.T) {
 	}
 }
 
-func TestLLMCommandPublisherFailsWhenNoRelayAcceptsDeployOrRollback(t *testing.T) {
+func TestLLMCommandPublisherFailsWhenNoRelayAcceptsRouteCreateDeployOrRollback(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
 	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
@@ -178,6 +201,11 @@ func TestLLMCommandPublisherFailsWhenNoRelayAcceptsDeployOrRollback(t *testing.T
 		t.Fatalf("create signer: %v", err)
 	}
 	publisher := NewLLMCommandPublisher(capture, signer)
+
+	_, err = publisher.PublishLLMRouteCreateRequest(ctx, LLMRouteCreateCommand{Name: "chat"})
+	if err == nil {
+		t.Fatalf("expected route create no relay acceptance error")
+	}
 
 	_, err = publisher.PublishLLMDeployRequest(ctx, LLMDeployCommand{RouteID: uuid.New(), EnvironmentID: uuid.New(), ReleaseID: uuid.New(), RequestedBy: "operator"})
 	if err == nil {

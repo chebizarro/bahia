@@ -20,12 +20,27 @@ func NewServiceCommandPublisher(publisher NostrEventPublisher, signer canonicaln
 	return &ServiceCommandPublisher{publisher: publisher, signer: signer}
 }
 
-type ServiceDeployCommand struct {
-	ServiceID      uuid.UUID
-	EnvironmentID  uuid.UUID
-	ArtifactID     uuid.UUID
+type ServiceCreateCommand struct {
+	Name           string
+	RepoURL        string
+	Repository     any
+	ArtifactRepo   string
+	DefaultBranch  string
+	RuntimeType    string
 	IdempotencyKey string
 	AgentID        string
+}
+
+type ServiceDeployCommand struct {
+	ServiceID        uuid.UUID
+	EnvironmentID    uuid.UUID
+	DeploymentUnitID *uuid.UUID
+	ArtifactID       uuid.UUID
+	RequestedBy      string
+	SourceKind       string
+	Metadata         map[string]any
+	IdempotencyKey   string
+	AgentID          string
 }
 
 type ServiceRollbackCommand struct {
@@ -41,6 +56,8 @@ type ServiceCommandReceipt struct {
 	RequestKind     int    `json:"request_kind"`
 	StatusKind      int    `json:"status_kind"`
 	ResultKind      int    `json:"result_kind"`
+	RegistryKind    int    `json:"registry_kind,omitempty"`
+	StateKind       int    `json:"state_kind,omitempty"`
 	DTag            string `json:"d_tag,omitempty"`
 	IdempotencyKey  string `json:"idempotency_key"`
 	Status          string `json:"status"`
@@ -49,18 +66,67 @@ type ServiceCommandReceipt struct {
 	PublishedRelays int    `json:"published_relays"`
 	TimeoutSeconds  int    `json:"timeout_seconds,omitempty"`
 	ServiceID       string `json:"service_id,omitempty"`
+	ServiceName     string `json:"service_name,omitempty"`
 	EnvironmentID   string `json:"environment_id,omitempty"`
 	ArtifactID      string `json:"artifact_id,omitempty"`
 }
 
+func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Context, cmd ServiceCreateCommand) (*ServiceCommandReceipt, error) {
+	name := strings.TrimSpace(cmd.Name)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	content := map[string]any{"name": name}
+	if cmd.RepoURL != "" {
+		content["repo_url"] = cmd.RepoURL
+	}
+	if cmd.Repository != nil {
+		content["repository"] = cmd.Repository
+	}
+	if cmd.ArtifactRepo != "" {
+		content["artifact_repo"] = cmd.ArtifactRepo
+	}
+	if cmd.DefaultBranch != "" {
+		content["default_branch"] = cmd.DefaultBranch
+	}
+	if cmd.RuntimeType != "" {
+		content["runtime_type"] = cmd.RuntimeType
+	}
+	tags := nostr.Tags{{"service", name}}
+	receipt, err := p.publish(ctx, ContextVMMethodServiceCreate, tags, content, cmd.IdempotencyKey, cmd.AgentID)
+	if receipt != nil {
+		receipt.ServiceName = name
+		receipt.RegistryKind = KindCASControlState
+		receipt.StateKind = KindCASControlState
+	}
+	return receipt, err
+}
+
 func (p *ServiceCommandPublisher) PublishDeployRequest(ctx context.Context, cmd ServiceDeployCommand) (*ServiceCommandReceipt, error) {
 	content := map[string]any{"service_id": cmd.ServiceID.String(), "environment_id": cmd.EnvironmentID.String(), "artifact_id": cmd.ArtifactID.String()}
+	if cmd.DeploymentUnitID != nil && *cmd.DeploymentUnitID != uuid.Nil {
+		content["deployment_unit_id"] = cmd.DeploymentUnitID.String()
+	}
+	if cmd.RequestedBy != "" {
+		content["requested_by"] = cmd.RequestedBy
+	}
+	if cmd.SourceKind != "" {
+		content["source_kind"] = cmd.SourceKind
+	}
+	if len(cmd.Metadata) > 0 {
+		content["metadata"] = cmd.Metadata
+	}
 	tags := nostr.Tags{{"service", cmd.ServiceID.String()}, {"environment", cmd.EnvironmentID.String()}, {"artifact", cmd.ArtifactID.String()}}
+	if cmd.DeploymentUnitID != nil && *cmd.DeploymentUnitID != uuid.Nil {
+		tags = append(tags, nostr.Tag{"deployment_unit", cmd.DeploymentUnitID.String()})
+	}
 	receipt, err := p.publish(ctx, ContextVMMethodServiceDeploy, tags, content, cmd.IdempotencyKey, cmd.AgentID)
 	if receipt != nil {
 		receipt.ServiceID = cmd.ServiceID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
 		receipt.ArtifactID = cmd.ArtifactID.String()
+		receipt.RegistryKind = KindDeploymentIntentRegistry
+		receipt.StateKind = KindCASControlState
 	}
 	return receipt, err
 }
@@ -72,6 +138,8 @@ func (p *ServiceCommandPublisher) PublishRollbackRequest(ctx context.Context, cm
 	if receipt != nil {
 		receipt.ServiceID = cmd.ServiceID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
+		receipt.RegistryKind = KindDeploymentIntentRegistry
+		receipt.StateKind = KindCASControlState
 	}
 	return receipt, err
 }
