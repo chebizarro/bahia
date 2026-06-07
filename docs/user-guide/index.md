@@ -85,8 +85,8 @@ All three paths read from `docs/user-guide/**/*.md`; do not duplicate user-facin
 
 ```
 ┌─────────────────┐     ┌──────────────────────────────┐
-│ Browser / CLI   │────▶│ Nostr Discovery (kind 31974) │
-│ / MCP Agent     │     │ Capability bootstrap         │
+│ Browser / CLI   │────▶│ ContextVM discovery + NIP-51 │
+│ / MCP Agent     │     │ 11316-11320 + relay sets     │
 └────────┬────────┘     └──────────────┬───────────────┘
          │                              │
          │ signed requests              │ relay discovery

@@ -24,7 +24,7 @@ The local rehearsal artifact is a release gate, not a substitute for staged/live
 | --- | --- | --- |
 | 0. Code regression | In-repo automated tests listed below | All pass on the release commit. |
 | 0.5 Local rehearsal artifact | Stored Docker+relay signer-first rehearsal evidence captured from the release commit | Release approval stays blocked until a local rehearsal bundle proves scan/import/direct-runtime behavior over relay subscriptions without HTTP polling assumptions. |
-| 1. Signer/operator staging | Bahia staging runs with signer-first operator transport enabled, operator pubkeys configured, and signer-capable CLI execution available | Valid signed operator requests are accepted; invalid/unauthorized requests fail closed; `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay topology evidence match the release candidate. |
+| 1. Signer/operator staging | Bahia staging runs with signer-first operator transport enabled, operator pubkeys configured, and signer-capable CLI execution available | Valid signed operator requests are accepted; invalid/unauthorized requests fail closed; ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) and relay topology evidence match the release candidate. |
 | 2. Managed endpoint staging | At least two `runtime.endpoints.<ref>` aliases are configured, including one remote Docker TLS/mTLS endpoint | Scans/imports use endpoint refs only; no raw Docker host or cert material appears in operator-visible request/result/log/metric surfaces. |
 | 3. First workload import | One non-critical Docker-origin workload is imported by explicit selection through the signer-first CLI path | Service, environment, build, artifact, state, runtime observation, audit event, and metrics are all present. |
 | 4. Direct runtime validation | Restart/stop/deploy are exercised only against the imported direct-runtime workload through signer-first requests | Actions pass for adopted direct-runtime workloads and fail closed for non-adopted or mismatched-host workloads. |
@@ -83,7 +83,7 @@ Before production enablement, record:
 - staged config excerpt with secrets and cert paths redacted;
 - relay URLs exercised and signer mode used;
 - request event IDs and correlated status/result event IDs for SF rows;
-- `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capture and relay `/relay` reachability evidence if applicable;
+- ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) capture and relay `/relay` reachability evidence if applicable;
 - manual matrix rows SF-01 through SF-11 with pass/fail, evidence location, and approver;
 - explicit decision for compose takeover (`disabled`, `enabled for named services only`, or `not applicable`);
 - rollback rehearsal timestamp and approver.

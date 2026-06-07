@@ -1,0 +1,103 @@
+{
+  "feature_id": "bahia-8epx.11",
+  "tests": [
+    {
+      "id": "T-11-001",
+      "name": "PSTF JSON validation",
+      "command": "python3 -m json.tool <artifact>",
+      "acceptance_criteria": [
+        "AC-11-001",
+        "AC-11-002",
+        "AC-11-003",
+        "AC-11-004",
+        "AC-11-005",
+        "AC-11-006"
+      ],
+      "covers": "Validates epic-11 artifacts and referenced relay-strategy PSTF JSON files."
+    },
+    {
+      "id": "T-11-002",
+      "name": "Backend relay policy and projection tests",
+      "command": "go test ./internal/config ./internal/adapters/nostr",
+      "acceptance_criteria": [
+        "AC-11-001",
+        "AC-11-002"
+      ],
+      "covers": "Independent service/browser/ContextVM config sources, NIP-51/NIP-65 publication, fail-closed missing browser relay set, OK/zero-accepted publish failure surfacing."
+    },
+    {
+      "id": "T-11-003",
+      "name": "Browser discovery and encrypted ContextVM tests",
+      "command": "cd web && npm test -- --run tests/unit/discovery-store.test.js tests/unit/encrypted-controlplane.test.js",
+      "acceptance_criteria": [
+        "AC-11-001",
+        "AC-11-002"
+      ],
+      "covers": "ContextVM relay normalization, degraded browser fallback, encrypted capability gating, EVENT/EOSE/CLOSED/AUTH callback handling."
+    },
+    {
+      "id": "T-11-004",
+      "name": "Operator discovery and CLI relay precedence tests",
+      "command": "go test ./pkg/client ./cmd/cli",
+      "acceptance_criteria": [
+        "AC-11-002"
+      ],
+      "covers": "CLI --relay/env/bootstrap precedence, trusted service-authored 30002 discovery, ContextVM relay preference, EOSE and deterministic failure paths."
+    },
+    {
+      "id": "T-11-005",
+      "name": "AUTH/CLOSED relay-unavailable tests",
+      "command": "go test ./internal/adapters/nostr ./pkg/client ./cmd/cli ./internal/fipsbridge && cd web && npm run test:unit -- --run tests/unit/nostr-client-parsing.test.js tests/unit/discovery-store.test.js tests/unit/controlplane-requests.test.js tests/unit/encrypted-controlplane.test.js",
+      "acceptance_criteria": [
+        "AC-11-002"
+      ],
+      "covers": "NIP-42 AUTH callbacks, auth-required relay exclusion, OK=false preservation, CLOSED post-acceptance failures, and no mutation fallback after relay acceptance."
+    },
+    {
+      "id": "T-11-006",
+      "name": "NIP-34 repository relay preference tests",
+      "command": "cd web && npm test -- --run tests/unit/test-utils-and-fixtures.test.js tests/unit/repositories-store.test.js",
+      "acceptance_criteria": [
+        "AC-11-003"
+      ],
+      "covers": "30617 relay tag preservation, 30618 branch/state lookup through repository relays first, degraded global fallback, incomplete EOSE metadata."
+    },
+    {
+      "id": "T-11-007",
+      "name": "SoulFactory ngit relay separation tests",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/soulfactory && ngit init --help",
+      "acceptance_criteria": [
+        "AC-11-003"
+      ],
+      "covers": "OpenClaw runtime/control relays separate from required NgitRelays and repeated ngit --relay support."
+    },
+    {
+      "id": "T-11-008",
+      "name": "NIP-86 relay administration boundary tests",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/config ./internal/adapters/nostr/relayadmin",
+      "acceptance_criteria": [
+        "AC-11-004"
+      ],
+      "covers": "Disabled-by-default NIP-86, secure opt-in targets, payload-bound NIP-98, authorized administrator pubkeys, HTTP/relay error surfacing, ContextVM mutation rejection."
+    },
+    {
+      "id": "T-11-009",
+      "name": "Documentation relay strategy search review",
+      "command": "grep/search review for relay taxonomy, NIP-11/NIP-66 advisory text, NIP-51 10050 boundaries, NIP-86 boundaries, and legacy 31974 usage",
+      "acceptance_criteria": [
+        "AC-11-005",
+        "AC-11-006"
+      ],
+      "covers": "Docs reflect changed Nostr integration, CLI behavior, relay settings, optional metadata/DM bounds, and legacy discovery migration-only wording."
+    },
+    {
+      "id": "T-11-010",
+      "name": "Documentation terminology validation",
+      "command": "RepoPrompt file_search checks for current-bootstrap legacy 31974 wording and stale 5980/7980 production wording in docs",
+      "acceptance_criteria": [
+        "AC-11-006"
+      ],
+      "covers": "Documentation files touched for this epic contain no current-bootstrap 31974 wording; remaining legacy encrypted-kind references are historical investigation notes only."
+    }
+  ]
+}

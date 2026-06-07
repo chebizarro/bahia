@@ -87,7 +87,7 @@ Most realtime app state is sourced from the Nostr sidecar/control-plane subscrip
 
 ### Encrypted Nostr Request/Result Flows
 
-Sensitive route migrations use a separate signer-first encrypted Nostr request/result flow instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.relays`, browser-facing `nostr.browser_relays`, and a service key; browser code reads `Nostr discovery events (kind 31974 + NIP-51 kind 30002).nostr.browser_relays` and publishes kind `5980` encrypted NIP-44 requests to those relay URLs only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
+Sensitive route migrations use signer-first encrypted ContextVM transport instead of REST compatibility. The backend advertises this only when operators configure service publish/backfill relays, browser-safe relays, ContextVM request/reply relays or their degraded browser-relay fallback, and a service key. Browser code reads ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), prefers `bahia-contextvm-v1` for ContextVM kind `25910` requests, and uses CEP-4/NIP-59 gift-wrap (`1059` or `21059`) where encrypted transport is available. Results are correlated by ContextVM response tags and durable completion still comes from canonical observable events.
 
 Important signer constraints:
 
@@ -113,7 +113,7 @@ Important signer constraints:
 **Solutions**:
 - Verify a NIP-07 browser extension is installed and unlocked
 - Reload the app and grant signing permission when prompted
-- Check `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `direct_nostr_http_auth: true` when backend auth is enabled
+- Check ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertises `direct_nostr_http_auth: true` when backend auth is enabled
 - If signer login works but a page reports compatibility required, that route still depends on REST compatibility
 
 ### NIP-07 Extension Not Detected
@@ -137,7 +137,7 @@ Compatibility notes for renamed keys:
 
 **Solutions**:
 - Check the relay connection status indicator (top-right corner)
-- Verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `relay_sidecar` and `relay_read_models`
+- Verify ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertises `relay_sidecar` and `relay_read_models`
 - Open DevTools → Network and confirm the `/relay` WebSocket is connected
 - Check Bahia and relay sidecar logs for publish/subscribe errors
 

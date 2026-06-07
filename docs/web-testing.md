@@ -364,7 +364,7 @@ test('notifications flow stays on encrypted relays for sensitive operations', as
 ```
 
 When testing relay-backed bootstrap, assert the behavior that matters:
-- `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery is loaded first
+- ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) discovery is loaded first
 - relay URLs come from the expected discovery fields
 - read-model queries wait for `EOSE` before treating bootstrap as complete
 - live subscriptions remain open for follow-up updates

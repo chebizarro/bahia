@@ -250,10 +250,11 @@ Legacy encrypted request/result events (`5980`/`7980`) are migration artifacts o
 
 Discovery/config contract:
 
-- Backend-only relay URLs for encrypted ContextVM handling are configured as `nostr.relays` and are not exposed as browser relay sets.
-- Browser-discoverable relay URLs for encrypted request/result handling are configured as `nostr.browser_relays` and are exposed as `nostr.browser_relays`.
-- ContextVM discovery `features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.relays` subscription target, and at least one browser encrypted-request relay URL advertised.
-- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.browser_relays`; sensitive payloads must never be published to the public sidecar relay.
+- Backend service publish/backfill relay URLs are configured as `nostr.service_relays` with `nostr.relays` retained only as a compatibility service alias.
+- Browser-safe relay URLs are configured as `nostr.browser_relays` and exposed through `d=bahia-browser-v1`.
+- ContextVM request/reply relay URLs are configured as `nostr.contextvm_relays`, exposed through `d=bahia-contextvm-v1`, and fall back to browser relays only with degraded metadata when the ContextVM set is absent.
+- ContextVM discovery `features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend service subscription target, and at least one browser-discoverable relay URL advertised for the operation.
+- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.contextvm_relays`; sensitive payloads must never be inferred safe for public browser relays without encrypted ContextVM capability metadata.
 
 Event contract:
 

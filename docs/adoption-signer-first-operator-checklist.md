@@ -63,7 +63,7 @@ Secondary / compatibility-only:
 | Local rehearsal artifact bundle | `<fill path + timestamp>` |
 | Managed endpoint refs under test | `<fill>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
-| `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capability evidence | `<fill path + timestamp>` |
+| ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) capability evidence | `<fill path + timestamp>` |
 | Relay `/relay` reachability evidence | `<fill path + timestamp or N/A>` |
 | Signer capability evidence (`signEvent`, request/result correlation path) | `<fill>` |
 | Compatibility explicit relay configuration approved? | `yes` / `no` |
@@ -79,7 +79,7 @@ Check each box before SF-01 starts.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
 - [ ] `adoption.allow_raw_docker_hosts=false` unless explicit break-glass testing is approved.
-- [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay/topology evidence are captured for the release candidate.
+- [ ] ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) and relay/topology evidence are captured for the release candidate.
 - [ ] A stored local Docker+relay signer-first rehearsal artifact exists for this release commit.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
@@ -95,7 +95,7 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] Local rehearsal artifact bundle (Docker+relay simulation)
 - [ ] CLI transcript showing signer-first request publication and terminal result handling
 - [ ] Request event IDs and correlated status/result event IDs
-- [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capture
+- [ ] ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) capture
 - [ ] Relay `/relay` reachability capture when sidecar validation is in scope
 - [ ] Relevant logs with request IDs / event IDs / actor pubkey
 - [ ] Metrics snapshots

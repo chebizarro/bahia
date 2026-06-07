@@ -7,9 +7,14 @@ Bahia uses a Khatru-based Nostr relay sidecar as the supported browser-facing an
 ```yaml
 nostr:
   relays:
-    - "wss://upstream.example"     # public interop relays; mirror source when mirror_external=true
+    - "wss://upstream.example"     # compatibility service/upstream interop source; never browser or ContextVM policy
+  service_relays:
+    - "wss://service-relay.example" # backend service publish/backfill relays
   browser_relays:
     - "ws://localhost:3000/relay"  # browser-safe discovery
+  contextvm_relays:
+    - "ws://localhost:3000/relay"  # ContextVM request/reply relays; may intentionally reuse the sidecar URL
+  relay_auth_unavailable: "exclude_and_fail"
   sidecar:
     enabled: true
     listen_addr: "0.0.0.0:3334"
@@ -23,10 +28,13 @@ nostr:
     max_query_limit: 500
 ```
 
-- `public_url` / `browser_relays` are exposed through ContextVM discovery (`11316`-`11320`) and NIP-51 relay sets (`30002`) to the frontend.
+- `public_url` / `browser_relays` are exposed through ContextVM discovery (`11316`-`11320`) and the `d=bahia-browser-v1` NIP-51 relay set (`30002`) to the frontend.
+- `contextvm_relays` is the preferred ContextVM request/reply relay policy and is projected as `d=bahia-contextvm-v1`; deployments may intentionally reuse the sidecar URL, but the purpose remains distinct from browser bootstrap.
+- `service_relays` is the backend service publish/backfill policy and is projected as `d=bahia-service-v1`; `nostr.relays` remains only a backward-compatible service alias.
+- `relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation and the operation fails if remaining relays cannot satisfy the success rule.
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
 - When sidecar mode is enabled, Bahia's own ContextVM transport and canonical observable projectors use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps ContextVM `25910`, CEP-4/NIP-59 wrappers (`1059`/`21059`), canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`), and relevant interop traffic sidecar-first.
-- Interop subscribers use `nostr.relays` unless `mirror_external=true`; with mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private and Loom relays stay direct and separate.
+- During the compatibility window, non-browser interop subscribers may still use `nostr.relays` as the upstream interop source unless `mirror_external=true`; service publish/backfill should prefer `service_relays`, browser bootstrap uses `browser_relays`, and ContextVM request/reply uses `contextvm_relays`. With mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private, Loom, repository/ngit, DM, and relay-administration relays stay direct and separate unless a deployment explicitly routes those purposes through the sidecar.
 
 ## Local topology
 

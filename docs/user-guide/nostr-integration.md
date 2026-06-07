@@ -169,6 +169,12 @@ nostr:
 
 When enabled, Bahia support code may call only NIP-86 relay-owner methods such as `supportedmethods`, `allowpubkey`, `banpubkey`, `allowkind`, `disallowkind`, `changerelayname`, `changerelaydescription`, and IP/event moderation methods. Relay administration URLs must use `wss://` and `https://` except for localhost/loopback development targets. Each HTTP request uses `Content-Type: application/nostr+json+rpc` and a NIP-98 `Authorization: Nostr <event>` header. The signed kind `27235` event includes `u=<relay_url>`, `method=POST`, and the required `payload=<sha256-of-exact-json-body>` tag. The client refuses disabled config, unknown target refs, administrator pubkeys not authorized for that target, non-NIP-86 method names, HTTP status failures, and relay JSON errors.
 
+### Advisory relay metadata and DM relay lists
+
+NIP-11 relay metadata and optional NIP-66 monitor events are advisory inputs only. They may annotate relay health, capability warnings, or operator-facing ranking, but they do not establish Bahia service trust, override trusted service pubkeys, or authorize removal of all configured relays. The safe default is no configured NIP-66 monitor trust.
+
+NIP-51 kind `10050` DM relay lists are reserved for explicitly DM-enabled Bahia features and receiving identities. Public browser bootstrap through `bahia-browser-v1` does not imply DM receive readiness, and Bahia does not publish DM relay lists by default.
+
 The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstrap and an advisory NIP-65 `10002` relay list for wider Nostr routing. The `10002` list advertises ContextVM request relays as `read` and service publish/backfill relays as `write`; clients must still use ContextVM discovery plus the NIP-51 `30002` relay sets for Bahia bootstrap.
 
 ### Repository Relay Hints

@@ -54,9 +54,9 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
    ```
 
 3. Confirm signer-first discovery and topology evidence:
-   - `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is captured for the release candidate
-   - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery (`nostr.browser_relays`, `nostr.sidecar_url`)
-   - if encrypted request/result web validation is in scope, verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `nostr.browser_relays` and `features.encrypted_nostr_requests`
+   - ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is captured for the release candidate
+   - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or trusted ContextVM/NIP-51 discovery (`bahia-contextvm-v1` preferred, `bahia-browser-v1` fallback)
+   - if encrypted request/result web validation is in scope, verify ContextVM discovery plus NIP-51 relay sets advertise `nostr.browser_relays` / `nostr.contextvm_relays` and `features.encrypted_nostr_requests`
    - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
 
 4. Prepare signer/operator execution inputs:

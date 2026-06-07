@@ -36,6 +36,7 @@ For the canonical control-plane contract, prefer:
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
 | NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
+| NIP-51 `10050` | DM relay lists | 🟡 only for explicitly DM-enabled features; not published by default |
 | NIP-34 | Repository relay hints and repository state | ✅ repository/ngit-specific routing input |
 | NIP-11 / NIP-66 | Relay metadata and optional monitor events | ✅ advisory capability/liveness metadata only |
 | NIP-86 + NIP-98 | Optional relay-owner HTTP administration with payload-bound signed HTTP authorization | 🟡 opt-in administration surface for Bahia-owned/authorized relays only; not ContextVM transport |
@@ -77,6 +78,8 @@ A ContextVM response is command acknowledgment only. Clients must follow canonic
 Bahia publishes service-key NIP-51 kind `30002` relay sets for canonical bootstrap and topology. `bahia-browser-v1` remains the browser-safe discovery/read set, `bahia-contextvm-v1` is the preferred ContextVM request/reply set, and `bahia-service-v1` is the backend service publish/backfill set.
 
 The Bahia service key also publishes an advisory NIP-65 kind `10002` relay list. Its `r` tags mark ContextVM request relays as `read` and service publish/backfill relays as `write`, giving wider Nostr clients standard author-routing hints. This event does not authorize relay use, does not replace ContextVM discovery, and must not replace the NIP-51 `30002` relay sets for Bahia bootstrap.
+
+NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-51 `10050` DM relay lists are not published by default and are reserved for future DM-enabled Bahia features with explicit receiving-identity semantics.
 
 ### 4. REST and HTTP MCP
 

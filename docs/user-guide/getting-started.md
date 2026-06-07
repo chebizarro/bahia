@@ -68,6 +68,7 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_SERVICE_RELAYS` | Backend service publish/backfill relays | `BAHIA_NOSTR_RELAYS` |
 | `BAHIA_NOSTR_BROWSER_RELAYS` | Browser-safe bootstrap/read relays | (discovery) |
 | `BAHIA_NOSTR_CONTEXTVM_RELAYS` | ContextVM request/reply relays; falls back to browser relays when absent | browser relays |
+| `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 
 ### Config File (bahia.yaml)
 
