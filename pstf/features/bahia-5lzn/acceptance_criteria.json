@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-5lzn",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Deleting a service-wide secret by name must execute SQL with placeholders matching the two bound arguments: service_id as $1 and name as $2 when envID is nil."
+    }
+  ]
+}

@@ -211,6 +211,7 @@ describe('encrypted controlplane transport', () => {
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1', contextVMRequestId: 'ctxvm-req-1' });
     await handlers.onEvent({ id: 'other', pubkey: 'b'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
     await handlers.onEvent({ id: 'spoofed', pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
+    handlers.onEose('wss://relay.example');
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"ctxvm-req-1","result":{"status":"ok","payload":{"count":1}}}' });
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
 
@@ -218,7 +219,7 @@ describe('encrypted controlplane transport', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(client.subscribe).toHaveBeenCalledWith(
       [{ kinds: [module.CONTEXTVM_MESSAGE_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)], authors: ['b'.repeat(64)] }],
-      expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
+      expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function) })
     );
   });
 
@@ -280,24 +281,47 @@ describe('encrypted controlplane transport', () => {
     await expect(closedFailure).rejects.toThrow('wss://relay-1.example (closed: shard restarting); wss://relay-2.example (closed: subscription limit)');
   });
 
-  it('times out when no correlated encrypted result arrives', async () => {
-    vi.useFakeTimers();
-    try {
-      client.subscribe.mockImplementation((_filters, _handlers) => vi.fn());
-      const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+  it('treats relay-less or unknown-relay CLOSED as terminal instead of waiting indefinitely', async () => {
+    let handlers;
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
-      const promise = transport.requestEncryptedResult({
-        operation: 'orgs.list',
-        payload: {},
-        timeoutMs: 25
-      });
-      const assertion = expect(promise).rejects.toThrow('Timed out waiting for ContextVM result for request-id');
+    client.getConnectedRelays.mockReturnValueOnce(null);
+    const unknownRelays = transport.awaitEncryptedResult({ requestEventId: 'req-unknown-relays' });
+    handlers.onClosed('closed: relay unavailable');
+    await expect(unknownRelays).rejects.toThrow('ContextVM result subscription closed before result: closed: relay unavailable');
 
-      await vi.advanceTimersByTimeAsync(25);
+    client.getConnectedRelays.mockReturnValueOnce(['wss://relay.example']);
+    const relaylessClosed = transport.awaitEncryptedResult({ requestEventId: 'req-relayless' });
+    handlers.onClosed('closed: relay unavailable');
+    await expect(relaylessClosed).rejects.toThrow('ContextVM result subscription closed before result: closed: relay unavailable');
+  });
 
-      await assertion;
-    } finally {
-      vi.useRealTimers();
-    }
+  it('does not publish encrypted ContextVM requests when operation cancellation is already aborted', async () => {
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const controller = new AbortController();
+    controller.abort(new Error('operator cancelled before publish'));
+
+    await expect(transport.requestEncryptedResult({ operation: 'orgs.list', payload: {}, signal: controller.signal }))
+      .rejects.toThrow('operator cancelled before publish');
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.publish).not.toHaveBeenCalled();
+    expect(client.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('rejects result waiting only from operation cancellation when relays remain open without a result', async () => {
+    const unsubscribe = vi.fn();
+    client.subscribe.mockImplementation((_filters, _handlers) => unsubscribe);
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const controller = new AbortController();
+
+    const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1', signal: controller.signal });
+    controller.abort(new Error('operator cancelled ContextVM request'));
+
+    await expect(promise).rejects.toThrow('operator cancelled ContextVM request');
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

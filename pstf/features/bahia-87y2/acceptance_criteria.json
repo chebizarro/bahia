@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-87y2",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "Backend relay-settings hydrator subscribes to kind 30900 with service author, #d=relay-settings:operator, #domain=relay-settings, and #schema=bahia.relay-settings.v1 filters."
+    },
+    {
+      "id": "AC-2",
+      "description": "Backend hydration validates inbound event signatures, relay-settings tags/content schema, trusted service author, accepts valid topology-empty canonical state, and stores only the latest valid replaceable state in a synchronized snapshot without mutating shared runtime config from the background runner."
+    },
+    {
+      "id": "AC-3",
+      "description": "Settings UI subscribes to the same canonical relay-settings state, hydrates operator policy inputs from EVENT messages when clean, preserves dirty operator edits by retaining incoming canonical state as pending until explicit user action, processes EOSE as catch-up completion, and surfaces CLOSED/AUTH outcomes."
+    },
+    {
+      "id": "AC-4",
+      "description": "Deterministic tests inject EVENT, EOSE, CLOSED, and AUTH paths without sleeps or polling-based completion."
+    },
+    {
+      "id": "AC-5",
+      "description": "Docs and PSTF evidence record that durable relay policy truth comes from canonical 30900 state, not ContextVM acknowledgments or local browser storage."
+    }
+  ]
+}

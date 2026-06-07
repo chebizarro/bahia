@@ -37,4 +37,4 @@ Implements Bead `bahia-ho1r`: an operator-facing relay settings UI and NIP-86 in
 - No new relay-routing kind was introduced.
 - NIP-86 remains relay-owner administration and is called only after ContextVM validation.
 - Browser session relay edits remain local and are labelled as local-only, not persistent operator policy.
-- Dedicated startup/live hydration from the canonical `30900` relay-settings read model remains tracked in Bead `bahia-87y2`; this patch publishes canonical state but does not yet add that subscriber/projection path.
+- Bead `bahia-87y2` adds dedicated backend and Settings-page startup/live hydration from the canonical `30900` relay-settings read model using scoped `#d`, `#domain`, `#schema`, and service-author filters.

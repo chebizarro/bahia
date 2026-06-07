@@ -3,7 +3,7 @@
 ## Goal
 Assess all currently open Bahia Beads issues, classify which are genuinely still open, which can be closed or normalized, which remain incomplete or deferred, and identify the highest-impact blockers that can be addressed immediately.
 
-This is a plan for a follow-up `rp-build` or `rp-orchestrate` workflow. This planning run does not close Beads, edit production code, or mutate issue state.
+This document began as a plan for a follow-up `rp-build` or `rp-orchestrate` workflow. The original planning run did not close Beads, edit production code, or mutate issue state; the later `Orchestration Progress` section records the subsequent immediate-blocker execution pass.
 
 ## Background
 A 2026-06-07 reconnaissance pass found 1104 total Beads issues: 43 open, 4 in progress, 5 blocked, and 39 ready to work. The same pass found `bd lint` warnings on 21 issues / 23 templates, mostly missing acceptance criteria and bug repro steps.
@@ -198,6 +198,13 @@ If any element is missing, keep `bahia-sqfx.5` open and reclassify it as actiona
 ## Open Questions
 - Which Beads issue should own this assessment/triage work before changes are made in a follow-up build workflow? If none exists, create a new Beads task before modifying issue state.
 - Is `bahia-1bai` still an active external blocker, and what type of permission/approval does it represent?
+
+## Orchestration Progress — 2026-06-07
+- `bahia-5lzn`: fixed service-wide secret `DeleteByName` SQL placeholder, added targeted repository regression test, added PSTF evidence, and marked the Bead ready for closeout.
+- `bahia-prcf`: removed encrypted ContextVM timeout-based terminal completion, added deterministic event/cancellation lifecycle tests, updated ContextVM migration PSTF evidence, and closed the Bead.
+- `bahia-sqfx.5` / `bahia-q6ob`: refreshed evidence; closeout threshold is not met, so `bahia-sqfx.5` remains the real blocker for `bahia-q6ob` pending staged/live signer-first SF-01–SF-11 signoff.
+- `bahia-1bai` / `bahia-f1ki`: identified blocker as ngit/Nostr remote maintainer permission, formally added `bahia-f1ki` -> `bahia-1bai` dependency, and confirmed `bahia-f1ki` cannot close until loom-worker pushes succeed.
+- `bahia-87y2`: implemented canonical `30900` relay-settings hydration across backend and settings UI, added tests/docs/PSTF evidence, closed the Bead, unblocked `bahia-ho1r`, and created follow-up `bahia-2kjh` for atomic relay-pool reconfiguration from hydrated policy.
 
 ## References
 - `bd stats`, `bd list --status=open`, `bd list --status=in_progress`, `bd blocked`, `bd lint` outputs gathered on 2026-06-07.

@@ -55,6 +55,29 @@ func TestPgSecretRepositoryUpdateWritesNextVersionRow(t *testing.T) {
 	}
 }
 
+func TestPgSecretRepositoryDeleteByNameServiceWideUsesNamePlaceholder(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock: %v", err)
+	}
+	defer mock.Close()
+	repo := newPgSecretRepositoryWithDB(mock)
+	serviceID := uuid.New()
+	name := "TOKEN"
+
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM service_secrets WHERE service_id = $1 AND environment_id IS NULL AND name = $2")).
+		WithArgs(serviceID, name).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+
+	if err := repo.DeleteByName(ctx, serviceID, nil, name); err != nil {
+		t.Fatalf("DeleteByName: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestPgSecretRepositoryRecordSecretAccessAudit(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

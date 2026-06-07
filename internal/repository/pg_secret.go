@@ -191,7 +191,7 @@ func (r *PgSecretRepository) DeleteByName(ctx context.Context, serviceID uuid.UU
 		`, serviceID, envID, name)
 	} else {
 		_, err = r.pool.Exec(ctx, `
-			DELETE FROM service_secrets WHERE service_id = $1 AND environment_id IS NULL AND name = $3
+			DELETE FROM service_secrets WHERE service_id = $1 AND environment_id IS NULL AND name = $2
 		`, serviceID, name)
 	}
 	if err != nil {

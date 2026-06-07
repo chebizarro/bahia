@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-5lzn",
+  "tests": [
+    {
+      "name": "TestPgSecretRepositoryDeleteByNameServiceWideUsesNamePlaceholder",
+      "file": "internal/repository/pg_secret_test.go",
+      "acceptance_criteria": ["AC1"],
+      "verification_command": "go test ./internal/repository -run 'TestPgSecretRepository(DeleteByNameServiceWideUsesNamePlaceholder|CreateWritesVersionRow|UpdateWritesNextVersionRow|RecordSecretAccessAudit)'"
+    }
+  ]
+}

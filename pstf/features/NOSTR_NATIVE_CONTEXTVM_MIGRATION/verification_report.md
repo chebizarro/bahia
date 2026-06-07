@@ -22,7 +22,23 @@ Complete. ContextVM/canonical Nostr migration streams A/B/C are complete and doc
 - PASS: static search confirmed `web/src/lib/nostr/kinds.gen.js` exposes ContextVM/canonical constants.
 
 ## Remaining dependencies and gaps
-None identified for `NOSTR_NATIVE_CONTEXTVM_MIGRATION` after the `bahia-6xxd` fixer pass.
+None identified for `NOSTR_NATIVE_CONTEXTVM_MIGRATION` after the `bahia-prcf` encrypted-result semantics pass.
+
+## Encrypted result terminal semantics pass — bahia-prcf — 2026-06-07
+
+Observed behavior before this pass: `web/src/lib/nostr/encrypted-controlplane.js` still exposed `ENCRYPTED_RESULT_TIMEOUT_MS`, scheduled a `setTimeout` inside `awaitEncryptedResult(...)`, and the focused unit test asserted timeout-based terminal failure when no correlated encrypted result arrived.
+
+Intended behavior: encrypted ContextVM result waiting terminates from correlated result `EVENT` success/error, explicit relay `CLOSED`/AUTH lifecycle failure, publish failure cleanup, or caller-provided operation cancellation. Historical `EOSE` is handled as subscription lifecycle metadata and does not become terminal completion for an open realtime result subscription.
+
+Changes verified:
+- `awaitEncryptedResult(...)` no longer uses timeout or `setTimeout` for terminal result completion.
+- The subscription handler set includes `onEvent`, `onEose`, and `onClosed`; tests inject those callbacks directly, including relay-less and unknown-relay `CLOSED` paths.
+- Assistant encrypted request callers now pass caller-provided `AbortSignal` cancellation instead of long `timeoutMs` values.
+- Already-aborted operation signals are rejected before relay connect/publish/subscribe work begins.
+
+Verification:
+- PASS: `npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js` — 1 file / 16 tests passed.
+- PASS: focused static search for `timeout`, `setTimeout`, `ENCRYPTED_RESULT_TIMEOUT_MS`, and `Timed out waiting for ContextVM` in `web/src/lib/nostr/encrypted-controlplane.js`, `web/tests/unit/encrypted-controlplane.test.js`, and encrypted assistant call sites returned no matches.
 
 ## Legacy-kind fixer pass — bahia-6xxd
 

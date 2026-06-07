@@ -51,6 +51,14 @@
         "go test ./pkg/client ./cmd/cli",
         "targeted web unit tests from bahia-viys"
       ]
+    },
+    {
+      "id": "AC-008",
+      "statement": "Encrypted browser ContextVM result waiting uses event-driven terminal semantics: correlated result EVENT success or error, explicit CLOSED/AUTH relay lifecycle failures, publish failure cleanup, and caller-provided operation cancellation. It does not use timeout-based result completion.",
+      "tests": [
+        "npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+        "static inspection: web/src/lib/nostr/encrypted-controlplane.js contains no timeout/setTimeout terminal result path"
+      ]
     }
   ]
 }

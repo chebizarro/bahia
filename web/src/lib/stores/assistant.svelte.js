@@ -457,7 +457,7 @@ function assistantResultItem(response, fallbackSessionId = '') {
   };
 }
 
-export async function publishAssistantPrompt({ prompt, sessionId, routeContext = null, selectedRefs = [] } = {}) {
+export async function publishAssistantPrompt({ prompt, sessionId, routeContext = null, selectedRefs = [], signal } = {}) {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) throw new Error('Prompt is required');
   const resolvedSessionId = sessionId || activeAssistantSession()?.sessionId || createAssistantSessionId();
@@ -488,14 +488,14 @@ export async function publishAssistantPrompt({ prompt, sessionId, routeContext =
     operation: 'assistant/prompt',
     payload: content,
     tags: [['session', resolvedSessionId], ['turn', turnId]],
-    timeoutMs: 120000
+    signal
   });
 
   applyLocalAssistantItem(assistantResultItem(response, resolvedSessionId));
   return response;
 }
 
-export async function publishAssistantApproval({ sessionId, planHash, decision, message = '', modifiedPlan = null } = {}) {
+export async function publishAssistantApproval({ sessionId, planHash, decision, message = '', modifiedPlan = null, signal } = {}) {
   if (!sessionId) throw new Error('sessionId is required');
   if (!planHash) throw new Error('planHash is required');
   if (!['approve', 'reject', 'cancel'].includes(decision)) throw new Error('decision must be approve, reject, or cancel');
@@ -519,7 +519,7 @@ export async function publishAssistantApproval({ sessionId, planHash, decision, 
     operation: 'assistant/approval',
     payload: content,
     tags: [['session', sessionId], ['plan-hash', effectivePlanHash], ['decision', decision]],
-    timeoutMs: 600000
+    signal
   });
 
   applyLocalAssistantItem(assistantResultItem(response, sessionId));

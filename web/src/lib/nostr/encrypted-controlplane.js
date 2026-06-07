@@ -9,7 +9,6 @@ export const CONTEXTVM_GIFT_WRAP_KIND = 1059;
 export const CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND = 21059;
 export const ENCRYPTED_REQUEST_KIND = CONTEXTVM_MESSAGE_KIND;
 export const ENCRYPTED_RESULT_KIND = CONTEXTVM_MESSAGE_KIND;
-export const ENCRYPTED_RESULT_TIMEOUT_MS = 15000;
 
 function ensureHexPubkey(pubkey, field) {
   if (typeof pubkey !== 'string' || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
@@ -126,6 +125,14 @@ function formatClosedRelays(closedRelays) {
     .join('; ');
 }
 
+function signalAbortError(signal, fallback = 'ContextVM result wait aborted') {
+  return signal?.reason instanceof Error ? signal.reason : new Error(fallback);
+}
+
+function throwIfSignalAborted(signal, fallback) {
+  if (signal?.aborted) throw signalAbortError(signal, fallback);
+}
+
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
   return normalizeRelays(systemInfo?.nostr?.contextvm_relays || systemInfo?.nostr?.browser_relays);
 }
@@ -218,7 +225,7 @@ export class EncryptedControlplaneTransport {
     };
   }
 
-  awaitEncryptedResult({ requestEventId, contextVMRequestId = requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS } = {}) {
+  awaitEncryptedResult({ requestEventId, contextVMRequestId = requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey } = {}) {
     if (!requestEventId) return Promise.reject(new Error('requestEventId is required'));
     if (!Array.isArray(resultKinds) || resultKinds.length === 0) return Promise.reject(new Error('resultKinds are required'));
     if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for ContextVM requests'));
@@ -227,17 +234,13 @@ export class EncryptedControlplaneTransport {
     return new Promise((resolve, reject) => {
       let unsubscribe = null;
       let settled = false;
-      let timer = null;
       const seen = new Set();
       const pendingRelays = openRelayUrls(this.client);
       const closedRelays = new Map();
+      const eoseRelays = new Set();
       const requesterPubkey = authState.pubkey;
 
       const cleanup = () => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
         if (unsubscribe) unsubscribe();
         unsubscribe = null;
         signal?.removeEventListener?.('abort', onAbort);
@@ -250,7 +253,7 @@ export class EncryptedControlplaneTransport {
         fn(value);
       };
 
-      const onAbort = () => settle(reject, signal?.reason instanceof Error ? signal.reason : new Error('ContextVM result wait aborted'));
+      const onAbort = () => settle(reject, signalAbortError(signal));
 
       if (signal?.aborted) {
         onAbort();
@@ -263,12 +266,6 @@ export class EncryptedControlplaneTransport {
       }
 
       signal?.addEventListener?.('abort', onAbort, { once: true });
-
-      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-        timer = setTimeout(() => {
-          settle(reject, new Error(`Timed out waiting for ContextVM result for ${requestEventId}`));
-        }, timeoutMs);
-      }
 
       const filter = { kinds: resultKinds, '#e': [requestEventId], '#p': [requesterPubkey], authors: [servicePubkey] };
       unsubscribe = this.client.subscribe([filter], {
@@ -287,47 +284,60 @@ export class EncryptedControlplaneTransport {
             settle(reject, error);
           }
         },
+        onEose: (relay) => {
+          if (relay) eoseRelays.add(relay);
+        },
         onClosed: (reason = '', relay) => {
           const reasonText = String(reason || '');
-          if (relay) closedRelays.set(relay, reasonText);
+          if (relay) closedRelays.set(relay, eoseRelays.has(relay) && reasonText ? `after EOSE: ${reasonText}` : reasonText);
           if (reasonText.toLowerCase().includes('auth')) {
             const relayLabel = relay ? `${relay}: ` : '';
             settle(reject, new Error(`ContextVM result subscription auth closure: ${relayLabel}${reasonText}`));
             return;
           }
-          if (pendingRelays && relay) {
-            const index = pendingRelays.indexOf(relay);
-            if (index >= 0) pendingRelays.splice(index, 1);
-            if (pendingRelays.length === 0) {
-              const summary = formatClosedRelays(closedRelays) || reasonText || 'all relays closed';
-              settle(reject, new Error(`ContextVM result subscription closed before result from all Bahia relays: ${summary}`));
-            }
+          if (!pendingRelays || !relay) {
+            settle(reject, new Error(`ContextVM result subscription closed before result: ${reasonText || 'relay closed without a reason'}`));
+            return;
+          }
+          const index = pendingRelays.indexOf(relay);
+          if (index >= 0) pendingRelays.splice(index, 1);
+          if (pendingRelays.length === 0) {
+            const summary = formatClosedRelays(closedRelays) || reasonText || 'all relays closed';
+            settle(reject, new Error(`ContextVM result subscription closed before result from all Bahia relays: ${summary}`));
           }
         }
       });
     });
   }
 
-  async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS, ...request } = {}) {
-    await this.connect();
-    const contextVMRequestId = request.requestId || randomId();
-    const event = await this.buildEncryptedRequestEvent({ ...request, requestId: contextVMRequestId });
+  async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, ...request } = {}) {
+    throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const waitSignal = abortController?.signal || signal;
     const forwardAbort = () => abortController?.abort(signal?.reason);
-    signal?.addEventListener?.('abort', forwardAbort, { once: true });
+    let resultPromise = null;
 
-    const resultPromise = this.awaitEncryptedResult({ requestEventId: event.id, contextVMRequestId, resultKinds, signal: waitSignal, timeoutMs });
     try {
+      await this.connect();
+      throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
+      const contextVMRequestId = request.requestId || randomId();
+      const event = await this.buildEncryptedRequestEvent({ ...request, requestId: contextVMRequestId });
+      throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
+      signal?.addEventListener?.('abort', forwardAbort, { once: true });
+      if (signal?.aborted) forwardAbort();
+
+      resultPromise = this.awaitEncryptedResult({ requestEventId: event.id, contextVMRequestId, resultKinds, signal: waitSignal });
       const publishResult = await this.publishEncryptedRequest(event);
       const result = await resultPromise;
       return { ...publishResult, resultEvent: result.event, result: result.payload };
     } catch (error) {
-      if (!signal?.aborted) {
-        abortController?.abort(new Error(`ContextVM request failed before terminal result: ${error.message}`));
+      if (resultPromise) {
+        if (!signal?.aborted) {
+          abortController?.abort(new Error(`ContextVM request failed before terminal result: ${error.message}`));
+        }
+        await resultPromise.catch(() => null);
       }
-      await resultPromise.catch(() => null);
-      signal?.throwIfAborted?.();
+      if (signal?.aborted) throw signalAbortError(signal, 'ContextVM request aborted before publish');
       throw error;
     } finally {
       signal?.removeEventListener?.('abort', forwardAbort);

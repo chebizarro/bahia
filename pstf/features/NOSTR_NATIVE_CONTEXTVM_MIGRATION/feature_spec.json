@@ -8,7 +8,8 @@
     "bahia-itrq",
     "bahia-guve",
     "bahia-7nh4",
-    "bahia-6xxd.4"
+    "bahia-6xxd.4",
+    "bahia-prcf"
   ],
   "status": "complete",
   "intended_behavior": {
@@ -16,7 +17,8 @@
     "reads": "Production clients read canonical observable/state, audit, status, discovery, and relay topology kinds: 30900, 4903, 30315, 11316-11320, 30002, 30078, and applicable standard NIPs.",
     "legacy_runtime": "Legacy Bahia custom request/status/result/read-model/encrypted kinds are not production reactor/subscriber/client runtime support outside startup migration, historical conversion, and fail-closed fixtures.",
     "deletions": "Deletions use NIP-09 kind 5 where relay-level Nostr deletion semantics apply; domain projections may also publish canonical tombstone replacements when durable state semantics require them.",
-    "documentation": "User-facing docs identify final ContextVM transport, canonical observable kinds, NIP-09 deletion behavior, and migration-only legacy boundaries."
+    "documentation": "User-facing docs identify final ContextVM transport, canonical observable kinds, NIP-09 deletion behavior, and migration-only legacy boundaries.",
+    "encrypted_results": "Browser encrypted ContextVM result waiting terminates from correlated result EVENTs, explicit relay CLOSED/AUTH lifecycle failures, publish failure cleanup, or caller-provided operation cancellation; it does not use timeout-based completion semantics."
   },
   "scope": [
     "internal/controlplane/encrypted_transport*",
@@ -61,6 +63,10 @@
     {
       "bead": "bahia-6xxd.4",
       "result": "Docs/PSTF pass rewrote target production documentation to describe ContextVM 25910/CEP-4 and canonical observables, with old Bahia kind ranges marked historical/migration-only."
+    },
+    {
+      "bead": "bahia-prcf",
+      "result": "Browser encrypted ContextVM result waiting no longer uses timeout-based terminal semantics; deterministic unit tests inject result EVENT, EOSE, CLOSED/AUTH, publish failure, and AbortSignal cancellation paths."
     }
   ],
   "remaining_dependencies": []

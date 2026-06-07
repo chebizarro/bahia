@@ -813,6 +813,16 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	bgManager.RegisterWithOptions(nostrSub, RunnerTier(Tier1))
 
+	if len(controlPlaneRelays) > 0 && servicePubkey != "" {
+		relaySettingsHydrator := controlplane.NewRelaySettingsHydrator(controlplane.RelaySettingsHydratorConfig{
+			Pool:          controlPlanePool,
+			ServicePubkey: servicePubkey,
+			Logger:        logger,
+		})
+		bgManager.RegisterWithOptions(relaySettingsHydrator, RunnerTier(Tier1))
+		logger.Info("relay settings canonical state hydrator registered", zap.Strings("relay_urls", controlPlaneRelays), zap.String("service_pubkey", servicePubkey))
+	}
+
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(controlPlanePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)

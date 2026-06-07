@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-87y2",
+  "bead": "bahia-87y2",
+  "title": "Hydrate operator relay policy from canonical 30900 relay-settings state",
+  "intended_behavior": [
+    "Backend runtime relay policy hydrates from the latest service-signed kind 30900 relay-settings state after restart.",
+    "The Settings operator relay policy form hydrates from canonical relay-settings state instead of relying only on discovery payload or local browser relay overrides.",
+    "Relay-settings hydration uses scoped Nostr subscriptions with EOSE for historical catch-up and keeps subscriptions open for realtime convergence.",
+    "Hydration validates inbound events, trusted service author, content schema, required tags, and parameterized replaceable semantics by pubkey plus d tag."
+  ],
+  "protocol_constraints": [
+    "No new relay-routing kinds are introduced.",
+    "ContextVM acknowledgments are not durable truth; canonical 30900 state is the relay policy read model.",
+    "NIP-86 remains optional relay-owner HTTP administration and is represented in policy state only for configured Bahia-owned or Bahia-authorized targets.",
+    "No polling or timeout-based completion is used for relay-settings state delivery."
+  ]
+}

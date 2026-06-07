@@ -320,6 +320,10 @@ func (h *RelaySettingsHandlers) publisherForRequest(req ContextVMRequest) (Nostr
 }
 
 func normalizeAndValidateRelayPolicy(state *RelayPolicyState) error {
+	return normalizeAndValidateRelayPolicyForSettings(state, true)
+}
+
+func normalizeAndValidateRelayPolicyForSettings(state *RelayPolicyState, requireRelayTopology bool) error {
 	state.BrowserRelays = normalizeRelayListForSettings(state.BrowserRelays)
 	state.ContextVMRelays = normalizeRelayListForSettings(state.ContextVMRelays)
 	state.ServiceRelays = normalizeRelayListForSettings(state.ServiceRelays)
@@ -328,7 +332,7 @@ func normalizeAndValidateRelayPolicy(state *RelayPolicyState) error {
 		return err
 	}
 	state.TrustedRelayMonitorPubkeys = trustedRelayMonitorPubkeys
-	if len(state.BrowserRelays)+len(state.ContextVMRelays)+len(state.ServiceRelays) == 0 {
+	if requireRelayTopology && len(state.BrowserRelays)+len(state.ContextVMRelays)+len(state.ServiceRelays) == 0 {
 		return fmt.Errorf("at least one browser, contextvm, or service relay is required")
 	}
 	for _, relay := range append(append([]string{}, state.BrowserRelays...), append(state.ContextVMRelays, state.ServiceRelays...)...) {

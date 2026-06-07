@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-87y2",
+  "tests": [
+    {
+      "criterion": "AC-1 AC-2 AC-4",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/controlplane -run 'TestRelaySettingsHydrator|TestRelaySettings'",
+      "proves": "Backend relay-settings hydrator uses scoped filters, validates signed canonical state, stores the latest replaceable policy in a cloned synchronized snapshot without mutating shared config, accepts valid topology-empty canonical state, handles EOSE and AUTH/CLOSED paths deterministically, and preserves existing mutation publication tests."
+    },
+    {
+      "criterion": "AC-3 AC-4",
+      "command": "cd web && npm test -- --run tests/unit/relay-settings-controlplane.test.js",
+      "proves": "Web relay-settings helper builds scoped 30900 filters, parses trusted canonical state including DM/monitor/NIP-86-only states with empty core relay topology, applies latest replaceable state, and forwards EOSE/CLOSED/AUTH callbacks without sleeps."
+    },
+    {
+      "criterion": "AC-5",
+      "command": "Manual review of docs/user-guide/nostr-integration.md and pstf/features/bahia-87y2/* plus cd web && npm run build",
+      "proves": "Documentation and PSTF describe canonical 30900 hydration as durable relay policy truth, the background hydrator snapshot boundary, and the Settings dirty-edit guard for pending canonical state."
+    }
+  ]
+}
