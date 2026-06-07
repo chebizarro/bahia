@@ -1,6 +1,6 @@
 # Bahia Relay Sidecar
 
-Bahia uses a Khatru-based Nostr relay sidecar as the supported browser-facing and server-facing control-plane topology. The sidecar stores rebuildable relay state; Bahia's database remains the source of truth and the projector republishes read-model snapshots when needed.
+Bahia uses a Khatru-based Nostr relay sidecar as the supported browser-facing and server-facing control-plane topology. The sidecar is a standalone HTTP/NIP-11/WebSocket Nostr relay server, not a REST CRUD API: `cmd/relay/main.go` loads config and starts `relaysidecar.New(...).Run(ctx)`, while `internal/relaysidecar/server.go` mounts the Khatru relay on `/` and on the path from `nostr.sidecar.public_url` such as `/relay`. The sidecar stores rebuildable relay state; Bahia's database remains the source of truth and the projector republishes read-model snapshots when needed.
 
 ## Configuration
 

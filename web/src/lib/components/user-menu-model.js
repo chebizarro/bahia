@@ -19,7 +19,7 @@ export const authenticatedMenuItems = [
     id: 'profile',
     label: 'Edit Profile',
     action: 'settings',
-    href: '/settings'
+    href: '/settings/profile'
   },
   {
     id: 'relays',

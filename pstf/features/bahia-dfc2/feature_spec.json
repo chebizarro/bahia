@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-dfc2",
+  "title": "Nostr profile settings route",
+  "bead": "bahia-dfc2",
+  "observed_behavior": [
+    "docs/designs/unified-user-menu.md defines an Edit Profile menu item for /settings/profile.",
+    "Before this slice, UserMenu linked Edit Profile to /settings because /settings/profile did not exist."
+  ],
+  "intended_behavior": [
+    "Authenticated users can open /settings/profile from UserMenu or the Settings profile card.",
+    "The profile form edits Nostr kind-0 metadata fields and validates field lengths, URLs, NIP-05, and lightning address formats before signing.",
+    "Publishing signs the kind-0 event with the active auth signer flow, publishes to writable signer/NIP-65 relays, checks per-relay OK accepted outcomes, and reports rejection/failure details."
+  ],
+  "scope": [
+    "web/src/routes/settings/profile/+page.svelte",
+    "web/src/lib/nostr/profile.js",
+    "web/src/lib/stores/auth.svelte.js profile cache persistence",
+    "web/src/lib/components/user-menu-model.js",
+    "web/src/routes/settings/+page.svelte",
+    "docs/user-guide/getting-started.md"
+  ],
+  "out_of_scope": [
+    "Relay sidecar HTTP inventory documentation handled by the concurrent docs-only agent.",
+    "Changing Nostr event kind definitions; kind 0 is a standard Nostr metadata kind."
+  ]
+}

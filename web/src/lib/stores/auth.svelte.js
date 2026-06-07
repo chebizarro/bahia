@@ -212,15 +212,21 @@ function normalizeProfileMetadata(metadata = {}) {
   const nip05 = String(metadata.nip05 || '').trim();
   const picture = String(metadata.picture || '').trim();
   const about = String(metadata.about || '').trim();
+  const banner = String(metadata.banner || '').trim();
+  const website = String(metadata.website || '').trim();
+  const lud16 = String(metadata.lud16 || '').trim();
 
-  if (!displayName && !name && !nip05 && !picture && !about) return null;
+  if (!displayName && !name && !nip05 && !picture && !about && !banner && !website && !lud16) return null;
 
   return {
     displayName,
     name,
     nip05,
     picture,
-    about
+    about,
+    banner,
+    website,
+    lud16
   };
 }
 
@@ -735,6 +741,23 @@ export function logout() {
     ...compatibilityPatch()
   });
   resetEncryptedSignerProbe();
+}
+
+export function updateAuthProfile(profile) {
+  if (authState.status !== 'authenticated' || !authState.pubkey) {
+    throw new Error('Not authenticated - please login first');
+  }
+  const normalizedProfile = normalizeProfileMetadata(profile);
+  updateAuthState({ profile: normalizedProfile });
+  persistSession({
+    pubkey: authState.pubkey,
+    relays: authState.relays,
+    authMethod: authState.authMethod || 'nip07',
+    nip46: authState.nip46 || null,
+    profile: normalizedProfile,
+    lastAuthenticatedAt: authState.lastAuthenticatedAt || new Date().toISOString()
+  });
+  return normalizedProfile;
 }
 
 export async function signWithAuth(event) {

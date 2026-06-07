@@ -651,6 +651,33 @@ describe('Auth Store', () => {
     });
   });
 
+  describe('updateAuthProfile', () => {
+    it('updates the active session profile and persists it for UserMenu hydration', async () => {
+      await authModule.login();
+
+      const profile = authModule.updateAuthProfile({
+        name: 'Alice',
+        display_name: 'Alice Example',
+        about: 'Maintainer'
+      });
+      const persisted = JSON.parse(localStorage.getItem('bahia_auth_session'));
+
+      expect(profile).toEqual({
+        displayName: 'Alice Example',
+        name: 'Alice',
+        nip05: '',
+        picture: '',
+        about: 'Maintainer',
+        banner: '',
+        website: '',
+        lud16: ''
+      });
+      expect(authModule.authState.profile).toEqual(profile);
+      expect(persisted.profile).toEqual(profile);
+      expect(persisted.pubkey).toBe(authModule.authState.pubkey);
+    });
+  });
+
   describe('signWithAuth', () => {
     it('should reject when not authenticated', async () => {
       const event = { kind: 1, content: 'test' };

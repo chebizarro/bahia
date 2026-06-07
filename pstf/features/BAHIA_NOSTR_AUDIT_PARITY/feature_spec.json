@@ -4,7 +4,8 @@
     "bahia-s6qp",
     "bahia-5dlr",
     "bahia-piy8",
-    "bahia-a84g"
+    "bahia-a84g",
+    "bahia-1ywi"
   ],
   "intent": "Generic Nostr inbound audit coverage matches the canonical control-plane request namespace with scoped author filters, reactor outbound auditing is wired independently of package feature enablement, the canonical Bahia kind catalog is single-sourced in internal/kinds and guarded against frontend generated-kind drift, and route/control-surface transport classifications are durable enough to prevent signer-first regressions back to REST command ingress.",
   "scope": [
@@ -21,6 +22,8 @@
     "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
     "pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json",
     "web/tests/unit/route-transport-matrix.test.js",
-    "docs/user-guide/nostr-integration.md"
+    "docs/user-guide/nostr-integration.md",
+    "docs/investigations/rest-api-audit-2026-06-01.md",
+    "docs/relay-sidecar.md"
   ]
 }

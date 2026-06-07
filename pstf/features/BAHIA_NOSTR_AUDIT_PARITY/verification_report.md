@@ -73,6 +73,42 @@ No remaining work is known for `bahia-piy8` in the touched scope.
 
 No remaining work is known for `bahia-wbgi` in the `/environments` route transport scope.
 
+## Bead bahia-1ywi — Relay sidecar HTTP surface inventory
+
+### Observed changes
+
+- Updated `docs/investigations/rest-api-audit-2026-06-01.md` so the relay sidecar is listed with permanent HTTP-native surfaces and separately classified as Nostr relay infrastructure rather than REST CRUD.
+- Updated `docs/user-guide/nostr-integration.md` and `docs/relay-sidecar.md` to name the sidecar as a standalone HTTP/NIP-11/WebSocket Khatru server started by `cmd/relay/main.go` and served by `internal/relaysidecar/server.go`.
+- Added operator references for `nostr.sidecar.*`, `BAHIA_NOSTR__SIDECAR__*`, `listen_addr`, `public_url`, `backend_url`, and `/relay` proxy exposure.
+- Added a `relay-sidecar-http-websocket` PSTF matrix entry with `http_native` classification and no route files, preserving sibling ownership of `/settings/profile` route files.
+
+### Verification
+
+- `python3 -m json.tool pstf/features/BAHIA_NOSTR_AUDIT_PARITY/{acceptance_criteria,test_matrix,feature_spec,route_transport_matrix,defects}.json` — passed.
+- Documentation review confirmed the three requested docs explicitly distinguish relay sidecar HTTP/NIP-11/WebSocket traffic from REST CRUD and include file/config/operator references.
+- `npm run test:unit -- --run tests/unit/route-transport-matrix.test.js` — failed because `web/src/routes/settings/relays/+page.svelte` is missing from the route transport matrix. This is tracked as defect `D-ROUTE-MATRIX-SETTINGS-RELAYS-001` / Bead `bahia-4rwk` and is separate from the relay sidecar documentation acceptance criteria.
+
+### Remaining issue scope
+
+No remaining work is known for `bahia-1ywi` in the touched documentation/PSTF scope. Separate PSTF matrix route coverage work is tracked by `bahia-4rwk`.
+
+## Bead bahia-4rwk — Settings route matrix classification
+
+### Observed changes
+
+- Added `settings-relay-policy-controlplane` to `route_transport_matrix.json` for `web/src/routes/settings/relays/+page.svelte`, backed by `RelaySettingsPanel`, `relay-settings-controlplane.js`, and backend relay-settings handlers/hydrator evidence.
+- Recorded the route as `nostr_request_result_facade`: relay policy/admin mutations use encrypted ContextVM request/result operations, while durable relay-policy truth arrives through scoped canonical `30900` subscriptions with EOSE/CLOSED/AUTH callbacks.
+- Added PSTF-only classification for concurrently added `web/src/routes/settings/profile/+page.svelte` because the same route matrix guard requires every live `+page` route to be classified. No profile route source files were edited.
+
+### Verification
+
+- `python3 -m json.tool pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json` — passed.
+- `npm --prefix web run test:unit -- --run tests/unit/route-transport-matrix.test.js` — passed, 1 file / 5 tests.
+
+### Remaining issue scope
+
+No remaining work is known for `bahia-4rwk` in the PSTF route transport matrix scope.
+
 ## Bead bahia-dg3t — PSTF stale verification cleanup
 
 ### Observed changes

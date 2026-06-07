@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-dfc2",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "/settings/profile route exists and is reachable from UserMenu Edit Profile.",
+      "tests": ["web/tests/unit/nav.test.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Profile fields are locally validated before signing or publishing.",
+      "tests": ["web/tests/unit/profile-publish.test.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Valid profile submissions create kind-0 metadata events signed through the active auth signer flow.",
+      "tests": ["web/tests/unit/profile-publish.test.js"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Publishing verifies per-relay OK outcomes and requires at least one accepted relay.",
+      "tests": ["web/tests/unit/profile-publish.test.js"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Relay rejection and connection failure behavior is deterministic and does not update the cached profile.",
+      "tests": ["web/tests/unit/profile-publish.test.js"]
+    },
+    {
+      "id": "AC6",
+      "statement": "Settings exposes the Profile surface, and user-facing docs describe profile publishing behavior.",
+      "tests": ["web/tests/unit/settings-section-order.test.js", "docs/user-guide/getting-started.md"]
+    }
+  ]
+}

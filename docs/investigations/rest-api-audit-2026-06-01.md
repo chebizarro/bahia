@@ -1,7 +1,7 @@
 # Investigation: REST API Surface Audit in Bahia
 
 ## Summary
-Comprehensive audit of REST API endpoints in Bahia codebase. Found **~100+ REST endpoints** across incoming API and **~50+ outbound HTTP calls** to external services. Bahia already has strong Nostr-first primitives with command/request kinds (5961-6006, 38390-38431), result kinds (6961-7997, 38395-38399), and read-model kinds (31961-32003). REST should remain only for HTTP-native boundaries (Docker Engine, OCI registries, health probes, browser compatibility).
+Comprehensive audit of REST API endpoints in Bahia codebase. Found **~100+ REST endpoints** across incoming API and **~50+ outbound HTTP calls** to external services. Bahia already has strong Nostr-first primitives with command/request kinds (5961-6006, 38390-38431), result kinds (6961-7997, 38395-38399), and read-model kinds (31961-32003). REST should remain only for HTTP-native boundaries (Docker Engine, OCI registries, health probes, browser compatibility). The standalone relay sidecar is also a permanent HTTP/WebSocket surface, but it is Nostr relay infrastructure rather than a REST CRUD API.
 
 ## Symptoms
 - Concern that REST APIs may exist where Nostr-first alternatives should be used
@@ -96,6 +96,7 @@ From `internal/kinds/kinds.go` and `policy.go`:
 | **OSV** | `POST /v1/query` | Vulnerability API is HTTP-only |
 | **LLM Providers** | `/v1/chat/completions`, `/v1/messages` | Provider APIs are HTTP-only |
 | **Blossom** | Blob upload/download/list | HTTP protocol with NIP-98 Nostr auth |
+| **Relay sidecar** | NIP-11 metadata over HTTP plus Nostr WebSocket traffic on `/` or configured `nostr.sidecar.public_url` path such as `/relay` | Permanent Khatru Nostr relay infrastructure, not REST CRUD; launched by `cmd/relay/main.go`, served by `internal/relaysidecar/server.go`, configured with `nostr.sidecar.*` / `BAHIA_NOSTR__SIDECAR__*` and proxied by operators via `docker-compose.yml` web `/relay` |
 
 #### 2. TRANSITIONAL REST (Has Nostr Analog - Should Migrate)
 
@@ -152,6 +153,7 @@ These should remain as **read-only facades** over Nostr projections.
 | **Internal (Bahia→Daemon)** | Bahia calling local services | Docker Engine API, Qdrant |
 | **External (Bahia→Service)** | Bahia calling external APIs | OCI registries, Harbor, OSV, LLM providers, Cashu mints, PowerDNS |
 | **External (Protocol)** | HTTP protocol with Nostr auth | Blossom (NIP-98) |
+| **Nostr relay infrastructure** | HTTP NIP-11 metadata and WebSocket relay protocol, not REST CRUD | Relay sidecar (`cmd/relay/main.go`, `internal/relaysidecar/server.go`) on `nostr.sidecar.listen_addr`, advertised/proxied through `nostr.sidecar.public_url` / `/relay` |
 
 ## Recommendations
 
@@ -171,7 +173,8 @@ These should remain as **read-only facades** over Nostr projections.
 3. MCP JSON-RPC transport
 4. All outbound HTTP to non-Nostr services (Docker, registries, Qdrant, Cashu, OSV, LLM providers)
 5. Blossom HTTP with NIP-98 auth
-6. Browser-facing GET endpoints as projection facades
+6. Relay sidecar HTTP/NIP-11/WebSocket server (`cmd/relay`, `internal/relaysidecar/server.go`) as Nostr relay infrastructure, configured by `nostr.sidecar.*` and exposed to operators/browser clients through `/relay` where deployed
+7. Browser-facing GET endpoints as projection facades
 
 ## Preventive Measures
 

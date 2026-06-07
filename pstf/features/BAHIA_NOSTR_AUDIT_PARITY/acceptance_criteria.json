@@ -53,6 +53,13 @@
         "route-transport-matrix.test.js: keeps REST/API route imports explicit and limited to non-signer-first surfaces",
         "route-transport-matrix.test.js: fails if a pure signer-first route starts importing REST clients for command ingress"
       ]
+    },
+    {
+      "id": "AC8",
+      "statement": "HTTP surface inventory docs explicitly classify the relay sidecar as permanent HTTP/NIP-11/WebSocket Nostr relay infrastructure, not REST CRUD, with operator file/config references.",
+      "tests": [
+        "docs review: rest-api-audit, nostr-integration, and relay-sidecar documentation mention cmd/relay, internal/relaysidecar/server.go, nostr.sidecar.* configuration, and /relay exposure"
+      ]
     }
   ]
 }

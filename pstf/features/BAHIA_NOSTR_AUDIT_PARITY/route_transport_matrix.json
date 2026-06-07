@@ -1,9 +1,9 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
-  "updated_at": "2026-06-05",
+  "updated_at": "2026-06-07",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
@@ -259,6 +259,28 @@
       "pstf_status": "current_audit_evidence"
     },
     {
+      "id": "settings-profile-nostr-kind0",
+      "surface": "`/settings/profile` signer-backed Nostr profile metadata publishing",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/settings/profile/+page.svelte"],
+      "control_files": ["web/src/lib/nostr/profile.js", "web/src/lib/stores/auth.svelte.js"],
+      "evidence": ["Profile settings builds standard kind-0 metadata events, signs through the active NIP-07 or NIP-46 auth signer flow, and publishes to writable signer/NIP-65 relays.", "publishProfileMetadata() checks per-relay OK outcomes and requires at least one accepted=true relay before updating cached profile state."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "resolved_by_bahia-dfc2_route_matrix_followup",
+      "resolved_by_beads": ["bahia-dfc2", "bahia-4rwk"]
+    },
+    {
+      "id": "settings-relay-policy-controlplane",
+      "surface": "`/settings/relays` operator relay policy, relay administration, and local browser relay reconnect controls",
+      "transport_class": "nostr_request_result_facade",
+      "route_files": ["web/src/routes/settings/relays/+page.svelte"],
+      "control_files": ["web/src/lib/components/settings/RelaySettingsPanel.svelte", "web/src/lib/nostr/relay-settings-controlplane.js", "internal/controlplane/relay_settings_handlers.go", "internal/controlplane/relay_settings_hydrator.go"],
+      "evidence": ["`/settings/relays` renders RelaySettingsPanel, which applies persistent relay policy and relay-admin operations through requestEncryptedResult() ContextVM operations settings/relay-policy.apply and settings/relay-admin.call.", "RelaySettingsPanel subscribes to canonical 30900 relay-settings state via subscribeRelayPolicyReadModel() with #d/domain/schema filters plus EOSE/CLOSED/AUTH callbacks; local browser relay add/remove/reconnect remains client-local Nostr relay configuration."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "resolved_by_bahia-4rwk",
+      "resolved_by_beads": ["bahia-4rwk"]
+    },
+    {
       "id": "central-docs-http-native",
       "surface": "`/docs` and `/docs/[topic]` central documentation browser reads",
       "transport_class": "http_native",
@@ -268,6 +290,17 @@
       "rest_import_policy": "allowed_http_native_read_only_docs_queries",
       "pstf_status": "resolved_by_bahia-76ls",
       "resolved_by_beads": ["bahia-76ls"]
+    },
+    {
+      "id": "relay-sidecar-http-websocket",
+      "surface": "Standalone relay sidecar HTTP/NIP-11/WebSocket server on `/` or configured `/relay` path",
+      "transport_class": "http_native",
+      "route_files": [],
+      "control_files": ["cmd/relay/main.go", "internal/relaysidecar/server.go", "docs/relay-sidecar.md", "docker-compose.yml", "config.yaml"],
+      "evidence": ["cmd/relay/main.go starts relaysidecar.New(...).Run(ctx) when nostr.sidecar.enabled is true.", "internal/relaysidecar/server.go creates a net/http server and serves the Khatru relay for NIP-11 HTTP metadata plus Nostr WebSocket traffic on `/` and the path from nostr.sidecar.public_url such as `/relay`.", "docs/investigations/rest-api-audit-2026-06-01.md classifies this surface as permanent Nostr relay infrastructure, not REST CRUD."],
+      "rest_import_policy": "not_a_rest_crud_surface",
+      "pstf_status": "resolved_by_bahia-1ywi",
+      "resolved_by_beads": ["bahia-1ywi"]
     },
     {
       "id": "backend-rest-compatibility-routes",

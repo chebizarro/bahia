@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-dfc2",
+  "tests": [
+    {
+      "test": "web/tests/unit/profile-publish.test.js",
+      "covers": ["AC2", "AC3", "AC4", "AC5"],
+      "evidence": "Validates normalizing profile metadata, signing kind-0 events, relay OK accepted/rejected partitioning, all-relay rejection, validation failure, and no connected writable relay failure."
+    },
+    {
+      "test": "web/tests/unit/nav.test.js",
+      "covers": ["AC1"],
+      "evidence": "Asserts authenticated UserMenu profile href is /settings/profile and the route file exists."
+    },
+    {
+      "test": "web/tests/unit/settings-section-order.test.js",
+      "covers": ["AC6"],
+      "evidence": "Asserts the Settings page exposes /settings/profile in documented settings surfaces."
+    },
+    {
+      "test": "web/tests/unit/auth-store.test.js",
+      "covers": ["AC3"],
+      "evidence": "Asserts successful profile cache updates persist editable metadata into the signer session for UserMenu/page hydration."
+    },
+    {
+      "test": "npm run lint",
+      "covers": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6"],
+      "evidence": "SvelteKit sync and svelte-check compile the new /settings/profile route with zero diagnostics."
+    }
+  ]
+}

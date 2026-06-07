@@ -107,6 +107,8 @@ nostr:
 
 Protected routes, including Settings, fail closed until a signer-first session is present. Routes that still depend on REST compatibility require the backend to advertise `direct_nostr_http_auth`; otherwise the UI shows a compatibility-required state instead of making REST calls.
 
+After sign-in, open the user menu and choose **Edit Profile**, or go directly to `/settings/profile`, to edit your Nostr kind-0 metadata. The profile editor validates fields locally, signs the kind-0 event with the active NIP-07 or NIP-46 signer, publishes to writable Nostr relays from the signer/NIP-65 relay list, and shows the relay OK acceptance/rejection outcomes.
+
 ### Step 2: Create a Service
 
 A **service** represents an application you want to deploy.

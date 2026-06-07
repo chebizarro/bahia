@@ -114,16 +114,18 @@ A cleanup execution projection is kind `30900` with tags such as `schema=bahia.s
 
 ### Sidecar
 
-The **relay sidecar** is the primary control plane:
+The **relay sidecar** is the primary control-plane relay surface. It is a standalone Khatru Nostr relay HTTP/WebSocket server, not a REST CRUD endpoint: `cmd/relay/main.go` starts it, `internal/relaysidecar/server.go` serves NIP-11 relay metadata over HTTP and Nostr WebSocket traffic on `/` plus the configured `nostr.sidecar.public_url` path such as `/relay`, and operators expose it with `nostr.sidecar.listen_addr` / `BAHIA_NOSTR__SIDECAR__LISTEN_ADDR` plus any web proxy mapping.
 
 ```yaml
 nostr:
   sidecar:
-    public_url: "wss://sidecar.example.com"
-    backend_url: "wss://sidecar-backend.example.com"
+    enabled: true
+    listen_addr: "0.0.0.0:3334"
+    public_url: "wss://sidecar.example.com/relay"
+    backend_url: "ws://relay:3334/relay"
 ```
 
-Browser and API traffic goes through the sidecar. Operators must configure the sidecar relay allowlists so browsers can reach only the advertised `nostr.browser_relays` / `nostr.sidecar_url` set and backend migration/runtime publishers can reach only configured backend/upstream relays. Legacy-kind backfill may read from migration-configured relays, but live runtime publication remains canonical-only.
+Browser and API Nostr relay traffic goes through the sidecar. Operators must configure the sidecar relay allowlists so browsers can reach only the advertised `nostr.browser_relays` / `nostr.sidecar_url` set and backend migration/runtime publishers can reach only configured backend/upstream relays. Legacy-kind backfill may read from migration-configured relays, but live runtime publication remains canonical-only.
 
 ### Relay Policy Sources
 

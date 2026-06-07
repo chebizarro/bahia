@@ -15,6 +15,21 @@
       "command": "npm run test:unit -- --run tests/unit/route-transport-matrix.test.js",
       "result": "passed",
       "evidence": "Focused Vitest guard passed: PSTF matrix uses the shared route transport taxonomy, covers audited surfaces, verifies every matrix route file exists, covers every live SvelteKit +page route/loader, permits exact $lib/api/* imports only for matrix-classified non-signer-first route files, and rejects REST/API imports in pure signer-first route files."
+    },
+    {
+      "command": "python3 -m json.tool pstf/features/BAHIA_NOSTR_AUDIT_PARITY/{acceptance_criteria,test_matrix,feature_spec,route_transport_matrix,defects}.json",
+      "result": "passed",
+      "evidence": "Documentation-only Bead bahia-1ywi added relay-sidecar HTTP/NIP-11/WebSocket classification evidence to PSTF JSON artifacts without changing route files."
+    },
+    {
+      "command": "docs review",
+      "result": "passed",
+      "evidence": "docs/investigations/rest-api-audit-2026-06-01.md, docs/user-guide/nostr-integration.md, and docs/relay-sidecar.md explicitly distinguish the sidecar from REST CRUD and reference cmd/relay/main.go, internal/relaysidecar/server.go, nostr.sidecar.* config, and /relay exposure."
+    },
+    {
+      "command": "python3 -m json.tool pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json && npm --prefix web run test:unit -- --run tests/unit/route-transport-matrix.test.js",
+      "result": "passed",
+      "evidence": "Bead bahia-4rwk classified web/src/routes/settings/relays/+page.svelte as the relay settings ContextVM/canonical 30900 surface; the guard also required PSTF-only classification for the concurrently added web/src/routes/settings/profile/+page.svelte route. JSON validation and the focused Vitest route matrix guard passed on 2026-06-07."
     }
   ]
 }

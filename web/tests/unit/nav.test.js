@@ -192,6 +192,9 @@ describe('nav model helpers', () => {
     expect(anonymousMenuItems.find((item) => item.id === 'nip46')).toMatchObject({ href: '/settings#nostr-connect' });
 
     expect(authenticatedMenuItems.map((item) => item.id)).toEqual(['profile', 'relays', 'logout']);
+    expect(authenticatedMenuItems.find((item) => item.id === 'profile')).toMatchObject({ href: '/settings/profile' });
+    expect(existsSync(join(process.cwd(), 'src', 'routes', 'settings', 'profile', '+page.svelte'))
+      || existsSync(join(process.cwd(), 'web', 'src', 'routes', 'settings', 'profile', '+page.svelte'))).toBe(true);
     expect(authenticatedMenuItems.find((item) => item.id === 'relays')).toMatchObject({ href: '/settings/relays' });
     expect(authenticatedMenuItems.find((item) => item.id === 'logout')).toMatchObject({ action: 'logout' });
   });

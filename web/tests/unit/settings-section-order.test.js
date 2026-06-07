@@ -29,6 +29,7 @@ describe('settings page section order', () => {
   });
 
   it('keeps documented settings surfaces visible from the settings page', () => {
+    expect(settingsSource).toContain("href: '/settings/profile'");
     expect(settingsSource).toContain("href: '/notifications'");
     expect(settingsSource).toContain("href: '/notifications/log'");
     expect(settingsSource).toContain('Container Registry');

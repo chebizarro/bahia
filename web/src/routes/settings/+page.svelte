@@ -29,6 +29,11 @@
   const versionRows = $derived(componentVersionRows(systemInfo));
   const settingsAreas = [
     {
+      href: '/settings/profile',
+      title: 'Profile',
+      description: 'Edit and publish your Nostr kind-0 profile metadata with signer-backed relay OK verification.'
+    },
+    {
       href: '/settings/relays',
       title: 'Relays',
       description: 'Manage persistent operator relay policy and local browser session relays.'
