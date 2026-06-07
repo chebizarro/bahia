@@ -2,6 +2,7 @@
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { nostr, saveRelayConfig, getDefaultRelays } from '$lib/nostr/client.js';
+  import { applyRelayPolicy, callRelayAdmin } from '$lib/nostr/relay-settings-controlplane.js';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
@@ -69,6 +70,20 @@
   let connectionStatus = $state({});
   let relaySummary = $derived(relayConnectionSummary(relays, connectionStatus));
 
+  // Operator relay policy (persistent Nostr-native control plane)
+  let operatorPolicyInitialized = $state(false);
+  let operatorPolicySaving = $state(false);
+  let relayAdminCalling = $state(false);
+  let browserPolicyInput = $state('');
+  let contextVMPolicyInput = $state('');
+  let servicePolicyInput = $state('');
+  let monitorPubkeysInput = $state('');
+  let dmRelaysInput = $state('');
+  let relayAdminTargetsInput = $state('[]');
+  let relayAdminTargetRef = $state('');
+  let relayAdminMethod = $state('supportedmethods');
+  let relayAdminParamsInput = $state('[]');
+
   $effect(() => {
     const unsubscribe = nostr.connectionStatus.subscribe(status => {
       connectionStatus = status;
@@ -90,6 +105,86 @@
     }
   });
 
+  $effect(() => {
+    const nostrConfig = systemInfo?.nostr;
+    if (!nostrConfig || operatorPolicyInitialized) return;
+    browserPolicyInput = listToTextarea(nostrConfig.browser_relays || []);
+    contextVMPolicyInput = listToTextarea(nostrConfig.contextvm_relays || []);
+    servicePolicyInput = listToTextarea(nostrConfig.service_relays || []);
+    monitorPubkeysInput = listToTextarea(nostrConfig.trusted_relay_monitor_pubkeys || []);
+    dmRelaysInput = listToTextarea((nostrConfig.dm_relay_lists || [])
+      .filter((list) => list?.enabled && list?.feature === 'notifications' && list?.identity === 'service')
+      .flatMap((list) => list.relays || []));
+    relayAdminTargetsInput = JSON.stringify(nostrConfig.relay_administration?.targets || [], null, 2);
+    operatorPolicyInitialized = true;
+  });
+
+  function listToTextarea(values = []) {
+    return Array.isArray(values) ? values.join('\n') : '';
+  }
+
+  function textareaToList(value) {
+    return String(value || '')
+      .split(/[\n,]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  function parseJsonArray(value, label) {
+    const raw = String(value || '').trim();
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array`);
+    return parsed;
+  }
+
+  function buildOperatorRelayPolicy() {
+    const adminTargets = parseJsonArray(relayAdminTargetsInput, 'NIP-86 targets');
+    const dmRelays = textareaToList(dmRelaysInput);
+    return {
+      browser_relays: textareaToList(browserPolicyInput),
+      contextvm_relays: textareaToList(contextVMPolicyInput),
+      service_relays: textareaToList(servicePolicyInput),
+      trusted_relay_monitor_pubkeys: textareaToList(monitorPubkeysInput),
+      dm_relay_lists: dmRelays.length > 0 ? [{
+        enabled: true,
+        feature: 'notifications',
+        identity: 'service',
+        relays: dmRelays
+      }] : [],
+      relay_administration: {
+        enabled: adminTargets.length > 0,
+        targets: adminTargets
+      }
+    };
+  }
+
+  async function saveOperatorRelayPolicy() {
+    operatorPolicySaving = true;
+    try {
+      const response = await applyRelayPolicy({ policy: buildOperatorRelayPolicy() });
+      const accepted = response?.acceptedRelays?.length || response?.ok?.length || 0;
+      toast.success(`Relay policy mutation accepted${accepted ? ` by ${accepted} relay${accepted === 1 ? '' : 's'}` : ''}`);
+    } catch (err) {
+      toast.error(err?.message || 'Failed to publish relay policy mutation');
+    } finally {
+      operatorPolicySaving = false;
+    }
+  }
+
+  async function runRelayAdminCall() {
+    relayAdminCalling = true;
+    try {
+      const params = parseJsonArray(relayAdminParamsInput, 'NIP-86 params');
+      const response = await callRelayAdmin({ targetRef: relayAdminTargetRef, method: relayAdminMethod, params });
+      const result = response?.result || response?.resultEvent || response;
+      toast.success(`NIP-86 ${relayAdminMethod} accepted: ${JSON.stringify(result).slice(0, 160)}`);
+    } catch (err) {
+      toast.error(err?.message || 'Failed to publish NIP-86 relay admin mutation');
+    } finally {
+      relayAdminCalling = false;
+    }
+  }
 
   async function addRelay() {
     const url = relayInput.trim();
@@ -274,11 +369,62 @@
   </div>
 
   <div class="settings-grid">
-    <!-- Nostr Relays Section -->
-    <section class="settings-section">
-      <h2><RelayIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Nostr Relays</h2>
+    <!-- Operator Relay Policy Section -->
+    <section class="settings-section relay-policy-section">
+      <h2><RelayIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Operator Relay Policy</h2>
       <p class="section-description">
-        Configure browser relays for Nostr reads and publishes. Changes autosave and reconnect immediately.
+        Add or remove persistent Bahia relay policy through ContextVM Nostr mutations. Durable truth is the service-signed relay settings state; this is not local browser storage.
+      </p>
+
+      <label class="relay-field">
+        <span>Browser/bootstrap relays</span>
+        <textarea class="relay-textarea" rows="3" bind:value={browserPolicyInput} placeholder="wss://browser-relay.example"></textarea>
+      </label>
+
+      <label class="relay-field">
+        <span>ContextVM request/reply relays</span>
+        <textarea class="relay-textarea" rows="3" bind:value={contextVMPolicyInput} placeholder="wss://contextvm-relay.example"></textarea>
+      </label>
+
+      <label class="relay-field">
+        <span>Service publish/backfill relays</span>
+        <textarea class="relay-textarea" rows="3" bind:value={servicePolicyInput} placeholder="wss://service-relay.example"></textarea>
+      </label>
+
+      <label class="relay-field">
+        <span>Trusted NIP-66 monitor pubkeys</span>
+        <textarea class="relay-textarea monospace" rows="3" bind:value={monitorPubkeysInput} placeholder="64-hex monitor pubkey, one per line"></textarea>
+      </label>
+
+      <label class="relay-field">
+        <span>Notification DM relays (NIP-51 kind 10050)</span>
+        <textarea class="relay-textarea" rows="3" bind:value={dmRelaysInput} placeholder="wss://dm-relay.example"></textarea>
+      </label>
+
+      <label class="relay-field">
+        <span>NIP-86 managed relay targets</span>
+        <textarea class="relay-textarea monospace" rows="6" bind:value={relayAdminTargetsInput} placeholder="JSON array of managed NIP-86 target objects"></textarea>
+      </label>
+
+      <div class="relay-actions">
+        <LoadingButton variant="primary" loading={operatorPolicySaving} onclick={saveOperatorRelayPolicy}>Publish Relay Policy Mutation</LoadingButton>
+      </div>
+
+      <div class="relay-admin-call">
+        <h3>NIP-86 Relay Administration</h3>
+        <p class="section-description">Calls are routed through Bahia ContextVM first, then restricted to configured Bahia-owned or Bahia-authorized relay targets.</p>
+        <Input placeholder="target ref, e.g. sidecar" bind:value={relayAdminTargetRef} />
+        <Input placeholder="NIP-86 method, e.g. supportedmethods" bind:value={relayAdminMethod} />
+        <textarea class="relay-textarea monospace" rows="3" bind:value={relayAdminParamsInput} placeholder='JSON array params, e.g. []'></textarea>
+        <LoadingButton variant="secondary" loading={relayAdminCalling} onclick={runRelayAdminCall}>Run NIP-86 Method</LoadingButton>
+      </div>
+    </section>
+
+    <!-- Browser Session Relays Section -->
+    <section class="settings-section">
+      <h2><RelayIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Browser Session Relays</h2>
+      <p class="section-description">
+        Local emergency override for this browser session only. Use Operator Relay Policy above for persistent Bahia relay settings.
       </p>
 
       <div class="relay-list">
@@ -298,21 +444,21 @@
           bind:value={relayInput}
           onkeydown={(e) => e.key === 'Enter' && addRelay()}
         />
-        <LoadingButton variant="secondary" loading={relaysSaving} onclick={addRelay}>Add & Reconnect</LoadingButton>
+        <LoadingButton variant="secondary" loading={relaysSaving} onclick={addRelay}>Add & Reconnect Locally</LoadingButton>
       </div>
 
       <div class="relay-actions">
-        <LoadingButton variant="secondary" loading={relaysSaving} onclick={resetToDefaults}>Reset Defaults & Reconnect</LoadingButton>
-        <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Reconnect Now</LoadingButton>
+        <LoadingButton variant="secondary" loading={relaysSaving} onclick={resetToDefaults}>Reset Local Defaults & Reconnect</LoadingButton>
+        <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Reconnect Locally Now</LoadingButton>
       </div>
 
       <p class="section-description relay-summary">
         {#if relaySummary.total === 0}
-          No relays configured.
+          No local browser relays configured.
         {:else if relaySummary.connecting > 0}
           Connecting to {relaySummary.connecting} relay{relaySummary.connecting === 1 ? '' : 's'}…
         {:else}
-          Connected {relaySummary.connected}/{relaySummary.total} relays{relaySummary.failed > 0 ? `; ${relaySummary.failed} unavailable` : ''}.
+          Connected {relaySummary.connected}/{relaySummary.total} local browser relays{relaySummary.failed > 0 ? `; ${relaySummary.failed} unavailable` : ''}.
         {/if}
       </p>
     </section>
@@ -768,6 +914,45 @@
     display: flex;
     gap: 0.5rem;
     justify-content: flex-end;
+  }
+
+  .relay-field {
+    display: grid;
+    gap: 0.375rem;
+    margin-bottom: 0.875rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .relay-textarea {
+    width: 100%;
+    min-height: 4.5rem;
+    padding: 0.625rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text-primary);
+    resize: vertical;
+    font: inherit;
+  }
+
+  .relay-textarea.monospace {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 0.8125rem;
+  }
+
+  .relay-admin-call {
+    display: grid;
+    gap: 0.625rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .relay-admin-call h3 {
+    margin: 0;
+    font-size: 1rem;
   }
 
   .relay-summary {

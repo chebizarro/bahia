@@ -62,6 +62,8 @@ Examples:
 | Roll back service | `service/rollback` |
 | Create DNS zone | `dns/zone-create` |
 | Apply DNS policy | `dns/policy-apply` |
+| Apply relay settings policy | `settings/relay-policy.apply` |
+| Call managed relay administration method | `settings/relay-admin.call` |
 | Run backup | `backup/run` |
 | Restore backup | `backup/restore` |
 | Cordon worker | `worker/cordon` |
@@ -95,6 +97,8 @@ Use canonical state.
 - Content must be a complete current-state snapshot, not a patch.
 
 Use NIP-78 kind `30078` instead when the object is app-specific data, user/application settings, local UI state, or a registry whose semantics are not a fleet-wide control-plane projection.
+
+Relay settings operator policy uses canonical state kind `30900` with `d=relay-settings:operator`, `domain=relay-settings`, and `schema=bahia.relay-settings.v1`. The state records the current service-authored browser, ContextVM, service, DM, NIP-66 monitor, and NIP-86 managed-target policy after a `settings/relay-policy.apply` ContextVM intent is accepted.
 
 ### 4. Is this an immutable audit fact or attestation?
 

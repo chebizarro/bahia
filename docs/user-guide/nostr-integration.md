@@ -149,7 +149,9 @@ nostr:
 
 ### Optional NIP-86 relay administration
 
-NIP-86 relay administration is an optional relay-owner HTTP management surface for Bahia-owned or Bahia-authorized relays. It is disabled by default and is not used for Bahia app/control-plane mutations. ContextVM kind `25910` remains the mutation intent transport, and NIP-42 websocket `AUTH` remains the relay authentication mechanism for websocket relay sessions.
+NIP-86 relay administration is an optional relay-owner HTTP management surface for Bahia-owned or Bahia-authorized relays. Bahia exposes it through the Nostr-native operator relay settings control plane: the browser publishes a ContextVM kind `25910` intent such as `settings/relay-admin.call`, Bahia validates the configured target, and only then calls the relay's NIP-86 HTTP endpoint with NIP-98 payload-bound authorization. NIP-86 is never used as Bahia application mutation transport.
+
+NIP-86 relay administration is disabled by default. Configure only Bahia-owned or explicitly Bahia-authorized relay targets; public relays and arbitrary HTTP endpoints are rejected before any NIP-86 request is sent.
 
 ```yaml
 nostr:
@@ -168,6 +170,23 @@ nostr:
 ```
 
 When enabled, Bahia support code may call only NIP-86 relay-owner methods such as `supportedmethods`, `allowpubkey`, `banpubkey`, `allowkind`, `disallowkind`, `changerelayname`, `changerelaydescription`, and IP/event moderation methods. Relay administration URLs must use `wss://` and `https://` except for localhost/loopback development targets. Each HTTP request uses `Content-Type: application/nostr+json+rpc` and a NIP-98 `Authorization: Nostr <event>` header. The signed kind `27235` event includes `u=<relay_url>`, `method=POST`, and the required `payload=<sha256-of-exact-json-body>` tag. The client refuses disabled config, unknown target refs, administrator pubkeys not authorized for that target, non-NIP-86 method names, HTTP status failures, and relay JSON errors.
+
+### Operator relay settings UI
+
+The Settings page separates persistent operator relay policy from local browser-session relay overrides.
+
+Use **Settings → Operator Relay Policy** to add or remove:
+
+- browser/bootstrap relays published as Bahia relay topology,
+- ContextVM request/reply relays,
+- service publish/backfill relays,
+- trusted NIP-66 monitor pubkeys,
+- notification DM receive relays published as NIP-51 kind `10050`, and
+- NIP-86 managed relay targets.
+
+Saving this section publishes a ContextVM kind `25910` intent with method `settings/relay-policy.apply`. Bahia validates the payload, updates the in-process policy snapshot, republishes the standard service-signed NIP-51 relay events (`30002` for browser/ContextVM/service and `10050` for explicit notification DM relays), and publishes a canonical relay settings state event (`30900`, `d=relay-settings:operator`, `schema=bahia.relay-settings.v1`) plus an audit event (`4903`). Clients must treat the ContextVM response as an acknowledgment; durable UI truth comes from the service-signed relay-list and state/read-model events.
+
+The **Browser Session Relays** section remains a local emergency override for this browser only. It reconnects the current browser session and may use local storage, but it is not persistent operator relay policy and does not update service relay sets, ContextVM relays, DM relay lists, NIP-66 monitor trust, or NIP-86 targets.
 
 ### Advisory relay metadata and DM relay lists
 

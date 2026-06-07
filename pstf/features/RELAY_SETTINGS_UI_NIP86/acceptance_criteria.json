@@ -1,0 +1,25 @@
+{
+  "feature_id": "RELAY_SETTINGS_UI_NIP86",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "Settings UI separates persistent operator relay policy from browser-session relay overrides."
+    },
+    {
+      "id": "AC-2",
+      "description": "Relay policy saves publish ContextVM method settings/relay-policy.apply with browser, ContextVM, service, NIP-66 monitor, DM 10050, and NIP-86 target fields."
+    },
+    {
+      "id": "AC-3",
+      "description": "Backend validates relay policy payloads, rejects invalid relays/targets, and publishes canonical 30900 state plus 4903 audit on accepted mutations."
+    },
+    {
+      "id": "AC-4",
+      "description": "NIP-86 calls go through ContextVM method settings/relay-admin.call and are restricted to configured Bahia-owned or Bahia-authorized targets and allowed relayadmin methods."
+    },
+    {
+      "id": "AC-5",
+      "description": "Documentation and event implementation guidance describe the ContextVM/state/audit path and local-only browser override boundary."
+    }
+  ]
+}

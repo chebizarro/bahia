@@ -1,0 +1,177 @@
+package controlplane
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
+	"go.uber.org/zap"
+)
+
+type fakeRelayAdminClient struct {
+	calls []relayAdminCallPayload
+}
+
+func (f *fakeRelayAdminClient) SupportedMethods(context.Context, string) ([]string, error) {
+	return []string{relayadmin.MethodSupportedMethods, relayadmin.MethodAllowPubkey}, nil
+}
+
+func (f *fakeRelayAdminClient) Call(_ context.Context, targetRef, method string, params []any) (*relayadmin.Response, error) {
+	f.calls = append(f.calls, relayAdminCallPayload{TargetRef: targetRef, Method: method, Params: params})
+	return &relayadmin.Response{Result: json.RawMessage(`{"ok":true}`)}, nil
+}
+
+func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	signer, err := NewPrivateKeySigner(testServiceKey)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
+	h.publisher = publisher
+	h.signer = signer
+	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+
+	params := RelayPolicyState{
+		BrowserRelays:   []string{"wss://browser.example", "wss://browser.example"},
+		ContextVMRelays: []string{"wss://contextvm.example"},
+		ServiceRelays:   []string{"wss://service.example"},
+		DMRelayLists: []RelayPolicyDMRelayList{{
+			Enabled:  true,
+			Feature:  config.DMRelayListFeatureNotifications,
+			Identity: config.DMRelayListIdentityService,
+			Relays:   []string{"wss://dm.example"},
+		}},
+		RelayAdministration: RelayPolicyAdministration{Enabled: true, Targets: []RelayPolicyAdminTarget{{
+			Ref:                  "sidecar",
+			RelayURL:             "wss://sidecar.example",
+			Authorization:        config.RelayAdministrationBahiaOwned,
+			AdministratorPubkeys: []string{requesterPubkey},
+		}}},
+	}
+	raw, _ := json.Marshal(params)
+	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	if err != nil {
+		t.Fatalf("ApplyPolicy error: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("missing result")
+	}
+	if len(publisher.events) != 6 {
+		t.Fatalf("published events = %d, want state + three relay sets + dm relay list + audit", len(publisher.events))
+	}
+	stateEvent := publisher.events[0]
+	if stateEvent.Kind != kinds.CASControlState || !hasTag(stateEvent.Tags, "schema", RelaySettingsSchema) || !hasTag(stateEvent.Tags, "d", RelaySettingsDTag) {
+		t.Fatalf("unexpected state event: kind=%d tags=%v", stateEvent.Kind, stateEvent.Tags)
+	}
+	var state RelayPolicyState
+	if err := json.Unmarshal([]byte(stateEvent.Content), &state); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if got := strings.Join(state.BrowserRelays, ","); got != "wss://browser.example" {
+		t.Fatalf("browser relays = %q", got)
+	}
+	if publisher.events[1].Kind != kinds.RelaySetDiscovery || !hasTag(publisher.events[1].Tags, "d", "bahia-browser-v1") {
+		t.Fatalf("missing browser relay set event: kind=%d tags=%v", publisher.events[1].Kind, publisher.events[1].Tags)
+	}
+	if publisher.events[2].Kind != kinds.RelaySetDiscovery || !hasTag(publisher.events[2].Tags, "d", "bahia-contextvm-v1") {
+		t.Fatalf("missing contextvm relay set event: kind=%d tags=%v", publisher.events[2].Kind, publisher.events[2].Tags)
+	}
+	if publisher.events[3].Kind != kinds.RelaySetDiscovery || !hasTag(publisher.events[3].Tags, "d", "bahia-service-v1") {
+		t.Fatalf("missing service relay set event: kind=%d tags=%v", publisher.events[3].Kind, publisher.events[3].Tags)
+	}
+	if publisher.events[4].Kind != kinds.NIP51DMRelayList || !hasTag(publisher.events[4].Tags, "relay", "wss://dm.example") {
+		t.Fatalf("missing dm relay list event: kind=%d tags=%v", publisher.events[4].Kind, publisher.events[4].Tags)
+	}
+	if publisher.events[5].Kind != kinds.CASAudit || !hasTag(publisher.events[5].Tags, "type", "relay-settings.updated") {
+		t.Fatalf("unexpected audit event: kind=%d tags=%v", publisher.events[5].Kind, publisher.events[5].Tags)
+	}
+}
+
+func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy string
+	}{
+		{name: "invalid relay scheme", policy: `{"browser_relays":["https://not-a-relay.example"]}`},
+		{name: "empty relay topology", policy: `{"browser_relays":[],"contextvm_relays":[],"service_relays":[]}`},
+		{name: "invalid trusted monitor pubkey", policy: `{"browser_relays":["wss://browser.example"],"trusted_relay_monitor_pubkeys":["not-hex"]}`},
+		{name: "invalid relay admin pubkey", policy: `{"browser_relays":["wss://browser.example"],"relay_administration":{"enabled":true,"targets":[{"ref":"sidecar","relay_url":"wss://sidecar.example","authorization":"bahia-owned","administrator_pubkeys":["not-hex"]}]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			signer, _ := NewPrivateKeySigner(testServiceKey)
+			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
+			h.publisher = publisher
+			h.signer = signer
+			requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+			_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: []byte(tc.policy)}})
+			if err == nil {
+				t.Fatalf("expected validation error")
+			}
+			if len(publisher.events) != 0 {
+				t.Fatalf("published invalid policy events: %d", len(publisher.events))
+			}
+		})
+	}
+}
+
+func TestRelaySettingsGetPolicyDoesNotPublishMutationState(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	signer, _ := NewPrivateKeySigner(testServiceKey)
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{Nostr: config.NostrConfig{BrowserRelays: []string{"wss://browser.example"}}}, Logger: zap.NewNop()})
+	h.publisher = publisher
+	h.signer = signer
+	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+	result, err := h.GetPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}})
+	if err != nil {
+		t.Fatalf("GetPolicy error: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("missing result")
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("read-only get published events: %d", len(publisher.events))
+	}
+}
+
+func TestRelayAdminCallRequiresConfiguredAuthorizedTarget(t *testing.T) {
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, AdminClient: &fakeRelayAdminClient{}, Logger: zap.NewNop()})
+	raw := []byte(`{"target_ref":"public","method":"supportedmethods"}`)
+	_, err := h.CallRelayAdmin(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: "requester"}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("error = %v, want configured target rejection", err)
+	}
+}
+
+func TestRelayAdminCallUsesConfiguredNIP86Client(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	signer, _ := NewPrivateKeySigner(testServiceKey)
+	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+	admin := &fakeRelayAdminClient{}
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{Nostr: config.NostrConfig{RelayAdministration: config.RelayAdministrationConfig{Enabled: true, Targets: []config.RelayAdministrationTarget{{
+		Ref:                  "sidecar",
+		RelayURL:             "wss://sidecar.example",
+		Authorization:        config.RelayAdministrationBahiaAuthorized,
+		AdministratorPubkeys: []string{requesterPubkey},
+	}}}}}, AdminClient: admin, Logger: zap.NewNop()})
+	h.publisher = publisher
+	h.signer = signer
+	raw := []byte(`{"target_ref":"sidecar","method":"allowpubkey","params":["` + requesterPubkey + `","operator requested"]}`)
+	_, err := h.CallRelayAdmin(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	if err != nil {
+		t.Fatalf("CallRelayAdmin error: %v", err)
+	}
+	if len(admin.calls) != 1 || admin.calls[0].Method != relayadmin.MethodAllowPubkey {
+		t.Fatalf("admin calls = %#v", admin.calls)
+	}
+	if len(publisher.events) != 1 || publisher.events[0].Kind != kinds.CASAudit {
+		t.Fatalf("admin audit events = %#v", publisher.events)
+	}
+}

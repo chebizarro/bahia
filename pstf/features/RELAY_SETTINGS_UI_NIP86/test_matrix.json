@@ -1,0 +1,25 @@
+{
+  "feature_id": "RELAY_SETTINGS_UI_NIP86",
+  "tests": [
+    {
+      "criterion": "AC-2",
+      "command": "cd web && npm test -- --run tests/unit/relay-settings-controlplane.test.js",
+      "proves": "Web helper normalizes relay policy and calls encrypted ContextVM methods for policy and NIP-86 admin requests."
+    },
+    {
+      "criterion": "AC-1",
+      "command": "web/tests/e2e/settings-relay-visibility.spec.js",
+      "proves": "Settings page exposes Operator Relay Policy and separately labels Browser Session Relays as local-only."
+    },
+    {
+      "criterion": "AC-3 AC-4",
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/controlplane -run 'TestRelaySettings|TestRelayAdmin'",
+      "proves": "Backend validates policy payloads, publishes state/audit, rejects unauthorized NIP-86 targets, and routes allowed NIP-86 calls through configured client."
+    },
+    {
+      "criterion": "AC-1 AC-2",
+      "command": "cd web && npm run build",
+      "proves": "Settings UI compiles with the new operator policy and NIP-86 controls."
+    }
+  ]
+}

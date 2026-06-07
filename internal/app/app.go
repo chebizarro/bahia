@@ -27,6 +27,7 @@ import (
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
@@ -839,6 +840,12 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
+		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
+		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
+			Config:      cfg,
+			AdminClient: relayAdminClient,
+			Logger:      logger,
+		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
@@ -2298,6 +2305,38 @@ type controlplaneRunner struct {
 func (r *controlplaneRunner) Name() string { return "controlplane" }
 func (r *controlplaneRunner) Run(ctx context.Context) error {
 	return r.reactor.Run(ctx)
+}
+
+func buildRelayAdminClient(ctx context.Context, cfg *config.Config, secretRepo repository.SecretRepository, secretEncryptor *secretsAdapter.Encryptor, logger *zap.Logger) controlplane.RelayAdminCaller {
+	if cfg == nil || !cfg.Nostr.RelayAdministration.Enabled {
+		return nil
+	}
+	resolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
+	privateKey, err := resolver.ResolveSecret(ctx, cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef)
+	if err != nil {
+		logger.Warn("nip-86 relay administration disabled because administrator private key could not be resolved", zap.Error(err))
+		return nil
+	}
+	targets := make([]relayadmin.Target, 0, len(cfg.Nostr.RelayAdministration.Targets))
+	for _, target := range cfg.Nostr.RelayAdministration.Targets {
+		targets = append(targets, relayadmin.Target{
+			Ref:                  target.Ref,
+			RelayURL:             target.RelayURL,
+			HTTPURL:              target.HTTPURL,
+			AdministratorPubkeys: target.AdministratorPubkeys,
+		})
+	}
+	client, err := relayadmin.NewClient(relayadmin.Config{
+		Enabled:       true,
+		PrivateKeyHex: strings.TrimSpace(privateKey),
+		Targets:       targets,
+		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+	})
+	if err != nil {
+		logger.Warn("nip-86 relay administration disabled because client validation failed", zap.Error(err))
+		return nil
+	}
+	return client
 }
 
 type encryptedRequestTransportRunner struct {

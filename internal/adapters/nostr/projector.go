@@ -2042,6 +2042,9 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 			"enabled":     cfg.OCI.Enabled,
 			"public_host": cfg.OCI.PublicHost,
 		},
+		"nostr": map[string]any{
+			"trusted_relay_monitor_pubkeys": cfg.Nostr.TrustedRelayMonitorPubkeys,
+		},
 		"features": map[string]bool{
 			"oci":                      cfg.OCI.Enabled,
 			"harbor":                   cfg.Harbor.Enabled,

@@ -1,0 +1,17 @@
+{
+  "feature_id": "RELAY_SETTINGS_UI_NIP86",
+  "bead": "bahia-ho1r",
+  "title": "Nostr-native relay settings UI and NIP-86 management interface",
+  "intended_behavior": [
+    "Operators can add and remove persistent Bahia relay policy from Settings without confusing it with local browser-session relay overrides.",
+    "Relay policy mutations use ContextVM kind 25910 methods instead of REST or localStorage-only persistence.",
+    "Accepted mutations publish service-signed canonical relay settings state kind 30900 and audit kind 4903.",
+    "NIP-86 relay administration is exposed only through Bahia ContextVM validation and only for configured Bahia-owned or Bahia-authorized targets."
+  ],
+  "protocol_constraints": [
+    "Do not introduce new relay-routing event kinds.",
+    "ContextVM responses are acknowledgments; durable truth is canonical observable state.",
+    "NIP-86 remains relay-owner HTTP administration protected by NIP-98, not Bahia application mutation transport.",
+    "Local browser relay overrides remain local and are labelled as non-persistent operator policy."
+  ]
+}

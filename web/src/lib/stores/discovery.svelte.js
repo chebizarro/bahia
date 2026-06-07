@@ -127,6 +127,9 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
       contextvm_relay_metadata: contextVMRelayMetadata,
       sidecar_url: browserRelays[0] || '',
       service_relays: relaySets[SERVICE_RELAY_SET_DTAG] || [],
+      trusted_relay_monitor_pubkeys: Array.isArray(payload.nostr?.trusted_relay_monitor_pubkeys)
+        ? payload.nostr.trusted_relay_monitor_pubkeys
+        : [],
       service_pubkey: discoveryEvent.pubkey,
       service_npub: '',
       publish_enabled: payload.features?.publish_enabled ?? true

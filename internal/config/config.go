@@ -274,13 +274,14 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey          string                    `koanf:"private_key"`
-	Relays              []string                  `koanf:"relays"`
-	ServiceRelays       []string                  `koanf:"service_relays"`
-	BrowserRelays       []string                  `koanf:"browser_relays"`
-	ContextVMRelays     []string                  `koanf:"contextvm_relays"`
-	DMRelayLists        []DMRelayListConfig       `koanf:"dm_relay_lists" yaml:"dm_relay_lists"`
-	RelayAdministration RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
+	PrivateKey                 string                    `koanf:"private_key"`
+	Relays                     []string                  `koanf:"relays"`
+	ServiceRelays              []string                  `koanf:"service_relays"`
+	BrowserRelays              []string                  `koanf:"browser_relays"`
+	ContextVMRelays            []string                  `koanf:"contextvm_relays"`
+	TrustedRelayMonitorPubkeys []string                  `koanf:"trusted_relay_monitor_pubkeys" yaml:"trusted_relay_monitor_pubkeys"`
+	DMRelayLists               []DMRelayListConfig       `koanf:"dm_relay_lists" yaml:"dm_relay_lists"`
+	RelayAdministration        RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
 
 	// RelayAuthUnavailablePolicy is fixed to exclude_and_fail: if a relay requires
 	// NIP-42 AUTH and no valid signer is available for the operation, consumers
@@ -964,6 +965,12 @@ func (c *Config) validate() error {
 	}
 	c.Nostr.AuthorizedPubkeys = nostrAuthorized
 
+	trustedRelayMonitors, err := normalizePubkeyList(c.Nostr.TrustedRelayMonitorPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: nostr.trusted_relay_monitor_pubkeys: %w", err)
+	}
+	c.Nostr.TrustedRelayMonitorPubkeys = trustedRelayMonitors
+
 	bootstrapOwners, err := normalizePubkeyList(c.Auth.BootstrapOwnerPubkeys)
 	if err != nil {
 		return fmt.Errorf("config validation failed: auth.bootstrap_owner_pubkeys: %w", err)
@@ -1011,6 +1018,9 @@ func (c *Config) normalizeNostrRelays() {
 	}
 	c.Nostr.BrowserRelays = normalizeRelayList(c.Nostr.BrowserRelays)
 	c.Nostr.ContextVMRelays = normalizeRelayList(c.Nostr.ContextVMRelays)
+	if pubkeys, err := normalizePubkeyList(c.Nostr.TrustedRelayMonitorPubkeys); err == nil {
+		c.Nostr.TrustedRelayMonitorPubkeys = pubkeys
+	}
 	for i := range c.Nostr.DMRelayLists {
 		c.Nostr.DMRelayLists[i].Feature = strings.ToLower(strings.TrimSpace(c.Nostr.DMRelayLists[i].Feature))
 		c.Nostr.DMRelayLists[i].Identity = strings.ToLower(strings.TrimSpace(c.Nostr.DMRelayLists[i].Identity))

@@ -35,4 +35,28 @@ test.describe('Settings relay visibility', () => {
     await expect(serverConfig.getByText(SERVICE_RELAYS.join(', '))).toBeVisible();
     await expect(serverConfig).not.toContainText(BROWSER_RELAY);
   });
+
+  test('shows persistent operator relay policy and separate local browser relay controls', async ({ page }) => {
+    await installE2EMocks(page, { systemInfo: {
+      ...systemInfo,
+      nostr: {
+        ...systemInfo.nostr,
+        contextvm_relays: [ENCRYPTED_RELAY],
+        trusted_relay_monitor_pubkeys: ['a'.repeat(64)],
+        dm_relay_lists: [{ enabled: true, feature: 'notifications', identity: 'service', relays: ['wss://dm-relay.example'] }],
+        relay_administration: { targets: [{ ref: 'sidecar', relay_url: 'wss://sidecar.example', authorization: 'bahia_owned', administrator_pubkeys: ['b'.repeat(64)] }] }
+      }
+    } });
+
+    await page.goto('/settings');
+
+    await expect(page.getByRole('heading', { name: 'Operator Relay Policy' })).toBeVisible();
+    await expect(page.getByText('ContextVM request/reply relays')).toBeVisible();
+    await expect(page.getByText('Trusted NIP-66 monitor pubkeys')).toBeVisible();
+    await expect(page.getByText('Notification DM relays (NIP-51 kind 10050)')).toBeVisible();
+    await expect(page.getByText('NIP-86 managed relay targets')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Publish Relay Policy Mutation' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Browser Session Relays' })).toBeVisible();
+    await expect(page.getByText('Local emergency override for this browser session only')).toBeVisible();
+  });
 });
