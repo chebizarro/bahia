@@ -1,0 +1,41 @@
+{
+  "feature_id": "RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY",
+  "tests": [
+    {
+      "test_id": "RSOBD-T-001",
+      "name": "CLI --relay beats env and discovery",
+      "command": "go test ./cmd/cli -run TestResolveOperatorRelaysPrecedence/flag_beats_env_and_discovery",
+      "acceptance_criteria": ["RSOBD-AC-001"]
+    },
+    {
+      "test_id": "RSOBD-T-002",
+      "name": "CLI env final relays beat discovery",
+      "command": "go test ./cmd/cli -run TestResolveOperatorRelaysPrecedence/env_is_used_when_flag_is_absent",
+      "acceptance_criteria": ["RSOBD-AC-002"]
+    },
+    {
+      "test_id": "RSOBD-T-003",
+      "name": "CLI trusted discovery is invoked only when final relays are absent",
+      "command": "go test ./cmd/cli -run TestResolveOperatorRelaysPrecedence/trusted_bootstrap_discovery_runs_only_after_final_relay_config_is_absent",
+      "acceptance_criteria": ["RSOBD-AC-003"]
+    },
+    {
+      "test_id": "RSOBD-T-004",
+      "name": "Shared discovery prefers bahia-contextvm-v1",
+      "command": "go test ./pkg/client -run TestDiscoverOperatorRelaysPrefersContextVMRelaySet",
+      "acceptance_criteria": ["RSOBD-AC-004"]
+    },
+    {
+      "test_id": "RSOBD-T-005",
+      "name": "Shared discovery falls back to bahia-browser-v1 and latest replaceable event",
+      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(FallsBackToBrowserRelaySet|UsesLatestParameterizedReplaceableRelaySet)'",
+      "acceptance_criteria": ["RSOBD-AC-004"]
+    },
+    {
+      "test_id": "RSOBD-T-006",
+      "name": "Missing or untrusted discovery inputs fail deterministically",
+      "command": "go test ./pkg/client -run 'TestDiscoverOperatorRelays(RejectsMissingTrustAndUntrustedEvents|RejectsUnsignedOrWrongDTagEvents|RequiresBootstrapRelaysForRealResolver|ReportsDeadlineBeforeEOSE)' && go test ./cmd/cli -run TestResolveOperatorRelaysPrecedence",
+      "acceptance_criteria": ["RSOBD-AC-003", "RSOBD-AC-005"]
+    }
+  ]
+}

@@ -19,14 +19,16 @@ import (
 )
 
 var (
-	serverURL             string
-	outputFormat          string
-	apiClient             *client.Client
-	nostrNsec             string
-	nostrPrivateKey       string
-	operatorRelays        []string
-	operatorServicePubkey string
-	operatorHTTPFallback  bool
+	serverURL                     string
+	outputFormat                  string
+	apiClient                     *client.Client
+	nostrNsec                     string
+	nostrPrivateKey               string
+	operatorRelays                []string
+	operatorBootstrapRelays       []string
+	operatorServicePubkey         string
+	operatorTrustedServicePubkeys []string
+	operatorHTTPFallback          bool
 )
 
 func main() {
@@ -54,7 +56,9 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "Nostr secret key (nsec) for NIP-98 auth and signer-first operator requests")
 	rootCmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "Nostr private key hex for NIP-98 auth and signer-first operator requests")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
-	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing (env BAHIA_NOSTR_SERVICE_PUBKEY)")
+	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
+	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
+	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
 	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request")
 
 	// Add all command groups

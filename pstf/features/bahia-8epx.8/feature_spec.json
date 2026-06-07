@@ -1,0 +1,24 @@
+{
+  "feature_id": "bahia-8epx.8",
+  "title": "Route NIP-34 repository operations through repository relay hints",
+  "source_bead": "bahia-8epx.8",
+  "plan": "docs/plans/relay-strategy-2026-06-06.md#item-8--route-nip-34-repository-operations-through-repository-relays",
+  "observed_behavior_before": [
+    "Repository announcement parsing extracted 30617 relays tag values into relayUrls.",
+    "Repository selections copied relayUrls from parsed repository records.",
+    "Branch lookup for NIP-34 30618 repository state queried the globally connected Nostr relays only."
+  ],
+  "intended_behavior": [
+    "Repository selections preserve relayUrls from 30617 relays tags.",
+    "30618 branch/state lookup uses scoped filters and queries repository relay hints before global Bahia read relays.",
+    "When selected NIP-34 repositories have no relay hints, branch lookup uses global Bahia relays only as a degraded fallback and exposes degraded metadata.",
+    "Incomplete EOSE metadata remains visible, including relay summary and partial event count."
+  ],
+  "out_of_scope": [
+    "CLI/operator discovery fallback",
+    "NIP-42 AUTH behavior changes",
+    "NIP-86 relay administration",
+    "Service NIP-65 publication",
+    "SoulFactory/ngit relay separation"
+  ]
+}

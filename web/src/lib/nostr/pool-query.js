@@ -1,15 +1,15 @@
 import { NostrIncompleteEOSEError } from './pool-errors.js';
-import { relaySummaryFromStates } from './pool-utils.js';
+import { relaySummaryFromStates, uniqueRelays } from './pool-utils.js';
 
 export function queryUntilEose(client, filters, options = {}) {
   const queryOptions = typeof options === 'number' ? { timeoutMs: options } : (options || {});
-  const { timeoutMs = null, signal = null } = queryOptions;
+  const { timeoutMs = null, signal = null, relays = null } = queryOptions;
 
   return new Promise((resolve, reject) => {
     const events = [];
     const seenEventIds = new Set();
-    const connectedRelays = client.getConnectedRelays();
-    const relayStates = new Map(connectedRelays.map((relay) => [relay, { status: 'pending', reason: '' }]));
+    const targetRelays = Array.isArray(relays) ? uniqueRelays(relays) : client.getConnectedRelays();
+    const relayStates = new Map(targetRelays.map((relay) => [relay, { status: 'pending', reason: '' }]));
     let unsub = null;
     let timer = null;
     let settled = false;
@@ -61,7 +61,7 @@ export function queryUntilEose(client, filters, options = {}) {
       }, timeoutMs);
     }
 
-    unsub = client.subscribeOnRelays(connectedRelays, filters, {
+    unsub = client.subscribeOnRelays(targetRelays, filters, {
       onEvent: (event) => {
         if (event?.id && seenEventIds.has(event.id)) return;
         if (event?.id) seenEventIds.add(event.id);

@@ -33,6 +33,30 @@ function repoStateEvent(overrides = {}) {
   };
 }
 
+describe('NIP-34 repository parsing coverage', () => {
+  it('preserves repository relay tag values from 30617 announcements', async () => {
+    const { parseRepositoryEvent } = await import('../../src/lib/nostr/client.js');
+
+    const parsed = parseRepositoryEvent({
+      id: 'repo-event',
+      kind: 30617,
+      pubkey: 'a'.repeat(64),
+      created_at: 100,
+      tags: [
+        ['d', 'bahia'],
+        ['name', 'Bahia'],
+        ['relays', 'wss://repo-a.example', 'wss://repo-b.example'],
+        ['clone', 'https://github.com/example/bahia.git']
+      ],
+      content: '',
+      sig: 'b'.repeat(128)
+    });
+
+    expect(parsed.relayUrls).toEqual(['wss://repo-a.example', 'wss://repo-b.example']);
+    expect(parsed.searchText).toContain('wss://repo-a.example');
+  });
+});
+
 describe('Nostr branch behavior coverage', () => {
   let fetchRepoBranches;
   let isNostrRepository;
@@ -59,16 +83,35 @@ describe('Nostr branch behavior coverage', () => {
       repoStateEvent({ id: 'new', pubkey, created_at: 20 })
     ]);
 
-    const result = await fetchRepoBranches(repoCoordinate(pubkey, 'bahia'), { timeout: 2500 });
+    const result = await fetchRepoBranches(repoCoordinate(pubkey, 'bahia'), {
+      timeout: 2500,
+      relayUrls: ['wss://repo-a.example', 'wss://repo-b.example']
+    });
 
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith([
       { kinds: [30618], authors: [pubkey], '#d': ['bahia'] }
-    ], { timeoutMs: 2500 });
+    ], { timeoutMs: 2500, relays: ['wss://repo-a.example', 'wss://repo-b.example'] });
     expect(result).toEqual({
       branches: ['main', 'feature/auth'],
       defaultBranch: 'main',
       error: null,
       degraded: null
+    });
+  });
+
+  it('uses global relay fallback with degraded metadata when a NIP-34 selection has no repository relay hints', async () => {
+    nostrMock.queryUntilEose.mockResolvedValue([repoStateEvent()]);
+
+    const result = await fetchRepoBranches(repoCoordinate(), { timeout: 100, relayUrls: [] });
+
+    expect(nostrMock.queryUntilEose).toHaveBeenCalledWith([
+      { kinds: [30618], authors: ['a'.repeat(64)], '#d': ['bahia'] }
+    ], { timeoutMs: 100 });
+    expect(result.branches).toEqual(['main', 'feature/auth']);
+    expect(result.degraded).toMatchObject({
+      incomplete: false,
+      reason: 'missing_repository_relays',
+      partialEventCount: 0
     });
   });
 

@@ -24,6 +24,10 @@ var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig) (cliOpera
 	return client.NewOperatorControlPlaneClient(cfg)
 }
 
+var discoverOperatorRelaysForCLI = func(ctx context.Context, cfg client.OperatorRelayDiscoveryConfig) ([]string, error) {
+	return client.DiscoverOperatorRelays(ctx, cfg)
+}
+
 func runRuntimeActionNostrFirst(cmd *cobra.Command, action, serviceID, envID string, artifactID *string, fallback func(context.Context) (*client.RuntimeActionResult, error)) (*client.RuntimeActionResult, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
@@ -122,7 +126,55 @@ func resolveOperatorRelays(cmd *cobra.Command) ([]string, error) {
 		return envRelays, nil
 	}
 
-	return nil, fmt.Errorf("no operator relays configured; pass --relay or set BAHIA_NOSTR_RELAYS")
+	bootstrapRelays := resolveOperatorBootstrapRelays(cmd)
+	trustedPubkeys := resolveOperatorTrustedServicePubkeys(cmd)
+	if len(bootstrapRelays) == 0 && len(trustedPubkeys) == 0 {
+		return nil, fmt.Errorf("no operator relays configured; pass --relay, set BAHIA_NOSTR_RELAYS, or configure trusted bootstrap discovery with BAHIA_NOSTR_BOOTSTRAP_RELAYS plus BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS or BAHIA_NOSTR_SERVICE_PUBKEY")
+	}
+	if len(bootstrapRelays) == 0 {
+		return nil, fmt.Errorf("operator bootstrap discovery requires at least one bootstrap relay; pass --bootstrap-relay or set BAHIA_NOSTR_BOOTSTRAP_RELAYS")
+	}
+	if len(trustedPubkeys) == 0 {
+		return nil, fmt.Errorf("operator bootstrap discovery requires at least one trusted service pubkey; pass --trusted-service-pubkey or set BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS or BAHIA_NOSTR_SERVICE_PUBKEY")
+	}
+	ctx := context.Background()
+	if cmd != nil {
+		ctx = cmd.Context()
+	}
+	relays, err := discoverOperatorRelaysForCLI(ctx, client.OperatorRelayDiscoveryConfig{BootstrapRelays: bootstrapRelays, TrustedServicePubkeys: trustedPubkeys})
+	if err != nil {
+		return nil, err
+	}
+	if len(relays) == 0 {
+		return nil, fmt.Errorf("trusted operator bootstrap discovery returned no usable relay URLs")
+	}
+	return relays, nil
+}
+
+func resolveOperatorBootstrapRelays(cmd *cobra.Command) []string {
+	if cmd != nil && cmd.Root() != nil {
+		flags := cmd.Root().PersistentFlags()
+		if flags != nil && flags.Changed("bootstrap-relay") {
+			return normalizeRelayList(operatorBootstrapRelays)
+		}
+	}
+	return normalizeRelayList(strings.Split(os.Getenv("BAHIA_NOSTR_BOOTSTRAP_RELAYS"), ","))
+}
+
+func resolveOperatorTrustedServicePubkeys(cmd *cobra.Command) []string {
+	if cmd != nil && cmd.Root() != nil {
+		flags := cmd.Root().PersistentFlags()
+		if flags != nil && flags.Changed("trusted-service-pubkey") {
+			return normalizeRelayList(operatorTrustedServicePubkeys)
+		}
+	}
+	if envTrusted := normalizeRelayList(strings.Split(os.Getenv("BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS"), ",")); len(envTrusted) > 0 {
+		return envTrusted
+	}
+	if servicePubkey := strings.TrimSpace(resolveOperatorServicePubkey(cmd)); servicePubkey != "" {
+		return []string{servicePubkey}
+	}
+	return nil
 }
 
 func resolveOperatorServicePubkey(cmd *cobra.Command) string {

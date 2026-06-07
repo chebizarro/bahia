@@ -81,7 +81,7 @@
 
     branchesLoading = true;
     try {
-      const result = await fetchRepoBranches(selection.repoCoordinate);
+      const result = await fetchRepoBranches(selection.repoCoordinate, { relayUrls: selection.relayUrls });
       detectedBranches = result.branches;
       detectedDefaultBranch = result.defaultBranch;
       branchesError = result.error;

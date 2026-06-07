@@ -116,7 +116,7 @@
 
     editBranchesLoading = true;
     try {
-      const result = await fetchRepoBranches(selection.repoCoordinate);
+      const result = await fetchRepoBranches(selection.repoCoordinate, { relayUrls: selection.relayUrls });
       editDetectedBranches = result.branches;
       editDetectedDefaultBranch = result.defaultBranch;
       editBranchesError = result.error;

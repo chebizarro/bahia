@@ -149,6 +149,12 @@ nostr:
 
 The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstrap and an advisory NIP-65 `10002` relay list for wider Nostr routing. The `10002` list advertises ContextVM request relays as `read` and service publish/backfill relays as `write`; clients must still use ContextVM discovery plus the NIP-51 `30002` relay sets for Bahia bootstrap.
 
+### Repository Relay Hints
+
+NIP-34 repository announcements (`30617`) may include a `relays` tag. Bahia preserves those tag values as repository `relayUrls` in browser selections. When a user selects a NIP-34 repository, branch/state lookup for kind `30618` queries those repository relays first with the scoped filter `{ kinds: [30618], authors: [repo_pubkey], "#d": [repo_identifier] }`.
+
+If a NIP-34 repository has no `relays` tag values, Bahia queries the globally connected Bahia read relays as a degraded fallback and surfaces degraded metadata with reason `missing_repository_relays`. Incomplete `EOSE` remains visible through branch lookup degraded metadata, including relay summary and partial event count.
+
 ### Encrypted Request Transport
 
 Sensitive operations use the ContextVM relay policy where available and otherwise the Bahia browser relay set, with encrypted capability gated by discovery metadata:

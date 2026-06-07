@@ -1,0 +1,41 @@
+{
+  "feature_id": "RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY",
+  "title": "Trusted operator bootstrap discovery fallback",
+  "status": "implemented",
+  "beads": ["bahia-8epx.6", "bahia-8epx.6.1", "bahia-8epx.6.2", "bahia-8epx.6.3"],
+  "intent": "Preserve explicit operator relay precedence while allowing signer-first CLI/operator clients to discover ContextVM transport relays from trusted service-authored NIP-51 relay sets when no final relay configuration is present.",
+  "scope": {
+    "included": [
+      "CLI operator relay resolution flags and environment inputs",
+      "Shared operator client bootstrap discovery over NIP-51 kind 30002 relay sets",
+      "Deterministic tests for precedence, trust validation, relay-set selection, EOSE handling, and failure modes",
+      "CLI user documentation for operator relay discovery"
+    ],
+    "excluded": [
+      "NIP-42 AUTH behavior for bootstrap or operator relays",
+      "NIP-34 repository relay routing and web repository helpers",
+      "NIP-86 relay administration",
+      "Commit or push workflow for this verification-only follow-up"
+    ]
+  },
+  "intended_behavior": [
+    "Explicit CLI --relay values are final and highest priority.",
+    "BAHIA_NOSTR_RELAYS is the second-priority final relay source when --relay is absent.",
+    "Trusted bootstrap discovery runs only when final relay sources are absent and both bootstrap relay seeds plus trusted service pubkeys are configured.",
+    "Discovery subscribes to trusted service-authored kind 30002 relay sets scoped to d=bahia-contextvm-v1 and d=bahia-browser-v1 until EOSE.",
+    "Discovery validates event ID, Schnorr signature, trusted author, reasonable timestamp, scoped d tag, and usable relay tags before trusting an event.",
+    "Usable bahia-contextvm-v1 relay sets are preferred over bahia-browser-v1; browser relays are used only as deterministic fallback.",
+    "Missing bootstrap inputs, missing trusted pubkeys, untrusted/invalid events, no trusted events before EOSE, or no EOSE before the bounded wait fail with explicit errors."
+  ],
+  "interfaces": {
+    "cli_flags": ["--relay", "--bootstrap-relay", "--service-pubkey", "--trusted-service-pubkey"],
+    "environment_variables": ["BAHIA_NOSTR_RELAYS", "BAHIA_NOSTR_BOOTSTRAP_RELAYS", "BAHIA_NOSTR_SERVICE_PUBKEY", "BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS"],
+    "nostr_kinds": [30002],
+    "relay_set_d_tags": ["bahia-contextvm-v1", "bahia-browser-v1"]
+  },
+  "evidence": {
+    "acceptance_criteria": "pstf/features/RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY/acceptance_criteria.json",
+    "test_matrix": "pstf/features/RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY/test_matrix.json",
+    "verification_report": "pstf/features/RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY/verification_report.md"
+  }
+}

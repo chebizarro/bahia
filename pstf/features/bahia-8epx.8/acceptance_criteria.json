@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-8epx.8",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Repository selections preserve 30617 relays tag values as relayUrls.",
+      "tests": [
+        "NIP-34 repository parsing coverage > preserves repository relay tag values from 30617 announcements",
+        "repositories store > resolves selection helpers for manual and NIP-34 repositories"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "30618 branch/state lookups query repository relay hints before global Bahia read relays.",
+      "tests": [
+        "Nostr branch behavior coverage > fetches repository branches with an EOSE-authoritative query and selects the latest state event"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "Missing repository relay hints use a documented degraded fallback to global Bahia read relays.",
+      "tests": [
+        "Nostr branch behavior coverage > uses global relay fallback with degraded metadata when a NIP-34 selection has no repository relay hints"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "Incomplete EOSE metadata remains visible for repository branch/state lookup.",
+      "tests": [
+        "Nostr branch behavior coverage > returns degraded metadata with partial repo state when branch history is incomplete before EOSE",
+        "Nostr branch behavior coverage > returns degraded metadata for incomplete branch history with no partial events"
+      ]
+    }
+  ]
+}

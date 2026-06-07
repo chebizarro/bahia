@@ -4,6 +4,7 @@
  */
 
 import { KINDS, NostrIncompleteEOSEError, nostr, partialEventsFromIncompleteEose } from './client.js';
+import { uniqueRelays } from './pool-utils.js';
 
 // Repo state event kind (NIP-34)
 const REPO_STATE_KIND = 30618;
@@ -99,9 +100,10 @@ function parseRepoCoordinate(repoCoordinate) {
  * @param {string} repoCoordinate - Repository coordinate (30617:pubkey:identifier)
  * @param {Object} options
  * @param {number} options.timeout - Incomplete-query timeout in ms (default: 5000)
+ * @param {string[]} options.relayUrls - Repository relay hints from the NIP-34 30617 relays tag
  * @returns {Promise<{ branches: string[], defaultBranch: string | null, error: string | null, degraded: Object | null }>}
  */
-export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {}) {
+export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayUrls = null } = {}) {
   const parsed = parseRepoCoordinate(repoCoordinate);
   if (!parsed) {
     return {
@@ -113,15 +115,28 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
   }
 
   const { pubkey, identifier } = parsed;
+  const repositoryRelays = Array.isArray(relayUrls) ? uniqueRelays(relayUrls) : null;
+  const missingRepositoryRelayFallback = Array.isArray(relayUrls) && repositoryRelays.length === 0
+    ? {
+        incomplete: false,
+        reason: 'missing_repository_relays',
+        message: 'NIP-34 repository announcement did not include relays tag values; queried global Bahia relays as a degraded fallback.',
+        relaySummary: [],
+        partialEventCount: 0
+      }
+    : null;
+  const queryOptions = repositoryRelays?.length > 0
+    ? { timeoutMs: timeout, relays: repositoryRelays }
+    : { timeoutMs: timeout };
 
   try {
-    // Query for repo state events (kind 30618) with matching author and d-tag
+    // Query for repo state events (kind 30618) with matching author and d-tag.
     const events = await nostr.queryUntilEose([{
       kinds: [REPO_STATE_KIND],
       authors: [pubkey],
       '#d': [identifier]
-    }], { timeoutMs: timeout });
-    const degraded = null;
+    }], queryOptions);
+    const degraded = missingRepositoryRelayFallback;
 
     if (!events || events.length === 0) {
       // No state event found - repo may not have state published yet
@@ -157,7 +172,8 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
         reason: err.reason || 'unknown',
         message: err.message,
         relaySummary: Array.isArray(err.relaySummary) ? err.relaySummary : [],
-        partialEventCount: events.length
+        partialEventCount: events.length,
+        fallback: missingRepositoryRelayFallback
       };
       if (events.length === 0) {
         return {

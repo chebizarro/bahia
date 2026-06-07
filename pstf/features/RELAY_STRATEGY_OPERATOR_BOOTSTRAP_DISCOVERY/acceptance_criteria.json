@@ -1,0 +1,42 @@
+{
+  "feature_id": "RELAY_STRATEGY_OPERATOR_BOOTSTRAP_DISCOVERY",
+  "status": "implemented",
+  "beads": ["bahia-8epx.6", "bahia-8epx.6.1", "bahia-8epx.6.2", "bahia-8epx.6.3"],
+  "criteria": [
+    {
+      "ac_id": "RSOBD-AC-001",
+      "title": "Explicit operator relays remain highest priority",
+      "assertion": "When --relay is provided, the CLI uses only those final relays and does not invoke bootstrap discovery, even if environment or discovery inputs are present.",
+      "tests": ["RSOBD-T-001"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSOBD-AC-002",
+      "title": "Environment final relays remain second priority",
+      "assertion": "When --relay is absent and BAHIA_NOSTR_RELAYS is set, the CLI uses those final relays and does not invoke bootstrap discovery.",
+      "tests": ["RSOBD-T-002"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSOBD-AC-003",
+      "title": "Bootstrap discovery requires seed relays and trusted service pubkeys",
+      "assertion": "Trusted operator bootstrap discovery runs only when no final relay config exists and both bootstrap relays plus trusted service pubkeys are configured; missing final/discovery inputs fail deterministically.",
+      "tests": ["RSOBD-T-003", "RSOBD-T-006"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSOBD-AC-004",
+      "title": "Discovery prefers ContextVM relays then browser relays",
+      "assertion": "The shared operator discovery resolver subscribes to trusted NIP-51 kind 30002 relay sets scoped to d=bahia-contextvm-v1 and d=bahia-browser-v1, validates trusted signed events, prefers usable ContextVM relay sets, and falls back to usable browser relay sets.",
+      "tests": ["RSOBD-T-004", "RSOBD-T-005"],
+      "status": "pass"
+    },
+    {
+      "ac_id": "RSOBD-AC-005",
+      "title": "Missing trust or trusted relay events fail deterministically",
+      "assertion": "Missing trusted pubkeys, untrusted relay-set authors, invalid signatures, wrong d tags, or no trusted events before EOSE produce explicit errors and no discovered relays.",
+      "tests": ["RSOBD-T-006"],
+      "status": "pass"
+    }
+  ]
+}

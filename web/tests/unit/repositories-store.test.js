@@ -135,6 +135,7 @@ describe('repositories store', () => {
     const resolved = store.resolveSelectionFromRepoUrl('https://github.com/org/alpha', [nip34Repo]);
     expect(resolved.source).toBe('nip34');
     expect(resolved.repoCoordinate).toBe('github.com/org/alpha');
+    expect(resolved.relayUrls).toEqual(['wss://relay.example']);
 
     const fallback = store.resolveSelectionFromRepoUrl('https://unknown.example/repo', [nip34Repo]);
     expect(fallback.source).toBe('manual');
