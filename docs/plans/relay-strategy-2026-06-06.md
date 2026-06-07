@@ -154,9 +154,11 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 - **EOSE semantics:** Use existing bounded query/degraded metadata patterns where appropriate, but do not add polling refresh loops or timeout-as-completion logic.
 - **ngit uncertainty:** Verify repeated relay support in `ngit`; track tool limitations in Beads rather than comments or silent single-relay assumptions.
 
-## Open Questions
-- Which deployments need multi-key service rotation for relay strategy publication? If required, create a dedicated key-management Bead before implementing Items 3 and 5.
-- Which NIP-66 monitor pubkeys, if any, should Bahia trust by default? The safe default for this plan is none.
+## Decision Closeouts
+- **Service-key rotation for relay strategy publication (`bahia-lfta`, decided 2026-06-07):** Items 3 and 5 remain scoped to the single configured Bahia service signing key. Clients validate relay strategy events against their configured trusted service pubkey list. Multi-key signer orchestration or dual-publish rotation is not required before Items 3/5 and must be designed in a separate key-management Bead if a future deployment needs it.
+- **Trusted NIP-66 monitor defaults (`bahia-tem1`, decided 2026-06-07):** Bahia ships no trusted NIP-66 monitor pubkeys by default. Operators may configure monitor pubkeys explicitly; monitor events remain advisory health/capability metadata and cannot establish service trust, override configured trusted service pubkeys, override configured relay policy, or remove all configured relays.
+
+## Remaining Open Questions
 - Which Bahia-owned or Bahia-authorized relays should expose NIP-86, and which administrator pubkeys should be authorized? The safe default for this plan is none.
 
 ## References

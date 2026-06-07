@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-tem1",
+  "tests": [
+    {
+      "id": "T-TEM1-001",
+      "name": "PSTF JSON validation",
+      "command": "python3 -m json.tool pstf/features/bahia-tem1/feature_spec.json && python3 -m json.tool pstf/features/bahia-tem1/acceptance_criteria.json && python3 -m json.tool pstf/features/bahia-tem1/test_matrix.json",
+      "acceptance_criteria": ["AC-TEM1-001"],
+      "covers": "Decision artifact JSON is parseable."
+    },
+    {
+      "id": "T-TEM1-002",
+      "name": "Repository evidence review",
+      "command": "Read docs/plans/relay-strategy-2026-06-06.md, docs/user-guide/nostr-integration.md, docs/nostr-event-implementation-guide.md, docs/protocol-compatibility.md, internal/config/config.go, and Bead bahia-tem1.",
+      "acceptance_criteria": ["AC-TEM1-001", "AC-TEM1-002"],
+      "covers": "Confirms safe empty trusted monitor defaults and advisory-only criteria."
+    }
+  ]
+}

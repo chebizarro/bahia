@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-kw04",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Each touched web Nostr helper module is at or below 200 lines.",
+      "verification": "wc -l over nip07*, nip46*, encrypted-controlplane*, and nostr-hex.js showed all files <=200 lines."
+    },
+    {
+      "id": "AC2",
+      "description": "Existing public imports for NIP-07, NIP-46, and encrypted control-plane remain compatible.",
+      "verification": "Original files remain as compatibility facades exporting the same public functions/constants/classes used by existing tests and callers."
+    },
+    {
+      "id": "AC3",
+      "description": "NIP-07 and NIP-46 signing plus NIP-44 encryption/decryption semantics are preserved.",
+      "verification": "Targeted unit tests for NIP-07 and NIP-46 pass, including pubkey validation, signer methods, capabilities, NIP-44 blockers, encryption/decryption calls, retry, and queue behavior."
+    },
+    {
+      "id": "AC4",
+      "description": "Encrypted ContextVM control-plane publish/result behavior remains event-driven and verifies relay OK outcomes.",
+      "verification": "Encrypted control-plane unit tests pass for request event construction, accepted OK enforcement, scoped result subscriptions, EOSE/CLOSED/AUTH handling, dedupe, decrypt/correlation errors, cleanup, and cancellation."
+    },
+    {
+      "id": "AC5",
+      "description": "Tests are deterministic for the touched NIP-07 async behavior.",
+      "verification": "NIP-07 availability timeout, late injection, transient retry, and serialization tests no longer depend on wall-clock sleeps."
+    }
+  ]
+}

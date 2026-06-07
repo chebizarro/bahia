@@ -151,6 +151,8 @@ nostr:
 
 `nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 
+Relay strategy publications for `bahia-browser-v1`, `bahia-contextvm-v1`, `bahia-service-v1`, and the advisory service NIP-65 `10002` list are authored by the configured Bahia service key. Clients validate these events against their configured trusted service pubkey list. Bahia does not ship multi-key publication rotation in this relay-strategy slice; deployments that need automatic dual publishing or signer orchestration require a separate key-management design.
+
 ### Optional NIP-86 relay administration
 
 NIP-86 relay administration is an optional relay-owner HTTP management surface for Bahia-owned or Bahia-authorized relays. Bahia exposes it through the Nostr-native operator relay settings control plane: the browser publishes a ContextVM kind `25910` intent such as `settings/relay-admin.call`, Bahia validates the configured target, and only then calls the relay's NIP-86 HTTP endpoint with NIP-98 payload-bound authorization. NIP-86 is never used as Bahia application mutation transport.

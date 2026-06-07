@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-kw04",
+  "title": "Split oversized web Nostr helper modules",
+  "status": "verified",
+  "observed_behavior": {
+    "summary": "web/src/lib/nostr/nip07.js, nip46.js, and encrypted-controlplane.js were oversized compatibility/helper modules, making NIP-07, NIP-46, and encrypted ContextVM behavior harder to review.",
+    "evidence": [
+      "Bead bahia-kw04 reported pre-existing line counts above the 200-line helper target.",
+      "The public import paths were used by existing code and tests and therefore had to remain compatible."
+    ]
+  },
+  "intended_behavior": {
+    "summary": "The public Nostr helper entry points remain stable while implementation is split into focused modules that preserve signing, NIP-44 encryption/decryption, ContextVM encrypted request publish verification, and event-driven result subscription semantics.",
+    "non_goals": [
+      "No Nostr event kind, payload, signing, encryption, relay strategy, or user-facing behavior changes.",
+      "No relay-strategy documentation changes because another agent is concurrently updating those artifacts."
+    ]
+  },
+  "scope": {
+    "code": [
+      "web/src/lib/nostr/nip07*.js",
+      "web/src/lib/nostr/nip46*.js",
+      "web/src/lib/nostr/encrypted-controlplane*.js",
+      "web/src/lib/nostr/nostr-hex.js",
+      "web/tests/unit/nip07.test.js"
+    ],
+    "docs": "No documentation update required because this is an internal modularization with preserved public imports and no protocol/user-facing behavior change."
+  }
+}

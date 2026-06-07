@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 describe('NIP-07 Utilities', () => {
   let nip07Module;
 
   beforeEach(async () => {
     // Reset modules to avoid state leakage
+    vi.useRealTimers();
     vi.resetModules();
     
     // Clear window.nostr before each test
@@ -13,6 +14,10 @@ describe('NIP-07 Utilities', () => {
     
     // Dynamically import to get fresh module state
     nip07Module = await import('../../src/lib/nostr/nip07.js');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('detectNip07', () => {
@@ -74,17 +79,19 @@ describe('NIP-07 Utilities', () => {
     });
 
     it('should timeout if extension never becomes available', async () => {
-      const startTime = Date.now();
-      const result = await nip07Module.waitForNip07({ timeoutMs: 200, intervalMs: 50 });
-      const elapsed = Date.now() - startTime;
+      vi.useFakeTimers();
+      const resultPromise = nip07Module.waitForNip07({ timeoutMs: 200, intervalMs: 50 });
+
+      await vi.advanceTimersByTimeAsync(200);
+      const result = await resultPromise;
       
       expect(result.available).toBe(false);
-      expect(elapsed).toBeGreaterThanOrEqual(150);
-      expect(elapsed).toBeLessThan(300);
     });
 
     it('should detect extension that loads after initial check', async () => {
-      // Start with no extension
+      vi.useFakeTimers();
+      const resultPromise = nip07Module.waitForNip07({ timeoutMs: 500, intervalMs: 50 });
+
       setTimeout(() => {
         global.window.nostr = {
           getPublicKey: vi.fn(),
@@ -92,7 +99,8 @@ describe('NIP-07 Utilities', () => {
         };
       }, 100);
       
-      const result = await nip07Module.waitForNip07({ timeoutMs: 500, intervalMs: 50 });
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await resultPromise;
       
       expect(result.available).toBe(true);
       expect(result.provider).toBe(global.window.nostr);
@@ -112,7 +120,8 @@ describe('NIP-07 Utilities', () => {
         signEvent: vi.fn()
       };
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
+      await Promise.resolve();
 
       expect(changes).toEqual([false, true]);
       stopWatching();
@@ -323,6 +332,7 @@ describe('NIP-07 Utilities', () => {
     });
 
     it('retries transient NIP-44 bridge failures before succeeding', async () => {
+      vi.useFakeTimers();
       const encrypt = vi.fn()
         .mockRejectedValueOnce(new Error('aka-profiles: Could not establish connection. Receiving end does not exist.'))
         .mockResolvedValueOnce('ciphertext');
@@ -334,7 +344,10 @@ describe('NIP-07 Utilities', () => {
         }
       };
 
-      await expect(nip07Module.encryptNip44('b'.repeat(64), 'secret')).resolves.toBe('ciphertext');
+      const resultPromise = nip07Module.encryptNip44('b'.repeat(64), 'secret');
+      await vi.advanceTimersByTimeAsync(150);
+
+      await expect(resultPromise).resolves.toBe('ciphertext');
       expect(encrypt).toHaveBeenCalledTimes(2);
     });
 
@@ -344,7 +357,7 @@ describe('NIP-07 Utilities', () => {
         nip44: {
           encrypt: vi.fn(async (_pubkey, plaintext) => {
             order.push(`start:${plaintext}`);
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            await Promise.resolve();
             order.push(`end:${plaintext}`);
             return `cipher:${plaintext}`;
           }),

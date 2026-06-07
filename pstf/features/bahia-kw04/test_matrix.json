@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-kw04",
+  "tests": [
+    {
+      "command": "npm run test:unit -- --run tests/unit/nip07.test.js tests/unit/nip46.test.js tests/unit/encrypted-controlplane.test.js",
+      "working_directory": "web",
+      "result": "passed",
+      "evidence": "3 test files passed; 58 tests passed.",
+      "acceptance_criteria": ["AC2", "AC3", "AC4", "AC5"]
+    },
+    {
+      "command": "npm run lint",
+      "working_directory": "web",
+      "result": "passed",
+      "evidence": "svelte-check found 0 errors and 0 warnings.",
+      "acceptance_criteria": ["AC2"]
+    },
+    {
+      "command": "wc -l web/src/lib/nostr/nip07*.js web/src/lib/nostr/nip46*.js web/src/lib/nostr/encrypted-controlplane*.js web/src/lib/nostr/nostr-hex.js",
+      "working_directory": ".",
+      "result": "passed",
+      "evidence": "Maximum touched helper module line count was 137 for nip07-detection.js; all listed files were <=200 lines.",
+      "acceptance_criteria": ["AC1"]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-lfta",
+  "criteria": [
+    {
+      "id": "AC-LFTA-001",
+      "title": "Service-key rotation decision is recorded",
+      "statement": "The relay strategy decision records whether Items 3 and 5 require multi-key publication rotation before implementation proceeds.",
+      "tests": ["T-LFTA-001", "T-LFTA-002"]
+    },
+    {
+      "id": "AC-LFTA-002",
+      "title": "Dependent work is only created when required",
+      "statement": "If multi-key rotation is required, a dependent design/implementation Bead exists; if not required, the implementation scope explicitly remains the configured service key plus trusted service pubkey list validation.",
+      "tests": ["T-LFTA-002"]
+    }
+  ]
+}

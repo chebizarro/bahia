@@ -1,0 +1,46 @@
+{
+  "feature_id": "bahia-tem1",
+  "title": "Trusted NIP-66 monitor defaults decision",
+  "status": "verified",
+  "source_plan": "docs/plans/relay-strategy-2026-06-06.md#decision-closeouts",
+  "source_bead": "bahia-tem1",
+  "observed_behavior_before": [
+    "The relay strategy plan stated the safe default for NIP-66 trusted monitors is none.",
+    "Existing user-facing and protocol docs describe NIP-66 monitor events as advisory only and explicitly configured.",
+    "Repository configuration has a trusted_relay_monitor_pubkeys field but no non-empty built-in monitor pubkey defaults were identified."
+  ],
+  "intended_behavior": [
+    "Bahia ships with no trusted NIP-66 monitor pubkeys by default.",
+    "Operators may configure trusted monitor pubkeys explicitly; when configured, monitor events remain advisory health/capability metadata only.",
+    "NIP-66 monitor data cannot establish service trust, override configured trusted service pubkeys, override configured relay policy, or remove all configured relays."
+  ],
+  "decision": {
+    "date": "2026-06-07",
+    "result": "empty_default_trusted_nip66_monitor_pubkeys",
+    "default_pubkeys": [],
+    "non_empty_defaults_documented": false,
+    "rationale": [
+      "No repository evidence identifies operator-approved NIP-66 monitor trust anchors suitable for development or production defaults.",
+      "The relay strategy plan and docs already define NIP-66 as configured-trust advisory metadata, never a trust root.",
+      "Shipping an empty default avoids silently inventing third-party trust anchors."
+    ],
+    "advisory_criteria_when_configured": [
+      "Subscribe only to NIP-66 monitor events from explicitly configured trusted monitor pubkeys.",
+      "Use monitor events only to annotate relay health, capability warnings, or operator-facing ranking.",
+      "Ignore untrusted monitor events and events for unknown relays.",
+      "Never use monitor events to establish Bahia service trust, override trusted service pubkeys, override configured relay policy, or remove all configured relays."
+    ]
+  },
+  "scope": {
+    "included": [
+      "Decision closeout for trusted NIP-66 monitor defaults",
+      "PSTF and plan documentation updates",
+      "Beads status update"
+    ],
+    "excluded": [
+      "Adding monitor pubkey defaults",
+      "Changes to web Nostr helper modules",
+      "New relay health UI behavior"
+    ]
+  }
+}

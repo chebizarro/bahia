@@ -1,0 +1,40 @@
+{
+  "feature_id": "bahia-lfta",
+  "title": "Relay strategy service-key rotation policy decision",
+  "status": "verified",
+  "source_plan": "docs/plans/relay-strategy-2026-06-06.md#decision-closeouts",
+  "source_bead": "bahia-lfta",
+  "observed_behavior_before": [
+    "The relay strategy plan already scoped Items 3 and 5 to service-authored publication by the configured Bahia service key.",
+    "Existing discovery design and client configuration support trusted service pubkey lists for accepting discovery during rotation windows, but repository evidence did not identify an implementation requirement to build multi-key publication rotation before relay strategy Items 3 or 5.",
+    "Backend discovery projection signs ContextVM discovery, NIP-51 relay sets, and advisory NIP-65 relay preferences through the configured projector signer, not through a multi-signer rotation workflow."
+  ],
+  "intended_behavior": [
+    "Relay strategy Items 3 and 5 remain scoped to a single configured Bahia service signing key.",
+    "Clients continue validating discovery and relay strategy events against their configured trusted service pubkey list, so operators can configure a transition trust window without requiring dual-publish implementation in this relay-strategy slice.",
+    "A dedicated key-management Bead is required only if a future deployment needs automatic multi-key publication rotation, signer orchestration, or dual-publish lifecycle management beyond the configured service key."
+  ],
+  "decision": {
+    "date": "2026-06-07",
+    "result": "single_configured_service_key_for_items_3_and_5",
+    "requires_multi_key_before_items_3_or_5": false,
+    "dependent_bead_created": false,
+    "rationale": [
+      "docs/plans/relay-strategy-2026-06-06.md records the single-key scope and says multi-key rotation must be separate if needed.",
+      "docs/designs/nostr-native-system-discovery.md supports trusted service pubkey lists for client-side rotation acceptance, which satisfies the discovery trust boundary without changing Items 3 or 5 publication semantics.",
+      "internal/adapters/nostr/projector.go publishes relay-set and NIP-65 events through the configured projector signer, preserving the existing service-key authorship model."
+    ]
+  },
+  "scope": {
+    "included": [
+      "Decision closeout for relay strategy service-key rotation policy",
+      "PSTF and plan documentation updates",
+      "Beads status update"
+    ],
+    "excluded": [
+      "Multi-key signer implementation",
+      "Changes to web Nostr helper modules",
+      "Changes to relay-set or NIP-65 projection code"
+    ]
+  }
+}

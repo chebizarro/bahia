@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-lfta",
+  "tests": [
+    {
+      "id": "T-LFTA-001",
+      "name": "PSTF JSON validation",
+      "command": "python3 -m json.tool pstf/features/bahia-lfta/feature_spec.json && python3 -m json.tool pstf/features/bahia-lfta/acceptance_criteria.json && python3 -m json.tool pstf/features/bahia-lfta/test_matrix.json",
+      "acceptance_criteria": ["AC-LFTA-001"],
+      "covers": "Decision artifact JSON is parseable."
+    },
+    {
+      "id": "T-LFTA-002",
+      "name": "Repository evidence review",
+      "command": "Read docs/plans/relay-strategy-2026-06-06.md, docs/designs/nostr-native-system-discovery.md, internal/adapters/nostr/projector.go, and Bead bahia-lfta.",
+      "acceptance_criteria": ["AC-LFTA-001", "AC-LFTA-002"],
+      "covers": "Confirms Items 3/5 remain single configured service-key scope and that no dependent multi-key Bead is needed for this closeout."
+    }
+  ]
+}

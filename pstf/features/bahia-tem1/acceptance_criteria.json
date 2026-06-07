@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-tem1",
+  "criteria": [
+    {
+      "id": "AC-TEM1-001",
+      "title": "Default trusted NIP-66 monitor policy is recorded",
+      "statement": "The decision records whether Bahia ships trusted NIP-66 monitor pubkeys by default.",
+      "tests": ["T-TEM1-001", "T-TEM1-002"]
+    },
+    {
+      "id": "AC-TEM1-002",
+      "title": "Non-empty defaults require explicit trust evidence",
+      "statement": "If non-empty defaults are chosen, pubkeys, rationale, and advisory-only criteria are documented; otherwise the empty safe default is explicitly recorded.",
+      "tests": ["T-TEM1-002"]
+    }
+  ]
+}
