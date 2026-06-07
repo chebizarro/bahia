@@ -12,7 +12,8 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 - NIP-34 support parses repository announcement kind `30617` relay hints and queries repository state kind `30618` with EOSE/degraded metadata, but repository relay hints are not yet the explicit first routing choice (`web/src/lib/nostr/repositories.js:1-104`; `web/src/lib/nostr/branches.js:1-200`).
 - SoulFactory has separate `OpenClawRelays` and `NgitRelays`, but `NgitRelays` falls back to OpenClaw relays and ngit publication currently uses only the first relay (`internal/soulfactory/workspace.go:17-326`).
 - PSTF `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` verifies sidecar-first bootstrap, EOSE-bounded query-to-live behavior, fail-closed behavior, canonical-author filtering, CLI relay precedence, and encrypted capability gating; some text still references historical `31974` and should be clarified (`pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/acceptance_criteria.json:1-320`).
-- External protocol facts were checked against official NIPs on 2026-06-06: NIP-34 repository `relays` tags, NIP-51 relay sets/lists, NIP-65 `10002` read/write lists, NIP-11 metadata, NIP-42 AUTH, and optional NIP-66 monitor/liveness events.
+- External protocol facts were checked against official NIPs on 2026-06-06: NIP-34 repository `relays` tags, NIP-51 relay sets/lists, NIP-65 `10002` read/write lists, NIP-11 metadata, NIP-42 AUTH, optional NIP-66 monitor/liveness events, NIP-86 relay management, and NIP-98 HTTP auth.
+- NIP-86 is an optional HTTP relay administration API for relay-owner operations such as allow/ban lists, kind policy, metadata changes, and IP blocking. It is only in scope for Bahia-owned or Bahia-authorized relays, uses NIP-98 HTTP authorization, and is distinct from NIP-42 websocket AUTH and from Bahia ContextVM application/control-plane mutations.
 
 ## Current Data Flow
 1. Runtime page shell provides seed relay URLs and trusted service pubkeys.
@@ -32,13 +33,14 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 ## Approach
 
 ### Core decisions
-1. **No new relay routing kinds.** Use ContextVM discovery `11316`-`11320`, NIP-51 relay sets `30002`, NIP-65 `10002`, NIP-51 `10050` where DM is enabled, NIP-34 repository relay tags, NIP-11 metadata, NIP-42 AUTH, and optional NIP-66 monitor events.
+1. **No new relay routing kinds.** Use ContextVM discovery `11316`-`11320`, NIP-51 relay sets `30002`, NIP-65 `10002`, NIP-51 `10050` where DM is enabled, NIP-34 repository relay tags, NIP-11 metadata, NIP-42 AUTH, optional NIP-66 monitor events, and optional NIP-86 relay management for authorized relay administration.
 2. **Separate relay purpose from physical relay URL.** Public browser, ContextVM request/reply, service publish/backfill, user/operator, repository/ngit, DM, FIPS public advert, and FIPS/Bahia private endpoint relays are distinct policy purposes even when a deployment intentionally reuses one relay URL.
 3. **Make `bahia-contextvm-v1` additive and permanently safe to fall back from.** New service deployments should publish it. New clients should prefer it for ContextVM mutation traffic and fall back to `bahia-browser-v1` with degraded metadata if it is absent. The plan does not require a hard cutover date because older deployments may never publish the new set.
 4. **Keep publication single-service-key for this slice.** Relay strategy events are authored by the configured Bahia service key. Multi-key rotation remains a separate key-management design; this plan only requires clients to validate against their configured trusted service pubkey list during discovery.
 5. **Define AUTH-unavailable behavior before adding new relay sets.** If a relay requires AUTH and no valid signer/key is available, that relay is excluded from the current operation, surfaced in relay health/error metadata with the CLOSED/OK reason, and retried only through normal reconnect/backoff or a new operation after credentials change. If remaining relays cannot satisfy the operation's publish/read success rules, the operation fails deterministically; no REST or legacy fallback is allowed after relay acceptance.
 6. **Treat NIP-11/NIP-66 as advisory metadata.** NIP-11 probing and NIP-66 monitor events may annotate, rank, or warn, but they do not establish trust, do not override service pubkey checks, and cannot remove all configured relays.
-7. **Preserve event-driven lifecycle.** Historical state is EOSE-bounded; realtime state uses long-lived subscriptions; publish success checks relay `OK`; CLOSED/AUTH are explicit; timer-based subscription refresh or completion detection is out of scope.
+7. **Keep NIP-86 administrative and opt-in.** NIP-86 may be used only for Bahia-owned or Bahia-authorized relay administration over HTTP with NIP-98 auth. It must not become Bahia's mutation transport, must not replace ContextVM kind `25910` intent events, and must not be confused with NIP-42 websocket relay AUTH.
+8. **Preserve event-driven lifecycle.** Historical state is EOSE-bounded; realtime state uses long-lived subscriptions; publish success checks relay `OK`; CLOSED/AUTH are explicit; timer-based subscription refresh or completion detection is out of scope.
 
 ### Relay taxonomy
 | Purpose | Owner | Canonical mechanism | Initial event / tag | Notes |
@@ -52,6 +54,7 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 | FIPS public adverts | FIPS/Bahia operator | Existing FIPS event contract + explicit bridge config | FIPS overlay advert relays | May be public and separate from Bahia endpoint/control relays. |
 | FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets / explicit bridge config | `bahia-contextvm-v1` or bridge config | Sharing with public relays is an explicit deployment exposure decision. |
 | Relay capability/liveness | Relay or trusted monitor | NIP-11; optional NIP-66 `10166`/`30166` | metadata/monitor events | Advisory only. |
+| Relay administration | Bahia relay owner/operator | Optional NIP-86 over HTTP with NIP-98 auth | relay management endpoint | Only for Bahia-owned or Bahia-authorized relays; administrative allow/ban/kind/metadata controls, not app/control-plane mutation transport. |
 
 ### Recommended target state
 - Backend relay policy has independent semantic sources for public browser bootstrap, ContextVM request/reply, and service publish/backfill. Implementation may choose exact config names consistent with `internal/config/config.go`; it must not repurpose `nostr.relays` as public browser relays.
@@ -60,12 +63,13 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 - Operator discovery keeps explicit final relay precedence and may add a separate trusted bootstrap-discovery path only when both bootstrap relay seeds and trusted service pubkeys are configured.
 - Repository and SoulFactory flows treat NIP-34/ngit relays as repository-specific policy, not as a generic control-plane relay substitute.
 - FIPS public advert relay guidance is documented as part of the taxonomy; no separate implementation work is needed unless a bridge currently defaults sensitive endpoint traffic to browser relay sets.
+- Relay administration, where needed for Bahia-operated infrastructure, is modeled as optional NIP-86 HTTP management with NIP-98 authorization and is kept separate from websocket relay authentication and ContextVM mutation handling.
 
 ## Work Items
 
 ### Item 1 — Land relay taxonomy, canonical wording, and FIPS boundary docs
 **Goal:** Make the relay strategy explicit before implementation begins.  
-**Done when:** Docs define each relay purpose, owner, NIP mechanism, security boundary, and the no-new-routing-kinds rule; FIPS public/private relay exposure is documented; PSTF wording clarifies that `31974` references are historical and that `11316`-`11320` plus `30002` are canonical.  
+**Done when:** Docs define each relay purpose, owner, NIP mechanism, security boundary, and the no-new-routing-kinds rule; FIPS public/private relay exposure is documented; NIP-86 relay administration is described as optional, authorized relay-owner HTTP management; PSTF wording clarifies that `31974` references are historical and that `11316`-`11320` plus `30002` are canonical.  
 **Key files:** `docs/plans/relay-strategy-2026-06-06.md`; `docs/control-planes.md`; `docs/nostr-event-implementation-guide.md`; `docs/protocol-compatibility.md`; `docs/designs/fips-bahia-integration.md`; `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/*`.  
 **Dependencies:** None.  
 **Size:** Medium.
@@ -126,10 +130,10 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 **Dependencies:** Item 1.  
 **Size:** Medium.
 
-### Item 10 — Add relay metadata inputs as advisory follow-up
-**Goal:** Integrate NIP-11, NIP-66, and DM relay-list support without putting optional metadata on the critical path.  
-**Done when:** A follow-up Bead or implementation slice defines best-effort NIP-11 probing, configured-trust NIP-66 monitor use, and NIP-51 `10050` publication only for DM-enabled features; each is explicitly advisory unless a later PSTF slice approves stronger behavior.  
-**Key files:** `internal/config/config.go`; `internal/adapters/nostr`; `web/src/lib/nostr`; notification/DM publisher code; settings/relay-health UI if exposed.  
+### Item 10 — Add relay metadata and administration inputs as optional follow-up
+**Goal:** Integrate NIP-11, NIP-66, NIP-86, and DM relay-list support without putting optional metadata or relay administration on the critical path.  
+**Done when:** A follow-up Bead or implementation slice defines best-effort NIP-11 probing, configured-trust NIP-66 monitor use, NIP-86 HTTP relay management with NIP-98 auth only for Bahia-owned or Bahia-authorized relays, and NIP-51 `10050` publication only for DM-enabled features; NIP-11/NIP-66 remain advisory, and NIP-86 remains administrative rather than ContextVM app/control-plane mutation transport unless a later PSTF slice approves stronger behavior.  
+**Key files:** `internal/config/config.go`; `internal/adapters/nostr`; `web/src/lib/nostr`; relay admin tooling/UI if exposed; notification/DM publisher code; settings/relay-health UI if exposed.  
 **Dependencies:** Item 1.  
 **Size:** Small planning follow-up; implementation sizes split per feature.
 
@@ -145,6 +149,7 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 - **Config compatibility:** Do not repurpose `nostr.relays` as public browser relays. Keep service vs browser semantics distinct even when URLs overlap.
 - **Single-key scope:** This plan assumes one configured service signing key for publishing relay strategy events. Multi-key rotation must be a separate Bead/design if needed.
 - **NIP-66 safety:** Safe default is no trusted monitors. Monitor data cannot override configured relays or service-pubkey trust.
+- **NIP-86 safety:** Safe default is no relay administration client. NIP-86 may target only Bahia-owned or Bahia-authorized relays, must use NIP-98 authorization with payload binding, and must not be used for Bahia application mutations or as a substitute for NIP-42 websocket AUTH.
 - **Operator safety:** Discovery fallback requires explicit bootstrap relays plus trusted service pubkeys; no default TOFU.
 - **EOSE semantics:** Use existing bounded query/degraded metadata patterns where appropriate, but do not add polling refresh loops or timeout-as-completion logic.
 - **ngit uncertainty:** Verify repeated relay support in `ngit`; track tool limitations in Beads rather than comments or silent single-relay assumptions.
@@ -152,6 +157,7 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 ## Open Questions
 - Which deployments need multi-key service rotation for relay strategy publication? If required, create a dedicated key-management Bead before implementing Items 3 and 5.
 - Which NIP-66 monitor pubkeys, if any, should Bahia trust by default? The safe default for this plan is none.
+- Which Bahia-owned or Bahia-authorized relays should expose NIP-86, and which administrator pubkeys should be authorized? The safe default for this plan is none.
 
 ## References
 - `docs/control-planes.md`
@@ -171,3 +177,5 @@ Define a Nostr-native relay strategy for Bahia that separates relay lists by pur
 - NIP-51: https://github.com/nostr-protocol/nips/blob/master/51.md
 - NIP-65: https://github.com/nostr-protocol/nips/blob/master/65.md
 - NIP-66: https://github.com/nostr-protocol/nips/blob/master/66.md
+- NIP-86: https://github.com/nostr-protocol/nips/blob/master/86.md
+- NIP-98: https://github.com/nostr-protocol/nips/blob/master/98.md
