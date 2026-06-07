@@ -57,7 +57,7 @@ describe('encrypted route stores', () => {
     }));
   });
 
-  it('verifies artifact signatures through encrypted Nostr requests and records success state', async () => {
+  it('verifies artifact signatures through ContextVM requests and records success state', async () => {
     encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
       result: { status: 'ok', payload: { found: 2, stored: 2, verified: 1, rejected: 1, signatures: [{ id: 'sig-1', verified: true }] } }
     });
@@ -71,12 +71,12 @@ describe('encrypted route stores', () => {
     }));
   });
 
-  it('blocks encrypted route stores when encrypted Nostr events are not configured for secrets', async () => {
+  it('blocks ContextVM route stores when ContextVM requests are not configured for secrets', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
     await expect(store.listServiceSecrets('svc-1')).rejects.toThrow(
-      'Encrypted Nostr events are not available for service secret management'
+      'ContextVM requests are not available for service secret management'
     );
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
   });

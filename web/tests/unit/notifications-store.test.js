@@ -33,7 +33,7 @@ describe('notifications encrypted store', () => {
     store.resetNotificationStore();
   });
 
-  it('loads channels through encrypted Nostr request operations', async () => {
+  it('loads channels through ContextVM request operations', async () => {
     encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
       result: { status: 'ok', payload: { channels: [{ id: 'ch-1', name: 'Ops', config: { url: 'https://hook' } }] } }
     });
@@ -106,13 +106,13 @@ describe('notifications encrypted store', () => {
     expect(store.notificationState.logsLoading).toBe(false);
   });
 
-  it('fails before publishing when encrypted Nostr requests are not advertised', async () => {
+  it('fails before publishing when ContextVM requests are not advertised', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
 
-    await expect(store.listNotificationChannels()).rejects.toThrow('Encrypted Nostr events are not available');
+    await expect(store.listNotificationChannels()).rejects.toThrow('ContextVM requests are not available');
 
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
-    expect(store.notificationState.channelsError).toContain('Encrypted Nostr events are not available');
+    expect(store.notificationState.channelsError).toContain('ContextVM requests are not available');
   });
 
   it('surfaces encrypted terminal errors from result events', async () => {

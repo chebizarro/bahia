@@ -87,7 +87,7 @@ function extractContextVMResult(payload, requestEventId, contextVMRequestId = re
     return payload.result ?? {};
   }
   if (payload?.request_event_id !== requestEventId) {
-    throw new Error('Encrypted Nostr result payload did not correlate to the request event id');
+    throw new Error('ContextVM result payload did not correlate to the request event id');
   }
   return payload;
 }
@@ -96,7 +96,7 @@ function parseJson(value) {
   try {
     return JSON.parse(value);
   } catch (error) {
-    throw new Error(`Encrypted Nostr result decrypted but did not contain valid JSON: ${error.message}`);
+    throw new Error(`ContextVM result decrypted but did not contain valid JSON: ${error.message}`);
   }
 }
 
@@ -154,7 +154,7 @@ export class EncryptedControlplaneTransport {
 
   async connect() {
     if (this.relays.length === 0) {
-      throw new Error('No relay URLs configured for encrypted Nostr events. Add relay URLs in Settings.');
+      throw new Error('No Bahia relay URLs are available for ContextVM requests. Configure browser/bootstrap or ContextVM relays in Bahia discovery before publishing.');
     }
     if (this.ownClient) {
       await this.client.connect(this.relays, { force: true });
@@ -172,10 +172,10 @@ export class EncryptedControlplaneTransport {
 
   async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000), requestId = randomId() } = {}) {
     if (authState.status !== 'authenticated' || !authState.pubkey) {
-      throw new Error('Nostr authentication is required for encrypted Nostr events');
+      throw new Error('Nostr authentication is required for ContextVM requests');
     }
     if (typeof operation !== 'string' || !operation.trim()) {
-      throw new Error('Encrypted Nostr event operation is required');
+      throw new Error('ContextVM request operation is required');
     }
     ensureHexPubkey(this.servicePubkey, 'servicePubkey');
     await ensureEncryptedSignerReady(this.servicePubkey);
@@ -198,15 +198,15 @@ export class EncryptedControlplaneTransport {
   }
 
   async publishEncryptedRequest(event) {
-    if (!event?.id) throw new Error('Cannot publish unsigned encrypted Nostr request event');
+    if (!event?.id) throw new Error('Cannot publish unsigned ContextVM request event');
     await this.connect();
     const results = await this.client.publish(event);
     const acceptedRelays = results.filter(publishAccepted);
     const rejectedRelays = results.filter((result) => !publishAccepted(result));
 
     if (acceptedRelays.length === 0) {
-      const reason = rejectedRelays.map((result) => result.message).filter(Boolean).join('; ') || 'no encrypted request relay accepted the request';
-      throw new Error(`Encrypted Nostr request publish rejected: ${reason}`);
+      const reason = rejectedRelays.map((result) => result.message).filter(Boolean).join('; ') || 'no Bahia relay accepted the ContextVM request';
+      throw new Error(`ContextVM request publish rejected: ${reason}`);
     }
 
     return {
@@ -221,7 +221,7 @@ export class EncryptedControlplaneTransport {
   awaitEncryptedResult({ requestEventId, contextVMRequestId = requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS } = {}) {
     if (!requestEventId) return Promise.reject(new Error('requestEventId is required'));
     if (!Array.isArray(resultKinds) || resultKinds.length === 0) return Promise.reject(new Error('resultKinds are required'));
-    if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for encrypted Nostr events'));
+    if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for ContextVM requests'));
     ensureHexPubkey(servicePubkey, 'servicePubkey');
 
     return new Promise((resolve, reject) => {
@@ -250,7 +250,7 @@ export class EncryptedControlplaneTransport {
         fn(value);
       };
 
-      const onAbort = () => settle(reject, signal?.reason instanceof Error ? signal.reason : new Error('Encrypted Nostr result wait aborted'));
+      const onAbort = () => settle(reject, signal?.reason instanceof Error ? signal.reason : new Error('ContextVM result wait aborted'));
 
       if (signal?.aborted) {
         onAbort();
@@ -258,7 +258,7 @@ export class EncryptedControlplaneTransport {
       }
 
       if (pendingRelays && pendingRelays.length === 0) {
-        settle(reject, new Error('No connected encrypted Nostr relays available for result subscription'));
+        settle(reject, new Error('No connected Bahia relays are available for ContextVM result subscription'));
         return;
       }
 
@@ -266,7 +266,7 @@ export class EncryptedControlplaneTransport {
 
       if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
         timer = setTimeout(() => {
-          settle(reject, new Error(`Timed out waiting for encrypted Nostr result for ${requestEventId}`));
+          settle(reject, new Error(`Timed out waiting for ContextVM result for ${requestEventId}`));
         }, timeoutMs);
       }
 
@@ -292,7 +292,7 @@ export class EncryptedControlplaneTransport {
           if (relay) closedRelays.set(relay, reasonText);
           if (reasonText.toLowerCase().includes('auth')) {
             const relayLabel = relay ? `${relay}: ` : '';
-            settle(reject, new Error(`Encrypted Nostr result subscription auth closure: ${relayLabel}${reasonText}`));
+            settle(reject, new Error(`ContextVM result subscription auth closure: ${relayLabel}${reasonText}`));
             return;
           }
           if (pendingRelays && relay) {
@@ -300,7 +300,7 @@ export class EncryptedControlplaneTransport {
             if (index >= 0) pendingRelays.splice(index, 1);
             if (pendingRelays.length === 0) {
               const summary = formatClosedRelays(closedRelays) || reasonText || 'all relays closed';
-              settle(reject, new Error(`Encrypted Nostr result subscription closed before result from all relays: ${summary}`));
+              settle(reject, new Error(`ContextVM result subscription closed before result from all Bahia relays: ${summary}`));
             }
           }
         }
@@ -324,7 +324,7 @@ export class EncryptedControlplaneTransport {
       return { ...publishResult, resultEvent: result.event, result: result.payload };
     } catch (error) {
       if (!signal?.aborted) {
-        abortController?.abort(new Error(`Encrypted Nostr request failed before terminal result: ${error.message}`));
+        abortController?.abort(new Error(`ContextVM request failed before terminal result: ${error.message}`));
       }
       await resultPromise.catch(() => null);
       signal?.throwIfAborted?.();

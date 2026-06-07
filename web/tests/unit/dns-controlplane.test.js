@@ -132,7 +132,7 @@ describe('DNS control-plane Nostr helpers', () => {
   });
 
   it('rejects when the encrypted ContextVM request publish path is rejected', async () => {
-    requestEncryptedResultMock.mockRejectedValueOnce(new Error('Encrypted Nostr request publish rejected: auth-required'));
+    requestEncryptedResultMock.mockRejectedValueOnce(new Error('ContextVM request publish rejected: auth-required'));
 
     await expect(dns.startDNSCommand({
       command: dns.DNS_COMMANDS.DRIFT_REMEDIATE,

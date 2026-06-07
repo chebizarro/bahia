@@ -66,7 +66,7 @@ test.describe('Service Secrets Smoke Test', () => {
     expect(pageContent).not.toContain('api-key-hidden-value');
   });
 
-  test('creates a secret through encrypted Nostr request coverage', async ({ page }) => {
+  test('creates a secret through ContextVM request coverage', async ({ page }) => {
     await page.goto('/services/service-1');
 
     await page.getByRole('button', { name: 'Add Secret' }).click();

@@ -38,7 +38,7 @@ async function ensureEncryptedOrgs() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
   if (!encryptedRequestsAvailable(info)) {
-    throw new Error('Encrypted Nostr events are not available for organizations. Configure the Bahia service pubkey and encrypted relay settings before managing organizations.');
+    throw new Error('ContextVM requests are not available for organizations. Configure Bahia service pubkey discovery and standard Bahia relays before managing organizations.');
   }
   return info;
 }

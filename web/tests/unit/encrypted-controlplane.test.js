@@ -64,7 +64,7 @@ describe('encrypted controlplane transport', () => {
     module = await import('../../src/lib/nostr/encrypted-controlplane.js');
   });
 
-  it('uses the advertised encrypted request relays when the feature is enabled', () => {
+  it('uses standard Bahia relays for ContextVM requests when the feature is enabled', () => {
     expect(module.encryptedRelayUrlsFromSystemInfo()).toEqual(['wss://relay.example']);
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
@@ -271,7 +271,7 @@ describe('encrypted controlplane transport', () => {
 
     const authFailure = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     handlers.onClosed('auth-required: sign in', 'wss://relay.example');
-    await expect(authFailure).rejects.toThrow('Encrypted Nostr result subscription auth closure: wss://relay.example: auth-required: sign in');
+    await expect(authFailure).rejects.toThrow('ContextVM result subscription auth closure: wss://relay.example: auth-required: sign in');
 
     client.getConnectedRelays.mockReturnValueOnce(['wss://relay-1.example', 'wss://relay-2.example']);
     const closedFailure = transport.awaitEncryptedResult({ requestEventId: 'req-2' });
@@ -291,7 +291,7 @@ describe('encrypted controlplane transport', () => {
         payload: {},
         timeoutMs: 25
       });
-      const assertion = expect(promise).rejects.toThrow('Timed out waiting for encrypted Nostr result for request-id');
+      const assertion = expect(promise).rejects.toThrow('Timed out waiting for ContextVM result for request-id');
 
       await vi.advanceTimersByTimeAsync(25);
 

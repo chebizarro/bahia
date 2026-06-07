@@ -80,7 +80,7 @@ describe('encrypted payments/orgs stores', () => {
     expect(records).toEqual([{ id: 'pay-ready', worker_pubkey: 'worker-a', amount_sats: 7 }]);
   });
 
-  it('requests payment history records through encrypted Nostr requests without mutating shared store state', async () => {
+  it('requests payment history records through ContextVM requests without mutating shared store state', async () => {
     encryptedRequests.requestEncryptedResult.mockResolvedValue({
       result: {
         status: 'ok',
@@ -100,7 +100,7 @@ describe('encrypted payments/orgs stores', () => {
     expect(paymentsStore.paymentHistoryState.loadedWorker).toBe('');
   });
 
-  it('loads payment history through encrypted Nostr requests only', async () => {
+  it('loads payment history through ContextVM requests only', async () => {
     encryptedRequests.requestEncryptedResult.mockResolvedValue({
       result: {
         status: 'ok',

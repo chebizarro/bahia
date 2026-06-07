@@ -15,7 +15,7 @@ async function ensureEncryptedSignatureRequests() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
   if (!encryptedRequestsAvailable(info)) {
-    throw new Error('Encrypted Nostr events are not available. Ensure relay URLs are configured in Settings and a Bahia service pubkey is advertised before verifying artifact signatures.');
+    throw new Error('ContextVM requests are not available. Ensure Bahia discovery advertises standard relay URLs and a Bahia service pubkey before verifying artifact signatures.');
   }
   return info;
 }

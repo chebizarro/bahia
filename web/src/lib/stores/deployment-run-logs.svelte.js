@@ -15,7 +15,7 @@ async function ensureEncryptedRunLogRequests() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
   if (!encryptedRequestsAvailable(info)) {
-    throw new Error('Encrypted Nostr events are not available. Ensure relay URLs are configured in Settings and a Bahia service pubkey is advertised before loading stored run logs.');
+    throw new Error('ContextVM requests are not available. Ensure Bahia discovery advertises standard relay URLs and a Bahia service pubkey before loading stored run logs.');
   }
   return info;
 }

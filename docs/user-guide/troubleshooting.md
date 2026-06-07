@@ -271,11 +271,11 @@ Common issues and solutions when using Bahia.
 
 4. Verify authors filter matches Bahia service pubkey.
 
-### Encrypted Operations Failing
+### ContextVM / NIP-44 Operations Failing
 
 **Symptoms:**
 - "Encryption failed" errors
-- Encrypted requests not working
+- ContextVM requests do not receive result events
 
 **Solutions:**
 1. Verify signer supports NIP-44:
@@ -283,7 +283,7 @@ Common issues and solutions when using Bahia.
    console.log(window.nostr.nip44)
    ```
 
-2. Check encrypted request relays are configured.
+2. Check Bahia discovery advertises standard browser/bootstrap or ContextVM relays.
 
 3. Verify correct service pubkey is used.
 

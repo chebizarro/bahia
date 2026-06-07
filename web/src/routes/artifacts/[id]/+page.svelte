@@ -371,7 +371,7 @@
                 loading={verifying}
                 onclick={handleVerifySignatures}
               >
-                Verify via Encrypted Nostr
+                Verify via ContextVM
               </LoadingButton>
             </div>
           </div>

@@ -311,7 +311,7 @@ test.describe('Deployment history and run details current-contract smoke', () =>
     await page.goto('/deployments/runs/run-completed-1');
 
     await expect(page.getByRole('heading', { name: 'Deployment Run' })).toBeVisible();
-    await expect(page.getByText('Transport: public relay run projection + encrypted Nostr request/result fetch for stored stdout/stderr snapshots.')).toBeVisible();
+    await expect(page.getByText('Transport: public relay run projection + ContextVM request/result fetch for stored stdout/stderr snapshots.')).toBeVisible();
     await expect(page.locator('pre.logs')).toContainText('deploy started');
 
     await page.getByRole('button', { name: 'stderr' }).click();
