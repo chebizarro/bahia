@@ -156,6 +156,15 @@ func (m *stubIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status 
 	}
 	return nil
 }
+func (m *stubIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if di, ok := m.intents[id]; ok {
+		di.DesiredState = desiredState
+		di.DesiredHash = desiredHash
+	}
+	return nil
+}
 func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, _ string) (*domain.DeploymentIntent, error) {
 	return nil, nil
 }

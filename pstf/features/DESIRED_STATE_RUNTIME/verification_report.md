@@ -4,23 +4,29 @@
 
 **Status:** partially verified — desired-state baseline persistence, deploy request/direct action/rollback runtime lifecycle routing, Compose ownership inventory/config-gate behavior, first-deploy legacy sibling hydration, and documentation/evidence closeout are covered by targeted tests or documentation review.
 
-- **Verified:** canonical desired-state hash stability; repository persistence for desired snapshots/hashes; Compose/Docker desired-state adapter capability; deploy request, direct runtime `action=deploy`, and rollback-to-artifact converge through `RuntimeLifecycleService.DeployWithStatus`; `bahia_owned` runtime target config is loadable, resolvable, and enforced by the Compose ownership gate; first desired-state deploy plans include stored and legacy siblings, persist hydrated legacy specs, and record post-apply observation/drift evidence; required Nostr/runtime/user docs describe additive desired-state metadata and Bahia-owned Compose/Docker behavior.
-- **Open defects:** unrelated flaky service-package timeout tracked separately as `bahia-54eo`.
-- **Matrix status:** targeted ownership rollout test DSR-T-022, first-deploy hydration test DSR-T-021, and deploy-convergence test DSR-T-023 implemented; live staging/prod directory inspection remains an operator decision/evidence task.
+- **Verified in targeted slices:** desired-state hash stability and persistence regressions touched by this rollout; Compose/Docker desired-state adapter capability; deploy request, direct runtime `action=deploy`, and rollback-to-artifact converge through `RuntimeLifecycleService.DeployWithStatus`; `bahia_owned` runtime target config is loadable, resolvable, and enforced by the Compose ownership gate; first desired-state deploy plans include stored and legacy siblings, persist hydrated legacy specs, and record post-apply observation/drift evidence; required Nostr/runtime/user docs describe additive desired-state metadata and Bahia-owned Compose/Docker behavior.
+- **Open defects:** none in the touched desired-state scope; previously observed service-package timeout remains tracked separately as `bahia-54eo` but did not reproduce in the final full suite.
+- **Matrix status:** targeted ownership rollout test DSR-T-022, first-deploy hydration test DSR-T-021, deploy-convergence test DSR-T-023, and full-project Compose apply guard DSR-T-012 implemented; live staging/prod directory inspection remains an operator decision/evidence task.
 
 ## Commands Run
 
 - PASS: `go test ./internal/controlplane ./internal/service ./internal/domain ./internal/repository ./internal/adapters/runtime`
-- PARTIAL: `go test ./...` (all packages passed except `internal/service`, which hit unrelated timeout in `TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting`, tracked as `bahia-54eo`)
+- PASS: `go test ./...`
 - PASS: `go build ./...`
 - PASS: `go test ./internal/config ./internal/adapters/runtime -run "TestLoadNestedRuntimeConfig|TestConfigRuntimeResolver_Compose.*BahiaOwned" -count=1`
 - PASS: `go test ./internal/service -run 'TestRuntimeLifecycleDesiredStateDeployHydratesLegacySiblingsAndRecordsDrift|TestAssemble_|TestRuntimeLifecycleDeploy' -count=1`
 - PASS: `go test ./internal/adapters/runtime -run 'TestComposeDesiredStateApplier|TestSafety_FullProjectApplyIncludesAllServices|TestComposeRenderer' -count=1`
 - PASS: `go test ./internal/controlplane ./internal/api/dto ./internal/service -run 'TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState|TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath|TestDirectRuntimeDeployResultCarriesDesiredHashFromState|TestRollback|TestRegistry|Test.*Desired|Test.*Runtime|TestRuntimeActionResponseFromDomainCopiesObservation'`
-- PASS: `go test ./internal/controlplane -run 'TestDirectRuntimeDeployResultCarriesDesiredHashFromState|TestDirectRuntimeRestartResultDoesNotCarryDesiredHashFromState|TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath|TestHandleRollbackRequestRecordsFailedRunWhenDesiredStateBuildFails|TestHandleRollbackRequestRecordsFailedRunWhenDeployFails' -count=1`
+- PASS: `go test ./internal/controlplane -run 'TestDirectRuntimeDeployResultCarriesDesiredHashFromState|TestDirectRuntimeRestartResultDoesNotCarryDesiredHashFromState|TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath|TestHandleRollbackRequestPersistsFallbackDesiredStateBeforeCompletingRun|TestHandleRollbackRequestRecordsFailedRunWhenDesiredStateBuildFails|TestHandleRollbackRequestRecordsFailedRunWhenDeployFails' -count=1`
 - PASS: `go test ./internal/nostrmigration -count=1`
 - PASS: `go test ./internal/adapters/runtime`
-- PARTIAL: `go test ./internal/controlplane ./internal/service` (controlplane passed; service package hit unrelated timeout in `TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting`, tracked as `bahia-54eo`)
+- PASS: `go test ./internal/controlplane ./internal/service` on final full-suite coverage via `go test ./...`; earlier service-package timeout is tracked as `bahia-54eo` and did not reproduce in the final run.
+- PASS: `go test ./internal/adapters/runtime -run 'TestComposeDesiredStateApplier_UpCommand|TestComposeDesiredStateApplier_NoServiceImageEnv|TestSafety_NoForceRecreate_UpCommandStructure|TestSafety_NoServiceImageEnvOverrides|TestSafety_FullProjectApply_NoServiceScopedUp' -count=1`
+- PASS: `go test ./internal/adapters/runtime -run 'TestUnsupportedRuntimesReturnExplicitError|TestResolveDesiredStateApplier_KubernetesExplicitError|TestDesiredStateApplierInterfaceCompiles' -count=1`
+- PASS: `go test ./internal/domain -run 'TestDesiredServiceSpec|TestDesiredState|TestCanonical|TestHash' -count=1`
+- PASS: `go test ./internal/adapters/runtime ./internal/domain`
+- PASS: `go test ./internal/service -run 'TestRegistry|TestRollback|TestCompleteDeploymentRun|TestCreateDeploymentRun' -count=1`
+- PASS: `go test ./internal/repository -count=1`
 - Documentation closeout review: `docs/nostr-event-implementation-guide.md`, `docs/control-planes.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md`, `docs/user-guide/nostr-integration.md`, `docs/user-guide/features/deployments.md`, `docs/user-guide/features/services.md`, `docs/deployment.md`, and `docs/api.md` updated for additive desired-state metadata and Bahia-owned Compose/Docker behavior. No runtime code changed in this closeout.
 
 ## 2026-05-30 Task 1 Evidence
@@ -32,6 +38,15 @@
 - `internal/domain/runtime_desired_state_golden_test.go`: golden hash fixture locks deterministic canonical hashing.
 - `internal/controlplane/reactor_policy_gate_test.go`: `TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState` proves 5961 routes to runtime lifecycle and persists desired state/hash on the intent.
 
+## 2026-06-07 bahia-zu2p.9.2 Evidence
+
+- `internal/adapters/runtime/desired_state_capability.go`: `KubernetesRuntime.SupportsDesiredState()` returns `false`, and `KubernetesRuntime.ApplyDesiredState` returns `ErrDesiredStateNotSupported` instead of rendering, applying, or falling back to the legacy deploy path.
+- `internal/adapters/runtime/resolver.go`: `ResolveDesiredStateApplier` resolves through the normal runtime factory/resolver path, then rejects any adapter that does not support desired-state convergence with an error that includes the runtime type.
+- `internal/adapters/runtime/desired_state_capability_test.go::TestUnsupportedRuntimesReturnExplicitError` proves Kubernetes desired-state apply returns a nil result plus `ErrDesiredStateNotSupported`.
+- `internal/adapters/runtime/resolver_desired_state_test.go::TestResolveDesiredStateApplier_KubernetesExplicitError` proves Kubernetes desired-state capability resolution fails explicitly and names the `kubernetes` runtime type.
+- `internal/domain/runtime_desired_state.go`: `KubernetesExtension` is documented as a reserved typed namespace only; it is not treated as a Kubernetes desired-state implementation.
+- Follow-up implementation work is tracked in Beads as `bahia-amqy` (Kubernetes desired-state renderer/adapter slice), referencing the desired-state domain contract and runtime adapter capability seam.
+
 ## 2026-06-07 bahia-zu2p.8.9 Evidence
 
 - `internal/service/runtime_lifecycle_test.go::TestRuntimeLifecycleDesiredStateDeployHydratesLegacySiblingsAndRecordsDrift` seeds a target service, a sibling with stored desired state, and a legacy sibling with only persisted service/runtime/artifact state. The lifecycle deploy path sends all three services to the desired-state apply seam, proving the first Compose desired-state plan does not omit existing managed siblings.
@@ -41,15 +56,24 @@
 
 ## 2026-06-07 bahia-zu2p.8.10 Evidence
 
-- `internal/controlplane/reactor.go::handleRollbackRequest` now creates the rollback intent, builds or reuses the selected artifact's desired snapshot/hash, creates a deployment run with apply metadata, executes the selected artifact via `RuntimeLifecycleService.DeployWithStatus`, completes the run, and publishes progression plus terminal ContextVM result metadata.
-- `internal/service/registry.go` preserves desired runtime state/hash when deployment intents and completed runs update `EnvironmentServiceState`; rollback intents inherit desired snapshot/hash from the selected previously deployed intent when available.
+- `internal/controlplane/reactor.go::handleRollbackRequest` now creates the rollback intent, builds or reuses the selected artifact's desired snapshot/hash, persists any fallback-built desired snapshot/hash before run creation, creates a deployment run with apply metadata, executes the selected artifact via `RuntimeLifecycleService.DeployWithStatus`, completes the run, and publishes progression plus terminal ContextVM result metadata.
+- `internal/service/registry.go` and `internal/repository/pg_deployment.go` preserve desired runtime state/hash when deployment intents and completed runs update `EnvironmentServiceState`; rollback intents inherit desired snapshot/hash from the selected previously deployed intent when available, and fallback-built rollback snapshots are persisted to the existing rollback intent before completion reloads it.
 - `internal/controlplane/operator_actions.go` and `internal/api/dto/responses.go` enrich direct runtime deploy terminal results with `desired_hash` from persisted environment service state when available; restart/stop action results deliberately do not carry desired-state metadata.
 - `internal/controlplane/reactor_policy_gate_test.go::TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath` proves rollback-to-artifact uses the shared desired-state helper, emits status progression, persists rollback intent/run desired metadata, and publishes terminal result metadata.
+- `internal/controlplane/reactor_policy_gate_test.go::TestHandleRollbackRequestPersistsFallbackDesiredStateBeforeCompletingRun` proves rollback fallback snapshots are persisted before run completion so environment service state keeps desired runtime metadata even when the previous deployed intent lacked stored desired state.
 - `internal/controlplane/reactor_policy_gate_test.go::TestHandleRollbackRequestRecordsFailedRunWhenDesiredStateBuildFails` and `TestHandleRollbackRequestRecordsFailedRunWhenDeployFails` prove rollback failure paths record terminal failed deployment runs instead of leaving rollback state approved/deploying.
 - `internal/controlplane/reactor_policy_gate_test.go::TestDirectRuntimeDeployResultCarriesDesiredHashFromState` proves direct runtime deploy terminal results expose the persisted desired hash.
 - `internal/controlplane/reactor_policy_gate_test.go::TestDirectRuntimeRestartResultDoesNotCarryDesiredHashFromState` proves non-deploy direct runtime actions do not leak desired hashes from existing state.
 - `internal/controlplane/reactor_policy_gate_test.go::TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState` continues to prove deploy request desired snapshot/hash and run apply metadata persistence.
 - `internal/adapters/runtime/compose_desired_state_test.go` and `internal/adapters/runtime/docker_apply_test.go` remain the adapter evidence that Compose/Docker desired-state paths do not use legacy Compose image substitution for desired-state-managed deploys.
+
+## 2026-06-07 bahia-zu2p.9.1 Evidence
+
+- `docs/plans/desired-state-runtime-architecture-2026-05-26.md` now states that Compose phase 1 has no dependency on per-service fragments: the canonical operational output remains `docker-compose.yml`, `.bahia/env/<service-key>.env`, and `.bahia/render-state.json` rendered by the final `ComposeRenderer` / `ComposeDesiredStateApplier` shape and applied with full-project `up -d --remove-orphans`.
+- The same plan records the fragment implementation design checklist that must be handled in Beads before service-scoped Compose apply is introduced: fragment layout/merge order, dependency and sibling-hydration eligibility, project-wide network/volume declaration safety, explicit project naming, and operator visibility for generated artifacts and diagnostics.
+- `pstf/features/DESIRED_STATE_RUNTIME/acceptance_criteria.md` now makes fragment independence a DSR-AC-008 expected result and negative case.
+- `pstf/features/DESIRED_STATE_RUNTIME/test_matrix.md` marks DSR-T-012 implemented against `internal/adapters/runtime/compose_desired_state_test.go` and `internal/adapters/runtime/compose_safety_test.go`.
+- Focused test evidence shows the phase-1 desired-state Compose path uses the rendered full project without service-scoped `up`, `<SERVICE>_IMAGE` substitution, or `--force-recreate`; fragment implementation remains tracked separately in Beads.
 
 ## 2026-06-07 Documentation Closeout Evidence
 
@@ -68,9 +92,9 @@
 | DSR-AC-003 | Verified | DSR-T-004 and DSR-T-023 cover deploy request, direct runtime deploy action, rollback-to-artifact, status progression, terminal results, and shared `RuntimeLifecycleService.DeployWithStatus` convergence. |
 | DSR-AC-004 | Not verified | DSR-WI-02 not started |
 | DSR-AC-005 | Not verified | DSR-WI-03 not started |
-| DSR-AC-006 | Verified | DSR-T-008 covers assembler hydration; DSR-T-021 covers lifecycle first-deploy plan inclusion and opportunistic persistence for legacy siblings. |
-| DSR-AC-007 | Not verified | DSR-WI-04 not started |
-| DSR-AC-008 | Not verified | DSR-WI-05 not started |
+| DSR-AC-006 | Verified | DSR-T-021 covers lifecycle first-deploy plan inclusion and opportunistic persistence for stored and legacy siblings; lower-level assembler test DSR-T-008 remains planned. |
+| DSR-AC-007 | Verified | DSR-T-009 covers desired-state adapter capability wiring and proves Kubernetes desired-state apply/capability resolution fails explicitly with `ErrDesiredStateNotSupported` instead of falling back or pretending support. Future Kubernetes implementation work is tracked in `bahia-amqy`. |
+| DSR-AC-008 | Partially verified | DSR-T-012 proves phase-1 desired-state Compose apply is full-project/unit-owned and does not use service-scoped `up`, `<SERVICE>_IMAGE`, `--force-recreate`, or fragment-dependent apply behavior. Other renderer/staging checks remain under DSR-WI-05. |
 | DSR-AC-009 | Not verified | DSR-WI-06 not started |
 | DSR-AC-010 | Not verified | DSR-WI-07 not started |
 | DSR-AC-011 | Partially verified | DSR-T-021 covers post-apply observation recording and `in_sync` drift when normalized observed hash matches desired hash. Broader `drifted`/`unknown` cases remain in DSR-WI-07. |
@@ -83,9 +107,9 @@
 ## Test Matrix Status
 
 - Total tests in matrix: 23
-- Passing: 4
+- Passing: 6
 - Failing: 0
-- Not implemented: 19
+- Not implemented: 17
 - Blocked: 0
 
 ### Verification Sequence

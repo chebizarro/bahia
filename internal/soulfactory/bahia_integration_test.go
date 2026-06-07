@@ -477,6 +477,13 @@ func (m *sfMockIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, statu
 	}
 	return nil
 }
+func (m *sfMockIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	if intent := m.intents[id]; intent != nil {
+		intent.DesiredState = desiredState
+		intent.DesiredHash = desiredHash
+	}
+	return nil
+}
 
 func (m *sfMockRunRepo) Create(_ context.Context, run *domain.DeploymentRun) error {
 	if run.ID == uuid.Nil {

@@ -611,6 +611,10 @@ func (s *RegistryService) GetDeploymentIntent(ctx context.Context, id uuid.UUID)
 	return s.intents.GetByID(ctx, id)
 }
 
+func (s *RegistryService) UpdateDeploymentIntentDesiredState(ctx context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	return s.intents.UpdateDesiredState(ctx, id, desiredState, desiredHash)
+}
+
 func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
 	if limit <= 0 {
 		limit = 50

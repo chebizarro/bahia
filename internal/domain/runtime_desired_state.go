@@ -127,11 +127,14 @@ type VolumeSpec struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// KubernetesExtension is a placeholder for future Kubernetes renderer data.
+// KubernetesExtension reserves a typed extension namespace for a future
+// Kubernetes renderer. It is not an implementation of Kubernetes desired-state
+// convergence; phase 1 Kubernetes desired-state apply remains explicitly
+// unsupported at the runtime adapter capability seam.
 type KubernetesExtension struct{}
 
-// PodmanExtension is a placeholder for future Podman renderer data.
-// Podman reuses the Docker-compatible path where feasible.
+// PodmanExtension reserves a typed extension namespace for Podman-specific
+// renderer metadata. Podman reuses the Docker-compatible path where feasible.
 type PodmanExtension struct{}
 
 // ---------------------------------------------------------------------------

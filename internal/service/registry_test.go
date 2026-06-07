@@ -292,6 +292,14 @@ func (m *mockIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status 
 	}
 	return nil
 }
+func (m *mockIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	if di, ok := m.intents[id]; ok {
+		di.DesiredState = desiredState
+		di.DesiredHash = desiredHash
+		di.UpdatedAt = time.Now().UTC()
+	}
+	return nil
+}
 
 type mockRunRepo struct {
 	runs map[uuid.UUID]*domain.DeploymentRun

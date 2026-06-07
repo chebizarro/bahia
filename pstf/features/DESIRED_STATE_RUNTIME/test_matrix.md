@@ -195,8 +195,8 @@
 |-------|-------|
 | **AC IDs** | DSR-AC-007 |
 | **Type** | unit |
-| **Status** | not_implemented |
-| **Target path** | `internal/adapters/runtime/factory_test.go` |
+| **Status** | implemented |
+| **Target path** | `internal/adapters/runtime/desired_state_capability_test.go`; `internal/adapters/runtime/resolver_desired_state_test.go` |
 | **Work item** | DSR-WI-04 |
 
 **Description:** Prove that Compose and Docker expose the desired-state apply capability, and that unsupported types (Kubernetes) fail explicitly rather than silently falling back.
@@ -260,8 +260,8 @@
 |-------|-------|
 | **AC IDs** | DSR-AC-008 |
 | **Type** | integration |
-| **Status** | not_implemented |
-| **Target path** | `internal/adapters/runtime/compose_test.go` |
+| **Status** | implemented |
+| **Target path** | `internal/adapters/runtime/compose_desired_state_test.go`, `internal/adapters/runtime/compose_safety_test.go` |
 | **Work item** | DSR-WI-05 |
 
 **Description:** Prove that the desired-state Compose apply uses `docker compose up -d --remove-orphans` (full project), not service-scoped `up <service>`, `--force-recreate`, or `<SERVICE>_IMAGE` env substitution.
@@ -270,8 +270,9 @@
 1. Execute a desired-state Compose apply with a command capture.
 2. Assert the command uses `up -d --remove-orphans` without `--force-recreate` or service scope.
 3. Assert no `<SERVICE>_IMAGE` env var substitution in the execution environment.
+4. Assert phase-1 apply succeeds from the rendered full project without creating or reading per-service fragment files.
 
-**Expected result:** Full-project apply with no legacy per-service patterns.
+**Expected result:** Full-project apply with no legacy per-service patterns or fragment dependency.
 
 ---
 
@@ -525,7 +526,7 @@
 | DSR-AC-003 | DSR-T-004, DSR-T-006, DSR-T-023 | yes |
 | DSR-AC-004 | DSR-T-005 | yes |
 | DSR-AC-005 | DSR-T-007 | yes |
-| DSR-AC-006 | DSR-T-008 | yes |
+| DSR-AC-006 | DSR-T-021 | yes |
 | DSR-AC-007 | DSR-T-009 | yes |
 | DSR-AC-008 | DSR-T-010, DSR-T-011, DSR-T-012 | yes |
 | DSR-AC-009 | DSR-T-013, DSR-T-014 | yes |

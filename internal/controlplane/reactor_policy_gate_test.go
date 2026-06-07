@@ -260,6 +260,27 @@ func TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath(t *testing.T)
 	assertNoLegacyStatusResultEvents(t, capture.events)
 }
 
+func TestHandleRollbackRequestPersistsFallbackDesiredStateBeforeCompletingRun(t *testing.T) {
+	fixture := newRollbackRequestTestFixture(t, false)
+
+	fixture.reactor.handleRollbackRequest(context.Background(), fixture.request)
+
+	if !fixture.runtime.deployCalled {
+		t.Fatal("rollback should deploy after building fallback desired state")
+	}
+	rollbackIntent := fixture.rollbackIntent(t)
+	if rollbackIntent.Status != domain.IntentStatusDeployed {
+		t.Fatalf("rollback intent status = %q, want %q", rollbackIntent.Status, domain.IntentStatusDeployed)
+	}
+	if rollbackIntent.DesiredState == nil || rollbackIntent.DesiredHash != fixture.previousDesired.DesiredHash {
+		t.Fatalf("rollback intent did not persist fallback desired state/hash: %#v", rollbackIntent)
+	}
+	updatedState := fixture.state.states[fixture.serviceID.String()+":"+fixture.environmentID.String()]
+	if updatedState == nil || updatedState.DesiredRuntimeState == nil || updatedState.DesiredHash != fixture.previousDesired.DesiredHash {
+		t.Fatalf("completed rollback run did not retain persisted fallback desired metadata in state: %#v", updatedState)
+	}
+}
+
 func TestHandleRollbackRequestRecordsFailedRunWhenDesiredStateBuildFails(t *testing.T) {
 	fixture := newRollbackRequestTestFixture(t, false)
 	fixture.runtime.buildErr = errors.New("desired state unavailable")
@@ -323,6 +344,7 @@ type rollbackRequestTestFixture struct {
 	previousDesired *domain.DesiredServiceSpec
 	intents         *testDeploymentIntentRepo
 	runs            *testDeploymentRunRepo
+	state           *testEnvironmentServiceStateRepo
 	runtime         *stubRuntimeLifecycleOperatorService
 	capture         *captureNostrPublisher
 	reactor         *Reactor
@@ -409,7 +431,7 @@ func newRollbackRequestTestFixture(t *testing.T, includePreviousDesired bool) *r
 		Kind:    KindRollbackRequest,
 		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
 	}
-	return &rollbackRequestTestFixture{serviceID: serviceID, environmentID: environmentID, previousDesired: previousDesired, intents: intentRepo, runs: runRepo, runtime: runtimeStub, capture: capture, reactor: reactor, request: request}
+	return &rollbackRequestTestFixture{serviceID: serviceID, environmentID: environmentID, previousDesired: previousDesired, intents: intentRepo, runs: runRepo, state: stateRepo, runtime: runtimeStub, capture: capture, reactor: reactor, request: request}
 }
 
 func (f *rollbackRequestTestFixture) rollbackIntent(t *testing.T) *domain.DeploymentIntent {
@@ -790,6 +812,13 @@ func (r *testDeploymentIntentRepo) UpdateStatus(_ context.Context, id uuid.UUID,
 func (r *testDeploymentIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status domain.ApprovalStatus) error {
 	if intent, ok := r.intents[id]; ok {
 		intent.ApprovalStatus = status
+	}
+	return nil
+}
+func (r *testDeploymentIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	if intent, ok := r.intents[id]; ok {
+		intent.DesiredState = desiredState
+		intent.DesiredHash = desiredHash
 	}
 	return nil
 }

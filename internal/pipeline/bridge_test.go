@@ -240,6 +240,9 @@ func (m *mockIntentRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ domain.D
 func (m *mockIntentRepo) UpdateApproval(_ context.Context, _ uuid.UUID, _ domain.ApprovalStatus) error {
 	return nil
 }
+func (m *mockIntentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.DesiredServiceSpec, string) error {
+	return nil
+}
 
 type mockEnvRepo struct {
 	byID   map[uuid.UUID]*domain.Environment

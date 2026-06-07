@@ -73,6 +73,7 @@ type DeploymentIntentRepository interface {
 	ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error
 	UpdateApproval(ctx context.Context, id uuid.UUID, status domain.ApprovalStatus) error
+	UpdateDesiredState(ctx context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error
 }
 
 // DeploymentRunRepository manages deployment run records.

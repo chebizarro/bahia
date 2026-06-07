@@ -283,6 +283,15 @@ func (m *mockIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status 
 	di.ApprovalStatus = status
 	return nil
 }
+func (m *mockIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	di, ok := m.intents[id]
+	if !ok {
+		return fmt.Errorf("updating intent %s desired state: %w", id, repository.ErrNotFound)
+	}
+	di.DesiredState = desiredState
+	di.DesiredHash = desiredHash
+	return nil
+}
 func (m *mockIntentRepo) GetByHiveResultEventID(_ context.Context, eventID string) (*domain.DeploymentIntent, error) {
 	for _, di := range m.intents {
 		if di.Metadata != nil {

@@ -164,6 +164,9 @@ func (r *fakeEncryptedIntentRepo) UpdateStatus(context.Context, uuid.UUID, domai
 func (r *fakeEncryptedIntentRepo) UpdateApproval(context.Context, uuid.UUID, domain.ApprovalStatus) error {
 	return nil
 }
+func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.DesiredServiceSpec, string) error {
+	return nil
+}
 
 func encryptedAuthDeps(t *testing.T, serviceID, orgID uuid.UUID, role domain.Role) (*fakeEncryptedServiceRepo, *auth.RBAC) {
 	t.Helper()

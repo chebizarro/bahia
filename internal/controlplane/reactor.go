@@ -943,6 +943,12 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 		}
 		intent.DesiredState = desiredState
 		intent.DesiredHash = desiredState.DesiredHash
+		if err := r.registry.UpdateDeploymentIntentDesiredState(ctx, intent.ID, desiredState, desiredState.DesiredHash); err != nil {
+			logger.Error("failed to persist rollback desired state", "error", err)
+			r.recordRollbackPreparationFailure(ctx, logger, event, intent, err)
+			r.publishError(ctx, event, "desired_state_persist_error", err.Error())
+			return
+		}
 	}
 
 	startedAt := time.Now().UTC()

@@ -190,11 +190,13 @@ All desired-state operations in this feature must complete through explicit term
 - Explicit Compose project `name:` is set (not relying on directory-basename).
 - Staged output passes `docker compose config -q` validation.
 - Apply uses full-project `up -d --remove-orphans`, not service-scoped `up <service>`.
+- The phase-1 Compose path has no dependency on per-service fragment files; the full rendered project is the only operational Compose output.
 - `<SERVICE>_IMAGE` env substitution, service-scoped `up`, and unconditional `--force-recreate` are removed from the desired-state path.
 
 **Negative cases:**
 - If a non-Bahia-owned `compose_dir` is written to without an explicit ownership gate, the criterion fails.
 - If service-scoped `up <service>` or `--force-recreate` is used in the desired-state path, the criterion fails.
+- If phase-1 apply requires per-service fragment files to render or apply Compose desired state, the criterion fails.
 - If staged output is swapped into the live location without passing `docker compose config -q`, the criterion fails.
 
 ---

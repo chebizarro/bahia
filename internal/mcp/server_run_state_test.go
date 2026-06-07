@@ -79,6 +79,14 @@ func (r *testIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status 
 	}
 	return nil
 }
+func (r *testIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	if intent := r.intents[id]; intent != nil {
+		intent.DesiredState = desiredState
+		intent.DesiredHash = desiredHash
+		intent.UpdatedAt = time.Now().UTC()
+	}
+	return nil
+}
 
 type testRuntimeObservationRepo struct {
 	observations map[string]*domain.RuntimeObservation

@@ -95,6 +95,17 @@ func (m *testDeploymentIntentRepo) UpdateApproval(_ context.Context, id uuid.UUI
 	return nil
 }
 
+func (m *testDeploymentIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	intent, ok := m.intents[id]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	intent.DesiredState = desiredState
+	intent.DesiredHash = desiredHash
+	intent.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 type testDeploymentStateRepo struct {
 	states map[string]*domain.EnvironmentServiceState
 }

@@ -182,6 +182,21 @@ func (r *PgDeploymentIntentRepository) UpdateApproval(ctx context.Context, id uu
 	return nil
 }
 
+func (r *PgDeploymentIntentRepository) UpdateDesiredState(ctx context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	desiredStateJSON, err := marshalJSON(desiredState, "desired state")
+	if err != nil {
+		return err
+	}
+	cmd, err := r.pool.Exec(ctx, `UPDATE deployment_intents SET desired_state = $2, desired_hash = $3, updated_at = $4 WHERE id = $1`, id, desiredStateJSON, desiredHash, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("updating deployment intent desired state: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("updating deployment intent %s desired state: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // PgDeploymentRunRepository is a PostgreSQL implementation.
 type PgDeploymentRunRepository struct {
 	pool deploymentDB

@@ -351,6 +351,13 @@ func (r *projectorSourceIntentRepo) UpdateApproval(_ context.Context, id uuid.UU
 	r.items[id] = v
 	return nil
 }
+func (r *projectorSourceIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
+	v := r.items[id]
+	v.DesiredState = desiredState
+	v.DesiredHash = desiredHash
+	r.items[id] = v
+	return nil
+}
 
 type projectorSourceRunRepo struct {
 	items map[uuid.UUID]domain.DeploymentRun
