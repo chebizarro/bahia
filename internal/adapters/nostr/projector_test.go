@@ -3,7 +3,9 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,13 +23,26 @@ import (
 const projectorTestPrivateKey = "1111111111111111111111111111111111111111111111111111111111111111"
 
 type captureProjectionPublisher struct {
-	mu     sync.Mutex
-	events []gonostr.Event
+	mu                 sync.Mutex
+	events             []gonostr.Event
+	errorsByRelayD     map[string]error
+	zeroAcceptedRelayD map[string]bool
 }
 
 func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if ev.Kind == kinds.RelaySetDiscovery {
+		dTag := eventDTag(ev)
+		if p.errorsByRelayD != nil {
+			if err := p.errorsByRelayD[dTag]; err != nil {
+				return 0, err
+			}
+		}
+		if p.zeroAcceptedRelayD != nil && p.zeroAcceptedRelayD[dTag] {
+			return 0, nil
+		}
+	}
 	p.events = append(p.events, ev)
 	return 1, nil
 }
@@ -456,7 +471,9 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	cfg.Nostr.PublishEnabled = true
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
-	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example", "wss://browser.example/"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{}
 	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
@@ -464,15 +481,99 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 		t.Fatalf("republish snapshot: %v", err)
 	}
 
+	wantPubkey := assertProjectorTestPubkey(t)
 	assertNoPublishedKind(t, sink, KindSystemDiscovery)
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertEventPubkey(t, discovery, wantPubkey)
 	assertTag(t, discovery, "schema", "bahia.system-discovery.v1")
 	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
 	assertDiscoveryVersions(t, discovery.Content)
+
 	browserSet := assertOneRelaySet(t, sink, "bahia-browser-v1")
-	assertTag(t, browserSet, "relay", "ws://localhost:3000/relay")
+	assertEventPubkey(t, browserSet, wantPubkey)
+	assertTag(t, browserSet, "relay", "wss://browser.example")
+	assertNoTag(t, browserSet, "relay", "wss://contextvm.example")
+	assertNoTag(t, browserSet, "relay", "wss://service.example")
+
+	contextVMSet := assertOneRelaySet(t, sink, "bahia-contextvm-v1")
+	assertEventPubkey(t, contextVMSet, wantPubkey)
+	assertTag(t, contextVMSet, "relay", "wss://contextvm.example")
+	assertNoTag(t, contextVMSet, "relay", "wss://browser.example")
+	assertNoTag(t, contextVMSet, "relay", "wss://service.example")
+
 	serviceSet := assertOneRelaySet(t, sink, "bahia-service-v1")
-	assertTag(t, serviceSet, "relay", "ws://localhost:3000/relay")
+	assertEventPubkey(t, serviceSet, wantPubkey)
+	assertTag(t, serviceSet, "relay", "wss://service.example")
+	assertNoTag(t, serviceSet, "relay", "wss://browser.example")
+	assertNoTag(t, serviceSet, "relay", "wss://contextvm.example")
+}
+
+func TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = nil
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	err := projector.RepublishSnapshot(ctx)
+	if err == nil || !strings.Contains(err.Error(), "nostr.browser_relays") {
+		t.Fatalf("republish snapshot error = %v, want missing browser relay policy failure", err)
+	}
+	assertNoPublishedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertNoPublishedKind(t, sink, kinds.RelaySetDiscovery)
+}
+
+func TestProjectorSystemDiscoverySurfacesRelaySetPublishFailure(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+
+	rejected := errors.New("failed to publish to any relay: wss://contextvm.example rejected event: auth-required: restricted write")
+	sink := &captureProjectionPublisher{errorsByRelayD: map[string]error{"bahia-contextvm-v1": rejected}}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	err := projector.RepublishSnapshot(ctx)
+	if err == nil || !strings.Contains(err.Error(), rejected.Error()) {
+		t.Fatalf("republish snapshot error = %v, want relay publish rejection surfaced", err)
+	}
+	assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertOneRelaySet(t, sink, "bahia-browser-v1")
+	assertNoRelaySet(t, sink, "bahia-contextvm-v1")
+	assertNoRelaySet(t, sink, "bahia-service-v1")
+}
+
+func TestProjectorSystemDiscoveryFailsWhenRelaySetHasNoAcceptedRelays(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+
+	sink := &captureProjectionPublisher{zeroAcceptedRelayD: map[string]bool{"bahia-browser-v1": true}}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	err := projector.RepublishSnapshot(ctx)
+	if err == nil || !strings.Contains(err.Error(), "no relays accepted event kind 30002") {
+		t.Fatalf("republish snapshot error = %v, want no accepted relay failure", err)
+	}
+	assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	assertNoRelaySet(t, sink, "bahia-browser-v1")
+	assertNoRelaySet(t, sink, "bahia-contextvm-v1")
+	assertNoRelaySet(t, sink, "bahia-service-v1")
 }
 
 func TestProjectorRepublishesSnapshot(t *testing.T) {
@@ -1161,14 +1262,7 @@ func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind in
 
 func assertOneRelaySet(t *testing.T, sink *captureProjectionPublisher, dTag string) gonostr.Event {
 	t.Helper()
-	var matched []gonostr.Event
-	for _, ev := range sink.byKind(30002) {
-		for _, tag := range ev.Tags {
-			if len(tag) >= 2 && tag[0] == "d" && tag[1] == dTag {
-				matched = append(matched, ev)
-			}
-		}
-	}
+	matched := relaySetsByDTag(sink, dTag)
 	if len(matched) != 1 {
 		t.Fatalf("expected one relay set %s, got %d", dTag, len(matched))
 	}
@@ -1177,6 +1271,48 @@ func assertOneRelaySet(t *testing.T, sink *captureProjectionPublisher, dTag stri
 		t.Fatalf("relay set %s has invalid signature: ok=%v err=%v", dTag, ok, err)
 	}
 	return matched[0]
+}
+
+func assertNoRelaySet(t *testing.T, sink *captureProjectionPublisher, dTag string) {
+	t.Helper()
+	if matched := relaySetsByDTag(sink, dTag); len(matched) != 0 {
+		t.Fatalf("expected no relay set %s, got %d", dTag, len(matched))
+	}
+}
+
+func relaySetsByDTag(sink *captureProjectionPublisher, dTag string) []gonostr.Event {
+	var matched []gonostr.Event
+	for _, ev := range sink.byKind(kinds.RelaySetDiscovery) {
+		if eventDTag(ev) == dTag {
+			matched = append(matched, ev)
+		}
+	}
+	return matched
+}
+
+func eventDTag(ev gonostr.Event) string {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "d" {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+func assertProjectorTestPubkey(t *testing.T) string {
+	t.Helper()
+	pubkey, err := gonostr.GetPublicKey(projectorTestPrivateKey)
+	if err != nil {
+		t.Fatalf("derive projector test pubkey: %v", err)
+	}
+	return pubkey
+}
+
+func assertEventPubkey(t *testing.T, ev gonostr.Event, want string) {
+	t.Helper()
+	if ev.PubKey != want {
+		t.Fatalf("event kind %d pubkey = %s, want %s", ev.Kind, ev.PubKey, want)
+	}
 }
 
 func assertTag(t *testing.T, ev gonostr.Event, key, value string) {

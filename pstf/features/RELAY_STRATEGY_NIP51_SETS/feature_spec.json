@@ -1,0 +1,20 @@
+{
+  "feature_id": "RELAY_STRATEGY_NIP51_SETS",
+  "beads": ["bahia-8epx.3", "bahia-8epx.3.1", "bahia-8epx.3.2", "bahia-8epx.3.3"],
+  "source_plan": "docs/plans/relay-strategy-2026-06-06.md",
+  "scope": "Backend discovery projection of service-authored NIP-51 kind 30002 relay sets for browser bootstrap, ContextVM request/reply, and service publish/backfill policy.",
+  "intended_behavior": [
+    "The backend projector publishes service-key-signed NIP-51 relay sets for bahia-browser-v1, bahia-contextvm-v1, and bahia-service-v1 during system discovery projection.",
+    "bahia-browser-v1 is sourced from the public browser relay policy source, bahia-contextvm-v1 is sourced from the ContextVM relay policy source with the approved browser fallback, and bahia-service-v1 is sourced from the service publish/backfill relay policy source.",
+    "Sidecar-enabled discovery fails deterministically when public browser relay policy is absent instead of publishing incomplete discovery or silently falling back to raw service relays.",
+    "Relay-set publication uses the existing signed publish path so relay OK rejection and aggregate publish errors are surfaced to the snapshot caller; partial relay failure behavior remains owned by the RelayPool health/result path."
+  ],
+  "out_of_scope": [
+    "Browser discovery normalization for bahia-8epx.4",
+    "Advisory service NIP-65 publication for bahia-8epx.5",
+    "Operator CLI fallback for bahia-8epx.6",
+    "AUTH epic behavior changes for bahia-8epx.7",
+    "NIP-86 relay administration for bahia-8epx.10",
+    "Docs-only final verification for bahia-8epx.11"
+  ]
+}

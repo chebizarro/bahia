@@ -1,0 +1,30 @@
+{
+  "feature_id": "RELAY_STRATEGY_NIP51_SETS",
+  "criteria": [
+    {
+      "id": "NIP51-SETS-AC-001",
+      "statement": "System discovery projection publishes bahia-browser-v1, bahia-contextvm-v1, and bahia-service-v1 as service-key-signed NIP-51 kind 30002 relay-set events.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorPublishesSystemDiscoverySnapshot"]
+    },
+    {
+      "id": "NIP51-SETS-AC-002",
+      "statement": "Each canonical relay set is sourced from its independent backend relay policy source and tests prove the sources do not bleed into one another.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorPublishesSystemDiscoverySnapshot"]
+    },
+    {
+      "id": "NIP51-SETS-AC-003",
+      "statement": "Sidecar-enabled discovery fails closed when public browser relay policy is absent.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent"]
+    },
+    {
+      "id": "NIP51-SETS-AC-004",
+      "statement": "Relay-set publish failures, including aggregate OK rejection errors from the publisher path, are surfaced to the snapshot caller and stop later relay-set projection.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorSystemDiscoverySurfacesRelaySetPublishFailure"]
+    },
+    {
+      "id": "NIP51-SETS-AC-005",
+      "statement": "A publish attempt with zero relay acceptances is not treated as successful discovery projection.",
+      "verification": ["go test ./internal/adapters/nostr -run TestProjectorSystemDiscoveryFailsWhenRelaySetHasNoAcceptedRelays"]
+    }
+  ]
+}

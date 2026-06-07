@@ -397,6 +397,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	}
 	if err := p.publishSystemDiscovery(ctx); err != nil {
 		p.logger.Warn("publish system discovery projection failed", zap.Error(err))
+		return fmt.Errorf("publish system discovery projection: %w", err)
 	}
 
 	snapshotSource := p.snapshotSource()
@@ -2008,10 +2009,15 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	if cfg == nil {
 		return nil
 	}
-	browserRelays := browserDiscoveryRelays(cfg.Nostr)
-	if len(browserRelays) == 0 {
+	if !cfg.Nostr.Sidecar.Enabled {
 		return nil
 	}
+	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
+	if len(browserRelays) == 0 {
+		return fmt.Errorf("system discovery requires nostr.browser_relays when relay sidecar is enabled")
+	}
+	contextVMRelays := cfg.Nostr.ContextVMRelayPolicyRelays()
+	serviceRelays := cfg.Nostr.ServiceRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && cfg.Nostr.PrivateKey != ""
 	payload := map[string]any{
 		"schema":        "bahia.system-discovery.v1",
@@ -2057,7 +2063,10 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	if err := p.publishRelaySet(ctx, "bahia-browser-v1", browserRelays); err != nil {
 		return err
 	}
-	return p.publishRelaySet(ctx, "bahia-service-v1", browserRelays)
+	if err := p.publishRelaySet(ctx, "bahia-contextvm-v1", contextVMRelays); err != nil {
+		return err
+	}
+	return p.publishRelaySet(ctx, "bahia-service-v1", serviceRelays)
 }
 
 func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []string) error {
@@ -2065,7 +2074,7 @@ func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []s
 	for _, relay := range normalizeProjectionRelays(relays) {
 		tags = append(tags, gonostr.Tag{"relay", relay})
 	}
-	return p.publishSigned(ctx, 30002, tags, "", "system.discovery.relay_set", nil)
+	return p.publishSigned(ctx, kinds.RelaySetDiscovery, tags, "", "system.discovery.relay_set", nil)
 }
 
 func discoveryVersions() map[string]any {
@@ -2181,19 +2190,6 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 		"canonical_observables": true,
 		"mcp":                   map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields},
 	}
-}
-
-func browserDiscoveryRelays(cfg config.NostrConfig) []string {
-	if !cfg.Sidecar.Enabled {
-		return nil
-	}
-	if len(cfg.BrowserRelays) > 0 {
-		return append([]string(nil), cfg.BrowserRelays...)
-	}
-	if cfg.Sidecar.PublicURL != "" {
-		return []string{cfg.Sidecar.PublicURL}
-	}
-	return nil
 }
 
 func runtimeEnvironmentNames(cfg *config.Config) []string {
@@ -3153,6 +3149,9 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	published, err := p.publisher.Publish(ctx, ev)
 	if err != nil {
 		return fmt.Errorf("publish event: %w", err)
+	}
+	if published == 0 {
+		return fmt.Errorf("publish event: no relays accepted event kind %d", kind)
 	}
 	if p.eventRepo != nil {
 		tagsJSON, _ := json.Marshal(ev.Tags)
