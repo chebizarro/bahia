@@ -72,6 +72,10 @@ func (r *Reactor) handleMLModelImportRequest(ctx context.Context, event *nostr.E
 		_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "rejected", "unauthorized", "requester not in authorized list", nil, nil)
 		return
 	}
+	if tagValueNostr(event.Tags, "d") == "" {
+		_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "failed", "validation_error", "d tag is required for addressable ML command events", nil, nil)
+		return
+	}
 	_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "failed", "model_import_not_enabled", "ML model import orchestration is not enabled in D1", nil, nil)
 }
 

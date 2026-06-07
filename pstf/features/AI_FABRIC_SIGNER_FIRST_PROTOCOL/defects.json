@@ -4,15 +4,15 @@
     {
       "id": "D-SFP-EXEC-001",
       "bead": "bahia-vn8o",
-      "title": "Executable signer-first AI/ML protocol verification is missing",
+      "title": "Executable signer-first AI/ML protocol verification was missing",
       "severity": "P2",
-      "status": "open",
-      "observed_behavior": "Current PSTF evidence maps criteria to placeholder tests only; no executable tests prove AI/ML command/result kinds, read-model addressability, correlation tags, or HTTP-polling avoidance.",
-      "intended_behavior": "Signer-first AI/ML protocol readiness requires deterministic event-driven tests and production code evidence for the declared event semantics.",
-      "acceptance_criteria": [
-        "Executable tests cover 38390-38399 command/result events and 31980-31989 read models.",
-        "Tests verify required e, p, status, d, correlation, and scoped tags.",
-        "Tests verify OK, CLOSED, AUTH, EOSE, validation, and no HTTP polling for long-running completion."
+      "status": "resolved",
+      "observed_behavior": "Prior PSTF evidence mapped criteria to placeholder tests only; no executable tests proved AI/ML command/result namespace inventory, read-model addressability, correlation tags, relay OK/CLOSED/AUTH/EOSE handling, or HTTP-polling avoidance.",
+      "intended_behavior": "Signer-first AI/ML protocol readiness requires deterministic event-driven tests and production code evidence for the declared event semantics, while respecting the repository guide that legacy custom ranges are migration-only at runtime.",
+      "resolution": "Added executable Go tests in internal/controlplane and internal/adapters/nostr; hardened ML model import direct handler to require a d tag before canonical failure publication; updated PSTF evidence on 2026-06-07.",
+      "verification": [
+        "go test ./internal/controlplane",
+        "go test ./internal/adapters/nostr"
       ]
     }
   ]

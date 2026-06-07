@@ -168,7 +168,7 @@ func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.
 func isLegacyRuntimeKind(kind int) bool {
 	return (kind >= 5941 && kind <= 7999) ||
 		(kind >= 31100 && kind <= 31399) ||
-		(kind >= 32000 && kind <= 32099) ||
+		(kind >= 31900 && kind <= 32099) ||
 		(kind >= 38390 && kind <= 38499)
 }
 
@@ -264,7 +264,7 @@ func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testi
 func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T) {
 	repo := newMemoryNostrEventRepo()
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
-		WithKinds([]int{5961, 38390, 38394, 31100, 5101}),
+		WithKinds([]int{5961, 38390, 38394, 31980, 31986, 31100, 5101}),
 		WithAuthorizedAuthors([]string{"operator-a", "operator-b"}),
 		WithBackfillLimit(10),
 		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
@@ -303,6 +303,32 @@ func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *tes
 	sub.handleEvent(ctx, ev)
 	require.Equal(t, []string{ev.ID}, handled)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
+}
+
+func TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryNostrEventRepo()
+	now := time.Unix(200, 0).UTC()
+	ev := signedTestEvent(t, KindCASControlState, time.Unix(105, 0).UTC())
+	ev.Tags = gonostr.Tags{{"d", "ml:endpoint-state:qwen:prod"}, {"domain", "ml"}, {"schema", "bahia.ml.endpoint-state.v1"}, {"entity", "endpoint-state"}, {"endpoint", "endpoint:qwen:prod"}, {"status", "healthy"}}
+	ev.Content = `{"endpoint":"endpoint:qwen:prod","status":"healthy"}`
+	require.NoError(t, ev.Sign(testNostrPrivateKey))
+
+	var handled []string
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithHandler(func(_ context.Context, ev *gonostr.Event) {
+			handled = append(handled, tagValue(ev.Tags, "d"))
+		}),
+		withClock(func() time.Time { return now }),
+	)
+
+	sub.handleEvent(ctx, ev)
+	require.Equal(t, []string{"ml:endpoint-state:qwen:prod"}, handled)
+	require.Equal(t, 1, repo.inserted)
+	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{KindCASControlState}))
+	require.False(t, sub.IsCaughtUp())
+	sub.handleEOSE()
+	require.True(t, sub.IsCaughtUp(), "EOSE marks historical ML read-model catch-up complete without sleeps or polling")
 }
 
 func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *testing.T) {

@@ -1,6 +1,6 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
-  "status": "verified_d4_harness_non_production",
+  "status": "production_verification_blocked",
   "tests": [
     {
       "id": "T-HFV-001-001",
@@ -67,6 +67,38 @@
         "internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation",
         "web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js"
       ]
+    },
+    {
+      "id": "T-HFV-PROD-001",
+      "criteria_ids": [
+        "AC-HFV-001",
+        "AC-HFV-002",
+        "AC-HFV-003",
+        "AC-HFV-004",
+        "AC-HFV-005"
+      ],
+      "type": "production_integration_gate",
+      "level": "external_integration",
+      "description": "Opt-in integration test streams real configured Hugging Face pinned artifact, OCI mirror/provenance, and Blossom mirror response bodies and computes local SHA-256 byte hashes before production PASS; response digest headers are supplemental consistency evidence only, ETag is not treated as a SHA-256 proof, and the gate also verifies vLLM /v1/models plus ML gateway /v1/models include the expected model id without substituting fakes.",
+      "status": "blocked",
+      "evidence": [
+        "test/integration/ml_hf_vllm_production_verification_test.go::TestAIHFVLLMProductionIntegrations",
+        "bahia-wiw9"
+      ]
+    },
+    {
+      "id": "T-HFV-PROD-002",
+      "criteria_ids": [
+        "AC-HFV-005"
+      ],
+      "type": "production_relay_protocol_gate",
+      "level": "external_integration",
+      "description": "Opt-in relay verification publishes a narrowly tagged NIP-78 verification event with expiration, checks per-relay OK/duplicate acceptance, handles AUTH/CLOSED failures, validates NIP-11 metadata, reads back from each accepted relay through scoped kind/author/#d/#t filters, waits for EOSE as catch-up completion, and validates event ID/signature before trusting the relay event.",
+      "status": "blocked",
+      "evidence": [
+        "test/integration/ml_hf_vllm_production_verification_test.go::verifyProductionRelayPath",
+        "bahia-wiw9"
+      ]
     }
   ],
   "coverage_summary": {
@@ -74,12 +106,14 @@
     "criteria_with_tests": 5,
     "known_gaps": [
       "D4 verifies the acceptance path with fakes and local Nostr read-model mocks only; it intentionally does not contact real Hugging Face, vLLM, GPU, OCI, Blossom, gateway, or relay services.",
-      "Production integration readiness is unverified and tracked by bahia-jicv.",
+      "Production integration readiness is blocked by missing real configured endpoints/credentials/hardware/relay access, expected model id, and expected SHA-256 byte-hash inputs for the configured artifact/mirror bodies tracked by bahia-wiw9.",
+      "The normal integration package path is currently blocked by pre-existing compile errors in test/integration/e2e_ci_registry_test.go tracked by bahia-iz8j; the new production gate compiles standalone.",
       "RKNN recipe work is explicitly out of scope for bahia-66ax.4.4."
     ]
   },
   "implementation_notes": [
     "D4 added a no-network Go integration harness and a Playwright /ml read-model smoke test for the HF \u2192 artifact provenance \u2192 GPU/vLLM placement/deploy \u2192 Nostr observation \u2192 UI acceptance path.",
-    "The implemented tests are non-production harness evidence only and must not be used as live integration or relay-readiness evidence."
+    "The implemented D4 tests are non-production harness evidence only and must not be used as live integration or relay-readiness evidence.",
+    "bahia-jicv added an opt-in production gate guarded by BAHIA_HF_VLLM_PROD_VERIFY; when disabled it skips with exact prerequisites, and when enabled it fails closed if required production inputs are missing. Artifact/mirror PASS requires streaming the response bytes and matching the local SHA-256 to the operator-supplied expected digest."
   ]
 }

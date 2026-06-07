@@ -569,8 +569,8 @@ func assertSignedEvent(t *testing.T, ev nostr.Event) {
 func assertNoLegacyStatusResultEvents(t *testing.T, events []nostr.Event) {
 	t.Helper()
 	for _, ev := range events {
-		if (ev.Kind >= 6961 && ev.Kind <= 6999) || (ev.Kind >= 7961 && ev.Kind <= 7999) {
-			t.Fatalf("production command path published legacy status/result kind %d: %#v", ev.Kind, ev)
+		if (ev.Kind >= 6961 && ev.Kind <= 6999) || (ev.Kind >= 7961 && ev.Kind <= 7999) || (ev.Kind >= 38390 && ev.Kind <= 38499) || (ev.Kind >= 31900 && ev.Kind <= 32099) {
+			t.Fatalf("production command path published legacy runtime kind %d: %#v", ev.Kind, ev)
 		}
 	}
 }

@@ -1,14 +1,22 @@
 {
   "feature_id": "AI_FABRIC_SIGNER_FIRST_PROTOCOL",
   "title": "AI fabric signer-first protocol",
-  "status": "draft",
+  "status": "verified_executable",
   "source_evidence": [
     {
       "path": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
       "sections": [
-        "Phase 0 \u2014 Contract and PSTF gate",
+        "Phase 0 — Contract and PSTF gate",
         "Default Vertical Slices",
         "Acceptance Criteria"
+      ]
+    },
+    {
+      "path": "docs/nostr-event-implementation-guide.md",
+      "sections": [
+        "Core rule",
+        "Runtime-prohibited legacy kinds",
+        "Required event shapes"
       ]
     }
   ],
@@ -18,34 +26,47 @@
     "Bahia worker",
     "Nostr relay"
   ],
-  "description": "Phase 0 PSTF gate for Nostr-canonical AI/ML command, status, result, and read-model protocol behavior.",
+  "description": "Executable PSTF gate for Nostr-canonical AI/ML command, result, read-model, subscription, and relay protocol behavior.",
   "in_scope": [
-    "38390-38399 command/result event contract",
-    "31980-31989 read-model event contract",
-    "Signer-first asynchronous completion semantics",
-    "Scoped tags and correlation metadata",
-    "NIP-90 range avoidance rationale"
+    "38390-38399 AI/ML command/result namespace retained as legacy migration inventory and rejected from production runtime subscriptions/publication",
+    "31980-31989 AI/ML read-model namespace retained as legacy migration inventory and rejected from production runtime subscriptions",
+    "Canonical ContextVM 25910 signer-first AI/ML mutation publishing",
+    "Canonical ML read-model observation via d-tagged state and EOSE catch-up",
+    "Scoped subscriptions, correlation metadata, relay primitive OK/CLOSED/AUTH/EOSE handling, and HTTP-polling avoidance"
   ],
   "out_of_scope": [
-    "Code implementation",
-    "Control-plane/protocol docs edits performed by another agent"
+    "HF/vLLM production integration evidence owned by bahia-jicv",
+    "Changing pstf/features/AI_FABRIC_HF_VLLM_DEPLOYMENT except for separately coordinated cross-reference",
+    "Reopening runtime publication of legacy AI/ML custom kinds"
   ],
   "preconditions": [
-    "Phase 0 protocol contract is under review.",
-    "No code implementation is included in this artifact task."
+    "docs/nostr-event-implementation-guide.md is the repository authority for event-kind selection.",
+    "Production AI/ML mutation intent uses ContextVM 25910; legacy 38390-38399 and 31980-31989 constants remain for migration inventory and tests."
   ],
   "postconditions": [
-    "Acceptance criteria are mapped to placeholder tests only.",
-    "Executable signer-first protocol verification remains tracked by bahia-vn8o."
+    "Executable tests prove signer-first AI/ML command publishing, event injection handling, scoped subscriptions, EOSE read-model observation, and no HTTP polling/sleep completion in the ML browser route.",
+    "D-SFP-EXEC-001 is resolved by executable evidence."
   ],
-  "happy_paths": [],
-  "failure_paths": [],
-  "edge_cases": [],
+  "happy_paths": [
+    "Operator publishes an ML inference deployment as a signed ContextVM 25910 event with d-tag/progressToken/scoped tags and accepted relay count.",
+    "Subscriber injects a canonical ML read-model state event, persists it once, invokes handlers once, then marks historical catch-up complete on EOSE."
+  ],
+  "failure_paths": [
+    "No relay accepts an ML command publish, so the publisher returns an error instead of a submitted receipt.",
+    "Injected ML model import request missing d tag returns a canonical ContextVM validation failure with e/p/status/model correlation.",
+    "Relay primitive CLOSED before EOSE does not produce false completion; AUTH-required subscription failures fail closed without fallback."
+  ],
+  "edge_cases": [
+    "Legacy AI/ML 38390/38394 and read-model 31980/31986 kinds are omitted from runtime subscriber filters.",
+    "Scoped operator subscription authors are deduplicated across default, adoption, and direct-runtime scopes."
+  ],
   "non_functional_requirements": [
-    "Nostr-native event-driven semantics; no HTTP polling as completion truth."
+    "Nostr-native event-driven semantics; no HTTP polling as completion truth.",
+    "Deterministic tests use injected events/handlers and do not sleep to wait for completion."
   ],
   "dependencies": [
-    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md"
+    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+    "docs/nostr-event-implementation-guide.md"
   ],
   "ambiguities": [],
   "human_decisions": []

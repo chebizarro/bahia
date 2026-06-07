@@ -1,7 +1,7 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
   "title": "AI fabric Hugging Face to vLLM deployment",
-  "status": "draft",
+  "status": "production_verification_blocked",
   "source_evidence": [
     {
       "path": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
@@ -9,6 +9,12 @@
         "Phase 0 \u2014 Contract and PSTF gate",
         "Default Vertical Slices",
         "Acceptance Criteria"
+      ]
+    },
+    {
+      "path": "test/integration/ml_hf_vllm_production_verification_test.go",
+      "sections": [
+        "TestAIHFVLLMProductionIntegrations"
       ]
     }
   ],
@@ -18,34 +24,47 @@
     "Bahia worker",
     "Nostr relay"
   ],
-  "description": "Phase 0 PSTF gate for the Slice 1 Hugging Face model import and GPU/vLLM deployment flow.",
+  "description": "Phase 0 PSTF gate for the Slice 1 Hugging Face model import and GPU/vLLM deployment flow. Current executable product-path evidence remains non-production D4 harness evidence; production verification is now represented by an opt-in integration gate that requires real configured external dependencies.",
   "in_scope": [
     "Hugging Face model card import",
     "Pinned revision model/version registration",
     "Artifact hash/provenance resolution",
     "GPU/vLLM placement requirements",
-    "Endpoint state and smoke evaluation publication"
+    "Endpoint state and smoke evaluation publication",
+    "Production verification prerequisites for Hugging Face artifacts, OCI/Blossom mirrors, vLLM runtime, gateway route, and Nostr relays"
   ],
   "out_of_scope": [
-    "HF resolver, vLLM adapter, UI, or gateway implementation"
+    "HF resolver, vLLM adapter, UI, or gateway implementation",
+    "Creating fake production credentials, artifacts, hardware, or relay access"
   ],
   "preconditions": [
     "Phase 0 protocol contract is under review.",
-    "Current executable evidence is limited to local fake/no-network D4 harnesses."
+    "Current executable behavior evidence is limited to local fake/no-network D4 harnesses.",
+    "Production verification requires real external prerequisites tracked by bahia-wiw9 and a compilable integration package tracked by bahia-iz8j."
   ],
   "postconditions": [
-    "Acceptance criteria are mapped to D4 harness tests that classify evidence as non-production.",
-    "Production integration verification remains tracked by bahia-jicv."
+    "Acceptance criteria remain mapped to D4 harness tests that classify evidence as non-production.",
+    "Production integration verification is blocked until real prerequisites are supplied and TestAIHFVLLMProductionIntegrations passes.",
+    "PSTF evidence separates non-production harness evidence from blocked production evidence."
   ],
   "happy_paths": [],
-  "failure_paths": [],
+  "failure_paths": [
+    "If BAHIA_HF_VLLM_PROD_VERIFY is unset, the production gate skips with the complete prerequisite list instead of fabricating evidence.",
+    "If BAHIA_HF_VLLM_PROD_VERIFY=1 but any required endpoint, digest, or relay credential is missing, the production gate fails with the exact missing prerequisite names."
+  ],
   "edge_cases": [],
   "non_functional_requirements": [
-    "Nostr-native event-driven semantics; no HTTP polling as completion truth."
+    "Nostr-native event-driven semantics; no HTTP polling as completion truth.",
+    "Production relay verification must validate per-relay OK/duplicate acceptance, EOSE catch-up, CLOSED reasons including AUTH, NIP-01 signatures, and scoped kind/author/#d/#t filters.",
+    "Production HTTP checks must prove the configured expected model id and stream configured artifact/mirror response bodies to compute local SHA-256 byte hashes; response digest headers are supplemental consistency evidence only and ETag is not treated as a SHA-256 proof."
   ],
   "dependencies": [
-    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md"
+    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+    "bahia-wiw9",
+    "bahia-iz8j"
   ],
   "ambiguities": [],
-  "human_decisions": []
+  "human_decisions": [
+    "HITL-HFV-001"
+  ]
 }

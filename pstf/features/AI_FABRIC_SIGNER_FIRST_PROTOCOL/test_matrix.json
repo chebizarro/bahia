@@ -1,71 +1,113 @@
 {
   "feature_id": "AI_FABRIC_SIGNER_FIRST_PROTOCOL",
-  "status": "draft",
+  "status": "verified_executable",
   "tests": [
     {
       "id": "T-SFP-001-001",
-      "criteria_ids": [
-        "AC-SFP-001"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: AI/ML command/result events use the phase-1 38390-38399 namespace and avoid NIP-90 reserved 5000-7000 ranges.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-SFP-001"],
+      "type": "unit",
+      "level": "protocol",
+      "description": "Verify AI/ML legacy command/result constants occupy exactly 38390-38399 and avoid the NIP-90 5000-7000 range.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing'"]
+    },
+    {
+      "id": "T-SFP-001-002",
+      "criteria_ids": ["AC-SFP-001", "AC-SFP-003"],
+      "type": "unit",
+      "level": "production-path",
+      "description": "Verify production ML command publishing emits signed ContextVM 25910 requests with OK acceptance counts and does not publish legacy AI/ML result kinds.",
+      "status": "passed",
+      "evidence": [
+        "go test ./internal/controlplane -run 'TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing|TestMLCommandPublisherFailsWhenNoRelayAccepts'"
+      ]
     },
     {
       "id": "T-SFP-002-001",
-      "criteria_ids": [
-        "AC-SFP-002"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: AI/ML read models use 31980-31989 addressable/replaceable events with stable d-tag coordinates.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-SFP-002"],
+      "type": "unit",
+      "level": "protocol",
+      "description": "Verify AI/ML legacy read-model constants occupy exactly 31980-31989 for migration inventory.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing'"]
+    },
+    {
+      "id": "T-SFP-002-002",
+      "criteria_ids": ["AC-SFP-002", "AC-SFP-003"],
+      "type": "unit",
+      "level": "subscriber",
+      "description": "Inject a canonical ML read-model state event, verify handler dispatch and EOSE catch-up without sleeps or polling, and verify legacy 31980/31986 filters are omitted from runtime subscriptions.",
+      "status": "passed",
+      "evidence": [
+        "go test ./internal/adapters/nostr -run 'TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp|TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds'"
+      ]
     },
     {
       "id": "T-SFP-003-001",
-      "criteria_ids": [
-        "AC-SFP-003"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: Every long-running import, recipe, deployment, rollback, and evaluation flow returns Nostr correlation metadata and completes through status/result events rather than HTTP polling.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-SFP-003"],
+      "type": "unit",
+      "level": "reactor-subscription",
+      "description": "Verify AI/ML request handling subscribes only to scoped canonical ContextVM kinds with authorized operator authors and never revives legacy AI/ML command/result kinds.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestMLSignerFirstRequestSubscriptionsAreScopedCanonicalContextVM'"]
+    },
+    {
+      "id": "T-SFP-003-002",
+      "criteria_ids": ["AC-SFP-003"],
+      "type": "unit",
+      "level": "browser-route",
+      "description": "Verify the ML browser route structurally calls the Nostr publish path for model import/deploy and contains no /api/v1/ml fetch, setTimeout, setInterval, or sleep-based completion path.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestMLBrowserRouteAvoidsHTTPPollingForCompletion'"]
+    },
+    {
+      "id": "T-SFP-003-003",
+      "criteria_ids": ["AC-SFP-003"],
+      "type": "unit",
+      "level": "relay-protocol",
+      "description": "Verify relay OK/CLOSED/AUTH and EOSE primitives through existing deterministic relay/subscriber tests: no accepted relay fails, CLOSED before EOSE does not signal completion, and AUTH-required subscriptions fail closed without fallback.",
+      "status": "passed",
+      "evidence": [
+        "go test ./internal/controlplane -run 'TestMLCommandPublisherFailsWhenNoRelayAccepts'",
+        "go test ./internal/adapters/nostr -run 'TestMergeSubscriptionsDoesNotSignalEOSEWhenRelayClosesBeforeEOSE|TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata|TestMergeSubscriptionsClosesEOSEAfterAllRelaysEOSE'"
+      ]
     },
     {
       "id": "T-SFP-004-001",
-      "criteria_ids": [
-        "AC-SFP-004"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: Command/result events include e, p, status, and relevant scoped tags such as model, version, recipe, run, endpoint, environment, deployment, artifact, worker, and runtime.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-SFP-004"],
+      "type": "unit",
+      "level": "event-injection",
+      "description": "Inject AI/ML legacy request events into retained direct handlers and verify canonical ContextVM results include e, p, status, result d coordinates, and scoped ML tags on happy paths/failure responses.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestHandleMLPhase1RequestsPublishCorrelatedTerminalResults'"]
+    },
+    {
+      "id": "T-SFP-004-002",
+      "criteria_ids": ["AC-SFP-004"],
+      "type": "unit",
+      "level": "event-injection",
+      "description": "Verify the retained ML model-import direct handler requires a d tag before emitting a canonical validation failure response with request e/p/status/model correlation.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestMLInjectedLegacyRequestsRequireCorrelationAndPublishCanonicalFailure'"]
     },
     {
       "id": "T-SFP-005-001",
-      "criteria_ids": [
-        "AC-SFP-005"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: Existing LLM 597x/697x/797x/3196x compatibility semantics remain stable and are not mutated into generic AI semantics.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-SFP-005"],
+      "type": "unit",
+      "level": "regression",
+      "description": "Existing LLM request tests remain in the LLM namespace and no AI/ML generic handling mutates LLM compatibility behavior.",
+      "status": "passed",
+      "evidence": ["go test ./internal/controlplane -run 'TestHandleLLM'"]
     }
   ],
   "coverage_summary": {
     "criteria_total": 5,
     "criteria_with_tests": 5,
     "known_gaps": [
-      "Tests are placeholders only; implementation and executable verification are tracked by bahia-vn8o."
+      "Missing-d validation is executable-proven only for the retained ML model-import direct handler; other retained ML direct handlers are covered for correlated happy-path/failure response tags, not missing-d rejection."
     ]
   },
   "implementation_notes": [
-    "This PSTF slice records draft criteria only; it is not production-readiness evidence."
+    "The executable evidence follows docs/nostr-event-implementation-guide.md: legacy AI/ML custom ranges are verified as inventory/migration constants, while production runtime uses ContextVM 25910 and canonical observables."
   ]
 }

@@ -1,6 +1,6 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
-  "status": "draft",
+  "status": "production_verification_blocked",
   "criteria": [
     {
       "id": "AC-HFV-001",
@@ -12,7 +12,8 @@
       ],
       "status": "draft",
       "test_ids": [
-        "T-HFV-001-001"
+        "T-HFV-001-001",
+        "T-HFV-PROD-001"
       ]
     },
     {
@@ -25,7 +26,8 @@
       ],
       "status": "draft",
       "test_ids": [
-        "T-HFV-002-001"
+        "T-HFV-002-001",
+        "T-HFV-PROD-001"
       ]
     },
     {
@@ -38,7 +40,8 @@
       ],
       "status": "draft",
       "test_ids": [
-        "T-HFV-003-001"
+        "T-HFV-003-001",
+        "T-HFV-PROD-001"
       ]
     },
     {
@@ -51,7 +54,8 @@
       ],
       "status": "draft",
       "test_ids": [
-        "T-HFV-004-001"
+        "T-HFV-004-001",
+        "T-HFV-PROD-001"
       ]
     },
     {
@@ -64,12 +68,16 @@
       ],
       "status": "draft",
       "test_ids": [
-        "T-HFV-005-001"
+        "T-HFV-005-001",
+        "T-HFV-PROD-001",
+        "T-HFV-PROD-002"
       ]
     }
   ],
   "coverage_notes": [
-    "Criteria are mapped to executable D4 harness tests only; production integration readiness remains unverified and tracked by bahia-jicv."
+    "Criteria are mapped to executable D4 harness tests only for non-production behavior.",
+    "T-HFV-PROD-001/T-HFV-PROD-002 provide an opt-in production verification gate but are blocked in this workspace by missing real prerequisites (including expected model id and expected SHA-256 byte hashes for configured artifact/mirror bodies) tracked by bahia-wiw9 and package compile blocker bahia-iz8j.",
+    "No production readiness claim is made from fake/D4 harness evidence."
   ],
   "unresolved_questions": []
 }

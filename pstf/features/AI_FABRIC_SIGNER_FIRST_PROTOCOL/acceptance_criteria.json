@@ -1,57 +1,66 @@
 {
   "feature_id": "AI_FABRIC_SIGNER_FIRST_PROTOCOL",
-  "status": "draft",
+  "status": "verified_executable",
   "criteria": [
     {
       "id": "AC-SFP-001",
-      "description": "AI/ML command/result events use the phase-1 38390-38399 namespace and avoid NIP-90 reserved 5000-7000 ranges.",
-      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "description": "AI/ML legacy command/result constants retain the phase-1 38390-38399 namespace and avoid NIP-90 reserved 5000-7000 ranges, while production signer-first publishing uses canonical ContextVM events instead of reviving those legacy kinds.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md; docs/nostr-event-implementation-guide.md",
       "plan_sections": [
-        "Phase 0 \u2014 Contract and PSTF gate",
-        "Acceptance Criteria"
+        "Phase 0 — Contract and PSTF gate",
+        "Acceptance Criteria",
+        "Runtime-prohibited legacy kinds"
       ],
-      "status": "draft",
+      "status": "verified",
       "test_ids": [
-        "T-SFP-001-001"
+        "T-SFP-001-001",
+        "T-SFP-001-002"
       ]
     },
     {
       "id": "AC-SFP-002",
-      "description": "AI/ML read models use 31980-31989 addressable/replaceable events with stable d-tag coordinates.",
-      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "description": "AI/ML legacy read-model constants retain 31980-31989 for migration inventory, while production read-model observation uses canonical addressable state with stable d-tag coordinates and EOSE catch-up.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md; docs/nostr-event-implementation-guide.md",
       "plan_sections": [
-        "Phase 0 \u2014 Contract and PSTF gate",
-        "Acceptance Criteria"
+        "Phase 0 — Contract and PSTF gate",
+        "Runtime-prohibited legacy kinds",
+        "Required event shapes / Canonical state"
       ],
-      "status": "draft",
+      "status": "verified",
       "test_ids": [
-        "T-SFP-002-001"
+        "T-SFP-002-001",
+        "T-SFP-002-002"
       ]
     },
     {
       "id": "AC-SFP-003",
-      "description": "Every long-running import, recipe, deployment, rollback, and evaluation flow returns Nostr correlation metadata and completes through status/result events rather than HTTP polling.",
-      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "description": "Every long-running import, recipe, deployment, and rollback flow returns Nostr correlation metadata and observes progress/completion through ContextVM result/read-model events rather than HTTP polling or sleep-based completion.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md; docs/nostr-event-implementation-guide.md",
       "plan_sections": [
-        "Phase 0 \u2014 Contract and PSTF gate",
-        "Acceptance Criteria"
+        "Phase 0 — Contract and PSTF gate",
+        "Acceptance Criteria",
+        "Required Nostr Patterns"
       ],
-      "status": "draft",
+      "status": "verified",
       "test_ids": [
-        "T-SFP-003-001"
+        "T-SFP-003-001",
+        "T-SFP-003-002",
+        "T-SFP-003-003"
       ]
     },
     {
       "id": "AC-SFP-004",
-      "description": "Command/result events include e, p, status, and relevant scoped tags such as model, version, recipe, run, endpoint, environment, deployment, artifact, worker, and runtime.",
-      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "description": "Injected AI/ML command/result handling includes required e/p/status/correlation tags and relevant scoped tags when present, including model, version, recipe, run, endpoint, environment, deployment, artifact, worker, task, accelerator, and runtime; executable missing-d validation is proven for the retained model-import direct handler only.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md; docs/nostr-event-implementation-guide.md",
       "plan_sections": [
-        "Phase 0 \u2014 Contract and PSTF gate",
-        "Acceptance Criteria"
+        "Phase 0 — Contract and PSTF gate",
+        "Acceptance Criteria",
+        "Required event shapes"
       ],
-      "status": "draft",
+      "status": "verified",
       "test_ids": [
-        "T-SFP-004-001"
+        "T-SFP-004-001",
+        "T-SFP-004-002"
       ]
     },
     {
@@ -59,17 +68,18 @@
       "description": "Existing LLM 597x/697x/797x/3196x compatibility semantics remain stable and are not mutated into generic AI semantics.",
       "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
       "plan_sections": [
-        "Phase 0 \u2014 Contract and PSTF gate",
+        "Phase 0 — Contract and PSTF gate",
         "Acceptance Criteria"
       ],
-      "status": "draft",
+      "status": "verified",
       "test_ids": [
         "T-SFP-005-001"
       ]
     }
   ],
   "coverage_notes": [
-    "Criteria are mapped from the AI/ML inference fabric plan and remain placeholders until bahia-vn8o adds executable verification."
+    "Executable verification was added by bahia-vn8o on 2026-06-07.",
+    "Repository policy currently treats the 38390-38399 and 31980-31989 custom ranges as legacy/migration inventory only; production runtime evidence therefore proves canonical ContextVM 25910 plus canonical observable state instead of reviving legacy runtime publication."
   ],
   "unresolved_questions": []
 }

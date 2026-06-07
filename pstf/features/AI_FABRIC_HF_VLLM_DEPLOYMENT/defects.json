@@ -3,16 +3,37 @@
   "defects": [
     {
       "id": "D-HFV-PROD-001",
-      "bead": "bahia-jicv",
-      "title": "Production HF/vLLM integration verification is not recorded",
+      "bead": "bahia-wiw9",
+      "title": "Production HF/vLLM integration prerequisites are not available in this workspace",
       "severity": "P2",
-      "status": "open",
-      "observed_behavior": "Current PSTF evidence is a D4 fake/no-network harness using fake Hugging Face artifact resolution, fake OCI/provenance state, fake GPU/vLLM provisioning, mocked Nostr read-model events, and UI smoke data.",
-      "intended_behavior": "Production readiness claims require real configured Hugging Face, artifact storage/provenance, GPU/vLLM runtime, gateway, live relay, and Nostr protocol verification evidence, or exact external blockers.",
+      "status": "blocked",
+      "observed_behavior": "Current PSTF evidence is a D4 fake/no-network harness using fake Hugging Face artifact resolution, fake OCI/provenance state, fake GPU/vLLM provisioning, mocked Nostr read-model events, and UI smoke data. The new production verification gate skips unless BAHIA_HF_VLLM_PROD_VERIFY=1 and real prerequisites are supplied.",
+      "intended_behavior": "Production readiness claims require real configured Hugging Face artifact URL plus locally computed byte SHA-256, artifact storage/provenance mirrors with locally computed byte SHA-256, GPU/vLLM runtime, gateway, live relay, and Nostr protocol verification evidence.",
+      "blocked_prerequisites": [
+        "BAHIA_HF_ARTIFACT_URL and BAHIA_HF_ARTIFACT_SHA256 for an exact pinned Hugging Face artifact or snapshot manifest",
+        "BAHIA_VLLM_BASE_URL and BAHIA_ML_EXPECTED_MODEL_ID for a reachable production vLLM/OpenAI-compatible backend advertising the intended model",
+        "BAHIA_ML_GATEWAY_MODELS_URL for the production gateway route advertising BAHIA_ML_EXPECTED_MODEL_ID",
+        "BAHIA_ML_OCI_MANIFEST_URL plus BAHIA_ML_OCI_ARTIFACT_SHA256 and BAHIA_ML_BLOSSOM_ARTIFACT_URL plus BAHIA_ML_BLOSSOM_ARTIFACT_SHA256 for local SHA-256 byte-hash checks of the configured mirror/provenance response bodies",
+        "BAHIA_ML_RELAY_URLS and BAHIA_ML_RELAY_PRIVATE_KEY for per-relay OK/EOSE/CLOSED/AUTH/signature/scoped-filter verification",
+        "Optional BAHIA_HF_TOKEN, BAHIA_VLLM_API_KEY, BAHIA_ML_GATEWAY_TOKEN, BAHIA_ML_OCI_TOKEN, and BAHIA_ML_BLOSSOM_TOKEN where the production services require auth"
+      ],
       "acceptance_criteria": [
         "PSTF distinguishes non-production D4 harness evidence from production evidence.",
         "Production integration verification covers configured external dependencies or records exact blockers.",
         "Nostr relay evidence validates OK, EOSE, CLOSED, AUTH, event signatures, and scoped filters rather than relying on mocked read-model inputs."
+      ]
+    },
+    {
+      "id": "D-HFV-PROD-002",
+      "bead": "bahia-iz8j",
+      "title": "Integration package compile failure blocks normal package-path execution of the production gate",
+      "severity": "P2",
+      "status": "open",
+      "observed_behavior": "go test -tags=integration ./test/integration -run TestAIHFVLLMProductionIntegrations -count=1 fails before running the gate because test/integration/e2e_ci_registry_test.go has unused fmt and net/http imports plus an unused ciSystem variable.",
+      "intended_behavior": "The integration package compiles so the production HF/vLLM gate can be run through the normal package path and either skip with prerequisites or execute against real configured services.",
+      "acceptance_criteria": [
+        "go test -tags=integration ./test/integration -run TestAIHFVLLMProductionIntegrations -count=1 compiles the package.",
+        "Placeholder integration tests are implemented, explicitly skipped, or isolated behind accurate build tags without unused code."
       ]
     }
   ]
