@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import { untrack } from 'svelte';
   import MarkdownDocument from '$lib/components/docs/MarkdownDocument.svelte';
-  import { api } from '$lib/api/client.js';
+  import { fetchDoc } from '$lib/docs/nostr.js';
 
   let loading = $state(true);
   let error = $state('');
@@ -24,13 +24,16 @@
     error = '';
     document = null;
     try {
-      if (!api) throw new Error('API client is not available in this browser session');
-      const nextDocument = await api.getDoc(topic);
+      const nextDocument = await fetchDoc(topic);
       if (requestId !== requestSequence || topic !== loadedTopic) return;
-      document = nextDocument;
+      if (!nextDocument) {
+        error = `Documentation topic not found on relay: ${topic}`;
+      } else {
+        document = nextDocument;
+      }
     } catch (err) {
       if (requestId !== requestSequence || topic !== loadedTopic) return;
-      error = err?.message || `Failed to load documentation topic: ${topic}`;
+      error = err?.message || `Failed to load documentation topic from relay: ${topic}`;
     } finally {
       if (requestId === requestSequence && topic === loadedTopic) {
         loading = false;
@@ -45,7 +48,7 @@
   </nav>
 
   {#if loading}
-    <div class="status-card" role="status">Loading documentation topic…</div>
+    <div class="status-card" role="status">Loading documentation from relay…</div>
   {:else if error}
     <div class="error-card" role="alert">
       <p class="eyebrow">Documentation error</p>
@@ -57,7 +60,7 @@
     <header class="topic-header">
       <p class="eyebrow">{document.metadata?.category || 'documentation'}</p>
       <h1>{document.metadata?.title || document.metadata?.topic}</h1>
-      <p class="topic-meta">{document.metadata?.topic} · {document.metadata?.sourcePath}</p>
+      <p class="topic-meta">{document.metadata?.topic}</p>
     </header>
     <MarkdownDocument markdown={document.markdown} links={document.links || []} />
   {/if}

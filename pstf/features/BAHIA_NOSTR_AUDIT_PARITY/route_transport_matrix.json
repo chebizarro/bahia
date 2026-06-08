@@ -18,18 +18,6 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "SBOM and attestation HTTP surfaces only; artifact read model and signature verification remain separate Nostr/encrypted flows."
-    },
-    {
-      "file": "web/src/routes/docs/+page.svelte",
-      "permitted_transport_classes": ["http_native"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Read-only central documentation catalog query through /api/v1/docs; no browser command ingress or Nostr completion claim."
-    },
-    {
-      "file": "web/src/routes/docs/[topic]/+page.svelte",
-      "permitted_transport_classes": ["http_native"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Read-only central documentation topic query through /api/v1/docs/{topic}; no browser command ingress or Nostr completion claim."
     }
   ],
   "entries": [
@@ -281,15 +269,15 @@
       "resolved_by_beads": ["bahia-4rwk"]
     },
     {
-      "id": "central-docs-http-native",
-      "surface": "`/docs` and `/docs/[topic]` central documentation browser reads",
-      "transport_class": "http_native",
+      "id": "central-docs-nostr-native",
+      "surface": "`/docs` and `/docs/[topic]` central documentation browser reads via NIP-23",
+      "transport_class": "nostr_native",
       "route_files": ["web/src/routes/docs/+page.svelte", "web/src/routes/docs/[topic]/+page.svelte"],
-      "control_files": ["web/src/lib/api/client.js", "internal/api/router/router.go", "internal/api/handlers/docs.go", "internal/docs/catalog.go"],
-      "evidence": ["Docs pages call api.listDocs() and api.getDoc() against read-only /api/v1/docs routes backed by the central internal/docs catalog service.", "Docs API responses contain Markdown metadata and link-resolution data only; router tests assert no request_event_id, result_kind, published_relays, or Nostr result subscription claims are returned."],
-      "rest_import_policy": "allowed_http_native_read_only_docs_queries",
-      "pstf_status": "resolved_by_bahia-76ls",
-      "resolved_by_beads": ["bahia-76ls"]
+      "control_files": ["web/src/lib/docs/nostr.js", "web/src/lib/nostr/subscriptions.js", "internal/docs/nostr_publisher.go", "internal/docs/catalog.go"],
+      "evidence": ["Docs pages query kind 30023 (NIP-23 long-form content) events tagged with bahia-docs from the relay via queryOrPartial().", "Backend NostrDocsPublisher syncs docs/user-guide/ Markdown to relay as addressable NIP-23 events on startup with content-hash change detection.", "No REST API import or /api/v1/docs fetch remains in the docs route files."],
+      "rest_import_policy": "forbidden_for_command_ingress",
+      "pstf_status": "resolved_by_bahia-vr8v",
+      "resolved_by_beads": ["bahia-vr8v"]
     },
     {
       "id": "relay-sidecar-http-websocket",

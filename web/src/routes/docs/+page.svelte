@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import DocsCatalog from '$lib/components/docs/DocsCatalog.svelte';
-  import { api } from '$lib/api/client.js';
+  import { fetchDocsCatalog } from '$lib/docs/nostr.js';
 
   let initialized = $state(false);
   let loading = $state(true);
@@ -19,15 +19,14 @@
     loading = true;
     error = '';
     try {
-      if (!api) throw new Error('API client is not available in this browser session');
-      const result = await api.listDocs();
+      const result = await fetchDocsCatalog();
       docsCatalog = {
         topics: Array.isArray(result?.topics) ? result.topics : [],
         groups: Array.isArray(result?.groups) ? result.groups : [],
         count: Number.isFinite(result?.count) ? result.count : 0
       };
     } catch (err) {
-      error = err?.message || 'Failed to load documentation catalog';
+      error = err?.message || 'Failed to load documentation catalog from relay';
       docsCatalog = { topics: [], groups: [], count: 0 };
     } finally {
       loading = false;
@@ -39,11 +38,11 @@
   <header class="page-header">
     <p class="eyebrow">Documentation</p>
     <h1>Bahia User Guide</h1>
-    <p class="subtitle">Browse the same central Markdown corpus served to agents through Bahia docs resources.</p>
+    <p class="subtitle">Documentation published as NIP-23 long-form content on the Nostr relay.</p>
   </header>
 
   {#if loading}
-    <div class="status-card" role="status">Loading documentation catalog…</div>
+    <div class="status-card" role="status">Loading documentation from relay…</div>
   {:else if error}
     <div class="error-card" role="alert">
       <h2>Documentation catalog failed to load</h2>
@@ -51,7 +50,7 @@
       <button type="button" onclick={loadDocsCatalog}>Retry</button>
     </div>
   {:else if docsCatalog.count === 0}
-    <EmptyState title="No documentation topics found" message="The central docs service returned an empty catalog." />
+    <EmptyState title="No documentation topics found" message="No NIP-23 documentation events were found on the relay." />
   {:else}
     <div class="catalog-summary" aria-live="polite">{docsCatalog.count} topics available</div>
     <DocsCatalog groups={docsCatalog.groups} topics={docsCatalog.topics} />

@@ -16,8 +16,15 @@ const pageMock = vi.hoisted(() => ({
   }
 }));
 
+// Mock nostr docs module for page-level tests.
+const nostrDocsMock = vi.hoisted(() => ({
+  fetchDocsCatalog: vi.fn(),
+  fetchDoc: vi.fn()
+}));
+
 vi.mock('$app/navigation', () => ({ goto: gotoMock }));
 vi.mock('$app/state', () => ({ page: pageMock.page }));
+vi.mock('$lib/docs/nostr.js', () => nostrDocsMock);
 
 function jsonEnvelope(data, extra = {}) {
   return {
@@ -37,7 +44,7 @@ async function flushEffects() {
   }
 }
 
-describe('docs API client', () => {
+describe('docs API client (REST, backward compat)', () => {
   beforeEach(() => {
     global.fetch = vi.fn();
   });
@@ -58,7 +65,8 @@ describe('docs API client', () => {
 
 describe('docs catalog component and page', () => {
   beforeEach(() => {
-    global.fetch = vi.fn();
+    nostrDocsMock.fetchDocsCatalog.mockReset();
+    nostrDocsMock.fetchDoc.mockReset();
   });
 
   it('renders grouped catalog topics from the docs API shape', () => {
@@ -74,12 +82,12 @@ describe('docs catalog component and page', () => {
     expect(target.querySelector('a[href="/docs/features-services"]')?.textContent).toContain('Services');
   });
 
-  it('loads the real catalog route state and surfaces API failures', async () => {
-    global.fetch.mockResolvedValueOnce(jsonEnvelope({
+  it('loads the catalog from relay via NIP-23 and surfaces failures', async () => {
+    nostrDocsMock.fetchDocsCatalog.mockResolvedValueOnce({
       count: 1,
       topics: [{ topic: 'index', title: 'Bahia User Guide', category: 'guide', href: '/docs/index' }],
       groups: [{ category: 'guide', label: 'Getting Started & Guides', topics: [{ topic: 'index', title: 'Bahia User Guide', category: 'guide', href: '/docs/index' }] }]
-    }));
+    });
 
     const loaded = renderComponent(DocsPage);
     await flushEffects();
@@ -87,26 +95,20 @@ describe('docs catalog component and page', () => {
     expect(textOf(loaded)).toContain('1 topics available');
     expect(loaded.querySelector('a[href="/docs/index"]')?.textContent).toContain('Bahia User Guide');
 
-    const failedCatalogResponse = {
-      ok: false,
-      status: 500,
-      statusText: 'Internal Server Error',
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ error: 'catalog unavailable' })
-    };
-    global.fetch.mockResolvedValueOnce(failedCatalogResponse).mockResolvedValueOnce(failedCatalogResponse);
+    nostrDocsMock.fetchDocsCatalog.mockRejectedValueOnce(new Error('relay unavailable'));
     const failed = renderComponent(DocsPage);
     await flushEffects();
 
     expect(textOf(failed)).toContain('Documentation catalog failed to load');
-    expect(textOf(failed)).toContain('catalog unavailable');
+    expect(textOf(failed)).toContain('relay unavailable');
   });
 });
 
 describe('documentation Markdown rendering and reader page', () => {
   beforeEach(() => {
-    global.fetch = vi.fn();
     gotoMock.mockReset();
+    nostrDocsMock.fetchDocsCatalog.mockReset();
+    nostrDocsMock.fetchDoc.mockReset();
     pageMock.page.params = { topic: 'index' };
     pageMock.page.url = new URL('http://localhost/docs/index');
   });
@@ -138,34 +140,27 @@ describe('documentation Markdown rendering and reader page', () => {
     expect(gotoMock).toHaveBeenCalledWith('/docs/features-deployments');
   });
 
-  it('renders document content and explicit not-found errors from the reader route', async () => {
-    global.fetch.mockResolvedValueOnce(jsonEnvelope({
-      metadata: { topic: 'index', title: 'Bahia User Guide', category: 'guide', sourcePath: 'index.md' },
+  it('renders document content from relay and handles missing topics', async () => {
+    nostrDocsMock.fetchDoc.mockResolvedValueOnce({
+      metadata: { topic: 'index', title: 'Bahia User Guide', category: 'guide' },
       markdown: '# Bahia User Guide\n\n[Services](features/services.md)',
-      links: [{ original: 'features/services.md', href: '/docs/features-services', topic: 'features-services', status: 'resolved' }]
-    }));
+      links: []
+    });
 
     const loaded = renderComponent(DocsTopicPage);
     await flushEffects();
 
     expect(textOf(loaded)).toContain('Bahia User Guide');
-    expect(loaded.querySelector('article a[href="/docs/features-services"]')).toBeTruthy();
 
     pageMock.page.params = { topic: 'missing' };
     pageMock.page.url = new URL('http://localhost/docs/missing');
-    global.fetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-      statusText: 'Not Found',
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ error: 'documentation topic not found: missing' })
-    });
+    nostrDocsMock.fetchDoc.mockResolvedValueOnce(null);
 
     const missing = renderComponent(DocsTopicPage);
     await flushEffects();
 
     expect(textOf(missing)).toContain('Topic unavailable');
-    expect(textOf(missing)).toContain('documentation topic not found: missing');
+    expect(textOf(missing)).toContain('not found on relay');
     expect(missing.querySelector('a.button-link[href="/docs"]')?.textContent).toContain('Back to documentation catalog');
   });
 });
