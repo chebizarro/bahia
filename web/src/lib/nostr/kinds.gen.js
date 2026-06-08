@@ -246,6 +246,8 @@ export const ASSISTANT_PROMPT_REQUEST = 38420;
 export const ASSISTANT_APPROVAL = 38421;
 export const ASSISTANT_STATUS = 38422;
 export const ASSISTANT_RESULT = 38423;
+export const LONG_FORM_CONTENT = 30023;
+export const LONG_FORM_DRAFT = 30024;
 export const HTTP_AUTH = 27235;
 
 // Web compatibility aliases for current canonical runtime names.

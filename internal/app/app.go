@@ -43,6 +43,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/docs"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/nostrmigration"
@@ -818,6 +819,18 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
 	)
 	bgManager.RegisterWithOptions(nostrSub, RunnerTier(Tier1))
+
+	// NIP-23 docs publisher: syncs user-guide documentation to relay as long-form content.
+	if nostrPub != nil && cfg.Nostr.PublishEnabled && cfg.Nostr.PrivateKey != "" {
+		userDocsForNostr := docs.New(docs.DefaultBasePath)
+		var docsQuerier docs.NostrDocsQuerier
+		if servicePubkey != "" {
+			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
+		}
+		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, nostrPub, docsQuerier, logger)
+		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3))
+		logger.Info("NIP-23 docs publisher registered")
+	}
 
 	if len(controlPlaneRelays) > 0 && servicePubkey != "" {
 		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
@@ -2383,4 +2396,46 @@ type encryptedRequestTransportRunner struct {
 func (r *encryptedRequestTransportRunner) Name() string { return "encrypted-request-result-events" }
 func (r *encryptedRequestTransportRunner) Run(ctx context.Context) error {
 	return r.transport.Run(ctx)
+}
+
+// newDocsRelayQuerier creates a NostrDocsQuerier that queries existing NIP-23
+// documentation events from the relay pool.
+func newDocsRelayQuerier(pool *nostrAdapter.RelayPool, pubkey string, logger *zap.Logger) docs.NostrDocsQuerier {
+	return docs.DocsQuerierFunc(func(ctx context.Context, _ string) ([]*nostr.Event, error) {
+		if pool == nil {
+			return nil, fmt.Errorf("relay pool not configured")
+		}
+
+		queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		filter := nostr.Filter{
+			Kinds:   []int{kinds.LongFormContent},
+			Authors: []string{pubkey},
+			Tags: nostr.TagMap{
+				"t": []string{"bahia-docs"},
+			},
+		}
+
+		merged, err := pool.SubscribeAllWithEOSE(queryCtx, []nostr.Filter{filter})
+		if err != nil {
+			return nil, fmt.Errorf("subscribing for existing doc events: %w", err)
+		}
+		defer merged.Close()
+
+		var events []*nostr.Event
+		for {
+			select {
+			case <-queryCtx.Done():
+				return events, nil
+			case <-merged.EndOfStoredEvents:
+				return events, nil
+			case ev, ok := <-merged.Events:
+				if !ok {
+					return events, nil
+				}
+				events = append(events, ev)
+			}
+		}
+	})
 }
