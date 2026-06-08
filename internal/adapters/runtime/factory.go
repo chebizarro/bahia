@@ -81,6 +81,16 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 			// Default to rootless Podman socket
 			host = fmt.Sprintf("unix:///run/user/%d/podman/podman.sock", os.Getuid())
 		}
+		// When compose_dir is set with Podman, use Podman Compose runtime
+		// instead of the Engine API-only PodmanObserver.
+		if cfg.ComposeDir != "" {
+			if normalizeRuntimeExecutionMode(cfg.ExecutionMode) != ExecutionModeCLI {
+				return nil, fmt.Errorf("podman compose runtime requires execution_mode %q", ExecutionModeCLI)
+			}
+			rt := NewPodmanComposeRuntime(cfg.ComposeDir, host, logger)
+			rt.ownershipConfig = ComposeOwnershipConfig{BahiaOwned: cfg.BahiaOwned}
+			return rt, nil
+		}
 		return NewPodmanObserver(host, logger), nil
 
 	default:

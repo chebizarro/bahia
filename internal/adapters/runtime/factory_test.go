@@ -420,3 +420,77 @@ func containsAt(s, sub string) bool {
 	}
 	return false
 }
+
+// ===========================================================================
+// Podman Compose factory wiring (bahia-zgov)
+// ===========================================================================
+
+func TestNewRuntime_PodmanWithComposeDir_CreatesPodmanComposeRuntime(t *testing.T) {
+	t.Parallel()
+	rt, err := NewRuntime(RuntimeConfig{
+		Type:          "podman",
+		PodmanHost:    "unix:///run/podman/podman.sock",
+		ComposeDir:    "/tmp/test-compose",
+		ExecutionMode: "cli",
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pcr, ok := rt.(*PodmanComposeRuntime)
+	if !ok {
+		t.Fatalf("expected PodmanComposeRuntime, got %T", rt)
+	}
+	if pcr.Type() != domain.RuntimeTypePodman {
+		t.Errorf("Type() = %q, want %q", pcr.Type(), domain.RuntimeTypePodman)
+	}
+	if pcr.projectDir != "/tmp/test-compose" {
+		t.Errorf("projectDir = %q, want /tmp/test-compose", pcr.projectDir)
+	}
+}
+
+func TestNewRuntime_PodmanWithComposeDir_RequiresCLIExecutionMode(t *testing.T) {
+	t.Parallel()
+	_, err := NewRuntime(RuntimeConfig{
+		Type:          "podman",
+		PodmanHost:    "unix:///run/podman/podman.sock",
+		ComposeDir:    "/tmp/test-compose",
+		ExecutionMode: "engine_api",
+	}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error for engine_api execution mode with podman compose")
+	}
+	if !contains(err.Error(), "cli") {
+		t.Errorf("error should mention cli, got: %v", err)
+	}
+}
+
+func TestNewRuntime_PodmanWithoutComposeDir_CreatesPodmanObserver(t *testing.T) {
+	t.Parallel()
+	rt, err := NewRuntime(RuntimeConfig{
+		Type:       "podman",
+		PodmanHost: "unix:///run/podman/podman.sock",
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, ok := rt.(*PodmanObserver)
+	if !ok {
+		t.Fatalf("expected PodmanObserver, got %T", rt)
+	}
+}
+
+func TestPodmanComposeRuntime_Type(t *testing.T) {
+	t.Parallel()
+	rt := NewPodmanComposeRuntime("/tmp/compose", "unix:///run/podman/podman.sock", zap.NewNop())
+	if rt.Type() != domain.RuntimeTypePodman {
+		t.Errorf("Type() = %q, want %q", rt.Type(), domain.RuntimeTypePodman)
+	}
+}
+
+func TestPodmanComposeRuntime_SupportsDesiredState(t *testing.T) {
+	t.Parallel()
+	rt := NewPodmanComposeRuntime("/tmp/compose", "unix:///run/podman/podman.sock", zap.NewNop())
+	if !rt.SupportsDesiredState() {
+		t.Error("PodmanComposeRuntime should support desired state (inherited from ComposeRuntime)")
+	}
+}

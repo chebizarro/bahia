@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -313,9 +314,78 @@ func probePodmanRootless(ctx context.Context, obs *DockerObserver) (bool, error)
 	return false, nil
 }
 
+// ---------------------------------------------------------------------------
+// Podman Compose runtime
+// ---------------------------------------------------------------------------
+
+// PodmanComposeRuntime wraps ComposeRuntime for Podman-backed Compose
+// workflows. It uses `podman compose` (Podman 3+) or `podman-compose`
+// (standalone Python tool) as the Compose binary, with the Podman socket
+// as the Docker host.
+//
+// This enables services configured with runtime_type=podman and a
+// compose_extension to use Compose-based desired-state apply through
+// Podman's Docker-compatible socket.
+type PodmanComposeRuntime struct {
+	*ComposeRuntime
+}
+
+// NewPodmanComposeRuntime creates a Compose runtime backed by a Podman socket.
+// It auto-detects the best available Compose binary for Podman.
+func NewPodmanComposeRuntime(projectDir, podmanHost string, logger *zap.Logger) *PodmanComposeRuntime {
+	binary := detectPodmanComposeBinary()
+	return &PodmanComposeRuntime{
+		ComposeRuntime: &ComposeRuntime{
+			projectDir: projectDir,
+			dockerHost: podmanHost,
+			binary:     binary,
+			logger:     logger,
+		},
+	}
+}
+
+// Type returns podman — this is a Podman-backed runtime even though it uses
+// Compose for orchestration.
+func (r *PodmanComposeRuntime) Type() domain.RuntimeType {
+	return domain.RuntimeTypePodman
+}
+
+// detectPodmanComposeBinary detects the best available Compose binary for use
+// with Podman, checking in order:
+//  1. "podman compose" subcommand (Podman 3+ with compose plugin)
+//  2. "docker compose" (works when Podman socket is set as DOCKER_HOST)
+//  3. "podman-compose" (standalone Python tool)
+//  4. Falls back to "docker-compose" (v1 standalone)
+func detectPodmanComposeBinary() string {
+	// 1. Try "podman compose" subcommand.
+	if _, err := exec.LookPath("podman"); err == nil {
+		cmd := exec.Command("podman", "compose", "version")
+		if err := cmd.Run(); err == nil {
+			return "podman compose"
+		}
+	}
+
+	// 2. Try "docker compose" (v2) — works with Podman socket as DOCKER_HOST.
+	if _, err := exec.LookPath("docker"); err == nil {
+		cmd := exec.Command("docker", "compose", "version")
+		if err := cmd.Run(); err == nil {
+			return "docker compose"
+		}
+	}
+
+	// 3. Try standalone podman-compose.
+	if _, err := exec.LookPath("podman-compose"); err == nil {
+		return "podman-compose"
+	}
+
+	// 4. Fall back to docker-compose (v1).
+	return "docker-compose"
+}
+
 // Compile-time interface checks.
 var (
 	_ Observer            = (*PodmanObserver)(nil)
 	_ Runtime             = (*PodmanObserver)(nil)
 	_ DesiredStateApplier = (*PodmanObserver)(nil)
+	_ Runtime             = (*PodmanComposeRuntime)(nil)
 )

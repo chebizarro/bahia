@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-zgov",
+  "title": "Podman podman-compose integration for Compose runtime target",
+  "status": "verified",
+  "verified_at": "2026-06-07",
+  "evidence": {
+    "description": "Added PodmanComposeRuntime that wraps ComposeRuntime with Podman socket and auto-detected podman compose binary. Wired into factory when runtime_type=podman with compose_dir set.",
+    "implementation": [
+      "PodmanComposeRuntime type wrapping ComposeRuntime with Podman Type()",
+      "detectPodmanComposeBinary() checks: podman compose > docker compose > podman-compose > docker-compose",
+      "Factory creates PodmanComposeRuntime when type=podman + compose_dir is set + execution_mode=cli",
+      "PodmanObserver Engine API path unchanged for non-Compose Podman usage",
+      "PodmanComposeRuntime inherits SupportsDesiredState from ComposeRuntime"
+    ],
+    "compatibility_findings": [
+      "Podman 3+ supports docker compose subcommand via podman-docker compatibility",
+      "podman-compose is a separate Python tool with reduced feature coverage",
+      "Compose operations work against Podman socket when DOCKER_HOST points to it",
+      "PodmanObserver.ApplyDesiredState still rejects compose_extension for Engine API path"
+    ],
+    "test_coverage": [
+      "TestNewRuntime_PodmanWithComposeDir_CreatesPodmanComposeRuntime",
+      "TestNewRuntime_PodmanWithComposeDir_RequiresCLIExecutionMode",
+      "TestNewRuntime_PodmanWithoutComposeDir_CreatesPodmanObserver",
+      "TestPodmanComposeRuntime_Type",
+      "TestPodmanComposeRuntime_SupportsDesiredState"
+    ]
+  }
+}
