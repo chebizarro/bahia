@@ -133,9 +133,14 @@ type VolumeSpec struct {
 // unsupported at the runtime adapter capability seam.
 type KubernetesExtension struct{}
 
-// PodmanExtension reserves a typed extension namespace for Podman-specific
-// renderer metadata. Podman reuses the Docker-compatible path where feasible.
-type PodmanExtension struct{}
+// PodmanExtension carries Podman-specific renderer metadata. Podman reuses
+// the Docker-compatible Engine API path where feasible.
+type PodmanExtension struct {
+	// Rootless indicates the Podman runtime is running in rootless mode.
+	// When true, cgroup resource limits may be silently ignored or behave
+	// differently depending on the cgroup version.
+	Rootless bool `json:"rootless,omitempty"`
+}
 
 // ---------------------------------------------------------------------------
 // DesiredServiceSpec — service-level desired state

@@ -479,4 +479,253 @@ func TestPodmanApplyDesiredState_PropagatesEnvironmentRevision(t *testing.T) {
 	}
 }
 
+// ===========================================================================
+// Health check startup probe validation (bahia-gk4o)
+// ===========================================================================
+
+func TestValidatePodmanHealthcheck_NoHealthcheck(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.Healthcheck = nil
+	warnings := validatePodmanHealthcheck(spec)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for nil healthcheck, got: %v", warnings)
+	}
+}
+
+func TestValidatePodmanHealthcheck_BasicHealthcheck_NoWarnings(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.Healthcheck = &domain.HealthcheckConfig{
+		Test:     []string{"CMD", "curl", "-f", "http://localhost/health"},
+		Interval: "30s",
+		Timeout:  "10s",
+		Retries:  3,
+	}
+	warnings := validatePodmanHealthcheck(spec)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for basic healthcheck, got: %v", warnings)
+	}
+}
+
+func TestValidatePodmanHealthcheck_StartPeriod_WarnsAboutBehavior(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.Healthcheck = &domain.HealthcheckConfig{
+		Test:        []string{"CMD", "curl", "-f", "http://localhost/health"},
+		Interval:    "30s",
+		StartPeriod: "60s",
+	}
+	warnings := validatePodmanHealthcheck(spec)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for StartPeriod, got %d: %v", len(warnings), warnings)
+	}
+	if !contains(warnings[0], "StartPeriod") {
+		t.Errorf("warning should mention StartPeriod, got: %s", warnings[0])
+	}
+	if !contains(warnings[0], "startup interval") {
+		t.Errorf("warning should explain the behavioral difference, got: %s", warnings[0])
+	}
+}
+
+func TestValidatePodmanHealthcheck_DockerStartInterval_WarnsUnsupported(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	// Clear portable healthcheck to isolate StartInterval test.
+	spec.Healthcheck = nil
+	spec.DockerExtension = &domain.DockerExtension{
+		Healthcheck: map[string]any{
+			"Test":          []any{"CMD", "curl", "-f", "http://localhost/health"},
+			"StartInterval": int64(5000000000), // 5s in nanoseconds
+		},
+	}
+	warnings := validatePodmanHealthcheck(spec)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for StartInterval, got %d: %v", len(warnings), warnings)
+	}
+	if !contains(warnings[0], "StartInterval") {
+		t.Errorf("warning should mention StartInterval, got: %s", warnings[0])
+	}
+	if !contains(warnings[0], "Docker 25+") {
+		t.Errorf("warning should mention Docker version, got: %s", warnings[0])
+	}
+}
+
+func TestValidatePodmanHealthcheck_BothStartPeriodAndStartInterval(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.Healthcheck = &domain.HealthcheckConfig{
+		Test:        []string{"CMD", "true"},
+		StartPeriod: "30s",
+	}
+	spec.DockerExtension = &domain.DockerExtension{
+		Healthcheck: map[string]any{
+			"StartInterval": int64(2000000000),
+		},
+	}
+	warnings := validatePodmanHealthcheck(spec)
+	if len(warnings) != 2 {
+		t.Fatalf("expected 2 warnings, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestPodmanApplyDesiredState_HealthcheckWarnings_PropagateToResult(t *testing.T) {
+	t.Parallel()
+	mock := newApplyMockState()
+	spec := applyTestSpec()
+	spec.Healthcheck = &domain.HealthcheckConfig{
+		Test:        []string{"CMD", "true"},
+		StartPeriod: "60s",
+	}
+
+	server, dockerObserver := setupApplyTest(mock)
+	defer server.Close()
+
+	podman := &PodmanObserver{DockerObserver: dockerObserver}
+	req := applyTestRequest(spec)
+
+	result, err := podman.ApplyDesiredState(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundHealthcheckWarning := false
+	for _, w := range result.Warnings {
+		if contains(w, "StartPeriod") {
+			foundHealthcheckWarning = true
+			break
+		}
+	}
+	if !foundHealthcheckWarning {
+		t.Errorf("expected healthcheck warning in result, got: %v", result.Warnings)
+	}
+}
+
+// ===========================================================================
+// Rootless cgroup resource limit validation (bahia-4iba)
+// ===========================================================================
+
+func TestValidatePodmanRootlessResources_RootfulMode_NoWarnings(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.DockerExtension = &domain.DockerExtension{
+		HostConfig: map[string]any{
+			"Memory":    int64(536870912),
+			"CpuShares": int64(1024),
+		},
+	}
+	warnings := validatePodmanRootlessResources(spec, false)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings in rootful mode, got: %v", warnings)
+	}
+}
+
+func TestValidatePodmanRootlessResources_RootlessWithLimits_Warns(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.DockerExtension = &domain.DockerExtension{
+		HostConfig: map[string]any{
+			"Memory":    int64(536870912),
+			"CpuShares": int64(1024),
+			"NanoCpus":  int64(2000000000),
+		},
+	}
+	warnings := validatePodmanRootlessResources(spec, true)
+	if len(warnings) != 3 {
+		t.Fatalf("expected 3 warnings for 3 resource fields, got %d: %v", len(warnings), warnings)
+	}
+	for _, w := range warnings {
+		if !contains(w, "rootless") {
+			t.Errorf("warning should mention rootless, got: %s", w)
+		}
+	}
+}
+
+func TestValidatePodmanRootlessResources_RootlessNoExtension_NoWarnings(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.DockerExtension = nil
+	warnings := validatePodmanRootlessResources(spec, true)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings without DockerExtension, got: %v", warnings)
+	}
+}
+
+func TestValidatePodmanRootlessResources_RootlessEmptyHostConfig_NoWarnings(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.DockerExtension = &domain.DockerExtension{
+		HostConfig: map[string]any{},
+	}
+	warnings := validatePodmanRootlessResources(spec, true)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings with empty HostConfig, got: %v", warnings)
+	}
+}
+
+func TestValidatePodmanRootlessResources_AllResourceFields(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	hc := map[string]any{}
+	for _, field := range podmanRootlessResourceFields {
+		hc[field] = int64(1)
+	}
+	spec.DockerExtension = &domain.DockerExtension{HostConfig: hc}
+
+	warnings := validatePodmanRootlessResources(spec, true)
+	if len(warnings) != len(podmanRootlessResourceFields) {
+		t.Fatalf("expected %d warnings, got %d: %v", len(podmanRootlessResourceFields), len(warnings), warnings)
+	}
+}
+
+func TestPodmanApplyDesiredState_RootlessResourceWarnings_PropagateToResult(t *testing.T) {
+	t.Parallel()
+	mock := newApplyMockState()
+	spec := applyTestSpec()
+	spec.DockerExtension = &domain.DockerExtension{
+		HostConfig: map[string]any{
+			"Memory": int64(536870912),
+		},
+	}
+
+	server, dockerObserver := setupApplyTest(mock)
+	defer server.Close()
+
+	podman := &PodmanObserver{DockerObserver: dockerObserver}
+	// Pre-set rootless to avoid /info probe against the mock server.
+	podman.rootlessInfo = PodmanRootlessInfo{Rootless: true, Probed: true}
+	req := applyTestRequest(spec)
+
+	result, err := podman.ApplyDesiredState(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundRootlessWarning := false
+	for _, w := range result.Warnings {
+		if contains(w, "rootless") && contains(w, "Memory") {
+			foundRootlessWarning = true
+			break
+		}
+	}
+	if !foundRootlessWarning {
+		t.Errorf("expected rootless Memory warning in result, got: %v", result.Warnings)
+	}
+}
+
+func TestPodmanDetectRootless_CachesResult(t *testing.T) {
+	t.Parallel()
+	podman := NewPodmanObserver("unix:///run/podman/podman.sock", zap.NewNop())
+	// Pre-set cached result.
+	podman.rootlessInfo = PodmanRootlessInfo{Rootless: true, Probed: true}
+
+	rootless, err := podman.DetectRootless(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !rootless {
+		t.Error("expected cached rootless=true")
+	}
+}
+
 // Helper: reuses contains() from factory_test.go (same package).

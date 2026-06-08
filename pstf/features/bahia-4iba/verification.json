@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-4iba",
+  "title": "Podman rootless cgroup resource limits validation",
+  "status": "verified",
+  "verified_at": "2026-06-07",
+  "evidence": {
+    "description": "Added runtime detection of Podman rootless vs rootful mode with caching. When rootless and cgroup resource limits are set, structured warnings are emitted.",
+    "resource_fields_validated": [
+      "Memory", "MemorySwap", "MemoryReservation", "CpuShares", "NanoCpus",
+      "CpuPeriod", "CpuQuota", "CpusetCpus", "CpusetMems", "BlkioWeight",
+      "PidsLimit", "DeviceRequests"
+    ],
+    "test_coverage": [
+      "TestValidatePodmanRootlessResources_RootfulMode_NoWarnings",
+      "TestValidatePodmanRootlessResources_RootlessWithLimits_Warns",
+      "TestValidatePodmanRootlessResources_RootlessNoExtension_NoWarnings",
+      "TestValidatePodmanRootlessResources_RootlessEmptyHostConfig_NoWarnings",
+      "TestValidatePodmanRootlessResources_AllResourceFields",
+      "TestPodmanApplyDesiredState_RootlessResourceWarnings_PropagateToResult",
+      "TestPodmanDetectRootless_CachesResult"
+    ]
+  }
+}

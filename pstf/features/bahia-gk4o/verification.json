@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-gk4o",
+  "title": "Podman health check startup probe differences validated",
+  "status": "verified",
+  "verified_at": "2026-06-07",
+  "evidence": {
+    "behavioral_differences": [
+      "StartPeriod: Podman supports it but does NOT run probes at a separate startup interval",
+      "StartInterval (Docker 25+): Not supported by Podman; silently ignored",
+      "Health check runner: Podman uses conmon-based checking vs Docker built-in"
+    ],
+    "test_coverage": [
+      "TestValidatePodmanHealthcheck_NoHealthcheck",
+      "TestValidatePodmanHealthcheck_BasicHealthcheck_NoWarnings",
+      "TestValidatePodmanHealthcheck_StartPeriod_WarnsAboutBehavior",
+      "TestValidatePodmanHealthcheck_DockerStartInterval_WarnsUnsupported",
+      "TestValidatePodmanHealthcheck_BothStartPeriodAndStartInterval",
+      "TestPodmanApplyDesiredState_HealthcheckWarnings_PropagateToResult"
+    ]
+  }
+}

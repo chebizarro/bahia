@@ -352,3 +352,60 @@ func commandReceiptData(t *testing.T, w *httptest.ResponseRecorder) map[string]a
 	}
 	return data
 }
+
+// TestRESTWriteDefaultsAreReceiptOnly verifies that all REST mutation endpoints
+// return 202 CommandReceipt by default with no synchronous fallback mode.
+// This is the acceptance test for bahia-23f1.
+func TestRESTWriteDefaultsAreReceiptOnly(t *testing.T) {
+	serviceCommands := &captureRESTServiceCommands{}
+	llmCommands := &captureRESTLLMCommands{}
+	policyCommands := &captureRESTPolicyCommands{}
+	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+		Config:          config.Defaults(),
+		ServiceCommands: serviceCommands,
+		LLMCommands:     llmCommands,
+		PolicyCommands:  policyCommands,
+	})
+
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	policyID := uuid.New()
+	endpoints := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"service create", http.MethodPost, "/api/v1/services", `{"name":"svc","idempotency_key":"k1"}`},
+		{"deployment intent", http.MethodPost, "/api/v1/deployments/intents", `{"service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `","idempotency_key":"k2"}`},
+		{"llm route create", http.MethodPost, "/api/v1/llm/routes", `{"name":"rt","idempotency_key":"k3"}`},
+		{"policy create", http.MethodPost, "/api/v1/policies", `{"name":"p","rules":[],"idempotency_key":"k4"}`},
+		{"policy update", http.MethodPut, "/api/v1/policies/" + policyID.String(), `{"name":"p","rules":[],"idempotency_key":"k5"}`},
+		{"policy delete", http.MethodDelete, "/api/v1/policies/" + policyID.String(), `{"idempotency_key":"k6"}`},
+	}
+	for _, ep := range endpoints {
+		t.Run(ep.name, func(t *testing.T) {
+			// Without any sync-mode header or query parameter.
+			req := httptest.NewRequest(ep.method, ep.path, strings.NewReader(ep.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("default response for %s should be 202 Accepted, got %d: %s", ep.name, w.Code, w.Body.String())
+			}
+
+			data := commandReceiptData(t, w)
+			if data["request_event_id"] == nil || data["request_event_id"] == "" {
+				t.Fatalf("receipt must contain request_event_id: %v", data)
+			}
+			if data["status"] != "submitted" {
+				t.Fatalf("receipt status should be 'submitted', got: %v", data["status"])
+			}
+			if _, hasMessage := data["message"]; !hasMessage {
+				t.Fatal("receipt should include a message directing to Nostr events")
+			}
+		})
+	}
+}
