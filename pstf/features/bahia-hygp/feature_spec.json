@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-hygp",
+  "title": "Signer-first deployment and artifact CLI/MCP mutations",
+  "observed_behavior_before": [
+    "CLI deployment intent and rollback commands called pkg/client REST-deprecated methods and failed with guidance instead of publishing signer-first requests.",
+    "MCP deployment and artifact mutation handlers could fall back to direct RegistryService mutation when no command publisher was configured.",
+    "MCP approval/rejection directly mutated deployment intent state."
+  ],
+  "intended_behavior": [
+    "CLI deployment intent and rollback commands publish signed ContextVM requests and await correlated ContextVM acknowledgments/status without REST fallback.",
+    "MCP deployment intent, rollback, approval/rejection, and artifact registration mutation tools publish signed Nostr requests and return correlation receipts.",
+    "MCP fails closed when signer-first publishers are unavailable instead of directly mutating RegistryService for semantic mutations.",
+    "Artifact registration publishes signed kind 5985 ArtifactRegister requests and verifies at least one relay accepted the event."
+  ],
+  "protocol_notes": [
+    "Per docs/nostr-event-implementation-guide.md, service deployment, rollback, and approval mutations use canonical ContextVM kind 25910 methods service/deploy, service/rollback, approval/approve, and approval/reject.",
+    "Artifact registration remains a signed ArtifactRegister request kind 5985 where existing repository behavior expects that request kind."
+  ]
+}

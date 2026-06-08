@@ -156,7 +156,7 @@ When an intent requires approval:
 
 ### CLI and MCP
 
-Approval and rejection mutations are signer-first ContextVM intents. Use `deployment/approve` or `deployment/reject` and follow canonical status/audit/state observables.
+Approval and rejection mutations are signer-first ContextVM intents. CLI/MCP mutation surfaces publish signed requests and return Nostr correlation receipts; if no signer-first publisher is configured, MCP fails closed instead of mutating the registry directly. Use `approval/approve` or `approval/reject` and follow canonical status/audit/state observables.
 
 ### Nostr
 

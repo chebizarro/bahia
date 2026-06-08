@@ -117,9 +117,17 @@ bahia environments delete staging
 
 ### Deployments
 
-Deployment intent create, approval/rejection, and rollback mutations use ContextVM JSON-RPC methods such as `service/deploy`, `approval/approve`, `approval/reject`, and `service/rollback`. Legacy REST-backed command paths and legacy Nostr request-kind publication are not production runtime behavior.
+Deployment intent creation and rollback publish signed ContextVM JSON-RPC events (`service/deploy`, `service/rollback`) with the configured operator signer and relay set. Relay `OK` acceptance is required before the command reports success. Legacy REST-backed mutation paths and legacy request-kind publication are not production runtime behavior.
 
 ```bash
+# Submit deployment intent (signer-first)
+bahia --privkey $BAHIA_NOSTR_PRIVATE_KEY --relay wss://relay.example \
+  deployments deploy --service svc-123 --environment env-456 --artifact art-789
+
+# Submit rollback intent (signer-first)
+bahia --privkey $BAHIA_NOSTR_PRIVATE_KEY --relay wss://relay.example \
+  deployments rollback --service svc-123 --environment env-456
+
 # List intents
 bahia deployments list
 bahia deployments list --service payment-api
@@ -203,14 +211,22 @@ bahia workers pricing npub1worker...
 
 ### Policies
 
-Policy create, update, delete, and manual evaluation mutations are ContextVM Nostr operations. Deletion uses NIP-09 kind `5` where relay-level deletion semantics apply; domain state may also publish canonical tombstone projections. Legacy REST-backed policy mutation command paths are not production CLI mutation transport.
+Policy mutations are signer-first public Nostr operations. `bahia policies create` publishes signed `PolicyCreate` (`5986`) with the configured operator signer, verifies relay `OK` acceptance, and prints the result/read-model kinds to follow. Policy reads (`list`, `get`) remain read-only and may use durable projections/server read models. Legacy REST-backed policy mutation command paths are not production CLI mutation transport.
 
 ```bash
-# List policies
+# List policies (read-only)
 bahia policies list
 
-# Get policy
+# Get policy (read-only)
 bahia policies get require-sbom
+
+# Create policy (signer-first 5986)
+bahia --privkey $BAHIA_NOSTR_PRIVATE_KEY --relay wss://relay.example \
+  policies create \
+  --name require-sbom \
+  --rules '[{"type":"require_sbom"}]' \
+  --enforcement block \
+  --idempotency-key policy-create-require-sbom
 ```
 
 ### LLM Routes

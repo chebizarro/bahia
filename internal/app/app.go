@@ -739,9 +739,9 @@ func New(cfg *config.Config) (*App, error) {
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		serviceCommandPublisher = controlplane.NewServiceCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
-	var policyCommandPublisher *controlplane.PolicyCommandPublisher
+	var artifactCommandPublisher *controlplane.ArtifactCommandPublisher
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		policyCommandPublisher = controlplane.NewPolicyCommandPublisher(controlPlanePool, controlPlaneSigner)
+		artifactCommandPublisher = controlplane.NewArtifactCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
 	var packageCommandPublisher mcp.PackageCommandPublisher
 	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
@@ -752,23 +752,25 @@ func New(cfg *config.Config) (*App, error) {
 		workerCommandPublisher = controlplane.NewWorkerCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
 	mcpDeps := mcp.ServerDeps{
-		LogService:              runLogService,
-		Payments:                paymentSvc,
-		SBOMs:                   sbomRepo,
-		Signatures:              sigRepo,
-		SignVerifier:            signVerifier,
-		MLRegistry:              mlRegistry,
-		MLCommandPublisher:      mlCommandPublisher,
-		LLMRegistry:             llmRegistry,
-		LLMCommandPublisher:     llmCommandPublisher,
-		ServiceCommandPublisher: serviceCommandPublisher,
-		PackageCommandPublisher: packageCommandPublisher,
-		WorkerCommandPublisher:  workerCommandPublisher,
-		PackageProjection:       packageProjection,
-		WorkerReadModels:        workerReadModelSvc,
-		Workers:                 workerRepo,
-		DNSEndpoints:            dnsProjector,
+		LogService:               runLogService,
+		Payments:                 paymentSvc,
+		SBOMs:                    sbomRepo,
+		Signatures:               sigRepo,
+		SignVerifier:             signVerifier,
+		MLRegistry:               mlRegistry,
+		MLCommandPublisher:       mlCommandPublisher,
+		LLMRegistry:              llmRegistry,
+		LLMCommandPublisher:      llmCommandPublisher,
+		ServiceCommandPublisher:  serviceCommandPublisher,
+		ArtifactCommandPublisher: artifactCommandPublisher,
+		PackageCommandPublisher:  packageCommandPublisher,
+		WorkerCommandPublisher:   workerCommandPublisher,
+		PackageProjection:        packageProjection,
+		WorkerReadModels:         workerReadModelSvc,
+		Workers:                  workerRepo,
+		DNSEndpoints:             dnsProjector,
 	}
+	policyCommandPublisher := configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureBackupMCPDeps(&mcpDeps, backupRegistryRepo, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcpDeps)
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
@@ -2187,6 +2189,16 @@ func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repos
 		return opts
 	}
 	return append(opts, controlplane.WithNostrEventRepository(repo))
+}
+
+func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer canonicalnostr.Signer, relays []string) *controlplane.PolicyCommandPublisher {
+	if deps == nil || publisher == nil || signer == nil || len(relays) == 0 {
+		return nil
+	}
+	policyPublisher := controlplane.NewPolicyCommandPublisher(publisher, signer)
+	deps.PolicyCommandPublisher = policyPublisher
+	deps.ToolApprovalCommandPublisher = controlplane.NewToolApprovalCommandPublisher(publisher, signer)
+	return policyPublisher
 }
 
 func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModelRepository, publisher controlplane.NostrEventPublisher, signer canonicalnostr.Signer, relays []string) {

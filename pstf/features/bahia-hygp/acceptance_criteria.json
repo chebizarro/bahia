@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-hygp",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "CLI deployment intent creation publishes a signed signer-first Nostr/ContextVM request and does not call the removed REST deployment intent endpoint."
+    },
+    {
+      "id": "AC2",
+      "statement": "CLI rollback publishes a signed signer-first Nostr/ContextVM request and does not call the removed REST rollback endpoint."
+    },
+    {
+      "id": "AC3",
+      "statement": "MCP deployment intent, rollback, approval, and rejection tools publish signer-first requests and return correlation receipts with request event id, pubkey, kind, result/status kinds, idempotency key, and accepted relay count."
+    },
+    {
+      "id": "AC4",
+      "statement": "MCP artifact registration publishes a signed kind 5985 ArtifactRegister request and requires at least one accepted relay before returning success."
+    },
+    {
+      "id": "AC5",
+      "statement": "MCP deployment/artifact semantic mutation tools fail closed when publishers are not configured instead of mutating RegistryService directly."
+    },
+    {
+      "id": "AC6",
+      "statement": "User-facing CLI, MCP, deployment, and artifact documentation describes signer-first mutation behavior and removed direct REST/registry fallback."
+    }
+  ]
+}

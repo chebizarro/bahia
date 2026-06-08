@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,7 +40,7 @@ func TestServiceCommandPublisherPublishesCanonicalServiceCreateRequest(t *testin
 	assertReactorTag(t, capture.events[0].Tags, "d", "service-create:payments-api")
 }
 
-func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteRequests(t *testing.T) {
+func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteEvaluateRequests(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
 	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
@@ -49,26 +50,38 @@ func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteRequest
 	publisher := NewPolicyCommandPublisher(capture, signer)
 	envID := uuid.New()
 	policyID := uuid.New()
+	artifactID := uuid.New()
+	serviceID := uuid.New()
 
 	enabled := true
 	create, err := publisher.PublishPolicyCreateRequest(ctx, PolicyMutationCommand{Name: "require-sbom", EnvironmentID: &envID, Rules: []domain.PolicyRule{{Type: domain.RuleRequireSBOM}}, Enforcement: string(domain.PolicyEnforcementBlock), Enabled: &enabled, IdempotencyKey: "policy-create:require-sbom"})
 	if err != nil {
 		t.Fatalf("publish policy create: %v", err)
 	}
-	if create.RequestKind != KindContextVMMessage || create.StatusKind != KindNIP38Status || create.ResultKind != KindContextVMMessage || create.ReadModelKinds["policy_registry"] != KindCASControlState {
+	if create.RequestKind != KindPolicyCreate || create.ResultKind != KindContextVMMessage || create.ReadModelKinds["policy_registry"] != KindCASControlState || create.PublishedRelays != 1 {
 		t.Fatalf("unexpected create receipt: %#v", create)
 	}
-	createParams := assertContextVMCommand(t, capture.events[0], ContextVMMethodPolicyCreate)
+	var createParams map[string]any
+	if err := json.Unmarshal([]byte(capture.events[0].Content), &createParams); err != nil {
+		t.Fatalf("decode create params: %v", err)
+	}
 	if createParams["name"] != "require-sbom" || createParams["enabled"] != true {
 		t.Fatalf("unexpected create params: %#v", createParams)
 	}
 	assertReactorTag(t, capture.events[0].Tags, "environment", envID.String())
+	assertReactorTag(t, capture.events[0].Tags, "d", "policy-create:require-sbom")
 
 	_, err = publisher.PublishPolicyUpdateRequest(ctx, PolicyMutationCommand{ID: policyID, Enforcement: string(domain.PolicyEnforcementWarn), IdempotencyKey: "policy-update:require-sbom"})
 	if err != nil {
 		t.Fatalf("publish policy update: %v", err)
 	}
-	updateParams := assertContextVMCommand(t, capture.events[1], ContextVMMethodPolicyUpdate)
+	if capture.events[1].Kind != KindPolicyUpdate {
+		t.Fatalf("update kind = %d, want %d", capture.events[1].Kind, KindPolicyUpdate)
+	}
+	var updateParams map[string]any
+	if err := json.Unmarshal([]byte(capture.events[1].Content), &updateParams); err != nil {
+		t.Fatalf("decode update params: %v", err)
+	}
 	if updateParams["id"] != policyID.String() || updateParams["enforcement"] != string(domain.PolicyEnforcementWarn) {
 		t.Fatalf("unexpected update params: %#v", updateParams)
 	}
@@ -84,10 +97,59 @@ func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteRequest
 	if err != nil {
 		t.Fatalf("publish policy delete: %v", err)
 	}
-	deleteParams := assertContextVMCommand(t, capture.events[2], ContextVMMethodPolicyDelete)
+	if capture.events[2].Kind != KindPolicyDelete {
+		t.Fatalf("delete kind = %d, want %d", capture.events[2].Kind, KindPolicyDelete)
+	}
+	var deleteParams map[string]any
+	if err := json.Unmarshal([]byte(capture.events[2].Content), &deleteParams); err != nil {
+		t.Fatalf("decode delete params: %v", err)
+	}
 	if deleteParams["id"] != policyID.String() {
 		t.Fatalf("unexpected delete params: %#v", deleteParams)
 	}
+
+	evaluate, err := publisher.PublishPolicyEvaluateRequest(ctx, PolicyMutationCommand{ArtifactID: artifactID, EnvironmentID: &envID, ServiceID: &serviceID, IdempotencyKey: "policy-evaluate:artifact"})
+	if err != nil {
+		t.Fatalf("publish policy evaluate: %v", err)
+	}
+	if evaluate.RequestKind != KindPolicyEvaluate || evaluate.ReadModelKinds != nil {
+		t.Fatalf("unexpected evaluate receipt: %#v", evaluate)
+	}
+	var evalParams map[string]any
+	if err := json.Unmarshal([]byte(capture.events[3].Content), &evalParams); err != nil {
+		t.Fatalf("decode evaluate params: %v", err)
+	}
+	if evalParams["artifact_id"] != artifactID.String() || evalParams["environment_id"] != envID.String() || evalParams["service_id"] != serviceID.String() {
+		t.Fatalf("unexpected evaluate params: %#v", evalParams)
+	}
+}
+
+func TestToolApprovalCommandPublisherPublishesCanonicalApprovalResponse(t *testing.T) {
+	ctx := context.Background()
+	capture := &captureNostrPublisher{published: 2}
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	publisher := NewToolApprovalCommandPublisher(capture, signer)
+	intentID := uuid.New()
+
+	receipt, err := publisher.PublishToolApprovalResponse(ctx, ToolApprovalCommand{IntentID: intentID, Action: "approve", Reason: "operator reviewed", IdempotencyKey: "tool-approval:1"})
+	if err != nil {
+		t.Fatalf("publish tool approval: %v", err)
+	}
+	if receipt.RequestKind != KindToolApprovalResponse || receipt.ResultKind != KindContextVMMessage || receipt.PublishedRelays != 2 || receipt.IntentID != intentID.String() || receipt.Action != "approve" {
+		t.Fatalf("unexpected tool approval receipt: %#v", receipt)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(capture.events[0].Content), &payload); err != nil {
+		t.Fatalf("decode tool approval payload: %v", err)
+	}
+	if payload["intent_id"] != intentID.String() || payload["action"] != "approve" || payload["reason"] != "operator reviewed" {
+		t.Fatalf("unexpected tool approval payload: %#v", payload)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "intent", intentID.String())
+	assertReactorTag(t, capture.events[0].Tags, "d", "tool-approval:1")
 }
 
 func TestPolicyCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {

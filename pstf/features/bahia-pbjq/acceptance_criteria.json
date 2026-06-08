@@ -1,0 +1,52 @@
+{
+  "feature_id": "bahia-pbjq",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Policy command publishing emits signed direct Nostr events for PolicyCreate 5986, PolicyUpdate 5987, PolicyDelete 5988, and PolicyEvaluate 5989 with correlation tags and follow metadata, and fails when no relay accepts the event.",
+      "tests": [
+        "TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteEvaluateRequests",
+        "TestPolicyCommandPublisherRequiresRelayAcceptance"
+      ]
+    },
+    {
+      "id": "AC2",
+      "description": "Tool approval publishing emits signed ToolApprovalResponse 7977 events with intent/action correlation and fails when relays do not accept the event.",
+      "tests": [
+        "TestToolApprovalCommandPublisherPublishesCanonicalApprovalResponse"
+      ]
+    },
+    {
+      "id": "AC3",
+      "description": "MCP policy mutation tools publish signer-first policy requests instead of calling direct policy service mutation/evaluation methods, while read-only list/get tools continue to use durable read models.",
+      "tests": [
+        "TestCallTool_PolicyMutationsPublishSignerFirstRequests",
+        "TestCallTool_PolicyReadToolsUseDurableReadModels"
+      ]
+    },
+    {
+      "id": "AC4",
+      "description": "MCP tool approval/rejection tools publish signer-first ToolApprovalResponse events instead of directly mutating intent state or approval logs.",
+      "tests": [
+        "TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses"
+      ]
+    },
+    {
+      "id": "AC5",
+      "description": "CLI policy create uses the operator signer/control-plane client path and parses policy rules deterministically without falling back to REST policy mutation.",
+      "tests": [
+        "TestPolicyCreateUsesSignerFirstOperatorClient",
+        "TestParsePolicyRulesJSONAcceptsArrayAndRejectsEmpty"
+      ]
+    },
+    {
+      "id": "AC6",
+      "description": "User-facing CLI, MCP, and policy docs distinguish signer-first semantic mutations from read-only projection queries and denylist administration.",
+      "tests": [
+        "docs/user-guide/cli-reference.md review",
+        "docs/user-guide/mcp-tools.md review",
+        "docs/user-guide/features/policies.md review"
+      ]
+    }
+  ]
+}

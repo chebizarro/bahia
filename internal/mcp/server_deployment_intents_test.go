@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -174,6 +175,37 @@ func (m *testDeploymentStateRepo) ListAll(_ context.Context) ([]domain.Environme
 	return out, nil
 }
 
+type captureServiceCommandPublisher struct {
+	deploy   *controlplane.ServiceDeployCommand
+	rollback *controlplane.ServiceRollbackCommand
+	approval *controlplane.ServiceApprovalCommand
+	err      error
+}
+
+func (p *captureServiceCommandPublisher) PublishDeployRequest(_ context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error) {
+	p.deploy = &cmd
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &controlplane.ServiceCommandReceipt{RequestEventID: "deploy-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindDeploymentIntentRegistry, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceID: cmd.ServiceID.String(), EnvironmentID: cmd.EnvironmentID.String(), ArtifactID: cmd.ArtifactID.String()}, nil
+}
+
+func (p *captureServiceCommandPublisher) PublishRollbackRequest(_ context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error) {
+	p.rollback = &cmd
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &controlplane.ServiceCommandReceipt{RequestEventID: "rollback-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindDeploymentIntentRegistry, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceID: cmd.ServiceID.String(), EnvironmentID: cmd.EnvironmentID.String()}, nil
+}
+
+func (p *captureServiceCommandPublisher) PublishDeploymentApprovalRequest(_ context.Context, cmd controlplane.ServiceApprovalCommand) (*controlplane.ServiceCommandReceipt, error) {
+	p.approval = &cmd
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &controlplane.ServiceCommandReceipt{RequestEventID: "approval-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindDeploymentIntentRegistry, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, IntentID: cmd.IntentID.String(), Decision: cmd.Decision}, nil
+}
+
 type deploymentTestFixture struct {
 	server    *Server
 	services  *testServiceRepo
@@ -181,6 +213,7 @@ type deploymentTestFixture struct {
 	artifacts *testArtifactRepo
 	intents   *testDeploymentIntentRepo
 	state     *testDeploymentStateRepo
+	commands  *captureServiceCommandPublisher
 	serviceID uuid.UUID
 	envID     uuid.UUID
 }
@@ -223,13 +256,15 @@ func newTestMCPDeploymentServer(t *testing.T, protected bool) *deploymentTestFix
 		DeployStrategy: domain.DeployStrategyReplace,
 	}
 
+	commands := &captureServiceCommandPublisher{}
 	return &deploymentTestFixture{
-		server:    NewServer(registry, zap.NewNop()),
+		server:    NewServerWithOptions(registry, zap.NewNop(), ServerDeps{ServiceCommandPublisher: commands}),
 		services:  svcRepo,
 		envs:      envRepo,
 		artifacts: artifactRepo,
 		intents:   intentRepo,
 		state:     stateRepo,
+		commands:  commands,
 		serviceID: serviceID,
 		envID:     envID,
 	}
@@ -300,40 +335,20 @@ func TestCallTool_DeployAndCreateIntent_CreateDeploymentIntent(t *testing.T) {
 			}
 
 			payload := decodeResultMap(t, result)
-			intentID := uuid.MustParse(payload["intent_id"].(string))
-			if payload["status"] != "submitted" {
-				t.Fatalf("expected submitted status, got %v", payload["status"])
+			if payload["status"] != "submitted" || payload["request_event_id"] != "deploy-event" || payload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) {
+				t.Fatalf("unexpected signer-first deploy receipt: %#v", payload)
 			}
 			if payload["service_id"] != fixture.serviceID.String() || payload["environment_id"] != fixture.envID.String() || payload["artifact_id"] != artifactID.String() {
 				t.Fatalf("unexpected deploy payload: %#v", payload)
 			}
-
-			intent := fixture.intents.intents[intentID]
-			if intent == nil {
-				t.Fatalf("expected intent %s to be persisted", intentID)
+			if fixture.commands.deploy == nil {
+				t.Fatalf("expected deploy command to be published")
 			}
-			if intent.RequestedBy != "alice" {
-				t.Fatalf("expected requested_by alice, got %q", intent.RequestedBy)
+			if fixture.commands.deploy.RequestedBy != "alice" || fixture.commands.deploy.ServiceID != fixture.serviceID || fixture.commands.deploy.EnvironmentID != fixture.envID || fixture.commands.deploy.ArtifactID != artifactID {
+				t.Fatalf("unexpected captured deploy command: %#v", fixture.commands.deploy)
 			}
-			if intent.SourceKind != domain.SourceKindManual {
-				t.Fatalf("expected manual source kind, got %s", intent.SourceKind)
-			}
-			if intent.ApprovalStatus != domain.ApprovalStatusNotRequired || intent.Status != domain.IntentStatusApproved {
-				t.Fatalf("expected unprotected deploy to be approved/not_required, got approval=%s status=%s", intent.ApprovalStatus, intent.Status)
-			}
-
-			state, err := fixture.state.Get(ctx, fixture.serviceID, fixture.envID)
-			if err != nil {
-				t.Fatalf("get state: %v", err)
-			}
-			if state.DesiredArtifactID == nil || *state.DesiredArtifactID != artifactID {
-				t.Fatalf("expected desired artifact %s, got %#v", artifactID, state.DesiredArtifactID)
-			}
-			if state.DesiredIntentID == nil || *state.DesiredIntentID != intentID {
-				t.Fatalf("expected desired intent %s, got %#v", intentID, state.DesiredIntentID)
-			}
-			if state.DriftStatus != domain.DriftStatusDeploying {
-				t.Fatalf("expected deploying drift status, got %s", state.DriftStatus)
+			if len(fixture.intents.intents) != 0 {
+				t.Fatalf("direct registry fallback persisted intents: %#v", fixture.intents.intents)
 			}
 		})
 	}
@@ -342,107 +357,35 @@ func TestCallTool_DeployAndCreateIntent_CreateDeploymentIntent(t *testing.T) {
 func TestCallTool_ApprovalAndRejectionFlows(t *testing.T) {
 	ctx := context.Background()
 
-	approvalCases := []struct {
-		name        string
-		createTool  string
-		approveTool string
+	for _, tc := range []struct {
+		name     string
+		tool     string
+		decision string
 	}{
-		{name: "deployment tool", createTool: "bahia_deploy", approveTool: "bahia_approve_deployment"},
-		{name: "intent alias", createTool: "bahia_create_intent", approveTool: "bahia_approve_intent"},
-	}
-	for _, tc := range approvalCases {
-		t.Run("approve "+tc.name, func(t *testing.T) {
+		{name: "approve deployment tool", tool: "bahia_approve_deployment", decision: "approve"},
+		{name: "approve intent alias", tool: "bahia_approve_intent", decision: "approve"},
+		{name: "reject deployment tool", tool: "bahia_reject_deployment", decision: "reject"},
+		{name: "reject intent alias", tool: "bahia_reject_intent", decision: "reject"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			fixture := newTestMCPDeploymentServer(t, true)
-			artifactID := fixture.addArtifact(uuid.Nil, "sha256:approve")
-
-			createRes, err := fixture.server.CallTool(ctx, tc.createTool, map[string]interface{}{
-				"service_id":     fixture.serviceID.String(),
-				"environment_id": fixture.envID.String(),
-				"artifact_id":    artifactID.String(),
-			})
+			intentID := uuid.New()
+			res, err := fixture.server.CallTool(ctx, tc.tool, map[string]interface{}{"intent_id": intentID.String(), "requested_by": "approver"})
 			if err != nil {
-				t.Fatalf("create call err: %v", err)
+				t.Fatalf("call err: %v", err)
 			}
-			if createRes.IsError {
-				t.Fatalf("create returned error: %s", createRes.Content[0].Text)
+			if res.IsError {
+				t.Fatalf("%s returned error: %s", tc.tool, res.Content[0].Text)
 			}
-			intentID := uuid.MustParse(decodeResultMap(t, createRes)["intent_id"].(string))
-			intent := fixture.intents.intents[intentID]
-			if intent.ApprovalStatus != domain.ApprovalStatusPending || intent.Status != domain.IntentStatusPending {
-				t.Fatalf("expected protected deploy to start pending, got approval=%s status=%s", intent.ApprovalStatus, intent.Status)
+			payload := decodeResultMap(t, res)
+			if payload["status"] != "submitted" || payload["request_event_id"] != "approval-event" || payload["intent_id"] != intentID.String() || payload["decision"] != tc.decision {
+				t.Fatalf("unexpected approval receipt: %#v", payload)
 			}
-
-			approveRes, err := fixture.server.CallTool(ctx, tc.approveTool, map[string]interface{}{"intent_id": intentID.String()})
-			if err != nil {
-				t.Fatalf("approve call err: %v", err)
+			if fixture.commands.approval == nil || fixture.commands.approval.IntentID != intentID || fixture.commands.approval.Decision != tc.decision || fixture.commands.approval.AgentID != "approver" {
+				t.Fatalf("unexpected captured approval command: %#v", fixture.commands.approval)
 			}
-			if approveRes.IsError {
-				t.Fatalf("approve returned error: %s", approveRes.Content[0].Text)
-			}
-			approvePayload := decodeResultMap(t, approveRes)
-			if approvePayload["status"] != "approved" || approvePayload["intent_id"] != intentID.String() {
-				t.Fatalf("unexpected approve payload: %#v", approvePayload)
-			}
-			if intent.ApprovalStatus != domain.ApprovalStatusApproved || intent.Status != domain.IntentStatusApproved {
-				t.Fatalf("expected approved intent, got approval=%s status=%s", intent.ApprovalStatus, intent.Status)
-			}
-			if intent.ApprovedAt == nil {
-				t.Fatalf("expected approval timestamp to be set")
-			}
-		})
-	}
-
-	rejectionCases := []struct {
-		name       string
-		createTool string
-		rejectTool string
-	}{
-		{name: "deployment tool", createTool: "bahia_deploy", rejectTool: "bahia_reject_deployment"},
-		{name: "intent alias", createTool: "bahia_create_intent", rejectTool: "bahia_reject_intent"},
-	}
-	for _, tc := range rejectionCases {
-		t.Run("reject "+tc.name, func(t *testing.T) {
-			fixture := newTestMCPDeploymentServer(t, true)
-			artifactID := fixture.addArtifact(uuid.Nil, "sha256:reject")
-
-			createRes, err := fixture.server.CallTool(ctx, tc.createTool, map[string]interface{}{
-				"service_id":     fixture.serviceID.String(),
-				"environment_id": fixture.envID.String(),
-				"artifact_id":    artifactID.String(),
-			})
-			if err != nil {
-				t.Fatalf("create call err: %v", err)
-			}
-			if createRes.IsError {
-				t.Fatalf("create returned error: %s", createRes.Content[0].Text)
-			}
-			intentID := uuid.MustParse(decodeResultMap(t, createRes)["intent_id"].(string))
-			intent := fixture.intents.intents[intentID]
-
-			rejectRes, err := fixture.server.CallTool(ctx, tc.rejectTool, map[string]interface{}{"intent_id": intentID.String()})
-			if err != nil {
-				t.Fatalf("reject call err: %v", err)
-			}
-			if rejectRes.IsError {
-				t.Fatalf("reject returned error: %s", rejectRes.Content[0].Text)
-			}
-			rejectPayload := decodeResultMap(t, rejectRes)
-			if rejectPayload["status"] != "rejected" || rejectPayload["intent_id"] != intentID.String() {
-				t.Fatalf("unexpected reject payload: %#v", rejectPayload)
-			}
-			if intent.ApprovalStatus != domain.ApprovalStatusRejected || intent.Status != domain.IntentStatusRejected {
-				t.Fatalf("expected rejected intent, got approval=%s status=%s", intent.ApprovalStatus, intent.Status)
-			}
-
-			state, err := fixture.state.Get(ctx, fixture.serviceID, fixture.envID)
-			if err != nil {
-				t.Fatalf("get state: %v", err)
-			}
-			if state.DesiredArtifactID != nil || state.DesiredIntentID != nil {
-				t.Fatalf("expected rejected current intent to clear desired state, got %#v", state)
-			}
-			if state.DriftStatus != domain.DriftStatusUnknown {
-				t.Fatalf("expected unknown drift after rejection repair, got %s", state.DriftStatus)
+			if len(fixture.intents.intents) != 0 {
+				t.Fatalf("direct registry fallback persisted intents: %#v", fixture.intents.intents)
 			}
 		})
 	}
@@ -451,42 +394,6 @@ func TestCallTool_ApprovalAndRejectionFlows(t *testing.T) {
 func TestCallTool_Rollback_CreatesRollbackIntent(t *testing.T) {
 	ctx := context.Background()
 	fixture := newTestMCPDeploymentServer(t, false)
-	previousArtifactID := fixture.addArtifact(uuid.Nil, "sha256:previous")
-	currentArtifactID := fixture.addArtifact(uuid.Nil, "sha256:current")
-
-	previousIntent := &domain.DeploymentIntent{
-		ServiceID:      fixture.serviceID,
-		EnvironmentID:  fixture.envID,
-		ArtifactID:     previousArtifactID,
-		RequestedBy:    "alice",
-		SourceKind:     domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired,
-		Status:         domain.IntentStatusDeployed,
-	}
-	if err := fixture.intents.Create(ctx, previousIntent); err != nil {
-		t.Fatalf("seed previous intent: %v", err)
-	}
-	currentIntent := &domain.DeploymentIntent{
-		ServiceID:      fixture.serviceID,
-		EnvironmentID:  fixture.envID,
-		ArtifactID:     currentArtifactID,
-		RequestedBy:    "bob",
-		SourceKind:     domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired,
-		Status:         domain.IntentStatusDeployed,
-	}
-	if err := fixture.intents.Create(ctx, currentIntent); err != nil {
-		t.Fatalf("seed current intent: %v", err)
-	}
-	if err := fixture.state.Upsert(ctx, &domain.EnvironmentServiceState{
-		ServiceID:         fixture.serviceID,
-		EnvironmentID:     fixture.envID,
-		DesiredArtifactID: &currentArtifactID,
-		DesiredIntentID:   &currentIntent.ID,
-		DriftStatus:       domain.DriftStatusInSync,
-	}); err != nil {
-		t.Fatalf("seed state: %v", err)
-	}
 
 	result, err := fixture.server.CallTool(ctx, "bahia_rollback", map[string]interface{}{
 		"service_id":     fixture.serviceID.String(),
@@ -500,37 +407,14 @@ func TestCallTool_Rollback_CreatesRollbackIntent(t *testing.T) {
 		t.Fatalf("rollback returned error: %s", result.Content[0].Text)
 	}
 	payload := decodeResultMap(t, result)
-	rollbackIntentID := uuid.MustParse(payload["intent_id"].(string))
-	if payload["status"] != "submitted" || payload["service_id"] != fixture.serviceID.String() || payload["environment_id"] != fixture.envID.String() {
-		t.Fatalf("unexpected rollback payload: %#v", payload)
+	if payload["status"] != "submitted" || payload["request_event_id"] != "rollback-event" || payload["service_id"] != fixture.serviceID.String() || payload["environment_id"] != fixture.envID.String() {
+		t.Fatalf("unexpected rollback receipt: %#v", payload)
 	}
-
-	rollbackIntent := fixture.intents.intents[rollbackIntentID]
-	if rollbackIntent == nil {
-		t.Fatalf("expected rollback intent %s to be persisted", rollbackIntentID)
+	if fixture.commands.rollback == nil || fixture.commands.rollback.ServiceID != fixture.serviceID || fixture.commands.rollback.EnvironmentID != fixture.envID || fixture.commands.rollback.AgentID != "operator" {
+		t.Fatalf("unexpected captured rollback command: %#v", fixture.commands.rollback)
 	}
-	if rollbackIntent.ArtifactID != previousArtifactID {
-		t.Fatalf("expected rollback artifact %s, got %s", previousArtifactID, rollbackIntent.ArtifactID)
-	}
-	if rollbackIntent.SourceKind != domain.SourceKindRollback {
-		t.Fatalf("expected rollback source kind, got %s", rollbackIntent.SourceKind)
-	}
-	if rollbackIntent.RequestedBy != "operator" {
-		t.Fatalf("expected requested_by operator, got %q", rollbackIntent.RequestedBy)
-	}
-	if rollbackIntent.SupersedesIntentID == nil || *rollbackIntent.SupersedesIntentID != currentIntent.ID {
-		t.Fatalf("expected rollback to supersede current intent %s, got %#v", currentIntent.ID, rollbackIntent.SupersedesIntentID)
-	}
-
-	state, err := fixture.state.Get(ctx, fixture.serviceID, fixture.envID)
-	if err != nil {
-		t.Fatalf("get state: %v", err)
-	}
-	if state.DesiredArtifactID == nil || *state.DesiredArtifactID != previousArtifactID {
-		t.Fatalf("expected rollback desired artifact %s, got %#v", previousArtifactID, state.DesiredArtifactID)
-	}
-	if state.DesiredIntentID == nil || *state.DesiredIntentID != rollbackIntentID {
-		t.Fatalf("expected rollback desired intent %s, got %#v", rollbackIntentID, state.DesiredIntentID)
+	if len(fixture.intents.intents) != 0 {
+		t.Fatalf("direct registry fallback persisted intents: %#v", fixture.intents.intents)
 	}
 }
 

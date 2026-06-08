@@ -183,9 +183,107 @@ func (c *OperatorControlPlaneClient) Close() {
 	}
 }
 
+// DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
+type DeploymentCommandResult struct {
+	Status        string `json:"status,omitempty"`
+	IntentID      string `json:"intent_id,omitempty"`
+	ServiceID     string `json:"service_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	ArtifactID    string `json:"artifact_id,omitempty"`
+	Message       string `json:"message,omitempty"`
+}
+
+// PublishPolicyCreateNostr publishes a signed public PolicyCreate request and returns relay/follow correlation metadata.
+func (c *OperatorControlPlaneClient) PublishPolicyCreateNostr(ctx context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	if c == nil || c.transport == nil || c.signer == nil {
+		return nil, &ControlPlaneRequestError{Phase: "configure policy command client", RequestAccepted: false, Cause: fmt.Errorf("operator control-plane client is not configured")}
+	}
+	publisher := controlplane.NewPolicyCommandPublisher(c.transport, c.signer)
+	receipt, err := publisher.PublishPolicyCreateRequest(ctx, cmd)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "publish PolicyCreate request", RequestAccepted: false, Cause: err}
+	}
+	return receipt, nil
+}
+
 // DeployServiceRuntimeNostr requests a direct runtime deploy over Nostr.
 func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
 	return c.runtimeAction(ctx, "deploy", serviceID, envID, artifactID, onStatus)
+}
+
+// CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
+func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, artifactID, requestedBy string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	serviceID = strings.TrimSpace(serviceID)
+	envID = strings.TrimSpace(envID)
+	artifactID = strings.TrimSpace(artifactID)
+	if serviceID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
+	}
+	if envID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
+	}
+	if artifactID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is required")}
+	}
+	payload := map[string]any{"service_id": serviceID, "environment_id": envID, "artifact_id": artifactID}
+	if requestedBy = strings.TrimSpace(requestedBy); requestedBy != "" {
+		payload["requested_by"] = requestedBy
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeploy, Tags: nostr.Tags{{"service", serviceID}, {"environment", envID}, {"artifact", artifactID}}, Payload: payload}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result DeploymentCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode deployment intent result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "submitted"
+	}
+	if result.ServiceID == "" {
+		result.ServiceID = serviceID
+	}
+	if result.EnvironmentID == "" {
+		result.EnvironmentID = envID
+	}
+	if result.ArtifactID == "" {
+		result.ArtifactID = artifactID
+	}
+	return &result, nil
+}
+
+// RollbackDeploymentNostr publishes a signer-first service/rollback intent and awaits the correlated ContextVM acknowledgment.
+func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context, serviceID, envID, requestedBy string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	serviceID = strings.TrimSpace(serviceID)
+	envID = strings.TrimSpace(envID)
+	if serviceID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate rollback request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
+	}
+	if envID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate rollback request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
+	}
+	payload := map[string]any{"service_id": serviceID, "environment_id": envID}
+	if requestedBy = strings.TrimSpace(requestedBy); requestedBy != "" {
+		payload["requested_by"] = requestedBy
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: "service/rollback", Tags: nostr.Tags{{"service", serviceID}, {"environment", envID}}, Payload: payload}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result DeploymentCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode rollback result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "submitted"
+	}
+	if result.ServiceID == "" {
+		result.ServiceID = serviceID
+	}
+	if result.EnvironmentID == "" {
+		result.EnvironmentID = envID
+	}
+	return &result, nil
 }
 
 // RestartServiceRuntimeNostr requests a direct runtime restart over Nostr.

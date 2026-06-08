@@ -19,7 +19,7 @@ MCP provides:
 
 ## Protocol
 
-MCP uses **JSON-RPC 2.0** over HTTP. Bahia's Nostr-native migration uses the same method model over ContextVM: client mutations are JSON-RPC requests on kind `25910` rather than legacy Bahia request kinds.
+MCP uses **JSON-RPC 2.0** over HTTP. Mutating tools return Nostr correlation receipts rather than synchronous domain objects. Some domains use ContextVM JSON-RPC on kind `25910`; policy CRUD/evaluate and tool approval decisions use Bahia public command kinds (`5986`-`5989`, `7977`) and still follow ContextVM replies/read-model observables for durable truth.
 
 ```bash
 curl -X POST http://localhost:8080/mcp \
@@ -73,12 +73,12 @@ curl -X POST http://localhost:8080/mcp \
 
 | Tool | Description |
 |------|-------------|
-| `bahia_deploy` | Create deployment intent |
-| `bahia_rollback` | Rollback to previous |
+| `bahia_deploy` | Publish signed ContextVM `service/deploy` deployment intent and return Nostr correlation receipt |
+| `bahia_rollback` | Publish signed ContextVM `service/rollback` intent and return Nostr correlation receipt |
 | `bahia_list_intents` | List deployment intents |
 | `bahia_get_intent` | Get intent details |
-| `bahia_approve_intent` | Approve deployment |
-| `bahia_reject_intent` | Reject deployment |
+| `bahia_approve_intent` | Publish signed ContextVM `approval/approve` request and return Nostr correlation receipt |
+| `bahia_reject_intent` | Publish signed ContextVM `approval/reject` request and return Nostr correlation receipt |
 | `bahia_list_runs` | List deployment runs |
 | `bahia_get_run` | Get run details |
 | `bahia_get_run_logs` | Get run logs (encrypted) |
@@ -89,7 +89,7 @@ curl -X POST http://localhost:8080/mcp \
 |------|-------------|
 | `bahia_list_artifacts` | List artifacts |
 | `bahia_get_artifact` | Get artifact details |
-| `bahia_artifact_register` | Register artifact |
+| `bahia_register_artifact` | Publish signed kind `5985` ArtifactRegister event and return relay acceptance receipt |
 | `bahia_get_sbom` | Get artifact SBOM |
 | `bahia_verify_signatures` | Verify signatures |
 
@@ -170,12 +170,28 @@ curl -X POST http://localhost:8080/mcp \
 
 ### Policy Tools
 
-Policy mutation tools use the ContextVM method surface for writes and canonical observable projections for reads. Deletion follows NIP-09 kind `5` where relay-level deletion semantics apply, with canonical tombstone projections where domain state requires durable delete markers.
+Policy list/get tools are read-only. Policy create/update/delete/evaluate tools are signer-first mutations: they publish signed public policy events, verify relay `OK` acceptance, and return `request_event_id`, `request_kind`, `result_kind`, read-model kinds, `d_tag`, and accepted relay count so MCP clients can subscribe instead of polling.
 
 | Tool | Description |
 |------|-------------|
-| `bahia_list_policies` | List policies |
-| `bahia_get_policy` | Get policy details |
+| `bahia_list_policies` | List policies (read-only) |
+| `bahia_get_policy` | Get policy details (read-only) |
+| `bahia_create_policy` | Publish signed `PolicyCreate` (`5986`) |
+| `bahia_update_policy` | Publish signed `PolicyUpdate` (`5987`) |
+| `bahia_delete_policy` | Publish signed `PolicyDelete` (`5988`) |
+| `bahia_evaluate_policy` | Publish signed `PolicyEvaluate` (`5989`) |
+
+### Tool Provisioning Approval Tools
+
+Tool provisioning status and denylist tools are not the same semantic mutation as approval/rejection. `bahia_tool_provision_status` is read-only. `bahia_tool_denylist_add` and `bahia_tool_denylist_remove` remain direct denylist administration paths until a separate tool-denylist command kind is specified. Approval and rejection are semantic tool provisioning decisions and therefore publish signed `ToolApprovalResponse` (`7977`) events with relay acceptance receipts.
+
+| Tool | Description |
+|------|-------------|
+| `bahia_tool_provision_status` | Read tool provisioning intent status |
+| `bahia_tool_provision_approve` | Publish signed `ToolApprovalResponse` (`7977`) approval |
+| `bahia_tool_provision_reject` | Publish signed `ToolApprovalResponse` (`7977`) rejection |
+| `bahia_tool_denylist_add` | Direct denylist administration, not approval semantics |
+| `bahia_tool_denylist_remove` | Direct denylist administration, not approval semantics |
 
 ### Payment Tools
 

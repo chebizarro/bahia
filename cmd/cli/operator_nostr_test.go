@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 )
@@ -156,6 +158,51 @@ func TestResolveOperatorRelaysPrecedence(t *testing.T) {
 			t.Fatalf("bootstrap-only error = %v, want trusted pubkey requirement", err)
 		}
 	})
+}
+
+func TestPolicyCreateUsesSignerFirstOperatorClient(t *testing.T) {
+	resetOperatorGlobals(t)
+	key := nostr.GeneratePrivateKey()
+	cmd := newOperatorFlagTestCommand(t)
+	cmd.SetContext(context.Background())
+	nostrPrivateKey = key
+	operatorRelays = []string{"wss://relay.example"}
+	if err := cmd.Root().PersistentFlags().Set("privkey", key); err != nil {
+		t.Fatalf("set privkey: %v", err)
+	}
+	if err := cmd.Root().PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	var captured *controlplane.PolicyMutationCommand
+	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		if cfg.PrivateKey != key {
+			t.Fatalf("PrivateKey = %q, want configured key", cfg.PrivateKey)
+		}
+		return fakeCLIOperatorClient{policyCreate: func(cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+			captured = &cmd
+			return &controlplane.PolicyCommandReceipt{RequestEventID: "policy-event", RequestKind: controlplane.KindPolicyCreate, ResultKind: controlplane.KindContextVMMessage, PublishedRelays: 1, Status: "submitted"}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	enabled := true
+	receipt, err := runPolicyCreateNostrFirst(cmd, controlplane.PolicyMutationCommand{Name: "require-sbom", Rules: []domain.PolicyRule{{Type: domain.RuleRequireSBOM}}, Enforcement: "block", Enabled: &enabled, IdempotencyKey: "policy:create:test"})
+	if err != nil {
+		t.Fatalf("run policy create: %v", err)
+	}
+	if receipt.RequestKind != controlplane.KindPolicyCreate || captured == nil || captured.IdempotencyKey != "policy:create:test" || captured.Name != "require-sbom" {
+		t.Fatalf("unexpected receipt=%#v captured=%#v", receipt, captured)
+	}
+}
+
+func TestParsePolicyRulesJSONAcceptsArrayAndRejectsEmpty(t *testing.T) {
+	rules, err := parsePolicyRulesJSON(`[{"type":"require_sbom"}]`)
+	if err != nil || len(rules) != 1 || rules[0].Type != domain.RuleRequireSBOM {
+		t.Fatalf("rules=%#v err=%v", rules, err)
+	}
+	if _, err := parsePolicyRulesJSON(`[]`); err == nil {
+		t.Fatalf("expected empty rules error")
+	}
 }
 
 func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
@@ -319,11 +366,18 @@ func TestOperatorStatusCallbackWritesOnlyInTableModeToStderr(t *testing.T) {
 }
 
 type fakeCLIOperatorClient struct {
-	restartErr error
+	restartErr   error
+	policyCreate func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 }
 
 func (f fakeCLIOperatorClient) Close() {}
 func (f fakeCLIOperatorClient) DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) CreateDeploymentIntentNostr(context.Context, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) RollbackDeploymentNostr(context.Context, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
@@ -339,6 +393,12 @@ func (f fakeCLIOperatorClient) ScanAdoptionNostr(context.Context, client.Adoptio
 	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) ImportAdoptionNostr(context.Context, client.AdoptionImportRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionImportResult, error) {
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) PublishPolicyCreateNostr(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	if f.policyCreate != nil {
+		return f.policyCreate(cmd)
+	}
 	return nil, errors.New("not implemented")
 }
 

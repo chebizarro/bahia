@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -130,6 +131,46 @@ func newTestMCPPolicyServer() (*Server, *testPolicyRepo) {
 	return server, policyRepo
 }
 
+type capturePolicyCommandPublisher struct {
+	create   *controlplane.PolicyMutationCommand
+	update   *controlplane.PolicyMutationCommand
+	delete   *controlplane.PolicyMutationCommand
+	evaluate *controlplane.PolicyMutationCommand
+}
+
+func (p *capturePolicyCommandPublisher) PublishPolicyCreateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	p.create = &cmd
+	return testPolicyReceipt(controlplane.KindPolicyCreate, cmd.IdempotencyKey), nil
+}
+func (p *capturePolicyCommandPublisher) PublishPolicyUpdateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	p.update = &cmd
+	return testPolicyReceipt(controlplane.KindPolicyUpdate, cmd.IdempotencyKey), nil
+}
+func (p *capturePolicyCommandPublisher) PublishPolicyDeleteRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	p.delete = &cmd
+	return testPolicyReceipt(controlplane.KindPolicyDelete, cmd.IdempotencyKey), nil
+}
+func (p *capturePolicyCommandPublisher) PublishPolicyEvaluateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	p.evaluate = &cmd
+	return testPolicyReceipt(controlplane.KindPolicyEvaluate, cmd.IdempotencyKey), nil
+}
+
+func testPolicyReceipt(kind int, key string) *controlplane.PolicyCommandReceipt {
+	if key == "" {
+		key = "generated-key"
+	}
+	return &controlplane.PolicyCommandReceipt{RequestEventID: "policy-event", RequestPubkey: "operator-pubkey", RequestKind: kind, ResultKind: controlplane.KindContextVMMessage, ReadModelKinds: map[string]int{"policy_registry": controlplane.KindCASControlState}, DTag: key, IdempotencyKey: key, Status: "submitted", PublishedRelays: 1}
+}
+
+type captureToolApprovalCommandPublisher struct {
+	cmd *controlplane.ToolApprovalCommand
+}
+
+func (p *captureToolApprovalCommandPublisher) PublishToolApprovalResponse(_ context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error) {
+	p.cmd = &cmd
+	return &controlplane.ToolApprovalCommandReceipt{RequestEventID: "tool-approval-event", RequestPubkey: "operator-pubkey", RequestKind: controlplane.KindToolApprovalResponse, ResultKind: controlplane.KindContextVMMessage, ReadModelKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, IntentID: cmd.IntentID.String(), Action: cmd.Action}, nil
+}
+
 func decodeResultMap(t *testing.T, result *ToolResult) map[string]interface{} {
 	t.Helper()
 	if result == nil || len(result.Content) == 0 {
@@ -168,35 +209,17 @@ func TestGetTools_IncludesPolicyCRUDAndEvaluate(t *testing.T) {
 	}
 }
 
-func TestCallTool_PolicyCRUDAndEvaluate(t *testing.T) {
+func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
 	ctx := context.Background()
-	server, _ := newTestMCPPolicyServer()
+	server, repo := newTestMCPPolicyServer()
 	envID := uuid.New()
+	policyID := uuid.New()
+	now := time.Now().UTC()
+	repo.policies[policyID] = &domain.DeploymentPolicy{ID: policyID, Name: "require-signature", EnvironmentID: &envID, Rules: []domain.PolicyRule{{Type: domain.RuleRequireSignature}}, Enforcement: domain.PolicyEnforcementBlock, Enabled: true, CreatedAt: now, UpdatedAt: now}
 
-	createRes, err := server.CallTool(ctx, "bahia_create_policy", map[string]interface{}{
-		"name":           "require-signature",
-		"environment_id": envID.String(),
-		"rules": []interface{}{
-			map[string]interface{}{"type": "require_signature"},
-		},
-		"enforcement": "block",
-		"enabled":     true,
-	})
-	if err != nil {
-		t.Fatalf("create err: %v", err)
-	}
-	if createRes.IsError {
-		t.Fatalf("create returned error: %s", createRes.Content[0].Text)
-	}
-	createPayload := decodeResultMap(t, createRes)
-	policyID := createPayload["policy_id"].(string)
-
-	getRes, err := server.CallTool(ctx, "bahia_get_policy", map[string]interface{}{"policy_id": policyID})
-	if err != nil {
-		t.Fatalf("get err: %v", err)
-	}
-	if getRes.IsError {
-		t.Fatalf("get returned error: %s", getRes.Content[0].Text)
+	getRes, err := server.CallTool(ctx, "bahia_get_policy", map[string]interface{}{"policy_id": policyID.String()})
+	if err != nil || getRes.IsError {
+		t.Fatalf("get result=%#v err=%v", getRes, err)
 	}
 	getPayload := decodeResultMap(t, getRes)
 	if getPayload["name"] != "require-signature" {
@@ -204,58 +227,92 @@ func TestCallTool_PolicyCRUDAndEvaluate(t *testing.T) {
 	}
 
 	listRes, err := server.CallTool(ctx, "bahia_list_policies", map[string]interface{}{"environment_id": envID.String()})
-	if err != nil {
-		t.Fatalf("list err: %v", err)
-	}
-	if listRes.IsError {
-		t.Fatalf("list returned error: %s", listRes.Content[0].Text)
+	if err != nil || listRes.IsError {
+		t.Fatalf("list result=%#v err=%v", listRes, err)
 	}
 	listPayload := decodeResultMap(t, listRes)
 	if int(listPayload["total"].(float64)) != 1 {
 		t.Fatalf("expected 1 policy, got %v", listPayload["total"])
 	}
+}
 
-	updateRes, err := server.CallTool(ctx, "bahia_update_policy", map[string]interface{}{
-		"policy_id":   policyID,
-		"name":        "require-signature-v2",
-		"enforcement": "warn",
+func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
+	ctx := context.Background()
+	publisher := &capturePolicyCommandPublisher{}
+	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{PolicyCommandPublisher: publisher})
+	envID := uuid.New()
+	policyID := uuid.New()
+	artifactID := uuid.New()
+	serviceID := uuid.New()
+
+	createRes, err := server.CallTool(ctx, "bahia_create_policy", map[string]interface{}{
+		"name":            "require-signature",
+		"environment_id":  envID.String(),
+		"rules":           []interface{}{map[string]interface{}{"type": "require_signature"}},
+		"enforcement":     "block",
+		"enabled":         true,
+		"idempotency_key": "policy:create:test",
 	})
-	if err != nil {
-		t.Fatalf("update err: %v", err)
+	if err != nil || createRes.IsError {
+		t.Fatalf("create result=%#v err=%v", createRes, err)
 	}
-	if updateRes.IsError {
-		t.Fatalf("update returned error: %s", updateRes.Content[0].Text)
+	createPayload := decodeResultMap(t, createRes)
+	if int(createPayload["request_kind"].(float64)) != controlplane.KindPolicyCreate {
+		t.Fatalf("create request_kind = %v", createPayload["request_kind"])
 	}
-
-	evalRes, err := server.CallTool(ctx, "bahia_evaluate_policy", map[string]interface{}{
-		"artifact_id":    uuid.New().String(),
-		"environment_id": envID.String(),
-	})
-	if err != nil {
-		t.Fatalf("evaluate err: %v", err)
-	}
-	if evalRes.IsError {
-		t.Fatalf("evaluate returned error: %s", evalRes.Content[0].Text)
-	}
-	evalPayload := decodeResultMap(t, evalRes)
-	if _, ok := evalPayload["allowed"]; !ok {
-		t.Fatalf("expected evaluation payload to include allowed")
+	if publisher.create == nil || publisher.create.Name != "require-signature" || publisher.create.EnvironmentID == nil || *publisher.create.EnvironmentID != envID || publisher.create.IdempotencyKey != "policy:create:test" {
+		t.Fatalf("create command not captured correctly: %#v", publisher.create)
 	}
 
-	deleteRes, err := server.CallTool(ctx, "bahia_delete_policy", map[string]interface{}{"policy_id": policyID})
-	if err != nil {
-		t.Fatalf("delete err: %v", err)
+	updateRes, err := server.CallTool(ctx, "bahia_update_policy", map[string]interface{}{"policy_id": policyID.String(), "name": "require-signature-v2", "enforcement": "warn", "idempotency_key": "policy:update:test"})
+	if err != nil || updateRes.IsError {
+		t.Fatalf("update result=%#v err=%v", updateRes, err)
 	}
-	if deleteRes.IsError {
-		t.Fatalf("delete returned error: %s", deleteRes.Content[0].Text)
+	if publisher.update == nil || publisher.update.ID != policyID || publisher.update.Name != "require-signature-v2" || publisher.update.Enforcement != "warn" {
+		t.Fatalf("update command not captured correctly: %#v", publisher.update)
 	}
 
-	getAfterDeleteRes, err := server.CallTool(ctx, "bahia_get_policy", map[string]interface{}{"policy_id": policyID})
-	if err != nil {
-		t.Fatalf("get after delete err: %v", err)
+	evalRes, err := server.CallTool(ctx, "bahia_evaluate_policy", map[string]interface{}{"artifact_id": artifactID.String(), "environment_id": envID.String(), "service_id": serviceID.String(), "idempotency_key": "policy:evaluate:test"})
+	if err != nil || evalRes.IsError {
+		t.Fatalf("evaluate result=%#v err=%v", evalRes, err)
 	}
-	if !getAfterDeleteRes.IsError {
-		t.Fatalf("expected get after delete to return error")
+	if publisher.evaluate == nil || publisher.evaluate.ArtifactID != artifactID || publisher.evaluate.EnvironmentID == nil || *publisher.evaluate.EnvironmentID != envID || publisher.evaluate.ServiceID == nil || *publisher.evaluate.ServiceID != serviceID {
+		t.Fatalf("evaluate command not captured correctly: %#v", publisher.evaluate)
+	}
+
+	deleteRes, err := server.CallTool(ctx, "bahia_delete_policy", map[string]interface{}{"policy_id": policyID.String(), "idempotency_key": "policy:delete:test"})
+	if err != nil || deleteRes.IsError {
+		t.Fatalf("delete result=%#v err=%v", deleteRes, err)
+	}
+	if publisher.delete == nil || publisher.delete.ID != policyID || publisher.delete.IdempotencyKey != "policy:delete:test" {
+		t.Fatalf("delete command not captured correctly: %#v", publisher.delete)
+	}
+}
+
+func TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses(t *testing.T) {
+	ctx := context.Background()
+	publisher := &captureToolApprovalCommandPublisher{}
+	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{ToolApprovalCommandPublisher: publisher})
+	intentID := uuid.New()
+
+	res, err := server.CallTool(ctx, "bahia_tool_provision_approve", map[string]interface{}{"intent_id": intentID.String(), "reason": "reviewed", "idempotency_key": "tool:approve:test"})
+	if err != nil || res.IsError {
+		t.Fatalf("approve result=%#v err=%v", res, err)
+	}
+	payload := decodeResultMap(t, res)
+	if int(payload["request_kind"].(float64)) != controlplane.KindToolApprovalResponse {
+		t.Fatalf("approve request_kind = %v", payload["request_kind"])
+	}
+	if publisher.cmd == nil || publisher.cmd.IntentID != intentID || publisher.cmd.Action != "approve" || publisher.cmd.Reason != "reviewed" || publisher.cmd.IdempotencyKey != "tool:approve:test" {
+		t.Fatalf("approval command not captured correctly: %#v", publisher.cmd)
+	}
+
+	res, err = server.CallTool(ctx, "bahia_tool_provision_reject", map[string]interface{}{"intent_id": intentID.String(), "reason": "unsafe"})
+	if err != nil || res.IsError {
+		t.Fatalf("reject result=%#v err=%v", res, err)
+	}
+	if publisher.cmd == nil || publisher.cmd.Action != "reject" || publisher.cmd.Reason != "unsafe" {
+		t.Fatalf("rejection command not captured correctly: %#v", publisher.cmd)
 	}
 }
 

@@ -12,6 +12,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -353,11 +355,18 @@ func deployCommands() *cobra.Command {
 			artifactID, _ := cmd.Flags().GetString("artifact")
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
 
-			intent, err := apiClient.CreateDeploymentIntent(cmd.Context(), serviceID, envID, artifactID, requestedBy)
+			result, err := runDeploymentIntentNostr(cmd, serviceID, envID, artifactID, requestedBy)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("✓ Deployment intent created: %s (status: %s)\n", intent.ID, intent.Status)
+			if outputFormat != "table" {
+				return outputSingle(result)
+			}
+			if result.IntentID != "" {
+				fmt.Printf("✓ Deployment intent submitted: %s (status: %s)\n", result.IntentID, firstNonEmpty(result.Status, "submitted"))
+			} else {
+				fmt.Printf("✓ Deployment intent submitted (status: %s)\n", firstNonEmpty(result.Status, "submitted"))
+			}
 			return nil
 		},
 	}
@@ -377,11 +386,18 @@ func deployCommands() *cobra.Command {
 			envID, _ := cmd.Flags().GetString("environment")
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
 
-			intent, err := apiClient.Rollback(cmd.Context(), serviceID, envID, requestedBy)
+			result, err := runRollbackIntentNostr(cmd, serviceID, envID, requestedBy)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("✓ Rollback intent created: %s\n", intent.ID)
+			if outputFormat != "table" {
+				return outputSingle(result)
+			}
+			if result.IntentID != "" {
+				fmt.Printf("✓ Rollback intent submitted: %s\n", result.IntentID)
+			} else {
+				fmt.Println("✓ Rollback intent submitted")
+			}
 			return nil
 		},
 	}
@@ -796,36 +812,70 @@ func policiesCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new policy",
+		Short: "Publish a signed PolicyCreate request (kind 5986)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, _ := cmd.Flags().GetString("name")
-			envID, _ := cmd.Flags().GetString("environment")
+			envIDRaw, _ := cmd.Flags().GetString("environment")
 			enforcement, _ := cmd.Flags().GetString("enforcement")
 			rulesJSON, _ := cmd.Flags().GetString("rules")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			var rules map[string]any
-			if rulesJSON != "" {
-				if err := json.Unmarshal([]byte(rulesJSON), &rules); err != nil {
-					return fmt.Errorf("invalid rules JSON: %w", err)
-				}
-			}
-
-			policy, err := apiClient.CreatePolicy(cmd.Context(), name, envID, rules, enforcement, true)
+			rules, err := parsePolicyRulesJSON(rulesJSON)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("✓ Policy created: %s\n", policy.ID)
+			var envID *uuid.UUID
+			if strings.TrimSpace(envIDRaw) != "" {
+				parsed, err := uuid.Parse(strings.TrimSpace(envIDRaw))
+				if err != nil {
+					return fmt.Errorf("invalid environment UUID: %w", err)
+				}
+				envID = &parsed
+			}
+			enabled := true
+			receipt, err := runPolicyCreateNostrFirst(cmd, controlplane.PolicyMutationCommand{Name: name, EnvironmentID: envID, Rules: rules, Enforcement: enforcement, Enabled: &enabled, IdempotencyKey: idempotencyKey})
+			if err != nil {
+				return err
+			}
+			if outputFormat == "json" || outputFormat == "yaml" {
+				return outputSingle(receipt)
+			}
+			fmt.Printf("✓ PolicyCreate accepted by %d relay(s): %s\n", receipt.PublishedRelays, receipt.RequestEventID)
+			fmt.Printf("Follow result kind %d with #e=%s and policy read model kind %d.\n", receipt.ResultKind, receipt.RequestEventID, receipt.ReadModelKinds["policy_registry"])
 			return nil
 		},
 	}
 	createCmd.Flags().String("name", "", "Policy name")
 	createCmd.Flags().String("environment", "", "Environment ID (optional)")
 	createCmd.Flags().String("enforcement", "warn", "Enforcement: warn, block")
-	createCmd.Flags().String("rules", "{}", "Rules as JSON")
+	createCmd.Flags().String("rules", "[]", "Policy rules as JSON array")
+	createCmd.Flags().String("idempotency-key", "", "Optional Nostr d tag for idempotency/correlation")
 	_ = createCmd.MarkFlagRequired("name")
 
 	cmd.AddCommand(listCmd, getCmd, createCmd)
 	return cmd
+}
+
+func parsePolicyRulesJSON(raw string) ([]domain.PolicyRule, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("rules JSON is required")
+	}
+	var rules []domain.PolicyRule
+	if err := json.Unmarshal([]byte(raw), &rules); err == nil {
+		if len(rules) == 0 {
+			return nil, fmt.Errorf("at least one policy rule is required")
+		}
+		return rules, nil
+	}
+	var single domain.PolicyRule
+	if err := json.Unmarshal([]byte(raw), &single); err != nil {
+		return nil, fmt.Errorf("invalid rules JSON: %w", err)
+	}
+	if single.Type == "" {
+		return nil, fmt.Errorf("policy rule type is required")
+	}
+	return []domain.PolicyRule{single}, nil
 }
 
 // --- Secrets Commands ---

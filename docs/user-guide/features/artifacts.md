@@ -53,7 +53,7 @@ Use the Hive-CI bridge or publish the event directly from CI with your configure
 
 ### CLI and MCP
 
-Artifact registration mutations are signer-first. Legacy CLI/MCP registration surfaces are being migrated to publish signed Nostr events directly; until that migration lands, publish the Nostr event below or use the Hive-CI bridge.
+Artifact registration mutations are signer-first. MCP `bahia_register_artifact` publishes a signed kind `5985` ArtifactRegister event and returns the request event id, pubkey, kind, and accepted relay count. Legacy direct REST/registry registration is not a production mutation path.
 
 ### Nostr (Signer-First)
 

@@ -61,18 +61,24 @@ evaluated_at: "2024-01-15T10:00:00Z"
 
 ### CLI and MCP
 
-Policy creation is signer-first. Publish a ContextVM JSON-RPC `policy/create` request as Nostr kind `25910`, usually inside encrypted `1059`/`21059` for private policy payloads, and subscribe to canonical policy state/status/audit observables for durable truth. Transitional REST `POST /api/v1/policies` is available when a control-plane command publisher is configured; it resolves authorization from `environment_id`, requires `policies:write` for that environment's organization, publishes the same signed command, verifies relay `OK` acceptance, and returns a `202` command receipt instead of a synchronous policy domain object.
+Policy creation is signer-first. CLI and MCP mutation surfaces publish a signed public `PolicyCreate` event (`kind: 5986`), verify relay `OK` acceptance, and return correlation metadata. Durable truth comes from following the returned `request_event_id` in ContextVM reply events (`kind: 25910`) and policy read-model projections (`kind: 30900`). Direct REST/repository mutation fallback is not used for policy creation.
 
-### Nostr (ContextVM)
+Read-only paths are distinct: listing and getting policies may read durable read models or server projections because they do not change policy semantics.
+
+### Nostr (`PolicyCreate` 5986)
 
 ```json
 {
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"policy-create-require-sbom\",\"method\":\"policy/create\",\"params\":{\"name\":\"require-sbom\",\"rules\":{\"require_sbom\":true},\"enforcement\":\"block\",\"_meta\":{\"progressToken\":\"policy-create-require-sbom\"}}}",
+  "kind": 5986,
+  "content": {
+    "name": "require-sbom",
+    "rules": [{ "type": "require_sbom" }],
+    "enforcement": "block",
+    "enabled": true
+  },
   "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "policy/create"],
-    ["policy", "require-sbom"]
+    ["d", "policy-create-require-sbom"],
+    ["policy_name", "require-sbom"]
   ]
 }
 ```
@@ -201,15 +207,17 @@ bahia policies get require-sbom -o yaml
 
 ### Nostr
 
-Policy updates are signer-first. Publish a ContextVM `policy/update` request, or use transitional REST `PUT /api/v1/policies/{id}` to publish that command and receive `202` command metadata. Transitional REST update/delete resolves authorization from the existing policy's environment and requires `policies:write` for that organization:
+Policy updates are signer-first. Publish a signed `PolicyUpdate` event (`kind: 5987`) with `id` in content or the `policy` tag. Omitted fields are preserved by the reactor; an empty `environment_id` explicitly clears environment scoping.
 
 ```json
 {
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"policy-update-policy-123\",\"method\":\"policy/update\",\"params\":{\"id\":\"policy-123\",\"rules\":{\"max_high_vulns\":3},\"_meta\":{\"progressToken\":\"policy-update-policy-123\"}}}",
+  "kind": 5987,
+  "content": {
+    "id": "policy-123",
+    "enforcement": "warn"
+  },
   "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "policy/update"],
+    ["d", "policy-update-policy-123"],
     ["policy", "policy-123"]
   ]
 }
@@ -217,7 +225,7 @@ Policy updates are signer-first. Publish a ContextVM `policy/update` request, or
 
 ## Deleting Policies
 
-Policy deletion is signer-first. Publish a ContextVM `policy/delete` request with the policy id in params and correlation tags, or use transitional REST `DELETE /api/v1/policies/{id}` to publish that command and receive `202` command metadata.
+Policy deletion is signer-first. Publish a signed `PolicyDelete` event (`kind: 5988`) with the policy id in content or the `policy` tag. CLI/MCP return relay acceptance and follow metadata; they do not delete the repository row directly.
 
 **Note**: Policies linked to active deployments cannot be deleted.
 

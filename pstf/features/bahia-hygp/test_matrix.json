@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-hygp",
+  "tests": [
+    {
+      "criteria": ["AC1", "AC2"],
+      "test": "go test ./pkg/client",
+      "evidence": "pkg/client operator Nostr tests verify subscribe-before-publish, signed ContextVM request construction, relay publish acceptance, rejection handling, correlated signed replies, and no REST calls for removed client methods."
+    },
+    {
+      "criteria": ["AC3", "AC5"],
+      "test": "go test ./internal/mcp",
+      "evidence": "server_deployment_intents_test captures ServiceCommandPublisher deploy/rollback/approval calls and asserts no direct intent repository persistence from MCP mutation tools."
+    },
+    {
+      "criteria": ["AC4", "AC5"],
+      "test": "go test ./internal/mcp",
+      "evidence": "server_build_artifact_test captures ArtifactCommandPublisher registration and asserts MCP returns kind 5985 request receipt metadata instead of a directly persisted artifact object."
+    },
+    {
+      "criteria": ["AC3", "AC4"],
+      "test": "go test ./internal/controlplane",
+      "evidence": "controlplane publisher tests compile and validate command publisher behavior in the signer-first control-plane package."
+    },
+    {
+      "criteria": ["AC3", "AC4"],
+      "test": "go test ./internal/app",
+      "evidence": "app wiring test/build verifies MCP server dependency injection compiles with service and artifact command publishers."
+    },
+    {
+      "criteria": ["AC1", "AC2"],
+      "test": "go test ./cmd/cli",
+      "evidence": "cmd/cli passes after signer-first deployment helpers are wired and the concurrent policy CLI helper is present in the worktree."
+    }
+  ]
+}

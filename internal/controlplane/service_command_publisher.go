@@ -50,6 +50,13 @@ type ServiceRollbackCommand struct {
 	AgentID        string
 }
 
+type ServiceApprovalCommand struct {
+	IntentID       uuid.UUID
+	Decision       string
+	IdempotencyKey string
+	AgentID        string
+}
+
 type ServiceCommandReceipt struct {
 	RequestEventID  string `json:"request_event_id"`
 	RequestPubkey   string `json:"request_pubkey"`
@@ -69,6 +76,8 @@ type ServiceCommandReceipt struct {
 	ServiceName     string `json:"service_name,omitempty"`
 	EnvironmentID   string `json:"environment_id,omitempty"`
 	ArtifactID      string `json:"artifact_id,omitempty"`
+	IntentID        string `json:"intent_id,omitempty"`
+	Decision        string `json:"decision,omitempty"`
 }
 
 func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Context, cmd ServiceCreateCommand) (*ServiceCommandReceipt, error) {
@@ -138,6 +147,30 @@ func (p *ServiceCommandPublisher) PublishRollbackRequest(ctx context.Context, cm
 	if receipt != nil {
 		receipt.ServiceID = cmd.ServiceID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
+		receipt.RegistryKind = KindDeploymentIntentRegistry
+		receipt.StateKind = KindCASControlState
+	}
+	return receipt, err
+}
+
+func (p *ServiceCommandPublisher) PublishDeploymentApprovalRequest(ctx context.Context, cmd ServiceApprovalCommand) (*ServiceCommandReceipt, error) {
+	decision := strings.ToLower(strings.TrimSpace(cmd.Decision))
+	if decision != "approve" && decision != "reject" {
+		return nil, fmt.Errorf("decision must be approve or reject")
+	}
+	if cmd.IntentID == uuid.Nil {
+		return nil, fmt.Errorf("intent_id is required")
+	}
+	method := ContextVMMethodApprovalApprove
+	if decision == "reject" {
+		method = "approval/reject"
+	}
+	content := map[string]any{"intent_id": cmd.IntentID.String(), "decision": decision, "approved": decision == "approve"}
+	tags := nostr.Tags{{"intent", cmd.IntentID.String()}, {"decision", decision}}
+	receipt, err := p.publish(ctx, method, tags, content, cmd.IdempotencyKey, cmd.AgentID)
+	if receipt != nil {
+		receipt.IntentID = cmd.IntentID.String()
+		receipt.Decision = decision
 		receipt.RegistryKind = KindDeploymentIntentRegistry
 		receipt.StateKind = KindCASControlState
 	}

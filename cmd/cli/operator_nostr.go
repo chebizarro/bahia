@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 )
@@ -14,10 +15,13 @@ import (
 type cliOperatorClient interface {
 	Close()
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
+	CreateDeploymentIntentNostr(context.Context, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
+	RollbackDeploymentNostr(context.Context, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	StopServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	ScanAdoptionNostr(context.Context, client.AdoptionScanRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionPreview, error)
 	ImportAdoptionNostr(context.Context, client.AdoptionImportRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionImportResult, error)
+	PublishPolicyCreateNostr(context.Context, controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 }
 
 var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
@@ -26,6 +30,24 @@ var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig) (cliOpera
 
 var discoverOperatorRelaysForCLI = func(ctx context.Context, cfg client.OperatorRelayDiscoveryConfig) ([]string, error) {
 	return client.DiscoverOperatorRelays(ctx, cfg)
+}
+
+func runDeploymentIntentNostr(cmd *cobra.Command, serviceID, envID, artifactID, requestedBy string) (*client.DeploymentCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.CreateDeploymentIntentNostr(cmd.Context(), serviceID, envID, artifactID, requestedBy, operatorStatusCallback(cmd, "deploy"))
+}
+
+func runRollbackIntentNostr(cmd *cobra.Command, serviceID, envID, requestedBy string) (*client.DeploymentCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.RollbackDeploymentNostr(cmd.Context(), serviceID, envID, requestedBy, operatorStatusCallback(cmd, "rollback"))
 }
 
 func runRuntimeActionNostrFirst(cmd *cobra.Command, action, serviceID, envID string, artifactID *string, fallback func(context.Context) (*client.RuntimeActionResult, error)) (*client.RuntimeActionResult, error) {
@@ -70,6 +92,15 @@ func runAdoptionScanNostrFirst(cmd *cobra.Command, req client.AdoptionScanReques
 		return fallbackOrError(cmd, err, fallback)
 	}
 	return result, nil
+}
+
+func runPolicyCreateNostrFirst(cmd *cobra.Command, req controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.PublishPolicyCreateNostr(cmd.Context(), req)
 }
 
 func runAdoptionImportNostrFirst(cmd *cobra.Command, req client.AdoptionImportRequest, rawTargetUsed bool, fallback func(context.Context) ([]client.AdoptionImportResult, error)) ([]client.AdoptionImportResult, error) {

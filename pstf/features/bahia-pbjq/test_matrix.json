@@ -1,0 +1,74 @@
+{
+  "feature_id": "bahia-pbjq",
+  "test_commands": [
+    {
+      "command": "go test ./internal/controlplane -run 'PolicyCommandPublisher|ToolApprovalCommandPublisher'",
+      "result": "passed",
+      "acceptance_criteria": [
+        "AC1",
+        "AC2"
+      ]
+    },
+    {
+      "command": "go test ./internal/mcp -run 'Policy|ToolApproval'",
+      "result": "passed",
+      "acceptance_criteria": [
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "command": "go test ./cmd/cli -run 'PolicyCreate|ParsePolicyRules'",
+      "result": "passed",
+      "acceptance_criteria": [
+        "AC5"
+      ]
+    },
+    {
+      "command": "go test ./internal/controlplane",
+      "result": "passed",
+      "acceptance_criteria": [
+        "AC1",
+        "AC2"
+      ]
+    },
+    {
+      "command": "go test ./internal/mcp",
+      "result": "passed",
+      "acceptance_criteria": [
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "command": "go test ./cmd/cli",
+      "result": "passed",
+      "acceptance_criteria": [
+        "AC5"
+      ]
+    }
+  ],
+  "manual_reviews": [
+    {
+      "artifact": "docs/user-guide/cli-reference.md",
+      "result": "updated to describe signer-first policy create and read-only policy queries",
+      "acceptance_criteria": [
+        "AC6"
+      ]
+    },
+    {
+      "artifact": "docs/user-guide/mcp-tools.md",
+      "result": "updated to distinguish policy/tool approval mutation event kinds from read-only/status and denylist admin paths",
+      "acceptance_criteria": [
+        "AC6"
+      ]
+    },
+    {
+      "artifact": "docs/user-guide/features/policies.md",
+      "result": "updated with PolicyCreate/Update/Delete signer-first event kinds and follow behavior",
+      "acceptance_criteria": [
+        "AC6"
+      ]
+    }
+  ]
+}

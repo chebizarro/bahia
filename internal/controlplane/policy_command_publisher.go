@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,6 +26,8 @@ type PolicyMutationCommand struct {
 	ID             uuid.UUID
 	Name           string
 	EnvironmentID  *uuid.UUID
+	ArtifactID     uuid.UUID
+	ServiceID      *uuid.UUID
 	Rules          []domain.PolicyRule
 	Enforcement    string
 	Enabled        *bool
@@ -49,38 +52,61 @@ type PolicyCommandReceipt struct {
 	PolicyID        string         `json:"policy_id,omitempty"`
 	PolicyName      string         `json:"policy_name,omitempty"`
 	EnvironmentID   string         `json:"environment_id,omitempty"`
+	ArtifactID      string         `json:"artifact_id,omitempty"`
+	ServiceID       string         `json:"service_id,omitempty"`
 }
 
 func (p *PolicyCommandPublisher) PublishPolicyCreateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if strings.TrimSpace(cmd.Name) == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	return p.publish(ctx, ContextVMMethodPolicyCreate, "policy-create", cmd, false)
+	if len(cmd.Rules) == 0 {
+		return nil, fmt.Errorf("rules is required")
+	}
+	return p.publish(ctx, KindPolicyCreate, "policy-create", cmd, false)
 }
 
 func (p *PolicyCommandPublisher) PublishPolicyUpdateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if cmd.ID == uuid.Nil {
 		return nil, fmt.Errorf("policy id is required")
 	}
-	return p.publish(ctx, ContextVMMethodPolicyUpdate, "policy-update", cmd, true)
+	return p.publish(ctx, KindPolicyUpdate, "policy-update", cmd, true)
 }
 
 func (p *PolicyCommandPublisher) PublishPolicyDeleteRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if cmd.ID == uuid.Nil {
 		return nil, fmt.Errorf("policy id is required")
 	}
-	return p.publish(ctx, ContextVMMethodPolicyDelete, "policy-delete", cmd, true)
+	return p.publish(ctx, KindPolicyDelete, "policy-delete", cmd, true)
 }
 
-func (p *PolicyCommandPublisher) publish(ctx context.Context, method, defaultPrefix string, cmd PolicyMutationCommand, includeID bool) (*PolicyCommandReceipt, error) {
+func (p *PolicyCommandPublisher) PublishPolicyEvaluateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
+	if cmd.ArtifactID == uuid.Nil {
+		return nil, fmt.Errorf("artifact id is required")
+	}
+	if cmd.EnvironmentID == nil || *cmd.EnvironmentID == uuid.Nil {
+		return nil, fmt.Errorf("environment id is required")
+	}
+	return p.publish(ctx, KindPolicyEvaluate, "policy-evaluate", cmd, false)
+}
+
+func (p *PolicyCommandPublisher) publish(ctx context.Context, kind int, defaultPrefix string, cmd PolicyMutationCommand, includeID bool) (*PolicyCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("policy command publisher is not configured")
 	}
 	content := map[string]any{}
-	if includeID {
+	if includeID || kind == KindPolicyDelete {
 		content["id"] = cmd.ID.String()
 	}
-	if method != ContextVMMethodPolicyDelete {
+	if kind == KindPolicyEvaluate {
+		content["artifact_id"] = cmd.ArtifactID.String()
+		if cmd.EnvironmentID != nil && *cmd.EnvironmentID != uuid.Nil {
+			content["environment_id"] = cmd.EnvironmentID.String()
+		}
+		if cmd.ServiceID != nil && *cmd.ServiceID != uuid.Nil {
+			content["service_id"] = cmd.ServiceID.String()
+		}
+	} else if kind != KindPolicyDelete {
 		if strings.TrimSpace(cmd.Name) != "" {
 			content["name"] = strings.TrimSpace(cmd.Name)
 		}
@@ -107,30 +133,61 @@ func (p *PolicyCommandPublisher) publish(ctx context.Context, method, defaultPre
 	if cmd.EnvironmentID != nil && *cmd.EnvironmentID != uuid.Nil {
 		tags = append(tags, nostr.Tag{"environment", cmd.EnvironmentID.String()})
 	}
+	if cmd.ArtifactID != uuid.Nil {
+		tags = append(tags, nostr.Tag{"artifact", cmd.ArtifactID.String()})
+	}
+	if cmd.ServiceID != nil && *cmd.ServiceID != uuid.Nil {
+		tags = append(tags, nostr.Tag{"service", cmd.ServiceID.String()})
+	}
 	dTag := strings.TrimSpace(cmd.IdempotencyKey)
 	if dTag == "" {
 		dTag = defaultPrefix + ":" + uuid.NewString()
 	}
-	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, cmd.AgentID, tags, content, "policy command")
+	body, err := json.Marshal(content)
 	if err != nil {
-		if ev != nil && published > 0 {
-			receipt := &PolicyCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(), DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}
-			populatePolicyReceiptTags(receipt, ev.Tags)
+		return nil, fmt.Errorf("marshal policy command: %w", err)
+	}
+	eventTags := nostr.Tags{{"d", dTag}}
+	eventTags = append(eventTags, compactTags(tags)...)
+	if agentID := strings.TrimSpace(cmd.AgentID); agentID != "" {
+		eventTags = append(eventTags, nostr.Tag{"agent", agentID})
+	}
+	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: eventTags, Content: string(body)}
+	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
+		return nil, fmt.Errorf("sign policy command: %w", err)
+	}
+	published, err := p.publisher.Publish(ctx, *ev)
+	if err != nil {
+		if published > 0 {
+			receipt := policyReceiptFromEvent(ev, dTag, published, "error")
+			receipt.Error = err.Error()
 			return receipt, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("publish policy command: %w", err)
 	}
-	receipt := &PolicyCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(), DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}
+	if published == 0 {
+		return nil, fmt.Errorf("publish policy command: no relay accepted the request; retry after relay reconnect")
+	}
+	return policyReceiptFromEvent(ev, dTag, published, "submitted"), nil
+}
+
+func policyReceiptFromEvent(ev *nostr.Event, dTag string, published int, status string) *PolicyCommandReceipt {
+	receipt := &PolicyCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: ev.Kind, ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(ev.Kind), DTag: dTag, IdempotencyKey: dTag, Status: status, PublishedRelays: published}
 	populatePolicyReceiptTags(receipt, ev.Tags)
-	return receipt, nil
+	return receipt
 }
 
 func populatePolicyReceiptTags(receipt *PolicyCommandReceipt, tags nostr.Tags) {
 	receipt.PolicyID = tagValueNostr(tags, "policy")
 	receipt.PolicyName = tagValueNostr(tags, "policy_name")
 	receipt.EnvironmentID = tagValueNostr(tags, "environment")
+	receipt.ArtifactID = tagValueNostr(tags, "artifact")
+	receipt.ServiceID = tagValueNostr(tags, "service")
 }
 
-func policyReadModels() map[string]int {
+func policyReadModels(kind int) map[string]int {
+	if kind == KindPolicyEvaluate {
+		return nil
+	}
 	return map[string]int{"policy_registry": KindCASControlState}
 }

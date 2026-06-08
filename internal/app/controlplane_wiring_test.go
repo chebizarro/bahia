@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+
+	canonicalnostr "fiatjaf.com/nostr"
 	"reflect"
 	"testing"
 	"time"
@@ -99,6 +101,42 @@ func TestControlPlaneReactorBackupOptionsInjectFinalSliceDependencies(t *testing
 type appWiringBackupMCPPublisher struct{}
 
 func (appWiringBackupMCPPublisher) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
+
+func TestConfigurePolicyToolMCPDepsWiresSignerFirstPublishers(t *testing.T) {
+	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	require.NoError(t, err)
+	deps := mcp.ServerDeps{}
+
+	policyPublisher := configurePolicyToolMCPDeps(&deps, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
+
+	require.NotNil(t, policyPublisher)
+	require.Same(t, policyPublisher, deps.PolicyCommandPublisher)
+	require.NotNil(t, deps.ToolApprovalCommandPublisher)
+}
+
+func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testing.T) {
+	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name      string
+		publisher controlplane.NostrEventPublisher
+		signer    canonicalnostr.Signer
+		relays    []string
+	}{
+		{name: "nil publisher", signer: signer, relays: []string{"ws://relay.test"}},
+		{name: "nil signer", publisher: appWiringBackupMCPPublisher{}, relays: []string{"ws://relay.test"}},
+		{name: "no relays", publisher: appWiringBackupMCPPublisher{}, signer: signer},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := mcp.ServerDeps{}
+			policyPublisher := configurePolicyToolMCPDeps(&deps, tt.publisher, tt.signer, tt.relays)
+			require.Nil(t, policyPublisher)
+			require.Nil(t, deps.PolicyCommandPublisher)
+			require.Nil(t, deps.ToolApprovalCommandPublisher)
+		})
+	}
+}
 
 func TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels(t *testing.T) {
 	var _ mcp.BackupReadModelRepository = (*repository.PgBackupControlPlaneRepository)(nil)

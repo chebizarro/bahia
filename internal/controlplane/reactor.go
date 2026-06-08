@@ -1841,11 +1841,11 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 	}
 	var req struct {
 		ID            string              `json:"id"`
-		Name          string              `json:"name"`
+		Name          *string             `json:"name,omitempty"`
 		EnvironmentID *string             `json:"environment_id,omitempty"`
-		Rules         []domain.PolicyRule `json:"rules"`
-		Enforcement   string              `json:"enforcement"`
-		Enabled       bool                `json:"enabled"`
+		Rules         []domain.PolicyRule `json:"rules,omitempty"`
+		Enforcement   *string             `json:"enforcement,omitempty"`
+		Enabled       *bool               `json:"enabled,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
 		r.publishError(ctx, event, "parse_error", err.Error())
@@ -1859,14 +1859,38 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err))
 		return
 	}
-	policy := &domain.DeploymentPolicy{ID: id, Name: req.Name, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
-	if req.EnvironmentID != nil && *req.EnvironmentID != "" {
-		envID, err := uuid.Parse(*req.EnvironmentID)
-		if err != nil {
-			r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
-			return
+	policy, err := r.policyService.GetPolicy(ctx, id)
+	if err != nil {
+		r.publishError(ctx, event, "lookup_error", err.Error())
+		return
+	}
+	if policy == nil {
+		r.publishError(ctx, event, "not_found", "policy not found")
+		return
+	}
+	if req.Name != nil {
+		policy.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Rules != nil {
+		policy.Rules = req.Rules
+	}
+	if req.Enforcement != nil {
+		policy.Enforcement = domain.PolicyEnforcement(strings.TrimSpace(*req.Enforcement))
+	}
+	if req.Enabled != nil {
+		policy.Enabled = *req.Enabled
+	}
+	if req.EnvironmentID != nil {
+		if strings.TrimSpace(*req.EnvironmentID) == "" {
+			policy.EnvironmentID = nil
+		} else {
+			envID, err := uuid.Parse(*req.EnvironmentID)
+			if err != nil {
+				r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+				return
+			}
+			policy.EnvironmentID = &envID
 		}
-		policy.EnvironmentID = &envID
 	}
 	if policy.Enforcement == "" {
 		policy.Enforcement = domain.PolicyEnforcementWarn

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -126,6 +127,19 @@ func (m *testArtifactRepo) ListByBuild(_ context.Context, buildID uuid.UUID) ([]
 	return out, nil
 }
 
+type captureArtifactCommandPublisher struct {
+	register *controlplane.ArtifactRegisterCommand
+	err      error
+}
+
+func (p *captureArtifactCommandPublisher) PublishArtifactRegisterRequest(_ context.Context, cmd controlplane.ArtifactRegisterCommand) (*controlplane.ArtifactCommandReceipt, error) {
+	p.register = &cmd
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &controlplane.ArtifactCommandReceipt{RequestEventID: "artifact-event", RequestPubkey: "operator", RequestKind: controlplane.KindArtifactRegister, ResultKind: controlplane.KindActionResult, RegistryKind: controlplane.KindArtifactRegistry, Status: "submitted", PublishedRelays: 1, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}, nil
+}
+
 func newTestMCPBuildArtifactServer() *Server {
 	buildRepo := newTestBuildRepo()
 	artifactRepo := newTestArtifactRepo()
@@ -142,7 +156,7 @@ func newTestMCPBuildArtifactServer() *Server {
 		events.NewInProcessPublisher(zap.NewNop()),
 		zap.NewNop(),
 	)
-	return NewServer(registry, zap.NewNop())
+	return NewServerWithOptions(registry, zap.NewNop(), ServerDeps{ArtifactCommandPublisher: &captureArtifactCommandPublisher{}})
 }
 
 func TestGetTools_IncludesBuildArtifactRegister(t *testing.T) {
@@ -212,12 +226,11 @@ func TestCallTool_RegisterBuild_AndRegisterArtifact(t *testing.T) {
 		t.Fatalf("register artifact returned error: %s", artifactRes.Content[0].Text)
 	}
 	artifactPayload := decodeResultMap(t, artifactRes)
-	artifact := artifactPayload["artifact"].(map[string]interface{})
-	if artifact["build_id"] != buildID {
-		t.Fatalf("expected build_id %s, got %v", buildID, artifact["build_id"])
+	if artifactPayload["request_event_id"] != "artifact-event" || artifactPayload["request_kind"].(float64) != float64(controlplane.KindArtifactRegister) {
+		t.Fatalf("unexpected artifact register receipt: %#v", artifactPayload)
 	}
-	if artifact["scan_status"] != "clean" {
-		t.Fatalf("expected scan_status clean, got %v", artifact["scan_status"])
+	if artifactPayload["build_id"] != buildID || artifactPayload["service_id"] != serviceID || artifactPayload["image_digest"] != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("unexpected artifact register payload: %#v", artifactPayload)
 	}
 }
 

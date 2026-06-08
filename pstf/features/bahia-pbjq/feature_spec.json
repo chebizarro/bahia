@@ -1,0 +1,32 @@
+{
+  "feature_id": "bahia-pbjq",
+  "title": "Signer-first policy and tool mutation CLI/MCP surfaces",
+  "intent": "Policy and tool approval semantic mutation surfaces publish signed Nostr events first, verify relay OK acceptance, and expose follow metadata instead of mutating repositories or services directly.",
+  "observed_behavior_before": [
+    "The CLI policy create command used the REST policy client mutation path rather than the operator signer/control-plane publisher.",
+    "MCP policy create, update, delete, and evaluate tools invoked PolicyService mutation/evaluation methods directly.",
+    "MCP tool provisioning approve/reject tools mutated ToolProvisioningRepository intent state and approval logs directly.",
+    "Read-only policy list/get and tool provisioning status paths legitimately used durable read models, but the semantic mutation distinction was not documented for users or MCP clients."
+  ],
+  "intended_behavior": [
+    "PolicyCreate, PolicyUpdate, PolicyDelete, and PolicyEvaluate mutation surfaces publish signed public Nostr events of kinds 5986, 5987, 5988, and 5989 respectively.",
+    "Tool provisioning approval/rejection mutation surfaces publish signed ToolApprovalResponse events of kind 7977.",
+    "Publishers verify relay OK acceptance by requiring at least one accepted relay and propagate relay rejection/no-acceptance failures to the caller.",
+    "CLI and MCP mutation responses return follow metadata for canonical observables rather than claiming direct durable completion from request submission.",
+    "Read-only list/get/status paths may continue to read durable projections, and denylist administration remains documented as a distinct admin path rather than a tool approval semantic mutation."
+  ],
+  "scope": [
+    "cmd/cli policy create signer-first operator path",
+    "internal/mcp policy mutation handlers",
+    "internal/mcp tool approval/rejection handlers",
+    "internal/controlplane policy command publisher direct event semantics",
+    "internal/controlplane tool approval command publisher",
+    "policy and tool approval documentation",
+    "deterministic tests for publish/follow/rejection behavior"
+  ],
+  "non_goals": [
+    "Deployment and artifact CLI/MCP mutation surfaces are intentionally out of scope because bahia-hygp owns that concurrent work.",
+    "Policy list/get and tool provisioning status read-model queries are not converted to mutation publishers.",
+    "Tool denylist administration is not redefined as ToolApprovalResponse semantics in this slice."
+  ]
+}
