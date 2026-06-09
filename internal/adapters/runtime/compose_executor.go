@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
@@ -13,6 +14,12 @@ type ComposeExecutor interface {
 	RuntimeControlClient
 	Validate(ctx context.Context, staged *StagedFiles) (stdout string, stderr string, err error)
 	Up(ctx context.Context, composeDir string, pullPolicy string) (stdout string, stderr string, err error)
+	// ValidateWithFragment validates the merged full-project + fragment overlay.
+	// It runs: docker compose -f <docker-compose.yml> -f <fragmentFile> config -q
+	ValidateWithFragment(ctx context.Context, composeDir string, fragmentFile string) (stdout string, stderr string, err error)
+	// UpService applies a single service via the fragment overlay.
+	// It runs: docker compose -f <docker-compose.yml> -f <fragmentFile> up -d --no-deps [--pull <policy>] <serviceKey>
+	UpService(ctx context.Context, composeDir string, fragmentFile string, serviceKey string, pullPolicy string) (stdout string, stderr string, err error)
 }
 
 // CLIComposeExecutor executes Compose through docker compose/docker-compose.
@@ -92,6 +99,86 @@ func (e *CLIComposeExecutor) Up(ctx context.Context, composeDir string, pullPoli
 			return stdout, stderr, fmt.Errorf("docker compose up: %s: %w", detail, err)
 		}
 		return stdout, stderr, fmt.Errorf("docker compose up: %w", err)
+	}
+	return stdout, stderr, nil
+}
+
+// ValidateWithFragment validates the merged composition of the live
+// docker-compose.yml and the given fragment overlay file.
+//
+// It runs:
+//
+//	docker compose -f <composeDir>/docker-compose.yml -f <fragmentFile> config -q
+func (e *CLIComposeExecutor) ValidateWithFragment(ctx context.Context, composeDir string, fragmentFile string) (string, string, error) {
+	if e.runner == nil {
+		return "", "", fmt.Errorf("compose executor command runner is nil")
+	}
+
+	mainFile := filepath.Join(composeDir, composeFileName)
+	args := []string{"compose", "-f", mainFile, "-f", fragmentFile, "config", "-q"}
+
+	e.logger.Info("compose fragment apply: validating merged project",
+		zap.String("compose_dir", composeDir),
+		zap.String("fragment_file", fragmentFile),
+		zap.Strings("args", args),
+	)
+
+	stdout, stderr, err := e.runner.RunCommand(ctx, "docker", args, composeDir, nil)
+	if err != nil {
+		detail := strings.TrimSpace(stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(stdout)
+		}
+		if detail != "" {
+			return stdout, stderr, fmt.Errorf("docker compose config (fragment): %s: %w", detail, err)
+		}
+		return stdout, stderr, fmt.Errorf("docker compose config (fragment): %w", err)
+	}
+	return stdout, stderr, nil
+}
+
+// UpService applies a single service using the live docker-compose.yml merged
+// with the given fragment overlay.
+//
+// It runs:
+//
+//	docker compose -f <composeDir>/docker-compose.yml -f <fragmentFile> up -d --no-deps [--pull <policy>] <serviceKey>
+func (e *CLIComposeExecutor) UpService(ctx context.Context, composeDir string, fragmentFile string, serviceKey string, pullPolicy string) (string, string, error) {
+	if e.runtime == nil {
+		return "", "", fmt.Errorf("compose executor runtime is nil")
+	}
+	if e.runner == nil {
+		return "", "", fmt.Errorf("compose executor command runner is nil")
+	}
+
+	mainFile := filepath.Join(composeDir, composeFileName)
+	args := []string{"compose", "-f", mainFile, "-f", fragmentFile, "up", "-d", "--no-deps"}
+
+	pullPolicy = normalizeComposePullPolicy(pullPolicy)
+	if pullPolicy != "" {
+		args = append(args, "--pull", pullPolicy)
+	}
+	args = append(args, serviceKey)
+
+	e.logger.Info("compose fragment apply: running up service",
+		zap.String("compose_dir", composeDir),
+		zap.String("fragment_file", fragmentFile),
+		zap.String("service_key", serviceKey),
+		zap.String("pull_policy", pullPolicy),
+		zap.Strings("args", args),
+	)
+
+	env := e.runtime.commandEnv(nil)
+	stdout, stderr, err := e.runner.RunCommand(ctx, "docker", args, composeDir, env)
+	if err != nil {
+		detail := strings.TrimSpace(stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(stdout)
+		}
+		if detail != "" {
+			return stdout, stderr, fmt.Errorf("docker compose up service: %s: %w", detail, err)
+		}
+		return stdout, stderr, fmt.Errorf("docker compose up service: %w", err)
 	}
 	return stdout, stderr, nil
 }

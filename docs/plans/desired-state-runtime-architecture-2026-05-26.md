@@ -305,6 +305,10 @@ Per-service fragments and service-scoped Compose apply are intentionally deferre
 
 The fragment implementation work is represented in Beads. Its design must reference the final `ComposeRenderer` / `ComposeDesiredStateApplier` shape and cover fragment layout, dependency eligibility, project-wide network and volume declaration safety, explicit project-name preservation, and operator-visible diagnostics/metadata before any service-scoped Compose apply path is introduced. Until then, unsafe or ambiguous Compose changes should use full-project apply.
 
+#### Implementation status (2026-06-08)
+
+Fragment optimization is implemented in `internal/adapters/runtime/compose_fragment_eligibility.go` and `compose_fragment_layout.go`. The applier in `compose_desired_state.go` checks fragment eligibility before each apply and uses service-scoped `docker compose up -d --no-deps <service>` when safe. Full-project apply remains the fallback for all unsafe or ambiguous changes. Fragment files live under `.bahia/fragments/` and the full `docker-compose.yml` is always updated alongside any fragment apply.
+
 ### Item 9 — Rollout hardening, verification, and docs
 
 **Goal:** Prove mixed-version safety and make the desired-state runtime model operable.

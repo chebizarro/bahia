@@ -29,6 +29,8 @@ import (
 //   - No unconditional --force-recreate: Compose computes minimal changes
 //     from the rendered project diff.
 //   - Pull policy is forwarded as --pull <policy> to `docker compose up`.
+//   - Fragment optimisation: when eligibility passes, a service-scoped fragment
+//     overlay is applied first. The full-project path is always the fallback.
 type ComposeDesiredStateApplier struct {
 	runtime  *ComposeRuntime
 	renderer *ComposeRenderer
@@ -36,6 +38,20 @@ type ComposeDesiredStateApplier struct {
 	runner   CommandRunner
 	executor ComposeExecutor
 	logger   *zap.Logger
+
+	// fragmentEligibilityFn is the function used to check fragment eligibility.
+	// When nil the production CheckFragmentEligibility is used.
+	// Override in tests to control eligibility behaviour.
+	fragmentEligibilityFn func(
+		*domain.DesiredEnvironmentPlan,
+		*domain.DesiredServiceSpec,
+		*RenderMetadata,
+	) *FragmentEligibility
+
+	// fragmentRendererFn is the function used to render a service fragment.
+	// When nil NewComposeFragmentRenderer().RenderServiceFragment is used.
+	// Override in tests to inject synthetic fragment YAML.
+	fragmentRendererFn func(projectName string, svc domain.DesiredServiceSpec) (*FragmentLayout, error)
 }
 
 // NewComposeDesiredStateApplier creates a new applier wired to the given
@@ -108,11 +124,23 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 		zap.Int("service_count", len(req.EnvironmentPlan.Services)),
 	)
 
-	// Step 2: Render the full project owned by the target deployment unit.
+	// Step 2: Select the target deployment unit plan.
 	unitPlan, err := selectComposeDeploymentUnitPlan(req.EnvironmentPlan, req.TargetService)
 	if err != nil {
 		return nil, fmt.Errorf("compose desired-state apply: unit selection failed: %w", err)
 	}
+
+	// Step 2a: Try the fragment apply optimisation (service-scoped overlay).
+	// Returns (result, nil) on success, (nil, nil) to fall through, or (nil, err)
+	// on hard failure. Any failure falls through to the full-project path.
+	if fragmentResult, fragmentErr := a.tryFragmentApply(ctx, req, unitPlan); fragmentErr != nil {
+		a.logger.Warn("compose desired-state apply: fragment path error, falling through to full-project",
+			zap.Error(fragmentErr))
+	} else if fragmentResult != nil {
+		return fragmentResult, nil
+	}
+
+	// Step 3: Render the full project owned by the target deployment unit.
 	renderResult, err := a.renderer.RenderDeploymentUnitPlan(ctx, req.EnvironmentPlan.EnvironmentID.String(), unitPlan)
 	if err != nil {
 		return nil, fmt.Errorf("compose desired-state apply: render failed: %w", err)

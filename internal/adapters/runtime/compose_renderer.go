@@ -49,6 +49,14 @@ type RenderMetadata struct {
 	ContentHash       string    `json:"content_hash"`
 	NetworksDeclared  []string  `json:"networks_declared,omitempty"`
 	VolumesDeclared   []string  `json:"volumes_declared,omitempty"`
+
+	// ServiceHashes maps service keys to their DesiredHash values at render time.
+	// Used by fragment eligibility to determine which services changed.
+	ServiceHashes map[string]string `json:"service_hashes,omitempty"`
+
+	// ServiceDependsOn maps service keys to their effective sorted depends_on keys
+	// at render time. Used by fragment eligibility to detect dependency changes.
+	ServiceDependsOn map[string][]string `json:"service_depends_on,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +129,17 @@ func (r *ComposeRenderer) RenderDeploymentUnitPlan(ctx context.Context, environm
 		serviceKeys = append(serviceKeys, svc.StableServiceKey)
 	}
 	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(composeYAML))
+
+	// Populate service hash and dependency maps for fragment eligibility.
+	serviceHashes := make(map[string]string, len(plan.Services))
+	serviceDependsOn := make(map[string][]string)
+	for _, svc := range plan.Services {
+		serviceHashes[svc.StableServiceKey] = svc.DesiredHash
+		if deps := collectEffectiveDependsOn(svc); len(deps) > 0 {
+			serviceDependsOn[svc.StableServiceKey] = deps
+		}
+	}
+
 	unitID := ""
 	if unitPlan.DeploymentUnitID != nil {
 		unitID = unitPlan.DeploymentUnitID.String()
@@ -139,6 +158,8 @@ func (r *ComposeRenderer) RenderDeploymentUnitPlan(ctx context.Context, environm
 		ContentHash:       contentHash,
 		NetworksDeclared:  networks,
 		VolumesDeclared:   volumes,
+		ServiceHashes:     serviceHashes,
+		ServiceDependsOn:  serviceDependsOn,
 	}
 	return &RenderResult{ComposeYAML: composeYAML, EnvMaterial: envMaterial, Metadata: metadata}, nil
 }
