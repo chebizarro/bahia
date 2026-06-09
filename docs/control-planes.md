@@ -325,6 +325,48 @@ Clients should wait for EOSE on bootstrap queries, then keep subscriptions open 
 
 ---
 
+## REST API: Read-Only Surface
+
+The REST API (`/api/v1/*`) is strictly a **read-only** query and compatibility surface. It serves GET endpoints for registry listing, service/environment/deployment read models, health checks, and log retrieval. It does **not** expose mutation endpoints.
+
+### Prohibition
+
+REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deleting services, policies, deployments, LLM routes, or any domain entity) are architecturally prohibited. This prohibition exists because:
+
+1. **Nostr is the source of truth.** Every mutation must be a signed Nostr event published to relays, giving relay-side indexing, signature verification, replay protection, and audit lineage. REST writes bypass all of this.
+2. **Command receipts are relay-acknowledged.** The `CommandReceipt` contract requires a signed event ID and relay `OK` acceptance. REST-originated writes cannot produce authentic receipts because no Nostr event was published.
+3. **ContextVM is the canonical mutation transport.** AGENTS.md mandates that all mutations flow through ContextVM kind `25910` JSON-RPC intents. Wrapping Nostr publish calls behind REST handlers creates "fake request/response wrappers over relays" — an explicitly prohibited pattern.
+
+### What to use instead
+
+| Surface | Mutation entry point | Implementation |
+|---------|---------------------|----------------|
+| **MCP tools** | `POST /mcp` with `tools/call` JSON-RPC | `internal/mcp/server.go` → controlplane publishers |
+| **CLI** | `bahia services actions deploy\|restart\|stop`, `bahia adopt scan\|import` | `cmd/cli/operator_nostr.go` → ContextVM `25910` |
+| **Browser** | ContextVM `25910` via NIP-07/NIP-46 signer | Direct Nostr event publication to relay |
+| **REST** | Read-only `GET` endpoints only | `internal/api/handlers/*.go` (Get/List methods) |
+
+### Correct mutation flow
+
+```
+┌──────────────┐    ┌──────────────────┐    ┌─────────────┐    ┌────────────┐
+│ MCP / CLI /  │───▸│ Controlplane     │───▸│ Nostr Relay │───▸│ Reactor /  │
+│ Browser      │    │ CommandPublisher  │    │ (relay OK)  │    │ Projector  │
+└──────────────┘    └──────────────────┘    └─────────────┘    └────────────┘
+                           │                                          │
+                    Signs event with              Subscribes to canonical
+                    service/operator key          observables (30900, 4903,
+                    as kind 25910                 30315) for durable truth
+                           │                                          │
+                    Returns CommandReceipt          Updates read models
+                    (event_id, relay count,         served by REST GET
+                     idempotency key)               endpoints
+```
+
+REST GET endpoints serve the **read models** that reactors and projectors maintain after processing Nostr events. The mutation path never touches REST.
+
+---
+
 ## Authorization
 
 - **Signer-first browser identity**: web sessions are signer-first (NIP-07 or NIP-46), with signer pubkey as the primary user identity.

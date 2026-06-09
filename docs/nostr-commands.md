@@ -142,6 +142,91 @@ The migration app:
 
 Because idempotency is based on `migrated-from`, the app is safe to run at every startup. Operators should fix migration failures rather than re-enabling legacy runtime subscribers.
 
+## Domain Mutation Surfaces (MCP → Nostr)
+
+Each domain's mutations flow through MCP tools backed by signer-first controlplane publishers. The publisher signs a ContextVM kind `25910` event, publishes to the relay pool, and returns a `CommandReceipt` with the event ID and relay acceptance count. REST never participates in mutation — it serves only read models.
+
+### Services
+
+| MCP tool | ContextVM method | Publisher |
+|----------|-----------------|-----------|
+| `bahia_create_service` | `service/create` | `ServiceCommandPublisher.PublishServiceCreate` |
+| `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployIntent` |
+| `bahia_rollback` | `service/rollback` | `ServiceCommandPublisher.PublishRollback` |
+
+**CLI path**: `bahia services actions deploy|restart|stop` → `cmd/cli/operator_nostr.go` → ContextVM `25910`
+
+**Read models (REST GET only)**:
+- `GET /api/v1/services` — list services
+- `GET /api/v1/services/{id}` — get service details
+- `GET /api/v1/services/{id}/environments` — list environments
+- `GET /api/v1/services/{id}/deployments` — list deployments
+
+### Policies
+
+| MCP tool | ContextVM method | Publisher |
+|----------|-----------------|-----------|
+| `bahia_policy_create` | `policy/create` | `PolicyCommandPublisher.PublishPolicyCreate` |
+| `bahia_policy_update` | `policy/update` | `PolicyCommandPublisher.PublishPolicyUpdate` |
+| `bahia_policy_delete` | `policy/delete` | `PolicyCommandPublisher.PublishPolicyDelete` |
+
+**Read models (REST GET only)**:
+- `GET /api/v1/policies` — list policies
+- `GET /api/v1/policies/{id}` — get policy details
+
+### Deployments / Intents
+
+| MCP tool | ContextVM method | Publisher |
+|----------|-----------------|-----------|
+| `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployIntent` |
+| `bahia_create_deployment_intent` | `service/deploy` | Same publisher (alias) |
+
+Deployment intents are a subset of service mutations. The MCP tool creates a signed deploy intent event; the reactor processes it into an actual deployment.
+
+**Read models (REST GET only)**:
+- `GET /api/v1/deployments` — list deployments
+- `GET /api/v1/deployments/{id}` — get deployment details
+
+### LLM Routes
+
+| MCP tool | ContextVM method | Publisher |
+|----------|-----------------|-----------|
+| `bahia_llm_create_route` | `llm/route-create` | `LLMCommandPublisher.PublishRouteCreate` |
+| `bahia_llm_update_route` | `llm/route-update` | `LLMCommandPublisher.PublishRouteUpdate` |
+| `bahia_llm_register_release` | `llm/release-register` | `LLMCommandPublisher.PublishReleaseRegister` |
+| `bahia_llm_deploy` | `llm/deploy` | `LLMCommandPublisher.PublishDeploy` |
+| `bahia_llm_approve_deployment` | `llm/approve` | `LLMCommandPublisher.PublishApproval` |
+| `bahia_llm_rollback` | `llm/rollback` | `LLMCommandPublisher.PublishRollback` |
+
+**Read models (REST GET only)**:
+- `GET /api/v1/llm/routes` — list LLM routes
+- `GET /api/v1/llm/routes/{id}` — get route details
+- `GET /api/v1/llm/releases` — list releases
+
+### Artifacts
+
+| MCP tool | ContextVM method | Publisher |
+|----------|-----------------|-----------|
+| `bahia_register_artifact` | `artifact/register` | `ArtifactCommandPublisher.PublishArtifactRegister` |
+
+### Tool Approvals
+
+| MCP tool | ContextVM method | Publisher |
+|----------|-----------------|-----------|
+| `bahia_approve_tool` | `tool/approve` | `ToolApprovalCommandPublisher.PublishToolApproval` |
+
+### Anti-pattern: REST write endpoints
+
+Do **not** add `POST`, `PUT`, or `DELETE` routes to `internal/api/router/router.go` for any of these domains. The correct mutation path is always:
+
+```
+MCP tool → controlplane.*CommandPublisher → Nostr relay → reactor → read model → REST GET
+```
+
+Adding REST write endpoints creates "fake request/response wrappers over relays" which is explicitly prohibited by AGENTS.md. If an MCP tool or CLI command doesn't exist for a mutation, create a new controlplane publisher and MCP tool — never a REST handler.
+
+---
+
 ## Historical Legacy Families
 
 These families are retained only for migration manifests, historical conversion tests, and fail-closed fixtures:
