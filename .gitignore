@@ -44,3 +44,5 @@ node_modules/
 dist/
 
 # Testing
+# Production integration credentials (never commit)
+test/integration/.env.integration
