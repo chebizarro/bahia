@@ -1,28 +1,20 @@
 package handlers
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/api/dto"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
-// LLMRouteCommandPublisher publishes signer-first LLM route commands.
-type LLMRouteCommandPublisher interface {
-	PublishLLMRouteCreateRequest(ctx context.Context, cmd controlplane.LLMRouteCreateCommand) (*controlplane.LLMCommandReceipt, error)
-}
-
 // LLMHandler handles HTTP requests for LLM routes, releases, intents, runs, and state.
 type LLMHandler struct {
 	registry *service.LLMRegistryService
 	workers  repository.WorkerRepository
-	commands LLMRouteCommandPublisher
 }
 
 func NewLLMHandler(registry *service.LLMRegistryService, workers ...repository.WorkerRepository) *LLMHandler {
@@ -31,41 +23,6 @@ func NewLLMHandler(registry *service.LLMRegistryService, workers ...repository.W
 		workerRepo = workers[0]
 	}
 	return &LLMHandler{registry: registry, workers: workerRepo}
-}
-
-func NewLLMHandlerWithCommands(registry *service.LLMRegistryService, commands LLMRouteCommandPublisher, workers ...repository.WorkerRepository) *LLMHandler {
-	h := NewLLMHandler(registry, workers...)
-	h.commands = commands
-	return h
-}
-
-func (h *LLMHandler) CreateRoute(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermWriteLLMRoutes) {
-		return
-	}
-	if h.commands == nil {
-		writeError(w, http.StatusServiceUnavailable, "LLM command publisher is not configured")
-		return
-	}
-	var req dto.CreateLLMRouteRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	receipt, err := h.commands.PublishLLMRouteCreateRequest(r.Context(), controlplane.LLMRouteCreateCommand{
-		Name:                   req.Name,
-		Description:            req.Description,
-		GatewayConfig:          gatewayConfig(req.GatewayConfig),
-		DefaultPlacementPolicy: placementPolicy(req.DefaultPlacementPolicy),
-		DefaultPromotionGate:   promotionGate(req.DefaultPromotionGate),
-		Metadata:               req.Metadata,
-		IdempotencyKey:         req.IdempotencyKey,
-	})
-	if err != nil {
-		writeCommandPublishError(w, err)
-		return
-	}
-	writeAcceptedCommandReceipt(w, commandReceiptFromLLM(receipt))
 }
 
 func (h *LLMHandler) ListRoutes(w http.ResponseWriter, r *http.Request) {

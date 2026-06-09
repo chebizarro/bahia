@@ -771,7 +771,7 @@ func New(cfg *config.Config) (*App, error) {
 		Workers:                  workerRepo,
 		DNSEndpoints:             dnsProjector,
 	}
-	policyCommandPublisher := configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureBackupMCPDeps(&mcpDeps, backupRegistryRepo, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcpDeps)
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
@@ -995,9 +995,7 @@ func New(cfg *config.Config) (*App, error) {
 			MLRegistry:       mlRegistry,
 			MLCommands:       mlCommandPublisher,
 			LLMRegistry:      llmRegistry,
-			LLMCommands:      llmCommandPublisher,
-			ServiceCommands:  serviceCommandPublisher,
-			PolicyCommands:   policyCommandPublisher,
+
 			HealthProvider:   healthProvider,
 			ModePolicy:       policy,
 		}, cfg.Auth)

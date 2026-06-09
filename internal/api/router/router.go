@@ -2,11 +2,8 @@
 package router
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"reflect"
 	"time"
@@ -69,11 +66,8 @@ type RouterDeps struct {
 	OrgInvites       repository.OrgInviteRepository
 	RBAC             *auth.RBAC
 	LLMRegistry      *service.LLMRegistryService
-	LLMCommands      handlers.LLMRouteCommandPublisher
 	MLRegistry       *service.MLRegistryService
 	MLCommands       handlers.MLCommandPublisher
-	ServiceCommands  handlers.ServiceMutationCommandPublisher
-	PolicyCommands   handlers.PolicyCommandPublisher
 	HealthProvider   any
 	ModePolicy       any
 	Docs             *userdocs.Service
@@ -155,11 +149,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 
 	// Create handlers.
-	svcH := handlers.NewServiceHandlerWithCommands(registry, deps.ServiceCommands)
+	svcH := handlers.NewServiceHandler(registry)
 	envH := handlers.NewEnvironmentHandler(registry)
 	buildH := handlers.NewBuildHandler(registry)
 	artifactH := handlers.NewArtifactHandler(registry)
-	deployH := handlers.NewDeploymentHandlerWithCommands(registry, deps.ServiceCommands)
+	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	docsService := userdocs.New(userdocs.DefaultBasePath)
@@ -168,8 +162,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 	docsH := handlers.NewDocsHandler(docsService)
 	var llmH *handlers.LLMHandler
-	if deps.LLMRegistry != nil || deps.LLMCommands != nil {
-		llmH = handlers.NewLLMHandlerWithCommands(deps.LLMRegistry, deps.LLMCommands)
+	if deps.LLMRegistry != nil {
+		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
 	}
 	var mlH *handlers.MLHandler
 	if deps.MLRegistry != nil || deps.MLCommands != nil {
@@ -278,7 +272,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// LLM control plane (read)
-			if llmH != nil && deps.LLMRegistry != nil {
+			if llmH != nil {
 				r.With(tier3Gate).Get("/llm/routes", llmH.ListRoutes)
 				r.With(tier3Gate).Get("/llm/routes/{id}", llmH.GetRoute)
 				r.With(tier3Gate).Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
@@ -382,11 +376,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Delete("/orgs/{id}/invites/{inviteId}", tenantH.RevokeInvite)
 			}
 
-			// Services (write compatibility actions publish Nostr commands)
-			if deps.ServiceCommands != nil {
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/services", svcH.Create)
-			}
-
 			// Builds (write)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
@@ -399,21 +388,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier3Gate).Post("/ml/rollback", mlH.Rollback)
 			}
 
-			// LLM control plane (write): route creation publishes Nostr commands;
-			// route updates remain REST-compatible while clients migrate.
+			// LLM control plane (write): route updates remain REST-compatible;
+			// route/release creation moved to signer-first Nostr commands.
 			if llmH != nil {
-				if deps.LLMCommands != nil {
-					llmRouteCreateRBAC := coreRBAC(deps, authMiddleware, nil, true)
-					r.With(tier3Gate, llmRouteCreateRBAC).Post("/llm/routes", llmH.CreateRoute)
-				}
-				if deps.LLMRegistry != nil {
-					r.With(tier3Gate).Put("/llm/routes/{id}", llmH.UpdateRoute)
-				}
-			}
-
-			// Deployment intents (write compatibility actions publish Nostr commands)
-			if deps.ServiceCommands != nil {
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/intents", deployH.CreateIntent)
+				r.With(tier3Gate).Put("/llm/routes/{id}", llmH.UpdateRoute)
 			}
 
 			// Deployment Runs (write)
@@ -438,13 +416,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
 			}
 
-			// Policy mutations (write compatibility actions publish Nostr commands)
-			if deps.PolicyCommands != nil {
-				polH := handlers.NewPolicyHandlerWithCommands(deps.Policies, deps.PolicyCommands)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, policyCreateOrgResolver(deps.Environments), true)).Post("/policies", polH.Create)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, policyOrgResolver(deps.Policies, deps.Environments, "id"), true)).Put("/policies/{id}", polH.Update)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, policyOrgResolver(deps.Policies, deps.Environments, "id"), true)).Delete("/policies/{id}", polH.Delete)
-			}
+			// Deprecated policy REST mutations are intentionally not mounted.
+			// Signer-first Nostr policy command kinds 5986-5989 are the supported replacement.
 
 			// Secrets (write)
 			if deps.Secrets != nil && deps.Encryptor != nil {
@@ -654,75 +627,15 @@ func environmentOrgResolver(environments repository.EnvironmentRepository, param
 		if err != nil {
 			return uuid.Nil, err
 		}
-		return environmentOrgByID(r.Context(), environments, id)
-	}
-}
-
-func policyCreateOrgResolver(environments repository.EnvironmentRepository) middleware.ResourceOrgResolver {
-	return func(r *http.Request) (uuid.UUID, error) {
-		var req struct {
-			EnvironmentID *uuid.UUID `json:"environment_id,omitempty"`
-		}
-		if err := decodeResolverBody(r, &req); err != nil {
-			return uuid.Nil, middleware.ErrInvalidOrgID
-		}
-		if req.EnvironmentID == nil || *req.EnvironmentID == uuid.Nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		return environmentOrgByID(r.Context(), environments, *req.EnvironmentID)
-	}
-}
-
-func policyOrgResolver(policies *service.PolicyService, environments repository.EnvironmentRepository, param string) middleware.ResourceOrgResolver {
-	return func(r *http.Request) (uuid.UUID, error) {
-		id, err := parseRouteUUID(r, param)
+		env, err := environments.GetByID(r.Context(), id)
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if policies == nil {
+		if env == nil || env.OrgID == uuid.Nil {
 			return uuid.Nil, middleware.ErrOrgContextNotFound
 		}
-		policy, err := policies.GetPolicy(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return uuid.Nil, middleware.ErrOrgContextNotFound
-			}
-			return uuid.Nil, err
-		}
-		if policy == nil || policy.EnvironmentID == nil || *policy.EnvironmentID == uuid.Nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		return environmentOrgByID(r.Context(), environments, *policy.EnvironmentID)
+		return env.OrgID, nil
 	}
-}
-
-func environmentOrgByID(ctx context.Context, environments repository.EnvironmentRepository, id uuid.UUID) (uuid.UUID, error) {
-	if environments == nil || id == uuid.Nil {
-		return uuid.Nil, middleware.ErrOrgContextNotFound
-	}
-	env, err := environments.GetByID(ctx, id)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	if env == nil || env.OrgID == uuid.Nil {
-		return uuid.Nil, middleware.ErrOrgContextNotFound
-	}
-	return env.OrgID, nil
-}
-
-func decodeResolverBody(r *http.Request, out any) error {
-	if r.Body == nil {
-		return middleware.ErrInvalidOrgID
-	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return err
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	if len(bytes.TrimSpace(body)) == 0 {
-		return middleware.ErrInvalidOrgID
-	}
-	return json.Unmarshal(body, out)
 }
 
 func buildOrgResolver(builds repository.BuildRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
