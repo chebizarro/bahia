@@ -286,6 +286,82 @@ func normalizeStringSlice(s []string) []string {
 // Docker inspect helper
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Kubernetes pod normalization
+// ---------------------------------------------------------------------------
+
+// NormalizeKubernetesPod produces a NormalizedObservation from a Kubernetes
+// pod structure retrieved via kubectl. Only the first container in the pod
+// spec is normalized — bahia maps one service to one primary container.
+//
+// Secret env var names are redacted: only key presence is recorded, never
+// values. Ports are expressed as "containerPort/protocol" strings (no host
+// binding since Kubernetes pods use Service resources for that).
+//
+// The caller MUST ensure pod is non-nil; NormalizeKubernetesPod returns nil
+// for a nil pod to match the Docker/Compose normalizer contract.
+func NormalizeKubernetesPod(pod *kubePod, secretNames map[string]bool) *domain.NormalizedObservation {
+	if pod == nil {
+		return nil
+	}
+
+	obs := &domain.NormalizedObservation{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+	}
+
+	// Primary container: image, command, env, ports.
+	if len(pod.Spec.Containers) > 0 {
+		c := pod.Spec.Containers[0]
+
+		obs.ImageRef = c.Image
+
+		// Command (equivalent to Docker Cmd/entrypoint merged in K8s).
+		obs.Command = normalizeStringSlice(c.Command)
+
+		// Environment: split into non-secret values and secret key presence.
+		if len(c.Env) > 0 {
+			envMap := make(map[string]string, len(c.Env))
+			for _, e := range c.Env {
+				envMap[e.Name] = e.Value
+			}
+			obs.Env, obs.SecretEnvKeys = domain.FilterNonSecretEnv(envMap, secretNames)
+		}
+
+		// Ports: "containerPort/protocol" (lowercase protocol).
+		if len(c.Ports) > 0 {
+			ports := make([]string, 0, len(c.Ports))
+			for _, p := range c.Ports {
+				proto := strings.ToLower(p.Protocol)
+				if proto == "" {
+					proto = "tcp"
+				}
+				ports = append(ports, fmt.Sprintf("%d/%s", p.ContainerPort, proto))
+			}
+			sort.Strings(ports)
+			obs.Ports = ports
+		}
+	}
+
+	// Image digest from container status (more precise than spec image ref).
+	if len(pod.Status.ContainerStatuses) > 0 {
+		cs := pod.Status.ContainerStatuses[0]
+		obs.ImageDigest = extractDigest(cs.ImageID)
+		// Prefer status image over spec image when spec image is empty.
+		if obs.ImageRef == "" {
+			obs.ImageRef = cs.Image
+		}
+	}
+
+	// Restart policy from pod spec.
+	obs.RestartPolicy = pod.Spec.RestartPolicy
+
+	// Labels — only Bahia-managed labels (bahia.* prefix).
+	obs.BahiaLabels = domain.FilterBahiaLabels(pod.Metadata.Labels)
+
+	obs.ComputeObservationHash()
+	return obs
+}
+
 // inspectContainerForNormalization calls the Docker Engine inspect API and
 // returns the parsed response. This reuses the same inspect structures as
 // docker_discovery.go.

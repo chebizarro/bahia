@@ -104,6 +104,15 @@ type ObservationHints struct {
 
 	// VolumeNames are the names of volumes mounted by the service.
 	VolumeNames []string
+
+	// PodName is the primary pod name (Kubernetes).
+	PodName string
+
+	// DeploymentName is the Deployment resource name (Kubernetes).
+	DeploymentName string
+
+	// Namespace is the Kubernetes namespace.
+	Namespace string
 }
 
 // ---------------------------------------------------------------------------
@@ -140,14 +149,7 @@ func (r *ComposeRuntime) ApplyDesiredState(ctx context.Context, req DesiredState
 	return applier.ApplyDesiredState(ctx, req)
 }
 
-// SupportsDesiredState returns false — the Kubernetes adapter has not yet been
-// migrated to desired-state convergence.
-func (k *KubernetesRuntime) SupportsDesiredState() bool { return false }
-
-// ApplyDesiredState returns ErrDesiredStateNotSupported for the Kubernetes adapter.
-func (k *KubernetesRuntime) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
-	return nil, ErrDesiredStateNotSupported
-}
+// Kubernetes desired-state implementation lives in kubernetes_desired_state.go.
 
 // Podman desired-state implementation lives in podman.go — it delegates to
 // the Docker implementation after Podman-specific compatibility validation.

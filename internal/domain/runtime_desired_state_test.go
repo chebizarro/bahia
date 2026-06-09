@@ -149,6 +149,171 @@ func TestDesiredServiceSpec_JSONRoundTrip_EmptyExtensions(t *testing.T) {
 	}
 }
 
+func TestDesiredServiceSpec_JSONRoundTrip_KubernetesExtension(t *testing.T) {
+	replicas := int32(3)
+	spec := DesiredServiceSpec{
+		SchemaVersion:    DesiredStateSchemaVersion,
+		ServiceID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		EnvironmentID:    uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+		ArtifactID:       uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+		StableServiceKey: "api-server",
+		ImageRef:         "ghcr.io/org/api:v2.0.0",
+		KubernetesExtension: &KubernetesExtension{
+			Namespace:   "production",
+			Replicas:    &replicas,
+			ServiceType: "ClusterIP",
+			ServicePorts: []K8sServicePort{
+				{Name: "http", Port: 80, TargetPort: 8080, Protocol: "TCP"},
+				{Name: "grpc", Port: 9090, TargetPort: 9090, Protocol: "TCP"},
+			},
+			ResourceLimits:   &K8sResources{CPU: "500m", Memory: "256Mi"},
+			ResourceRequests: &K8sResources{CPU: "100m", Memory: "128Mi"},
+			Annotations:      map[string]string{"prometheus.io/scrape": "true"},
+			NodeSelector:     map[string]string{"kubernetes.io/os": "linux"},
+			Tolerations: []K8sToleration{
+				{Key: "node-role", Operator: "Equal", Value: "worker", Effect: "NoSchedule"},
+			},
+			LivenessProbe: &K8sProbe{
+				HTTPGet:             &K8sHTTPGet{Path: "/healthz", Port: 8080, Scheme: "HTTP"},
+				InitialDelaySeconds: 10,
+				PeriodSeconds:       30,
+				TimeoutSeconds:      5,
+				FailureThreshold:    3,
+			},
+			ReadinessProbe: &K8sProbe{
+				Exec:                []string{"cat", "/tmp/ready"},
+				InitialDelaySeconds: 5,
+				PeriodSeconds:       10,
+			},
+			ImagePullSecrets: []string{"registry-creds"},
+		},
+	}
+	spec.ComputeDesiredHash()
+
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded DesiredServiceSpec
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Re-compute hash on decoded — must match.
+	decoded.ComputeDesiredHash()
+	if decoded.DesiredHash != spec.DesiredHash {
+		t.Errorf("hash mismatch after round-trip:\n  original: %s\n  decoded:  %s", spec.DesiredHash, decoded.DesiredHash)
+	}
+
+	k := decoded.KubernetesExtension
+	if k == nil {
+		t.Fatal("KubernetesExtension is nil after round-trip")
+	}
+	if k.Namespace != "production" {
+		t.Errorf("Namespace = %q, want %q", k.Namespace, "production")
+	}
+	if k.Replicas == nil || *k.Replicas != 3 {
+		t.Errorf("Replicas = %v, want 3", k.Replicas)
+	}
+	if k.ServiceType != "ClusterIP" {
+		t.Errorf("ServiceType = %q, want %q", k.ServiceType, "ClusterIP")
+	}
+	if len(k.ServicePorts) != 2 {
+		t.Fatalf("ServicePorts len = %d, want 2", len(k.ServicePorts))
+	}
+	if k.ServicePorts[0].Name != "http" || k.ServicePorts[0].Port != 80 || k.ServicePorts[0].TargetPort != 8080 {
+		t.Errorf("ServicePorts[0] = %+v, unexpected", k.ServicePorts[0])
+	}
+	if k.ResourceLimits == nil || k.ResourceLimits.CPU != "500m" || k.ResourceLimits.Memory != "256Mi" {
+		t.Errorf("ResourceLimits = %+v, unexpected", k.ResourceLimits)
+	}
+	if k.ResourceRequests == nil || k.ResourceRequests.CPU != "100m" {
+		t.Errorf("ResourceRequests = %+v, unexpected", k.ResourceRequests)
+	}
+	if k.Annotations["prometheus.io/scrape"] != "true" {
+		t.Errorf("Annotations = %v, unexpected", k.Annotations)
+	}
+	if k.NodeSelector["kubernetes.io/os"] != "linux" {
+		t.Errorf("NodeSelector = %v, unexpected", k.NodeSelector)
+	}
+	if len(k.Tolerations) != 1 || k.Tolerations[0].Key != "node-role" {
+		t.Errorf("Tolerations = %v, unexpected", k.Tolerations)
+	}
+	if k.LivenessProbe == nil || k.LivenessProbe.HTTPGet == nil || k.LivenessProbe.HTTPGet.Path != "/healthz" {
+		t.Errorf("LivenessProbe = %+v, unexpected", k.LivenessProbe)
+	}
+	if k.ReadinessProbe == nil || len(k.ReadinessProbe.Exec) != 2 {
+		t.Errorf("ReadinessProbe = %+v, unexpected", k.ReadinessProbe)
+	}
+	if len(k.ImagePullSecrets) != 1 || k.ImagePullSecrets[0] != "registry-creds" {
+		t.Errorf("ImagePullSecrets = %v, unexpected", k.ImagePullSecrets)
+	}
+}
+
+func TestDesiredServiceSpec_KubernetesExtension_HashIgnored(t *testing.T) {
+	// KubernetesExtension content must NOT affect the desired hash — extensions
+	// are excluded from hashing per the hashInput struct design.
+	base := DesiredServiceSpec{
+		SchemaVersion:    DesiredStateSchemaVersion,
+		ServiceID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		EnvironmentID:    uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+		ArtifactID:       uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+		StableServiceKey: "api-server",
+		ImageRef:         "ghcr.io/org/api:v2.0.0",
+	}
+	h1 := base.ComputeDesiredHash()
+
+	replicas := int32(5)
+	base.KubernetesExtension = &KubernetesExtension{
+		Namespace:        "staging",
+		Replicas:         &replicas,
+		ServiceType:      "LoadBalancer",
+		ImagePullSecrets: []string{"my-secret"},
+	}
+	h2 := base.ComputeDesiredHash()
+
+	if h1 != h2 {
+		t.Errorf("KubernetesExtension should not affect desired hash:\n  without: %s\n  with:    %s", h1, h2)
+	}
+}
+
+func TestDesiredServiceSpec_KubernetesExtension_HashStability(t *testing.T) {
+	// Two identical specs with KubernetesExtension must produce the same desired hash.
+	replicas := int32(2)
+	makeSpec := func() DesiredServiceSpec {
+		r := replicas
+		return DesiredServiceSpec{
+			SchemaVersion:    DesiredStateSchemaVersion,
+			ServiceID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+			EnvironmentID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+			ArtifactID:       uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+			StableServiceKey: "worker",
+			ImageRef:         "worker:v1",
+			RestartPolicy:    "Always",
+			KubernetesExtension: &KubernetesExtension{
+				Namespace: "default",
+				Replicas:  &r,
+				ResourceLimits: &K8sResources{
+					CPU:    "250m",
+					Memory: "128Mi",
+				},
+			},
+		}
+	}
+
+	s1 := makeSpec()
+	s2 := makeSpec()
+	h1 := s1.ComputeDesiredHash()
+	h2 := s2.ComputeDesiredHash()
+
+	if h1 != h2 {
+		t.Errorf("identical specs produced different hashes:\n  h1: %s\n  h2: %s", h1, h2)
+	}
+	if !strings.HasPrefix(h1, "sha256:") {
+		t.Errorf("hash missing sha256: prefix: %q", h1)
+	}
+}
+
 func TestDesiredEnvironmentPlan_JSONRoundTrip(t *testing.T) {
 	envID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 

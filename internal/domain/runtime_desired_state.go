@@ -127,11 +127,76 @@ type VolumeSpec struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// KubernetesExtension reserves a typed extension namespace for a future
-// Kubernetes renderer. It is not an implementation of Kubernetes desired-state
-// convergence; phase 1 Kubernetes desired-state apply remains explicitly
-// unsupported at the runtime adapter capability seam.
-type KubernetesExtension struct{}
+// K8sServicePort describes a Kubernetes Service port mapping.
+type K8sServicePort struct {
+	Name       string `json:"name,omitempty"`
+	Port       int32  `json:"port"`
+	TargetPort int32  `json:"target_port,omitempty"`
+	Protocol   string `json:"protocol,omitempty"` // TCP, UDP
+	NodePort   int32  `json:"node_port,omitempty"`
+}
+
+// K8sResources describes CPU/memory resource quantities.
+type K8sResources struct {
+	CPU    string `json:"cpu,omitempty"`    // e.g. "500m", "2"
+	Memory string `json:"memory,omitempty"` // e.g. "256Mi", "1Gi"
+}
+
+// K8sToleration describes a Kubernetes toleration.
+type K8sToleration struct {
+	Key      string `json:"key,omitempty"`
+	Operator string `json:"operator,omitempty"` // Exists, Equal
+	Value    string `json:"value,omitempty"`
+	Effect   string `json:"effect,omitempty"` // NoSchedule, PreferNoSchedule, NoExecute
+}
+
+// K8sHTTPGet describes an HTTP probe action.
+type K8sHTTPGet struct {
+	Path   string `json:"path"`
+	Port   int32  `json:"port"`
+	Scheme string `json:"scheme,omitempty"` // HTTP, HTTPS
+}
+
+// K8sProbe describes a Kubernetes liveness/readiness probe.
+type K8sProbe struct {
+	HTTPGet             *K8sHTTPGet `json:"http_get,omitempty"`
+	Exec                []string    `json:"exec,omitempty"`
+	InitialDelaySeconds int32       `json:"initial_delay_seconds,omitempty"`
+	PeriodSeconds       int32       `json:"period_seconds,omitempty"`
+	TimeoutSeconds      int32       `json:"timeout_seconds,omitempty"`
+	FailureThreshold    int32       `json:"failure_threshold,omitempty"`
+}
+
+// KubernetesExtension carries Kubernetes-specific rendering metadata for the
+// desired-state renderer. It maps DesiredServiceSpec fields to Kubernetes
+// Deployment and optional Service resources.
+type KubernetesExtension struct {
+	// Namespace overrides the runtime's default namespace for this service.
+	Namespace string `json:"namespace,omitempty"`
+	// Replicas is the desired replica count. Nil means 1.
+	Replicas *int32 `json:"replicas,omitempty"`
+	// ServiceType is the Kubernetes Service type (ClusterIP, NodePort, LoadBalancer).
+	// Empty means no Service resource is created.
+	ServiceType string `json:"service_type,omitempty"`
+	// ServicePorts are the Service port mappings. Used only when ServiceType is set.
+	ServicePorts []K8sServicePort `json:"service_ports,omitempty"`
+	// ResourceLimits are container resource limits.
+	ResourceLimits *K8sResources `json:"resource_limits,omitempty"`
+	// ResourceRequests are container resource requests.
+	ResourceRequests *K8sResources `json:"resource_requests,omitempty"`
+	// Annotations are added to the Deployment metadata.
+	Annotations map[string]string `json:"annotations,omitempty"`
+	// NodeSelector constrains pod scheduling.
+	NodeSelector map[string]string `json:"node_selector,omitempty"`
+	// Tolerations allow pods to schedule on tainted nodes.
+	Tolerations []K8sToleration `json:"tolerations,omitempty"`
+	// LivenessProbe overrides the portable healthcheck for Kubernetes liveness.
+	LivenessProbe *K8sProbe `json:"liveness_probe,omitempty"`
+	// ReadinessProbe configures Kubernetes readiness checking.
+	ReadinessProbe *K8sProbe `json:"readiness_probe,omitempty"`
+	// ImagePullSecrets are the names of Kubernetes secrets for pulling images.
+	ImagePullSecrets []string `json:"image_pull_secrets,omitempty"`
+}
 
 // PodmanExtension carries Podman-specific renderer metadata. Podman reuses
 // the Docker-compatible Engine API path where feasible.

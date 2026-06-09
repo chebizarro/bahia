@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,11 @@ type KubernetesRuntime struct {
 	kubeNamespace string // --namespace flag (empty = "default")
 	kubeConfig    string // --kubeconfig flag (empty = default)
 	logger        *zap.Logger
+
+	// execCmd is an optional test hook that overrides kubectl command execution.
+	// When nil, execCommand falls back to exec.CommandContext.
+	// Signature: func(ctx, args, stdin) (output, error)
+	execCmd func(ctx context.Context, args []string, stdin []byte) (string, error)
 }
 
 // NewKubernetesRuntime creates a new Kubernetes runtime backed by kubectl.
@@ -48,9 +54,19 @@ type kubePod struct {
 	} `json:"metadata"`
 	Spec struct {
 		Containers []struct {
-			Name  string `json:"name"`
-			Image string `json:"image"`
+			Name    string   `json:"name"`
+			Image   string   `json:"image"`
+			Command []string `json:"command,omitempty"`
+			Env     []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"env,omitempty"`
+			Ports []struct {
+				ContainerPort int32  `json:"containerPort"`
+				Protocol      string `json:"protocol,omitempty"`
+			} `json:"ports,omitempty"`
 		} `json:"containers"`
+		RestartPolicy string `json:"restartPolicy,omitempty"`
 	} `json:"spec"`
 	Status struct {
 		Phase             string `json:"phase"`
@@ -289,7 +305,20 @@ func (k *KubernetesRuntime) baseArgs(subArgs ...string) []string {
 }
 
 func (k *KubernetesRuntime) runCommand(ctx context.Context, args ...string) (string, error) {
+	return k.execCommand(ctx, args, nil)
+}
+
+// execCommand is the single execution path for all kubectl invocations.
+// It honours the execCmd test hook when set, and falls back to
+// exec.CommandContext with optional stdin support.
+func (k *KubernetesRuntime) execCommand(ctx context.Context, args []string, stdin []byte) (string, error) {
+	if k.execCmd != nil {
+		return k.execCmd(ctx, args, stdin)
+	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	if len(stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%s: %w (output: %s)", args[0], err, string(output))

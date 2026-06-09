@@ -89,7 +89,8 @@ func TestResolveDesiredStateApplier_PodmanEndpoint(t *testing.T) {
 	}
 }
 
-func TestResolveDesiredStateApplier_KubernetesExplicitError(t *testing.T) {
+func TestResolveDesiredStateApplier_KubernetesResolves(t *testing.T) {
+	// Kubernetes now supports desired-state convergence via kubectl apply.
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{
 			Type:          "kubernetes",
@@ -100,15 +101,15 @@ func TestResolveDesiredStateApplier_KubernetesExplicitError(t *testing.T) {
 	svc := resolverTestService(domain.RuntimeTypeK8s)
 	env := resolverTestEnv("production", nil)
 
-	_, err := resolver.ResolveDesiredStateApplier(svc, env)
-	if err == nil {
-		t.Fatal("expected error for Kubernetes runtime")
+	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
+	if err != nil {
+		t.Fatalf("unexpected error resolving Kubernetes desired-state applier: %v", err)
 	}
-	if !errors.Is(err, ErrDesiredStateNotSupported) {
-		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	if applier == nil {
+		t.Fatal("expected non-nil applier for Kubernetes runtime")
 	}
-	if !strings.Contains(err.Error(), "kubernetes") {
-		t.Errorf("error should mention kubernetes runtime type, got: %v", err)
+	if !applier.SupportsDesiredState() {
+		t.Error("Kubernetes applier should report SupportsDesiredState() = true")
 	}
 }
 
@@ -192,5 +193,40 @@ func TestResolveDesiredStateApplier_UsesFullResolutionPath(t *testing.T) {
 	}
 	if !applier.SupportsDesiredState() {
 		t.Error("expected resolved applier to support desired state")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Kubernetes desired-state resolver — forward-compatible test
+// (t.Skip guard until Agent 2's SupportsDesiredState() flip lands)
+// ---------------------------------------------------------------------------
+
+// TestResolveDesiredStateApplier_KubernetesSupported will pass once the
+// Kubernetes desired-state adapter is implemented (bahia-amqy Agent 2). Until
+// then it skips automatically on ErrDesiredStateNotSupported so it does not
+// block the pre-merge test suite.
+func TestResolveDesiredStateApplier_KubernetesSupported(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{
+			Type:          "kubernetes",
+			KubeNamespace: "production",
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeK8s)
+	env := resolverTestEnv("production", nil)
+
+	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
+	if err != nil {
+		if errors.Is(err, ErrDesiredStateNotSupported) {
+			t.Skip("Kubernetes desired-state not yet implemented")
+		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if applier == nil {
+		t.Fatal("expected non-nil applier")
+	}
+	if !applier.SupportsDesiredState() {
+		t.Error("expected K8s applier to support desired state")
 	}
 }

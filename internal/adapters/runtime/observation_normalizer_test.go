@@ -824,8 +824,296 @@ func TestNormalize_VolumeDeduplication(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Kubernetes pod normalization tests
+// ---------------------------------------------------------------------------
+
+func TestNormalizeKubernetesPod_Nil(t *testing.T) {
+	t.Parallel()
+	if obs := NormalizeKubernetesPod(nil, nil); obs != nil {
+		t.Error("expected nil for nil pod input")
+	}
+}
+
+func TestNormalizeKubernetesPod_Basic(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if obs == nil {
+		t.Fatal("expected non-nil observation")
+	}
+	if obs.ImageRef != "ghcr.io/org/api:v1.0.0" {
+		t.Errorf("ImageRef = %q, want %q", obs.ImageRef, "ghcr.io/org/api:v1.0.0")
+	}
+	if obs.SchemaVersion == "" {
+		t.Error("SchemaVersion should be set")
+	}
+}
+
+func TestNormalizeKubernetesPod_Command(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	pod.Spec.Containers[0].Command = []string{"/app/server", "--port=8080"}
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if len(obs.Command) != 2 || obs.Command[0] != "/app/server" {
+		t.Errorf("Command = %v, unexpected", obs.Command)
+	}
+}
+
+func TestNormalizeKubernetesPod_Ports(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if obs == nil {
+		t.Fatal("expected non-nil observation")
+	}
+	// Ports should be sorted and lowercase protocol
+	if len(obs.Ports) != 2 {
+		t.Fatalf("expected 2 ports, got %d: %v", len(obs.Ports), obs.Ports)
+	}
+	// sorted: 8080/tcp, 9090/tcp
+	if obs.Ports[0] != "8080/tcp" {
+		t.Errorf("Ports[0] = %q, want %q", obs.Ports[0], "8080/tcp")
+	}
+	if obs.Ports[1] != "9090/tcp" {
+		t.Errorf("Ports[1] = %q, want %q", obs.Ports[1], "9090/tcp")
+	}
+}
+
+func TestNormalizeKubernetesPod_SecretRedaction(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	pod.Spec.Containers[0].Env = []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}{
+		{Name: "APP_NAME", Value: "api"},
+		{Name: "DB_PASSWORD", Value: "super-secret"},
+		{Name: "API_KEY", Value: "another-secret"},
+		{Name: "LOG_LEVEL", Value: "info"},
+	}
+	secretNames := map[string]bool{"DB_PASSWORD": true, "API_KEY": true}
+
+	obs := NormalizeKubernetesPod(pod, secretNames)
+
+	// Non-secret env vars should be present.
+	if obs.Env["APP_NAME"] != "api" {
+		t.Errorf("expected APP_NAME=api, got %q", obs.Env["APP_NAME"])
+	}
+	if obs.Env["LOG_LEVEL"] != "info" {
+		t.Errorf("expected LOG_LEVEL=info, got %q", obs.Env["LOG_LEVEL"])
+	}
+
+	// Secret values must NOT appear in env.
+	if _, ok := obs.Env["DB_PASSWORD"]; ok {
+		t.Error("DB_PASSWORD should not be in non-secret env")
+	}
+	if _, ok := obs.Env["API_KEY"]; ok {
+		t.Error("API_KEY should not be in non-secret env")
+	}
+
+	// Secret keys should appear in SecretEnvKeys (sorted).
+	if len(obs.SecretEnvKeys) != 2 {
+		t.Fatalf("expected 2 secret keys, got %d", len(obs.SecretEnvKeys))
+	}
+	if obs.SecretEnvKeys[0] != "API_KEY" || obs.SecretEnvKeys[1] != "DB_PASSWORD" {
+		t.Errorf("expected sorted secret keys [API_KEY, DB_PASSWORD], got %v", obs.SecretEnvKeys)
+	}
+}
+
+func TestNormalizeKubernetesPod_BahiaLabelsOnly(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	pod.Metadata.Labels = map[string]string{
+		"bahia.service":          "api",
+		"bahia.environment_id":   "env-123",
+		"app":                    "my-app",
+		"k8s-app":                "api",
+		"app.kubernetes.io/name": "api",
+	}
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if len(obs.BahiaLabels) != 2 {
+		t.Fatalf("expected 2 Bahia labels, got %d: %v", len(obs.BahiaLabels), obs.BahiaLabels)
+	}
+	if obs.BahiaLabels["bahia.service"] != "api" {
+		t.Error("missing bahia.service label")
+	}
+	if obs.BahiaLabels["bahia.environment_id"] != "env-123" {
+		t.Error("missing bahia.environment_id label")
+	}
+	if _, ok := obs.BahiaLabels["app"]; ok {
+		t.Error("non-Bahia label 'app' should be excluded")
+	}
+}
+
+func TestNormalizeKubernetesPod_RestartPolicy(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	pod.Spec.RestartPolicy = "Always"
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if obs.RestartPolicy != "Always" {
+		t.Errorf("RestartPolicy = %q, want %q", obs.RestartPolicy, "Always")
+	}
+}
+
+func TestNormalizeKubernetesPod_ImageDigestFromStatus(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	pod.Status.ContainerStatuses[0].ImageID = "docker-pullable://ghcr.io/org/api@sha256:abcdef1234567890"
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if obs.ImageDigest != "sha256:abcdef1234567890" {
+		t.Errorf("ImageDigest = %q, want %q", obs.ImageDigest, "sha256:abcdef1234567890")
+	}
+}
+
+func TestNormalizeKubernetesPod_HashStability(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	secrets := map[string]bool{"SECRET_KEY": true}
+
+	obs1 := NormalizeKubernetesPod(pod, secrets)
+	obs2 := NormalizeKubernetesPod(pod, secrets)
+
+	if obs1.ObservationHash == "" {
+		t.Fatal("expected non-empty hash")
+	}
+	if obs1.ObservationHash != obs2.ObservationHash {
+		t.Errorf("hash not stable: %s vs %s", obs1.ObservationHash, obs2.ObservationHash)
+	}
+}
+
+func TestNormalizeKubernetesPod_HashChangesOnDrift(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	obs1 := NormalizeKubernetesPod(pod, nil)
+
+	// Change image → hash must change.
+	pod2 := sampleKubePod()
+	pod2.Spec.Containers[0].Image = "ghcr.io/org/api:v2.0.0"
+	obs2 := NormalizeKubernetesPod(pod2, nil)
+
+	if obs1.ObservationHash == obs2.ObservationHash {
+		t.Error("hash should change when image changes")
+	}
+
+	// Change restart policy → hash must change.
+	pod3 := sampleKubePod()
+	pod3.Spec.RestartPolicy = "Never"
+	obs3 := NormalizeKubernetesPod(pod3, nil)
+
+	if obs1.ObservationHash == obs3.ObservationHash {
+		t.Error("hash should change when restart policy changes")
+	}
+}
+
+func TestNormalizeKubernetesPod_PortProtocolDefaultsTCP(t *testing.T) {
+	t.Parallel()
+	pod := sampleKubePod()
+	// Override ports with one that has no protocol set.
+	pod.Spec.Containers[0].Ports = []struct {
+		ContainerPort int32  `json:"containerPort"`
+		Protocol      string `json:"protocol,omitempty"`
+	}{
+		{ContainerPort: 5432, Protocol: ""},
+	}
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if len(obs.Ports) != 1 || obs.Ports[0] != "5432/tcp" {
+		t.Errorf("Ports = %v, want [5432/tcp]", obs.Ports)
+	}
+}
+
+func TestNormalizeKubernetesPod_EmptyPodNoContainers(t *testing.T) {
+	t.Parallel()
+	pod := &kubePod{}
+	pod.Metadata.Labels = map[string]string{"bahia.service": "empty"}
+
+	obs := NormalizeKubernetesPod(pod, nil)
+
+	if obs == nil {
+		t.Fatal("expected non-nil observation even for empty pod")
+	}
+	if obs.ImageRef != "" {
+		t.Errorf("expected empty ImageRef, got %q", obs.ImageRef)
+	}
+	if obs.ObservationHash == "" {
+		t.Error("expected non-empty hash even for empty pod")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+func sampleKubePod() *kubePod {
+	pod := &kubePod{}
+	pod.Metadata.Name = "api-7d8f9b-xyz"
+	pod.Metadata.Labels = map[string]string{
+		"bahia.service":        "api",
+		"bahia.environment_id": "env-abc",
+		"app":                  "api",
+	}
+	pod.Spec.Containers = []struct {
+		Name    string   `json:"name"`
+		Image   string   `json:"image"`
+		Command []string `json:"command,omitempty"`
+		Env     []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"env,omitempty"`
+		Ports []struct {
+			ContainerPort int32  `json:"containerPort"`
+			Protocol      string `json:"protocol,omitempty"`
+		} `json:"ports,omitempty"`
+	}{
+		{
+			Name:  "api",
+			Image: "ghcr.io/org/api:v1.0.0",
+			Env: []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			}{
+				{Name: "APP_PORT", Value: "8080"},
+				{Name: "LOG_LEVEL", Value: "info"},
+			},
+			Ports: []struct {
+				ContainerPort int32  `json:"containerPort"`
+				Protocol      string `json:"protocol,omitempty"`
+			}{
+				{ContainerPort: 9090, Protocol: "TCP"},
+				{ContainerPort: 8080, Protocol: "TCP"},
+			},
+		},
+	}
+	pod.Spec.RestartPolicy = "Always"
+	pod.Status.Phase = "Running"
+	pod.Status.ContainerStatuses = []struct {
+		ContainerID string `json:"containerID"`
+		Image       string `json:"image"`
+		ImageID     string `json:"imageID"`
+		Ready       bool   `json:"ready"`
+	}{
+		{
+			ContainerID: "containerd://abc123",
+			Image:       "ghcr.io/org/api:v1.0.0",
+			ImageID:     "ghcr.io/org/api@sha256:deadbeef12345678",
+			Ready:       true,
+		},
+	}
+	return pod
+}
 
 func sampleInspectData() *dockerContainerInspect {
 	return &dockerContainerInspect{
