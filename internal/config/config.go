@@ -608,6 +608,11 @@ func Defaults() *Config {
 			PollInterval: 10 * time.Second,
 		},
 		Nostr: NostrConfig{
+			ContextVMRelays: []string{
+				"wss://relay.contextvm.org",
+				"wss://relay2.contextvm.org",
+				"wss://cvm.otherstuff.ai",
+			},
 			PublishEnabled:             true,
 			RelayAuthUnavailablePolicy: RelayAuthUnavailableExcludeAndFail,
 			RelayQuorum: RelayQuorumConfig{

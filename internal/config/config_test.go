@@ -691,6 +691,7 @@ func TestNostrRelayPolicyCompatibilityFallbacks(t *testing.T) {
 	cfg := Defaults()
 	cfg.Nostr.Relays = []string{"wss://service-compat.example"}
 	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = nil // clear defaults to test fallback behavior
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() error: %v", err)
