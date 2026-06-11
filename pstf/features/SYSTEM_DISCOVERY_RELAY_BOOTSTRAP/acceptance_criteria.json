@@ -315,6 +315,44 @@
         "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md"
       ],
       "requires_human_approval": false
+    },
+    {
+      "ac_id": "SDRB-AC-011",
+      "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+      "title": "Discovery event tags are treated as compatibility-reviewed protocol",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "The Bahia system discovery server announcement must be emitted as exact protocol tags d=bahia-system-v1, schema=bahia.system-discovery.v1, and name=Bahia on kind 11316. Browser discovery subscriptions must scope by the trusted service authors and the required #d coordinates for the announcement and NIP-51 relay sets. Any change to these tags, d coordinates, tag order, or schema requires compatibility review before merge.",
+      "testable_by": [
+        "unit",
+        "contract",
+        "e2e"
+      ],
+      "preconditions": [
+        "Nostr projector is configured with sidecar enabled and browser/contextvm/service relay sets.",
+        "Browser discovery has explicit bootstrap relays and trusted service pubkeys."
+      ],
+      "steps": [
+        "Publish the discovery snapshot through the backend projector.",
+        "Compare the announcement and relay-set tags to the exact browser protocol envelope.",
+        "Run browser discovery against EOSE-bounded relay history and assert trusted discovery state is accepted before completion."
+      ],
+      "expected_result": "The backend emits only the canonical discovery envelope, browser filters are narrow over the canonical d-tags, and discovery fails closed when EOSE arrives without trusted accepted state.",
+      "negative_cases": [
+        "If the d tag drifts from bahia-system-v1, the backend contract test fails.",
+        "If required schema/name tags are removed or reordered without review, the exact-envelope test fails.",
+        "If the browser reaches EOSE without trusted discovery or browser relay-set state, discovery fails closed."
+      ],
+      "source_evidence": [
+        "internal/adapters/nostr/discovery_protocol.go",
+        "internal/adapters/nostr/projector.go",
+        "internal/adapters/nostr/projector_test.go",
+        "web/src/lib/stores/discovery.svelte.js",
+        "web/tests/unit/discovery-store.test.js",
+        "web/tests/e2e/system-discovery-real-sidecar-smoke.spec.js",
+        "docs/nostr-event-implementation-guide.md"
+      ],
+      "requires_human_approval": false
     }
   ]
 }

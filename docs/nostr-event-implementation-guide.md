@@ -129,6 +129,18 @@ Use ContextVM discovery.
 
 Use NIP-89 kind `31990` only when advertising application handler capability to the broader Nostr ecosystem. Do not use Bahia's old `31974` system discovery kind in runtime code.
 
+Bahia system discovery is a protocol envelope, not an implementation detail. The server announcement that browsers accept is:
+
+| Field | Required value |
+|---|---|
+| Kind | `11316` |
+| `d` tag | `bahia-system-v1` |
+| `schema` tag | `bahia.system-discovery.v1` |
+| `name` tag | `Bahia` |
+| Content `schema` | `bahia.system-discovery.v1` |
+
+Browsers subscribe with narrow filters over trusted service authors and `#d` values for the announcement plus the relay sets they consume. Any change to these discovery tags, tag order, `d` coordinates, content schema, or the browser-required relay-set tags is a compatibility-impacting protocol change and requires PSTF evidence plus compatibility review before merging.
+
 ### 6. Is this relay topology or bootstrap routing?
 
 Use existing relay-list NIPs and existing protocol relay hints. Bahia does not allocate relay-routing kinds.

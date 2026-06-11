@@ -50,6 +50,11 @@ vi.mock('../../src/lib/nostr/pool-client.js', () => ({
 
 const trustedPubkey = 'b'.repeat(64);
 const otherPubkey = 'f'.repeat(64);
+const discoveryFilter = {
+  kinds: [11316, 30002],
+  authors: [trustedPubkey],
+  '#d': ['bahia-system-v1', 'bahia-browser-v1', 'bahia-contextvm-v1', 'bahia-service-v1']
+};
 
 function nostrEvent({ id, kind, pubkey = trustedPubkey, created_at = 100, tags = [], content = {} }) {
   return {
@@ -122,12 +127,10 @@ describe('Nostr system discovery store', () => {
     const info = await store.discoverSystemInfo();
 
     expect(poolClientHarness.instance.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(poolClientHarness.instance.queryUntilEose).toHaveBeenCalledWith([
-      { kinds: [11316, 30002], authors: [trustedPubkey] }
-    ]);
+    expect(poolClientHarness.instance.queryUntilEose).toHaveBeenCalledWith([discoveryFilter]);
     expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
       ['ws://localhost:10547/relay'],
-      [{ kinds: [11316, 30002], authors: [trustedPubkey] }],
+      [discoveryFilter],
       expect.objectContaining({
         onEvent: expect.any(Function),
         onEose: expect.any(Function),
@@ -217,7 +220,7 @@ describe('Nostr system discovery store', () => {
     await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('All Nostr query relays require AUTH');
     expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
       ['ws://localhost:10547/relay'],
-      [{ kinds: [11316, 30002], authors: [trustedPubkey] }],
+      [discoveryFilter],
       expect.objectContaining({
         onEvent: expect.any(Function),
         onEose: expect.any(Function),

@@ -412,6 +412,45 @@
       ],
       "status": "pass",
       "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-013",
+      "ac_ids": [
+        "SDRB-AC-011"
+      ],
+      "title": "Exact discovery protocol envelope and real-sidecar EOSE smoke",
+      "type": "contract+e2e",
+      "existing_or_new": "new",
+      "target_path": "internal/adapters/nostr/projector_test.go; web/tests/unit/discovery-store.test.js; web/tests/e2e/system-discovery-real-sidecar-smoke.spec.js",
+      "description": "Assert the backend system discovery announcement and NIP-51 relay-set tags as exact protocol envelopes, verify browser discovery subscribes with #d-scoped filters, and provide an opt-in real-sidecar Playwright smoke that fails when EOSE completes without trusted accepted discovery state.",
+      "preconditions": [
+        "Backend projector has a deterministic sidecar-enabled config.",
+        "For the real-sidecar smoke, set BAHIA_REAL_SIDECAR_SMOKE=1 with real bootstrap relay and trusted service pubkey environment."
+      ],
+      "steps": [
+        "Run the backend projector discovery snapshot test.",
+        "Run the browser discovery-store unit test.",
+        "Run the real-sidecar smoke in an environment with a live sidecar containing canonical discovery events."
+      ],
+      "expected_result": "Exact tag drift breaks backend tests; broad browser discovery filters break unit tests; the real-sidecar smoke accepts trusted discovery before EOSE or fails.",
+      "fixtures": [
+        "Deterministic projector private key and relay URLs.",
+        "Live sidecar discovery history for opt-in smoke."
+      ],
+      "mocks": [
+        "Backend capture publisher for contract assertions.",
+        "Vitest PoolBackedClient harness for browser filter assertion."
+      ],
+      "data_requirements": [
+        "Canonical kind 11316 discovery announcement.",
+        "NIP-51 relay sets d=bahia-browser-v1, d=bahia-contextvm-v1, and d=bahia-service-v1."
+      ],
+      "determinism_notes": [
+        "Backend and unit tests are deterministic and event-driven.",
+        "The real-sidecar smoke is environment-gated because it intentionally verifies a deployed relay/app topology."
+      ],
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {

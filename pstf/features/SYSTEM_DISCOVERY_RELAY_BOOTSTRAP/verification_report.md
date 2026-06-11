@@ -77,3 +77,23 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 ## Recommendation
 - Mark `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` verified for the approved sidecar-first slice.
 - Next PSTF stage should be confidence scoring, then critic review / HITL release review for this feature.
+
+## 2026-06-10 Discovery tag protocol hardening
+- Scope: Beads issue `bahia-74yc`.
+- Verified that the backend system discovery event builder now uses shared protocol constants/helpers for the required kind `11316` tags: `d=bahia-system-v1`, `schema=bahia.system-discovery.v1`, and `name=Bahia`.
+- Verified that NIP-51 relay-set `d` tags for browser, ContextVM, and service relay discovery are centralized alongside the announcement constants because browsers filter on those coordinates.
+- Verified that `web/src/lib/stores/discovery.svelte.js` now queries discovery history with a narrow `#d` filter for the exact discovery and relay-set coordinates it accepts, instead of broad-fetching all trusted `11316`/`30002` events.
+- Added backend exact-envelope assertions for the discovery announcement tags, relay-set tags, and browser-critical discovery payload structure. Tag drift now breaks the projector contract test rather than being hidden by partial assertions.
+- Added opt-in Playwright smoke `web/tests/e2e/system-discovery-real-sidecar-smoke.spec.js`. With `BAHIA_REAL_SIDECAR_SMOKE=1` plus real sidecar bootstrap relays and trusted service pubkeys, it boots the app without browser-side relay mocks and fails if EOSE completes without accepted trusted discovery state.
+- Added `SDRB-AC-011` and `SDRB-T-013` to capture discovery tags as compatibility-reviewed protocol.
+
+### Commands Run
+- `python3 -m json.tool pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/acceptance_criteria.json >/tmp/sdrb-ac.json.check`
+- `python3 -m json.tool pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/test_matrix.json >/tmp/sdrb-tm.json.check`
+- `gofmt -w internal/adapters/nostr/discovery_protocol.go internal/adapters/nostr/projector.go internal/adapters/nostr/projector_test.go`
+- `go test ./internal/adapters/nostr -run 'TestProjectorPublishesSystemDiscoverySnapshot|TestProjectorSystemDiscovery' -count=1`
+- `cd web && pnpm test:unit -- --run tests/unit/discovery-store.test.js` (Vitest command executed the configured unit suite: 66 files / 511 tests passed.)
+- `cd web && pnpm exec playwright test tests/e2e/system-discovery-real-sidecar-smoke.spec.js --reporter=line` (1 skipped because `BAHIA_REAL_SIDECAR_SMOKE` was not set in this local environment.)
+
+### Remaining verification
+- Real-sidecar smoke must be run in an environment that provides a live Bahia sidecar containing canonical discovery history. This is tracked outside prose in Beads for CI/deployment wiring if such an environment is not present locally.

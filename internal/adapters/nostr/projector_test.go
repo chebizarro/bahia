@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -495,25 +497,27 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	assertNoPublishedKind(t, sink, KindSystemDiscovery)
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertEventPubkey(t, discovery, wantPubkey)
-	assertTag(t, discovery, "d", "bahia-system-v1")
-	assertTag(t, discovery, "schema", "bahia.system-discovery.v1")
-	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
+	assertExactTags(t, discovery, systemDiscoveryAnnouncementTags())
+	assertSystemDiscoveryEnvelopeForBrowser(t, discovery)
 	assertDiscoveryVersions(t, discovery.Content)
 
-	browserSet := assertOneRelaySet(t, sink, "bahia-browser-v1")
+	browserSet := assertOneRelaySet(t, sink, BrowserRelaySetDTag)
 	assertEventPubkey(t, browserSet, wantPubkey)
+	assertExactTags(t, browserSet, gonostr.Tags{{"d", BrowserRelaySetDTag}, {"title", BrowserRelaySetDTag}, {"relay", "wss://browser.example"}})
 	assertTag(t, browserSet, "relay", "wss://browser.example")
 	assertNoTag(t, browserSet, "relay", "wss://contextvm.example")
 	assertNoTag(t, browserSet, "relay", "wss://service.example")
 
-	contextVMSet := assertOneRelaySet(t, sink, "bahia-contextvm-v1")
+	contextVMSet := assertOneRelaySet(t, sink, ContextVMRelaySetDTag)
 	assertEventPubkey(t, contextVMSet, wantPubkey)
+	assertExactTags(t, contextVMSet, gonostr.Tags{{"d", ContextVMRelaySetDTag}, {"title", ContextVMRelaySetDTag}, {"relay", "wss://contextvm.example"}})
 	assertTag(t, contextVMSet, "relay", "wss://contextvm.example")
 	assertNoTag(t, contextVMSet, "relay", "wss://browser.example")
 	assertNoTag(t, contextVMSet, "relay", "wss://service.example")
 
-	serviceSet := assertOneRelaySet(t, sink, "bahia-service-v1")
+	serviceSet := assertOneRelaySet(t, sink, ServiceRelaySetDTag)
 	assertEventPubkey(t, serviceSet, wantPubkey)
+	assertExactTags(t, serviceSet, gonostr.Tags{{"d", ServiceRelaySetDTag}, {"title", ServiceRelaySetDTag}, {"relay", "wss://service.example"}})
 	assertTag(t, serviceSet, "relay", "wss://service.example")
 	assertNoTag(t, serviceSet, "relay", "wss://browser.example")
 	assertNoTag(t, serviceSet, "relay", "wss://contextvm.example")
@@ -1459,6 +1463,103 @@ func assertTag(t *testing.T, ev gonostr.Event, key, value string) {
 		}
 	}
 	t.Fatalf("event kind %d missing tag %s=%s; tags=%v", ev.Kind, key, value, ev.Tags)
+}
+
+func assertExactTags(t *testing.T, ev gonostr.Event, want gonostr.Tags) {
+	t.Helper()
+	if !reflect.DeepEqual(ev.Tags, want) {
+		t.Fatalf("event kind %d tags = %#v, want exact protocol envelope %#v", ev.Kind, ev.Tags, want)
+	}
+}
+
+func assertSystemDiscoveryEnvelopeForBrowser(t *testing.T, ev gonostr.Event) {
+	t.Helper()
+	if ev.Kind != kinds.ContextVMServerAnnouncement {
+		t.Fatalf("discovery kind = %d, want %d", ev.Kind, kinds.ContextVMServerAnnouncement)
+	}
+	if eventDTag(ev) != SystemDiscoveryDTag {
+		t.Fatalf("discovery d tag = %q, want %q", eventDTag(ev), SystemDiscoveryDTag)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil {
+		t.Fatalf("unmarshal discovery content: %v", err)
+	}
+	wantTopLevel := []string{"blossom", "control_plane", "features", "nostr", "oci", "registries", "runtime", "schema", "versions"}
+	if got := sortedDiscoveryPayloadKeys(payload); !reflect.DeepEqual(got, wantTopLevel) {
+		t.Fatalf("discovery top-level keys = %#v, want browser protocol envelope keys %#v", got, wantTopLevel)
+	}
+	if payload["schema"] != SystemDiscoverySchema {
+		t.Fatalf("discovery schema = %#v, want %q", payload["schema"], SystemDiscoverySchema)
+	}
+	features, ok := payload["features"].(map[string]any)
+	if !ok {
+		t.Fatalf("discovery features missing or invalid: %#v", payload["features"])
+	}
+	wantFeatures := map[string]any{
+		"auth":                     false,
+		"blossom":                  false,
+		"cashu":                    false,
+		"direct_nostr_http_auth":   false,
+		"encrypted_nostr_requests": true,
+		"harbor":                   false,
+		"hiveci":                   false,
+		"llm_control_plane":        false,
+		"mcp_transport":            true,
+		"notifications":            false,
+		"oci":                      false,
+		"publish_enabled":          true,
+		"relay_read_models":        true,
+		"relay_sidecar":            true,
+		"telemetry":                false,
+	}
+	if !reflect.DeepEqual(features, wantFeatures) {
+		t.Fatalf("discovery features = %#v, want exact browser feature envelope %#v", features, wantFeatures)
+	}
+	controlPlane, ok := payload["control_plane"].(map[string]any)
+	if !ok {
+		t.Fatalf("discovery control_plane missing or invalid: %#v", payload["control_plane"])
+	}
+	if controlPlane["version"] != "bahia-controlplane-v1" || controlPlane["contextvm_commands"] != true || controlPlane["canonical_observables"] != true {
+		t.Fatalf("discovery control_plane critical fields invalid: %#v", controlPlane)
+	}
+	assertDiscoveryKindMap(t, controlPlane, "transport_kinds", map[string]int{
+		"contextvm_message":        kinds.ContextVMMessage,
+		"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
+		"contextvm_ephemeral_wrap": kinds.ContextVMEphemeralGiftWrap,
+	})
+	assertDiscoveryKindMap(t, controlPlane, "observable_kinds", map[string]int{
+		"control_state": KindCASControlState,
+		"status":        KindNIP38Status,
+		"audit":         KindCASAudit,
+	})
+	assertDiscoveryKindMap(t, controlPlane, "announcement_kinds", map[string]int{
+		"server":             kinds.ContextVMServerAnnouncement,
+		"tools":              kinds.ContextVMToolsList,
+		"resources":          kinds.ContextVMResourcesList,
+		"resource_templates": kinds.ContextVMResourceTemplatesList,
+		"prompts":            kinds.ContextVMPromptsList,
+	})
+	nostrPayload, ok := payload["nostr"].(map[string]any)
+	if !ok {
+		t.Fatalf("discovery nostr missing or invalid: %#v", payload["nostr"])
+	}
+	if got := nostrPayload["trusted_relay_monitor_pubkeys"]; got != nil {
+		t.Fatalf("trusted relay monitor pubkeys = %#v, want nil", got)
+	}
+	runtime, ok := payload["runtime"].(map[string]any)
+	if !ok || runtime["type"] != "docker" || !reflect.DeepEqual(runtime["environments"], []any{}) {
+		t.Fatalf("runtime discovery envelope = %#v", payload["runtime"])
+	}
+	assertDiscoveryContainsNoLegacyKinds(t, payload)
+}
+
+func sortedDiscoveryPayloadKeys(value map[string]any) []string {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func assertNoTag(t *testing.T, ev gonostr.Event, key, value string) {

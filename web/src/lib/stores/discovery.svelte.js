@@ -233,7 +233,11 @@ export async function discoverSystemInfo({ force = false } = {}) {
         }
 
         events = await bootstrapClient.queryUntilEose([
-          { kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET], authors: seed.service_pubkeys }
+          {
+            kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
+            authors: seed.service_pubkeys,
+            '#d': [SYSTEM_DISCOVERY_DTAG, BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG]
+          }
         ]);
       } finally {
         bootstrapClient.disconnect();

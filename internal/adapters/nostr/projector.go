@@ -2024,7 +2024,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	serviceRelays := cfg.Nostr.ServiceRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && cfg.Nostr.PrivateKey != ""
 	payload := map[string]any{
-		"schema":        "bahia.system-discovery.v1",
+		"schema":        SystemDiscoverySchema,
 		"registries":    discoveryRegistries(cfg),
 		"versions":      discoveryVersions(),
 		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
@@ -2064,16 +2064,16 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 		},
 	}
 	content, _ := json.Marshal(payload)
-	if err := p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, gonostr.Tags{{"d", "bahia-system-v1"}, {"schema", "bahia.system-discovery.v1"}, {"name", "Bahia"}}, string(content), "system.discovery", nil); err != nil {
+	if err := p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, systemDiscoveryAnnouncementTags(), string(content), "system.discovery", nil); err != nil {
 		return err
 	}
-	if err := p.publishRelaySet(ctx, "bahia-browser-v1", browserRelays); err != nil {
+	if err := p.publishRelaySet(ctx, BrowserRelaySetDTag, browserRelays); err != nil {
 		return err
 	}
-	if err := p.publishRelaySet(ctx, "bahia-contextvm-v1", contextVMRelays); err != nil {
+	if err := p.publishRelaySet(ctx, ContextVMRelaySetDTag, contextVMRelays); err != nil {
 		return err
 	}
-	if err := p.publishRelaySet(ctx, "bahia-service-v1", serviceRelays); err != nil {
+	if err := p.publishRelaySet(ctx, ServiceRelaySetDTag, serviceRelays); err != nil {
 		return err
 	}
 	return p.publishServiceNIP65RelayPreferences(ctx, serviceRelays, contextVMRelays)
@@ -2122,11 +2122,7 @@ func (p *Projector) publishServiceNIP65RelayPreferences(ctx context.Context, wri
 }
 
 func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []string) error {
-	tags := gonostr.Tags{{"d", dTag}, {"title", dTag}}
-	for _, relay := range normalizeProjectionRelays(relays) {
-		tags = append(tags, gonostr.Tag{"relay", relay})
-	}
-	return p.publishSigned(ctx, kinds.RelaySetDiscovery, tags, "", "system.discovery.relay_set", nil)
+	return p.publishSigned(ctx, kinds.RelaySetDiscovery, relaySetTags(dTag, relays), "", "system.discovery.relay_set", nil)
 }
 
 func discoveryVersions() map[string]any {
