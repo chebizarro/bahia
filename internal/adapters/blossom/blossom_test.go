@@ -391,9 +391,9 @@ func TestClient_CreateAuthHeader_WithPrivateKey(t *testing.T) {
 
 	// Decode and validate the event
 	encodedEvent := strings.TrimPrefix(header, "Nostr ")
-	eventJSON, err := base64.StdEncoding.DecodeString(encodedEvent)
+	eventJSON, err := base64.RawURLEncoding.DecodeString(encodedEvent)
 	if err != nil {
-		t.Fatalf("failed to decode base64: %v", err)
+		t.Fatalf("failed to decode base64url: %v", err)
 	}
 
 	var event nostr.Event
@@ -401,47 +401,44 @@ func TestClient_CreateAuthHeader_WithPrivateKey(t *testing.T) {
 		t.Fatalf("failed to unmarshal event: %v", err)
 	}
 
-	// Verify event properties
-	if event.Kind != 27235 {
-		t.Errorf("event.Kind = %d, want 27235", event.Kind)
+	// Verify event properties — BUD-11 requires kind 24242
+	if event.Kind != 24242 {
+		t.Errorf("event.Kind = %d, want 24242", event.Kind)
 	}
 	if event.PubKey != pubkey {
 		t.Errorf("event.PubKey = %s, want %s", event.PubKey, pubkey)
 	}
 
-	// Verify tags
-	foundU := false
-	foundMethod := false
-	foundPayload := false
+	// Verify tags per BUD-11
+	foundT := false
+	foundExpiration := false
+	foundX := false
 	for _, tag := range event.Tags {
 		if len(tag) >= 2 {
 			switch tag[0] {
-			case "u":
-				if tag[1] != url {
-					t.Errorf("u tag = %s, want %s", tag[1], url)
+			case "t":
+				if tag[1] != "upload" {
+					t.Errorf("t tag = %s, want upload", tag[1])
 				}
-				foundU = true
-			case "method":
-				if tag[1] != method {
-					t.Errorf("method tag = %s, want %s", tag[1], method)
-				}
-				foundMethod = true
-			case "payload":
+				foundT = true
+			case "expiration":
+				foundExpiration = true
+			case "x":
 				if tag[1] != contentHash {
-					t.Errorf("payload tag = %s, want %s", tag[1], contentHash)
+					t.Errorf("x tag = %s, want %s", tag[1], contentHash)
 				}
-				foundPayload = true
+				foundX = true
 			}
 		}
 	}
-	if !foundU {
-		t.Error("missing 'u' tag")
+	if !foundT {
+		t.Error("missing 't' tag")
 	}
-	if !foundMethod {
-		t.Error("missing 'method' tag")
+	if !foundExpiration {
+		t.Error("missing 'expiration' tag")
 	}
-	if !foundPayload {
-		t.Error("missing 'payload' tag")
+	if !foundX {
+		t.Error("missing 'x' tag")
 	}
 
 	// Verify signature
@@ -467,16 +464,16 @@ func TestClient_CreateAuthHeader_NoPayload(t *testing.T) {
 		t.Fatalf("createAuthHeader() error = %v", err)
 	}
 
-	// Decode and check no payload tag
+	// Decode and check no x tag when hash is empty
 	encodedEvent := strings.TrimPrefix(header, "Nostr ")
-	eventJSON, _ := base64.StdEncoding.DecodeString(encodedEvent)
+	eventJSON, _ := base64.RawURLEncoding.DecodeString(encodedEvent)
 
 	var event nostr.Event
 	json.Unmarshal(eventJSON, &event)
 
 	for _, tag := range event.Tags {
-		if len(tag) >= 1 && tag[0] == "payload" {
-			t.Error("should not have 'payload' tag when contentHash is empty")
+		if len(tag) >= 1 && tag[0] == "x" {
+			t.Error("should not have 'x' tag when contentHash is empty")
 		}
 	}
 }

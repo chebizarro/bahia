@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"strconv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -151,8 +152,8 @@ func (c *Client) doUpload(ctx context.Context, url string, data []byte, contentT
 	return &bd, nil
 }
 
-// createAuthHeader creates a NIP-98 Nostr-signed authorization header.
-// Returns "Nostr <base64-encoded-signed-event>" for authenticated requests.
+// createAuthHeader creates a Blossom BUD-11 authorization header (kind 24242).
+// Returns "Nostr <base64url-encoded-signed-event>" for authenticated requests.
 func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash string) (string, error) {
 	if c.privateKey == "" {
 		return "", nil
@@ -164,21 +165,39 @@ func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash 
 		return "", fmt.Errorf("deriving public key: %w", err)
 	}
 
-	// Build NIP-98 event (kind 27235)
+	// Determine the action verb from the HTTP method
+	var action, content string
+	switch method {
+	case http.MethodPut:
+		action = "upload"
+		content = "Upload Blob"
+	case http.MethodDelete:
+		action = "delete"
+		content = "Delete Blob"
+	case http.MethodGet:
+		action = "get"
+		content = "Get Blob"
+	default:
+		action = "get"
+		content = "Get Blob"
+	}
+
+	// Build Blossom authorization event (kind 24242) per BUD-11
+	expiration := nostr.Now() + 60 // 60 seconds from now
 	event := &nostr.Event{
-		Kind:      27235,
+		Kind:      24242,
 		PubKey:    pubkey,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
-			{"u", url},
-			{"method", method},
+			{"t", action},
+			{"expiration", strconv.FormatInt(int64(expiration), 10)},
 		},
-		Content: "",
+		Content: content,
 	}
 
-	// Add payload hash if provided (SHA-256 of request body)
+	// Add blob hash as x tag if provided (required for upload/delete per BUD-11)
 	if contentHash != "" {
-		event.Tags = append(event.Tags, nostr.Tag{"payload", contentHash})
+		event.Tags = append(event.Tags, nostr.Tag{"x", contentHash})
 	}
 
 	// Sign the event
@@ -186,12 +205,12 @@ func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash 
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 
-	// Serialize to JSON and base64 encode
+	// Serialize to JSON and base64url encode (no padding) per BUD-11
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		return "", fmt.Errorf("marshaling event: %w", err)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(eventJSON)
+	encoded := base64.RawURLEncoding.EncodeToString(eventJSON)
 	return "Nostr " + encoded, nil
 }

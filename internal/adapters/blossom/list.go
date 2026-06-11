@@ -3,6 +3,7 @@ package blossom
 import (
 	"context"
 	"encoding/base64"
+	"strconv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -160,17 +161,17 @@ func (c *Client) createListAuthHeader(ctx context.Context, url string) (string, 
 		return "", fmt.Errorf("deriving public key: %w", err)
 	}
 
-	// Build NIP-98 event (kind 27235) with list tag
+	// Build Blossom authorization event (kind 24242) per BUD-11
+	expiration := nostr.Now() + 60 // 60 seconds from now
 	event := &nostr.Event{
-		Kind:      27235,
+		Kind:      24242,
 		PubKey:    pubkey,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
-			{"u", url},
-			{"method", "GET"},
-			{"t", "list"}, // Required for Blossom list operations
+			{"t", "list"},
+			{"expiration", strconv.FormatInt(int64(expiration), 10)},
 		},
-		Content: "",
+		Content: "List Blobs",
 	}
 
 	if err := event.Sign(c.privateKey); err != nil {
@@ -182,6 +183,6 @@ func (c *Client) createListAuthHeader(ctx context.Context, url string) (string, 
 		return "", fmt.Errorf("marshaling event: %w", err)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(eventJSON)
+	encoded := base64.RawURLEncoding.EncodeToString(eventJSON)
 	return "Nostr " + encoded, nil
 }
