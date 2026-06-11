@@ -252,11 +252,20 @@ export function workerTelemetryIndicators(worker) {
     .filter((value) => Number.isFinite(value));
   const vramPercent = vramPercents.length > 0 ? Math.max(...vramPercents) : null;
 
+  const thermalObj = typeof telemetry.thermal === 'object' && telemetry.thermal !== null ? telemetry.thermal : null;
+  const thermalLabel = thermalObj?.throttled
+    ? 'throttled'
+    : thermalObj?.max_temperature_c !== undefined
+      ? percentLabel(thermalObj.max_temperature_c).replace('%', '°C')
+      : typeof telemetry.thermal === 'string'
+        ? telemetry.thermal
+        : '—';
+
   return [
     ['mem', percentLabel(telemetry.memory?.used_percent)],
     ['disk', percentLabel(telemetry.disk?.used_percent)],
     ['vram', percentLabel(vramPercent)],
-    ['thermal', telemetry.thermal?.throttled ? 'throttled' : percentLabel(telemetry.thermal?.max_temperature_c).replace('%', '°C')]
+    ['thermal', thermalLabel]
   ];
 }
 
