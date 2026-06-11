@@ -53,6 +53,20 @@ Final integrated verification after the fixer pass:
 - PASS: `go test ./internal/nostrmigration ./internal/repository ./internal/app ./internal/controlplane ./internal/kinds ./internal/adapters/nostr ./internal/relaysidecar ./internal/mcp ./internal/service ./pkg/client ./cmd/cli`.
 - PASS: `npm run test:unit -- --run tests/unit/llm-page.test.js tests/unit/controlplane-store.test.js tests/unit/fips-mesh-store.test.js tests/unit/dns-store-subscriptions.test.js tests/unit/dns-store-commands.test.js tests/unit/nostr-client-parsing.test.js tests/unit/encrypted-controlplane.test.js tests/unit/public-controlplane.test.js tests/unit/dns-controlplane.test.js tests/unit/workers-actions.test.js tests/unit/assistant/assistant-store.test.js` — 11 files / 106 tests passed.
 
+## Migration manifest standard-kind omission pass — bahia-8j5h — 2026-06-11
+
+Observed behavior before this pass: `go test ./... -count=1` failed in `internal/nostrmigration` because `internal/kinds.LongFormDraft=30024` was neither mapped in the migration manifest nor explicitly justified. The focused rerun also exposed the companion NIP-23 constant `LongFormContent=30023` as uncovered.
+
+Intended behavior: the migration manifest covers every `internal/kinds` constant either with a legacy-to-canonical disposition or an explicit omission/alias justification. Standard NIP-23 long-form content and draft events (`30023`, `30024`) are consumed directly when applicable and are not Bahia legacy control-plane/read-model inputs to rewrite.
+
+Changes verified:
+- `internal/nostrmigration/manifest.go` now documents explicit `standard` omissions for `LongFormContent` and `LongFormDraft`.
+- `internal/nostrmigration/manifest_test.go` requires both NIP-23 constants in the requested omission/alias documentation test, while `TestKindConstantsAreMappedOrJustified` continues to parse all `internal/kinds` constants.
+
+Verification:
+- PASS: `GOCACHE=/tmp/bahia-go-build-cache GOMODCACHE=/tmp/bahia-go-mod-cache go test ./internal/nostrmigration -count=1`.
+- PASS: `GOCACHE=/tmp/bahia-go-build-cache GOMODCACHE=/tmp/bahia-go-mod-cache go test ./... -count=1`.
+
 ## Work item D verification — bahia-6xxd.4
 
 Docs/PSTF scope updated in this pass: `docs/control-planes.md`, `docs/user-guide/nostr-integration.md`, `docs/api.md`, `docs/deployment.md`, `docs/architecture.md`, `docs/designs/dns-orchestration-layer.md`, `docs/designs/nostr-native-system-discovery.md`, and `pstf/features/NOSTR_NATIVE_CONTEXTVM_MIGRATION/*`. Production documentation now describes ContextVM `25910` with CEP-4/NIP-59 wrappers (`1059`/`21059`) and canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, plus NIP-09 `5`). Legacy Bahia request/status/result/read-model/encrypted ranges are either removed from production instructions or explicitly marked historical/migration-only.

@@ -170,6 +170,8 @@ var constantJustifications = map[string]KindJustification{
 	"ContextVMPromptsList":           omitted("ContextVMPromptsList", kinds.ContextVMPromptsList, "canonical-discovery", "canonical ContextVM prompts list; not a legacy Bahia event kind"),
 	"NIP65RelayList":                 omitted("NIP65RelayList", kinds.NIP65RelayList, "standard", "standard NIP-65 relay list consumed directly, not rewritten by Bahia migration"),
 	"NIP51DMRelayList":               omitted("NIP51DMRelayList", kinds.NIP51DMRelayList, "standard", "standard NIP-51 DM relay list consumed directly for configured receive relays, not rewritten by Bahia migration"),
+	"LongFormContent":                omitted("LongFormContent", kinds.LongFormContent, "standard", "standard NIP-23 long-form content event consumed directly; not a Bahia legacy control-plane/read-model kind to rewrite"),
+	"LongFormDraft":                  omitted("LongFormDraft", kinds.LongFormDraft, "standard", "standard NIP-23 long-form draft event consumed directly; not a Bahia legacy control-plane/read-model kind to rewrite"),
 	"NostrSignature":                 omitted("NostrSignature", kinds.NostrSignature, "custom-support", "signature support event is not part of the legacy control-plane/read-model migration inventory"),
 	"FIPSOverlayAdvert":              omitted("FIPSOverlayAdvert", kinds.FIPSOverlayAdvert, "custom-interop", "FIPS overlay advertisement is handled by the FIPS overlay path, not the Bahia legacy migration"),
 	"HTTPAuth":                       omitted("HTTPAuth", kinds.HTTPAuth, "standard", "standard NIP-98 HTTP auth event; never a Bahia legacy migration input"),

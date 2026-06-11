@@ -171,6 +171,8 @@ func TestManifestDocumentsRequestedOmissionsAndAliases(t *testing.T) {
 		"FIPSOverlayAdvert":              kinds.FIPSOverlayAdvert,
 		"HTTPAuth":                       kinds.HTTPAuth,
 		"NIP65RelayList":                 kinds.NIP65RelayList,
+		"LongFormContent":                kinds.LongFormContent,
+		"LongFormDraft":                  kinds.LongFormDraft,
 		"ContextVMMessage":               kinds.ContextVMMessage,
 		"ContextVMGiftWrap":              kinds.ContextVMGiftWrap,
 		"ContextVMEphemeralGiftWrap":     kinds.ContextVMEphemeralGiftWrap,
