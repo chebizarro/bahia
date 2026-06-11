@@ -18,6 +18,7 @@ jobs:
       CONTROLPLANE_ROOT: /srv/data/bahia-controlplane
       COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
       RELEASE_ROOT: /srv/data/bahia-controlplane/releases
+      EDGE_HEALTH_HOST: 172.17.0.1
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
       PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
     steps:
@@ -123,6 +124,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          curl -fsS http://127.0.0.1:8080/health
-          curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/relay >/dev/null
-          curl -fsS http://127.0.0.1:8081/ >/dev/null
+          curl -fsS "http://${EDGE_HEALTH_HOST}:8080/health"
+          curl -fsS -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null
+          curl -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null
