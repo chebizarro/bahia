@@ -820,16 +820,19 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	bgManager.RegisterWithOptions(nostrSub, RunnerTier(Tier1))
 
-	// NIP-23 docs publisher: syncs user-guide documentation to relay as long-form content.
-	if nostrPub != nil && cfg.Nostr.PublishEnabled && cfg.Nostr.PrivateKey != "" {
+	// NIP-23 docs publisher: syncs user-guide documentation to the sidecar relay
+	// (or control-plane relays) as long-form content. Uses controlPlanePool so
+	// docs land on the same relay set the browser reads from.
+	if controlPlanePool != nil && cfg.Nostr.PublishEnabled && cfg.Nostr.PrivateKey != "" {
+		docsPub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
 		userDocsForNostr := docs.New(docs.DefaultBasePath)
 		var docsQuerier docs.NostrDocsQuerier
 		if servicePubkey != "" {
 			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
 		}
-		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, nostrPub, docsQuerier, logger)
+		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, docsPub, docsQuerier, logger)
 		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3))
-		logger.Info("NIP-23 docs publisher registered")
+		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
 	if len(controlPlaneRelays) > 0 && servicePubkey != "" {

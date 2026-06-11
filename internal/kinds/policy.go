@@ -21,7 +21,8 @@ func IsCanonicalObservableKind(kind int) bool {
 		ContextVMServerAnnouncement, ContextVMToolsList, ContextVMResourcesList,
 		ContextVMResourceTemplatesList, ContextVMPromptsList,
 		RelaySetDiscovery, NIP65RelayList, NIP51DMRelayList, SBOMAttestation,
-		BahiaIdentityDefinition, BahiaReplayCheckpoint, BahiaReadinessStatus:
+		BahiaIdentityDefinition, BahiaReplayCheckpoint, BahiaReadinessStatus,
+		LongFormContent:
 		return true
 	default:
 		return false
