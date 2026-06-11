@@ -1,5 +1,6 @@
 import IconAlertTriangle from './tabler/IconAlertTriangle.svelte';
 import IconBell from './tabler/IconBell.svelte';
+import IconBook from './tabler/IconBook.svelte';
 import IconBolt from './tabler/IconBolt.svelte';
 import IconBrain from './tabler/IconBrain.svelte';
 import IconBuildingCommunity from './tabler/IconBuildingCommunity.svelte';
@@ -100,6 +101,7 @@ export const StandardIcon = IconRobot;
 export const HeavyIcon = IconGauge;
 export const MLFabricIcon = IconNetwork;
 export const AcceleratorIcon = IconCpu;
+export const DocsIcon = IconBook;
 
 export const ImageFileIcon = IconPhoto;
 export const VideoFileIcon = IconVideo;

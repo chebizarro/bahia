@@ -4,6 +4,7 @@
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import {
     DeploymentIcon,
+    DocsIcon,
     LlmIcon,
     MoonIcon,
     ProtectedIcon,
@@ -148,7 +149,10 @@
 
       <div class="nav-sections">
         <section class="nav-section docs-section">
-          <h2>Documentation</h2>
+          <h2>
+            <DocsIcon size={16} strokeWidth={1.8} ariaHidden="true" />
+            <span>Documentation</span>
+          </h2>
           <ul>
             <li>
               <a href={DOCS_HOME_LINK.href} onclick={closeMenu}>
