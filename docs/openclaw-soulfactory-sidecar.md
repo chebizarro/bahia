@@ -46,6 +46,8 @@ Run the sidecar with a local command driver. The command receives one JSON `Open
 
 The command can wrap supported local OpenClaw surfaces such as the OpenClaw CLI/gateway-local RPC or plugin SDK execution path. It must not expose or depend on a REST SoulFactory lifecycle API.
 
+See [`openclaw-soulfactory-control-wrapper.md`](openclaw-soulfactory-control-wrapper.md) for the host-local wrapper specification, supported method mapping, state layout, and verification plan.
+
 ## Example
 
 ```bash
