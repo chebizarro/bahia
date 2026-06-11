@@ -32,6 +32,8 @@ jobs:
           : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
           : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 
+          mkdir -p "$GITHUB_WORKSPACE"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
           git init "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
