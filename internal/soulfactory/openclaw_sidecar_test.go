@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -101,6 +104,28 @@ func newTestOpenClawSidecar(t *testing.T, runtime, controller fakeSigner, transp
 		t.Fatalf("NewOpenClawSidecar error = %v", err)
 	}
 	return sidecar
+}
+
+func TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods(t *testing.T) {
+	got := OpenClawCommandDriver{Command: "openclaw-soulfactory-control"}.Methods()
+	want := []string{RuntimeMethodProvision, RuntimeMethodPersonaUpdate, RuntimeMethodRevoke}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("default command-driver methods = %#v, want %#v", got, want)
+	}
+	for _, unsupported := range []string{RuntimeMethodUpdate, RuntimeMethodSuspend, RuntimeMethodResume, RuntimeMethodAvatarGenerate, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure} {
+		if stringInSlice(unsupported, got) {
+			t.Fatalf("default command-driver methods over-advertise unsupported wrapper method %s in %#v", unsupported, got)
+		}
+	}
+}
+
+func TestOpenClawCommandDriverMethodsListCanBeConfigured(t *testing.T) {
+	driver := OpenClawCommandDriver{MethodsList: []string{RuntimeMethodProvision, " ", RuntimeMethodRevoke, RuntimeMethodProvision}}
+	got := driver.Methods()
+	want := []string{RuntimeMethodProvision, RuntimeMethodRevoke}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("configured command-driver methods = %#v, want %#v", got, want)
+	}
 }
 
 func TestOpenClawSidecarPublishesCompatibleCapability(t *testing.T) {
@@ -214,6 +239,161 @@ func TestOpenClawSidecarIdempotentReplayDoesNotRepeatSideEffects(t *testing.T) {
 	}
 	if len(transport.published) != 2 {
 		t.Fatalf("published results = %d, want one per request event delivery", len(transport.published))
+	}
+}
+
+func TestOpenClawSidecarRejectsIdempotencyReuseWithChangedParams(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &fakeOpenClawDriver{}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, driver)
+	request := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodProvision, openClawProvisionParams(), nil)
+
+	if _, err := sidecar.HandleControlEvent(t.Context(), request); err != nil {
+		t.Fatalf("first HandleControlEvent error = %v", err)
+	}
+	conflict := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodProvision, openClawProvisionParams(), func(_ *nostr.Event, envelope *RuntimeControlEnvelope) {
+		envelope.Params["identity"].(map[string]interface{})["name"] = "Changed Alice"
+	})
+	result, err := sidecar.HandleControlEvent(t.Context(), conflict)
+	if err != nil {
+		t.Fatalf("conflicting HandleControlEvent error = %v", err)
+	}
+	if result.Status != "rejected" || result.Error == nil || result.Error.Code != "duplicate_conflict" {
+		t.Fatalf("changed params idempotency result = %+v, want duplicate_conflict", result)
+	}
+	if len(driver.calls) != 1 {
+		t.Fatalf("driver called %d times, want original call only", len(driver.calls))
+	}
+}
+
+func TestOpenClawSidecarReportsIdempotencyPersistenceFailure(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &fakeOpenClawDriver{}
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("blocker"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	sidecar, err := NewOpenClawSidecar(OpenClawSidecarConfig{
+		RuntimePubkey:            runtime.pubkey,
+		Signer:                   runtime,
+		TrustedControllerPubkeys: []string{controller.pubkey},
+		Relays:                   []string{"wss://relay.example"},
+		Transport:                transport,
+		Driver:                   driver,
+		IdempotencyStore:         &fileOpenClawIdempotencyStore{path: filepath.Join(blocker, "idempotency.json"), results: map[string]OpenClawStoredResult{}},
+		Now:                      time.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenClawSidecar error = %v", err)
+	}
+	request := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodProvision, openClawProvisionParams(), nil)
+
+	result, err := sidecar.HandleControlEvent(t.Context(), request)
+	if err != nil {
+		t.Fatalf("HandleControlEvent persistence failure publish error = %v", err)
+	}
+	if result.Status != "failed" || result.Error == nil || result.Error.Code != "execution_failed" {
+		t.Fatalf("persistence failure result = %+v, want execution_failed", result)
+	}
+	if len(driver.calls) != 1 {
+		t.Fatalf("driver calls = %d, want 1", len(driver.calls))
+	}
+	if len(transport.published) != 1 || tagValue(transport.published[0].Tags, tagStatus) != "failed" {
+		t.Fatalf("published result = %#v, want failed 38386", transport.published)
+	}
+}
+
+func TestOpenClawSidecarCommandDriverInvokesWrapperDryRunAndCachesReplay(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	wrapperRoot := t.TempDir()
+	wrapperBinary := buildOpenClawControlWrapperForTest(t)
+	wrapperShim := writeCountingOpenClawWrapperShim(t, wrapperRoot)
+	driver := OpenClawCommandDriver{
+		Command: wrapperShim,
+		Args:    []string{wrapperBinary},
+		Env: []string{
+			"OPENCLAW_SOULFACTORY_ROOT=" + wrapperRoot,
+			"OPENCLAW_SOULFACTORY_DRY_RUN=1",
+			"OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container",
+			"OPENCLAW_SOULFACTORY_CONTAINER=openclaw-gateway",
+		},
+		MethodsList: []string{RuntimeMethodProvision},
+	}
+	sidecar, err := NewOpenClawSidecar(OpenClawSidecarConfig{
+		RuntimePubkey:            runtime.pubkey,
+		Signer:                   runtime,
+		TrustedControllerPubkeys: []string{controller.pubkey},
+		Relays:                   []string{"wss://relay.example"},
+		Transport:                transport,
+		Driver:                   driver,
+		IdempotencyStore:         NewMemoryOpenClawIdempotencyStore(),
+		Now:                      time.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenClawSidecar error = %v", err)
+	}
+	request := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodProvision, openClawProvisionParams(), nil)
+
+	result, err := sidecar.HandleControlEvent(t.Context(), request)
+	if err != nil {
+		t.Fatalf("HandleControlEvent wrapper dry-run error = %v", err)
+	}
+	if result.Status != "success" || result.Method != RuntimeMethodProvision || result.RequestEvent != request.ID || result.OperatorRequestEvent != "operator-request" {
+		t.Fatalf("unexpected wrapper result envelope: %+v", result)
+	}
+	if result.Result["runtime_binding"] != "openclaw://agents/agent-alice" || result.Result["state"] != "running" {
+		t.Fatalf("unexpected wrapper result payload: %+v", result.Result)
+	}
+	assertOpenClawWrapperDryRunState(t, wrapperRoot)
+	if got := countWrapperShimInvocations(t, wrapperRoot); got != 1 {
+		t.Fatalf("wrapper invocations after first request = %d, want 1", got)
+	}
+	if len(transport.published) != 1 {
+		t.Fatalf("published count after first request = %d, want 1", len(transport.published))
+	}
+	published := transport.published[0]
+	signatureOK, signatureErr := published.CheckSignature()
+	if published.Kind != domain.KindRuntimeControlResult || published.PubKey != runtime.pubkey || !published.CheckID() || signatureErr != nil || !signatureOK {
+		t.Fatalf("result event is not a signed 38386 from runtime: kind=%d pubkey=%s signatureOK=%v signatureErr=%v", published.Kind, published.PubKey, signatureOK, signatureErr)
+	}
+	parsed, ok := parseRuntimeControlResultEvent(&published)
+	if !ok || !runtimeResultCorrelates(parsed, request, RuntimeAdapterRequest{Method: RuntimeMethodProvision, IdempotencyKey: "idem-soulfactory.provision", Operator: RuntimeOperatorRef{RequestEvent: "operator-request"}, Target: RuntimeTargetRef{RuntimePubkey: runtime.pubkey, AgentID: "agent-alice"}, Soul: RuntimeSoulRef{ID: "soul-alice", SpecHash: "sha256:spec"}}, controller.pubkey) {
+		t.Fatalf("published wrapper result does not parse/correlate: %+v", parsed)
+	}
+
+	if _, err := sidecar.HandleControlEvent(t.Context(), request); err != nil {
+		t.Fatalf("HandleControlEvent cached replay error = %v", err)
+	}
+	if got := countWrapperShimInvocations(t, wrapperRoot); got != 1 {
+		t.Fatalf("wrapper invocations after cached replay = %d, want 1", got)
+	}
+	assertOpenClawWrapperDryRunState(t, wrapperRoot)
+	if len(transport.published) != 2 {
+		t.Fatalf("published count after cached replay = %d, want 2", len(transport.published))
+	}
+
+	conflict := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodProvision, openClawProvisionParams(), func(event *nostr.Event, envelope *RuntimeControlEnvelope) {
+		envelope.Operator.RequestEvent = "operator-request-conflict"
+		setExistingTagValue(event.Tags, tagEvent, envelope.Operator.RequestEvent)
+	})
+	conflictResult, err := sidecar.HandleControlEvent(t.Context(), conflict)
+	if err != nil {
+		t.Fatalf("HandleControlEvent idempotency conflict publish error = %v", err)
+	}
+	if conflictResult.Status != "rejected" || conflictResult.Error == nil || conflictResult.Error.Code != "duplicate_conflict" || conflictResult.RequestEvent != conflict.ID {
+		t.Fatalf("unexpected idempotency conflict result: %+v", conflictResult)
+	}
+	if got := countWrapperShimInvocations(t, wrapperRoot); got != 1 {
+		t.Fatalf("wrapper invocations after idempotency conflict = %d, want 1", got)
+	}
+	if len(transport.published) != 3 || tagValue(transport.published[2].Tags, tagStatus) != "rejected" || tagValue(transport.published[2].Tags, tagEvent) != conflict.ID {
+		t.Fatalf("conflict 38386 result is not correlated/rejected: %#v", transport.published)
 	}
 }
 
@@ -471,6 +651,118 @@ func TestOpenClawSidecarAvatarListAndSet(t *testing.T) {
 	}
 	if setResult.Result["avatar_ref"] != "blossom:existing" || setResult.Result["read_model_patch"] == nil {
 		t.Fatalf("unexpected avatar set result: %+v", setResult.Result)
+	}
+}
+
+func buildOpenClawControlWrapperForTest(t *testing.T) string {
+	t.Helper()
+	repoRoot := repoRootForOpenClawSidecarTest(t)
+	out := filepath.Join(t.TempDir(), "openclaw-soulfactory-control")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/openclaw-soulfactory-control")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build openclaw-soulfactory-control: %v\n%s", err, output)
+	}
+	return out
+}
+
+func repoRootForOpenClawSidecarTest(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(cwd, "go.mod")); err == nil {
+			return cwd
+		}
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			t.Fatalf("could not locate repo root from %s", cwd)
+		}
+		cwd = parent
+	}
+}
+
+func writeCountingOpenClawWrapperShim(t *testing.T, root string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "openclaw-wrapper-shim")
+	content := []byte("#!/bin/sh\nset -eu\nprintf '1\\n' >> \"$OPENCLAW_SOULFACTORY_ROOT/wrapper-invocations.log\"\nexec \"$1\"\n")
+	if err := os.WriteFile(path, content, 0o700); err != nil {
+		t.Fatalf("write wrapper shim: %v", err)
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create wrapper root: %v", err)
+	}
+	return path
+}
+
+func countWrapperShimInvocations(t *testing.T, root string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "wrapper-invocations.log"))
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("read wrapper invocation log: %v", err)
+	}
+	count := 0
+	for _, b := range data {
+		if b == '\n' {
+			count++
+		}
+	}
+	return count
+}
+
+func assertOpenClawWrapperDryRunState(t *testing.T, root string) {
+	t.Helper()
+	type wrapperState struct {
+		AgentID        string `json:"agent_id"`
+		SoulID         string `json:"soul_id"`
+		SpecHash       string `json:"spec_hash"`
+		State          string `json:"state"`
+		RuntimeBinding string `json:"runtime_binding"`
+		Workspace      string `json:"workspace"`
+		AgentDir       string `json:"agent_dir"`
+		RuntimeMode    string `json:"runtime_mode"`
+		Container      string `json:"container"`
+		LastMethod     string `json:"last_method"`
+	}
+	statePath := filepath.Join(root, "agents", "agent-alice", "state.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read wrapper state %s: %v", statePath, err)
+	}
+	var state wrapperState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("decode wrapper state: %v\n%s", err, data)
+	}
+	workspace := filepath.Join(root, "agents", "agent-alice", "workspace")
+	agentDir := filepath.Join(root, "agents", "agent-alice", "agent")
+	if state.AgentID != "agent-alice" || state.SoulID != "soul-alice" || state.SpecHash != "sha256:spec" || state.State != "running" || state.RuntimeBinding != "openclaw://agents/agent-alice" || state.Workspace != workspace || state.AgentDir != agentDir || state.RuntimeMode != "existing-container" || state.Container != "openclaw-gateway" || state.LastMethod != RuntimeMethodProvision {
+		t.Fatalf("unexpected wrapper state: %+v", state)
+	}
+	for _, rel := range []string{"SOUL.md", "IDENTITY.md", "AGENTS.md", "MEMORY.md", ".openclaw/soulfactory.json", "../last-invocation.json", "../last-outcome.json"} {
+		if _, err := os.Stat(filepath.Join(workspace, rel)); err != nil {
+			t.Fatalf("expected wrapper dry-run file %s: %v", rel, err)
+		}
+	}
+}
+
+func setExistingTagValue(tags nostr.Tags, name, value string) {
+	for i := range tags {
+		if len(tags[i]) == 0 || tags[i][0] != name {
+			continue
+		}
+		if len(tags[i]) == 1 {
+			tags[i] = append(tags[i], value)
+			return
+		}
+		tags[i][1] = value
+		return
 	}
 }
 

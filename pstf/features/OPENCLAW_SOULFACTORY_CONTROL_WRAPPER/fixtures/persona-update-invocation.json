@@ -1,0 +1,48 @@
+{
+  "envelope": {
+    "schema": "soulfactory-runtime-control/v1",
+    "method": "soulfactory.persona.update",
+    "idempotency_key": "idem-soulfactory.persona.update-agent-alice",
+    "requested_at": 1715700000,
+    "operator": {
+      "pubkey": "operator-pubkey",
+      "request_event": "operator-request"
+    },
+    "controller": {
+      "pubkey": "controller-pubkey"
+    },
+    "target": {
+      "runtime": "openclaw",
+      "runtime_pubkey": "runtime-pubkey",
+      "agent_id": "agent-alice"
+    },
+    "soul": {
+      "id": "soul-agent-alice",
+      "spec_hash": "sha256:spec"
+    },
+    "params": {
+      "persona": {
+        "traits": ["steady"],
+        "constraints": ["Do not use unapproved relays."],
+        "system_prompt_sections": {
+          "role": "You are SteadyBot.",
+          "guidelines": "Answer with audited local state."
+        }
+      }
+    }
+  },
+  "method": "soulfactory.persona.update",
+  "agent_id": "agent-alice",
+  "soul_id": "soul-agent-alice",
+  "spec_hash": "sha256:spec",
+  "params": {
+    "persona": {
+      "traits": ["steady"],
+      "constraints": ["Do not use unapproved relays."],
+      "system_prompt_sections": {
+        "role": "You are SteadyBot.",
+        "guidelines": "Answer with audited local state."
+      }
+    }
+  }
+}

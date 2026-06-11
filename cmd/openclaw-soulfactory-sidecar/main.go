@@ -43,6 +43,7 @@ func main() {
 	trustedControllers := flag.String("trusted-controller-pubkeys", env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "comma-separated trusted SoulFactory controller pubkeys")
 	identifier := flag.String("identifier", env("OPENCLAW_SOULFACTORY_IDENTIFIER", "openclaw-soulfactory-sidecar"), "kind:30317 d-tag identifier")
 	command := flag.String("command", env("OPENCLAW_SOULFACTORY_COMMAND", ""), "local OpenClaw control command; receives invocation JSON on stdin and returns outcome JSON on stdout")
+	methods := flag.String("methods", env("OPENCLAW_SOULFACTORY_METHODS", ""), "comma-separated SoulFactory runtime-control methods advertised and accepted by the command driver; defaults to the wrapper-supported method set")
 	workdir := flag.String("workdir", env("OPENCLAW_SOULFACTORY_WORKDIR", ""), "optional command working directory")
 	readRelays := flag.String("read-relays", env("OPENCLAW_SOULFACTORY_READ_RELAYS", ""), "comma-separated read relay hints in capability announcements")
 	writeRelays := flag.String("write-relays", env("OPENCLAW_SOULFACTORY_WRITE_RELAYS", ""), "comma-separated write relay hints in capability announcements")
@@ -90,9 +91,10 @@ func main() {
 			Control: splitCSV(*controlRelays),
 		},
 		Driver: soulfactory.OpenClawCommandDriver{
-			Command: *command,
-			Args:    args,
-			Dir:     strings.TrimSpace(*workdir),
+			Command:     *command,
+			Args:        args,
+			Dir:         strings.TrimSpace(*workdir),
+			MethodsList: splitCSV(*methods),
 		},
 		IdempotencyStore: store,
 		Logger:           slog.Default(),

@@ -28,7 +28,15 @@ Generated OpenClaw workspace config must use operator-supplied relays, controlle
 
 ## Local OpenClaw control surface
 
-Run the sidecar with a local command driver. The command receives one JSON `OpenClawControlInvocation` on stdin and must return an `OpenClawControlOutcome` JSON on stdout:
+Run the sidecar with a local command driver. The command receives one JSON `OpenClawControlInvocation` on stdin and must return an `OpenClawControlOutcome` JSON on stdout. The default command-driver method set is intentionally conservative and matches the implemented wrapper:
+
+```text
+soulfactory.provision
+soulfactory.persona.update
+soulfactory.revoke
+```
+
+Requests for other SoulFactory runtime-control methods are rejected with `unsupported_method` unless the operator explicitly configures a driver that implements and advertises those methods.
 
 ```json
 {
@@ -46,20 +54,23 @@ Run the sidecar with a local command driver. The command receives one JSON `Open
 }
 ```
 
-The command can wrap supported local OpenClaw surfaces such as the OpenClaw CLI/gateway-local RPC or plugin SDK execution path. It must not expose or depend on a REST SoulFactory lifecycle API.
+The packaged `openclaw-soulfactory-control` wrapper currently implements `soulfactory.provision`, `soulfactory.persona.update`, and `soulfactory.revoke`. It can run in dry-run mode for verification, or target an existing containerized OpenClaw gateway with `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and `OPENCLAW_SOULFACTORY_CONTAINER=<container>`. It does not expose or depend on a REST SoulFactory lifecycle API and does not launch a persistent bare-metal OpenClaw runtime.
 
-See [`openclaw-soulfactory-control-wrapper.md`](openclaw-soulfactory-control-wrapper.md) for the host-local wrapper specification, supported method mapping, state layout, and verification plan.
+The sidecar advertises and accepts the methods returned by its driver. With `OpenClawCommandDriver`, operators may override the advertised/accepted method list with `-methods` or `OPENCLAW_SOULFACTORY_METHODS`; only configure methods that the command really implements. The command also receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH` environment variables for routing convenience.
+
+See [`openclaw-soulfactory-control-wrapper.md`](openclaw-soulfactory-control-wrapper.md) for the host-local wrapper specification, supported method mapping, state layout, packaging path, and verification plan.
 
 ## Example
 
 ```bash
-go run ./cmd/openclaw-soulfactory-sidecar \
+openclaw-soulfactory-sidecar \
   -relays wss://relay.example \
   -private-key "$OPENCLAW_SOULFACTORY_PRIVATE_KEY" \
   -trusted-controller-pubkeys "$SOULFACTORY_CONTROLLER_PUBKEYS" \
   -control-relays wss://relay.example \
   -idempotency-store ~/.cache/bahia/openclaw-soulfactory-sidecar-idempotency.json \
-  -command /usr/local/bin/openclaw-soulfactory-control
+  -command /usr/local/bin/openclaw-soulfactory-control \
+  -methods soulfactory.provision,soulfactory.persona.update,soulfactory.revoke
 ```
 
-The command also receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH` environment variables for routing convenience.
+`openclaw-soulfactory-sidecar` and `openclaw-soulfactory-control` are built by `make build`, by the focused `make build-openclaw-soulfactory-sidecar` and `make build-openclaw-soulfactory-control` targets, and into `/usr/local/bin/` in the Bahia Docker image.

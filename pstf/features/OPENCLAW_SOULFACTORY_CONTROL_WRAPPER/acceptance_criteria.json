@@ -1,0 +1,51 @@
+{
+  "feature_id": "OPENCLAW_SOULFACTORY_CONTROL_WRAPPER",
+  "issue": "bahia-7qt9",
+  "criteria": [
+    {
+      "id": "OCSCW-AC-001",
+      "statement": "The wrapper CLI reads one invocation JSON document from stdin, writes one structured outcome JSON document to stdout, returns process code 0 for structured success or structured failure, and rejects malformed or trailing JSON as execution_failed.",
+      "tests": ["OCSCW-T-001", "OCSCW-T-002"]
+    },
+    {
+      "id": "OCSCW-AC-002",
+      "statement": "Dry-run provision validates required resolved params, creates deterministic workspace/state/audit files, returns running OpenClaw binding state, and exact replay returns the same logical outcome without repeating mutation work.",
+      "tests": ["OCSCW-T-003"]
+    },
+    {
+      "id": "OCSCW-AC-003",
+      "statement": "Provision rejects duplicate local state conflicts, unsafe agent IDs, and inline private secret material before local runtime mutation.",
+      "tests": ["OCSCW-T-004", "OCSCW-T-005"]
+    },
+    {
+      "id": "OCSCW-AC-004",
+      "statement": "Persona update writes normalized persona data and generated prompt files for an existing non-revoked agent, preserves running runtime binding, and reports a live hot-reload warning when runtime reload is not confirmed.",
+      "tests": ["OCSCW-T-006"]
+    },
+    {
+      "id": "OCSCW-AC-005",
+      "statement": "Revoke records revoked state, honors delete_workspace false and true, preserves audit state, warns when credential revocation is requested but not configured, and non-dry-run replay does not repeat local commands.",
+      "tests": ["OCSCW-T-007", "OCSCW-T-008"]
+    },
+    {
+      "id": "OCSCW-AC-006",
+      "statement": "The wrapper rejects unsupported methods with unsupported_method instead of silently accepting unimplemented lifecycle semantics.",
+      "tests": ["OCSCW-T-009"]
+    },
+    {
+      "id": "OCSCW-AC-007",
+      "statement": "Non-dry-run provision uses configured containerized OpenClaw commands and does not emit persistent bare-metal gateway or agent process commands.",
+      "tests": ["OCSCW-T-010"]
+    },
+    {
+      "id": "OCSCW-AC-008",
+      "statement": "Local command execution failures return structured failed outcomes and persist failed audit state; exact replay of that failed invocation uses the cached failure rather than re-running the command.",
+      "tests": ["OCSCW-T-011"]
+    },
+    {
+      "id": "OCSCW-AC-009",
+      "statement": "The OpenClaw sidecar invokes the real openclaw-soulfactory-control wrapper through OpenClawCommandDriver in dry-run from a signed kind 38384 runtime-control request, publishes a signed correlated kind 38386 result, replays the cached result without invoking wrapper side effects again, rejects conflicting idempotency-key reuse before wrapper execution including params-only conflicts, and reports idempotency persistence failures as failed 38386 results.",
+      "tests": ["OCSCW-T-012", "OCSCW-T-013", "OCSCW-T-014"]
+    }
+  ]
+}

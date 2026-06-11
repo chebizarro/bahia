@@ -1,0 +1,20 @@
+{
+  "status": "success",
+  "result": {
+    "agent_id": "agent-alice",
+    "runtime": "openclaw",
+    "runtime_binding": "openclaw://agents/agent-alice",
+    "state": "running",
+    "spec_hash": "sha256:spec",
+    "workspace": "/tmp/openclaw-soulfactory-pstf/agents/agent-alice/workspace",
+    "agent_dir": "/tmp/openclaw-soulfactory-pstf/agents/agent-alice/agent",
+    "runtime_mode": "existing-container",
+    "container": "openclaw-gateway",
+    "observed_at": 1715700005,
+    "warnings": [
+      "dry-run mode recorded local state without invoking OpenClaw CLI",
+      "openclaw persona files updated; live runtime hot reload is not confirmed by the current OpenClaw CLI"
+    ]
+  },
+  "error": null
+}

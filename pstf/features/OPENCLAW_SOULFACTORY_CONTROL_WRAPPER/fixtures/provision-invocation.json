@@ -1,0 +1,74 @@
+{
+  "envelope": {
+    "schema": "soulfactory-runtime-control/v1",
+    "method": "soulfactory.provision",
+    "idempotency_key": "idem-soulfactory.provision-agent-alice",
+    "requested_at": 1715700000,
+    "operator": {
+      "pubkey": "operator-pubkey",
+      "request_event": "operator-request"
+    },
+    "controller": {
+      "pubkey": "controller-pubkey"
+    },
+    "target": {
+      "runtime": "openclaw",
+      "runtime_pubkey": "runtime-pubkey",
+      "agent_id": "agent-alice"
+    },
+    "soul": {
+      "id": "soul-agent-alice",
+      "spec_hash": "sha256:spec"
+    },
+    "params": {
+      "identity": {
+        "name": "Alice",
+        "purpose": "Operate audited OpenClaw tasks"
+      },
+      "runtime": {
+        "target": "openclaw",
+        "model": "gpt-test"
+      },
+      "permissions": {
+        "allowed_kinds": [30317, 38386]
+      },
+      "relay_policy": {
+        "control": ["wss://relay.example"]
+      },
+      "workspace": {
+        "mode": "generated"
+      },
+      "assets": {},
+      "persona": {
+        "traits": ["careful"]
+      }
+    }
+  },
+  "method": "soulfactory.provision",
+  "agent_id": "agent-alice",
+  "soul_id": "soul-agent-alice",
+  "spec_hash": "sha256:spec",
+  "params": {
+    "identity": {
+      "name": "Alice",
+      "purpose": "Operate audited OpenClaw tasks"
+    },
+    "runtime": {
+      "target": "openclaw",
+      "model": "gpt-test"
+    },
+    "permissions": {
+      "allowed_kinds": [30317, 38386]
+    },
+    "relay_policy": {
+      "control": ["wss://relay.example"]
+    },
+    "workspace": {
+      "mode": "generated"
+    },
+    "assets": {},
+    "persona": {
+      "traits": ["careful"]
+    }
+  }
+}

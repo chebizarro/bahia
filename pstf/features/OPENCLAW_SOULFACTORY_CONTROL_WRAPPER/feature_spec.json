@@ -1,0 +1,36 @@
+{
+  "feature_id": "OPENCLAW_SOULFACTORY_CONTROL_WRAPPER",
+  "issue": "bahia-7qt9",
+  "summary": "PSTF coverage for the host-local openclaw-soulfactory-control wrapper invoked by the Bahia OpenClaw SoulFactory sidecar.",
+  "observed_context": [
+    "docs/analysis/openclaw-soulfactory-wrapper-orchestration-2026-06-11.md identifies Item 4 / bahia-7qt9 as the PSTF artifact and fixture task for the wrapper rollout.",
+    "docs/openclaw-soulfactory-control-wrapper.md specifies a stdin/stdout JSON command, environment configuration, deterministic local state layout, supported provision/persona.update/revoke behavior, and error mapping.",
+    "docs/openclaw-soulfactory-sidecar.md states the sidecar owns Nostr validation, idempotency, capability publication, and result publication while the wrapper owns only local OpenClaw runtime effects.",
+    "Closed MVP/sidecar Beads bahia-0wc4, bahia-23at, bahia-euu6, bahia-2r4y, and bahia-8ycd.4 are historical context only and are not reopened by this coverage."
+  ],
+  "intended_behavior": [
+    "The wrapper accepts exactly one OpenClawControlInvocation JSON document on stdin and emits exactly one OpenClawControlOutcome JSON document on stdout with status success, rejected, or failed.",
+    "Provision validates required resolved SoulFactory params, rejects unsafe agent IDs or inline private secret material, creates deterministic workspace/state/audit files, and is idempotent for exact replays.",
+    "Provision rejects conflicting local state for the same agent with a different spec hash as duplicate_conflict without local runtime mutation.",
+    "Persona update requires existing non-revoked state, persists normalized persona data, updates generated prompt files, preserves runtime binding, and returns a warning when live OpenClaw hot reload is not confirmed.",
+    "Revoke requires existing state, records revoked audit state, preserves or deletes workspace according to delete_workspace, warns when credential revocation is requested without configured credential revocation, and replays without repeating local commands.",
+    "Non-dry-run OpenClaw commands target the configured containerized runtime and never launch persistent bare-metal gateway or agent processes.",
+    "Runtime-unavailable or command-execution failures return structured outcomes and preserve audit state when a mutation was attempted."
+  ],
+  "out_of_scope": [
+    "Implementing wrapper code or changing cmd/openclaw-soulfactory-control or internal/soulfactory/openclawcontrol behavior.",
+    "Changing Makefile, Dockerfile, sidecar packaging, or sidecar method advertisement files owned by sibling Item 2 / bahia-zqn9.",
+    "Adding sidecar-to-wrapper smoke tests or publishing Nostr kind 38386 results; those belong to Item 3 / bahia-j26z.",
+    "Documentation closeout, commit, or push; those belong to Item 5 / bahia-hvbs."
+  ],
+  "fixtures": {
+    "provision_invocation": "fixtures/provision-invocation.json",
+    "provision_success_outcome": "fixtures/provision-success-outcome.json",
+    "persona_update_invocation": "fixtures/persona-update-invocation.json",
+    "persona_update_success_outcome": "fixtures/persona-update-success-outcome.json",
+    "revoke_keep_workspace_invocation": "fixtures/revoke-keep-workspace-invocation.json",
+    "revoke_keep_workspace_success_outcome": "fixtures/revoke-keep-workspace-success-outcome.json",
+    "revoke_delete_workspace_invocation": "fixtures/revoke-delete-workspace-invocation.json",
+    "revoke_delete_workspace_success_outcome": "fixtures/revoke-delete-workspace-success-outcome.json"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "envelope": {
+    "schema": "soulfactory-runtime-control/v1",
+    "method": "soulfactory.revoke",
+    "idempotency_key": "idem-soulfactory.revoke-agent-alice-keep",
+    "requested_at": 1715700000,
+    "operator": {
+      "pubkey": "operator-pubkey",
+      "request_event": "operator-request"
+    },
+    "controller": {
+      "pubkey": "controller-pubkey"
+    },
+    "target": {
+      "runtime": "openclaw",
+      "runtime_pubkey": "runtime-pubkey",
+      "agent_id": "agent-alice"
+    },
+    "soul": {
+      "id": "soul-agent-alice",
+      "spec_hash": "sha256:spec"
+    },
+    "params": {
+      "reason": "operator requested revoke",
+      "revoke_runtime_credentials": false,
+      "delete_workspace": false
+    }
+  },
+  "method": "soulfactory.revoke",
+  "agent_id": "agent-alice",
+  "soul_id": "soul-agent-alice",
+  "spec_hash": "sha256:spec",
+  "params": {
+    "reason": "operator requested revoke",
+    "revoke_runtime_credentials": false,
+    "delete_workspace": false
+  }
+}

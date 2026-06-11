@@ -3,6 +3,8 @@ package soulfactory
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -43,6 +45,12 @@ var openClawSoulFactoryMethods = []string{
 	RuntimeMethodConfigReload,
 }
 
+var openClawCommandDriverDefaultMethods = []string{
+	RuntimeMethodProvision,
+	RuntimeMethodPersonaUpdate,
+	RuntimeMethodRevoke,
+}
+
 // OpenClawControlDriver is the owned sidecar seam into local OpenClaw control
 // surfaces. Implementations may wrap OpenClaw CLI/gateway-local commands,
 // plugin SDK entrypoints, or test fakes, but must not expose REST lifecycle
@@ -80,7 +88,7 @@ func (d OpenClawCommandDriver) Methods() []string {
 	if len(d.MethodsList) > 0 {
 		return uniqueStrings(d.MethodsList)
 	}
-	return append([]string{}, openClawSoulFactoryMethods...)
+	return append([]string{}, openClawCommandDriverDefaultMethods...)
 }
 
 func (d OpenClawCommandDriver) Execute(ctx context.Context, invocation OpenClawControlInvocation) (*OpenClawControlOutcome, error) {
@@ -349,7 +357,10 @@ func (s *OpenClawSidecar) HandleControlEvent(ctx context.Context, event *nostr.E
 		outcome = &OpenClawControlOutcome{Status: "failed", Error: &RuntimeControlError{Code: "execution_failed", Message: err.Error(), Retryable: true}}
 	}
 	outcome = normalizeOpenClawOutcome(invocation, outcome)
-	s.store.Put(request.Envelope.IdempotencyKey, OpenClawStoredResult{Fingerprint: fingerprint, Outcome: outcome})
+	if err := s.store.Put(request.Envelope.IdempotencyKey, OpenClawStoredResult{Fingerprint: fingerprint, Outcome: outcome}); err != nil {
+		persisted := &OpenClawControlOutcome{Status: "failed", Error: &RuntimeControlError{Code: "execution_failed", Message: "persist OpenClaw idempotency result: " + err.Error(), Retryable: true}}
+		return s.publishOutcome(ctx, event, *request.Envelope, persisted)
+	}
 	return s.publishOutcome(ctx, event, *request.Envelope, outcome)
 }
 
@@ -362,16 +373,22 @@ func (r OpenClawValidatedRequest) Fingerprint() string {
 	if r.Envelope == nil {
 		return ""
 	}
-	parts := []string{
-		r.Envelope.Controller.Pubkey,
-		r.Envelope.Method,
-		r.Envelope.Operator.RequestEvent,
-		r.Envelope.Target.RuntimePubkey,
-		r.Envelope.Target.AgentID,
-		r.Envelope.Soul.ID,
-		r.Envelope.Soul.SpecHash,
+	data, err := json.Marshal(r.Envelope)
+	if err != nil {
+		parts := []string{
+			r.Envelope.Controller.Pubkey,
+			r.Envelope.Method,
+			r.Envelope.Operator.RequestEvent,
+			r.Envelope.Target.RuntimePubkey,
+			r.Envelope.Target.AgentID,
+			r.Envelope.Soul.ID,
+			r.Envelope.Soul.SpecHash,
+			fmt.Sprint(r.Envelope.Params),
+		}
+		return strings.Join(parts, "\x00")
 	}
-	return strings.Join(parts, "\x00")
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawValidatedRequest, *RuntimeControlError) {
@@ -499,7 +516,7 @@ type OpenClawStoredResult struct {
 
 type OpenClawIdempotencyStore interface {
 	Get(string) (OpenClawStoredResult, bool)
-	Put(string, OpenClawStoredResult)
+	Put(string, OpenClawStoredResult) error
 }
 
 type memoryOpenClawIdempotencyStore struct {
@@ -546,10 +563,11 @@ func (s *memoryOpenClawIdempotencyStore) Get(key string) (OpenClawStoredResult, 
 	return result, ok
 }
 
-func (s *memoryOpenClawIdempotencyStore) Put(key string, result OpenClawStoredResult) {
+func (s *memoryOpenClawIdempotencyStore) Put(key string, result OpenClawStoredResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.results[key] = result
+	return nil
 }
 
 func (s *fileOpenClawIdempotencyStore) Get(key string) (OpenClawStoredResult, bool) {
@@ -559,18 +577,48 @@ func (s *fileOpenClawIdempotencyStore) Get(key string) (OpenClawStoredResult, bo
 	return result, ok
 }
 
-func (s *fileOpenClawIdempotencyStore) Put(key string, result OpenClawStoredResult) {
+func (s *fileOpenClawIdempotencyStore) Put(key string, result OpenClawStoredResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.results[key] = result
+	next := make(map[string]OpenClawStoredResult, len(s.results)+1)
+	for existingKey, existingResult := range s.results {
+		next[existingKey] = existingResult
+	}
+	next[key] = result
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return
+		return err
 	}
-	data, err := json.MarshalIndent(s.results, "", "  ")
+	data, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(s.path, data, 0o600)
+	data = append(data, '\n')
+	if err := atomicWriteFileMode(s.path, data, 0o600); err != nil {
+		return err
+	}
+	s.results = next
+	return nil
+}
+
+func atomicWriteFileMode(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func validateOpenClawMethodParams(method string, params map[string]interface{}) *RuntimeControlError {

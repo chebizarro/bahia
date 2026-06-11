@@ -1,0 +1,90 @@
+{
+  "feature_id": "OPENCLAW_SOULFACTORY_CONTROL_WRAPPER",
+  "tests": [
+    {
+      "id": "OCSCW-T-001",
+      "name": "CLI reads invocation and writes outcome",
+      "command": "go test ./cmd/openclaw-soulfactory-control -run TestRunReadsInvocationAndWritesOutcome",
+      "criteria": ["OCSCW-AC-001"]
+    },
+    {
+      "id": "OCSCW-T-002",
+      "name": "CLI reports malformed or trailing JSON as structured failure",
+      "command": "go test ./cmd/openclaw-soulfactory-control -run 'TestRun(RejectsTrailingJSONDocument|MalformedJSONReturnsStructuredFailure)'",
+      "criteria": ["OCSCW-AC-001"]
+    },
+    {
+      "id": "OCSCW-T-003",
+      "name": "Provision dry-run workspace/state/idempotent replay",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestProvisionDryRunCreatesWorkspaceStateAndReplaysIdempotently",
+      "criteria": ["OCSCW-AC-002"]
+    },
+    {
+      "id": "OCSCW-T-004",
+      "name": "Provision duplicate spec conflict rejection",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestProvisionRejectsDuplicateSpecConflict",
+      "criteria": ["OCSCW-AC-003"]
+    },
+    {
+      "id": "OCSCW-T-005",
+      "name": "Provision safety validation for agent ID and inline private secret",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestProvisionRejectsUnsafeAgentIDAndInlinePrivateSecret",
+      "criteria": ["OCSCW-AC-003"]
+    },
+    {
+      "id": "OCSCW-T-006",
+      "name": "Persona update writes persona files and warning",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestPersonaUpdateWritesPersonaAndWarning",
+      "criteria": ["OCSCW-AC-004"]
+    },
+    {
+      "id": "OCSCW-T-007",
+      "name": "Revoke records state and honors workspace deletion",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestRevokeRecordsStateAndHonorsWorkspaceDeletion",
+      "criteria": ["OCSCW-AC-005"]
+    },
+    {
+      "id": "OCSCW-T-008",
+      "name": "Non-dry-run revoke uses persisted container and replays without commands",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestNonDryRunRevokeUsesPersistedContainerAndReplaysWithoutCommands",
+      "criteria": ["OCSCW-AC-005"]
+    },
+    {
+      "id": "OCSCW-T-009",
+      "name": "Unsupported method rejection",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestUnsupportedMethodRejected",
+      "criteria": ["OCSCW-AC-006"]
+    },
+    {
+      "id": "OCSCW-T-010",
+      "name": "Non-dry-run uses containerized OpenClaw commands only",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestNonDryRunUsesContainerizedOpenClawCommands",
+      "criteria": ["OCSCW-AC-007"]
+    },
+    {
+      "id": "OCSCW-T-011",
+      "name": "Command failure persists failed audit state and cached failed replay",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestCommandFailurePersistsFailedAuditState",
+      "criteria": ["OCSCW-AC-008"]
+    },
+    {
+      "id": "OCSCW-T-012",
+      "name": "Sidecar invokes real wrapper dry-run and caches replay",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarCommandDriverInvokesWrapperDryRunAndCachesReplay -count=1",
+      "criteria": ["OCSCW-AC-009"]
+    },
+    {
+      "id": "OCSCW-T-013",
+      "name": "Sidecar rejects idempotency-key reuse when params change",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarRejectsIdempotencyReuseWithChangedParams -count=1",
+      "criteria": ["OCSCW-AC-009"]
+    },
+    {
+      "id": "OCSCW-T-014",
+      "name": "Sidecar reports idempotency persistence failure as failed result",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarReportsIdempotencyPersistenceFailure -count=1",
+      "criteria": ["OCSCW-AC-009"]
+    }
+  ],
+  "not_covered_here": []
+}
