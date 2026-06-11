@@ -36,6 +36,7 @@
   const assistantDefaultSelectedRefs = $derived(
     currentRouteDocsRef(page.url.pathname) ? [currentRouteDocsRef(page.url.pathname)] : []
   );
+  let assistantBootstrappedForPubkey = $state('');
 
   $effect(() => {
     let active = true;
@@ -51,10 +52,6 @@
       eagerRelayConnect().catch((error) => {
         console.error('Eager relay connection failed before controlplane load:', error);
       });
-
-      bootstrapAssistant().catch((error) => {
-        console.error('Assistant bootstrap failed:', error);
-      });
     });
 
     return () => {
@@ -62,6 +59,17 @@
       unsubscribeFromEvents();
       disconnectAssistant();
     };
+  });
+
+  $effect(() => {
+    const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
+    if (!pubkey || assistantBootstrappedForPubkey === pubkey) return;
+
+    assistantBootstrappedForPubkey = pubkey;
+    bootstrapAssistant({ force: true }).catch((error) => {
+      assistantBootstrappedForPubkey = '';
+      console.error('Assistant bootstrap failed:', error);
+    });
   });
 </script>
 
