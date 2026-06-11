@@ -1,0 +1,108 @@
+name: Deploy Bahia Edge
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bahia-edge-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, edge-01, docker]
+    env:
+      CONTROLPLANE_ROOT: /srv/data/bahia-controlplane
+      COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
+      RELEASE_ROOT: /srv/data/bahia-controlplane/releases
+      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight edge deploy inputs
+        run: |
+          set -euo pipefail
+
+          : "${GITHUB_SHA:?GITHUB_SHA is required}"
+          [[ "$GITHUB_REF" == "refs/heads/master" ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMPOSE_FILE" == "$CONTROLPLANE_ROOT/docker-compose.yml" ]]
+          [[ "$RELEASE_ROOT" == "$CONTROLPLANE_ROOT/releases" ]]
+
+          command -v docker >/dev/null
+          command -v rsync >/dev/null
+          command -v python3 >/dev/null
+          command -v curl >/dev/null
+          docker version >/dev/null
+          docker compose version >/dev/null
+
+          test -f Dockerfile
+          test -f web/Dockerfile
+          test -d docs
+          test -f scripts/deploy_edge_compose_update.py
+          test -f "$COMPOSE_FILE"
+          test -w "$CONTROLPLANE_ROOT"
+          mkdir -p "$RELEASE_ROOT" "$CONTROLPLANE_ROOT/backups"
+          test -w "$RELEASE_ROOT"
+          test -w "$CONTROLPLANE_ROOT/backups"
+
+      - name: Build local Bahia image
+        run: |
+          set -euo pipefail
+
+          tag="github-${GITHUB_SHA::7}"
+          docker build \
+            --build-arg VERSION_BASE=0.1.0 \
+            --build-arg GIT_COMMIT="$GITHUB_SHA" \
+            --build-arg VERSION="0.1.0-$GITHUB_SHA" \
+            -t "local/bahia-controlplane-bahia:$tag" .
+
+      - name: Build local Bahia web image
+        run: |
+          set -euo pipefail
+
+          tag="github-${GITHUB_SHA::7}"
+          docker build \
+            -f web/Dockerfile \
+            --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="$PUBLIC_BAHIA_BOOTSTRAP_RELAYS" \
+            --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="$PUBLIC_BAHIA_SERVICE_PUBKEYS" \
+            --build-arg PUBLIC_BAHIA_GIT_COMMIT="$GITHUB_SHA" \
+            --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$GITHUB_SHA" \
+            -t "local/bahia-controlplane-web:$tag" web
+
+      - name: Stage release tree
+        run: |
+          set -euo pipefail
+
+          tag="github-${GITHUB_SHA::7}"
+          release_dir="$RELEASE_ROOT/$tag"
+          mkdir -p "$release_dir"
+          rsync -a --delete --exclude .git ./ "$release_dir/"
+
+      - name: Update live compose and deploy edge services
+        run: |
+          set -euo pipefail
+
+          tag="github-${GITHUB_SHA::7}"
+          release_dir="$RELEASE_ROOT/$tag"
+          backup="$CONTROLPLANE_ROOT/backups/compose-${tag}-$(date -u +%Y%m%dT%H%M%SZ).yml"
+
+          cp "$COMPOSE_FILE" "$backup"
+          python3 scripts/deploy_edge_compose_update.py \
+            --compose-file "$COMPOSE_FILE" \
+            --tag "$tag" \
+            --release-dir "$release_dir"
+          docker compose -f "$COMPOSE_FILE" config --quiet
+          docker compose -f "$COMPOSE_FILE" up -d bahia relay web
+
+      - name: Verify edge health
+        run: |
+          set -euo pipefail
+
+          curl -fsS http://127.0.0.1:8080/health
+          curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/relay >/dev/null
+          curl -fsS http://127.0.0.1:8081/ >/dev/null

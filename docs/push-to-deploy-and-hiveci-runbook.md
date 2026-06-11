@@ -60,87 +60,79 @@ The registration token is short-lived and should come from the GitHub runner set
 
 ### Workflow
 
-Add `.github/workflows/deploy-edge.yml`:
+The checked-in workflow is `.github/workflows/deploy-edge.yml`. It:
 
-```yaml
-name: Deploy Bahia Edge
+1. runs on pushes to `master`;
+2. requires the `self-hosted`, `edge-01`, and `docker` runner labels;
+3. serializes deploys with `cancel-in-progress: false`;
+4. grants only `contents: read` GitHub token permissions;
+5. preflights the branch, SHA, Docker access, Compose path, release root, backup directory, and required local tools;
+6. builds `local/bahia-controlplane-bahia:github-<shortsha>` from the repository root;
+7. builds `local/bahia-controlplane-web:github-<shortsha>` from `web/Dockerfile`;
+8. stages the checkout to `/srv/data/bahia-controlplane/releases/github-<shortsha>` with `rsync -a --delete --exclude .git`;
+9. backs up `/srv/data/bahia-controlplane/docker-compose.yml` to `/srv/data/bahia-controlplane/backups/compose-github-<shortsha>-<utc timestamp>.yml`;
+10. invokes `scripts/deploy_edge_compose_update.py` to update the live Compose images and docs mount;
+11. validates the resulting Compose file with `docker compose -f "$COMPOSE_FILE" config --quiet`;
+12. runs `docker compose -f "$COMPOSE_FILE" up -d bahia relay web`;
+13. verifies:
 
-on:
-  push:
-    branches: [master]
+```bash
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/relay >/dev/null
+curl -fsS http://127.0.0.1:8081/ >/dev/null
+```
 
-concurrency:
-  group: bahia-edge-deploy
-  cancel-in-progress: false
+The workflow uses these image/build arguments:
 
-jobs:
-  deploy:
-    runs-on: [self-hosted, edge-01, docker]
-    steps:
-      - uses: actions/checkout@v4
+```bash
+tag="github-${GITHUB_SHA::7}"
 
-      - name: Build and deploy local images
-        env:
-          COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
-          RELEASE_ROOT: /srv/data/bahia-controlplane/releases
-          PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
-          PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
-        run: |
-          set -euo pipefail
+docker build \
+  --build-arg VERSION_BASE=0.1.0 \
+  --build-arg GIT_COMMIT="$GITHUB_SHA" \
+  --build-arg VERSION="0.1.0-$GITHUB_SHA" \
+  -t "local/bahia-controlplane-bahia:$tag" .
 
-          tag="github-${GITHUB_SHA::7}"
-          release_dir="$RELEASE_ROOT/$tag"
-          backup="/srv/data/bahia-controlplane/backups/compose-$(date +%Y%m%d-%H%M%S).yml"
+docker build \
+  -f web/Dockerfile \
+  --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="wss://bahia.sharegap.net/relay" \
+  --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc" \
+  --build-arg PUBLIC_BAHIA_GIT_COMMIT="$GITHUB_SHA" \
+  --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$GITHUB_SHA" \
+  -t "local/bahia-controlplane-web:$tag" web
+```
 
-          mkdir -p "$release_dir" /srv/data/bahia-controlplane/backups
-          rsync -a --delete --exclude .git ./ "$release_dir/"
+### Compose Mutation Helper
 
-          docker build \
-            --build-arg VERSION_BASE=0.1.0 \
-            --build-arg GIT_COMMIT="$GITHUB_SHA" \
-            --build-arg VERSION="0.1.0-$GITHUB_SHA" \
-            -t "local/bahia-controlplane-bahia:$tag" .
+`scripts/deploy_edge_compose_update.py` is the only supported mutator for the live Compose file in this workflow. The helper accepts:
 
-          docker build \
-            -f web/Dockerfile \
-            --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="$PUBLIC_BAHIA_BOOTSTRAP_RELAYS" \
-            --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="$PUBLIC_BAHIA_SERVICE_PUBKEYS" \
-            --build-arg PUBLIC_BAHIA_GIT_COMMIT="$GITHUB_SHA" \
-            --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$GITHUB_SHA" \
-            -t "local/bahia-controlplane-web:$tag" web
+```bash
+python3 scripts/deploy_edge_compose_update.py \
+  --compose-file /srv/data/bahia-controlplane/docker-compose.yml \
+  --tag github-<7 lowercase hex characters> \
+  --release-dir /srv/data/bahia-controlplane/releases/github-<7 lowercase hex characters>
+```
 
-          cp "$COMPOSE_FILE" "$backup"
+It updates exactly:
 
-          COMPOSE_FILE="$COMPOSE_FILE" TAG="$tag" RELEASE_DIR="$release_dir" python3 - <<'PY'
-          import os
-          from pathlib import Path
+- `bahia.image` and `relay.image` to `local/bahia-controlplane-bahia:<tag>`;
+- `web.image` to `local/bahia-controlplane-web:<tag>`;
+- the single `/srv/data/bahia-controlplane/releases/.../docs:/docs:ro` mount to `<release-dir>/docs:/docs:ro`.
 
-          path = Path(os.environ["COMPOSE_FILE"])
-          tag = os.environ["TAG"]
-          release_dir = os.environ["RELEASE_DIR"]
+It refuses to write when any of these safety checks fail:
 
-          service = None
-          out = []
-          for line in path.read_text().splitlines():
-              stripped = line.strip()
-              if line.startswith("  ") and not line.startswith("    ") and stripped.endswith(":"):
-                  service = stripped[:-1]
-              if stripped.startswith("image:") and service in {"bahia", "relay"}:
-                  line = f"    image: local/bahia-controlplane-bahia:{tag}"
-              elif stripped.startswith("image:") and service == "web":
-                  line = f"    image: local/bahia-controlplane-web:{tag}"
-              elif "/srv/data/bahia-controlplane/releases/" in line and ":/docs:ro" in line:
-                  line = f"      - {release_dir}/docs:/docs:ro"
-              out.append(line)
+- tag is not `github-<7 lowercase hex characters>`;
+- release directory is not `/srv/data/bahia-controlplane/releases/<tag>`;
+- `bahia`, `relay`, or `web` service is missing;
+- an expected service has no image line;
+- an expected service has more than one image line;
+- the release docs mount is missing;
+- more than one release docs mount is present.
 
-          path.write_text("\n".join(out) + "\n")
-          PY
+Deterministic helper coverage lives in `test/scripts/test_deploy_edge_compose_update.py` and runs with:
 
-          docker compose -f "$COMPOSE_FILE" up -d bahia relay web
-
-          curl -fsS http://127.0.0.1:8080/health
-          curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/relay >/dev/null
-          curl -fsS http://127.0.0.1:8081/ >/dev/null
+```bash
+python3 -m unittest discover -s test/scripts -p 'test_*.py'
 ```
 
 ### Operational Notes
@@ -148,7 +140,7 @@ jobs:
 - Keep `cancel-in-progress: false`; interrupted production deploys are worse than serialized deploys.
 - The workflow updates the existing compose file in place, after backing it up.
 - The workflow uses local images because the current live stack already uses local tags.
-- This path bypasses Bahia's deployment model. It is acceptable as a temporary bootstrap shortcut, not the final architecture.
+- This path bypasses Bahia's deployment model. It is acceptable only until the durable Hive-CI path tracked by `bahia-fj0z` satisfies the retirement conditions below.
 
 ## Durable Path: Hive CI Artifact Publishing
 
@@ -235,7 +227,7 @@ If backend and web stay as separate images, either:
 - emit two Hive results mapped by two pipeline policies; or
 - define a multi-artifact result extension before expecting Bahia to deploy both from one `5402`.
 
-For now, the simpler production path is one canonical backend/control-plane image through Hive CI, while the immediate relief workflow keeps handling the split backend/web local-image deployment.
+The simpler production path is one canonical backend/control-plane image through Hive CI, while the immediate relief workflow handles the split backend/web local-image deployment until retirement.
 
 ### Bahia Requirements
 

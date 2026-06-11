@@ -1,0 +1,35 @@
+{
+  "feature_id": "EDGE_DEPLOY_WORKFLOW",
+  "title": "Immediate Relief self-hosted edge deploy workflow",
+  "beads": {
+    "implemented": "bahia-irii",
+    "out_of_scope": "bahia-fj0z"
+  },
+  "observed_behavior": [
+    "docs/push-to-deploy-and-hiveci-runbook.md described an immediate self-hosted runner deploy workflow as an inline prototype.",
+    "The repository did not contain .github/workflows/deploy-edge.yml.",
+    "The repository did not contain a deterministic helper for safely mutating the live edge docker-compose.yml."
+  ],
+  "intended_behavior": [
+    "Pushes to master run the deploy workflow on a self-hosted edge-01 Docker runner with serialized deploy concurrency.",
+    "The workflow builds local backend and web images tagged github-<shortsha> from the pushed commit.",
+    "The workflow stages the release tree under /srv/data/bahia-controlplane/releases/github-<shortsha>.",
+    "The workflow backs up the live compose file before mutation, updates bahia/relay/web images and the release docs mount through a checked-in helper, applies the three services, and verifies backend, relay, and web health endpoints.",
+    "The durable Hive-CI artifact publishing path remains tracked by bahia-fj0z and is not implemented in this vertical slice."
+  ],
+  "scope": {
+    "included": [
+      ".github/workflows/deploy-edge.yml",
+      "scripts/deploy_edge_compose_update.py",
+      "test/scripts/test_deploy_edge_compose_update.py",
+      "docs/push-to-deploy-and-hiveci-runbook.md",
+      "pstf/features/EDGE_DEPLOY_WORKFLOW/*"
+    ],
+    "excluded": [
+      "Hive-CI 5402 artifact publication",
+      "Harbor image publishing",
+      "Bahia artifact registration from Hive-CI results",
+      "Auto-deploy policy enablement"
+    ]
+  }
+}

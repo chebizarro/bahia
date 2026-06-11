@@ -1,0 +1,50 @@
+{
+  "feature_id": "EDGE_DEPLOY_WORKFLOW",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The deploy workflow triggers on pushes to master, uses self-hosted edge-01 docker runner labels, minimal contents read permission, and serialized concurrency without cancellation.",
+      "tests": [
+        "Static review of .github/workflows/deploy-edge.yml"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "The workflow builds backend and web local images tagged github-<shortsha> with the documented build arguments.",
+      "tests": [
+        "Static review of .github/workflows/deploy-edge.yml"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "The workflow stages a release tree under /srv/data/bahia-controlplane/releases/github-<shortsha> using rsync before compose mutation.",
+      "tests": [
+        "Static review of .github/workflows/deploy-edge.yml"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "The compose mutation helper deterministically updates only bahia, relay, web, and the release docs mount, and fails without writing when required live-compose assumptions are missing or ambiguous.",
+      "tests": [
+        "python3 -m unittest discover -s test/scripts -p 'test_*.py'"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "The workflow applies bahia, relay, and web services and verifies backend, relay, and web health checks from the runbook.",
+      "tests": [
+        "Static review of .github/workflows/deploy-edge.yml"
+      ]
+    },
+    {
+      "id": "AC6",
+      "statement": "PSTF artifacts map acceptance criteria to verification evidence and state that durable Hive-CI artifact publishing remains out of scope under bahia-fj0z.",
+      "tests": [
+        "test -f pstf/features/EDGE_DEPLOY_WORKFLOW/feature_spec.json",
+        "test -f pstf/features/EDGE_DEPLOY_WORKFLOW/acceptance_criteria.json",
+        "test -f pstf/features/EDGE_DEPLOY_WORKFLOW/test_matrix.json",
+        "test -f pstf/features/EDGE_DEPLOY_WORKFLOW/verification_report.md"
+      ]
+    }
+  ]
+}

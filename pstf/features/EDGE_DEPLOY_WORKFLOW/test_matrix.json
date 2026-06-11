@@ -1,0 +1,50 @@
+{
+  "feature_id": "EDGE_DEPLOY_WORKFLOW",
+  "tests": [
+    {
+      "id": "T1",
+      "command": "python3 -m unittest discover -s test/scripts -p 'test_*.py'",
+      "acceptance_criteria": ["AC4"],
+      "coverage": [
+        "successful image and docs mount update",
+        "unrelated compose content preservation",
+        "missing service failure without write",
+        "missing release docs mount failure without write",
+        "duplicate image line failure without write",
+        "unsafe tag failure without write"
+      ]
+    },
+    {
+      "id": "T2",
+      "command": "python3 -m py_compile scripts/deploy_edge_compose_update.py test/scripts/test_deploy_edge_compose_update.py",
+      "acceptance_criteria": ["AC4"],
+      "coverage": ["stdlib helper and tests parse successfully"]
+    },
+    {
+      "id": "T3",
+      "command": "Static review of .github/workflows/deploy-edge.yml",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC5"],
+      "coverage": [
+        "master push trigger",
+        "self-hosted edge-01 docker runner labels",
+        "contents read permission",
+        "serialized deploy concurrency",
+        "preflight checks",
+        "backend and web local image builds",
+        "release rsync",
+        "compose backup and helper invocation",
+        "docker compose up -d bahia relay web",
+        "8080, 3334, and 8081 health checks"
+      ]
+    },
+    {
+      "id": "T4",
+      "command": "Static review of docs/push-to-deploy-and-hiveci-runbook.md and pstf/features/EDGE_DEPLOY_WORKFLOW/*",
+      "acceptance_criteria": ["AC6"],
+      "coverage": [
+        "runbook matches checked-in workflow/helper",
+        "durable Hive-CI artifact publishing remains assigned to bahia-fj0z"
+      ]
+    }
+  ]
+}
