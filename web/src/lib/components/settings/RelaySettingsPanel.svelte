@@ -25,6 +25,7 @@
   let contextVMPolicyInput = $state('');
   let servicePolicyInput = $state('');
   let monitorPubkeysInput = $state('');
+  let nip34RelaysInput = $state('');
   let dmRelaysInput = $state('');
   let relayAdminTargetsInput = $state('[]');
   let relayAdminTargetRef = $state('');
@@ -142,6 +143,7 @@
     browserPolicyInput = listToTextarea(nostrConfig.browser_relays || []);
     contextVMPolicyInput = listToTextarea(nostrConfig.contextvm_relays || []);
     servicePolicyInput = listToTextarea(nostrConfig.service_relays || []);
+    nip34RelaysInput = listToTextarea(nostrConfig.nip34_relays || []);
     monitorPubkeysInput = listToTextarea(nostrConfig.trusted_relay_monitor_pubkeys || []);
     dmRelaysInput = listToTextarea((nostrConfig.dm_relay_lists || [])
       .filter((list) => list?.enabled && list?.feature === 'notifications' && list?.identity === 'service')
@@ -192,6 +194,7 @@
       browser_relays: textareaToList(browserPolicyInput),
       contextvm_relays: textareaToList(contextVMPolicyInput),
       service_relays: textareaToList(servicePolicyInput),
+      nip34_relays: textareaToList(nip34RelaysInput),
       trusted_relay_monitor_pubkeys: textareaToList(monitorPubkeysInput),
       dm_relay_lists: dmRelays.length > 0 ? [{
         enabled: true,
@@ -382,6 +385,12 @@
   <label class="relay-field">
     <span>Service publish/backfill relays</span>
     <textarea class="relay-textarea" rows="3" bind:value={servicePolicyInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://service-relay.example"></textarea>
+  </label>
+
+  <label class="relay-field">
+    <span>NIP-34 repository relays</span>
+    <textarea class="relay-textarea" rows="3" bind:value={nip34RelaysInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://nip34-relay.example"></textarea>
+    <span class="field-hint">Relays used for NIP-34 git repository operations (kind 30617/30618). Separate from browser and service relays.</span>
   </label>
 
   <label class="relay-field">
@@ -578,6 +587,12 @@
   .relay-textarea.monospace {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
     font-size: 0.8125rem;
+  }
+
+  .field-hint {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 400;
   }
 
   .relay-admin-call {

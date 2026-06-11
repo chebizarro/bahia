@@ -48,6 +48,7 @@ export function buildRelayPolicyPayload(policy = {}) {
     browser_relays: normalizeRelayArray(policy.browser_relays),
     contextvm_relays: normalizeRelayArray(policy.contextvm_relays),
     service_relays: normalizeRelayArray(policy.service_relays),
+    nip34_relays: normalizeRelayArray(policy.nip34_relays),
     trusted_relay_monitor_pubkeys: normalizePubkeyArray(policy.trusted_relay_monitor_pubkeys),
     dm_relay_lists: (policy.dm_relay_lists || []).map((list) => ({
       enabled: Boolean(list.enabled),

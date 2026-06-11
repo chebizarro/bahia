@@ -279,6 +279,7 @@ type NostrConfig struct {
 	ServiceRelays              []string                  `koanf:"service_relays"`
 	BrowserRelays              []string                  `koanf:"browser_relays"`
 	ContextVMRelays            []string                  `koanf:"contextvm_relays"`
+	NIP34Relays                []string                  `koanf:"nip34_relays" yaml:"nip34_relays"`
 	TrustedRelayMonitorPubkeys []string                  `koanf:"trusted_relay_monitor_pubkeys" yaml:"trusted_relay_monitor_pubkeys"`
 	DMRelayLists               []DMRelayListConfig       `koanf:"dm_relay_lists" yaml:"dm_relay_lists"`
 	RelayAdministration        RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
@@ -1052,6 +1053,10 @@ func (c NostrConfig) ContextVMRelayPolicyRelays() []string {
 		return cloneStrings(c.ContextVMRelays)
 	}
 	return cloneStrings(c.BrowserRelays)
+}
+
+func (c NostrConfig) NIP34RelayPolicyRelays() []string {
+	return cloneStrings(c.NIP34Relays)
 }
 
 func (c NostrConfig) EnabledDMRelayLists() []DMRelayListConfig {

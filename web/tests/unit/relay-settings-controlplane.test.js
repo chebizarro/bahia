@@ -21,6 +21,7 @@ describe('relay settings control-plane helpers', () => {
       browser_relays: ['wss://browser.example', 'wss://browser.example, wss://browser-2.example'],
       contextvm_relays: ['wss://contextvm.example'],
       service_relays: ['wss://service.example'],
+      nip34_relays: ['wss://nip34.example'],
       trusted_relay_monitor_pubkeys: ['A'.repeat(64), 'not-a-key'],
       dm_relay_lists: [{ enabled: true, feature: 'Notifications', identity: 'Service', relays: ['wss://dm.example'] }],
       relay_administration: { enabled: true, targets: [{ ref: 'sidecar', relay_url: 'wss://sidecar.example', authorization: 'Bahia_Owned', administrator_pubkeys: ['b'.repeat(64)] }] }
@@ -29,6 +30,7 @@ describe('relay settings control-plane helpers', () => {
       browser_relays: ['wss://browser.example', 'wss://browser-2.example'],
       contextvm_relays: ['wss://contextvm.example'],
       service_relays: ['wss://service.example'],
+      nip34_relays: ['wss://nip34.example'],
       trusted_relay_monitor_pubkeys: ['a'.repeat(64)],
       dm_relay_lists: [{ enabled: true, feature: 'notifications', identity: 'service', relays: ['wss://dm.example'] }],
       relay_administration: { enabled: true, targets: [{ ref: 'sidecar', relay_url: 'wss://sidecar.example', authorization: 'bahia_owned', administrator_pubkeys: ['b'.repeat(64)] }] }
@@ -89,6 +91,7 @@ describe('relay settings control-plane helpers', () => {
       browser_relays: ['wss://browser.example'],
       contextvm_relays: ['wss://contextvm.example'],
       service_relays: ['wss://service.example'],
+      nip34_relays: [],
       updated_at: '2026-06-07T00:00:00Z'
     });
     expect(relaySettings.parseRelayPolicyStateEvent({ ...event, pubkey: 'c'.repeat(64) }, { servicePubkey })).toBeNull();

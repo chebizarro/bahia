@@ -54,6 +54,7 @@ type RelayPolicyState struct {
 	BrowserRelays              []string                  `json:"browser_relays"`
 	ContextVMRelays            []string                  `json:"contextvm_relays"`
 	ServiceRelays              []string                  `json:"service_relays"`
+	NIP34Relays                []string                  `json:"nip34_relays,omitempty"`
 	TrustedRelayMonitorPubkeys []string                  `json:"trusted_relay_monitor_pubkeys,omitempty"`
 	DMRelayLists               []RelayPolicyDMRelayList  `json:"dm_relay_lists,omitempty"`
 	RelayAdministration        RelayPolicyAdministration `json:"relay_administration"`
@@ -187,6 +188,7 @@ func (h *RelaySettingsHandlers) currentState(pubkey string) RelayPolicyState {
 	state.BrowserRelays = cloneStrings(nostrCfg.BrowserRelayPolicyRelays())
 	state.ContextVMRelays = cloneStrings(nostrCfg.ContextVMRelayPolicyRelays())
 	state.ServiceRelays = cloneStrings(nostrCfg.ServiceRelayPolicyRelays())
+	state.NIP34Relays = cloneStrings(nostrCfg.NIP34RelayPolicyRelays())
 	state.TrustedRelayMonitorPubkeys = cloneStrings(nostrCfg.TrustedRelayMonitorPubkeys)
 	state.DMRelayLists = make([]RelayPolicyDMRelayList, 0, len(nostrCfg.DMRelayLists))
 	for _, list := range nostrCfg.DMRelayLists {
@@ -232,6 +234,11 @@ func (h *RelaySettingsHandlers) publishRelayTopology(ctx context.Context, req Co
 	}
 	if err := h.publishRelaySet(ctx, req, "bahia-service-v1", state.ServiceRelays); err != nil {
 		return err
+	}
+	if len(state.NIP34Relays) > 0 {
+		if err := h.publishRelaySet(ctx, req, "bahia-nip34-v1", state.NIP34Relays); err != nil {
+			return err
+		}
 	}
 	for _, list := range state.DMRelayLists {
 		if !list.Enabled || list.Feature != config.DMRelayListFeatureNotifications || list.Identity != config.DMRelayListIdentityService || len(list.Relays) == 0 {
@@ -326,6 +333,7 @@ func normalizeAndValidateRelayPolicyForSettings(state *RelayPolicyState, require
 	state.BrowserRelays = normalizeRelayListForSettings(state.BrowserRelays)
 	state.ContextVMRelays = normalizeRelayListForSettings(state.ContextVMRelays)
 	state.ServiceRelays = normalizeRelayListForSettings(state.ServiceRelays)
+	state.NIP34Relays = normalizeRelayListForSettings(state.NIP34Relays)
 	trustedRelayMonitorPubkeys, err := normalizePubkeysForSettings("trusted_relay_monitor_pubkeys", state.TrustedRelayMonitorPubkeys)
 	if err != nil {
 		return err
@@ -334,7 +342,7 @@ func normalizeAndValidateRelayPolicyForSettings(state *RelayPolicyState, require
 	if requireRelayTopology && len(state.BrowserRelays)+len(state.ContextVMRelays)+len(state.ServiceRelays) == 0 {
 		return fmt.Errorf("at least one browser, contextvm, or service relay is required")
 	}
-	for _, relay := range append(append([]string{}, state.BrowserRelays...), append(state.ContextVMRelays, state.ServiceRelays...)...) {
+	for _, relay := range append(append(append([]string{}, state.BrowserRelays...), append(state.ContextVMRelays, state.ServiceRelays...)...), state.NIP34Relays...) {
 		if err := validateWebsocketRelayURLForSettings(relay); err != nil {
 			return err
 		}

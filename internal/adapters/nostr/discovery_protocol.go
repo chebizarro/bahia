@@ -10,6 +10,7 @@ const (
 	BrowserRelaySetDTag   = "bahia-browser-v1"
 	ContextVMRelaySetDTag = "bahia-contextvm-v1"
 	ServiceRelaySetDTag   = "bahia-service-v1"
+	NIP34RelaySetDTag     = "bahia-nip34-v1"
 )
 
 // systemDiscoveryAnnouncementTags is the protocol envelope browsers subscribe to
