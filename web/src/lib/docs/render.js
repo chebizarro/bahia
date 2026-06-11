@@ -54,7 +54,7 @@ export function renderDocumentationMarkdown(markdown = '', links = []) {
     }
 
     if (!resolution && internalMarkdownHref(href)) {
-      return unresolvedLink(label, 'Documentation link was not resolved by the central docs service');
+      return unresolvedLink(label, 'Cross-document link resolution is not yet available from relay events');
     }
 
     return Renderer.prototype.link.call(this, { href, title, tokens });

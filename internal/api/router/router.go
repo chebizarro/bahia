@@ -20,7 +20,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/middleware"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
-	userdocs "github.com/openagentsinc/bahia/internal/docs"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -70,7 +69,6 @@ type RouterDeps struct {
 	MLCommands       handlers.MLCommandPublisher
 	HealthProvider   any
 	ModePolicy       any
-	Docs             *userdocs.Service
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -156,11 +154,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
-	docsService := userdocs.New(userdocs.DefaultBasePath)
-	if deps.Docs != nil {
-		docsService = *deps.Docs
-	}
-	docsH := handlers.NewDocsHandler(docsService)
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
 		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
@@ -203,10 +196,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(readLimiter))
-
-			// Documentation (read-only query surface)
-			r.With(tier1Gate).Get("/docs", docsH.Catalog)
-			r.With(tier1Gate).Get("/docs/{topic}", docsH.Read)
 
 			// Tenant orgs (read)
 			if tenantH != nil {
