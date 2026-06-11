@@ -11,6 +11,7 @@ This command is intentionally not a REST API. It receives one `OpenClawControlIn
 - Use supported OpenClaw host-local commands before direct config edits.
 - Return structured success, rejected, or failed outcomes compatible with `soulfactory-runtime-control/v1`.
 - Keep runtime side effects auditable under the generated agent workspace.
+- Keep persistent OpenClaw runtime execution containerized.
 
 ## Non-Goals
 
@@ -19,6 +20,19 @@ This command is intentionally not a REST API. It receives one `OpenClawControlIn
 - Do not mint private keys inline in generated config.
 - Do not create fake Bahia deployable artifacts, image tags, or digests.
 - Do not delete user data unless `soulfactory.revoke` explicitly asks for workspace deletion.
+- Do not launch persistent OpenClaw gateway or agent runtime processes directly on bare metal.
+
+## Runtime Deployment Doctrine
+
+Provisioned OpenClaw souls must run under Docker, not as bare-metal user services or background processes. The wrapper is allowed to be a host-local command because it is an adapter invoked by the sidecar, but any persistent OpenClaw runtime it creates or targets must be one of:
+
+- an existing containerized OpenClaw gateway that supports isolated agents;
+- a per-soul Docker Compose project rendered and owned by the wrapper;
+- a Bahia-managed container deployment once Bahia runtime ownership is wired for this path.
+
+The wrapper must not run `openclaw gateway run`, `openclaw gateway start`, `go run`, `npm start`, or a user-level systemd service as the long-lived runtime for a provisioned soul. If the OpenClaw CLI is used from the host, it should target a containerized runtime through `openclaw --container <name> ...`, `docker exec`, or an equivalent container control path.
+
+For the first `max` deployment, the recommended mode is `existing-container`: the wrapper creates/binds isolated agent state and routes inside an already containerized OpenClaw gateway. A later `per-agent-compose` mode may create one containerized OpenClaw gateway per soul when isolation requirements justify the extra resources.
 
 ## Command Interface
 
@@ -61,6 +75,8 @@ The wrapper reads configuration from environment variables:
 
 - `OPENCLAW_SOULFACTORY_ROOT`: base directory for generated agent workspaces and state. Default: `~/.openclaw/soulfactory`.
 - `OPENCLAW_SOULFACTORY_OPENCLAW_BIN`: OpenClaw CLI path. Default: `openclaw`.
+- `OPENCLAW_SOULFACTORY_RUNTIME_MODE`: `existing-container` or `per-agent-compose`. Default: `existing-container`.
+- `OPENCLAW_SOULFACTORY_CONTAINER`: container name used when `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container`.
 - `OPENCLAW_SOULFACTORY_DEFAULT_MODEL`: fallback model for `openclaw agents add --model`.
 - `OPENCLAW_SOULFACTORY_DEFAULT_BINDINGS`: comma-separated channel bindings to add on provision, optional.
 - `OPENCLAW_SOULFACTORY_DRY_RUN`: when `1`, validate and render state but skip OpenClaw CLI mutations.
@@ -100,6 +116,8 @@ $OPENCLAW_SOULFACTORY_ROOT/
 - `runtime_binding`
 - `workspace`
 - `agent_dir`
+- `runtime_mode`
+- `container`
 - `created_at`
 - `updated_at`
 - `last_method`
@@ -114,12 +132,13 @@ For `soulfactory.provision`, the wrapper:
 
 1. Validates required params already accepted by the sidecar: `identity`, `runtime`, `permissions`, `relay_policy`, `workspace`, and `assets`.
 2. Rejects if an existing local state file has the same `agent_id` with a different `spec_hash`, unless the existing state is already bound to the same SoulFactory operator request.
-3. Creates the workspace directory.
-4. Renders `IDENTITY.md`, `SOUL.md`, `AGENTS.md`, `MEMORY.md`, and `.openclaw/soulfactory.json`.
-5. Runs `openclaw agents add <agent-id> --workspace <workspace> --agent-dir <agent-dir> --non-interactive --json`, adding `--model` when configured or supplied by params.
-6. Runs `openclaw agents set-identity --agent <agent-id> --identity-file <workspace>/IDENTITY.md --json`.
-7. Adds configured bindings with `openclaw agents bind --agent <agent-id> --bind <binding> --json`.
-8. Writes `state.json`, `last-invocation.json`, and `last-outcome.json`.
+3. Resolves the containerized runtime target from `OPENCLAW_SOULFACTORY_RUNTIME_MODE`.
+4. Creates the workspace directory.
+5. Renders `IDENTITY.md`, `SOUL.md`, `AGENTS.md`, `MEMORY.md`, and `.openclaw/soulfactory.json`.
+6. Runs `openclaw --container <container> agents add <agent-id> --workspace <workspace> --agent-dir <agent-dir> --non-interactive --json`, adding `--model` when configured or supplied by params. An equivalent `docker exec <container> openclaw agents add ...` path is acceptable.
+7. Runs `openclaw --container <container> agents set-identity --agent <agent-id> --identity-file <workspace>/IDENTITY.md --json`.
+8. Adds configured bindings with `openclaw --container <container> agents bind --agent <agent-id> --bind <binding> --json`.
+9. Writes `state.json`, `last-invocation.json`, and `last-outcome.json`.
 
 Success result:
 
@@ -132,6 +151,8 @@ Success result:
   "spec_hash": "sha256:...",
   "workspace": "/home/majordomo/.openclaw/soulfactory/agents/agent-alice/workspace",
   "agent_dir": "/home/majordomo/.openclaw/soulfactory/agents/agent-alice/agent",
+  "runtime_mode": "existing-container",
+  "container": "openclaw-gateway",
   "warnings": []
 }
 ```

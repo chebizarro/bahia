@@ -2,6 +2,8 @@
 
 Bahia owns the OpenClaw SoulFactory adapter as a separate sidecar. It does not require direct upstream OpenClaw changes or REST lifecycle control APIs.
 
+Provisioned OpenClaw souls run in containerized OpenClaw runtimes. The sidecar/control wrapper may be invoked locally, but it must not launch persistent bare-metal OpenClaw gateway or agent processes for managed souls.
+
 Soul provisioning is initiated by signed Nostr events, not by REST. Operators publish a `31952` Soul draft and a correlated `5950` provisioning request; SoulFactory then drives OpenClaw with runtime control events and publishes observable progress/read-model events. Adding REST provisioning or lifecycle routes is a non-goal for this MVP.
 
 ## Nostr contract
