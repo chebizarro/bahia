@@ -495,6 +495,7 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	assertNoPublishedKind(t, sink, KindSystemDiscovery)
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertEventPubkey(t, discovery, wantPubkey)
+	assertTag(t, discovery, "d", "bahia-system-v1")
 	assertTag(t, discovery, "schema", "bahia.system-discovery.v1")
 	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
 	assertDiscoveryVersions(t, discovery.Content)
