@@ -69,11 +69,23 @@ export function dominantPressureSignal(worker) {
     });
   }
   if (pressure.thermal_pressure || telemetry.thermal_state || telemetry.thermal !== undefined) {
+    const thermalObj = typeof telemetry.thermal === 'object' && telemetry.thermal !== null ? telemetry.thermal : null;
+    const thermalString = thermalObj ? null : telemetry.thermal;
+    const thermalLevel = normalize(pressure.thermal_pressure)
+      || (thermalObj?.throttled ? 'critical' : '')
+      || normalize(telemetry.thermal_state || thermalString)
+      || (thermalObj?.max_temperature_c !== undefined ? levelFromTemperature(thermalObj.max_temperature_c) : '')
+      || 'unknown';
+    const thermalValue = telemetry.thermal_state
+      || (thermalObj?.throttled ? 'throttled' : '')
+      || (thermalObj?.max_temperature_c !== undefined ? `${thermalObj.max_temperature_c}°C` : '')
+      || thermalString
+      || 'reported';
     signals.push({
       key: 'thermal',
       label: 'Thermal',
-      level: normalize(pressure.thermal_pressure) || normalize(telemetry.thermal_state || telemetry.thermal) || 'unknown',
-      value: telemetry.thermal_state || telemetry.thermal || 'reported'
+      level: thermalLevel,
+      value: thermalValue
     });
   }
   if (pressure.inode_pressure || telemetry.inode_used_pct !== undefined) {
@@ -113,6 +125,14 @@ function levelFromPercent(value) {
   if (!Number.isFinite(number)) return '';
   if (number >= 90) return 'critical';
   if (number >= 80) return 'warning';
+  return 'nominal';
+}
+
+function levelFromTemperature(celsius) {
+  const value = Number(celsius);
+  if (!Number.isFinite(value)) return '';
+  if (value >= 95) return 'critical';
+  if (value >= 80) return 'warning';
   return 'nominal';
 }
 
