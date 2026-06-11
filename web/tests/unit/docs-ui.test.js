@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderComponent, textOf, tick } from './utils/svelte-component-test.ts';
-import { BahiaClient } from '../../src/lib/api/client.js';
 import { renderDocumentationMarkdown } from '../../src/lib/docs/render.js';
 import DocsCatalog from '../../src/lib/components/docs/DocsCatalog.svelte';
 import MarkdownDocument from '../../src/lib/components/docs/MarkdownDocument.svelte';
@@ -44,24 +43,6 @@ async function flushEffects() {
   }
 }
 
-describe('docs API client (REST, backward compat)', () => {
-  beforeEach(() => {
-    global.fetch = vi.fn();
-  });
-
-  it('loads docs catalog and topic through read-only API paths', async () => {
-    const client = new BahiaClient();
-    global.fetch
-      .mockResolvedValueOnce(jsonEnvelope({ count: 1, topics: [], groups: [] }))
-      .mockResolvedValueOnce(jsonEnvelope({ metadata: { topic: 'features-services' }, markdown: '# Services', links: [] }));
-
-    await expect(client.listDocs()).resolves.toMatchObject({ count: 1 });
-    await expect(client.getDoc('features/services')).resolves.toMatchObject({ markdown: '# Services' });
-
-    expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/v1/docs', expect.objectContaining({ method: 'GET' }));
-    expect(global.fetch).toHaveBeenNthCalledWith(2, `/api/v1/docs/${encodeURIComponent('features/services')}`, expect.objectContaining({ method: 'GET' }));
-  });
-});
 
 describe('docs catalog component and page', () => {
   beforeEach(() => {
@@ -127,7 +108,7 @@ describe('documentation Markdown rendering and reader page', () => {
     expect(html).toContain('data-doc-topic="features-deployments"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('docs-link-unresolved');
-    expect(renderDocumentationMarkdown('[Unscanned](other.md)', [])).toContain('Documentation link was not resolved by the central docs service');
+    expect(renderDocumentationMarkdown('[Unscanned](other.md)', [])).toContain('Documentation topic not found in catalog');
     expect(html).not.toContain('<script');
     expect(html).not.toContain('onerror');
 

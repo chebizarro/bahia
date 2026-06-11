@@ -1,27 +1,78 @@
 /**
- * Nostr-based documentation fetching.
+ * Nostr-based documentation fetching with browser caching and link resolution.
  *
  * Reads documentation topics from the relay as NIP-23 long-form content
- * (kind 30023) events tagged with "bahia-docs". This replaces the REST API
- * docs endpoints with a fully nostr-native documentation pipeline.
+ * (kind 30023) events tagged with "bahia-docs". Caches events in localStorage
+ * and resolves cross-document markdown links client-side.
  */
+import { browser } from '$app/environment';
 import { KINDS } from '$lib/nostr/kinds.js';
 import { queryOrPartial, readModelEvents } from '$lib/nostr/subscriptions.js';
 import { dedupeReplaceableEvents } from '$lib/nostr/replaceable.js';
 import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
 
+// --- Cache configuration ---
+
+const DOCS_CACHE_KEY = 'bahia_docs_cache';
+const DOCS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
- * Fetch the documentation catalog from the relay.
- *
- * Returns a structure compatible with the REST API DocsCatalogResponse:
- *   { topics: Topic[], groups: Group[], count: number }
- *
- * @param {Object} [options]
- * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
- * @param {number} [options.timeoutMs=10000] - Query timeout
- * @returns {Promise<{topics: Array, groups: Array, count: number}>}
+ * Read cached docs events from localStorage.
+ * @returns {{ events: Array, cachedAt: number } | null}
  */
-export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000 } = {}) {
+function readCache() {
+  if (!browser || typeof localStorage?.getItem !== 'function') return null;
+  try {
+    const raw = localStorage.getItem(DOCS_CACHE_KEY);
+    if (!raw) return null;
+    const snapshot = JSON.parse(raw);
+    const age = Date.now() - Number(snapshot?.cachedAt || 0);
+    if (age > DOCS_CACHE_TTL_MS) return null;
+    if (!Array.isArray(snapshot?.events)) return null;
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write docs events to localStorage cache.
+ * @param {Array} events - Raw nostr event objects
+ */
+function writeCache(events) {
+  if (!browser || typeof localStorage?.setItem !== 'function') return;
+  try {
+    localStorage.setItem(DOCS_CACHE_KEY, JSON.stringify({
+      cachedAt: Date.now(),
+      events: events.map((e) => ({
+        id: e.id,
+        kind: e.kind,
+        pubkey: e.pubkey,
+        created_at: e.created_at,
+        content: e.content,
+        tags: e.tags,
+        sig: e.sig
+      }))
+    }));
+  } catch {
+    // Storage full or unavailable — ignore.
+  }
+}
+
+/**
+ * Fetch all docs events, using cache when fresh.
+ * @param {Object} [options]
+ * @param {string} [options.servicePubkey]
+ * @param {number} [options.timeoutMs=10000]
+ * @param {boolean} [options.bypassCache=false]
+ * @returns {Promise<Array>} Deduplicated events
+ */
+async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = readCache();
+    if (cached) return cached.events;
+  }
+
   const filter = {
     kinds: [KINDS.LONG_FORM_CONTENT],
     '#t': ['bahia-docs']
@@ -36,6 +87,24 @@ export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000
   });
 
   const events = dedupeReplaceableEvents(readModelEvents(result));
+  writeCache(events);
+  return events;
+}
+
+/**
+ * Fetch the documentation catalog from the relay.
+ *
+ * Returns a structure with topics grouped for display:
+ *   { topics: Topic[], groups: Group[], count: number }
+ *
+ * @param {Object} [options]
+ * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
+ * @param {number} [options.timeoutMs=10000] - Query timeout
+ * @param {boolean} [options.bypassCache=false] - Skip localStorage cache
+ * @returns {Promise<{topics: Array, groups: Array, count: number}>}
+ */
+export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
+  const events = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
   const topics = events.map(parseDocTopic).filter(Boolean);
 
   // Sort deterministically by topic slug.
@@ -51,43 +120,136 @@ export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000
 /**
  * Fetch a single documentation topic from the relay.
  *
- * Returns a structure compatible with the REST API DocsDocumentResponse:
- *   { metadata: Topic, markdown: string, links: [] }
+ * Returns the document with resolved cross-document links:
+ *   { metadata: Topic, markdown: string, links: DocumentLink[] }
  *
  * @param {string} topic - Topic slug (d-tag value)
  * @param {Object} [options]
  * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
  * @param {number} [options.timeoutMs=10000] - Query timeout
+ * @param {boolean} [options.bypassCache=false] - Skip localStorage cache
  * @returns {Promise<{metadata: Object, markdown: string, links: Array}|null>}
  */
-export async function fetchDoc(topic, { servicePubkey = null, timeoutMs = 10000 } = {}) {
-  const filter = {
-    kinds: [KINDS.LONG_FORM_CONTENT],
-    '#d': [topic],
-    '#t': ['bahia-docs']
-  };
-  if (servicePubkey) {
-    filter.authors = [servicePubkey];
-  }
+export async function fetchDoc(topic, { servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
+  // Fetch all docs events (leverages cache) so we have the catalog for link resolution.
+  const allEvents = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
 
-  const result = await queryOrPartial([filter], {
-    scope: 'docs-read',
-    timeoutMs
-  });
+  const event = allEvents.find((e) => getDTag(e) === topic);
+  if (!event) return null;
 
-  const events = dedupeReplaceableEvents(readModelEvents(result));
-  if (events.length === 0) return null;
-
-  const event = events[0];
   const metadata = parseDocTopic(event);
   if (!metadata) return null;
+
+  // Build catalog for link resolution.
+  const catalog = allEvents.map(parseDocTopic).filter(Boolean);
+  const links = resolveDocumentLinks(event.content || '', catalog);
 
   return {
     metadata,
     markdown: event.content || '',
-    links: [] // Link resolution is not available from relay events; render raw links.
+    links
   };
 }
+
+// --- Link resolution ---
+
+const MARKDOWN_LINK_PATTERN = /!?\[[^\]\n]+\]\(([^)\s]+)(?:\s+['"][^)]*['"])?\)/g;
+
+/**
+ * Convert a relative markdown path to a topic slug.
+ * Mirrors the server-side TopicFromPath logic:
+ *   strip extension, replace / with -, trim parts.
+ *
+ * @param {string} relPath - e.g. "features/services.md"
+ * @returns {string} e.g. "features-services"
+ */
+function topicFromPath(relPath) {
+  // Strip extension
+  const dotIdx = relPath.lastIndexOf('.');
+  const withoutExt = dotIdx > 0 ? relPath.slice(0, dotIdx) : relPath;
+  return withoutExt
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join('-');
+}
+
+/**
+ * Check if a link href is an internal markdown reference.
+ * @param {string} href
+ * @returns {boolean}
+ */
+function isInternalMarkdownHref(href) {
+  const value = String(href || '').trim();
+  if (!value || value.startsWith('#')) return false;
+  if (value.startsWith('/') || value.startsWith('//')) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return false;
+  const pathOnly = value.split(/[?#]/, 1)[0];
+  return pathOnly.toLowerCase().endsWith('.md');
+}
+
+/**
+ * Check if a link href is an external URL.
+ * @param {string} href
+ * @returns {boolean}
+ */
+function isExternalHref(href) {
+  return /^(https?:|mailto:)/i.test(href) || href.startsWith('//');
+}
+
+/**
+ * Resolve all markdown links in a document against the known catalog.
+ *
+ * @param {string} markdown - Raw markdown content
+ * @param {Array} catalog - Array of topic metadata objects
+ * @returns {Array} Resolved link objects for the renderer
+ */
+function resolveDocumentLinks(markdown, catalog) {
+  if (!markdown || !catalog?.length) return [];
+
+  const catalogSet = new Map(catalog.map((t) => [t.topic, t]));
+  const seen = new Set();
+  const links = [];
+
+  for (const match of markdown.matchAll(MARKDOWN_LINK_PATTERN)) {
+    const rawHref = (match[1] || '').trim();
+    if (!rawHref || seen.has(rawHref)) continue;
+    seen.add(rawHref);
+
+    // External links
+    if (isExternalHref(rawHref)) {
+      links.push({ original: rawHref, href: rawHref, external: true, status: 'resolved' });
+      continue;
+    }
+
+    // Internal markdown links
+    if (isInternalMarkdownHref(rawHref)) {
+      // Strip query/fragment for topic resolution
+      const pathOnly = rawHref.split(/[?#]/, 1)[0];
+      // Normalize: remove leading ./ or nested ../
+      const cleaned = pathOnly.replace(/^(\.\/)+/, '');
+      const candidateTopic = topicFromPath(cleaned);
+
+      const found = catalogSet.get(candidateTopic);
+      if (found) {
+        let href = `/docs/${candidateTopic}`;
+        // Preserve fragment
+        const hashIdx = rawHref.indexOf('#');
+        if (hashIdx >= 0) href += rawHref.slice(hashIdx);
+        links.push({ original: rawHref, href, topic: candidateTopic, external: false, status: 'resolved' });
+      } else {
+        links.push({ original: rawHref, status: 'not_found', error: `Topic "${candidateTopic}" not found in catalog` });
+      }
+      continue;
+    }
+
+    // Fragment-only or non-markdown links — skip, renderer handles them natively.
+  }
+
+  return links;
+}
+
+// --- Parsing helpers ---
 
 /**
  * Parse a NIP-23 event into a docs topic metadata object.
@@ -114,7 +276,7 @@ function parseDocTopic(event) {
 }
 
 /**
- * Group topics into catalog sections matching the REST API format.
+ * Group topics into catalog sections.
  * @param {Array} topics
  * @returns {Array} Groups with category, label, and topics.
  */
