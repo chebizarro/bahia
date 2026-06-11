@@ -21,7 +21,23 @@ jobs:
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
       PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+          : "${GITHUB_SHA:?GITHUB_SHA is required}"
+          : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+          : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
+
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+            fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --force --detach FETCH_HEAD
 
       - name: Preflight edge deploy inputs
         run: |
@@ -33,6 +49,7 @@ jobs:
           [[ "$COMPOSE_FILE" == "$CONTROLPLANE_ROOT/docker-compose.yml" ]]
           [[ "$RELEASE_ROOT" == "$CONTROLPLANE_ROOT/releases" ]]
 
+          command -v git >/dev/null
           command -v docker >/dev/null
           command -v rsync >/dev/null
           command -v python3 >/dev/null
