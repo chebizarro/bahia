@@ -22,7 +22,7 @@ func IsCanonicalObservableKind(kind int) bool {
 		ContextVMResourceTemplatesList, ContextVMPromptsList,
 		RelaySetDiscovery, NIP65RelayList, NIP51DMRelayList, SBOMAttestation,
 		BahiaIdentityDefinition, BahiaReplayCheckpoint, BahiaReadinessStatus,
-		LongFormContent:
+		LongFormContent, LongFormDraft:
 		return true
 	default:
 		return false

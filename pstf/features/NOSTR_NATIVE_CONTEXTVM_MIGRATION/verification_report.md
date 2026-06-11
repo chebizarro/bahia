@@ -53,6 +53,19 @@ Final integrated verification after the fixer pass:
 - PASS: `go test ./internal/nostrmigration ./internal/repository ./internal/app ./internal/controlplane ./internal/kinds ./internal/adapters/nostr ./internal/relaysidecar ./internal/mcp ./internal/service ./pkg/client ./cmd/cli`.
 - PASS: `npm run test:unit -- --run tests/unit/llm-page.test.js tests/unit/controlplane-store.test.js tests/unit/fips-mesh-store.test.js tests/unit/dns-store-subscriptions.test.js tests/unit/dns-store-commands.test.js tests/unit/nostr-client-parsing.test.js tests/unit/encrypted-controlplane.test.js tests/unit/public-controlplane.test.js tests/unit/dns-controlplane.test.js tests/unit/workers-actions.test.js tests/unit/assistant/assistant-store.test.js` — 11 files / 106 tests passed.
 
+## Relay sidecar NIP-23 draft allow-list pass — bahia-h1tz — 2026-06-11
+
+Observed behavior before this pass: the relay sidecar readable/publishable canonical-kind policy allowed NIP-23 long-form content (`30023`) but not the NIP-23 draft companion kind (`30024`). Operators need the sidecar allow-list to include both standard NIP-23 long-form event kinds.
+
+Intended behavior: NIP-23 `LongFormContent=30023` and `LongFormDraft=30024` are standard Nostr kinds consumed directly where Bahia publishes/reads long-form documents or drafts. The sidecar should allow service-signed publishes and readable filters for both, while preserving rejection of unauthorized publishers and legacy runtime kinds.
+
+Changes verified:
+- `internal/kinds.IsCanonicalObservableKind` now includes `LongFormDraft` beside `LongFormContent`.
+- `internal/relaysidecar` tests prove both NIP-23 kinds are accepted from the service pubkey, rejected from unauthorized pubkeys, readable via kind-scoped filters, and queryable from the sidecar store.
+
+Verification:
+- PASS: `GOCACHE=/tmp/bahia-go-build-cache GOMODCACHE=/tmp/bahia-go-mod-cache go test ./internal/kinds ./internal/relaysidecar -count=1`.
+
 ## Migration manifest standard-kind omission pass — bahia-8j5h — 2026-06-11
 
 Observed behavior before this pass: `go test ./... -count=1` failed in `internal/nostrmigration` because `internal/kinds.LongFormDraft=30024` was neither mapped in the migration manifest nor explicitly justified. The focused rerun also exposed the companion NIP-23 constant `LongFormContent=30023` as uncovered.

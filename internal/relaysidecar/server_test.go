@@ -396,7 +396,7 @@ func TestSidecarRejectsUnauthorizedRequestKind(t *testing.T) {
 	}
 }
 
-func TestSidecarAcceptsLongFormContentFromServicePubkeyAndAllowsRead(t *testing.T) {
+func TestSidecarAcceptsNIP23LongFormKindsFromServicePubkeyAndAllowsRead(t *testing.T) {
 	serviceSK := nostr.Generate()
 	servicePubkey := nostr.GetPublicKey(serviceSK)
 	unauthorizedSK := nostr.Generate()
@@ -411,62 +411,73 @@ func TestSidecarAcceptsLongFormContentFromServicePubkeyAndAllowsRead(t *testing.
 		t.Fatalf("New() error: %v", err)
 	}
 
-	// Service pubkey can write NIP-23 long-form content.
-	docEvent := nostr.Event{
-		CreatedAt: nostr.Now(),
-		Kind:      nostr.Kind(kinds.LongFormContent),
-		Tags: nostr.Tags{
-			nostr.Tag{"d", "getting-started"},
-			nostr.Tag{"title", "Getting Started"},
-			nostr.Tag{"t", "bahia-docs"},
-			nostr.Tag{"t", "guide"},
-		},
-		Content: "# Getting Started\n\nWelcome to Bahia.",
-	}
-	if err := docEvent.Sign(serviceSK); err != nil {
-		t.Fatalf("sign doc event: %v", err)
-	}
-	skipBroadcast, err := server.Relay().AddEvent(context.Background(), docEvent)
-	if err != nil {
-		t.Fatalf("AddEvent() error for long-form content: %v", err)
-	}
-	if skipBroadcast {
-		t.Fatalf("AddEvent() rejected long-form content from service pubkey")
-	}
+	for _, tc := range []struct {
+		name string
+		kind int
+		dtag string
+	}{
+		{name: "long-form content", kind: kinds.LongFormContent, dtag: "getting-started"},
+		{name: "long-form draft", kind: kinds.LongFormDraft, dtag: "getting-started-draft"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Service pubkey can write NIP-23 long-form content and draft events.
+			docEvent := nostr.Event{
+				CreatedAt: nostr.Now(),
+				Kind:      nostr.Kind(tc.kind),
+				Tags: nostr.Tags{
+					nostr.Tag{"d", tc.dtag},
+					nostr.Tag{"title", "Getting Started"},
+					nostr.Tag{"t", "bahia-docs"},
+					nostr.Tag{"t", "guide"},
+				},
+				Content: "# Getting Started\n\nWelcome to Bahia.",
+			}
+			if err := docEvent.Sign(serviceSK); err != nil {
+				t.Fatalf("sign doc event: %v", err)
+			}
+			skipBroadcast, err := server.Relay().AddEvent(context.Background(), docEvent)
+			if err != nil {
+				t.Fatalf("AddEvent() error for kind %d: %v", tc.kind, err)
+			}
+			if skipBroadcast {
+				t.Fatalf("AddEvent() rejected kind %d from service pubkey", tc.kind)
+			}
 
-	// Unauthorized pubkey cannot write long-form content.
-	badDocEvent := nostr.Event{
-		CreatedAt: nostr.Now(),
-		Kind:      nostr.Kind(kinds.LongFormContent),
-		Tags:      nostr.Tags{nostr.Tag{"d", "rogue-doc"}, nostr.Tag{"t", "bahia-docs"}},
-		Content:   "# Rogue",
-	}
-	if err := badDocEvent.Sign(unauthorizedSK); err != nil {
-		t.Fatalf("sign bad doc event: %v", err)
-	}
-	if _, err := server.Relay().AddEvent(context.Background(), badDocEvent); err == nil {
-		t.Fatalf("expected long-form content from unauthorized pubkey to be rejected")
-	}
+			// Unauthorized pubkey cannot write NIP-23 long-form events.
+			badDocEvent := nostr.Event{
+				CreatedAt: nostr.Now(),
+				Kind:      nostr.Kind(tc.kind),
+				Tags:      nostr.Tags{nostr.Tag{"d", "rogue-doc"}, nostr.Tag{"t", "bahia-docs"}},
+				Content:   "# Rogue",
+			}
+			if err := badDocEvent.Sign(unauthorizedSK); err != nil {
+				t.Fatalf("sign bad doc event: %v", err)
+			}
+			if _, err := server.Relay().AddEvent(context.Background(), badDocEvent); err == nil {
+				t.Fatalf("expected kind %d from unauthorized pubkey to be rejected", tc.kind)
+			}
 
-	// Long-form content is readable.
-	readFilter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.LongFormContent)}}
-	reject, msg := server.Relay().OnRequest(context.Background(), readFilter)
-	if reject {
-		t.Fatalf("expected long-form content to be readable, got rejection %q", msg)
-	}
+			// NIP-23 long-form content and draft kinds are readable.
+			readFilter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(tc.kind)}}
+			reject, msg := server.Relay().OnRequest(context.Background(), readFilter)
+			if reject {
+				t.Fatalf("expected kind %d to be readable, got rejection %q", tc.kind, msg)
+			}
 
-	// Verify the stored event is queryable.
-	var found bool
-	for stored := range server.Relay().QueryStored(context.Background(), nostr.Filter{
-		Kinds:   []nostr.Kind{nostr.Kind(kinds.LongFormContent)},
-		Authors: []nostr.PubKey{servicePubkey},
-	}) {
-		if stored.ID == docEvent.ID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("long-form content event not found in sidecar store")
+			// Verify the stored event is queryable.
+			var found bool
+			for stored := range server.Relay().QueryStored(context.Background(), nostr.Filter{
+				Kinds:   []nostr.Kind{nostr.Kind(tc.kind)},
+				Authors: []nostr.PubKey{servicePubkey},
+			}) {
+				if stored.ID == docEvent.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("kind %d event not found in sidecar store", tc.kind)
+			}
+		})
 	}
 }
