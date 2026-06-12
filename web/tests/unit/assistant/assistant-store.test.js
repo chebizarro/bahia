@@ -183,4 +183,58 @@ describe('assistant store', () => {
       downstreamRequestId: 'downstream-live'
     });
   });
+
+  it('does not replay historical streaming chunks during bootstrap', async () => {
+    const operator = authMock.authState.pubkey;
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    const sessionId = 'assistant-stale-stream-session';
+
+    nostrMock.queryUntilEose.mockResolvedValueOnce([
+      event({
+        id: 'session-event',
+        kind: ASSISTANT_KINDS.SESSION,
+        pubkey: service,
+        created_at: 100,
+        tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'idle']],
+        content: { state: 'idle', operator_pubkey: operator, transcript_summary: 'Stale stream session' }
+      }),
+      event({
+        id: 'historical-stream-1',
+        kind: ASSISTANT_KINDS.STATUS,
+        pubkey: service,
+        created_at: 110,
+        tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-1`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-1', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
+        content: { session_id: sessionId, status: 'planning', streaming: true, chunk: '{\"summary\":' }
+      }),
+      event({
+        id: 'historical-stream-2',
+        kind: ASSISTANT_KINDS.STATUS,
+        pubkey: service,
+        created_at: 111,
+        tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-2`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-1', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
+        content: { session_id: sessionId, status: 'planning', streaming: true, chunk: '\"partial\"}' }
+      })
+    ]);
+
+    await store.bootstrapAssistant({ force: true });
+
+    expect(store.assistantSessions).toHaveLength(1);
+    expect(store.assistantSessions[0].transcript).toHaveLength(0);
+
+    liveHandlers.onEvent(event({
+      id: 'live-stream',
+      kind: ASSISTANT_KINDS.STATUS,
+      pubkey: service,
+      created_at: 130,
+      tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-live`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-2', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
+      content: { session_id: sessionId, status: 'planning', streaming: true, chunk: 'Planning live response' }
+    }));
+
+    expect(store.assistantSessions[0].transcript).toHaveLength(1);
+    expect(store.assistantSessions[0].transcript[0]).toMatchObject({
+      id: 'stream:request-2',
+      streaming: true,
+      streamingContent: 'Planning live response'
+    });
+  });
 });

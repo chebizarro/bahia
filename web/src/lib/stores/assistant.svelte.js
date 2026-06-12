@@ -243,10 +243,11 @@ function recordAssistantItem(item) {
   return true;
 }
 
-function applyTranscriptEvent(event) {
+function applyTranscriptEvent(event, { allowStreaming = true } = {}) {
   if (!authorAllowed(event)) return false;
   const item = normalizeAssistantItem(event);
   if (!item?.sessionId) return false;
+  if (item.streaming && !allowStreaming) return false;
   return recordAssistantItem(item);
 }
 
@@ -257,13 +258,13 @@ function applyLocalAssistantItem(item) {
   return true;
 }
 
-function applyAssistantEvent(event) {
+function applyAssistantEvent(event, options = {}) {
   if (!event?.id || seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
 
   let changed = false;
   if (event.kind === ASSISTANT_KINDS.SESSION) changed = applySessionEvent(event);
-  else changed = applyTranscriptEvent(event);
+  else changed = applyTranscriptEvent(event, options);
 
   if (changed) {
     if (
@@ -369,7 +370,7 @@ export async function bootstrapAssistant({ force = false } = {}) {
       subscribeToConnectionState();
 
       const events = await nostr.queryUntilEose(bootstrapFilters(operatorPubkey, servicePubkey));
-      for (const event of events) applyAssistantEvent(event);
+      for (const event of events) applyAssistantEvent(event, { allowStreaming: false });
 
       assistantConnection.ready = true;
       assistantConnection.status = 'live';
