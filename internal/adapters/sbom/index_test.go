@@ -6,9 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
+
+const testSBOMPrivateKey = "1111111111111111111111111111111111111111111111111111111111111111"
 
 // mockNostrPublisher captures published events for testing.
 type mockNostrPublisher struct {
@@ -16,12 +19,30 @@ type mockNostrPublisher struct {
 }
 
 func (m *mockNostrPublisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) error {
-	// Simulate signing by setting ID and Sig.
-	ev.ID = "test-event-id-" + ev.Tags.GetFirst([]string{TagDIdentifier}).Value()
-	ev.Sig = "test-signature"
-	ev.PubKey = "test-pubkey"
+	if err := nostrutil.SignEventWithHexKey(ev, testSBOMPrivateKey); err != nil {
+		return err
+	}
 	m.events = append(m.events, ev)
 	return nil
+}
+
+func testTagValue(tags nostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+func testTagsByName(tags nostr.Tags, key string) []nostr.Tag {
+	matched := make([]nostr.Tag, 0)
+	for _, tag := range tags {
+		if len(tag) >= 1 && tag[0] == key {
+			matched = append(matched, tag)
+		}
+	}
+	return matched
 }
 
 func TestIndexPublisher_PublishAttestation(t *testing.T) {
@@ -68,41 +89,41 @@ func TestIndexPublisher_PublishAttestation(t *testing.T) {
 	ev := mock.events[0]
 
 	// Check event kind.
-	if ev.Kind != KindSBOMAttestation {
+	if int(ev.Kind) != KindSBOMAttestation {
 		t.Errorf("Event kind = %d, want %d", ev.Kind, KindSBOMAttestation)
 	}
 
 	// Check d-tag format.
-	dTag := ev.Tags.GetFirst([]string{TagDIdentifier})
-	if dTag == nil {
+	dTag := testTagValue(ev.Tags, TagDIdentifier)
+	if dTag == "" {
 		t.Fatal("Missing d-tag")
 	}
 	expectedDTag := "sbom:attestation:sha256:abc123def456"
-	if dTag.Value() != expectedDTag {
-		t.Errorf("d-tag = %q, want %q", dTag.Value(), expectedDTag)
+	if dTag != expectedDTag {
+		t.Errorf("d-tag = %q, want %q", dTag, expectedDTag)
 	}
 
 	// Check format tag.
-	formatTag := ev.Tags.GetFirst([]string{TagFormat})
-	if formatTag == nil || formatTag.Value() != "spdx" {
+	formatTag := testTagValue(ev.Tags, TagFormat)
+	if formatTag != "spdx" {
 		t.Errorf("format tag = %v, want 'spdx'", formatTag)
 	}
 
 	// Check storage type tag.
-	storageTag := ev.Tags.GetFirst([]string{TagStorageType})
-	if storageTag == nil || storageTag.Value() != "blossom" {
+	storageTag := testTagValue(ev.Tags, TagStorageType)
+	if storageTag != "blossom" {
 		t.Errorf("storage tag = %v, want 'blossom'", storageTag)
 	}
 
 	// Check generator tag.
-	genTag := ev.Tags.GetFirst([]string{TagGenerator})
-	if genTag == nil || genTag.Value() != "syft@0.95.0" {
+	genTag := testTagValue(ev.Tags, TagGenerator)
+	if genTag != "syft@0.95.0" {
 		t.Errorf("generator tag = %v, want 'syft@0.95.0'", genTag)
 	}
 
 	// Check NTIA tag.
-	ntiaTag := ev.Tags.GetFirst([]string{TagNTIA})
-	if ntiaTag == nil || ntiaTag.Value() != "compliant" {
+	ntiaTag := testTagValue(ev.Tags, TagNTIA)
+	if ntiaTag != "compliant" {
 		t.Errorf("ntia tag = %v, want 'compliant'", ntiaTag)
 	}
 
@@ -158,22 +179,22 @@ func TestIndexPublisher_PublishIndex(t *testing.T) {
 	ev := mock.events[0]
 
 	// Check event kind.
-	if ev.Kind != KindSBOMIndex {
+	if int(ev.Kind) != KindSBOMIndex {
 		t.Errorf("Event kind = %d, want %d", ev.Kind, KindSBOMIndex)
 	}
 
 	// Check d-tag format.
-	dTag := ev.Tags.GetFirst([]string{TagDIdentifier})
-	if dTag == nil {
+	dTag := testTagValue(ev.Tags, TagDIdentifier)
+	if dTag == "" {
 		t.Fatal("Missing d-tag")
 	}
 	expectedDTag := "sbom:index:artifact:myapp-v1.0.0"
-	if dTag.Value() != expectedDTag {
-		t.Errorf("d-tag = %q, want %q", dTag.Value(), expectedDTag)
+	if dTag != expectedDTag {
+		t.Errorf("d-tag = %q, want %q", dTag, expectedDTag)
 	}
 
 	// Check SBOM reference tags.
-	sbomTags := ev.Tags.GetAll([]string{TagSBOMRef})
+	sbomTags := testTagsByName(ev.Tags, TagSBOMRef)
 	if len(sbomTags) != 2 {
 		t.Errorf("Expected 2 sbom tags, got %d", len(sbomTags))
 	}

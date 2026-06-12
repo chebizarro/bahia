@@ -4,11 +4,28 @@
     {
       "id": "DEF-ITEM2-001",
       "title": "Downstream go-nostr notification publisher cannot compile against migrated RelayPool.Publish signature",
-      "status": "open_tracked_in_beads",
+      "status": "resolved_in_item_2",
       "beads_issue": "bahia-u2ma",
-      "observed_behavior": "go test ./internal/controlplane fails because internal/notifications/nostr_dm.go creates a github.com/nbd-wtf/go-nostr.Event and passes it to RelayPool.Publish, which now accepts fiatjaf.com/nostr.Event.",
+      "observed_behavior": "go test ./internal/controlplane failed during Item 1 because internal/notifications/nostr_dm.go created a github.com/nbd-wtf/go-nostr.Event and passed it to RelayPool.Publish, which accepts fiatjaf.com/nostr.Event.",
       "intended_behavior": "Downstream protocol consumers should use fiatjaf.com/nostr event/signing/encryption APIs or a deliberate compatibility boundary in their own migration slice.",
-      "scope_decision": "Not fixed in Item 1 because notifications/controlplane protocol consumers are part of the broader Item 2/3 sweep."
+      "resolution": "Item 2 migrated internal/notifications/nostr_dm.go and the scoped protocol/NIP consumer packages to fiatjaf.com/nostr. Targeted Item 2 package tests passed. Residual public-client/CLI/controlplane/service/soulfactory/test imports remain Item 3 scope."
+    },
+    {
+      "id": "DEF-ITEM2-002",
+      "title": "NIP-44 stored-secret compatibility after canonical key derivation requires verification",
+      "status": "open_tracked_in_beads",
+      "beads_issue": "bahia-ncxo",
+      "observed_behavior": "The legacy secrets self-encryption helper passed the private key string as the recipient argument to go-nostr NIP-44 conversation-key derivation. Item 2 corrected self-encryption to derive Bahia's public key and use fiatjaf.com/nostr/nip44 with decoded canonical key types.",
+      "intended_behavior": "Existing stored NIP-44 encrypted secrets should either remain decryptable via a deliberate compatibility/migration path or require documented operator rotation.",
+      "scope_decision": "Tracked as follow-up because no representative persisted legacy ciphertext fixture was available in the Item 2 migration slice."
+    },
+    {
+      "id": "DEF-ITEM2-003",
+      "title": "Relay backfill migration recorded events before validation",
+      "status": "resolved_in_item_2_review_followup",
+      "observed_behavior": "Oracle review found that internal/nostrmigration relay backfill converted and recorded relay events before verifying canonical event ID, Schnorr signature, and tag structure.",
+      "intended_behavior": "Relay-provided historical events must be validated before persistence or migration while still allowing legitimately old legacy events bounded by the configured backfill window.",
+      "resolution": "Added validateRelayBackfillEvent before recordFromEvent in migrateRelayBackfill and TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording to reject tampered events before repository recording or migration publishing."
     }
   ]
 }

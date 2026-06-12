@@ -7,16 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
@@ -60,9 +59,7 @@ func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
 }
 
 func TestResolverFallsBackToContentFQDNAndLegacyContentFields(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
@@ -88,9 +85,7 @@ func TestResolverFallsBackToContentFQDNAndLegacyContentFields(t *testing.T) {
 }
 
 func TestResolverAppliesNewestReplaceableEvent(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	base := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
@@ -111,9 +106,7 @@ func TestResolverAppliesNewestReplaceableEvent(t *testing.T) {
 }
 
 func TestResolverHandlesTombstones(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	base := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
@@ -197,9 +190,7 @@ func TestResolverNIP11MetadataIsAdvisoryForMissingMalformedAndLimitingRelays(t *
 }
 
 func TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 
 	events := make(chan *nostr.Event, 1)
@@ -215,7 +206,7 @@ func TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker(t *testing.T) {
 	closed := make(chan nostradapter.RelayClosed)
 	close(closed)
 
-	_, err = resolver.consume(context.Background(), &fakeRelayPool{}, &nostradapter.MergedSubscription{
+	_, err := resolver.consume(context.Background(), &fakeRelayPool{}, &nostradapter.MergedSubscription{
 		Events:            events,
 		EndOfStoredEvents: eose,
 		RelayEOSE:         relayEOSE,
@@ -243,9 +234,7 @@ func TestResolverRetriesAfterAuthRequiredClosed(t *testing.T) {
 }
 
 func TestResolverFindsByCapability(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	createdAt := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
@@ -265,9 +254,7 @@ func TestResolverFindsByCapability(t *testing.T) {
 }
 
 func TestResolverRejectsInvalidEvent(t *testing.T) {
-	secretKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	require.NoError(t, err)
+	secretKey, pubkey := generatedResolverKeyPair(t)
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
@@ -280,6 +267,14 @@ func TestResolverRejectsInvalidEvent(t *testing.T) {
 	require.False(t, ok)
 }
 
+func generatedResolverKeyPair(t *testing.T) (string, string) {
+	t.Helper()
+	secretKey := nostrutil.GeneratePrivateKeyHex()
+	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(secretKey)
+	require.NoError(t, err)
+	return secretKey, pubkey
+}
+
 func signedEndpointEvent(t *testing.T, secretKey string, fqdn string, createdAt nostr.Timestamp, content map[string]any, tags nostr.Tags) *nostr.Event {
 	t.Helper()
 	if tags.GetD() == "" {
@@ -287,16 +282,18 @@ func signedEndpointEvent(t *testing.T, secretKey string, fqdn string, createdAt 
 	}
 	body, err := json.Marshal(content)
 	require.NoError(t, err)
-	pubkey, err := nostr.GetPublicKey(secretKey)
+	pubkeyHex, err := nostrutil.PublicKeyHexFromPrivateKeyHex(secretKey)
+	require.NoError(t, err)
+	pubkey, err := nostrutil.PubKeyFromHex(pubkeyHex)
 	require.NoError(t, err)
 	event := &nostr.Event{
 		PubKey:    pubkey,
 		CreatedAt: createdAt,
-		Kind:      KindDNSEndpointState,
+		Kind:      nostr.Kind(KindDNSEndpointState),
 		Tags:      tags,
 		Content:   string(body),
 	}
-	require.NoError(t, event.Sign(secretKey))
+	require.NoError(t, nostrutil.SignEventWithHexKey(event, secretKey))
 	return event
 }
 

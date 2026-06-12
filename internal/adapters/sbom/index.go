@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // Nostr event kinds for SBOM attestations and indexes.
@@ -117,7 +118,7 @@ func (p *IndexPublisher) PublishAttestation(ctx context.Context, input PublishAt
 		return "", fmt.Errorf("publishing attestation event: %w", err)
 	}
 
-	return ev.ID, nil
+	return nostrutil.EventIDHex(ev), nil
 }
 
 // PublishIndexInput contains input for publishing/updating an SBOM index event.
@@ -175,7 +176,7 @@ func (p *IndexPublisher) PublishIndex(ctx context.Context, input PublishIndexInp
 		return "", fmt.Errorf("publishing index event: %w", err)
 	}
 
-	return ev.ID, nil
+	return nostrutil.EventIDHex(ev), nil
 }
 
 // AddToIndex adds a new SBOM entry to an existing index.
@@ -219,7 +220,7 @@ func BuildIndexEntry(att *domain.SBOMAttestation, attestationEventID string) (*d
 
 // ParseIndexFromEvent parses an SBOM index from a Nostr event.
 func ParseIndexFromEvent(ev *nostr.Event) (*domain.SBOMIndex, error) {
-	if ev.Kind != KindSBOMIndex {
+	if int(ev.Kind) != KindSBOMIndex {
 		return nil, fmt.Errorf("invalid event kind: %d", ev.Kind)
 	}
 
@@ -233,7 +234,7 @@ func ParseIndexFromEvent(ev *nostr.Event) (*domain.SBOMIndex, error) {
 
 // ParseAttestationFromEvent parses an SBOM attestation from a Nostr event.
 func ParseAttestationFromEvent(ev *nostr.Event) (*domain.SBOMAttestation, error) {
-	if ev.Kind != KindSBOMAttestation {
+	if int(ev.Kind) != KindSBOMAttestation {
 		return nil, fmt.Errorf("invalid event kind: %d", ev.Kind)
 	}
 
@@ -243,7 +244,7 @@ func ParseAttestationFromEvent(ev *nostr.Event) (*domain.SBOMAttestation, error)
 // FilterForArtifactSBOMs returns a Nostr filter for finding SBOM indexes for an artifact.
 func FilterForArtifactSBOMs(artifactDigest string) nostr.Filter {
 	return nostr.Filter{
-		Kinds: []int{KindSBOMIndex},
+		Kinds: []nostr.Kind{KindSBOMIndex},
 		Tags: map[string][]string{
 			TagSBOMRef: {artifactDigest},
 		},
@@ -253,7 +254,7 @@ func FilterForArtifactSBOMs(artifactDigest string) nostr.Filter {
 // FilterForAttestations returns a Nostr filter for finding SBOM attestations.
 func FilterForAttestations(subjectDigest string) nostr.Filter {
 	return nostr.Filter{
-		Kinds: []int{KindSBOMAttestation},
+		Kinds: []nostr.Kind{KindSBOMAttestation},
 		Tags: map[string][]string{
 			TagSubjectDigest: {subjectDigest},
 		},

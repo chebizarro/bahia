@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -36,7 +37,7 @@ func (f *fakeLoomRelayPool) AuthenticateRelay(context.Context, string) error {
 
 func testClient(t *testing.T, sub *nostrAdapter.MergedSubscription, clientSK string) (*Client, *fakeLoomRelayPool, string) {
 	t.Helper()
-	clientPK, err := nostr.GetPublicKey(clientSK)
+	clientPK, err := nostrutil.PublicKeyHexFromPrivateKeyHex(clientSK)
 	if err != nil {
 		t.Fatalf("derive client pubkey: %v", err)
 	}
@@ -63,12 +64,12 @@ func testSubscription(events <-chan *nostr.Event, eose <-chan struct{}, relayEOS
 func signLoomEvent(t *testing.T, sk string, kind int, createdAt time.Time, tags nostr.Tags, content string) *nostr.Event {
 	t.Helper()
 	ev := &nostr.Event{
-		Kind:      kind,
+		Kind:      nostr.Kind(kind),
 		Content:   content,
 		CreatedAt: nostr.Timestamp(createdAt.Unix()),
 		Tags:      tags,
 	}
-	if err := ev.Sign(sk); err != nil {
+	if err := nostrutil.SignEventWithHexKey(ev, sk); err != nil {
 		t.Fatalf("sign event: %v", err)
 	}
 	return ev
@@ -97,10 +98,26 @@ func validStatusEvent(t *testing.T, workerSK, jobID, clientPK, status string) *n
 	}, "running logs")
 }
 
+func generatedKeyPair(t *testing.T) (string, string) {
+	t.Helper()
+	secret := nostrutil.GeneratePrivateKeyHex()
+	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(secret)
+	if err != nil {
+		t.Fatalf("derive pubkey: %v", err)
+	}
+	return secret, pubkey
+}
+
+func assertAuthor(t *testing.T, got []nostr.PubKey, want string, label string) {
+	t.Helper()
+	if len(got) != 1 || got[0].Hex() != want {
+		t.Fatalf("%s authors = %#v, want %s", label, got, want)
+	}
+}
+
 func TestPollJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
-	workerSK := nostr.GeneratePrivateKey()
-	workerPK, _ := nostr.GetPublicKey(workerSK)
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("a", 64)
 
 	events := make(chan *nostr.Event, 1)
@@ -130,16 +147,13 @@ func TestPollJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
 	if got := pool.filters[0].Tags["p"]; len(got) != 1 || got[0] != clientPK {
 		t.Fatalf("status filter p tag = %#v, want client pubkey", got)
 	}
-	if got := pool.filters[1].Authors; len(got) != 1 || got[0] != workerPK {
-		t.Fatalf("result filter authors = %#v, want worker", got)
-	}
+	assertAuthor(t, pool.filters[1].Authors, workerPK, "result filter")
 }
 
 func TestPollJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
-	workerSK := nostr.GeneratePrivateKey()
-	workerPK, _ := nostr.GetPublicKey(workerSK)
-	otherWorkerSK := nostr.GeneratePrivateKey()
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
+	otherWorkerSK, _ := generatedKeyPair(t)
 	jobID := strings.Repeat("b", 64)
 	otherJobID := strings.Repeat("c", 64)
 
@@ -221,10 +235,9 @@ func TestPollJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
 }
 
 func TestPollJobStatus_UsesRememberedSubmittedWorkerForValidation(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
-	workerSK := nostr.GeneratePrivateKey()
-	workerPK, _ := nostr.GetPublicKey(workerSK)
-	otherWorkerSK := nostr.GeneratePrivateKey()
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
+	otherWorkerSK, _ := generatedKeyPair(t)
 	jobID := strings.Repeat("3", 64)
 
 	events := make(chan *nostr.Event, 2)
@@ -241,15 +254,12 @@ func TestPollJobStatus_UsesRememberedSubmittedWorkerForValidation(t *testing.T) 
 	if status.WorkerPubkey != workerPK {
 		t.Fatalf("worker pubkey = %q, want remembered worker %q", status.WorkerPubkey, workerPK)
 	}
-	if got := pool.filters[0].Authors; len(got) != 1 || got[0] != workerPK {
-		t.Fatalf("status filter authors = %#v, want remembered worker", got)
-	}
+	assertAuthor(t, pool.filters[0].Authors, workerPK, "status filter")
 }
 
 func TestPollJobStatusFromWorker_DeduplicatesStatusCallbacks(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
-	workerSK := nostr.GeneratePrivateKey()
-	workerPK, _ := nostr.GetPublicKey(workerSK)
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("d", 64)
 
 	events := make(chan *nostr.Event, 3)
@@ -276,9 +286,8 @@ func TestPollJobStatusFromWorker_DeduplicatesStatusCallbacks(t *testing.T) {
 }
 
 func TestPollJobStatusFromWorker_HandlesEOSEAndWaitsForRealtimeResult(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
-	workerSK := nostr.GeneratePrivateKey()
-	workerPK, _ := nostr.GetPublicKey(workerSK)
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("e", 64)
 	events := make(chan *nostr.Event)
 	eose := make(chan struct{})
@@ -301,9 +310,8 @@ func TestPollJobStatusFromWorker_HandlesEOSEAndWaitsForRealtimeResult(t *testing
 }
 
 func TestPollJobStatusFromWorker_ContinuesAfterRelayClosedWhenResultArrives(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
-	workerSK := nostr.GeneratePrivateKey()
-	workerPK, _ := nostr.GetPublicKey(workerSK)
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("2", 64)
 	events := make(chan *nostr.Event, 1)
 	closed := make(chan nostrAdapter.RelayClosed, 1)
@@ -323,7 +331,7 @@ func TestPollJobStatusFromWorker_ContinuesAfterRelayClosedWhenResultArrives(t *t
 }
 
 func TestPollJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
+	clientSK, _ := generatedKeyPair(t)
 	jobID := strings.Repeat("f", 64)
 	closed := make(chan nostrAdapter.RelayClosed, 1)
 	closed <- nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub", Reason: "auth-required: restricted"}
@@ -341,7 +349,7 @@ func TestPollJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
 }
 
 func TestPollJobStatusFromWorker_ClosedWithoutTerminalResultIsSurfaced(t *testing.T) {
-	clientSK := nostr.GeneratePrivateKey()
+	clientSK, _ := generatedKeyPair(t)
 	jobID := strings.Repeat("1", 64)
 	events := make(chan *nostr.Event)
 	close(events)

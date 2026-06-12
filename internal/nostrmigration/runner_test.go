@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -60,8 +61,8 @@ func TestRunnerMigratesLocalLegacyRecordAndRecordsCanonicalEvent(t *testing.T) {
 	require.NoError(t, runner.Run(ctx))
 	require.Len(t, publisher.events, 1)
 	published := publisher.events[0]
-	require.Equal(t, CanonicalContextVMMessage, published.Kind)
-	require.NotEmpty(t, published.ID)
+	require.Equal(t, gonostr.Kind(CanonicalContextVMMessage), published.Kind)
+	require.NotEmpty(t, published.ID.Hex())
 	require.Contains(t, tagValues(published.Tags, "migrated-from"), legacy.ID)
 	require.Contains(t, tagValues(published.Tags, "legacy-kind"), "5961")
 	require.Contains(t, tagValues(published.Tags, "method"), "service/deploy")
@@ -123,11 +124,29 @@ func TestRunnerMigratesRelayBackfillUntilEOSE(t *testing.T) {
 
 	require.NoError(t, runner.Run(ctx))
 	require.Len(t, subscriber.filters, 1)
-	require.Contains(t, subscriber.filters[0][0].Kinds, kinds.PackagePromotionRequest)
+	require.Contains(t, subscriber.filters[0][0].Kinds, gonostr.Kind(kinds.PackagePromotionRequest))
 	require.Len(t, publisher.events, 1)
-	found, err := repo.FindByTag(ctx, "migrated-from", legacy.ID, []int{CanonicalContextVMMessage}, 10)
+	found, err := repo.FindByTag(ctx, "migrated-from", nostrutil.EventIDHex(legacy), []int{CanonicalContextVMMessage}, 10)
 	require.NoError(t, err)
 	require.Len(t, found, 1)
+}
+
+func TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
+	legacy.Content = `{"tampered":true}`
+	subscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
+	runner := NewRunner(repo, publisher, subscriber, Config{PrivateKey: deterministicPrivateKey(t), RelayBackfill: true}, zap.NewNop())
+
+	err := runner.Run(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate relay legacy event")
+	require.Empty(t, publisher.events)
+	records, listErr := repo.ListByKinds(ctx, []int{kinds.PackagePromotionRequest}, 10)
+	require.NoError(t, listErr)
+	require.Empty(t, records)
 }
 
 func TestRunnerDryRunDoesNotPublishOrRecordCanonicalEvent(t *testing.T) {
@@ -147,8 +166,8 @@ func TestRunnerDryRunDoesNotPublishOrRecordCanonicalEvent(t *testing.T) {
 
 func signedLegacyEvent(t *testing.T, kind int, createdAt time.Time) *gonostr.Event {
 	t.Helper()
-	ev := &gonostr.Event{Kind: kind, CreatedAt: gonostr.Timestamp(createdAt.Unix()), Content: `{"ok":true}`, Tags: gonostr.Tags{{"d", "legacy-d"}}}
-	require.NoError(t, ev.Sign(deterministicPrivateKey(t)))
+	ev := &gonostr.Event{Kind: gonostr.Kind(kind), CreatedAt: gonostr.Timestamp(createdAt.Unix()), Content: `{"ok":true}`, Tags: gonostr.Tags{{"d", "legacy-d"}}}
+	require.NoError(t, nostrutil.SignEventWithHexKey(ev, deterministicPrivateKey(t)))
 	return ev
 }
 

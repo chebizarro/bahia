@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 func TestNewClient(t *testing.T) {
@@ -23,7 +24,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestNewClient_WithSecretKey(t *testing.T) {
-	sk := nostr.GeneratePrivateKey()
+	sk := nostrutil.GeneratePrivateKeyHex()
 	client, err := NewClient(Config{ClientSecretKey: sk}, nil)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
@@ -144,8 +145,8 @@ func TestClient_Sign_ExplicitMockMode(t *testing.T) {
 	}
 
 	assertValidSignature(t, event)
-	if event.PubKey != wantPubkey {
-		t.Errorf("event.PubKey = %s, want explicit mock client pubkey %s", event.PubKey, wantPubkey)
+	if event.PubKey.Hex() != wantPubkey {
+		t.Errorf("event.PubKey = %s, want explicit mock client pubkey %s", event.PubKey.Hex(), wantPubkey)
 	}
 
 	secondEvent := newTestEvent()
@@ -153,8 +154,8 @@ func TestClient_Sign_ExplicitMockMode(t *testing.T) {
 		t.Fatalf("second Sign() error = %v", err)
 	}
 	assertValidSignature(t, secondEvent)
-	if secondEvent.PubKey != wantPubkey {
-		t.Errorf("second event.PubKey = %s, want stable explicit mock client pubkey %s", secondEvent.PubKey, wantPubkey)
+	if secondEvent.PubKey.Hex() != wantPubkey {
+		t.Errorf("second event.PubKey = %s, want stable explicit mock client pubkey %s", secondEvent.PubKey.Hex(), wantPubkey)
 	}
 }
 
@@ -173,8 +174,8 @@ func TestClient_SignAs_ExplicitMockMode(t *testing.T) {
 	}
 
 	assertValidSignature(t, event)
-	if event.PubKey != pubkey {
-		t.Errorf("event.PubKey = %s, want %s", event.PubKey, pubkey)
+	if event.PubKey.Hex() != pubkey {
+		t.Errorf("event.PubKey = %s, want %s", event.PubKey.Hex(), pubkey)
 	}
 }
 
@@ -383,18 +384,14 @@ func newTestEvent() *nostr.Event {
 func assertValidSignature(t *testing.T, event *nostr.Event) {
 	t.Helper()
 
-	if event.PubKey == "" {
+	if event.PubKey == nostr.ZeroPK {
 		t.Fatal("event.PubKey should be set after signing")
 	}
-	if event.Sig == "" {
+	if event.Sig == [64]byte{} {
 		t.Fatal("event.Sig should be set after signing")
 	}
 
-	ok, err := event.CheckSignature()
-	if err != nil {
-		t.Fatalf("CheckSignature() error = %v", err)
-	}
-	if !ok {
+	if !event.VerifySignature() {
 		t.Fatal("signature should be valid")
 	}
 }

@@ -16,9 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip19"
-	"github.com/nbd-wtf/go-nostr/nip46"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
+	"fiatjaf.com/nostr/nip46"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 var (
@@ -45,7 +46,7 @@ const (
 type Client struct {
 	bunkerURI       string
 	relays          []string
-	pool            *nostr.SimplePool
+	pool            *nostr.Pool
 	logger          *slog.Logger
 	clientSecretKey string // Ephemeral key for NIP-46 session
 	allowMock       bool   // Explicit test/dev-only mock signing mode
@@ -84,13 +85,13 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 	// Generate ephemeral client key if not provided
 	clientSK := config.ClientSecretKey
 	if clientSK == "" {
-		clientSK = nostr.GeneratePrivateKey()
+		clientSK = nostrutil.GeneratePrivateKeyHex()
 	}
 
 	c := &Client{
 		bunkerURI:       config.BunkerURI,
 		relays:          config.Relays,
-		pool:            nostr.NewSimplePool(context.Background()),
+		pool:            nostr.NewPool(),
 		logger:          logger.With("component", "signet"),
 		clientSecretKey: clientSK,
 		allowMock:       config.AllowMock,
@@ -120,10 +121,15 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	c.logger.Info("connecting to Signet bunker", "uri", c.bunkerURI)
 
-	// Connect using go-nostr's NIP-46 implementation
+	// Connect using the canonical NIP-46 implementation.
+	clientSecret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
+	if err != nil {
+		return fmt.Errorf("decode Signet client secret key: %w", err)
+	}
+
 	bunker, err := nip46.ConnectBunker(
 		ctx,
-		c.clientSecretKey,
+		clientSecret,
 		c.bunkerURI,
 		c.pool,
 		func(authURL string) {
@@ -207,7 +213,11 @@ func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKind
 		return "", "", "", fmt.Errorf("parse provision response: %w", err)
 	}
 
-	npubEncoded, _ := nip19.EncodePublicKey(resp.Pubkey)
+	provisionedPubKey, err := nostrutil.PubKeyFromHex(resp.Pubkey)
+	if err != nil {
+		return "", "", "", fmt.Errorf("decode provisioned pubkey: %w", err)
+	}
+	npubEncoded := nip19.EncodeNpub(provisionedPubKey)
 
 	identity := &AgentIdentity{
 		AgentID:   agentID,
@@ -231,9 +241,9 @@ func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKind
 
 // provisionAgentMock creates a mock agent identity for testing without a bunker.
 func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI string, err error) {
-	mockSK := nostr.GeneratePrivateKey()
-	mockPK, _ := nostr.GetPublicKey(mockSK)
-	mockNpub, _ := nip19.EncodePublicKey(mockPK)
+	mockSK := nostrutil.GeneratePrivateKeyHex()
+	mockPK, _ := nostrutil.PublicKeyHexFromPrivateKeyHex(mockSK)
+	mockNpub, _ := nostrutil.EncodeNpubFromHex(mockPK)
 
 	// Build an intentionally non-production URI so test/dev mock identities are obvious.
 	agentBunkerURI := fmt.Sprintf("mock-bunker://%s", mockPK)
@@ -322,9 +332,13 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 
 	// Connect to agent's bunker if needed
 	if identity.bunkerClient == nil {
+		clientSecret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
+		if err != nil {
+			return fmt.Errorf("decode Signet client secret key: %w", err)
+		}
 		bunker, err := nip46.ConnectBunker(
 			ctx,
-			c.clientSecretKey,
+			clientSecret,
 			identity.BunkerURI,
 			c.pool,
 			nil,
@@ -535,7 +549,10 @@ func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 	}
 
 	if mockMode {
-		pk, _ := nostr.GetPublicKey(c.clientSecretKey)
+		pk, err := nostrutil.PublicKeyHexFromPrivateKeyHex(c.clientSecretKey)
+		if err != nil {
+			return "", fmt.Errorf("derive mock public key: %w", err)
+		}
 		return pk, nil
 	}
 
@@ -543,7 +560,11 @@ func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 		return "", ErrNotConnected
 	}
 
-	return bunker.GetPublicKey(ctx)
+	pubkey, err := bunker.GetPublicKey(ctx)
+	if err != nil {
+		return "", err
+	}
+	return pubkey.Hex(), nil
 }
 
 // --- NIP-98 Auth Helpers ---
@@ -630,13 +651,7 @@ func signEventWithKey(event *nostr.Event, secretKey string) error {
 		return ErrInvalidEvent
 	}
 
-	pubkey, err := nostr.GetPublicKey(secretKey)
-	if err != nil {
-		return fmt.Errorf("derive public key: %w", err)
-	}
-	event.PubKey = pubkey
-
-	if err := event.Sign(secretKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(event, secretKey); err != nil {
 		return fmt.Errorf("sign event: %w", err)
 	}
 

@@ -26,6 +26,42 @@
         "Representative remaining consumers include internal/notifications/nostr_dm.go, internal/controlplane/* publishers/reactors, pkg/client/*, pkg/discovery/*, cmd/cli/*, internal/soulfactory/*, internal/fipsbridge/*, and other non-core adapters."
       ],
       "acceptance_criteria": ["AC-ITEM1-005"]
+    },
+    {
+      "command": "scoped file_search: github.com/nbd-wtf/go-nostr|go-nostr in Item 2 paths",
+      "result": "passed",
+      "evidence": [
+        "0 matches across internal/adapters/{secrets,signet,loom,hiveci,blossom,sbom,signing}, internal/auth, internal/fipsbridge, internal/notifications, internal/nostrmigration, and pkg/discovery"
+      ],
+      "acceptance_criteria": ["AC-ITEM2-001"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/adapters/secrets ./internal/adapters/signet ./internal/adapters/loom ./internal/adapters/hiveci ./internal/adapters/blossom ./internal/adapters/sbom ./internal/adapters/signing ./internal/auth ./internal/fipsbridge ./internal/notifications ./internal/nostrmigration ./pkg/discovery",
+      "result": "passed",
+      "evidence": [
+        "ok github.com/openagentsinc/bahia/internal/adapters/secrets (cached)",
+        "ok github.com/openagentsinc/bahia/internal/adapters/signet (cached)",
+        "ok github.com/openagentsinc/bahia/internal/adapters/loom (cached)",
+        "ok github.com/openagentsinc/bahia/internal/adapters/hiveci (cached)",
+        "ok github.com/openagentsinc/bahia/internal/adapters/blossom (cached)",
+        "ok github.com/openagentsinc/bahia/internal/adapters/sbom (cached)",
+        "ok github.com/openagentsinc/bahia/internal/adapters/signing (cached)",
+        "ok github.com/openagentsinc/bahia/internal/auth (cached)",
+        "ok github.com/openagentsinc/bahia/internal/fipsbridge (cached)",
+        "ok github.com/openagentsinc/bahia/internal/notifications (cached)",
+        "ok github.com/openagentsinc/bahia/internal/nostrmigration (cached)",
+        "ok github.com/openagentsinc/bahia/pkg/discovery (cached)"
+      ],
+      "acceptance_criteria": ["AC-ITEM2-002", "AC-ITEM2-003"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/nostrmigration",
+      "result": "passed",
+      "evidence": [
+        "ok github.com/openagentsinc/bahia/internal/nostrmigration 0.270s",
+        "TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording rejects a tampered relay backfill event before repository recording or migration publishing"
+      ],
+      "acceptance_criteria": ["AC-ITEM2-003"]
     }
   ]
 }

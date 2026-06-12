@@ -17,7 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // testLogger returns a logger that discards all output
@@ -367,8 +368,8 @@ func TestClient_CreateAuthHeader_NoPrivateKey(t *testing.T) {
 
 func TestClient_CreateAuthHeader_WithPrivateKey(t *testing.T) {
 	// Generate a test private key
-	privateKey := nostr.GeneratePrivateKey()
-	pubkey, _ := nostr.GetPublicKey(privateKey)
+	privateKey := nostrutil.GeneratePrivateKeyHex()
+	pubkey, _ := nostrutil.PublicKeyHexFromPrivateKeyHex(privateKey)
 
 	client := NewClient(Config{
 		Servers:       []string{"https://example.com"},
@@ -405,8 +406,8 @@ func TestClient_CreateAuthHeader_WithPrivateKey(t *testing.T) {
 	if event.Kind != 24242 {
 		t.Errorf("event.Kind = %d, want 24242", event.Kind)
 	}
-	if event.PubKey != pubkey {
-		t.Errorf("event.PubKey = %s, want %s", event.PubKey, pubkey)
+	if event.PubKey.Hex() != pubkey {
+		t.Errorf("event.PubKey = %s, want %s", event.PubKey.Hex(), pubkey)
 	}
 
 	// Verify tags per BUD-11
@@ -442,17 +443,13 @@ func TestClient_CreateAuthHeader_WithPrivateKey(t *testing.T) {
 	}
 
 	// Verify signature
-	ok, err := event.CheckSignature()
-	if err != nil {
-		t.Fatalf("CheckSignature() error = %v", err)
-	}
-	if !ok {
+	if !event.VerifySignature() {
 		t.Error("event signature is invalid")
 	}
 }
 
 func TestClient_CreateAuthHeader_NoPayload(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
+	privateKey := nostrutil.GeneratePrivateKeyHex()
 
 	client := NewClient(Config{
 		Servers:       []string{"https://example.com"},
@@ -479,7 +476,7 @@ func TestClient_CreateAuthHeader_NoPayload(t *testing.T) {
 }
 
 func TestClient_Upload_WithAuth(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
+	privateKey := nostrutil.GeneratePrivateKeyHex()
 	data := []byte("authenticated upload")
 	hash := sha256.Sum256(data)
 	hashStr := hex.EncodeToString(hash[:])

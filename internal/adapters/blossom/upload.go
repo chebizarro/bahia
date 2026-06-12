@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"strconv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // Upload uploads data to the first available Blossom server.
@@ -160,9 +161,13 @@ func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash 
 	}
 
 	// Get public key from private key
-	pubkey, err := nostr.GetPublicKey(c.privateKey)
+	pubkeyHex, err := nostrutil.PublicKeyHexFromPrivateKeyHex(c.privateKey)
 	if err != nil {
 		return "", fmt.Errorf("deriving public key: %w", err)
+	}
+	pubkey, err := nostrutil.PubKeyFromHex(pubkeyHex)
+	if err != nil {
+		return "", fmt.Errorf("decoding public key: %w", err)
 	}
 
 	// Determine the action verb from the HTTP method
@@ -201,7 +206,7 @@ func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash 
 	}
 
 	// Sign the event
-	if err := event.Sign(c.privateKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(event, c.privateKey); err != nil {
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 

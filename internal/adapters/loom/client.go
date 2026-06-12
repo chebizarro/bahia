@@ -19,11 +19,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip44"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -116,7 +117,7 @@ func NewClient(cfg config.LoomConfig, nostrPrivateKey string, pool *nostrAdapter
 
 	clientPubkey := ""
 	if nostrPrivateKey != "" {
-		pubkey, err := nostr.GetPublicKey(nostrPrivateKey)
+		pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(nostrPrivateKey)
 		if err == nil {
 			clientPubkey = pubkey
 		} else {
@@ -233,7 +234,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		Tags:      tags,
 	}
 
-	if err := ev.Sign(c.privateKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(&ev, c.privateKey); err != nil {
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 
@@ -241,10 +242,11 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("publishing job request: %w", err)
 	}
-	c.rememberSubmittedWorker(ev.ID, workerPubkey)
+	eventID := nostrutil.EventIDHex(&ev)
+	c.rememberSubmittedWorker(eventID, workerPubkey)
 
 	c.logger.Info("loom job submitted",
-		zap.String("event_id", ev.ID),
+		zap.String("event_id", eventID),
 		zap.String("service", job.Service),
 		zap.String("environment", job.Environment),
 		zap.String("worker", workerPubkey),
@@ -252,7 +254,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		zap.Int("relays", published),
 	)
 
-	return ev.ID, nil
+	return eventID, nil
 }
 
 // PollJobStatus subscribes to Kind 30100 (status) and Kind 5101 (result) events
@@ -273,6 +275,11 @@ func (c *Client) PollJobStatusFromWorker(ctx context.Context, jobEventID string,
 
 	if expectedWorkerPubkey == "" {
 		expectedWorkerPubkey = c.submittedWorker(jobEventID)
+	}
+	if expectedWorkerPubkey != "" {
+		if _, err := nostrutil.PubKeyFromHex(expectedWorkerPubkey); err != nil {
+			return nil, fmt.Errorf("invalid expected Loom worker pubkey: %w", err)
+		}
 	}
 	filters := c.jobStatusFilters(jobEventID, expectedWorkerPubkey)
 
@@ -333,27 +340,28 @@ resubscribe:
 			if err := c.validateJobEvent(ev, jobEventID, expectedWorkerPubkey); err != nil {
 				c.logger.Warn("dropping invalid Loom job event",
 					zap.String("job_id", jobEventID),
-					zap.String("event_id", ev.ID),
-					zap.Int("kind", ev.Kind),
+					zap.String("event_id", nostrutil.EventIDHex(ev)),
+					zap.Int("kind", int(ev.Kind)),
 					zap.Error(err),
 				)
 				continue
 			}
-			if seen.IsDuplicate(ev.ID) {
+			eventID := nostrutil.EventIDHex(ev)
+			if seen.IsDuplicate(eventID) {
 				c.logger.Debug("skipping duplicate Loom job event",
 					zap.String("job_id", jobEventID),
-					zap.String("event_id", ev.ID),
-					zap.Int("kind", ev.Kind),
+					zap.String("event_id", eventID),
+					zap.Int("kind", int(ev.Kind)),
 				)
 				continue
 			}
 
-			switch ev.Kind {
+			switch int(ev.Kind) {
 			case KindJobStatus:
 				// Intermediate status update — record it.
 				status := getTagValue(ev.Tags, "status")
 				latest.Status = status
-				latest.WorkerPubkey = ev.PubKey
+				latest.WorkerPubkey = nostrutil.EventPubKeyHex(ev)
 				if ev.Content != "" {
 					latest.LogOutput = ev.Content
 				}
@@ -378,14 +386,14 @@ resubscribe:
 
 func (c *Client) jobStatusFilters(jobEventID string, expectedWorkerPubkey string) []nostr.Filter {
 	statusFilter := nostr.Filter{
-		Kinds: []int{KindJobStatus},
+		Kinds: []nostr.Kind{KindJobStatus},
 		Tags: nostr.TagMap{
 			"d": {jobEventID},
 			"e": {jobEventID},
 		},
 	}
 	resultFilter := nostr.Filter{
-		Kinds: []int{KindJobResult},
+		Kinds: []nostr.Kind{KindJobResult},
 		Tags:  nostr.TagMap{"e": {jobEventID}},
 	}
 	if c.clientPubkey != "" {
@@ -393,8 +401,10 @@ func (c *Client) jobStatusFilters(jobEventID string, expectedWorkerPubkey string
 		resultFilter.Tags["p"] = []string{c.clientPubkey}
 	}
 	if expectedWorkerPubkey != "" {
-		statusFilter.Authors = []string{expectedWorkerPubkey}
-		resultFilter.Authors = []string{expectedWorkerPubkey}
+		if pubkey, err := nostrutil.PubKeyFromHex(expectedWorkerPubkey); err == nil {
+			statusFilter.Authors = []nostr.PubKey{pubkey}
+			resultFilter.Authors = []nostr.PubKey{pubkey}
+		}
 	}
 	return []nostr.Filter{statusFilter, resultFilter}
 }
@@ -450,17 +460,17 @@ func (c *Client) validateJobEvent(ev *nostr.Event, jobEventID string, expectedWo
 	if err := nostrAdapter.ValidateInboundEvent(ev, time.Now().UTC(), nostrAdapter.InboundEventMaxFutureSkew); err != nil {
 		return err
 	}
-	if ev.Kind != KindJobStatus && ev.Kind != KindJobResult {
+	if int(ev.Kind) != KindJobStatus && int(ev.Kind) != KindJobResult {
 		return fmt.Errorf("unexpected Loom job event kind %d", ev.Kind)
 	}
-	if expectedWorkerPubkey != "" && ev.PubKey != expectedWorkerPubkey {
+	if expectedWorkerPubkey != "" && nostrutil.EventPubKeyHex(ev) != expectedWorkerPubkey {
 		return fmt.Errorf("worker pubkey mismatch")
 	}
 	if c.clientPubkey != "" && getTagValue(ev.Tags, "p") != c.clientPubkey {
 		return fmt.Errorf("client pubkey tag mismatch")
 	}
 
-	switch ev.Kind {
+	switch int(ev.Kind) {
 	case KindJobStatus:
 		if err := requireTagValue(ev.Tags, "d", jobEventID); err != nil {
 			return err
@@ -547,7 +557,7 @@ func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey 
 		Tags:      tags,
 	}
 
-	if err := ev.Sign(c.privateKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(&ev, c.privateKey); err != nil {
 		return fmt.Errorf("signing cancellation event: %w", err)
 	}
 
@@ -589,7 +599,7 @@ func (c *Client) selectWorker(ctx context.Context) (string, error) {
 
 // encryptSecrets encrypts secret env vars using NIP-44 with the worker's pubkey.
 func (c *Client) encryptSecrets(secrets map[string]string, workerPubkey string) (nostr.Tags, error) {
-	conversationKey, err := nip44.GenerateConversationKey(workerPubkey, c.privateKey)
+	conversationKey, err := nostrutil.NIP44ConversationKey(workerPubkey, c.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("generating conversation key: %w", err)
 	}
@@ -642,7 +652,7 @@ func shellQuote(s string) string {
 func parseJobResult(ev *nostr.Event, jobEventID string) *JobStatus {
 	result := &JobStatus{
 		JobID:        jobEventID,
-		WorkerPubkey: ev.PubKey,
+		WorkerPubkey: nostrutil.EventPubKeyHex(ev),
 	}
 
 	if s := getTagValue(ev.Tags, "success"); s != "" {

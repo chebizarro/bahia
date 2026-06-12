@@ -8,7 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // NIP98 event kind for HTTP Auth (RFC 7235 reference).
@@ -76,11 +77,7 @@ func (v *NIP98Validator) Validate(authToken string, r *http.Request) (*Principal
 	if !ev.CheckID() {
 		return nil, fmt.Errorf("event ID mismatch")
 	}
-	ok, err := ev.CheckSignature()
-	if err != nil {
-		return nil, fmt.Errorf("signature check error: %w", err)
-	}
-	if !ok {
+	if !ev.VerifySignature() {
 		return nil, fmt.Errorf("invalid signature")
 	}
 
@@ -115,14 +112,14 @@ func (v *NIP98Validator) Validate(authToken string, r *http.Request) (*Principal
 	}
 
 	// 6. Replay protection.
-	if !v.markSeen(ev.ID, eventTime) {
+	if !v.markSeen(ev.ID.Hex(), eventTime) {
 		return nil, fmt.Errorf("event ID already used (replay)")
 	}
 
 	return &Principal{
-		Subject: ev.PubKey,
+		Subject: nostrutil.PubKeyHex(ev.PubKey),
 		Method:  MethodNIP98,
-		PubKey:  ev.PubKey,
+		PubKey:  nostrutil.PubKeyHex(ev.PubKey),
 	}, nil
 }
 

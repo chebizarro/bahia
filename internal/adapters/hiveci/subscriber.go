@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -84,7 +85,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) subscribe(ctx context.Context) error {
-	filters := []nostr.Filter{{Kinds: []int{kindWorkflowRun, kindWorkflowResult}}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{kindWorkflowRun, kindWorkflowResult}}}
 	authAttempted := make(map[string]struct{})
 	for {
 		if s.pool == nil {
@@ -180,8 +181,8 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		eventID := ""
 		kind := 0
 		if ev != nil {
-			eventID = ev.ID
-			kind = ev.Kind
+			eventID = nostrutil.EventIDHex(ev)
+			kind = int(ev.Kind)
 		}
 		s.logger.Warn("dropping invalid hiveci event before persistence",
 			zap.String("event_id", eventID),
@@ -191,7 +192,7 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		return
 	}
 
-	switch ev.Kind {
+	switch int(ev.Kind) {
 	case kindWorkflowRun:
 		s.handleWorkflowRun(ctx, ev)
 	case kindWorkflowResult:
@@ -200,44 +201,46 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 }
 
 func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
-	if _, ok := s.trusted[ev.PubKey]; !ok {
-		s.logger.Debug("ignoring untrusted hiveci workflow run", zap.String("event_id", ev.ID), zap.String("pubkey", ev.PubKey))
+	eventID := nostrutil.EventIDHex(ev)
+	pubkey := nostrutil.EventPubKeyHex(ev)
+	if _, ok := s.trusted[pubkey]; !ok {
+		s.logger.Debug("ignoring untrusted hiveci workflow run", zap.String("event_id", eventID), zap.String("pubkey", pubkey))
 		return
 	}
 
 	repoCoordinate, err := requiredTag(ev, "a")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	commit, err := requiredTag(ev, "commit")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	branch, err := requiredTag(ev, "branch")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	workflow, err := requiredTag(ev, "workflow")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	triggeredBy, err := requiredTag(ev, "triggered-by")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	publisher, err := requiredTag(ev, "publisher")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 
 	run := domain.HiveCIWorkflowRun{
-		RunEventID:      ev.ID,
+		RunEventID:      eventID,
 		RepoCoordinate:  repoCoordinate,
 		CommitSHA:       commit,
 		Branch:          branch,
@@ -249,13 +252,13 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 		ProcessingState: domain.HiveCIProcessingStatePendingResult,
 	}
 	if err := s.repo.UpsertWorkflowRun(ctx, run); err != nil {
-		s.logger.Warn("failed to persist hiveci workflow run", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("failed to persist hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
-	s.logger.Info("hiveci workflow run ingested", zap.String("run_event_id", ev.ID), zap.String("workflow", workflow), zap.String("commit", commit))
+	s.logger.Info("hiveci workflow run ingested", zap.String("run_event_id", eventID), zap.String("workflow", workflow), zap.String("commit", commit))
 
 	// Check for any orphaned results that arrived before this run
-	s.processOrphanedResults(ctx, ev.ID, publisher)
+	s.processOrphanedResults(ctx, eventID, publisher)
 }
 
 func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID, expectedPublisher string) {
@@ -289,43 +292,45 @@ func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID, exp
 }
 
 func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) {
+	eventID := nostrutil.EventIDHex(ev)
+	pubkey := nostrutil.EventPubKeyHex(ev)
 	runEventID, err := requiredTag(ev, "e")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	logURL, err := requiredTag(ev, "log_url")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	status, err := requiredTag(ev, "status")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	if status != "success" && status != "failure" {
-		s.logger.Warn("invalid hiveci workflow result status", zap.String("event_id", ev.ID), zap.String("status", status))
+		s.logger.Warn("invalid hiveci workflow result status", zap.String("event_id", eventID), zap.String("status", status))
 		return
 	}
 	exitCodeStr, err := requiredTag(ev, "exit_code")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	exitCode, err := strconv.Atoi(exitCodeStr)
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result exit_code", zap.String("event_id", ev.ID), zap.String("exit_code", exitCodeStr))
+		s.logger.Warn("invalid hiveci workflow result exit_code", zap.String("event_id", eventID), zap.String("exit_code", exitCodeStr))
 		return
 	}
 	durationStr, err := requiredTag(ev, "duration")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	duration, err := strconv.Atoi(durationStr)
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result duration", zap.String("event_id", ev.ID), zap.String("duration", durationStr))
+		s.logger.Warn("invalid hiveci workflow result duration", zap.String("event_id", eventID), zap.String("duration", durationStr))
 		return
 	}
 
@@ -340,9 +345,9 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	if run == nil {
 		// Result arrived before run - store as orphan to be processed when run arrives
 		processingState = domain.HiveCIProcessingStatePendingRun
-		s.logger.Info("hiveci workflow result arrived before run, storing as orphan", zap.String("run_event_id", runEventID), zap.String("result_event_id", ev.ID))
-	} else if run.PublisherPubkey != ev.PubKey {
-		s.logger.Warn("hiveci workflow result publisher mismatch", zap.String("run_event_id", runEventID), zap.String("expected", run.PublisherPubkey), zap.String("actual", ev.PubKey))
+		s.logger.Info("hiveci workflow result arrived before run, storing as orphan", zap.String("run_event_id", runEventID), zap.String("result_event_id", eventID))
+	} else if run.PublisherPubkey != pubkey {
+		s.logger.Warn("hiveci workflow result publisher mismatch", zap.String("run_event_id", runEventID), zap.String("expected", run.PublisherPubkey), zap.String("actual", pubkey))
 		return
 	}
 
@@ -369,7 +374,7 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	}
 
 	result := domain.HiveCIWorkflowResult{
-		ResultEventID:   ev.ID,
+		ResultEventID:   eventID,
 		RunEventID:      runEventID,
 		Status:          status,
 		ExitCode:        exitCode,
@@ -379,20 +384,20 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		ImageRepo:       imageRepo,
 		ImageTag:        imageTag,
 		ImageDigest:     imageDigest,
-		PublisherPubkey: ev.PubKey,
+		PublisherPubkey: pubkey,
 		EventCreatedAt:  ev.CreatedAt.Time(),
 		ProcessingState: processingState,
 	}
 
 	if err := s.repo.UpsertWorkflowResult(ctx, result); err != nil {
-		s.logger.Warn("failed to persist hiveci workflow result", zap.String("event_id", ev.ID), zap.Error(err))
+		s.logger.Warn("failed to persist hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	// Only invoke callback if we have the run (otherwise wait for run to arrive)
 	if run != nil && s.onResult != nil {
 		s.onResult(ctx, result.ResultEventID)
 	}
-	s.logger.Info("hiveci workflow result ingested", zap.String("run_event_id", runEventID), zap.String("result_event_id", ev.ID), zap.String("status", status), zap.String("processing_state", string(processingState)))
+	s.logger.Info("hiveci workflow result ingested", zap.String("run_event_id", runEventID), zap.String("result_event_id", eventID), zap.String("status", status), zap.String("processing_state", string(processingState)))
 }
 
 func requiredTag(ev *nostr.Event, key string) (string, error) {

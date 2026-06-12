@@ -9,9 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -154,6 +155,9 @@ func (r *Resolver) Start(ctx context.Context) error {
 	}
 	if strings.TrimSpace(r.authorPubkey) == "" {
 		return errors.New("discovery resolver start: author pubkey is required")
+	}
+	if _, err := nostrutil.PubKeyFromHex(r.authorPubkey); err != nil {
+		return fmt.Errorf("discovery resolver start: author pubkey must be valid hex: %w", err)
 	}
 
 	r.lifecycleMu.Lock()
@@ -503,9 +507,10 @@ func (r *Resolver) handleClosed(ctx context.Context, pool relayPool, closed nost
 }
 
 func (r *Resolver) subscriptionFilter() nostr.Filter {
+	pubkey, _ := nostrutil.PubKeyFromHex(r.authorPubkey)
 	return nostr.Filter{
-		Kinds:   []int{KindDNSEndpointState},
-		Authors: []string{r.authorPubkey},
+		Kinds:   []nostr.Kind{KindDNSEndpointState},
+		Authors: []nostr.PubKey{pubkey},
 	}
 }
 
@@ -541,11 +546,12 @@ func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error)
 	if err := nostradapter.ValidateInboundEvent(event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return Endpoint{}, false, err
 	}
-	if event.Kind != KindDNSEndpointState {
+	if int(event.Kind) != KindDNSEndpointState {
 		return Endpoint{}, false, fmt.Errorf("unexpected kind %d", event.Kind)
 	}
-	if r.authorPubkey != "" && event.PubKey != r.authorPubkey {
-		return Endpoint{}, false, fmt.Errorf("unexpected author %s", event.PubKey)
+	pubkey := nostrutil.EventPubKeyHex(event)
+	if r.authorPubkey != "" && pubkey != r.authorPubkey {
+		return Endpoint{}, false, fmt.Errorf("unexpected author %s", pubkey)
 	}
 
 	coordinate := event.Tags.GetD()
@@ -646,7 +652,7 @@ func eventID(event *nostr.Event) string {
 	if event == nil {
 		return ""
 	}
-	return event.ID
+	return nostrutil.EventIDHex(event)
 }
 
 func cloneEndpoint(endpoint Endpoint) Endpoint {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +69,7 @@ func TestBridgeHealthFilteringAddsAndRemovesHostsEntry(t *testing.T) {
 		{"npub", npub},
 	})
 	unhealthy.CreatedAt = healthy.CreatedAt + 1
-	require.NoError(t, unhealthy.Sign(testPrivateKey))
+	require.NoError(t, nostrutil.SignEventWithHexKey(unhealthy, testPrivateKey))
 	require.NoError(t, bridge.HandleEvent(context.Background(), unhealthy))
 	require.NotContains(t, bridge.entries, "drydock-review")
 }
@@ -84,8 +84,9 @@ func TestBridgeSubscriptionFilterUsesKindAndAuthorOnly(t *testing.T) {
 	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	filter := bridge.subscriptionFilter()
-	require.Equal(t, []int{KindDNSEndpointState}, filter.Kinds)
-	require.Equal(t, []string{pubkey}, filter.Authors)
+	require.Equal(t, []nostr.Kind{KindDNSEndpointState}, filter.Kinds)
+	require.Len(t, filter.Authors, 1)
+	require.Equal(t, pubkey, filter.Authors[0].Hex())
 	require.Empty(t, filter.Tags)
 }
 
@@ -107,7 +108,7 @@ func TestBridgeFiltersByCapabilityAndEnvironment(t *testing.T) {
 
 	matching := signedEndpointEvent(t, pubkey, `{"service":"drydock","env":"prod","health":"healthy","capabilities":["llm"]}`, nostr.Tags{{"dns", "drydock.prod.cascadia"}, {"npub", npub}})
 	matching.CreatedAt = wrongEnv.CreatedAt + 1
-	require.NoError(t, matching.Sign(testPrivateKey))
+	require.NoError(t, nostrutil.SignEventWithHexKey(matching, testPrivateKey))
 	require.NoError(t, bridge.HandleEvent(context.Background(), matching))
 	require.Equal(t, npub, bridge.entries["drydock"])
 }
@@ -119,16 +120,18 @@ func TestServiceLabelFromFQDNStripsZoneSuffix(t *testing.T) {
 
 func signedEndpointEvent(t *testing.T, pubkey, content string, tags nostr.Tags) *nostr.Event {
 	t.Helper()
-	ev := &nostr.Event{PubKey: pubkey, CreatedAt: nostr.Now(), Kind: KindDNSEndpointState, Tags: tags, Content: content}
-	require.NoError(t, ev.Sign(testPrivateKey))
+	pubkeyValue, err := nostrutil.PubKeyFromHex(pubkey)
+	require.NoError(t, err)
+	ev := &nostr.Event{PubKey: pubkeyValue, CreatedAt: nostr.Now(), Kind: KindDNSEndpointState, Tags: tags, Content: content}
+	require.NoError(t, nostrutil.SignEventWithHexKey(ev, testPrivateKey))
 	return ev
 }
 
 func testIdentity(t *testing.T) (string, string) {
 	t.Helper()
-	pubkey, err := nostr.GetPublicKey(testPrivateKey)
+	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(testPrivateKey)
 	require.NoError(t, err)
-	npub, err := nip19.EncodePublicKey(pubkey)
+	npub, err := nostrutil.EncodeNpubFromHex(pubkey)
 	require.NoError(t, err)
 	return pubkey, npub
 }

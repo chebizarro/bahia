@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip44"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -46,7 +47,7 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 	}
 
 	// Generate conversation key for NIP-44 encryption.
-	conversationKey, err := nip44.GenerateConversationKey(recipientPubkey, s.privateKey)
+	conversationKey, err := nostrutil.NIP44ConversationKey(recipientPubkey, s.privateKey)
 	if err != nil {
 		return fmt.Errorf("generating conversation key: %w", err)
 	}
@@ -66,7 +67,7 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 		},
 	}
 
-	if err := ev.Sign(s.privateKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(&ev, s.privateKey); err != nil {
 		return fmt.Errorf("signing DM event: %w", err)
 	}
 

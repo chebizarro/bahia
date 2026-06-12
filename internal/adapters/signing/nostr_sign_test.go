@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -24,27 +25,29 @@ func makeTestEvent(t *testing.T, privkey string, artifact *domain.Artifact, appr
 		t.Fatalf("marshaling attestation: %v", err)
 	}
 
-	pubkey, err := gonostr.GetPublicKey(privkey)
-	if err != nil {
-		t.Fatalf("getting public key: %v", err)
-	}
-
 	ev := &gonostr.Event{
-		Kind:    NostrSignatureKind,
-		PubKey:  pubkey,
+		Kind:    gonostr.Kind(NostrSignatureKind),
 		Content: string(content),
 		Tags:    gonostr.Tags{{"d", artifact.ImageDigest}},
 	}
-	err = ev.Sign(privkey)
-	if err != nil {
+	if err := nostrutil.SignEventWithHexKey(ev, privkey); err != nil {
 		t.Fatalf("signing event: %v", err)
 	}
 	return ev
 }
 
+func generatedNostrKeyPair(t *testing.T) (string, string) {
+	t.Helper()
+	privkey := nostrutil.GeneratePrivateKeyHex()
+	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(privkey)
+	if err != nil {
+		t.Fatalf("derive public key: %v", err)
+	}
+	return privkey, pubkey
+}
+
 func TestNostrVerifier_ValidTrustedEvent(t *testing.T) {
-	privkey := gonostr.GeneratePrivateKey()
-	pubkey, _ := gonostr.GetPublicKey(privkey)
+	privkey, pubkey := generatedNostrKeyPair(t)
 
 	artifact := &domain.Artifact{
 		ID:          uuid.New(),
@@ -77,8 +80,8 @@ func TestNostrVerifier_ValidTrustedEvent(t *testing.T) {
 }
 
 func TestNostrVerifier_UntrustedPubkey(t *testing.T) {
-	privkey := gonostr.GeneratePrivateKey()
-	otherPubkey, _ := gonostr.GetPublicKey(gonostr.GeneratePrivateKey())
+	privkey, _ := generatedNostrKeyPair(t)
+	_, otherPubkey := generatedNostrKeyPair(t)
 
 	artifact := &domain.Artifact{
 		ID:          uuid.New(),
@@ -109,8 +112,7 @@ func TestNostrVerifier_UntrustedPubkey(t *testing.T) {
 }
 
 func TestNostrVerifier_DigestMismatch(t *testing.T) {
-	privkey := gonostr.GeneratePrivateKey()
-	pubkey, _ := gonostr.GetPublicKey(privkey)
+	privkey, pubkey := generatedNostrKeyPair(t)
 
 	artifact := &domain.Artifact{
 		ID:          uuid.New(),
@@ -144,8 +146,7 @@ func TestNostrVerifier_DigestMismatch(t *testing.T) {
 }
 
 func TestNostrVerifier_DisapprovedAttestation(t *testing.T) {
-	privkey := gonostr.GeneratePrivateKey()
-	pubkey, _ := gonostr.GetPublicKey(privkey)
+	privkey, pubkey := generatedNostrKeyPair(t)
 
 	artifact := &domain.Artifact{
 		ID:          uuid.New(),

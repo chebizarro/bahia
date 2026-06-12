@@ -11,8 +11,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nbd-wtf/go-nostr/nip44"
+	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // Encryptor encrypts and decrypts secret values using the configured method.
@@ -75,7 +76,7 @@ func (e *Encryptor) ReEncryptForWorker(ciphertext []byte, method domain.Encrypti
 	}
 
 	// Re-encrypt using NIP-44 with the worker's pubkey.
-	conversationKey, err := nip44.GenerateConversationKey(workerPubkey, e.privateKey)
+	conversationKey, err := nostrutil.NIP44ConversationKey(workerPubkey, e.privateKey)
 	if err != nil {
 		return "", fmt.Errorf("generating conversation key for worker: %w", err)
 	}
@@ -91,8 +92,8 @@ func (e *Encryptor) ReEncryptForWorker(ciphertext []byte, method domain.Encrypti
 // --- NIP-44 encryption (self-encryption: Bahia encrypts to its own pubkey) ---
 
 func (e *Encryptor) encryptNIP44(plaintext string) ([]byte, error) {
-	// Self-encryption: use conversation key with ourselves.
-	conversationKey, err := nip44.GenerateConversationKey(e.publicKey(), e.privateKey)
+	// Self-encryption: use a conversation key with Bahia's derived public key.
+	conversationKey, err := nostrutil.NIP44ConversationKey(e.publicKey(), e.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("generating self conversation key: %w", err)
 	}
@@ -106,7 +107,7 @@ func (e *Encryptor) encryptNIP44(plaintext string) ([]byte, error) {
 }
 
 func (e *Encryptor) decryptNIP44(ciphertext []byte) (string, error) {
-	conversationKey, err := nip44.GenerateConversationKey(e.publicKey(), e.privateKey)
+	conversationKey, err := nostrutil.NIP44ConversationKey(e.publicKey(), e.privateKey)
 	if err != nil {
 		return "", fmt.Errorf("generating self conversation key: %w", err)
 	}
@@ -121,13 +122,11 @@ func (e *Encryptor) decryptNIP44(ciphertext []byte) (string, error) {
 
 // publicKey derives the public key from the private key.
 func (e *Encryptor) publicKey() string {
-	// For NIP-44, the private key is used directly. The go-nostr library
-	// handles key derivation internally. We pass the private key as both sides
-	// of the conversation key to encrypt to ourselves.
-	// In practice, the pubkey is derived from the privkey via secp256k1.
-	// For self-encryption, using the privkey as the "recipient" actually
-	// generates a conversation key that only we can decrypt.
-	return e.privateKey
+	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(e.privateKey)
+	if err != nil {
+		return ""
+	}
+	return pubkey
 }
 
 // --- AES-256-GCM encryption ---

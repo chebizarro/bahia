@@ -36,7 +36,7 @@ Remove all production/test/module dependency on `github.com/nbd-wtf/go-nostr` fr
 
 ## Work items
 
-### [ ] Item 1 — Core canonical Nostr adapter and helper migration
+### [x] Item 1 — Core canonical Nostr adapter and helper migration
 
 **Goal:** Establish canonical `fiatjaf.com/nostr` helper boundaries and migrate the central `internal/adapters/nostr` package, where relay pools, publishing, subscribing, validation, cataloging, bootstrap, FIPS subscription, relay admin, replay cursors, and serialization are concentrated.
 
@@ -48,7 +48,7 @@ Remove all production/test/module dependency on `github.com/nbd-wtf/go-nostr` fr
 
 **Size:** Large.
 
-### [ ] Item 2 — Protocol/NIP consumer migration
+### [x] Item 2 — Protocol/NIP consumer migration
 
 **Goal:** Migrate NIP and protocol consumers outside the core adapter: NIP-44 secrets/notifications/loom, NIP-46 signet, NIP-98 auth, Blossom auth events, Hive-CI, FIPS bridge, SBOM, signing attestations, nostr migration runner, and discovery resolver.
 
@@ -82,3 +82,5 @@ Remove all production/test/module dependency on `github.com/nbd-wtf/go-nostr` fr
 ## Progress log
 
 - 2026-06-12: Orchestrator created this plan from repository scan and context-builder plan.
+- 2026-06-12: Item 1 completed and pushed in commit `06d56f1`.
+- 2026-06-12: Item 2 migrated scoped protocol/NIP consumers in `internal/adapters/{secrets,signet,loom,hiveci,blossom,sbom,signing}`, `internal/auth`, `internal/fipsbridge`, `internal/notifications`, `internal/nostrmigration`, and `pkg/discovery` to `fiatjaf.com/nostr`; targeted Item 2 package tests passed with `GOCACHE=/tmp/bahia-go-cache`.

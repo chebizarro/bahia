@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // testNIP98Key is a throwaway private key for tests only.
@@ -25,7 +26,7 @@ func makeNIP98Event(t *testing.T, method, url string, createdAt time.Time) nostr
 			{"method", method},
 		},
 	}
-	if err := ev.Sign(testNIP98Key); err != nil {
+	if err := nostrutil.SignEventWithHexKey(&ev, testNIP98Key); err != nil {
 		t.Fatalf("failed to sign NIP-98 event: %v", err)
 	}
 	return ev
@@ -55,10 +56,11 @@ func TestNIP98_ValidEvent(t *testing.T) {
 	if principal.Method != MethodNIP98 {
 		t.Errorf("Method = %q, want %q", principal.Method, MethodNIP98)
 	}
-	if principal.PubKey != ev.PubKey {
-		t.Errorf("PubKey = %q, want %q", principal.PubKey, ev.PubKey)
+	wantPubkey := ev.PubKey.Hex()
+	if principal.PubKey != wantPubkey {
+		t.Errorf("PubKey = %q, want %q", principal.PubKey, wantPubkey)
 	}
-	if principal.Subject != ev.PubKey {
+	if principal.Subject != wantPubkey {
 		t.Errorf("Subject should equal PubKey for NIP-98")
 	}
 	if !principal.IsAuthenticated() {
@@ -79,7 +81,7 @@ func TestNIP98_WrongKind(t *testing.T) {
 			{"method", "GET"},
 		},
 	}
-	_ = ev.Sign(testNIP98Key)
+	_ = nostrutil.SignEventWithHexKey(&ev, testNIP98Key)
 	token := encodeEvent(t, ev)
 
 	req := httptest.NewRequest(http.MethodGet, url, nil)
@@ -179,7 +181,7 @@ func TestNIP98_MissingURLTag(t *testing.T) {
 			// no "u" tag
 		},
 	}
-	_ = ev.Sign(testNIP98Key)
+	_ = nostrutil.SignEventWithHexKey(&ev, testNIP98Key)
 	token := encodeEvent(t, ev)
 
 	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/test", nil)
@@ -202,7 +204,7 @@ func TestNIP98_MissingMethodTag(t *testing.T) {
 			// no "method" tag
 		},
 	}
-	_ = ev.Sign(testNIP98Key)
+	_ = nostrutil.SignEventWithHexKey(&ev, testNIP98Key)
 	token := encodeEvent(t, ev)
 
 	req := httptest.NewRequest(http.MethodGet, url, nil)

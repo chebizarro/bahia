@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -109,6 +109,9 @@ func (c *Config) normalize() {
 func (c Config) validate() error {
 	if strings.TrimSpace(c.BahiaPubkey) == "" {
 		return fmt.Errorf("bahia_pubkey is required")
+	}
+	if _, err := nostrutil.PubKeyFromHex(c.BahiaPubkey); err != nil {
+		return fmt.Errorf("bahia_pubkey must be a valid 32-byte hex pubkey: %w", err)
 	}
 	if len(c.RelayURLs) == 0 {
 		return fmt.Errorf("at least one relay URL is required")
@@ -231,7 +234,11 @@ func (b *Bridge) subscribeOnce(ctx context.Context) error {
 }
 
 func (b *Bridge) subscriptionFilter() nostr.Filter {
-	return nostr.Filter{Kinds: []int{KindDNSEndpointState}, Authors: []string{b.cfg.BahiaPubkey}}
+	authors := []nostr.PubKey(nil)
+	if pubkey, err := nostrutil.PubKeyFromHex(b.cfg.BahiaPubkey); err == nil {
+		authors = []nostr.PubKey{pubkey}
+	}
+	return nostr.Filter{Kinds: []nostr.Kind{KindDNSEndpointState}, Authors: authors}
 }
 
 func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
@@ -296,18 +303,20 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 	if err := nostradapter.ValidateInboundEvent(ev, b.now(), nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return err
 	}
-	if ev.Kind != KindDNSEndpointState {
+	if int(ev.Kind) != KindDNSEndpointState {
 		return fmt.Errorf("unexpected kind %d", ev.Kind)
 	}
-	if ev.PubKey != b.cfg.BahiaPubkey {
-		return fmt.Errorf("unexpected author %s", ev.PubKey)
+	pubkey := nostrutil.EventPubKeyHex(ev)
+	if pubkey != b.cfg.BahiaPubkey {
+		return fmt.Errorf("unexpected author %s", pubkey)
 	}
-	if _, ok := b.seen[ev.ID]; ok {
+	eventID := nostrutil.EventIDHex(ev)
+	if _, ok := b.seen[eventID]; ok {
 		return nil
 	}
 	coordinate := replaceableCoordinate(ev)
 	if last, ok := b.latest[coordinate]; ok && ev.CreatedAt < last {
-		b.seen[ev.ID] = struct{}{}
+		b.seen[eventID] = struct{}{}
 		return nil
 	}
 
@@ -335,7 +344,7 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 		}
 	}
 
-	b.seen[ev.ID] = struct{}{}
+	b.seen[eventID] = struct{}{}
 	b.latest[coordinate] = ev.CreatedAt
 	if changed {
 		if err := b.writer.Write(b.entries); err != nil {
@@ -443,11 +452,9 @@ func ParseEndpointEvent(ev *nostr.Event) (Endpoint, error) {
 func normalizePubkeyString(value string) string {
 	value = strings.TrimSpace(value)
 	if strings.HasPrefix(value, "npub1") {
-		prefix, decoded, err := nip19.Decode(value)
-		if err == nil && prefix == "npub" {
-			if pubkey, ok := decoded.(string); ok {
-				return pubkey
-			}
+		pubkey, err := nostrutil.DecodeNpubToHex(value)
+		if err == nil {
+			return pubkey
 		}
 	}
 	return value
@@ -459,17 +466,13 @@ func normalizeNpub(value string) (string, error) {
 		return "", nil
 	}
 	if strings.HasPrefix(value, "npub1") {
-		prefix, decoded, err := nip19.Decode(value)
-		if err != nil {
+		if _, err := nostrutil.DecodeNpubToHex(value); err != nil {
 			return "", fmt.Errorf("invalid npub: %w", err)
-		}
-		if prefix != "npub" || decoded == nil {
-			return "", fmt.Errorf("invalid npub prefix %q", prefix)
 		}
 		return value, nil
 	}
 	if len(value) == 64 {
-		npub, err := nip19.EncodePublicKey(value)
+		npub, err := nostrutil.EncodeNpubFromHex(value)
 		if err != nil {
 			return "", fmt.Errorf("encode worker pubkey as npub: %w", err)
 		}
@@ -529,7 +532,7 @@ func sanitizeLabel(value string) string {
 }
 
 func replaceableCoordinate(ev *nostr.Event) string {
-	return fmt.Sprintf("%d:%s:%s", ev.Kind, ev.PubKey, tagValue(ev, "d"))
+	return fmt.Sprintf("%d:%s:%s", ev.Kind, nostrutil.EventPubKeyHex(ev), tagValue(ev, "d"))
 }
 
 func tagValue(ev *nostr.Event, key string) string {
@@ -560,7 +563,7 @@ func eventID(ev *nostr.Event) string {
 	if ev == nil {
 		return ""
 	}
-	return ev.ID
+	return nostrutil.EventIDHex(ev)
 }
 
 func firstNonEmpty(values ...string) string {

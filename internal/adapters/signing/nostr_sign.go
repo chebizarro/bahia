@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -54,18 +55,17 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 	}
 
 	// Verify Schnorr signature.
-	ok, err := ev.CheckSignature()
-	if err != nil {
-		return nil, fmt.Errorf("checking event signature: %w", err)
+	if !ev.CheckID() {
+		return nil, fmt.Errorf("event ID mismatch")
 	}
-	if !ok {
+	if !ev.VerifySignature() {
 		now := time.Now().UTC()
 		sig := &domain.ArtifactSignature{
 			ID:                 uuid.New(),
 			ArtifactID:         artifact.ID,
-			SignerIdentity:     ev.PubKey,
+			SignerIdentity:     nostrutil.EventPubKeyHex(ev),
 			SignatureType:      domain.SignatureNostr,
-			SignatureRef:       ev.ID,
+			SignatureRef:       nostrutil.EventIDHex(ev),
 			Verified:           false,
 			VerificationStatus: domain.SignatureStatusRejected,
 			VerificationError:  "invalid Schnorr signature",
@@ -76,7 +76,8 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 	}
 
 	// Check trusted pubkey.
-	trusted := v.trustedPubkeys[ev.PubKey]
+	pubkeyHex := nostrutil.EventPubKeyHex(ev)
+	trusted := v.trustedPubkeys[pubkeyHex]
 
 	// Parse attestation content.
 	var attestation NostrArtifactAttestation
@@ -89,12 +90,12 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 	sig := &domain.ArtifactSignature{
 		ID:             uuid.New(),
 		ArtifactID:     artifact.ID,
-		SignerIdentity: ev.PubKey,
+		SignerIdentity: pubkeyHex,
 		SignatureType:  domain.SignatureNostr,
-		SignatureRef:   ev.ID,
+		SignatureRef:   nostrutil.EventIDHex(ev),
 		CreatedAt:      now,
 		Metadata: map[string]any{
-			"event_kind":    ev.Kind,
+			"event_kind":    int(ev.Kind),
 			"event_created": ev.CreatedAt.Time().UTC().Format(time.RFC3339),
 			"approved":      attestation.Approved,
 			"trusted":       trusted,
@@ -114,7 +115,7 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 		}
 	case !trusted:
 		sig.VerificationStatus = domain.SignatureStatusRejected
-		sig.VerificationError = fmt.Sprintf("signer %s is not in trusted pubkey list", ev.PubKey)
+		sig.VerificationError = fmt.Sprintf("signer %s is not in trusted pubkey list", pubkeyHex)
 	default:
 		sig.VerificationStatus = domain.SignatureStatusVerified
 		sig.VerifiedAt = &now

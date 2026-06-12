@@ -134,8 +134,9 @@ func TestMiddleware_ValidNIP98SetsPrincipal(t *testing.T) {
 	if principal == nil {
 		t.Fatal("expected Principal in context, got nil")
 	}
-	if principal.Subject != ev.PubKey || principal.PubKey != ev.PubKey {
-		t.Errorf("principal should use NIP-98 pubkey, got %+v want %q", principal, ev.PubKey)
+	wantPubkey := ev.PubKey.Hex()
+	if principal.Subject != wantPubkey || principal.PubKey != wantPubkey {
+		t.Errorf("principal should use NIP-98 pubkey, got %+v want %q", principal, wantPubkey)
 	}
 	if principal.Method != MethodNIP98 {
 		t.Errorf("Principal.Method = %q, want %q", principal.Method, MethodNIP98)

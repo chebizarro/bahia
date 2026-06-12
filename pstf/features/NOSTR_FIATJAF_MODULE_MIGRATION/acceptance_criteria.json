@@ -26,5 +26,27 @@
       "description": "Downstream go-nostr consumers outside Item 1 are not migrated in this slice and are tracked as blockers for later items.",
       "tests": ["go test ./internal/controlplane failure captured", "rg github.com/nbd-wtf/go-nostr internal cmd pkg output captured"]
     }
+  ],
+  "item_2_acceptance_criteria": [
+    {
+      "id": "AC-ITEM2-001",
+      "description": "No github.com/nbd-wtf/go-nostr imports or go-nostr references remain in the Item 2 protocol/NIP consumer scope.",
+      "tests": ["scoped file_search for github.com/nbd-wtf/go-nostr|go-nostr"]
+    },
+    {
+      "id": "AC-ITEM2-002",
+      "description": "Scoped protocol/NIP consumer packages compile and pass targeted tests against fiatjaf.com/nostr.",
+      "tests": ["GOCACHE=/tmp/bahia-go-cache go test ./internal/adapters/secrets ./internal/adapters/signet ./internal/adapters/loom ./internal/adapters/hiveci ./internal/adapters/blossom ./internal/adapters/sbom ./internal/adapters/signing ./internal/auth ./internal/fipsbridge ./internal/notifications ./internal/nostrmigration ./pkg/discovery"]
+    },
+    {
+      "id": "AC-ITEM2-003",
+      "description": "Downstream publish/sign/auth/encryption paths reuse canonical helpers and preserve OK/AUTH/CLOSED/EOSE/validation semantics without polling/request-response shims.",
+      "tests": ["targeted package tests", "code review of modified scoped consumers"]
+    },
+    {
+      "id": "AC-ITEM2-004",
+      "description": "Known compatibility or remaining migration gaps are tracked in Beads rather than comments or handoff prose.",
+      "tests": ["bahia-ncxo created for NIP-44 stored-secret compatibility", "bahia-u2ma updated for Item 2 status"]
+    }
   ]
 }

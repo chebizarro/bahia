@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -122,14 +123,12 @@ func (r *Runner) migrateLocal(ctx context.Context, summary *Summary) error {
 }
 
 func (r *Runner) migrateRelayBackfill(ctx context.Context, summary *Summary) error {
-	filter := gonostr.Filter{Kinds: LegacyKinds(), Limit: r.config.BackfillLimit}
+	filter := gonostr.Filter{Kinds: nostrutil.KindsFromInts(LegacyKinds()), Limit: r.config.BackfillLimit}
 	if r.config.BackfillSince != nil {
-		since := gonostr.Timestamp(r.config.BackfillSince.Unix())
-		filter.Since = &since
+		filter.Since = gonostr.Timestamp(r.config.BackfillSince.Unix())
 	}
 	if r.config.BackfillUntil != nil {
-		until := gonostr.Timestamp(r.config.BackfillUntil.Unix())
-		filter.Until = &until
+		filter.Until = gonostr.Timestamp(r.config.BackfillUntil.Unix())
 	}
 	backfillCtx, cancel := context.WithTimeout(ctx, r.config.BackfillTimeout)
 	defer cancel()
@@ -157,12 +156,15 @@ func (r *Runner) migrateRelayBackfill(ctx context.Context, summary *Summary) err
 			if ev == nil {
 				continue
 			}
+			if err := validateRelayBackfillEvent(ev, time.Now().UTC(), r.config.BackfillSince, r.config.BackfillUntil); err != nil {
+				return fmt.Errorf("validate relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
+			}
 			rec, err := recordFromEvent(ev)
 			if err != nil {
 				return err
 			}
 			if _, err := r.repo.Record(ctx, rec); err != nil {
-				return fmt.Errorf("record relay legacy event %s: %w", ev.ID, err)
+				return fmt.Errorf("record relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
 			}
 			summary.RelayScanned++
 			if err := r.migrateRecord(ctx, *rec, summary); err != nil {
@@ -196,7 +198,7 @@ func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRec
 	if r.publisher == nil || r.config.PrivateKey == "" {
 		return fmt.Errorf("nostr migration publisher and private key are required")
 	}
-	if err := ev.Sign(r.config.PrivateKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(ev, r.config.PrivateKey); err != nil {
 		return fmt.Errorf("sign migration event for %s: %w", rec.ID, err)
 	}
 	outcomes, err := r.publisher.PublishMigrationEvent(ctx, *ev)
@@ -205,7 +207,7 @@ func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRec
 	}
 	accepted, duplicate := verifyPublish(outcomes)
 	if !accepted && !duplicate {
-		return fmt.Errorf("migration event %s had no accepted or duplicate relay OK", ev.ID)
+		return fmt.Errorf("migration event %s had no accepted or duplicate relay OK", nostrutil.EventIDHex(ev))
 	}
 	if duplicate {
 		summary.PublishDuplicate++
@@ -215,7 +217,7 @@ func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRec
 		return err
 	}
 	if _, err := r.repo.Record(ctx, canon); err != nil {
-		return fmt.Errorf("record canonical migration event %s: %w", ev.ID, err)
+		return fmt.Errorf("record canonical migration event %s: %w", nostrutil.EventIDHex(ev), err)
 	}
 	summary.Migrated++
 	summary.ByLegacyKind[rec.Kind]++
@@ -263,7 +265,7 @@ func BuildCanonicalEvent(rec repository.NostrEventRecord, disp Disposition) (*go
 	for _, tag := range tags {
 		eventTags = append(eventTags, gonostr.Tag(tag))
 	}
-	return &gonostr.Event{Kind: disp.CanonicalKind, CreatedAt: gonostr.Timestamp(createdAt.Unix()), Tags: eventTags, Content: string(content)}, nil
+	return &gonostr.Event{Kind: gonostr.Kind(disp.CanonicalKind), CreatedAt: gonostr.Timestamp(createdAt.Unix()), Tags: eventTags, Content: string(content)}, nil
 }
 
 func verifyPublish(outcomes []PublishOutcome) (accepted bool, duplicate bool) {
@@ -278,13 +280,53 @@ func verifyPublish(outcomes []PublishOutcome) (accepted bool, duplicate bool) {
 	return accepted, duplicate
 }
 
+func validateRelayBackfillEvent(ev *gonostr.Event, now time.Time, since, until *time.Time) error {
+	if ev == nil {
+		return fmt.Errorf("nil event")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ev.CreatedAt <= 0 {
+		return fmt.Errorf("created_at is required")
+	}
+	createdAt := ev.CreatedAt.Time()
+	if createdAt.After(now.Add(nostrAdapter.InboundEventMaxFutureSkew)) {
+		return fmt.Errorf("created_at too far in future")
+	}
+	if since != nil && createdAt.Before(since.UTC()) {
+		return fmt.Errorf("created_at before relay backfill since bound")
+	}
+	if until != nil && createdAt.After(until.UTC()) {
+		return fmt.Errorf("created_at after relay backfill until bound")
+	}
+	for i, tag := range ev.Tags {
+		if tag == nil {
+			return fmt.Errorf("tag %d is nil", i)
+		}
+		if len(tag) == 0 {
+			return fmt.Errorf("tag %d is empty", i)
+		}
+		if tag[0] == "" {
+			return fmt.Errorf("tag %d has empty key", i)
+		}
+	}
+	if !ev.CheckID() {
+		return fmt.Errorf("event id does not match serialized event")
+	}
+	if !ev.VerifySignature() {
+		return fmt.Errorf("invalid signature")
+	}
+	return nil
+}
+
 func recordFromEvent(ev *gonostr.Event) (*repository.NostrEventRecord, error) {
 	if ev == nil {
 		return nil, fmt.Errorf("nostr event is nil")
 	}
 	tags, err := json.Marshal(ev.Tags)
 	if err != nil {
-		return nil, fmt.Errorf("marshal event tags %s: %w", ev.ID, err)
+		return nil, fmt.Errorf("marshal event tags %s: %w", nostrutil.EventIDHex(ev), err)
 	}
-	return &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tags, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time().UTC(), ReceivedAt: time.Now().UTC(), EntityType: "nostr_migration"}, nil
+	return &repository.NostrEventRecord{ID: nostrutil.EventIDHex(ev), Kind: int(ev.Kind), PubKey: nostrutil.EventPubKeyHex(ev), Content: ev.Content, Tags: tags, Sig: nostrutil.EventSignatureHex(ev), CreatedAt: ev.CreatedAt.Time().UTC(), ReceivedAt: time.Now().UTC(), EntityType: "nostr_migration"}, nil
 }
