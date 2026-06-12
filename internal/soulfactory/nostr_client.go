@@ -30,6 +30,7 @@ type SoulFactoryRequestReceipt struct {
 	StatusKind       int    `json:"status_kind,omitempty"`
 	ResultKind       int    `json:"result_kind,omitempty"`
 	ActionResultKind int    `json:"action_result_kind,omitempty"`
+	ExpectedAuthor   string `json:"expected_author,omitempty"` // when set, reject results not signed by this pubkey
 }
 
 type SoulFactoryTransport interface {
@@ -55,9 +56,18 @@ type soulClientSigner interface {
 }
 
 type NostrClient struct {
-	relays    []string
-	signer    soulClientSigner
-	transport SoulFactoryTransport
+	relays              []string
+	signer              soulClientSigner
+	transport           SoulFactoryTransport
+	expectedFactoryPubkey string // when set, reject results not signed by this pubkey
+}
+
+// WithExpectedFactoryPubkey sets the expected SoulFactory service pubkey.
+// When set, terminal result events not signed by this pubkey are silently
+// dropped, hardening against spoofed results from untrusted authors.
+func (c *NostrClient) WithExpectedFactoryPubkey(pubkey string) *NostrClient {
+	c.expectedFactoryPubkey = strings.TrimSpace(pubkey)
+	return c
 }
 
 func NewNostrClient(relays []string, signer soulClientSigner) (*NostrClient, error) {
@@ -276,7 +286,7 @@ func (c *NostrClient) AwaitProvisioningResult(ctx context.Context, receipt *Soul
 		if onStatus != nil {
 			onStatus(statusEventFromNostr(ev))
 		}
-	})
+	}, receipt.ExpectedAuthor)
 	if err != nil {
 		return nil, err
 	}
@@ -335,6 +345,9 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 			if !validSignedEvent(reply) || !tagHasValue(reply.Tags, "e", event.ID.Hex()) {
 				continue
 			}
+			if c.expectedFactoryPubkey != "" && reply.PubKey.Hex() != c.expectedFactoryPubkey {
+				continue
+			}
 			if _, duplicate := seen[reply.ID.Hex()]; duplicate {
 				continue
 			}
@@ -383,7 +396,11 @@ func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter)
 	}
 }
 
-func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter, statusKinds, terminalKinds map[int]bool, onStatus func(*nostr.Event)) (*nostr.Event, error) {
+func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter, statusKinds, terminalKinds map[int]bool, onStatus func(*nostr.Event), expectedAuthor ...string) (*nostr.Event, error) {
+	var authorCheck string
+	if len(expectedAuthor) > 0 {
+		authorCheck = strings.TrimSpace(expectedAuthor[0])
+	}
 	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, err
@@ -402,6 +419,9 @@ func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter,
 				return nil, fmt.Errorf("reply subscription closed before terminal result")
 			}
 			if ev == nil || !validSignedEvent(ev) {
+				continue
+			}
+			if authorCheck != "" && ev.PubKey.Hex() != authorCheck {
 				continue
 			}
 			if _, duplicate := seen[ev.ID.Hex()]; duplicate {

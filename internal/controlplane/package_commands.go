@@ -106,6 +106,7 @@ type PackageCommandReceipt struct {
 	PackageName            string `json:"package_name,omitempty"`
 	Version                string `json:"version,omitempty"`
 	Filename               string `json:"filename,omitempty"`
+	ExpectedAuthor         string `json:"expected_author,omitempty"` // when set, reject results not signed by this pubkey
 }
 
 func (p *PackageCommandPublisher) PublishPackageRepositoryApplyRequest(ctx context.Context, cmd PackageRepositoryApplyCommand) (*PackageCommandReceipt, error) {

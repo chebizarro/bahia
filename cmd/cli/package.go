@@ -119,6 +119,9 @@ func (c *packageCLIClient) AwaitPackageResult(ctx context.Context, receipt *cont
 			if ev == nil || !validPackageReply(ev, receipt) {
 				continue
 			}
+			if receipt.ExpectedAuthor != "" && ev.PubKey.Hex() != receipt.ExpectedAuthor {
+				continue
+			}
 			eventID := ev.ID.Hex()
 			if _, duplicate := seen[eventID]; duplicate {
 				continue

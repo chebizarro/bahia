@@ -240,6 +240,52 @@ func (r *EncryptedResponder) conversationKey(counterpartyPubkey string) ([32]byt
 	return conversationKey, nil
 }
 
+// contextVMDedupDefaultLimit is the default maximum number of cached ContextVM
+// idempotency responses. When the limit is reached, the oldest entry is evicted.
+const contextVMDedupDefaultLimit = 4096
+
+// contextVMDedupCache is a bounded LRU cache for ContextVM command idempotency.
+// It evicts the oldest entry when the configured limit is reached.
+type contextVMDedupCache struct {
+	entries map[string]ContextVMJSONRPCResponse
+	order   []string // insertion order for LRU eviction
+	limit   int
+}
+
+func newContextVMDedupCache(limit int) *contextVMDedupCache {
+	if limit <= 0 {
+		limit = contextVMDedupDefaultLimit
+	}
+	return &contextVMDedupCache{
+		entries: make(map[string]ContextVMJSONRPCResponse, limit),
+		order:  make([]string, 0, limit),
+		limit:  limit,
+	}
+}
+
+func (c *contextVMDedupCache) get(key string) (ContextVMJSONRPCResponse, bool) {
+	resp, ok := c.entries[key]
+	return resp, ok
+}
+
+func (c *contextVMDedupCache) put(key string, response ContextVMJSONRPCResponse) {
+	if _, exists := c.entries[key]; exists {
+		c.entries[key] = response
+		return
+	}
+	if len(c.order) >= c.limit {
+		oldest := c.order[0]
+		c.order = c.order[1:]
+		delete(c.entries, oldest)
+	}
+	c.entries[key] = response
+	c.order = append(c.order, key)
+}
+
+func (c *contextVMDedupCache) len() int {
+	return len(c.entries)
+}
+
 // EncryptedRequestTransport subscribes to encrypted request events and dispatches
 // them to operation handlers. It never publishes sensitive payloads as public
 // sidecar projections.
@@ -249,7 +295,7 @@ type EncryptedRequestTransport struct {
 	authorizedPubkeys []string
 	handlers          map[string]EncryptedRequestHandler
 	contextVMHandlers map[string]ContextVMHandler
-	contextVMDedup    map[string]ContextVMJSONRPCResponse
+	contextVMDedup    *contextVMDedupCache
 	contextVMMu       sync.Mutex
 	dedup             *nostrpool.EventDeduplicator
 	logger            *zap.Logger
@@ -265,7 +311,7 @@ func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, respond
 		authorizedPubkeys: append([]string(nil), authorizedPubkeys...),
 		handlers:          make(map[string]EncryptedRequestHandler),
 		contextVMHandlers: make(map[string]ContextVMHandler),
-		contextVMDedup:    make(map[string]ContextVMJSONRPCResponse),
+		contextVMDedup:    newContextVMDedupCache(contextVMDedupDefaultLimit),
 		dedup:             nostrpool.NewEventDeduplicator(10000),
 		logger:            logger.Named("encrypted-request-result-events"),
 	}
@@ -534,7 +580,7 @@ func (t *EncryptedRequestTransport) cachedContextVMResponse(pubkey, progressToke
 	}
 	t.contextVMMu.Lock()
 	defer t.contextVMMu.Unlock()
-	response, ok := t.contextVMDedup[pubkey+":"+progressToken]
+	response, ok := t.contextVMDedup.get(pubkey + ":" + progressToken)
 	return response, ok
 }
 
@@ -544,7 +590,7 @@ func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, progressToken
 	}
 	t.contextVMMu.Lock()
 	defer t.contextVMMu.Unlock()
-	t.contextVMDedup[pubkey+":"+progressToken] = response
+	t.contextVMDedup.put(pubkey+":"+progressToken, response)
 }
 
 func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) bool {

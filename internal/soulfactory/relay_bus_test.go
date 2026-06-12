@@ -395,6 +395,201 @@ func TestRelayBusReconnectReissuesSubscriptionWithSameFilters(t *testing.T) {
 	}
 }
 
+func TestRelayBusPublishOKFalseWithEmptyReason(t *testing.T) {
+	endpoint := newFakeRelayEndpoint("wss://silent.example")
+	endpoint.publishResults = []RelayPublishResult{{Accepted: false}} // OK false, no reason
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("ok-false-empty")})
+	if err == nil {
+		t.Fatal("Publish() error = nil, want error for OK false")
+	}
+	if count != 0 {
+		t.Fatalf("Publish() accepted = %d, want 0", count)
+	}
+	if !strings.Contains(err.Error(), "OK false") {
+		t.Fatalf("Publish() error = %q, want default 'OK false' reason", err.Error())
+	}
+}
+
+func TestRelayBusPublishNetworkErrorCombinedWithOKFalse(t *testing.T) {
+	errEndpoint := newFakeRelayEndpoint("wss://error.example")
+	errEndpoint.publishResults = []RelayPublishResult{{Error: errors.New("connection reset")}}
+	rejectedEndpoint := newFakeRelayEndpoint("wss://rejected.example")
+	rejectedEndpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "rate-limited"}}
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{errEndpoint, rejectedEndpoint})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("net-err-ok-false")})
+	if err == nil {
+		t.Fatal("Publish() error = nil, want error for combined network error + OK false")
+	}
+	if count != 0 {
+		t.Fatalf("Publish() accepted = %d, want 0", count)
+	}
+	if !containsAll(err.Error(), "connection reset", "rate-limited") {
+		t.Fatalf("Publish() error = %q, want both failure reasons", err.Error())
+	}
+}
+
+func TestRelayBusMultiRelayDeduplicatesSameEvent(t *testing.T) {
+	signer := newFakeSigner(t)
+	relay1 := newFakeRelayEndpoint("wss://relay1.example")
+	relay2 := newFakeRelayEndpoint("wss://relay2.example")
+	sub1 := newFakeRelaySubscription()
+	sub2 := newFakeRelaySubscription()
+	relay1.subscribeQueue <- sub1
+	relay2.subscribeQueue <- sub2
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{relay1, relay2},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+	)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	if err != nil {
+		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+	}
+	mustReceiveFilters(t, relay1.subscribeCalls)
+	mustReceiveFilters(t, relay2.subscribeCalls)
+
+	// Same event delivered by both relays — should be deduped to one.
+	shared := signedRelayBusEvent(t, signer, 1, "shared-event")
+	sentinel := signedRelayBusEvent(t, signer, 1, "sentinel-multi")
+	sub1.events <- shared
+	sub2.events <- shared
+	sub1.events <- sentinel
+
+	got1 := mustReceiveRelayEvent(t, sub.Events)
+	got2 := mustReceiveRelayEvent(t, sub.Events)
+
+	if got1.ID != shared.ID {
+		t.Fatalf("first event ID = %s, want shared %s", got1.ID, shared.ID)
+	}
+	if got2.ID != sentinel.ID {
+		t.Fatalf("second event ID = %s, want sentinel %s (duplicate was not deduped)", got2.ID, sentinel.ID)
+	}
+}
+
+func TestRelayBusInvalidEventFilteredByValidator(t *testing.T) {
+	signer := newFakeSigner(t)
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+
+	// Custom validator that rejects events with specific content.
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{endpoint},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+		WithRelayBusEventValidator(func(ev *nostr.Event) bool {
+			return ev != nil && ev.Content != "invalid"
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	if err != nil {
+		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+	}
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+
+	invalid := signedRelayBusEvent(t, signer, 1, "invalid")
+	valid := signedRelayBusEvent(t, signer, 1, "valid")
+	subscription.events <- invalid
+	subscription.events <- valid
+
+	got := mustReceiveRelayEvent(t, sub.Events)
+	if got.Content != "valid" {
+		t.Fatalf("received event content = %q, want 'valid' (invalid event was not filtered)", got.Content)
+	}
+}
+
+func TestRelayBusClosedWithMultipleReasonsReissuesCorrectly(t *testing.T) {
+	signer := newFakeSigner(t)
+	endpoint := newFakeRelayEndpoint("wss://flaky.example")
+	first := newFakeRelaySubscription()
+	second := newFakeRelaySubscription()
+	third := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- first
+	endpoint.subscribeQueue <- second
+	endpoint.subscribeQueue <- third
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{endpoint},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+	)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	if err != nil {
+		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+	}
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+
+	// First CLOSED (non-auth) triggers reconnect.
+	first.closed <- "closed: maintenance"
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+
+	// Second CLOSED also triggers reconnect.
+	second.closed <- "closed: busy"
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+
+	// Third subscription completes EOSE normally.
+	event := signedRelayBusEvent(t, signer, 1, "after-reconnects")
+	third.events <- event
+	close(third.eose)
+
+	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
+	got := mustReceiveRelayEvent(t, sub.Events)
+	if got.ID != event.ID {
+		t.Fatalf("event after multiple reconnects = %s, want %s", got.ID, event.ID)
+	}
+}
+
+func TestRelayBusNilEventIgnored(t *testing.T) {
+	signer := newFakeSigner(t)
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	if err != nil {
+		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+	}
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+
+	sentinel := signedRelayBusEvent(t, signer, 1, "after-nil")
+	subscription.events <- nil
+	subscription.events <- sentinel
+
+	got := mustReceiveRelayEvent(t, sub.Events)
+	if got.ID != sentinel.ID {
+		t.Fatalf("received event = %s after nil, want sentinel %s", got.ID, sentinel.ID)
+	}
+}
+
 func containsAll(value string, wants ...string) bool {
 	for _, want := range wants {
 		if !strings.Contains(value, want) {

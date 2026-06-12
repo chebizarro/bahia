@@ -614,6 +614,65 @@ func TestContextVMTransport_RejectsInvalidRandomKeyWrapper(t *testing.T) {
 	}
 }
 
+func TestContextVMDedupCache_BoundsEntries(t *testing.T) {
+	cache := newContextVMDedupCache(3)
+
+	cache.put("a", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+	cache.put("b", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+	cache.put("c", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+
+	if cache.len() != 3 {
+		t.Fatalf("cache.len() = %d, want 3", cache.len())
+	}
+
+	// Adding a 4th entry should evict the oldest ("a").
+	cache.put("d", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+
+	if cache.len() != 3 {
+		t.Fatalf("cache.len() = %d after eviction, want 3", cache.len())
+	}
+	if _, ok := cache.get("a"); ok {
+		t.Fatal("oldest entry 'a' should have been evicted")
+	}
+	if _, ok := cache.get("b"); !ok {
+		t.Fatal("entry 'b' should still be present")
+	}
+	if _, ok := cache.get("d"); !ok {
+		t.Fatal("new entry 'd' should be present")
+	}
+}
+
+func TestContextVMDedupCache_UpdateExistingDoesNotEvict(t *testing.T) {
+	cache := newContextVMDedupCache(2)
+
+	cache.put("a", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+	cache.put("b", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+
+	// Updating "a" should not grow the cache or evict "b".
+	cache.put("a", ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: []byte(`"updated"`)})
+
+	if cache.len() != 2 {
+		t.Fatalf("cache.len() = %d after update, want 2", cache.len())
+	}
+	resp, ok := cache.get("a")
+	if !ok {
+		t.Fatal("updated entry 'a' should still be present")
+	}
+	if string(resp.ID) != `"updated"` {
+		t.Fatalf("entry 'a' ID = %s, want \"updated\"", string(resp.ID))
+	}
+	if _, ok := cache.get("b"); !ok {
+		t.Fatal("entry 'b' should still be present after update of 'a'")
+	}
+}
+
+func TestContextVMDedupCache_DefaultLimit(t *testing.T) {
+	cache := newContextVMDedupCache(0)
+	if cache.limit != contextVMDedupDefaultLimit {
+		t.Fatalf("default limit = %d, want %d", cache.limit, contextVMDedupDefaultLimit)
+	}
+}
+
 func TestContextVMTransport_RejectsInvalidWrappedInnerEvent(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
