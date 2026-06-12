@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -113,7 +113,7 @@ func (h *RelaySettingsHandlers) Register(transport *EncryptedRequestTransport) {
 }
 
 func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequest) (any, error) {
-	state := h.currentState(req.Event.PubKey)
+	state := h.currentState(req.Event.PubKey.Hex())
 	return map[string]any{"status": "ok", "state": state}, nil
 }
 
@@ -127,7 +127,7 @@ func (h *RelaySettingsHandlers) ApplyPolicy(ctx context.Context, req ContextVMRe
 	}
 	state.Schema = RelaySettingsSchema
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	state.UpdatedBy = req.Event.PubKey
+	state.UpdatedBy = req.Event.PubKey.Hex()
 	if err := normalizeAndValidateRelayPolicy(&state); err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func (h *RelaySettingsHandlers) CallRelayAdmin(ctx context.Context, req ContextV
 	if err != nil {
 		return nil, err
 	}
-	if err := h.publishAudit(ctx, req, h.currentState(req.Event.PubKey), "relay-admin."+payload.Method); err != nil {
+	if err := h.publishAudit(ctx, req, h.currentState(req.Event.PubKey.Hex()), "relay-admin."+payload.Method); err != nil {
 		return nil, err
 	}
 	return map[string]any{"status": "ok", "target_ref": payload.TargetRef, "method": payload.Method, "result": json.RawMessage(resp.Result)}, nil
@@ -213,7 +213,7 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 	if err != nil {
 		return err
 	}
-	ev := &nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", RelaySettingsDTag}, {"domain", RelaySettingsDomain}, {"entity", "relay-policy"}, {"schema", RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey}}, Content: string(content)}
+	ev := &nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", RelaySettingsDTag}, {"domain", RelaySettingsDomain}, {"entity", "relay-policy"}, {"schema", RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey.Hex()}}, Content: string(content)}
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign relay settings state: %w", err)
 	}
@@ -302,7 +302,7 @@ func (h *RelaySettingsHandlers) publishAudit(ctx context.Context, req ContextVMR
 	if err != nil {
 		return err
 	}
-	ev := &nostr.Event{Kind: kinds.CASAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", RelaySettingsDomain}, {"type", eventType}, {"schema", "bahia.audit.v1"}, {"p", req.Event.PubKey}}, Content: string(content)}
+	ev := &nostr.Event{Kind: kinds.CASAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", RelaySettingsDomain}, {"type", eventType}, {"schema", "bahia.audit.v1"}, {"p", req.Event.PubKey.Hex()}}, Content: string(content)}
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign relay settings audit: %w", err)
 	}

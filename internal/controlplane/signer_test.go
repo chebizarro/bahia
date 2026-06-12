@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	canonicalnostr "fiatjaf.com/nostr"
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 )
 
 type signerContextKey struct{}
@@ -28,11 +28,8 @@ func (s *contextCheckingSigner) SignEvent(ctx context.Context, ev *canonicalnost
 }
 
 func TestSignGoNostrEventUsesCanonicalSigner(t *testing.T) {
-	privateKey := gonostr.GeneratePrivateKey()
-	wantPubkey, err := gonostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("derive pubkey: %v", err)
-	}
+	privateKey := gonostr.Generate().Hex()
+	wantPubkey := testNostrPubKeyHexFromPrivateKey(t, privateKey)
 	signer, err := NewPrivateKeySigner(privateKey)
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
@@ -47,19 +44,19 @@ func TestSignGoNostrEventUsesCanonicalSigner(t *testing.T) {
 	if err := SignGoNostrEvent(context.Background(), signer, event); err != nil {
 		t.Fatalf("sign event: %v", err)
 	}
-	if event.ID == "" || event.Sig == "" {
-		t.Fatalf("expected signed event fields, got id=%q sig=%q", event.ID, event.Sig)
+	if event.ID == (gonostr.ID{}) || event.Sig == ([64]byte{}) {
+		t.Fatalf("expected signed event fields, got id=%x sig=%x", event.ID, event.Sig)
 	}
-	if event.PubKey != wantPubkey {
-		t.Fatalf("pubkey = %s, want %s", event.PubKey, wantPubkey)
+	if event.PubKey.Hex() != wantPubkey {
+		t.Fatalf("pubkey = %s, want %s", event.PubKey.Hex(), wantPubkey)
 	}
-	if ok, err := event.CheckSignature(); err != nil || !ok {
-		t.Fatalf("signature invalid: ok=%v err=%v", ok, err)
+	if !event.VerifySignature() {
+		t.Fatalf("signature invalid")
 	}
 }
 
 func TestReactorSignEventPropagatesCallContext(t *testing.T) {
-	baseSigner, err := NewPrivateKeySigner(gonostr.GeneratePrivateKey())
+	baseSigner, err := NewPrivateKeySigner(gonostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -71,8 +68,8 @@ func TestReactorSignEventPropagatesCallContext(t *testing.T) {
 	if err := reactor.signEvent(ctx, event); err != nil {
 		t.Fatalf("sign event: %v", err)
 	}
-	if ok, err := event.CheckSignature(); err != nil || !ok {
-		t.Fatalf("signature invalid: ok=%v err=%v", ok, err)
+	if !event.VerifySignature() {
+		t.Fatalf("signature invalid")
 	}
 }
 

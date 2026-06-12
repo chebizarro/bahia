@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 // ServiceCommandPublisher emits canonical service deployment command events.
@@ -188,9 +188,9 @@ func (p *ServiceCommandPublisher) publish(ctx context.Context, method string, ta
 	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, agentID, tags, content, "service command")
 	if err != nil {
 		if ev != nil && published > 0 {
-			return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
+			return &ServiceCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
 		}
 		return nil, err
 	}
-	return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}, nil
+	return &ServiceCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}, nil
 }

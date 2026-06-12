@@ -16,22 +16,69 @@
       "notifications, controlplane reactors/publishers, public pkg/client/pkg/discovery, soul factory, fips bridge, docs publishers, blossom/sbom/signing/signet adapters"
     ]
   },
+  "item_2_scope": {
+    "status": "implemented_with_stored_secret_followup_recorded",
+    "included_paths": [
+      "internal/adapters/secrets/**",
+      "internal/adapters/signet/**",
+      "internal/adapters/loom/**",
+      "internal/adapters/hiveci/**",
+      "internal/adapters/blossom/**",
+      "internal/adapters/sbom/**",
+      "internal/adapters/signing/**",
+      "internal/auth/**",
+      "internal/fipsbridge/**",
+      "internal/notifications/**",
+      "internal/nostrmigration/**",
+      "pkg/discovery/**"
+    ]
+  },
+  "item_3_scope": {
+    "status": "completed",
+    "included_paths": [
+      "cmd/**",
+      "pkg/client/**",
+      "internal/api/**",
+      "internal/app/**",
+      "internal/controlplane/**",
+      "internal/mcp/**",
+      "internal/service/**",
+      "internal/soulfactory/**",
+      "test/integration/**",
+      "go.mod",
+      "go.sum"
+    ],
+    "dependency_cleanup": [
+      "Removed github.com/nbd-wtf/go-nostr from go.mod and go.sum.",
+      "Kept fiatjaf.com/nostr at v0.0.0-20260611214214-c4534c716026 after go mod tidy."
+    ],
+    "review_followups_completed": [
+      "Controlplane configured author pubkey parsing now fails closed instead of broadening relay filters when malformed pubkeys are configured.",
+      "Assistant downstream terminal result handling now locally validates event kind, correlation tag, event ID, Schnorr signature, and future timestamp bounds before trusting status.",
+      "SoulFactory relay bus no longer treats subscribe failure, CLOSED-before-EOSE, or context cancellation as historical catch-up completion; tests use deterministic fake EOSE relay behavior instead of placeholder production relay URLs."
+    ]
+  },
   "intended_behavior": [
-    "The core canonical Nostr adapter/helper layer uses fiatjaf.com/nostr event, relay, filter, key, signing, validation, NIP-11, and NIP-19 APIs.",
-    "Core adapter subscriptions remain event-driven with scoped REQ filters and explicit EVENT/EOSE/CLOSED/AUTH handling.",
+    "All active Bahia Go Nostr producers, consumers, relays, tests, CLI clients, API/app/controlplane/MCP/service/SoulFactory code use fiatjaf.com/nostr typed event, relay, filter, key, signing, validation, NIP-11, NIP-19, NIP-42, and NIP-44 APIs.",
+    "Core and downstream subscriptions remain event-driven with scoped REQ filters and explicit EVENT, EOSE, CLOSED, and AUTH handling.",
     "Publishing continues to verify relay OK outcomes through fiatjaf relay Publish errors and records partial failure metadata.",
     "Inbound events are validated with canonical event ID, Schnorr signature, timestamp, tag, and content checks before persistence or dispatch.",
-    "No polling or sleep-based completion logic is introduced for relay event delivery or historical catch-up."
+    "Historical catch-up completion is based on real EOSE signals, never sleeps, polling, or timeout-based done logic.",
+    "Remaining compatibility or hardening work is tracked in Beads, not TODO comments or handoff prose."
   ],
   "observed_behavior_before": [
     "Core adapter files imported github.com/nbd-wtf/go-nostr and relied on string-shaped Event ID, PubKey, Kind, Sig, filter author/kind, and signing APIs.",
-    "The repository already had an older fiatjaf.com/nostr module pin but the core adapter layer was still coupled to go-nostr."
+    "Downstream CLI, public client, API/app/controlplane/MCP/service/SoulFactory, integration tests, and protocol/NIP consumers still imported or depended on github.com/nbd-wtf/go-nostr before Items 2 and 3.",
+    "The repository already had an older fiatjaf.com/nostr module pin but the active Nostr codebase was still coupled to go-nostr in multiple packages."
   ],
   "implementation_notes": [
     "Added internal/nostrutil to centralize canonical fiatjaf private-key decoding, event signing, pubkey derivation, signature hex encoding, kind conversion, and pubkey filter conversion.",
     "Added adapter-local canonical helpers to keep repository string records and domain metadata stable while the relay/event layer uses fiatjaf typed IDs, pubkeys, kinds, and signatures.",
     "Updated RelayPool subscription wrappers for fiatjaf single-filter subscriptions and disabled fiatjaf fake EOSE timeout with MaxWaitForEOSE set to math.MaxInt64 duration, preserving Bahia EOSE semantics.",
     "Updated relay AUTH signing to fiatjaf Auth callback signature and canonical event signing.",
-    "Updated core adapter tests and fixtures to use typed fiatjaf events and valid canonical pubkeys where filter scoping is asserted."
+    "Updated core adapter tests and fixtures to use typed fiatjaf events and valid canonical pubkeys where filter scoping is asserted.",
+    "Updated residual Item 3 packages to construct canonical signed events, typed filters, typed IDs, pubkeys, signatures, and relay subscriptions using fiatjaf.com/nostr.",
+    "Replaced placeholder real relay URLs in SoulFactory backfill/query tests with deterministic fake relay bus behavior so tests do not encode hidden network dependencies.",
+    "Validated the final active Go/module scope with repo-wide searches, targeted tests, full go test ./..., go mod tidy, and git diff --check."
   ]
 }

@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -125,7 +125,7 @@ func isDirectRuntimeAction(action string) bool {
 
 func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *nostr.Event, req parsedDirectRuntimeActionRequest) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "action", req.Action, "service_id", req.ServiceID.String(), "environment_id", req.EnvironmentID.String())
-	if !r.isAuthorizedFor(event.PubKey, operatorScopeDirectRuntime) {
+	if !r.isAuthorizedFor(event.PubKey.Hex(), operatorScopeDirectRuntime) {
 		logger.Warn("unauthorized direct-runtime action request")
 		r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("requester not in authorized direct-runtime list"))
 		return
@@ -173,7 +173,7 @@ func (r *Reactor) deploymentStatusCallbackFor(ctx context.Context, event *nostr.
 
 func (r *Reactor) handleAdoptionScanRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "operation", "scan")
-	if !r.isAuthorizedFor(event.PubKey, operatorScopeAdoption) {
+	if !r.isAuthorizedFor(event.PubKey.Hex(), operatorScopeAdoption) {
 		logger.Warn("unauthorized adoption scan request")
 		r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "unauthorized", "requester not in authorized adoption list")
 		return
@@ -209,7 +209,7 @@ func (r *Reactor) handleAdoptionScanRequest(ctx context.Context, event *nostr.Ev
 
 func (r *Reactor) handleAdoptionImportRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "operation", "import")
-	if !r.isAuthorizedFor(event.PubKey, operatorScopeAdoption) {
+	if !r.isAuthorizedFor(event.PubKey.Hex(), operatorScopeAdoption) {
 		logger.Warn("unauthorized adoption import request")
 		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "unauthorized", "requester not in authorized adoption list")
 		return

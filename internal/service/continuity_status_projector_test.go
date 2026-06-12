@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/stretchr/testify/require"

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -17,13 +17,13 @@ import (
 
 func TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	capture := &captureNostrPublisher{published: 1}
 	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Labels: map[string]string{"role": "ci"}})
 	reactor := newWorkerHandlerTestReactor(t, operatorPubkey, capture, repo)
-	event := &nostr.Event{ID: "cordon-request", PubKey: operatorPubkey, Kind: KindWorkerCordonRequest, Tags: nostr.Tags{{"d", "cordon-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLifecycleCommand{WorkerPubKey: workerPubkey, Reason: "maintenance window", IdempotencyKey: "cordon-1", OperatorMetadata: map[string]any{"ticket": "ops-1"}})}
+	event := &nostr.Event{ID: testNostrID("cordon-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerCordonRequest, Tags: nostr.Tags{{"d", "cordon-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLifecycleCommand{WorkerPubKey: workerPubkey, Reason: "maintenance window", IdempotencyKey: "cordon-1", OperatorMetadata: map[string]any{"ticket": "ops-1"}})}
 
 	reactor.handleWorkerCordonRequest(ctx, event)
 
@@ -50,13 +50,13 @@ func TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle(t *testing.T) {
 
 func TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	capture := &captureNostrPublisher{published: 1}
 	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Telemetry: &domain.WorkerTelemetry{SampledAt: time.Unix(100, 0).UTC(), Memory: &domain.WorkerMemoryTelemetry{TotalBytes: 16 << 30, AvailableBytes: 8 << 30}}, Pressure: &domain.WorkerPressureAssessment{OverallLevel: domain.WorkerPressureWarning, CapacityClass: domain.WorkerCapacityReduced, RecommendedAction: domain.WorkerPressureActionOperatorIntervention, AssessedAt: time.Unix(101, 0).UTC()}})
 	reactor := newWorkerHandlerTestReactor(t, operatorPubkey, capture, repo)
-	event := &nostr.Event{ID: "labels-request", PubKey: operatorPubkey, Kind: KindWorkerLabelsUpdate, Tags: nostr.Tags{{"d", "labels-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLabelsUpdateCommand{WorkerPubKey: workerPubkey, Reason: "pool update", IdempotencyKey: "labels-1", Labels: map[string]string{" role ": " inference ", "track": "canary"}})}
+	event := &nostr.Event{ID: testNostrID("labels-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerLabelsUpdate, Tags: nostr.Tags{{"d", "labels-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLabelsUpdateCommand{WorkerPubKey: workerPubkey, Reason: "pool update", IdempotencyKey: "labels-1", Labels: map[string]string{" role ": " inference ", "track": "canary"}})}
 
 	reactor.handleWorkerLabelsUpdateRequest(ctx, event)
 
@@ -86,14 +86,14 @@ func TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel(t *testing.
 
 func TestWorkerHandlerRejectsConflictingWorkerTagAndContent(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	tagWorkerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-	bodyWorkerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	tagWorkerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
+	bodyWorkerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	capture := &captureNostrPublisher{published: 1}
 	repo := newMemoryWorkerRepo(domain.Worker{PubKey: tagWorkerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline}, domain.Worker{PubKey: bodyWorkerPubkey, Name: "worker-b", Status: domain.WorkerStatusOnline})
 	reactor := newWorkerHandlerTestReactor(t, operatorPubkey, capture, repo)
-	event := &nostr.Event{ID: "conflict", PubKey: operatorPubkey, Kind: KindWorkerCordonRequest, Tags: nostr.Tags{{"d", "cordon-1"}, {"worker", tagWorkerPubkey}}, Content: mustJSON(WorkerLifecycleCommand{WorkerPubKey: bodyWorkerPubkey, IdempotencyKey: "cordon-1"})}
+	event := &nostr.Event{ID: testNostrID("conflict"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerCordonRequest, Tags: nostr.Tags{{"d", "cordon-1"}, {"worker", tagWorkerPubkey}}, Content: mustJSON(WorkerLifecycleCommand{WorkerPubKey: bodyWorkerPubkey, IdempotencyKey: "cordon-1"})}
 
 	reactor.handleWorkerCordonRequest(ctx, event)
 
@@ -109,13 +109,13 @@ func TestWorkerHandlerRejectsConflictingWorkerTagAndContent(t *testing.T) {
 
 func TestWorkerHandlerRejectsDisabledWorkerTransition(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	capture := &captureNostrPublisher{published: 1}
 	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingDisabled})
 	reactor := newWorkerHandlerTestReactor(t, operatorPubkey, capture, repo)
-	event := &nostr.Event{ID: "disabled-transition", PubKey: operatorPubkey, Kind: KindWorkerMaintenanceExit, Tags: nostr.Tags{{"d", "maint-exit-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLifecycleCommand{WorkerPubKey: workerPubkey, IdempotencyKey: "maint-exit-1"})}
+	event := &nostr.Event{ID: testNostrID("disabled-transition"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerMaintenanceExit, Tags: nostr.Tags{{"d", "maint-exit-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLifecycleCommand{WorkerPubKey: workerPubkey, IdempotencyKey: "maint-exit-1"})}
 
 	reactor.handleWorkerMaintenanceExitRequest(ctx, event)
 
@@ -131,16 +131,16 @@ func TestWorkerHandlerRejectsDisabledWorkerTransition(t *testing.T) {
 
 func TestWorkerPolicyApplyHandlerUpdatesEnvironmentPolicy(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	envID := uuid.New()
 	capture := &captureNostrPublisher{published: 1}
 	workers := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive})
 	environments := newMemoryEnvironmentRepo(domain.Environment{ID: envID, Name: "prod", RuntimeConfig: map[string]any{"worker_policy": map[string]any{"strategy": "cheapest"}}})
 	registry := service.NewRegistryService(nil, environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
 	reactor := newWorkerHandlerTestReactorWithRegistry(t, operatorPubkey, capture, workers, registry)
-	event := &nostr.Event{ID: "policy-apply", PubKey: operatorPubkey, Kind: KindWorkerPolicyApplyRequest, Tags: nostr.Tags{{"d", "policy-1"}, {"environment", envID.String()}}, Content: mustJSON(WorkerPolicyApplyCommand{
+	event := &nostr.Event{ID: testNostrID("policy-apply"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerPolicyApplyRequest, Tags: nostr.Tags{{"d", "policy-1"}, {"environment", envID.String()}}, Content: mustJSON(WorkerPolicyApplyCommand{
 		EnvironmentID:  envID.String(),
 		IdempotencyKey: "policy-1",
 		Policy: map[string]any{
@@ -179,17 +179,17 @@ func TestWorkerPolicyApplyHandlerUpdatesEnvironmentPolicy(t *testing.T) {
 
 func TestWorkerPolicyApplyRejectsMismatchedWorkerTagAndPolicyPin(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	tagWorkerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-	policyWorkerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	tagWorkerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
+	policyWorkerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	envID := uuid.New()
 	capture := &captureNostrPublisher{published: 1}
 	workers := newMemoryWorkerRepo(domain.Worker{PubKey: tagWorkerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive}, domain.Worker{PubKey: policyWorkerPubkey, Name: "worker-b", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive})
 	environments := newMemoryEnvironmentRepo(domain.Environment{ID: envID, Name: "prod", RuntimeConfig: map[string]any{}})
 	registry := service.NewRegistryService(nil, environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
 	reactor := newWorkerHandlerTestReactorWithRegistry(t, operatorPubkey, capture, workers, registry)
-	event := &nostr.Event{ID: "policy-mismatch", PubKey: operatorPubkey, Kind: KindWorkerPolicyApplyRequest, Tags: nostr.Tags{{"d", "policy-1"}, {"environment", envID.String()}, {"worker", tagWorkerPubkey}}, Content: mustJSON(WorkerPolicyApplyCommand{EnvironmentID: envID.String(), IdempotencyKey: "policy-1", Policy: map[string]any{"pinned_worker": policyWorkerPubkey}})}
+	event := &nostr.Event{ID: testNostrID("policy-mismatch"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerPolicyApplyRequest, Tags: nostr.Tags{{"d", "policy-1"}, {"environment", envID.String()}, {"worker", tagWorkerPubkey}}, Content: mustJSON(WorkerPolicyApplyCommand{EnvironmentID: envID.String(), IdempotencyKey: "policy-1", Policy: map[string]any{"pinned_worker": policyWorkerPubkey}})}
 
 	reactor.handleWorkerPolicyApplyRequest(ctx, event)
 
@@ -208,16 +208,16 @@ func TestWorkerPolicyApplyRejectsMismatchedWorkerTagAndPolicyPin(t *testing.T) {
 
 func TestWorkloadPinHandlerUpdatesEnvironmentPolicy(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	envID := uuid.New()
 	capture := &captureNostrPublisher{published: 1}
 	workers := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive})
 	environments := newMemoryEnvironmentRepo(domain.Environment{ID: envID, Name: "prod", RuntimeConfig: map[string]any{}})
 	registry := service.NewRegistryService(nil, environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
 	reactor := newWorkerHandlerTestReactorWithRegistry(t, operatorPubkey, capture, workers, registry)
-	event := &nostr.Event{ID: "pin-request", PubKey: operatorPubkey, Kind: KindWorkloadPinRequest, Tags: nostr.Tags{{"d", "pin-1"}, {"environment", envID.String()}, {"worker", workerPubkey}}, Content: mustJSON(WorkloadPinCommand{EnvironmentID: envID.String(), WorkerPubKey: workerPubkey, IdempotencyKey: "pin-1"})}
+	event := &nostr.Event{ID: testNostrID("pin-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkloadPinRequest, Tags: nostr.Tags{{"d", "pin-1"}, {"environment", envID.String()}, {"worker", workerPubkey}}, Content: mustJSON(WorkloadPinCommand{EnvironmentID: envID.String(), WorkerPubKey: workerPubkey, IdempotencyKey: "pin-1"})}
 
 	reactor.handleWorkloadPinRequest(ctx, event)
 
@@ -237,9 +237,9 @@ func TestWorkloadPinHandlerUpdatesEnvironmentPolicy(t *testing.T) {
 
 func TestWorkerCleanupHandlerPublishesDispatchResultWithLoomJobID(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	capture := &captureNostrPublisher{published: 1}
 	worker := domain.Worker{PubKey: workerPubkey, Name: "cleanup-worker", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Software: []domain.WorkerSoftware{{Name: "bash"}, {Name: "docker"}}, Pressure: &domain.WorkerPressureAssessment{CapacityClass: domain.WorkerCapacityOpen, OverallLevel: domain.WorkerPressureNominal}}
 	repo := newMemoryWorkerRepo(worker)
@@ -247,12 +247,12 @@ func TestWorkerCleanupHandlerPublishesDispatchResultWithLoomJobID(t *testing.T) 
 	loom := &controlplaneCleanupLoomFake{releasePoll: releasePoll}
 	t.Cleanup(func() { close(releasePoll) })
 	orchestrator := service.NewWorkerCleanupOrchestrator(repo, nil, loom, &events.NoopPublisher{}, service.WorkerCleanupConfig{RequiredSoftware: []string{"bash", "docker"}}, zap.NewNop())
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{operatorPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo), WithWorkerCleanupOrchestrator(orchestrator))
-	event := &nostr.Event{ID: "cleanup-request", PubKey: operatorPubkey, Kind: KindWorkerCleanupRequest, Tags: nostr.Tags{{"d", "cleanup-1"}, {"worker", workerPubkey}}, Content: mustJSON(map[string]any{"worker_pubkey": workerPubkey, "idempotency_key": "cleanup-1", "cleanup_mode": service.CleanupModeReclaimableOnly, "reason": "operator cleanup"})}
+	event := &nostr.Event{ID: testNostrID("cleanup-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerCleanupRequest, Tags: nostr.Tags{{"d", "cleanup-1"}, {"worker", workerPubkey}}, Content: mustJSON(map[string]any{"worker_pubkey": workerPubkey, "idempotency_key": "cleanup-1", "cleanup_mode": service.CleanupModeReclaimableOnly, "reason": "operator cleanup"})}
 
 	reactor.handleWorkerCleanupRequest(ctx, event)
 
@@ -268,8 +268,8 @@ func TestWorkerCleanupHandlerPublishesDispatchResultWithLoomJobID(t *testing.T) 
 
 func TestWorkerCleanupHandlerPublishesNewRejectionCodes(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
 	cases := []struct {
 		name     string
 		worker   domain.Worker
@@ -302,12 +302,12 @@ func TestWorkerCleanupHandlerPublishesNewRejectionCodes(t *testing.T) {
 			releasePoll := make(chan struct{})
 			close(releasePoll)
 			orchestrator := service.NewWorkerCleanupOrchestrator(repo, nil, &controlplaneCleanupLoomFake{releasePoll: releasePoll}, &events.NoopPublisher{}, tc.cfg, zap.NewNop())
-			signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+			signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 			if err != nil {
 				t.Fatalf("create signer: %v", err)
 			}
 			reactor := NewReactor(Config{AuthorizedPubkeys: []string{operatorPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo), WithWorkerCleanupOrchestrator(orchestrator))
-			event := &nostr.Event{ID: "cleanup-reject", PubKey: operatorPubkey, Kind: KindWorkerCleanupRequest, Tags: nostr.Tags{{"d", "cleanup-reject-1"}, {"worker", tc.worker.PubKey}}, Content: mustJSON(map[string]any{"worker_pubkey": tc.worker.PubKey, "idempotency_key": "cleanup-reject-1", "cleanup_mode": service.CleanupModeReclaimableOnly})}
+			event := &nostr.Event{ID: testNostrID("cleanup-reject"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerCleanupRequest, Tags: nostr.Tags{{"d", "cleanup-reject-1"}, {"worker", tc.worker.PubKey}}, Content: mustJSON(map[string]any{"worker_pubkey": tc.worker.PubKey, "idempotency_key": "cleanup-reject-1", "cleanup_mode": service.CleanupModeReclaimableOnly})}
 
 			reactor.handleWorkerCleanupRequest(ctx, event)
 
@@ -321,22 +321,19 @@ func TestWorkerCleanupHandlerPublishesNewRejectionCodes(t *testing.T) {
 
 func mustTestPubkey(t *testing.T) string {
 	t.Helper()
-	pubkey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-	if err != nil {
-		t.Fatal(err)
-	}
+	pubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	return pubkey
 }
 
 func TestWorkerHandlerRejectsMissingIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
-	operatorKey := nostr.GeneratePrivateKey()
-	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
-	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	capture := &captureNostrPublisher{published: 1}
 	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline})
 	reactor := newWorkerHandlerTestReactor(t, operatorPubkey, capture, repo)
-	event := &nostr.Event{ID: "missing-idempotency", PubKey: operatorPubkey, Kind: KindWorkerDrainRequest, Tags: nostr.Tags{{"worker", workerPubkey}}, Content: mustJSON(map[string]any{"worker_pubkey": workerPubkey})}
+	event := &nostr.Event{ID: testNostrID("missing-idempotency"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindWorkerDrainRequest, Tags: nostr.Tags{{"worker", workerPubkey}}, Content: mustJSON(map[string]any{"worker_pubkey": workerPubkey})}
 
 	reactor.handleWorkerDrainRequest(ctx, event)
 
@@ -351,7 +348,7 @@ func TestWorkerHandlerRejectsMissingIdempotencyKey(t *testing.T) {
 }
 
 func TestWorkerCommandKindsAreOmittedFromDefaultRuntimeSubscription(t *testing.T) {
-	filter := nostr.Filter{Kinds: defaultRequestSubscriptionKinds()}
+	filter := nostr.Filter{Kinds: nostrKindsFromInts(defaultRequestSubscriptionKinds())}
 	assertFilterMissingKinds(t, filter,
 		KindWorkerCordonRequest,
 		KindWorkerUncordonRequest,
@@ -372,7 +369,7 @@ func newWorkerHandlerTestReactor(t *testing.T, authorizedPubkey string, capture 
 
 func newWorkerHandlerTestReactorWithRegistry(t *testing.T, authorizedPubkey string, capture *captureNostrPublisher, repo *memoryWorkerRepo, registry *service.RegistryService) *Reactor {
 	t.Helper()
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -571,7 +568,7 @@ func lastPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event
 	t.Helper()
 	if isLegacyRuntimeObservableKind(kind) {
 		for i := len(events) - 1; i >= 0; i-- {
-			if events[i].Kind == kind {
+			if events[i].Kind == nostr.Kind(kind) {
 				t.Fatalf("legacy runtime kind %d was published directly; events=%#v", kind, events)
 			}
 		}
@@ -583,7 +580,7 @@ func lastPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event
 		}
 	}
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Kind == kind {
+		if events[i].Kind == nostr.Kind(kind) {
 			return events[i]
 		}
 	}

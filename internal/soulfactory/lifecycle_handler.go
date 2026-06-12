@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -107,9 +107,9 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 	}
 
 	// Verify authorization.
-	if !h.isAuthorized(event.PubKey, soul) {
+	if !h.isAuthorized(event.PubKey.Hex(), soul) {
 		err := fmt.Errorf("unauthorized: %s cannot perform %s on soul %s",
-			event.PubKey, action.Action, soul.AgentID)
+			event.PubKey.Hex(), action.Action, soul.AgentID)
 		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
 		return err
 	}
@@ -188,7 +188,7 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 		return nil, nil
 	}
 	results, err := bus.Query(ctx, []nostr.Filter{{
-		Kinds: []int{domain.KindProvisioningResult, domain.KindSoulActionLegacyResult},
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)},
 		Tags:  nostr.TagMap{"e": []string{eventID}},
 		Limit: 1,
 	}})
@@ -196,7 +196,7 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 		return nil, err
 	}
 	for _, result := range results {
-		if result != nil && domain.IsLifecycleResultKind(result.Kind) && tagValue(result.Tags, tagRequestKind) == fmt.Sprint(domain.KindSoulAction) {
+		if result != nil && domain.IsLifecycleResultKind(int(result.Kind)) && tagValue(result.Tags, tagRequestKind) == fmt.Sprint(domain.KindSoulAction) {
 			return result, nil
 		}
 	}
@@ -887,10 +887,10 @@ func (e *localLifecycleEngine) handleUpdate(ctx context.Context, soul *domain.Ag
 
 func actionFromEventForError(event *nostr.Event) *domain.SoulAction {
 	return &domain.SoulAction{
-		EventID:   event.ID,
+		EventID:   event.ID.Hex(),
 		SoulRef:   tagValue(event.Tags, tagSoul),
 		Action:    domain.SoulActionType(tagValue(event.Tags, tagAction)),
-		Initiator: event.PubKey,
+		Initiator: event.PubKey.Hex(),
 		CreatedAt: event.CreatedAt.Time(),
 	}
 }

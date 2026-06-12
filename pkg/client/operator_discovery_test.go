@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func TestDiscoverOperatorRelaysPrefersContextVMRelaySet(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	now := nostr.Now()
@@ -27,10 +27,10 @@ func TestDiscoverOperatorRelaysPrefersContextVMRelaySet(t *testing.T) {
 		t.Fatalf("relays = %#v, want normalized ContextVM relay set", relays)
 	}
 	filter := transport.onlyFilter(t)
-	if got := filter.Kinds; len(got) != 1 || got[0] != kinds.RelaySetDiscovery {
+	if got := filter.Kinds; len(got) != 1 || got[0] != nostr.Kind(kinds.RelaySetDiscovery) {
 		t.Fatalf("filter kinds = %#v, want NIP-51 relay set kind", got)
 	}
-	if got := filter.Authors; len(got) != 1 || got[0] != trustedPubkey {
+	if got := filter.Authors; len(got) != 1 || got[0].Hex() != trustedPubkey {
 		t.Fatalf("filter authors = %#v, want trusted service pubkey", got)
 	}
 	if got := filter.Tags["d"]; strings.Join(got, ",") != operatorContextVMRelaySet+","+operatorBrowserRelaySet {
@@ -39,7 +39,7 @@ func TestDiscoverOperatorRelaysPrefersContextVMRelaySet(t *testing.T) {
 }
 
 func TestDiscoverOperatorRelaysFallsBackToBrowserRelaySet(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	transport.events <- signedRelaySetEvent(t, serviceKey, operatorBrowserRelaySet, []string{"wss://browser.example"}, nostr.Now())
@@ -55,7 +55,7 @@ func TestDiscoverOperatorRelaysFallsBackToBrowserRelaySet(t *testing.T) {
 }
 
 func TestDiscoverOperatorRelaysUsesLatestParameterizedReplaceableRelaySet(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	now := nostr.Now()
@@ -73,7 +73,7 @@ func TestDiscoverOperatorRelaysUsesLatestParameterizedReplaceableRelaySet(t *tes
 }
 
 func TestDiscoverOperatorRelaysUsesLowestEventIDForReplaceableTimestampTie(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	now := nostr.Now()
@@ -84,7 +84,7 @@ func TestDiscoverOperatorRelaysUsesLowestEventIDForReplaceableTimestampTie(t *te
 	close(transport.eose)
 
 	expected := "wss://first.example"
-	if second.ID < first.ID {
+	if second.ID.Hex() < first.ID.Hex() {
 		expected = "wss://second.example"
 	}
 	relays, err := discoverOperatorRelaysWithTransport(context.Background(), []string{trustedPubkey}, transport)
@@ -98,8 +98,8 @@ func TestDiscoverOperatorRelaysUsesLowestEventIDForReplaceableTimestampTie(t *te
 
 func TestDiscoverOperatorRelaysMultipleTrustedServicesUsePurposeThenTrustOrder(t *testing.T) {
 	t.Run("ContextVM from later trusted service beats browser from earlier trusted service", func(t *testing.T) {
-		firstServiceKey := nostr.GeneratePrivateKey()
-		secondServiceKey := nostr.GeneratePrivateKey()
+		firstServiceKey := nostr.Generate().Hex()
+		secondServiceKey := nostr.Generate().Hex()
 		firstTrustedPubkey := mustPublicKey(t, firstServiceKey)
 		secondTrustedPubkey := mustPublicKey(t, secondServiceKey)
 		transport := newFakeOperatorTransport()
@@ -118,8 +118,8 @@ func TestDiscoverOperatorRelaysMultipleTrustedServicesUsePurposeThenTrustOrder(t
 	})
 
 	t.Run("configured trust order beats cross-service latest timestamp for same relay-set purpose", func(t *testing.T) {
-		firstServiceKey := nostr.GeneratePrivateKey()
-		secondServiceKey := nostr.GeneratePrivateKey()
+		firstServiceKey := nostr.Generate().Hex()
+		secondServiceKey := nostr.Generate().Hex()
 		firstTrustedPubkey := mustPublicKey(t, firstServiceKey)
 		secondTrustedPubkey := mustPublicKey(t, secondServiceKey)
 		transport := newFakeOperatorTransport()
@@ -143,8 +143,8 @@ func TestDiscoverOperatorRelaysRejectsMissingTrustAndUntrustedEvents(t *testing.
 		t.Fatalf("missing trust error = %v, want deterministic trusted service pubkey failure", err)
 	}
 
-	trustedKey := nostr.GeneratePrivateKey()
-	untrustedKey := nostr.GeneratePrivateKey()
+	trustedKey := nostr.Generate().Hex()
+	untrustedKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	transport.events <- signedRelaySetEvent(t, untrustedKey, operatorContextVMRelaySet, []string{"wss://untrusted.example"}, nostr.Now())
 	close(transport.eose)
@@ -156,7 +156,7 @@ func TestDiscoverOperatorRelaysRejectsMissingTrustAndUntrustedEvents(t *testing.
 }
 
 func TestDiscoverOperatorRelaysRejectsUnsignedOrWrongDTagEvents(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	badSignature := signedRelaySetEvent(t, serviceKey, operatorContextVMRelaySet, []string{"wss://tampered.example"}, nostr.Now())
@@ -172,7 +172,7 @@ func TestDiscoverOperatorRelaysRejectsUnsignedOrWrongDTagEvents(t *testing.T) {
 }
 
 func TestDiscoverOperatorRelaysRequiresBootstrapRelaysForRealResolver(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	_, err := DiscoverOperatorRelays(context.Background(), OperatorRelayDiscoveryConfig{TrustedServicePubkeys: []string{mustPublicKey(t, serviceKey)}})
 	if err == nil || !strings.Contains(err.Error(), "bootstrap relay") {
 		t.Fatalf("DiscoverOperatorRelays() error = %v, want bootstrap relay requirement", err)
@@ -180,7 +180,7 @@ func TestDiscoverOperatorRelaysRequiresBootstrapRelaysForRealResolver(t *testing
 }
 
 func TestDiscoverOperatorRelaysReportsDeadlineBeforeEOSE(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -193,7 +193,7 @@ func TestDiscoverOperatorRelaysReportsDeadlineBeforeEOSE(t *testing.T) {
 }
 
 func TestDiscoverOperatorRelaysTransportGuardDoesNotCompleteDiscovery(t *testing.T) {
-	serviceKey := nostr.GeneratePrivateKey()
+	serviceKey := nostr.Generate().Hex()
 	trustedPubkey := mustPublicKey(t, serviceKey)
 	transport := newFakeOperatorTransport()
 	transport.events = make(chan *nostr.Event)
@@ -229,8 +229,12 @@ func signedRelaySetEvent(t *testing.T, privateKey, dTag string, relays []string,
 	for _, relay := range relays {
 		tags = append(tags, nostr.Tag{"relay", relay})
 	}
-	event := &nostr.Event{Kind: kinds.RelaySetDiscovery, CreatedAt: createdAt, Tags: tags}
-	if err := event.Sign(privateKey); err != nil {
+	event := &nostr.Event{Kind: nostr.Kind(kinds.RelaySetDiscovery), CreatedAt: createdAt, Tags: tags}
+	secret, err := nostr.SecretKeyFromHex(privateKey)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	if err := event.Sign(secret); err != nil {
 		t.Fatalf("sign relay set event: %v", err)
 	}
 	return event
@@ -238,9 +242,9 @@ func signedRelaySetEvent(t *testing.T, privateKey, dTag string, relays []string,
 
 func mustPublicKey(t *testing.T, privateKey string) string {
 	t.Helper()
-	pubkey, err := nostr.GetPublicKey(privateKey)
+	secret, err := nostr.SecretKeyFromHex(privateKey)
 	if err != nil {
-		t.Fatalf("derive pubkey: %v", err)
+		t.Fatalf("parse private key: %v", err)
 	}
-	return pubkey
+	return secret.Public().Hex()
 }

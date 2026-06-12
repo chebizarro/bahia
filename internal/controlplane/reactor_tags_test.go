@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 func TestAppendRequestResourceTagsAddsDeployCorrelationTags(t *testing.T) {
@@ -13,16 +13,16 @@ func TestAppendRequestResourceTagsAddsDeployCorrelationTags(t *testing.T) {
 	envID := uuid.New()
 	artifactID := uuid.New()
 	request := &nostr.Event{
-		ID:      "request-event",
-		PubKey:  "requester",
+		ID:      testNostrID("request-event"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindDeployRequest,
 		Content: `{"service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `"}`,
 	}
 	reactor := &Reactor{runs: map[string]*DeploymentRun{}}
 
 	tags := reactor.appendRequestResourceTags(context.Background(), nostr.Tags{
-		{"e", request.ID, "", "reply"},
-		{"p", request.PubKey},
+		{"e", request.ID.Hex(), "", "reply"},
+		{"p", request.PubKey.Hex()},
 		{"status", "processing"},
 	}, request)
 
@@ -37,9 +37,9 @@ func TestAppendRequestResourceTagsAddsTrackedRunCorrelationTags(t *testing.T) {
 	artifactID := uuid.New()
 	intentID := uuid.New()
 	runID := uuid.New()
-	request := &nostr.Event{ID: "request-event", PubKey: "requester", Kind: KindDeployRequest}
+	request := &nostr.Event{ID: testNostrID("request-event"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey), Kind: KindDeployRequest}
 	reactor := &Reactor{runs: map[string]*DeploymentRun{
-		request.ID: {
+		request.ID.Hex(): {
 			ID:            runID,
 			ServiceID:     serviceID,
 			EnvironmentID: envID,
@@ -55,6 +55,18 @@ func TestAppendRequestResourceTagsAddsTrackedRunCorrelationTags(t *testing.T) {
 	assertReactorTag(t, tags, "artifact", artifactID.String())
 	assertReactorTag(t, tags, "intent", intentID.String())
 	assertReactorTag(t, tags, "run", runID.String())
+}
+
+func TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys(t *testing.T) {
+	reactor := &Reactor{config: Config{AuthorizedPubkeys: []string{"not-a-pubkey"}}}
+
+	authors := reactor.requestSubscriptionAuthors()
+	if len(authors) == 0 {
+		t.Fatal("requestSubscriptionAuthors() returned no authors for malformed configured allowlist; want fail-closed sentinel")
+	}
+	if authors[0].Hex() != invalidSubscriptionAuthorPubKey().Hex() {
+		t.Fatalf("requestSubscriptionAuthors()[0] = %s, want fail-closed sentinel %s", authors[0].Hex(), invalidSubscriptionAuthorPubKey().Hex())
+	}
 }
 
 func assertReactorTag(t *testing.T, tags nostr.Tags, key, value string) {

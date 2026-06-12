@@ -4,14 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func TestPackageCommandPublisherPublishesCanonicalUploadRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}

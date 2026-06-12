@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
@@ -57,7 +57,7 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -117,14 +117,17 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 }
 
 func TestMLSignerFirstRequestSubscriptionsAreScopedCanonicalContextVM(t *testing.T) {
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
+	adoptionPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
+	runtimePubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	reactor := NewReactor(Config{
-		AuthorizedPubkeys:              []string{"operator-a"},
-		AdoptionAuthorizedPubkeys:      []string{"adoption-a"},
-		DirectRuntimeAuthorizedPubkeys: []string{"runtime-a", "operator-a"},
+		AuthorizedPubkeys:              []string{operatorPubkey},
+		AdoptionAuthorizedPubkeys:      []string{adoptionPubkey},
+		DirectRuntimeAuthorizedPubkeys: []string{runtimePubkey, operatorPubkey},
 	}, nil, nil, signer, nil)
 
 	since := nostr.Timestamp(123)
@@ -133,33 +136,30 @@ func TestMLSignerFirstRequestSubscriptionsAreScopedCanonicalContextVM(t *testing
 		t.Fatalf("filters=%d, want one scoped ContextVM subscription", len(filters))
 	}
 	filter := filters[0]
-	wantKinds := []int{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}
-	if !sameIntSet(filter.Kinds, wantKinds) {
+	wantKinds := []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}
+	if !sameNostrKindSet(filter.Kinds, wantKinds) {
 		t.Fatalf("request subscription kinds=%v, want canonical ContextVM kinds %v", filter.Kinds, wantKinds)
 	}
-	for _, legacyKind := range []int{KindMLRecipeRunRequest, KindMLInferenceDeployRequest, KindMLModelImportRequest, KindMLInferenceDeployResult, KindMLModelImportResult} {
-		if containsInt(filter.Kinds, legacyKind) {
+	for _, legacyKind := range []nostr.Kind{KindMLRecipeRunRequest, KindMLInferenceDeployRequest, KindMLModelImportRequest, KindMLInferenceDeployResult, KindMLModelImportResult} {
+		if containsNostrKind(filter.Kinds, legacyKind) {
 			t.Fatalf("runtime request subscription revived legacy ML kind %d in %v", legacyKind, filter.Kinds)
 		}
 	}
-	wantAuthors := []string{"operator-a", "adoption-a", "runtime-a"}
-	if !sameStringSet(filter.Authors, wantAuthors) {
+	wantAuthors := []string{operatorPubkey, adoptionPubkey, runtimePubkey}
+	if !samePubKeyHexSet(filter.Authors, wantAuthors) {
 		t.Fatalf("request subscription authors=%v, want scoped operators %v", filter.Authors, wantAuthors)
 	}
-	if filter.Since == nil || *filter.Since != since {
+	if filter.Since != since {
 		t.Fatalf("request subscription since=%v, want %d", filter.Since, since)
 	}
 }
 
 func TestMLInjectedLegacyRequestsRequireCorrelationAndPublishCanonicalFailure(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestMLInjectedLegacyRequestsRequireCorrelationAndPublishCanonicalFailure(t 
 		t.Fatalf("ML validation failure kind=%d, want ContextVM %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "failed")
 	assertReactorTag(t, result.Tags, "result", "validation_error")
@@ -224,7 +224,7 @@ func TestMLBrowserRouteAvoidsHTTPPollingForCompletion(t *testing.T) {
 	}
 }
 
-func containsInt(values []int, want int) bool {
+func containsNostrKind(values []nostr.Kind, want nostr.Kind) bool {
 	for _, value := range values {
 		if value == want {
 			return true
@@ -233,25 +233,25 @@ func containsInt(values []int, want int) bool {
 	return false
 }
 
-func sameIntSet(got, want []int) bool {
+func sameNostrKindSet(got, want []nostr.Kind) bool {
 	if len(got) != len(want) {
 		return false
 	}
 	for _, value := range want {
-		if !containsInt(got, value) {
+		if !containsNostrKind(got, value) {
 			return false
 		}
 	}
 	return true
 }
 
-func sameStringSet(got, want []string) bool {
+func samePubKeyHexSet(got []nostr.PubKey, want []string) bool {
 	if len(got) != len(want) {
 		return false
 	}
 	seen := map[string]struct{}{}
 	for _, value := range got {
-		seen[value] = struct{}{}
+		seen[value.Hex()] = struct{}{}
 	}
 	for _, value := range want {
 		if _, ok := seen[value]; !ok {

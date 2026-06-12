@@ -4,10 +4,9 @@ import (
 	"context"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -15,8 +14,9 @@ import (
 
 func signedControlPlaneTestEvent(t *testing.T, kind int) *gonostr.Event {
 	t.Helper()
-	ev := &gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Content: "{}", Tags: gonostr.Tags{}}
-	if err := ev.Sign("1111111111111111111111111111111111111111111111111111111111111111"); err != nil {
+	ev := &gonostr.Event{Kind: gonostr.Kind(kind), CreatedAt: gonostr.Now(), Content: "{}", Tags: gonostr.Tags{}}
+	secret := testNostrSecretKey(t, "1111111111111111111111111111111111111111111111111111111111111111")
+	if err := ev.Sign(secret); err != nil {
 		t.Fatalf("sign event: %v", err)
 	}
 	return ev
@@ -26,11 +26,11 @@ func TestReactorHandleEventDropsInvalidBeforeDedupAndDispatch(t *testing.T) {
 	r := NewReactor(Config{}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 	valid := signedControlPlaneTestEvent(t, KindDeployRequest)
 	invalid := *valid
-	invalid.ID = strings.Repeat("0", 64)
+	invalid.ID = gonostr.ID{}
 
 	r.handleEvent(context.Background(), &invalid)
 
-	if r.dedup.IsDuplicate(valid.ID) {
+	if r.dedup.IsDuplicate(valid.ID.Hex()) {
 		t.Fatal("invalid control-plane event must not be marked seen")
 	}
 }
@@ -43,14 +43,14 @@ func TestReactorHandleEventDropsLegacyRuntimeKindBeforeAudit(t *testing.T) {
 
 	r.handleEvent(ctx, event)
 
-	rec, err := repo.GetByID(ctx, event.ID)
+	rec, err := repo.GetByID(ctx, event.ID.Hex())
 	if err != nil {
 		t.Fatalf("get audit record: %v", err)
 	}
 	if rec != nil {
 		t.Fatalf("legacy runtime event should be dropped before audit, got %#v", rec)
 	}
-	if r.dedup.IsDuplicate(event.ID) {
+	if r.dedup.IsDuplicate(event.ID.Hex()) {
 		t.Fatal("legacy runtime event must not be marked seen")
 	}
 }
@@ -73,10 +73,13 @@ func TestReactorHandleEventRecordsEOSEState(t *testing.T) {
 
 func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing.T) {
 	since := gonostr.Timestamp(12345)
+	global := testNostrPubKeyHexFromPrivateKey(t, gonostr.Generate().Hex())
+	adoption := testNostrPubKeyHexFromPrivateKey(t, gonostr.Generate().Hex())
+	runtime := testNostrPubKeyHexFromPrivateKey(t, gonostr.Generate().Hex())
 	r := NewReactor(Config{
-		AuthorizedPubkeys:              []string{"global", "global", ""},
-		AdoptionAuthorizedPubkeys:      []string{"adoption", "global", "adoption", ""},
-		DirectRuntimeAuthorizedPubkeys: []string{"runtime", "global", "runtime", ""},
+		AuthorizedPubkeys:              []string{global, global, ""},
+		AdoptionAuthorizedPubkeys:      []string{adoption, global, adoption, ""},
+		DirectRuntimeAuthorizedPubkeys: []string{runtime, global, runtime, ""},
 	}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(since)
@@ -84,7 +87,7 @@ func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing
 		t.Fatalf("expected one canonical runtime replay filter, got %d", len(filters))
 	}
 	filter := filters[0]
-	assertAuthors(t, filter.Authors, []string{"global", "adoption", "runtime"})
+	assertAuthors(t, filter.Authors, []string{global, adoption, runtime})
 	assertFilterHasKinds(t, filter, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap)
 	assertFilterMissingKinds(t, filter,
 		nostr.KindCASControlState,
@@ -99,37 +102,44 @@ func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing
 		KindPackageDriftDetect,
 		nostr.KindFailoverRequest,
 	)
-	if filter.Since == nil || *filter.Since != since {
+	if filter.Since != since {
 		t.Fatalf("filter should preserve shared since cursor %v, got %v", since, filter.Since)
 	}
 }
 
 func TestReactorBuildRequestSubscriptionFiltersIgnoresLegacyAuthorScopes(t *testing.T) {
+	global := testNostrPubKeyHexFromPrivateKey(t, gonostr.Generate().Hex())
+	adoption := testNostrPubKeyHexFromPrivateKey(t, gonostr.Generate().Hex())
+	runtime := testNostrPubKeyHexFromPrivateKey(t, gonostr.Generate().Hex())
 	r := NewReactor(Config{
-		AuthorizedPubkeys:              []string{"global"},
-		AdoptionAuthorizedPubkeys:      []string{"adoption"},
-		DirectRuntimeAuthorizedPubkeys: []string{"runtime"},
+		AuthorizedPubkeys:              []string{global},
+		AdoptionAuthorizedPubkeys:      []string{adoption},
+		DirectRuntimeAuthorizedPubkeys: []string{runtime},
 	}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(gonostr.Timestamp(67890))
 	if len(filters) != 1 {
 		t.Fatalf("expected one canonical runtime replay filter, got %d", len(filters))
 	}
-	assertAuthors(t, filters[0].Authors, []string{"global", "adoption", "runtime"})
+	assertAuthors(t, filters[0].Authors, []string{global, adoption, runtime})
 	assertFilterMissingKinds(t, filters[0], KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, KindWorkerCleanupRequest)
 }
 
-func assertAuthors(t *testing.T, got, want []string) {
+func assertAuthors(t *testing.T, got []gonostr.PubKey, want []string) {
 	t.Helper()
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("authors mismatch: got %v want %v", got, want)
+	gotHex := make([]string, 0, len(got))
+	for _, pubkey := range got {
+		gotHex = append(gotHex, pubkey.Hex())
+	}
+	if !reflect.DeepEqual(gotHex, want) {
+		t.Fatalf("authors mismatch: got %v want %v", gotHex, want)
 	}
 }
 
 func assertFilterHasKinds(t *testing.T, filter gonostr.Filter, kinds ...int) {
 	t.Helper()
 	for _, kind := range kinds {
-		if !slices.Contains(filter.Kinds, kind) {
+		if !slices.Contains(filter.Kinds, gonostr.Kind(kind)) {
 			t.Fatalf("expected filter kinds %v to include %d", filter.Kinds, kind)
 		}
 	}
@@ -138,7 +148,7 @@ func assertFilterHasKinds(t *testing.T, filter gonostr.Filter, kinds ...int) {
 func assertFilterMissingKinds(t *testing.T, filter gonostr.Filter, kinds ...int) {
 	t.Helper()
 	for _, kind := range kinds {
-		if slices.Contains(filter.Kinds, kind) {
+		if slices.Contains(filter.Kinds, gonostr.Kind(kind)) {
 			t.Fatalf("expected filter kinds %v not to include %d", filter.Kinds, kind)
 		}
 	}
@@ -149,7 +159,7 @@ func filterWithKinds(t *testing.T, filters []gonostr.Filter, kinds ...int) gonos
 	for _, filter := range filters {
 		matched := true
 		for _, kind := range kinds {
-			if !slices.Contains(filter.Kinds, kind) {
+			if !slices.Contains(filter.Kinds, gonostr.Kind(kind)) {
 				matched = false
 				break
 			}
@@ -167,7 +177,7 @@ func filterWithoutKinds(t *testing.T, filters []gonostr.Filter, kinds ...int) go
 	for _, filter := range filters {
 		matched := true
 		for _, kind := range kinds {
-			if slices.Contains(filter.Kinds, kind) {
+			if slices.Contains(filter.Kinds, gonostr.Kind(kind)) {
 				matched = false
 				break
 			}

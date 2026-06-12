@@ -3,7 +3,7 @@ package docs
 import (
 	"context"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // DocsQuerierFunc is a convenience adapter that turns a function into a

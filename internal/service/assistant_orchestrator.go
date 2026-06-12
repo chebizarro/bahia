@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
-	"github.com/nbd-wtf/go-nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -170,10 +170,10 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 		return nil, fmt.Errorf("assistant prompt event is nil")
 	}
 	if strings.TrimSpace(source.OperatorPubkey) == "" {
-		source.OperatorPubkey = event.PubKey
+		source.OperatorPubkey = event.PubKey.Hex()
 	}
 	if strings.TrimSpace(source.RequestID) == "" {
-		source.RequestID = event.ID
+		source.RequestID = event.ID.Hex()
 	}
 	if strings.TrimSpace(source.DedupKey) == "" {
 		source.DedupKey = source.RequestID
@@ -200,8 +200,8 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 	addSessionParticipant(session, source.OperatorPubkey)
 	session.State = domain.AssistantSessionStatePlanning
 	session.CurrentTurnID = req.TurnID
-	session.CurrentRequestID = event.ID
-	o.logger.Info("assistant prompt started", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", event.ID)
+	session.CurrentRequestID = event.ID.Hex()
+	o.logger.Info("assistant prompt started", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", event.ID.Hex())
 	if err := o.publishSession(ctx, session); err != nil {
 		return nil, err
 	}
@@ -278,10 +278,10 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 		return nil, fmt.Errorf("assistant approval event is nil")
 	}
 	if strings.TrimSpace(source.OperatorPubkey) == "" {
-		source.OperatorPubkey = event.PubKey
+		source.OperatorPubkey = event.PubKey.Hex()
 	}
 	if strings.TrimSpace(source.RequestID) == "" {
-		source.RequestID = event.ID
+		source.RequestID = event.ID.Hex()
 	}
 	if strings.TrimSpace(source.DedupKey) == "" {
 		source.DedupKey = source.RequestID
@@ -484,7 +484,11 @@ func (o *AssistantOrchestrator) observeDownstreamResult(ctx context.Context, ses
 		delete(o.activeObservers, sessionID)
 		o.mu.Unlock()
 	}()
-	merged, err := o.subscriber.SubscribeAllWithEOSE(observeCtx, []nostr.Filter{{Kinds: append([]int(nil), receipt.ResultKinds...), Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
+	resultKinds := make([]nostr.Kind, 0, len(receipt.ResultKinds))
+	for _, kind := range receipt.ResultKinds {
+		resultKinds = append(resultKinds, nostr.Kind(kind))
+	}
+	merged, err := o.subscriber.SubscribeAllWithEOSE(observeCtx, []nostr.Filter{{Kinds: resultKinds, Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
 	if err != nil {
 		return downstreamOutcome{Status: "blocked"}, err
 	}
@@ -507,10 +511,14 @@ func (o *AssistantOrchestrator) observeDownstreamResult(ctx context.Context, ses
 			if ev == nil {
 				continue
 			}
-			if _, dup := seen[ev.ID]; dup {
+			eventID := ev.ID.Hex()
+			if _, dup := seen[eventID]; dup {
 				continue
 			}
-			seen[ev.ID] = struct{}{}
+			seen[eventID] = struct{}{}
+			if !downstreamResultMatchesReceipt(ev, receipt) {
+				continue
+			}
 			status := terminalStatus(ev)
 			if status == "completed" || status == "failed" {
 				return downstreamOutcome{Status: status, Event: ev}, nil
@@ -527,6 +535,32 @@ func (o *AssistantOrchestrator) cancelObserver(sessionID string) {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+func downstreamResultMatchesReceipt(ev *nostr.Event, receipt *domain.AsyncToolReceipt) bool {
+	if ev == nil || receipt == nil || receipt.RequestEventID == "" {
+		return false
+	}
+	kindAllowed := false
+	for _, kind := range receipt.ResultKinds {
+		if ev.Kind == nostr.Kind(kind) {
+			kindAllowed = true
+			break
+		}
+	}
+	if !kindAllowed {
+		return false
+	}
+	if !tagContainsValue(ev.Tags, "e", receipt.RequestEventID) {
+		return false
+	}
+	if ev.CreatedAt == 0 || ev.CreatedAt > nostr.Now()+nostr.Timestamp((5*time.Minute)/time.Second) {
+		return false
+	}
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return false
+	}
+	return true
 }
 
 func terminalStatus(ev *nostr.Event) string {
@@ -802,8 +836,8 @@ func (o *AssistantOrchestrator) publishStatus(ctx context.Context, requestEvent 
 		return fmt.Errorf("marshal assistant status: %w", err)
 	}
 	dTag := fmt.Sprintf("%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, time.Now().UnixNano())
-	if requestEvent != nil && requestEvent.ID != "" {
-		dTag = fmt.Sprintf("%s:%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, requestEvent.ID, time.Now().UnixNano())
+	if requestEvent != nil && requestEvent.ID != (nostr.ID{}) {
+		dTag = fmt.Sprintf("%s:%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, requestEvent.ID.Hex(), time.Now().UnixNano())
 	}
 	tags := append(nostr.Tags{{"d", dTag}, {"schema", domain.AssistantStatusSchema}}, o.replyTags(requestEvent, sessionID, status)...)
 	if planHash := stringFromMap(content, "plan_hash"); planHash != "" {
@@ -834,7 +868,7 @@ func (o *AssistantOrchestrator) resultPayload(requestEvent *nostr.Event, session
 		payload["step"] = step
 	}
 	if requestEvent != nil {
-		payload["request_event_id"] = requestEvent.ID
+		payload["request_event_id"] = requestEvent.ID.Hex()
 	}
 	return payload
 }
@@ -846,7 +880,7 @@ func (o *AssistantOrchestrator) failureResult(sessionID, step, message string) A
 func (o *AssistantOrchestrator) replyTags(requestEvent *nostr.Event, sessionID, status string) nostr.Tags {
 	tags := nostr.Tags{{"session", sessionID}, {"agent", o.identity.AgentID}, {"status", status}}
 	if requestEvent != nil {
-		tags = append(tags, nostr.Tag{"e", requestEvent.ID, "", "reply"}, nostr.Tag{"p", requestEvent.PubKey})
+		tags = append(tags, nostr.Tag{"e", requestEvent.ID.Hex(), "", "reply"}, nostr.Tag{"p", requestEvent.PubKey.Hex()})
 	}
 	return tags
 }
@@ -973,6 +1007,15 @@ func tagValue(tags nostr.Tags, key string) string {
 	return ""
 }
 
+func tagContainsValue(tags nostr.Tags, key string, value string) bool {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key && tag[1] == value {
+			return true
+		}
+	}
+	return false
+}
+
 func routeContextStrings(routeContext map[string]any) map[string]string {
 	out := make(map[string]string, len(routeContext))
 	for k, v := range routeContext {
@@ -1031,32 +1074,5 @@ func signGoNostrEvent(ctx context.Context, signer canonicalnostr.Signer, ev *nos
 	if signer == nil {
 		return fmt.Errorf("assistant signer is not configured")
 	}
-	canonicalEvent := canonicalnostr.Event{CreatedAt: canonicalnostr.Timestamp(ev.CreatedAt), Kind: canonicalnostr.Kind(ev.Kind), Tags: toCanonicalTags(ev.Tags), Content: ev.Content}
-	if err := signer.SignEvent(ctx, &canonicalEvent); err != nil {
-		return err
-	}
-	ev.ID = canonicalEvent.ID.Hex()
-	ev.PubKey = canonicalEvent.PubKey.Hex()
-	ev.CreatedAt = nostr.Timestamp(canonicalEvent.CreatedAt)
-	ev.Kind = int(canonicalEvent.Kind)
-	ev.Tags = toGoNostrTags(canonicalEvent.Tags)
-	ev.Content = canonicalEvent.Content
-	ev.Sig = canonicalnostr.HexEncodeToString(canonicalEvent.Sig[:])
-	return nil
-}
-
-func toCanonicalTags(tags nostr.Tags) canonicalnostr.Tags {
-	converted := make(canonicalnostr.Tags, 0, len(tags))
-	for _, tag := range tags {
-		converted = append(converted, canonicalnostr.Tag(append([]string(nil), tag...)))
-	}
-	return converted
-}
-
-func toGoNostrTags(tags canonicalnostr.Tags) nostr.Tags {
-	converted := make(nostr.Tags, 0, len(tags))
-	for _, tag := range tags {
-		converted = append(converted, nostr.Tag(append([]string(nil), tag...)))
-	}
-	return converted
+	return signer.SignEvent(ctx, ev)
 }

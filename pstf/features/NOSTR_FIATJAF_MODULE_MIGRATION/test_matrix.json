@@ -62,6 +62,66 @@
         "TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording rejects a tampered relay backfill event before repository recording or migration publishing"
       ],
       "acceptance_criteria": ["AC-ITEM2-003"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/soulfactory -timeout 30s",
+      "result": "passed",
+      "evidence": [
+        "ok github.com/openagentsinc/bahia/internal/soulfactory 7.719s",
+        "Covers SoulFactory fiatjaf migration plus relay bus EOSE retry/closed-before-EOSE review follow-ups."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-002", "AC-ITEM3-005"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/controlplane ./internal/service ./internal/soulfactory",
+      "result": "passed",
+      "evidence": [
+        "ok github.com/openagentsinc/bahia/internal/controlplane (cached)",
+        "ok github.com/openagentsinc/bahia/internal/service (cached)",
+        "ok github.com/openagentsinc/bahia/internal/soulfactory 7.5s",
+        "Covers fail-closed configured author filters, assistant downstream result validation, and SoulFactory relay bus EOSE semantics."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-002", "AC-ITEM3-005"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./cmd/... ./pkg/client/... ./internal/api/... ./internal/app/... ./internal/controlplane/... ./internal/mcp/... ./internal/service/... ./internal/soulfactory/... ./test/integration/...",
+      "result": "passed",
+      "evidence": [
+        "All residual Item 3 packages compiled and passed or reported [no test files]."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-002", "AC-ITEM3-005"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go mod tidy",
+      "result": "passed",
+      "evidence": [
+        "go.mod/go.sum remain tidy after removing github.com/nbd-wtf/go-nostr and retaining fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-004"]
+    },
+    {
+      "command": "rg -n \"github.com/nbd-wtf/go-nostr|go-nostr\" go.mod go.sum cmd pkg internal test/integration --glob '!_git_data/**'",
+      "result": "passed",
+      "evidence": [
+        "No active Go import/module/test-scope matches found."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-001", "AC-ITEM3-004"]
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./...",
+      "result": "passed",
+      "evidence": [
+        "All repository Go packages compiled and passed or reported [no test files]."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-003", "AC-ITEM3-005"]
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed",
+      "evidence": [
+        "No whitespace errors reported."
+      ],
+      "acceptance_criteria": ["AC-ITEM3-007"]
     }
   ]
 }

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -54,11 +54,11 @@ func TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState(t *te
 		deployResp:   &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
 	}
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, policyService, runtimeStub)
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, policyService, runtimeStub)
 
 	request := &nostr.Event{
-		ID:      "deploy-request",
-		PubKey:  "operator",
+		ID:      testNostrID("deploy-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindDeployRequest,
 		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, environmentID, artifactID),
 	}
@@ -178,11 +178,11 @@ func TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath(t *testing.T)
 		emitSteps:    true,
 	}
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, nil, runtimeStub)
 
 	request := &nostr.Event{
-		ID:      "rollback-request",
-		PubKey:  "operator",
+		ID:      testNostrID("rollback-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindRollbackRequest,
 		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
 	}
@@ -424,10 +424,10 @@ func newRollbackRequestTestFixture(t *testing.T, includePreviousDesired bool) *r
 	)
 	runtimeStub := &stubRuntimeLifecycleOperatorService{desiredState: previousDesired, deployResp: &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"}}
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, nil, runtimeStub)
 	request := &nostr.Event{
-		ID:      "rollback-request",
-		PubKey:  "operator",
+		ID:      testNostrID("rollback-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindRollbackRequest,
 		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
 	}
@@ -488,11 +488,11 @@ func TestDirectRuntimeDeployResultCarriesDesiredHashFromState(t *testing.T) {
 	)
 	runtimeStub := &stubRuntimeLifecycleOperatorService{deployResp: &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"}}
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newDeployRequestTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+	reactor := newDeployRequestTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, nil, runtimeStub)
 
 	reactor.handleServiceAction(ctx, &nostr.Event{
-		ID:      "direct-deploy-request",
-		PubKey:  "operator",
+		ID:      testNostrID("direct-deploy-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindServiceAction,
 		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, environmentID, artifactID),
 	})
@@ -542,11 +542,11 @@ func TestDirectRuntimeRestartResultDoesNotCarryDesiredHashFromState(t *testing.T
 	)
 	runtimeStub := &stubRuntimeLifecycleOperatorService{restartResp: &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"}}
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newDeployRequestTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, registry, nil, runtimeStub)
+	reactor := newDeployRequestTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, nil, runtimeStub)
 
 	reactor.handleServiceAction(ctx, &nostr.Event{
-		ID:      "direct-restart-request",
-		PubKey:  "operator",
+		ID:      testNostrID("direct-restart-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindServiceAction,
 		Content: fmt.Sprintf(`{"action":"restart","service_id":"%s","environment_id":"%s"}`, serviceID, environmentID),
 	})
@@ -609,11 +609,11 @@ func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 	}
 	policyService := service.NewPolicyService(policyRepo, &testSignatureRepo{hasVerifiedSignature: false}, &testSBOMRepo{}, zap.NewNop())
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, policyService)
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, policyService)
 
 	request := &nostr.Event{
-		ID:      "deploy-request",
-		PubKey:  "operator",
+		ID:      testNostrID("deploy-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindDeployRequest,
 		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, environmentID, artifactID),
 	}
@@ -635,8 +635,8 @@ func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
-	assertReactorTag(t, result.Tags, "p", request.PubKey)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
+	assertReactorTag(t, result.Tags, "p", request.PubKey.Hex())
 	assertReactorTag(t, result.Tags, "status", "error")
 	assertReactorTag(t, result.Tags, "step", "policy_blocked")
 	assertReactorTag(t, result.Tags, "service", serviceID.String())
@@ -655,7 +655,7 @@ func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 
 func newDeployRequestTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, registry *service.RegistryService, policyService *service.PolicyService, runtimeLifecycle ...RuntimeLifecycleOperatorService) *Reactor {
 	t.Helper()
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}

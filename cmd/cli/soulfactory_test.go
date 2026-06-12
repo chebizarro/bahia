@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 )
@@ -185,7 +185,7 @@ func TestSoulFactoryCLILifecycleCommandsUseSignedActions(t *testing.T) {
 			if action == domain.SoulActionRegenerate {
 				content = `{"regenerated":true}`
 			}
-			return &nostr.Event{ID: "result-1", Tags: nostr.Tags{{"status", "completed"}}, Content: content}, nil
+			return &nostr.Event{ID: nostr.ID{0x01}, Tags: nostr.Tags{{"status", "completed"}}, Content: content}, nil
 		},
 	}
 	withFakeCLISoulFactoryClient(t, client)
@@ -217,7 +217,7 @@ func TestSoulFactoryCLILifecycleCommandsUseSignedActions(t *testing.T) {
 func setupSoulFactoryCLIEnv(t *testing.T) {
 	t.Helper()
 	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.GeneratePrivateKey())
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
 	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
 }
 

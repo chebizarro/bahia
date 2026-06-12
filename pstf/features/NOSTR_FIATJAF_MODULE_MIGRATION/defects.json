@@ -8,7 +8,7 @@
       "beads_issue": "bahia-u2ma",
       "observed_behavior": "go test ./internal/controlplane failed during Item 1 because internal/notifications/nostr_dm.go created a github.com/nbd-wtf/go-nostr.Event and passed it to RelayPool.Publish, which accepts fiatjaf.com/nostr.Event.",
       "intended_behavior": "Downstream protocol consumers should use fiatjaf.com/nostr event/signing/encryption APIs or a deliberate compatibility boundary in their own migration slice.",
-      "resolution": "Item 2 migrated internal/notifications/nostr_dm.go and the scoped protocol/NIP consumer packages to fiatjaf.com/nostr. Targeted Item 2 package tests passed. Residual public-client/CLI/controlplane/service/soulfactory/test imports remain Item 3 scope."
+      "resolution": "Item 2 migrated internal/notifications/nostr_dm.go and the scoped protocol/NIP consumer packages to fiatjaf.com/nostr. Targeted Item 2 package tests passed. Residual public-client/CLI/controlplane/service/soulfactory/test imports were completed in Item 3."
     },
     {
       "id": "DEF-ITEM2-002",
@@ -17,7 +17,7 @@
       "beads_issue": "bahia-ncxo",
       "observed_behavior": "The legacy secrets self-encryption helper passed the private key string as the recipient argument to go-nostr NIP-44 conversation-key derivation. Item 2 corrected self-encryption to derive Bahia's public key and use fiatjaf.com/nostr/nip44 with decoded canonical key types.",
       "intended_behavior": "Existing stored NIP-44 encrypted secrets should either remain decryptable via a deliberate compatibility/migration path or require documented operator rotation.",
-      "scope_decision": "Tracked as follow-up because no representative persisted legacy ciphertext fixture was available in the Item 2 migration slice."
+      "scope_decision": "Tracked as follow-up because no representative persisted legacy ciphertext fixture was available in the Item 2 or Item 3 migration slices."
     },
     {
       "id": "DEF-ITEM2-003",
@@ -26,6 +26,33 @@
       "observed_behavior": "Oracle review found that internal/nostrmigration relay backfill converted and recorded relay events before verifying canonical event ID, Schnorr signature, and tag structure.",
       "intended_behavior": "Relay-provided historical events must be validated before persistence or migration while still allowing legitimately old legacy events bounded by the configured backfill window.",
       "resolution": "Added validateRelayBackfillEvent before recordFromEvent in migrateRelayBackfill and TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording to reject tampered events before repository recording or migration publishing."
+    },
+    {
+      "id": "DEF-ITEM3-001",
+      "title": "Malformed configured controlplane author pubkeys could broaden relay subscriptions",
+      "status": "resolved_in_item_3_review_followup",
+      "beads_issue": "bahia-u2ma",
+      "observed_behavior": "Configured authorized/factory controller pubkeys that failed fiatjaf pubkey parsing were dropped. A non-empty but entirely malformed configured allowlist could become a nil author filter, broadening relay subscriptions instead of failing closed.",
+      "intended_behavior": "Nostr REQ filters derived from configured allowlists must remain narrow; malformed configured pubkeys must not produce broad authorless subscriptions.",
+      "resolution": "Controlplane pubkey conversion now records invalid configured pubkeys and appends a fixed valid sentinel author so malformed non-empty allowlists fail closed. TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys verifies no nil author filter is produced."
+    },
+    {
+      "id": "DEF-ITEM3-002",
+      "title": "Assistant downstream terminal result handling trusted insufficiently validated events",
+      "status": "resolved_in_item_3_review_followup",
+      "beads_issue": "bahia-u2ma",
+      "observed_behavior": "Assistant orchestration accepted terminal-looking downstream result events from a relay subscription without local re-validation of event ID, Schnorr signature, timestamp bounds, or request correlation tag.",
+      "intended_behavior": "Inbound terminal observables must be locally validated and correlated before mutating orchestration state, even when relay filters are scoped.",
+      "resolution": "Added downstreamResultMatchesReceipt to verify result kind, #e correlation, nonzero/future-bounded CreatedAt, canonical event ID, and Schnorr signature before trusting terminal status. TestDownstreamResultMatchesReceiptRejectsWrongCorrelation covers forged correlation rejection. Expected responder-author hardening remains tracked separately."
+    },
+    {
+      "id": "DEF-ITEM3-003",
+      "title": "SoulFactory relay bus could treat subscribe failure or closure as historical EOSE",
+      "status": "resolved_in_item_3_review_followup",
+      "beads_issue": "bahia-u2ma",
+      "observed_behavior": "SoulFactory relay subscriptions marked initial EOSE on subscribe errors and could close merged EOSE channels on subscription/context closure, allowing queries and replay checks to see partial or empty relay history as complete catch-up.",
+      "intended_behavior": "Historical catch-up must complete only on actual relay EOSE. CLOSED, subscribe failure, and cancellation must not masquerade as EOSE completion; retry/reissue behavior must remain event-driven.",
+      "resolution": "Removed EOSE marking on subscribe error and changed the merged subscription wrapper to close EOSE only after each underlying subscription sends real EOSE. Added deterministic tests for recovery after initial subscribe failure and CLOSED-before-EOSE reissue without completing backfill."
     }
   ]
 }

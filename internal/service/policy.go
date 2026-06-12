@@ -21,12 +21,12 @@ type SBOMAttestationProvider interface {
 
 // PolicyService evaluates deployment policies against artifacts.
 type PolicyService struct {
-	policies       repository.DeploymentPolicyRepository
-	signatures     repository.ArtifactSignatureRepository
-	sboms          repository.SBOMRepository
-	attestations   SBOMAttestationProvider
-	trustedGens    map[string]bool // map of trusted generator IDs
-	logger         *zap.Logger
+	policies     repository.DeploymentPolicyRepository
+	signatures   repository.ArtifactSignatureRepository
+	sboms        repository.SBOMRepository
+	attestations SBOMAttestationProvider
+	trustedGens  map[string]bool // map of trusted generator IDs
+	logger       *zap.Logger
 }
 
 // PolicyServiceOption configures the PolicyService.

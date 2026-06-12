@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -308,8 +308,9 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 		return nil, nil
 	}
 	factoryPubkey := strings.TrimSpace(r.config.SoulFactoryPubkey)
+	requestEventID := requestEvent.ID.Hex()
 	if r.findProvisioningResultFn != nil {
-		result, err := r.findProvisioningResultFn(ctx, requestEvent.ID)
+		result, err := r.findProvisioningResultFn(ctx, requestEventID)
 		if err != nil || !authoritativeProvisioningResult(result, requestEvent, factoryPubkey) {
 			return nil, err
 		}
@@ -320,12 +321,16 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 		return nil, nil
 	}
 	filter := nostr.Filter{
-		Kinds: []int{domain.KindProvisioningResult},
-		Tags:  nostr.TagMap{tagEvent: []string{requestEvent.ID}},
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningResult)},
+		Tags:  nostr.TagMap{tagEvent: []string{requestEventID}},
 		Limit: 5,
 	}
 	if factoryPubkey != "" {
-		filter.Authors = []string{factoryPubkey}
+		parsed, err := nostr.PubKeyFromHex(factoryPubkey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Soul Factory pubkey for provisioning result lookup: %w", err)
+		}
+		filter.Authors = []nostr.PubKey{parsed}
 	}
 	results, err := bus.Query(ctx, []nostr.Filter{filter})
 	if err != nil {
@@ -341,13 +346,13 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 
 func authoritativeProvisioningResult(result, requestEvent *nostr.Event, factoryPubkey string) bool {
 	factoryPubkey = strings.TrimSpace(factoryPubkey)
-	if factoryPubkey == "" || result == nil || requestEvent == nil || result.Kind != domain.KindProvisioningResult {
+	if factoryPubkey == "" || result == nil || requestEvent == nil || result.Kind != nostr.Kind(domain.KindProvisioningResult) {
 		return false
 	}
-	if result.PubKey != factoryPubkey {
+	if result.PubKey.Hex() != factoryPubkey {
 		return false
 	}
-	if tagValue(result.Tags, tagEvent) != requestEvent.ID || tagValue(result.Tags, tagPubkey) != requestEvent.PubKey {
+	if tagValue(result.Tags, tagEvent) != requestEvent.ID.Hex() || tagValue(result.Tags, tagPubkey) != requestEvent.PubKey.Hex() {
 		return false
 	}
 	requestKind := tagValue(result.Tags, tagRequestKind)
@@ -368,12 +373,18 @@ func isProvisioningTerminalStatus(status string) bool {
 
 func draftLookupFilters(draftRef, draftEventID string) []nostr.Filter {
 	if draftEventID != "" {
-		return []nostr.Filter{{IDs: []string{draftEventID}, Kinds: []int{domain.KindSoulDraft}, Limit: 1}}
+		parsed, err := nostr.IDFromHex(draftEventID)
+		if err == nil {
+			return []nostr.Filter{{IDs: []nostr.ID{parsed}, Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulDraft)}, Limit: 1}}
+		}
+		return []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulDraft)}, Tags: nostr.TagMap{tagEvent: []string{draftEventID}}, Limit: 1}}
 	}
 	author, identifier, ok := parseParameterizedRef(domain.KindSoulDraft, draftRef)
-	filter := nostr.Filter{Kinds: []int{domain.KindSoulDraft}, Limit: 1}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulDraft)}, Limit: 1}
 	if ok && author != "" {
-		filter.Authors = []string{author}
+		if parsed, err := nostr.PubKeyFromHex(author); err == nil {
+			filter.Authors = []nostr.PubKey{parsed}
+		}
 	}
 	if identifier != "" {
 		filter.Tags = nostr.TagMap{tagParameterizedD: []string{identifier}}
@@ -389,9 +400,11 @@ func templateLookupFilters(templateRef string) []nostr.Filter {
 		return nil
 	}
 	author, identifier, ok := parseParameterizedRef(domain.KindSoulTemplate, templateRef)
-	filter := nostr.Filter{Kinds: []int{domain.KindSoulTemplate}, Limit: 1}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulTemplate)}, Limit: 1}
 	if ok && author != "" {
-		filter.Authors = []string{author}
+		if parsed, err := nostr.PubKeyFromHex(author); err == nil {
+			filter.Authors = []nostr.PubKey{parsed}
+		}
 	}
 	if identifier != "" {
 		filter.Tags = nostr.TagMap{tagParameterizedD: []string{identifier}}

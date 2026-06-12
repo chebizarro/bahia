@@ -26,10 +26,10 @@ var (
 	// ErrBlobNotFound indicates a blob was not found.
 	ErrBlobNotFound = errors.New("blob not found")
 	// ErrManifestNotAcceptable indicates the manifest media type does not match the Accept header.
-	ErrManifestNotAcceptable = errors.New("manifest media type not acceptable")
-	ErrManifestInvalid       = errors.New("manifest invalid")
-	ErrManifestDigestMismatch   = errors.New("manifest digest mismatch")
-	ErrBlobUnknown              = errors.New("referenced blob unknown")
+	ErrManifestNotAcceptable  = errors.New("manifest media type not acceptable")
+	ErrManifestInvalid        = errors.New("manifest invalid")
+	ErrManifestDigestMismatch = errors.New("manifest digest mismatch")
+	ErrBlobUnknown            = errors.New("referenced blob unknown")
 )
 
 const (

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
 )
@@ -205,10 +205,11 @@ func verifyOpenAIModelsEndpoint(ctx context.Context, t *testing.T, client *http.
 func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 	t.Helper()
 	privateKey := os.Getenv("BAHIA_ML_RELAY_PRIVATE_KEY")
-	pubkey, err := gonostr.GetPublicKey(privateKey)
+	secret, err := gonostr.SecretKeyFromHex(privateKey)
 	if err != nil {
-		t.Fatalf("derive relay verification pubkey: %v", err)
+		t.Fatalf("parse relay verification private key: %v", err)
 	}
+	pubkey := secret.Public()
 	pool := nostradapter.NewRelayPool(splitCSV(os.Getenv("BAHIA_ML_RELAY_URLS")), zap.NewNop(), nostradapter.WithPrivateKey(privateKey))
 	defer pool.Close()
 
@@ -228,7 +229,7 @@ func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 
 	dTag := "bahia-jicv:" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
 	event := gonostr.Event{
-		Kind:      envInt("BAHIA_ML_RELAY_VERIFY_KIND", 30078),
+		Kind:      gonostr.Kind(envInt("BAHIA_ML_RELAY_VERIFY_KIND", 30078)),
 		CreatedAt: gonostr.Now(),
 		Tags: gonostr.Tags{
 			{"d", dTag},
@@ -239,7 +240,7 @@ func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 		},
 		Content: `{"feature_id":"AI_FABRIC_HF_VLLM_DEPLOYMENT","bead":"bahia-jicv","verification":"relay-ok-eose-closed-auth-signature-scoped-filter"}`,
 	}
-	if err := event.Sign(privateKey); err != nil {
+	if err := event.Sign(secret); err != nil {
 		t.Fatalf("sign relay verification event: %v", err)
 	}
 	if err := nostradapter.ValidateInboundEvent(&event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
@@ -271,8 +272,8 @@ func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 	}
 
 	filter := gonostr.Filter{
-		Kinds:   []int{event.Kind},
-		Authors: []string{pubkey},
+		Kinds:   []gonostr.Kind{event.Kind},
+		Authors: []gonostr.PubKey{pubkey},
 		Tags:    gonostr.TagMap{"d": []string{dTag}, "t": []string{"bahia-jicv-production-verification"}},
 		Limit:   1,
 	}

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/app"
@@ -759,12 +759,16 @@ func makeRouterNIP98Header(t *testing.T, method, url string) string {
 func makeRouterNIP98HeaderWithKey(t *testing.T, privateKey, method, url string) string {
 	t.Helper()
 	ev := nostr.Event{
-		Kind:      27235,
+		Kind:      nostr.Kind(27235),
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags:      nostr.Tags{{"u", url}, {"method", method}, {"nonce", uuid.NewString()}},
 		Content:   "",
 	}
-	if err := ev.Sign(privateKey); err != nil {
+	secret, err := nostr.SecretKeyFromHex(privateKey)
+	if err != nil {
+		t.Fatalf("parse NIP-98 private key: %v", err)
+	}
+	if err := ev.Sign(secret); err != nil {
 		t.Fatalf("sign NIP-98 event: %v", err)
 	}
 	payload, err := json.Marshal(ev)
@@ -1016,11 +1020,12 @@ func TestTieredRoutesAccessibleWhenActiveTier3(t *testing.T) {
 func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	const aliceKey = "0000000000000000000000000000000000000000000000000000000000000001"
 	const bobKey = "0000000000000000000000000000000000000000000000000000000000000002"
-	alicePubkey, err := nostr.GetPublicKey(aliceKey)
+	aliceSecret, err := nostr.SecretKeyFromHex(aliceKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := nostr.GetPublicKey(bobKey); err != nil {
+	alicePubkey := aliceSecret.Public().Hex()
+	if _, err := nostr.SecretKeyFromHex(bobKey); err != nil {
 		t.Fatal(err)
 	}
 	orgA := uuid.New()

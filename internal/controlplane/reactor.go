@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"go.uber.org/zap"
 
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -554,21 +554,21 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 	}
 	tagsJSON, err := json.Marshal(event.Tags)
 	if err != nil {
-		r.logger.Warn("failed to marshal inbound control-plane event tags for audit", "event_id", event.ID, "kind", event.Kind, "error", err)
+		r.logger.Warn("failed to marshal inbound control-plane event tags for audit", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
 		tagsJSON = []byte("[]")
 	}
 	inserted, err := r.nostrEvents.Record(ctx, &repository.NostrEventRecord{
-		ID:         event.ID,
-		Kind:       event.Kind,
-		PubKey:     event.PubKey,
+		ID:         event.ID.Hex(),
+		Kind:       int(event.Kind),
+		PubKey:     event.PubKey.Hex(),
 		Content:    event.Content,
 		Tags:       tagsJSON,
-		Sig:        event.Sig,
+		Sig:        nostr.HexEncodeToString(event.Sig[:]),
 		CreatedAt:  event.CreatedAt.Time(),
 		ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		r.logger.Warn("failed to audit inbound control-plane event", "event_id", event.ID, "kind", event.Kind, "error", err)
+		r.logger.Warn("failed to audit inbound control-plane event", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
 		return false
 	}
 	if !inserted {
@@ -586,33 +586,35 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
 		if event != nil {
-			eventID = event.ID
+			eventID = event.ID.Hex()
 		}
 		r.logger.Warn("dropping invalid control-plane event", "event_id", eventID, "error", err)
 		return
 	}
-	if isLegacyProductionRuntimeKind(event.Kind) {
-		r.logger.Warn("dropping legacy control-plane event after migration boundary", "event_id", event.ID, "kind", event.Kind)
+	eventID := event.ID.Hex()
+	eventKind := int(event.Kind)
+	if isLegacyProductionRuntimeKind(eventKind) {
+		r.logger.Warn("dropping legacy control-plane event after migration boundary", "event_id", eventID, "kind", eventKind)
 		return
 	}
 
 	// Deduplicate events (relays may replay during reconnection).
-	if r.dedup.IsDuplicate(event.ID) || r.isDuplicateIdempotencyCommand(ctx, event) {
+	if r.dedup.IsDuplicate(eventID) || r.isDuplicateIdempotencyCommand(ctx, event) {
 		return
 	}
 	if !r.auditInboundEvent(ctx, event) {
 		return
 	}
-	r.dedup.MarkSeen(event.ID)
+	r.dedup.MarkSeen(eventID)
 	r.trackLastSeen(event)
 
 	switch {
 	case isHeartbeatObservationEvent(event):
 		go r.handleHeartbeatObservation(ctx, event)
-	case isCanonicalRuntimeReplayKind(event.Kind):
+	case isCanonicalRuntimeReplayKind(eventKind):
 		return
 	default:
-		r.logger.Warn("unexpected event kind", "kind", event.Kind)
+		r.logger.Warn("unexpected event kind", "kind", eventKind)
 	}
 }
 
@@ -622,7 +624,7 @@ type idempotencyEventRepository interface {
 }
 
 func (r *Reactor) isDuplicateIdempotencyCommand(ctx context.Context, event *nostr.Event) bool {
-	if r == nil || r.nostrEvents == nil || event == nil || !isIdempotencyCommandKind(event.Kind) {
+	if r == nil || r.nostrEvents == nil || event == nil || !isIdempotencyCommandKind(int(event.Kind)) {
 		return false
 	}
 	dTag := strings.TrimSpace(tagValueNostr(event.Tags, "d"))
@@ -633,15 +635,15 @@ func (r *Reactor) isDuplicateIdempotencyCommand(ctx context.Context, event *nost
 	if !ok {
 		return false
 	}
-	previous, err := repo.FindLatestByKindPubkeyDTag(ctx, event.Kind, event.PubKey, dTag, event.ID)
+	previous, err := repo.FindLatestByKindPubkeyDTag(ctx, int(event.Kind), event.PubKey.Hex(), dTag, event.ID.Hex())
 	if err != nil {
-		r.logger.Warn("failed to check idempotency key", "event_id", event.ID, "idempotency_key", dTag, "error", err)
+		r.logger.Warn("failed to check idempotency key", "event_id", event.ID.Hex(), "idempotency_key", dTag, "error", err)
 		return false
 	}
 	if previous == nil {
 		return false
 	}
-	r.logger.Info("dropping duplicate idempotency-keyed control-plane command", "event_id", event.ID, "previous_event_id", previous.ID, "idempotency_key", dTag, "kind", event.Kind)
+	r.logger.Info("dropping duplicate idempotency-keyed control-plane command", "event_id", event.ID.Hex(), "previous_event_id", previous.ID, "idempotency_key", dTag, "kind", int(event.Kind))
 	return true
 }
 
@@ -664,11 +666,11 @@ func isHeartbeatObservationEvent(event *nostr.Event) bool {
 }
 
 func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	logger := r.logger.With("event_id", event.ID.Hex(), "requester", event.PubKey.Hex())
 	logger.Info("received deployment request")
 
 	// Validate authorization
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized deployment request")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -729,18 +731,18 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	// Create run tracker
 	run := &DeploymentRun{
 		ID:              uuid.New(),
-		RequestEventID:  event.ID,
+		RequestEventID:  event.ID.Hex(),
 		ServiceID:       req.ServiceID,
 		EnvironmentID:   req.EnvironmentID,
 		ArtifactID:      req.ArtifactID,
-		RequesterPubkey: event.PubKey,
+		RequesterPubkey: event.PubKey.Hex(),
 		Status:          "running",
 		CurrentStep:     "creating_intent",
 		StartedAt:       time.Now(),
 	}
 
 	r.mu.Lock()
-	r.runs[event.ID] = run
+	r.runs[event.ID.Hex()] = run
 	r.mu.Unlock()
 
 	// Publish status update
@@ -762,9 +764,9 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		ServiceID:     req.ServiceID,
 		EnvironmentID: req.EnvironmentID,
 		ArtifactID:    req.ArtifactID,
-		RequestedBy:   event.PubKey,
+		RequestedBy:   event.PubKey.Hex(),
 		SourceKind:    domain.SourceKindEventTriggered,
-		Metadata:      map[string]any{"nostr_event_id": event.ID},
+		Metadata:      map[string]any{"nostr_event_id": event.ID.Hex()},
 		DesiredState:  desiredState,
 		DesiredHash:   desiredState.DesiredHash,
 	}
@@ -886,7 +888,7 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received rollback request")
 
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized rollback request")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -925,7 +927,7 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 	// Select the rollback artifact by creating an approved rollback intent, then
 	// execute that artifact through the same desired-state deploy helper used by
 	// normal deploy requests and direct runtime action=deploy.
-	intent, err := r.registry.Rollback(ctx, serviceID, envID, event.PubKey)
+	intent, err := r.registry.Rollback(ctx, serviceID, envID, event.PubKey.Hex())
 	if err != nil {
 		logger.Error("rollback failed", "error", err)
 		r.publishError(ctx, event, "rollback_error", err.Error())
@@ -1044,7 +1046,7 @@ func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized service action")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -1079,7 +1081,7 @@ func (r *Reactor) handleServiceCreate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received service create request")
 
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized service create")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -1133,7 +1135,7 @@ func (r *Reactor) handleEnvironmentCreate(ctx context.Context, event *nostr.Even
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received environment create request")
 
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized environment create")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -1178,7 +1180,7 @@ func (r *Reactor) handleEnvironmentCreate(ctx context.Context, event *nostr.Even
 
 func (r *Reactor) handleServiceUpdate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1233,7 +1235,7 @@ func (r *Reactor) handleServiceUpdate(ctx context.Context, event *nostr.Event) {
 }
 
 func (r *Reactor) handleServiceDelete(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1259,7 +1261,7 @@ func (r *Reactor) handleServiceDelete(ctx context.Context, event *nostr.Event) {
 
 func (r *Reactor) handleEnvironmentUpdate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1310,7 +1312,7 @@ func (r *Reactor) handleEnvironmentUpdate(ctx context.Context, event *nostr.Even
 }
 
 func (r *Reactor) handleEnvironmentDelete(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1335,7 +1337,7 @@ func (r *Reactor) handleEnvironmentDelete(ctx context.Context, event *nostr.Even
 }
 
 func (r *Reactor) handleArtifactRegister(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1382,7 +1384,7 @@ func (r *Reactor) handleDeploymentApproval(ctx context.Context, event *nostr.Eve
 	logger := r.logger.With("event_id", event.ID, "approver", event.PubKey)
 	logger.Info("received deployment approval request")
 
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized approval request")
 		r.publishError(ctx, event, "unauthorized", "approver not in authorized list")
 		return
@@ -1550,14 +1552,14 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 		return
 	}
 	if req.RequestedBy == "" {
-		req.RequestedBy = event.PubKey
+		req.RequestedBy = event.PubKey.Hex()
 	}
 	metadata := req.Metadata
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	metadata["nostr_event_id"] = event.ID
-	metadata["nostr_request_pubkey"] = event.PubKey
+	metadata["nostr_event_id"] = event.ID.Hex()
+	metadata["nostr_request_pubkey"] = event.PubKey.Hex()
 	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: req.RequestedBy, SourceKind: domain.SourceKindEventTriggered, Metadata: metadata}
 	if err := r.llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
 		logger.Error("failed to create LLM deployment intent", "error", err)
@@ -1640,13 +1642,13 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 		return
 	}
 	if req.RequestedBy == "" {
-		req.RequestedBy = event.PubKey
+		req.RequestedBy = event.PubKey.Hex()
 	}
 
 	metadata := map[string]any{
-		"nostr_event_id":         event.ID,
-		"nostr_request_pubkey":   event.PubKey,
-		"nostr_request_kind":     event.Kind,
+		"nostr_event_id":         event.ID.Hex(),
+		"nostr_request_pubkey":   event.PubKey.Hex(),
+		"nostr_request_kind":     int(event.Kind),
 		"nostr_request_command":  "llm_rollback",
 		"nostr_requested_by_raw": req.RequestedBy,
 	}
@@ -1661,8 +1663,8 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 }
 
 func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.Event) error {
-	logger := r.zapLog.With(zap.String("event_id", event.ID), zap.String("requester", event.PubKey), zap.Int("kind", event.Kind))
-	if !r.isAuthorized(event.PubKey) {
+	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("requester", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return fmt.Errorf("unauthorized requester")
 	}
@@ -1701,8 +1703,8 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 		EnvironmentID:   envID,
 		RequestedTools:  req.Tools,
 		Status:          domain.ToolProvisionStatusPending,
-		NostrEventID:    event.ID,
-		RequesterPubkey: event.PubKey,
+		NostrEventID:    event.ID.Hex(),
+		RequesterPubkey: event.PubKey.Hex(),
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := r.toolProvisioning.CreateIntent(ctx, intent); err != nil {
@@ -1722,8 +1724,8 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 }
 
 func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.Event) error {
-	logger := r.zapLog.With(zap.String("event_id", event.ID), zap.String("operator", event.PubKey), zap.Int("kind", event.Kind))
-	if !r.isAuthorized(event.PubKey) {
+	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("operator", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "operator not in authorized list")
 		return fmt.Errorf("unauthorized operator")
 	}
@@ -1761,7 +1763,7 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 	now := time.Now().UTC()
 	if req.Action == "approve" {
 		intent.Status = domain.ToolProvisionStatusApproved
-		intent.ApprovedBy = event.PubKey
+		intent.ApprovedBy = event.PubKey.Hex()
 		intent.ApprovedAt = &now
 	} else {
 		intent.Status = domain.ToolProvisionStatusRejected
@@ -1770,7 +1772,7 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 		r.publishError(ctx, event, "update_error", err.Error())
 		return fmt.Errorf("update tool provisioning intent: %w", err)
 	}
-	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey, req.Reason); err != nil {
+	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey.Hex(), req.Reason); err != nil {
 		logger.Warn("failed to log tool approval action", zap.Error(err))
 	}
 	if req.Action == "approve" {
@@ -1784,14 +1786,20 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 		logger.Info("tool provisioning rejected", zap.String("intent_id", intent.ID.String()))
 	}
 	if r.toolResponder != nil {
-		requestEvent := &nostr.Event{ID: intent.NostrEventID, PubKey: intent.RequesterPubkey}
-		_ = r.toolResponder.PublishResult(ctx, requestEvent, intent, req.Action == "approve", req.Reason)
+		requestEventID, idErr := nostr.IDFromHex(strings.TrimSpace(intent.NostrEventID))
+		requestPubkey, pubkeyErr := nostr.PubKeyFromHex(strings.TrimSpace(intent.RequesterPubkey))
+		if idErr != nil || pubkeyErr != nil {
+			logger.Warn("tool approval result publish skipped: invalid original request metadata", zap.String("id_error", fmt.Sprint(idErr)), zap.String("pubkey_error", fmt.Sprint(pubkeyErr)))
+		} else {
+			requestEvent := &nostr.Event{ID: requestEventID, PubKey: requestPubkey}
+			_ = r.toolResponder.PublishResult(ctx, requestEvent, intent, req.Action == "approve", req.Reason)
+		}
 	}
 	return nil
 }
 
 func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1831,7 +1839,7 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
 }
 
 func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1904,7 +1912,7 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 }
 
 func (r *Reactor) handlePolicyDelete(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1933,7 +1941,7 @@ func (r *Reactor) handlePolicyDelete(ctx context.Context, event *nostr.Event) {
 }
 
 func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
@@ -1969,7 +1977,7 @@ func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) 
 }
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishLLMError(ctx, event, "unauthorized", "requester not in authorized list")
 		return false
 	}
@@ -2073,7 +2081,7 @@ func (r *Reactor) trackLastSeen(event *nostr.Event) {
 	if event == nil || event.CreatedAt == 0 {
 		return
 	}
-	groups := r.replayGroupsForKind(event.Kind)
+	groups := r.replayGroupsForKind(int(event.Kind))
 	if len(groups) == 0 {
 		return
 	}
@@ -2138,9 +2146,9 @@ func replayCursorWithOverlap(timestamp nostr.Timestamp) nostr.Timestamp {
 
 func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
 	return []nostr.Filter{{
-		Kinds:   canonicalReactorSubscriptionKinds(),
+		Kinds:   nostrKindsFromInts(canonicalReactorSubscriptionKinds()),
 		Authors: r.requestSubscriptionAuthors(),
-		Since:   &since,
+		Since:   since,
 	}}
 }
 
@@ -2191,8 +2199,45 @@ func isLegacyProductionRuntimeKind(kind int) bool {
 		(kind >= 38390 && kind <= 38499)
 }
 
-func (r *Reactor) requestSubscriptionAuthors() []string {
-	return r.subscriptionAuthors(operatorScopeDefault, operatorScopeAdoption, operatorScopeDirectRuntime)
+func (r *Reactor) requestSubscriptionAuthors() []nostr.PubKey {
+	return nostrPubKeysFromHex(r.subscriptionAuthors(operatorScopeDefault, operatorScopeAdoption, operatorScopeDirectRuntime))
+}
+
+func nostrKindsFromInts(kinds []int) []nostr.Kind {
+	out := make([]nostr.Kind, 0, len(kinds))
+	for _, kind := range kinds {
+		out = append(out, nostr.Kind(kind))
+	}
+	return out
+}
+
+func nostrPubKeysFromHex(pubkeys []string) []nostr.PubKey {
+	out := make([]nostr.PubKey, 0, len(pubkeys))
+	invalidSeen := false
+	for _, raw := range pubkeys {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		pubkey, err := nostr.PubKeyFromHex(trimmed)
+		if err != nil {
+			invalidSeen = true
+			continue
+		}
+		out = append(out, pubkey)
+	}
+	if invalidSeen {
+		out = append(out, invalidSubscriptionAuthorPubKey())
+	}
+	return out
+}
+
+func invalidSubscriptionAuthorPubKey() nostr.PubKey {
+	pubkey, err := nostr.PubKeyFromHex("8541adf5c61099c9f8160c7555e7bb7e98330bdedb27d6ac6eaf38d6c39dce3a")
+	if err != nil {
+		panic("invalid controlplane subscription author sentinel: " + err.Error())
+	}
+	return pubkey
 }
 
 func (r *Reactor) subscriptionAuthors(scopes ...operatorScope) []string {
@@ -2310,7 +2355,7 @@ func (r *Reactor) appendRequestResourceTags(ctx context.Context, tags nostr.Tags
 	}
 
 	r.mu.Lock()
-	run := r.runs[requestEvent.ID]
+	run := r.runs[requestEvent.ID.Hex()]
 	r.mu.Unlock()
 	if run != nil {
 		add("service", run.ServiceID.String())
@@ -2624,13 +2669,13 @@ func (r *Reactor) publishCanonicalStatus(ctx context.Context, requestEvent *nost
 	if content == nil {
 		content = map[string]any{}
 	}
-	content["request_event_id"] = requestEvent.ID
-	content["request_pubkey"] = requestEvent.PubKey
+	content["request_event_id"] = requestEvent.ID.Hex()
+	content["request_pubkey"] = requestEvent.PubKey.Hex()
 	body, err := json.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("marshal canonical status: %w", err)
 	}
-	eventTags := nostr.Tags{{"d", canonicalReplyDTag("status", requestEvent, tags)}, {"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}}
+	eventTags := nostr.Tags{{"d", canonicalReplyDTag("status", requestEvent, tags)}, {"e", requestEvent.ID.Hex(), "", "reply"}, {"p", requestEvent.PubKey.Hex()}}
 	eventTags = append(eventTags, compactTags(tags)...)
 	event := &nostr.Event{Kind: KindNIP38Status, CreatedAt: nostr.Now(), Tags: dedupeTags(eventTags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
@@ -2653,7 +2698,7 @@ func (r *Reactor) publishContextVMResult(ctx context.Context, requestEvent *nost
 	if err != nil {
 		return fmt.Errorf("marshal ContextVM response: %w", err)
 	}
-	eventTags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {ContextVMRoutingTag, ContextVMWireVersion}}
+	eventTags := nostr.Tags{{"e", requestEvent.ID.Hex(), "", "reply"}, {"p", requestEvent.PubKey.Hex()}, {ContextVMRoutingTag, ContextVMWireVersion}}
 	eventTags = append(eventTags, compactTags(tags)...)
 	event := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: dedupeTags(eventTags), Content: string(content)}
 	if err := r.signEvent(ctx, event); err != nil {
@@ -2675,8 +2720,8 @@ func contextVMReplyID(requestEvent *nostr.Event) json.RawMessage {
 			body, _ := json.Marshal(dTag)
 			return body
 		}
-		if requestEvent.ID != "" {
-			body, _ := json.Marshal(requestEvent.ID)
+		if requestEvent.ID != (nostr.ID{}) {
+			body, _ := json.Marshal(requestEvent.ID.Hex())
 			return body
 		}
 	}
@@ -2685,8 +2730,8 @@ func contextVMReplyID(requestEvent *nostr.Event) json.RawMessage {
 
 func canonicalReplyDTag(prefix string, requestEvent *nostr.Event, tags nostr.Tags) string {
 	parts := []string{prefix}
-	if requestEvent != nil && requestEvent.ID != "" {
-		parts = append(parts, requestEvent.ID)
+	if requestEvent != nil && requestEvent.ID != (nostr.ID{}) {
+		parts = append(parts, requestEvent.ID.Hex())
 	}
 	for _, key := range []string{"step", "action", "operation", "intent", "service", "environment", "route"} {
 		if value := strings.TrimSpace(tagValueNostr(tags, key)); value != "" {
@@ -2712,18 +2757,18 @@ func (r *Reactor) publishEvent(ctx context.Context, event *nostr.Event) (int, er
 	if err == nil && published > 0 && r.nostrEvents != nil {
 		tagsJSON, marshalErr := json.Marshal(event.Tags)
 		if marshalErr != nil {
-			r.logger.Warn("failed to marshal outbound event tags for audit", "event_id", event.ID, "error", marshalErr)
+			r.logger.Warn("failed to marshal outbound event tags for audit", "event_id", event.ID.Hex(), "error", marshalErr)
 		} else if _, recordErr := r.nostrEvents.Record(ctx, &repository.NostrEventRecord{
-			ID:         event.ID,
-			Kind:       event.Kind,
-			PubKey:     event.PubKey,
+			ID:         event.ID.Hex(),
+			Kind:       int(event.Kind),
+			PubKey:     event.PubKey.Hex(),
 			Content:    event.Content,
 			Tags:       tagsJSON,
-			Sig:        event.Sig,
+			Sig:        nostr.HexEncodeToString(event.Sig[:]),
 			CreatedAt:  event.CreatedAt.Time(),
 			ReceivedAt: time.Now().UTC(),
 		}); recordErr != nil {
-			r.logger.Warn("failed to audit outbound control-plane event", "event_id", event.ID, "kind", event.Kind, "error", recordErr)
+			r.logger.Warn("failed to audit outbound control-plane event", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", recordErr)
 		}
 	}
 	return published, err
@@ -2755,7 +2800,7 @@ func (r *Reactor) handleObservationSubmit(ctx context.Context, event *nostr.Even
 	logger.Info("received observation submission")
 
 	// Validate authorization
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized observation submission")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -2829,7 +2874,7 @@ func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) 
 	logger.Info("received drift remediation request")
 
 	// Validate authorization
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized drift remediation request")
 		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
@@ -2873,7 +2918,7 @@ func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) 
 		ServiceID:     req.ServiceID,
 		EnvironmentID: req.EnvironmentID,
 		ArtifactID:    *state.DesiredArtifactID,
-		RequestedBy:   event.PubKey,
+		RequestedBy:   event.PubKey.Hex(),
 		SourceKind:    domain.SourceKindEventTriggered,
 		Status:        domain.IntentStatusPending,
 		CreatedAt:     time.Now(),

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
@@ -22,7 +22,7 @@ func (p *backupCaptureNostrPublisher) Publish(_ context.Context, ev nostr.Event)
 func TestBackupCommandPublisherPublishesCanonicalRunRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &backupCaptureNostrPublisher{published: 1}
-	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -42,11 +42,11 @@ func TestBackupCommandPublisherPublishesCanonicalRunRequest(t *testing.T) {
 		t.Fatalf("expected one event, got %d", len(capture.events))
 	}
 	ev := capture.events[0]
-	if ev.Kind != controlplane.KindBackupRunRequest {
+	if ev.Kind != nostr.Kind(controlplane.KindBackupRunRequest) {
 		t.Fatalf("expected kind %d, got %d", controlplane.KindBackupRunRequest, ev.Kind)
 	}
-	if ok, err := ev.CheckSignature(); err != nil || !ok {
-		t.Fatalf("published event signature invalid: ok=%v err=%v", ok, err)
+	if !ev.VerifySignature() {
+		t.Fatalf("published event signature invalid")
 	}
 	assertBackupTag(t, ev.Tags, "d", "backup-run:1")
 	assertBackupTag(t, ev.Tags, "command", "backup_run")

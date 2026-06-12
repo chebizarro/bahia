@@ -4,17 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"go.uber.org/zap"
 )
 
 func TestHandleMLPhase1RequestsPublishCorrelatedTerminalResults(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	tests := []struct {
 		name    string
 		kind    int
@@ -29,7 +26,7 @@ func TestHandleMLPhase1RequestsPublishCorrelatedTerminalResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			capture := &captureNostrPublisher{published: 1}
-			signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+			signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 			if err != nil {
 				t.Fatalf("create signer: %v", err)
 			}
@@ -58,8 +55,8 @@ func TestHandleMLPhase1RequestsPublishCorrelatedTerminalResults(t *testing.T) {
 				t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 			}
 			assertNoLegacyStatusResultEvents(t, capture.events)
-			assertReactorTag(t, result.Tags, "d", "result:"+request.ID)
-			assertReactorTag(t, result.Tags, "e", request.ID)
+			assertReactorTag(t, result.Tags, "d", "result:"+request.ID.Hex())
+			assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 			assertReactorTag(t, result.Tags, "p", requestPubkey)
 			assertReactorTag(t, result.Tags, "endpoint", "endpoint:demo:prod")
 			assertReactorTag(t, result.Tags, "deployment", "deployment:demo")

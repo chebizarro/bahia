@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -137,7 +138,13 @@ func TestFIPSResourcesListIncludesOnlyMeshResources(t *testing.T) {
 	}
 }
 
-const testHexPubkey = "1111111111111111111111111111111111111111111111111111111111111111"
+var testHexPubkey = func() string {
+	secret, err := nostr.SecretKeyFromHex("1111111111111111111111111111111111111111111111111111111111111111")
+	if err != nil {
+		panic(err)
+	}
+	return secret.Public().Hex()
+}()
 
 type fakeWorkerRepository struct {
 	workers []domain.Worker

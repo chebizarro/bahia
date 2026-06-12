@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"go.uber.org/zap"
 )
 
@@ -125,7 +125,7 @@ func encodeBahiaStatusEvent(kind int, dTag, topic string, payload any) (gonostr.
 		return gonostr.Event{}, fmt.Errorf("marshal Bahia status kind %d: %w", kind, err)
 	}
 	return gonostr.Event{
-		Kind:      kind,
+		Kind:      gonostr.Kind(kind),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", strings.TrimSpace(dTag)}, {"t", "bahia"}, {"t", topic}},
 		Content:   string(content),
@@ -134,7 +134,7 @@ func encodeBahiaStatusEvent(kind int, dTag, topic string, payload any) (gonostr.
 
 func bahiaStatusFingerprint(ev gonostr.Event) (string, error) {
 	encoded, err := json.Marshal(struct {
-		Kind    int          `json:"kind"`
+		Kind    gonostr.Kind `json:"kind"`
 		Tags    gonostr.Tags `json:"tags"`
 		Content string       `json:"content"`
 	}{

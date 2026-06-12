@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
@@ -156,7 +156,7 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 
 func (h *RelaySettingsHydrator) filter() gonostr.Filter {
 	filter := gonostr.Filter{
-		Kinds: []int{kinds.CASControlState},
+		Kinds: []gonostr.Kind{kinds.CASControlState},
 		Tags: gonostr.TagMap{
 			"d":      []string{RelaySettingsDTag},
 			"domain": []string{RelaySettingsDomain},
@@ -165,7 +165,9 @@ func (h *RelaySettingsHydrator) filter() gonostr.Filter {
 		Limit: 10,
 	}
 	if h.servicePubkey != "" {
-		filter.Authors = []string{h.servicePubkey}
+		if pubkey, err := gonostr.PubKeyFromHex(h.servicePubkey); err == nil {
+			filter.Authors = []gonostr.PubKey{pubkey}
+		}
 	}
 	return filter
 }
@@ -210,7 +212,7 @@ func (h *RelaySettingsHydrator) handleEvent(ctx context.Context, ev *gonostr.Eve
 	}
 	state, err := relayPolicyStateFromCanonicalEvent(ev, h.servicePubkey)
 	if err != nil {
-		h.logger.Warn("dropping relay settings state event", zap.String("event_id", ev.ID), zap.Error(err))
+		h.logger.Warn("dropping relay settings state event", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
 		return false
 	}
 	if !h.shouldApply(ev) {
@@ -219,10 +221,10 @@ func (h *RelaySettingsHydrator) handleEvent(ctx context.Context, ev *gonostr.Eve
 	h.storeSnapshot(*state)
 	if h.onSnapshot != nil {
 		if err := h.onSnapshot(ctx, cloneRelayPolicyState(*state)); err != nil {
-			h.logger.Warn("relay settings snapshot callback failed", zap.String("event_id", ev.ID), zap.Error(err))
+			h.logger.Warn("relay settings snapshot callback failed", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
 		}
 	}
-	h.logger.Info("hydrated relay settings policy snapshot from canonical state", zap.String("event_id", ev.ID), zap.Int("browser_relays", len(state.BrowserRelays)), zap.Int("contextvm_relays", len(state.ContextVMRelays)), zap.Int("service_relays", len(state.ServiceRelays)))
+	h.logger.Info("hydrated relay settings policy snapshot from canonical state", zap.String("event_id", ev.ID.Hex()), zap.Int("browser_relays", len(state.BrowserRelays)), zap.Int("contextvm_relays", len(state.ContextVMRelays)), zap.Int("service_relays", len(state.ServiceRelays)))
 	return true
 }
 
@@ -248,21 +250,23 @@ func (h *RelaySettingsHydrator) storeSnapshot(state RelayPolicyState) {
 func (h *RelaySettingsHydrator) shouldApply(ev *gonostr.Event) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if ev.ID != "" {
-		if _, ok := h.seenEventIDs[ev.ID]; ok {
+	if ev.ID != (gonostr.ID{}) {
+		eventID := ev.ID.Hex()
+		if _, ok := h.seenEventIDs[eventID]; ok {
 			return false
 		}
-		h.seenEventIDs[ev.ID] = struct{}{}
+		h.seenEventIDs[eventID] = struct{}{}
 	}
 	created := ev.CreatedAt.Time().Unix()
 	if created < h.latestCreated {
 		return false
 	}
-	if created == h.latestCreated && h.latestEventID != "" && ev.ID >= h.latestEventID {
+	eventID := ev.ID.Hex()
+	if created == h.latestCreated && h.latestEventID != "" && eventID >= h.latestEventID {
 		return false
 	}
 	h.latestCreated = created
-	h.latestEventID = ev.ID
+	h.latestEventID = eventID
 	return true
 }
 
@@ -273,8 +277,8 @@ func relayPolicyStateFromCanonicalEvent(ev *gonostr.Event, servicePubkey string)
 	if ev.Kind != kinds.CASControlState {
 		return nil, fmt.Errorf("unexpected event kind %d", ev.Kind)
 	}
-	if expected := strings.ToLower(strings.TrimSpace(servicePubkey)); expected != "" && strings.ToLower(ev.PubKey) != expected {
-		return nil, fmt.Errorf("event pubkey %q does not match trusted service pubkey", ev.PubKey)
+	if expected := strings.ToLower(strings.TrimSpace(servicePubkey)); expected != "" && strings.ToLower(ev.PubKey.Hex()) != expected {
+		return nil, fmt.Errorf("event pubkey %q does not match trusted service pubkey", ev.PubKey.Hex())
 	}
 	if tagValueNostr(ev.Tags, "d") != RelaySettingsDTag {
 		return nil, fmt.Errorf("missing relay settings d tag %q", RelaySettingsDTag)
@@ -318,5 +322,5 @@ func eventIDForLog(ev *gonostr.Event) string {
 	if ev == nil {
 		return ""
 	}
-	return ev.ID
+	return ev.ID.Hex()
 }

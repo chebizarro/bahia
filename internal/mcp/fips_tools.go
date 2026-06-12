@@ -2,13 +2,13 @@ package mcp
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -269,14 +269,11 @@ func npubFromPubkey(pubkey string) string {
 	if len(pubkey) != 64 {
 		return ""
 	}
-	if _, err := hex.DecodeString(pubkey); err != nil {
-		return ""
-	}
-	npub, err := nip19.EncodePublicKey(pubkey)
+	parsed, err := nostr.PubKeyFromHex(pubkey)
 	if err != nil {
 		return ""
 	}
-	return npub
+	return nip19.EncodeNpub(parsed)
 }
 
 func formatOptionalTime(t time.Time) string {

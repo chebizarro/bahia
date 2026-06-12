@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
@@ -329,7 +329,7 @@ func (p *NostrBackupCommandPublisher) publish(ctx context.Context, spec backupPu
 		tags = append(tags, nostr.Tag{"agent", agentID})
 	}
 	tags = append(tags, spec.tags...)
-	ev := &nostr.Event{Kind: spec.kind, CreatedAt: nostr.Now(), Tags: backupCompactTags(tags), Content: string(body)}
+	ev := &nostr.Event{Kind: nostr.Kind(spec.kind), CreatedAt: nostr.Now(), Tags: backupCompactTags(tags), Content: string(body)}
 	if err := controlplane.SignGoNostrEvent(ctx, p.signer, ev); err != nil {
 		return nil, fmt.Errorf("sign backup command event: %w", err)
 	}
@@ -341,8 +341,8 @@ func (p *NostrBackupCommandPublisher) publish(ctx context.Context, spec backupPu
 		return nil, fmt.Errorf("publish backup command event: no relay accepted the request")
 	}
 	receipt := &BackupCommandReceipt{
-		RequestEventID:  ev.ID,
-		RequestPubkey:   ev.PubKey,
+		RequestEventID:  ev.ID.Hex(),
+		RequestPubkey:   ev.PubKey.Hex(),
 		RequestKind:     spec.kind,
 		StatusKind:      spec.statusKind,
 		ResultKind:      spec.resultKind,

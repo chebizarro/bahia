@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 func TestMLCommandPublisherPublishesAddressableDeployRequestWithCorrelation(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestMLCommandPublisherPublishesAddressableDeployRequestWithCorrelation(t *t
 func TestMLCommandPublisherPublishesImportRecipeAndRollbackKinds(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestMLCommandPublisherPublishesImportRecipeAndRollbackKinds(t *testing.T) {
 func TestMLCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}

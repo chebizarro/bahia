@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -215,7 +215,7 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		definition.ID = uuid.New()
 	}
 	if definition.CreatedBy == "" {
-		definition.CreatedBy = event.PubKey
+		definition.CreatedBy = event.PubKey.Hex()
 	}
 	repo, err := r.backupRegistry.GetRepository(ctx, definition.RepositoryID)
 	if err != nil || repo == nil {
@@ -283,7 +283,7 @@ func (r *Reactor) handleBackupRepositoryProbeRequest(ctx context.Context, event 
 		if err := r.backupRepositoryProbeExecutor.ProcessBackupRepositoryProbe(ctx, repositoryID, requestEventID); err != nil {
 			r.logger.Warn("backup repository probe executor failed", "repository_id", repositoryID.String(), "error", err)
 		}
-	}(repo.ID, event.ID)
+	}(repo.ID, event.ID.Hex())
 }
 
 func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *nostr.Event) {
@@ -528,17 +528,19 @@ func (r *Reactor) resolveBackupRepository(ctx context.Context, repositoryID, nam
 }
 
 func (r *Reactor) publishBackupRegistryMutationResult(ctx context.Context, requestEvent *nostr.Event, resultKind int, action, status, message string, payload map[string]any, extraTags nostr.Tags) error {
-	content := map[string]any{"request_event_id": requestEvent.ID, "action": action, "status": status, "message": message, "created_at": time.Now().UTC().Format(time.RFC3339)}
+	requestEventID := requestEvent.ID.Hex()
+	requestPubkey := requestEvent.PubKey.Hex()
+	content := map[string]any{"request_event_id": requestEventID, "action": action, "status": status, "message": message, "created_at": time.Now().UTC().Format(time.RFC3339)}
 	for k, v := range payload {
 		if v != nil {
 			content[k] = v
 		}
 	}
 	body, _ := json.Marshal(content)
-	tags := nostr.Tags{{"d", "result:" + requestEvent.ID}, {"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", status}, {"result", action}}
+	tags := nostr.Tags{{"d", "result:" + requestEventID}, {"e", requestEventID, "", "reply"}, {"p", requestPubkey}, {"status", status}, {"result", action}}
 	tags = append(tags, extraTags...)
 	tags = appendBackupRequestTags(tags, requestEvent)
-	event := &nostr.Event{Kind: resultKind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	event := &nostr.Event{Kind: nostr.Kind(resultKind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign backup registry result: %w", err)
 	}

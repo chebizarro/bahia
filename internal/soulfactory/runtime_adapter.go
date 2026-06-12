@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -209,7 +209,7 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 	defer closeTransport()
 
 	filters := []nostr.Filter{{
-		Kinds: []int{domain.KindRuntimeCapability},
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeCapability)},
 		Tags:  nostr.TagMap{tagRuntime: []string{string(a.target)}},
 		Limit: a.capabilityLimit,
 	}}
@@ -286,15 +286,19 @@ func (a *runtimeControlAdapter) Execute(ctx context.Context, req RuntimeAdapterR
 	if err := signGoNostrEvent(ctx, a.signer, event); err != nil {
 		return nil, fmt.Errorf("sign runtime control request: %w", err)
 	}
-	if event.PubKey != a.controllerPubkey {
-		return nil, fmt.Errorf("runtime control request signed by %s, want controller %s", event.PubKey, a.controllerPubkey)
+	if event.PubKey.Hex() != a.controllerPubkey {
+		return nil, fmt.Errorf("runtime control request signed by %s, want controller %s", event.PubKey.Hex(), a.controllerPubkey)
+	}
+	runtimePubkey, err := nostr.PubKeyFromHex(req.Target.RuntimePubkey)
+	if err != nil {
+		return nil, fmt.Errorf("parse runtime pubkey for result subscription: %w", err)
 	}
 
 	filters := []nostr.Filter{{
-		Kinds:   []int{domain.KindRuntimeControlResult},
-		Authors: []string{req.Target.RuntimePubkey},
+		Kinds:   []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},
+		Authors: []nostr.PubKey{runtimePubkey},
 		Tags: nostr.TagMap{
-			tagEvent:          []string{event.ID},
+			tagEvent:          []string{event.ID.Hex()},
 			tagPubkey:         []string{a.controllerPubkey},
 			"idempotency-key": []string{req.IdempotencyKey},
 		},
@@ -415,17 +419,22 @@ func (a *runtimeControlAdapter) fetchRuntimeNIP65Policy(ctx context.Context, run
 		return domain.SoulRelayPolicySpec{}
 	}
 	defer closeTransport()
-	events, err := collectRuntimeAdapterEvents(ctx, transport, []nostr.Filter{{Kinds: []int{kindNIP65RelayListMetadata}, Authors: []string{runtimePubkey}, Limit: 1}})
+	parsedRuntimePubkey, err := nostr.PubKeyFromHex(runtimePubkey)
+	if err != nil {
+		a.logger.Warn("skip NIP-65 runtime relay discovery", "runtime_pubkey", runtimePubkey, "error", err)
+		return domain.SoulRelayPolicySpec{}
+	}
+	events, err := collectRuntimeAdapterEvents(ctx, transport, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(kindNIP65RelayListMetadata)}, Authors: []nostr.PubKey{parsedRuntimePubkey}, Limit: 1}})
 	if err != nil {
 		a.logger.Warn("NIP-65 runtime relay discovery failed", "runtime_pubkey", runtimePubkey, "error", err)
 		return domain.SoulRelayPolicySpec{}
 	}
 	var latest *nostr.Event
 	for _, event := range events {
-		if event.Kind != kindNIP65RelayListMetadata || event.PubKey != runtimePubkey || !validSignedEvent(event) {
+		if event.Kind != nostr.Kind(kindNIP65RelayListMetadata) || event.PubKey.Hex() != runtimePubkey || !validSignedEvent(event) {
 			continue
 		}
-		if latest == nil || event.CreatedAt > latest.CreatedAt || (event.CreatedAt == latest.CreatedAt && event.ID > latest.ID) {
+		if latest == nil || event.CreatedAt > latest.CreatedAt || (event.CreatedAt == latest.CreatedAt && event.ID.Hex() > latest.ID.Hex()) {
 			latest = event
 		}
 	}
@@ -448,7 +457,7 @@ func (a *runtimeControlAdapter) transportForRelays(relays []string) (RuntimeAdap
 }
 
 func ParseRuntimeCapabilityEvent(event *nostr.Event) (RuntimeCapability, bool) {
-	if event == nil || event.Kind != domain.KindRuntimeCapability || !validSignedEvent(event) {
+	if event == nil || event.Kind != nostr.Kind(domain.KindRuntimeCapability) || !validSignedEvent(event) {
 		return RuntimeCapability{}, false
 	}
 	var content struct {
@@ -475,8 +484,8 @@ func ParseRuntimeCapabilityEvent(event *nostr.Event) (RuntimeCapability, bool) {
 	}
 
 	capability := RuntimeCapability{
-		ID:                event.ID,
-		Pubkey:            event.PubKey,
+		ID:                event.ID.Hex(),
+		Pubkey:            event.PubKey.Hex(),
 		Identifier:        tagValue(event.Tags, tagParameterizedD),
 		Runtime:           domain.RuntimeTarget(firstNonEmpty(tagValue(event.Tags, tagRuntime), content.Runtime)),
 		Schema:            firstNonEmpty(tagValue(event.Tags, tagSchema), content.Schema),
@@ -593,10 +602,11 @@ func collectRuntimeAdapterEvents(ctx context.Context, transport RuntimeAdapterTr
 			if event == nil || !validSignedEvent(event) {
 				continue
 			}
-			if _, exists := seen[event.ID]; exists {
+			eventID := event.ID.Hex()
+			if _, exists := seen[eventID]; exists {
 				continue
 			}
-			seen[event.ID] = struct{}{}
+			seen[eventID] = struct{}{}
 			events = append(events, event)
 		}
 	}
@@ -615,10 +625,11 @@ func awaitRuntimeControlResult(ctx context.Context, sub *RelayBusSubscription, r
 			if !ok {
 				return nil, fmt.Errorf("runtime result subscription closed before correlated result")
 			}
-			if _, duplicate := seen[event.ID]; duplicate {
+			eventID := event.ID.Hex()
+			if _, duplicate := seen[eventID]; duplicate {
 				continue
 			}
-			seen[event.ID] = struct{}{}
+			seen[eventID] = struct{}{}
 			result, ok := parseRuntimeControlResultEvent(event)
 			if !ok || !runtimeResultCorrelates(result, requestEvent, req, controllerPubkey) {
 				continue
@@ -629,7 +640,7 @@ func awaitRuntimeControlResult(ctx context.Context, sub *RelayBusSubscription, r
 }
 
 func parseRuntimeControlResultEvent(event *nostr.Event) (*RuntimeControlResultEnvelope, bool) {
-	if event == nil || event.Kind != domain.KindRuntimeControlResult || !validSignedEvent(event) {
+	if event == nil || event.Kind != nostr.Kind(domain.KindRuntimeControlResult) || !validSignedEvent(event) {
 		return nil, false
 	}
 	var result RuntimeControlResultEnvelope
@@ -659,16 +670,16 @@ func runtimeResultCorrelates(result *RuntimeControlResultEnvelope, requestEvent 
 	if result == nil || result.Event == nil || requestEvent == nil {
 		return false
 	}
-	if result.Event.PubKey != req.Target.RuntimePubkey || result.Schema != domain.SoulFactoryRuntimeControlSchema {
+	if result.Event.PubKey.Hex() != req.Target.RuntimePubkey || result.Schema != domain.SoulFactoryRuntimeControlSchema {
 		return false
 	}
-	if result.RequestEvent != requestEvent.ID || result.OperatorRequestEvent != req.Operator.RequestEvent {
+	if result.RequestEvent != requestEvent.ID.Hex() || result.OperatorRequestEvent != req.Operator.RequestEvent {
 		return false
 	}
 	if result.Method != req.Method || result.IdempotencyKey != req.IdempotencyKey {
 		return false
 	}
-	if tagValue(result.Event.Tags, tagPubkey) != controllerPubkey || tagValue(result.Event.Tags, tagEvent) != requestEvent.ID {
+	if tagValue(result.Event.Tags, tagPubkey) != controllerPubkey || tagValue(result.Event.Tags, tagEvent) != requestEvent.ID.Hex() {
 		return false
 	}
 	if value := tagValue(result.Event.Tags, tagSoul); value != "" && value != req.Soul.ID {
@@ -762,7 +773,7 @@ func eventCoordinate(event *nostr.Event) string {
 	if identifier == "" {
 		return ""
 	}
-	return fmt.Sprintf("%d:%s:%s", event.Kind, event.PubKey, identifier)
+	return fmt.Sprintf("%d:%s:%s", event.Kind, event.PubKey.Hex(), identifier)
 }
 
 func uniqueStrings(values []string) []string {

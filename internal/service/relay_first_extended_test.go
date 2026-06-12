@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -27,8 +27,8 @@ func (p *relayFirstExtendedTestPublisher) Publish(_ context.Context, ev gonostr.
 type relayFirstExtendedTestSigner struct{}
 
 func (relayFirstExtendedTestSigner) Sign(_ context.Context, ev *gonostr.Event) error {
-	ev.ID = "signed-event"
-	ev.PubKey = "pubkey"
+	ev.ID = assistantTestID("signed-event")
+	ev.PubKey = assistantTestPubKey("pubkey")
 	return nil
 }
 
@@ -73,7 +73,7 @@ func TestRelayFirstLLMSuccessfulMutationDelegates(t *testing.T) {
 	if delegate.calls != 1 {
 		t.Fatalf("delegate calls = %d, want 1", delegate.calls)
 	}
-	if len(publisher.events) != 1 || publisher.events[0].Kind != relayFirstExtendedKind {
+	if len(publisher.events) != 1 || publisher.events[0].Kind != gonostr.Kind(relayFirstExtendedKind) {
 		t.Fatalf("published events = %#v", publisher.events)
 	}
 	assertRelayFirstTag(t, publisher.events[0].Tags, "domain", "llm")

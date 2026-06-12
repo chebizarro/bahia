@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
@@ -33,7 +33,11 @@ func (f *repeatedFlag) Set(value string) error {
 type cliSigner struct{ privateKey string }
 
 func (s cliSigner) Sign(_ context.Context, event *nostr.Event) error {
-	return event.Sign(s.privateKey)
+	secret, err := nostr.SecretKeyFromHex(s.privateKey)
+	if err != nil {
+		return err
+	}
+	return event.Sign(secret)
 }
 
 func main() {
@@ -62,10 +66,11 @@ func main() {
 	if err != nil {
 		fatalf("invalid private key: %v", err)
 	}
-	runtimePubkey, err := nostr.GetPublicKey(normalizedKey)
+	secret, err := nostr.SecretKeyFromHex(normalizedKey)
 	if err != nil {
 		fatalf("derive runtime pubkey: %v", err)
 	}
+	runtimePubkey := secret.Public().Hex()
 	relayList := splitCSV(*relays)
 	if len(relayList) == 0 {
 		fatalf("at least one relay is required")

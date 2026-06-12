@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
@@ -46,7 +46,7 @@ func (b relayFirstExtendedBase) publish(ctx context.Context, dTag, domain, entit
 	if err != nil {
 		return fmt.Errorf("encode %s event: %w", label, err)
 	}
-	ev := gonostr.Event{Kind: relayFirstExtendedKind, CreatedAt: gonostr.Now(), Tags: tags, Content: string(content)}
+	ev := gonostr.Event{Kind: gonostr.Kind(relayFirstExtendedKind), CreatedAt: gonostr.Now(), Tags: tags, Content: string(content)}
 	if err := b.signer.Sign(ctx, &ev); err != nil {
 		return fmt.Errorf("sign %s event: %w", label, err)
 	}
@@ -57,7 +57,7 @@ func (b relayFirstExtendedBase) publish(ctx context.Context, dTag, domain, entit
 	if published == 0 {
 		return fmt.Errorf("publish %s event: no relay accepted the event", label)
 	}
-	b.logger.Debug("relay-first extended event published", zap.String("family", b.family), zap.Int("kind", relayFirstExtendedKind), zap.String("event_id", ev.ID), zap.Int("relays", published))
+	b.logger.Debug("relay-first extended event published", zap.String("family", b.family), zap.Int("kind", relayFirstExtendedKind), zap.String("event_id", ev.ID.Hex()), zap.Int("relays", published))
 	return nil
 }
 

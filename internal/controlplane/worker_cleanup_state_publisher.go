@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -152,11 +152,11 @@ func (p *WorkerCleanupStatePublisher) recordAudit(ctx context.Context, event *no
 	}
 	tagsJSON, err := json.Marshal(event.Tags)
 	if err != nil {
-		logger.Warn("failed to marshal worker cleanup state event tags for audit", zap.String("event_id", event.ID), zap.Error(err))
+		logger.Warn("failed to marshal worker cleanup state event tags for audit", zap.String("event_id", event.ID.Hex()), zap.Error(err))
 		return
 	}
-	if _, err := repo.Record(ctx, &repository.NostrEventRecord{ID: event.ID, Kind: event.Kind, PubKey: event.PubKey, Content: event.Content, Tags: tagsJSON, Sig: event.Sig, CreatedAt: event.CreatedAt.Time(), ReceivedAt: time.Now().UTC()}); err != nil {
-		logger.Warn("failed to audit worker cleanup state event", zap.String("event_id", event.ID), zap.Error(err))
+	if _, err := repo.Record(ctx, &repository.NostrEventRecord{ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(), Content: event.Content, Tags: tagsJSON, Sig: nostr.HexEncodeToString(event.Sig[:]), CreatedAt: event.CreatedAt.Time(), ReceivedAt: time.Now().UTC()}); err != nil {
+		logger.Warn("failed to audit worker cleanup state event", zap.String("event_id", event.ID.Hex()), zap.Error(err))
 	}
 }
 

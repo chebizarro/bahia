@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
@@ -56,14 +56,14 @@ func TestRelayFirstRegistryCreateServicePublishesBeforeDatabaseWrite(t *testing.
 		t.Fatalf("expected one published event, got %d", len(publisher.events))
 	}
 	ev := publisher.events[0]
-	if ev.Kind != relayFirstCanonicalStateKind {
+	if ev.Kind != gonostr.Kind(relayFirstCanonicalStateKind) {
 		t.Fatalf("published kind = %d, want %d", ev.Kind, relayFirstCanonicalStateKind)
 	}
 	assertRelayFirstTag(t, ev.Tags, "domain", "service")
 	assertRelayFirstTag(t, ev.Tags, "entity", "registry")
 	assertRelayFirstTag(t, ev.Tags, "schema", relayFirstStateSchema)
-	if ev.ID == "" || ev.Sig == "" || ev.PubKey == "" {
-		t.Fatalf("published event was not signed: id=%q sig=%q pubkey=%q", ev.ID, ev.Sig, ev.PubKey)
+	if ev.ID == (gonostr.ID{}) || ev.Sig == ([64]byte{}) || ev.PubKey == (gonostr.PubKey{}) {
+		t.Fatalf("published event was not signed: id=%q sig=%q pubkey=%q", ev.ID.Hex(), gonostr.HexEncodeToString(ev.Sig[:]), ev.PubKey.Hex())
 	}
 	if svc.RuntimeType != domain.RuntimeTypeDocker || svc.DefaultBranch != "main" {
 		t.Fatalf("service defaults were not applied before publish: runtime=%q branch=%q", svc.RuntimeType, svc.DefaultBranch)
@@ -109,7 +109,7 @@ func TestRelayFirstRegistryUpdateEnvironmentPublishesBeforeDatabaseWrite(t *test
 	if len(publisher.events) != 1 {
 		t.Fatalf("expected one published event, got %d", len(publisher.events))
 	}
-	if publisher.events[0].Kind != relayFirstCanonicalStateKind {
+	if publisher.events[0].Kind != gonostr.Kind(relayFirstCanonicalStateKind) {
 		t.Fatalf("published kind = %d, want %d", publisher.events[0].Kind, relayFirstCanonicalStateKind)
 	}
 	assertRelayFirstTag(t, publisher.events[0].Tags, "domain", "environment")
@@ -129,7 +129,7 @@ func assertRelayFirstTag(t *testing.T, tags gonostr.Tags, name, value string) {
 
 func relayFirstTestSigner(t *testing.T) RelayFirstSigner {
 	t.Helper()
-	return RelayFirstPrivateKeySigner(gonostr.GeneratePrivateKey())
+	return RelayFirstPrivateKeySigner(gonostr.Generate().Hex())
 }
 
 type relayFirstCapturePublisher struct {

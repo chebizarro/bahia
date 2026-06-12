@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -35,7 +35,7 @@ func attachPublishCapture(reactor *Reactor) *capturedPublish {
 func (c *capturedPublish) eventsByKind(kind int) []*nostr.Event {
 	var out []*nostr.Event
 	for _, event := range c.events {
-		if event.Kind == kind {
+		if event.Kind == nostr.Kind(kind) {
 			out = append(out, event)
 		}
 	}
@@ -45,7 +45,7 @@ func (c *capturedPublish) eventsByKind(kind int) []*nostr.Event {
 func (c *capturedPublish) relaysByKind(kind int) [][]string {
 	var out [][]string
 	for i, event := range c.events {
-		if event.Kind == kind {
+		if event.Kind == nostr.Kind(kind) {
 			out = append(out, c.relays[i])
 		}
 	}
@@ -57,11 +57,15 @@ func buildProvisioningEvent(t *testing.T, pubkey, eventID string, tags nostr.Tag
 	if eventID == "" {
 		eventID = fmt.Sprintf("request-%d", time.Now().UnixNano())
 	}
+	parsedPubkey, err := nostr.PubKeyFromHex(pubkey)
+	if err != nil {
+		t.Fatalf("parse provisioning pubkey: %v", err)
+	}
 	return &nostr.Event{
-		ID:        eventID,
-		Kind:      domain.KindProvisioningRequest,
+		ID:        soulTestID(eventID),
+		Kind:      nostr.Kind(domain.KindProvisioningRequest),
 		CreatedAt: nostr.Now(),
-		PubKey:    pubkey,
+		PubKey:    parsedPubkey,
 		Tags:      tags,
 		Content:   content,
 	}
@@ -110,6 +114,7 @@ func TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors(t 
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full
@@ -137,20 +142,21 @@ func TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors(t 
 }
 
 func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *testing.T) {
-	authorized := strings.Repeat("1", 64)
+	authorized := soulTestPubKeyHex("authorized-provisioner")
 	reactor := NewReactor(
 		Config{AuthorizedPubkeys: []string{authorized}, AdditionalRelays: []string{"wss://private.example"}, SoulFactoryPubkey: authorized},
 		fakeGenerator{},
 		newFakeSigner(t),
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 
 	t.Run("unauthorized requester", func(t *testing.T) {
 		capture.events = nil
 		request := buildProvisioningEvent(
 			t,
-			strings.Repeat("2", 64),
+			soulTestPubKeyHex("unauthorized-provisioner"),
 			"unauthorized-request",
 			nostr.Tags{{"agent-id", "unauthorized-agent"}},
 			`{"brief":"not allowed"}`,
@@ -163,10 +169,10 @@ func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *
 			t.Fatalf("provisioning result count = %d, want 1", len(results))
 		}
 		result := results[0]
-		if got := findTag(result, "e"); got != request.ID {
+		if got := findTag(result, "e"); got != request.ID.Hex() {
 			t.Fatalf("reply event tag = %q, want %q", got, request.ID)
 		}
-		if got := findTag(result, "p"); got != request.PubKey {
+		if got := findTag(result, "p"); got != request.PubKey.Hex() {
 			t.Fatalf("reply pubkey tag = %q, want %q", got, request.PubKey)
 		}
 		if got := findTag(result, "status"); got != "error" {
@@ -217,10 +223,10 @@ func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *
 				t.Fatalf("provisioning result count = %d, want 1", len(results))
 			}
 			result := results[0]
-			if got := findTag(result, "e"); got != request.ID {
+			if got := findTag(result, "e"); got != request.ID.Hex() {
 				t.Fatalf("reply event tag = %q, want %q", got, request.ID)
 			}
-			if got := findTag(result, "p"); got != request.PubKey {
+			if got := findTag(result, "p"); got != request.PubKey.Hex() {
 				t.Fatalf("reply pubkey tag = %q, want %q", got, request.PubKey)
 			}
 			if got := findTag(result, "status"); got != "error" {
@@ -249,6 +255,7 @@ func TestReactorRequiresExplicitAuthorizedPubkeys(t *testing.T) {
 		slog.Default(),
 		WithProvisioningEngine(engine),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "missing-authorized-pubkeys", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
 
@@ -279,6 +286,7 @@ func TestProvisioningRequiresExplicitFactoryPubkeyBeforeSideEffects(t *testing.T
 		slog.Default(),
 		WithProvisioningEngine(engine),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "missing-factory-pubkey", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
 
@@ -287,7 +295,7 @@ func TestProvisioningRequiresExplicitFactoryPubkeyBeforeSideEffects(t *testing.T
 	if engine.called {
 		t.Fatal("provisioning engine was called without explicit SoulFactory pubkey")
 	}
-	if run := reactor.GetRun(request.ID); run != nil {
+	if run := reactor.GetRun(request.ID.Hex()); run != nil {
 		t.Fatalf("run tracked without explicit SoulFactory pubkey: %+v", run)
 	}
 	results := capture.eventsByKind(domain.KindProvisioningResult)
@@ -329,6 +337,7 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full
@@ -343,7 +352,7 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 
 	reactor.handleProvisioningRequest(t.Context(), request)
 
-	run := reactor.GetRun(request.ID)
+	run := reactor.GetRun(request.ID.Hex())
 	if run == nil {
 		t.Fatal("expected provisioning run to be tracked")
 	}
@@ -372,10 +381,10 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 		t.Fatalf("status event count = %d, want %d", len(statusEvents), len(domain.ProvisioningSteps))
 	}
 	for idx, event := range statusEvents {
-		if got := findTag(event, "e"); got != request.ID {
+		if got := findTag(event, "e"); got != request.ID.Hex() {
 			t.Fatalf("status[%d] reply tag = %q, want %q", idx, got, request.ID)
 		}
-		if got := findTag(event, "p"); got != request.PubKey {
+		if got := findTag(event, "p"); got != request.PubKey.Hex() {
 			t.Fatalf("status[%d] pubkey tag = %q, want %q", idx, got, request.PubKey)
 		}
 		if got := findTag(event, "status"); got != "processing" {
@@ -404,7 +413,7 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 	if got := findTag(result, "status"); got != "success" {
 		t.Fatalf("result status tag = %q, want success", got)
 	}
-	if got := findTag(result, "e"); got != request.ID {
+	if got := findTag(result, "e"); got != request.ID.Hex() {
 		t.Fatalf("result reply tag = %q, want %q", got, request.ID)
 	}
 	if got := findTag(result, "soul"); got != fmt.Sprintf("31951:%s:scout", signer.pubkey) {
@@ -421,7 +430,7 @@ func TestOptionalIntegrationFailureIsRecordedWithoutFabricatedSuccess(t *testing
 
 	run := &domain.ProvisioningRun{
 		ID:              domain.NewUUID(),
-		RequestID:       "request-workspace-failure",
+		RequestID:       soulTestID("request-workspace-failure").Hex(),
 		RequesterPubkey: newFakeSigner(t).pubkey,
 		Steps:           []domain.ProvisioningStepResult{},
 	}
@@ -512,7 +521,7 @@ func (a *trackingRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapterRe
 			"spec_hash":       req.Soul.SpecHash,
 			"capability_ref":  "capability-event",
 		},
-		Event: &nostr.Event{PubKey: "runtime-pubkey"},
+		Event: &nostr.Event{PubKey: soulTestPubKey("runtime-pubkey")},
 	}, nil
 }
 
@@ -526,13 +535,18 @@ func TestProvisioningReplaySkipsExternalSideEffectsWhenTerminalResultExists(t *t
 		slog.Default(),
 		WithProvisioningEngine(engine),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
-	reactor.findProvisioningResultFn = func(context.Context, string) (*nostr.Event, error) {
+	reactor.findProvisioningResultFn = func(_ context.Context, eventID string) (*nostr.Event, error) {
+		factoryPubkey, err := nostr.PubKeyFromHex(signer.pubkey)
+		if err != nil {
+			return nil, err
+		}
 		return &nostr.Event{
-			ID:     "terminal-7950",
-			Kind:   domain.KindProvisioningResult,
-			PubKey: signer.pubkey,
-			Tags:   nostr.Tags{{"e", "already-terminal"}, {"p", signer.pubkey}, {"request-kind", fmt.Sprint(domain.KindProvisioningRequest)}, {"status", "success"}},
+			ID:     soulTestID("terminal-7950"),
+			Kind:   nostr.Kind(domain.KindProvisioningResult),
+			PubKey: factoryPubkey,
+			Tags:   nostr.Tags{{"e", eventID}, {"p", signer.pubkey}, {"request-kind", fmt.Sprint(domain.KindProvisioningRequest)}, {"status", "success"}},
 		}, nil
 	}
 
@@ -545,7 +559,7 @@ func TestProvisioningReplaySkipsExternalSideEffectsWhenTerminalResultExists(t *t
 	if len(capture.events) != 0 {
 		t.Fatalf("published events = %d, want none for terminal replay", len(capture.events))
 	}
-	if run := reactor.GetRun(request.ID); run != nil {
+	if run := reactor.GetRun(request.ID.Hex()); run != nil {
 		t.Fatalf("run tracked for terminal replay: %+v", run)
 	}
 }
@@ -565,6 +579,7 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:     "exact-draft-event",
@@ -632,7 +647,7 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		t.Fatalf("runtime requests = %d, want 1", len(runtime.requests))
 	}
 	runtimeReq := runtime.requests[0]
-	if runtimeReq.Method != RuntimeMethodProvision || runtimeReq.Operator.RequestEvent != request.ID || runtimeReq.Soul.Draft != draft.EventID || runtimeReq.Soul.SpecHash != "sha256:draft" {
+	if runtimeReq.Method != RuntimeMethodProvision || runtimeReq.Operator.RequestEvent != request.ID.Hex() || runtimeReq.Soul.Draft != draft.EventID || runtimeReq.Soul.SpecHash != "sha256:draft" {
 		t.Fatalf("runtime request missing correlated draft/spec context: %+v", runtimeReq)
 	}
 	if got := runtimeReq.Params["relay_policy"]; got == nil {
@@ -687,6 +702,7 @@ func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testi
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:   "runtime-failure-draft",
@@ -727,6 +743,7 @@ func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testi
 func TestDraftSpecHashMismatchFailsBeforeRuntimeProvisioning(t *testing.T) {
 	signer := newFakeSigner(t)
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, &capturingGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:   "mismatched-draft-event",
@@ -761,10 +778,10 @@ func TestDraftSpecHashMismatchFailsBeforeRuntimeProvisioning(t *testing.T) {
 func eventKindBefore(events []*nostr.Event, firstKind, secondKind int) bool {
 	firstIndex, secondIndex := -1, -1
 	for i, event := range events {
-		if event.Kind == firstKind && firstIndex == -1 {
+		if event.Kind == nostr.Kind(firstKind) && firstIndex == -1 {
 			firstIndex = i
 		}
-		if event.Kind == secondKind && secondIndex == -1 {
+		if event.Kind == nostr.Kind(secondKind) && secondIndex == -1 {
 			secondIndex = i
 		}
 	}
@@ -785,6 +802,7 @@ func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *te
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full

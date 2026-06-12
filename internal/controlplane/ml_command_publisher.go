@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -128,13 +128,13 @@ func (p *MLCommandPublisher) publish(ctx context.Context, method string, resultK
 	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, "", tags, content, "ML command")
 	if err != nil {
 		if ev != nil && published > 0 {
-			receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}
+			receipt := &MLCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}
 			populateMLReceiptTags(receipt, ev.Tags)
 			return receipt, nil
 		}
 		return nil, err
 	}
-	receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}
+	receipt := &MLCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}
 	populateMLReceiptTags(receipt, ev.Tags)
 	return receipt, nil
 }

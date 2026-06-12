@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -131,9 +131,11 @@ func TestHandleServiceActionRoutesDirectRuntimeDeploy(t *testing.T) {
 		HealthStatus:        domain.HealthStatusHealthy,
 		Source:              "direct_runtime",
 	}}
-	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{operatorPubkey}}, capture, nil, runtimeStub)
 
-	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "deploy-request", PubKey: "operator", Kind: KindServiceAction, Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `"}`})
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: testNostrID("deploy-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindServiceAction, Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `"}`})
 
 	if !runtimeStub.deployCalled || runtimeStub.deployServiceID != serviceID || runtimeStub.deployEnvID != envID || runtimeStub.deployArtifact == nil || *runtimeStub.deployArtifact != artifactID {
 		t.Fatalf("deploy was not dispatched correctly: %#v", runtimeStub)
@@ -169,9 +171,11 @@ func TestHandleServiceActionDirectRuntimeScopedAuth(t *testing.T) {
 	serviceID := uuid.New()
 	envID := uuid.New()
 	runtimeStub := &stubRuntimeLifecycleOperatorService{}
-	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"allowed"}}, capture, nil, runtimeStub)
+	allowedKey := nostr.Generate().Hex()
+	deniedKey := nostr.Generate().Hex()
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, allowedKey)}}, capture, nil, runtimeStub)
 
-	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "restart-request", PubKey: "denied", Kind: KindServiceAction, Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`})
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: testNostrID("restart-request"), PubKey: testNostrPubKeyFromPrivateKey(t, deniedKey), Kind: KindServiceAction, Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`})
 
 	if runtimeStub.restartCalled {
 		t.Fatal("runtime lifecycle service should not be called for unauthorized requester")
@@ -222,9 +226,10 @@ func TestHandleServiceActionDirectRuntimeValidation(t *testing.T) {
 			serviceID := uuid.New()
 			envID := uuid.New()
 			runtimeStub := &stubRuntimeLifecycleOperatorService{}
-			reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+			operatorKey := nostr.Generate().Hex()
+			reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, operatorKey)}}, capture, nil, runtimeStub)
 
-			reactor.handleServiceAction(context.Background(), &nostr.Event{ID: tc.name + "-request", PubKey: "operator", Kind: KindServiceAction, Content: `{"action":"` + tc.action + `","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + uuid.NewString() + `"}`})
+			reactor.handleServiceAction(context.Background(), &nostr.Event{ID: testNostrID(tc.name + "-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindServiceAction, Content: `{"action":"` + tc.action + `","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + uuid.NewString() + `"}`})
 
 			tc.assert(t, runtimeStub)
 			if len(capture.events) != 1 {
@@ -245,9 +250,10 @@ func TestHandleServiceActionDirectRuntimeFailure(t *testing.T) {
 	serviceID := uuid.New()
 	envID := uuid.New()
 	runtimeStub := &stubRuntimeLifecycleOperatorService{restartErr: errors.New("runtime docker does not support restart")}
-	reactor := newOperatorActionTestReactor(t, Config{AuthorizedPubkeys: []string{"global-operator"}}, capture, nil, runtimeStub)
+	operatorKey := nostr.Generate().Hex()
+	reactor := newOperatorActionTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, operatorKey)}}, capture, nil, runtimeStub)
 
-	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "restart-request", PubKey: "global-operator", Kind: KindServiceAction, Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`})
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: testNostrID("restart-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindServiceAction, Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`})
 
 	if !runtimeStub.restartCalled {
 		t.Fatal("restart was not dispatched")
@@ -305,9 +311,10 @@ func TestHandleServiceActionRoutesSuccessfulRestartAndStop(t *testing.T) {
 				restartResp: &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: envID, HealthStatus: tc.status, Source: "direct_runtime"},
 				stopResp:    &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: envID, HealthStatus: tc.status, Source: "direct_runtime"},
 			}
-			reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+			operatorKey := nostr.Generate().Hex()
+			reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, operatorKey)}}, capture, nil, runtimeStub)
 
-			reactor.handleServiceAction(context.Background(), &nostr.Event{ID: tc.name + "-request", PubKey: "operator", Kind: KindServiceAction, Content: fmt.Sprintf(tc.content, serviceID.String(), envID.String())})
+			reactor.handleServiceAction(context.Background(), &nostr.Event{ID: testNostrID(tc.name + "-request"), PubKey: testNostrPubKeyFromPrivateKey(t, operatorKey), Kind: KindServiceAction, Content: fmt.Sprintf(tc.content, serviceID.String(), envID.String())})
 
 			tc.assertCalled(t, runtimeStub, serviceID, envID)
 			if len(capture.events) != 2 {
@@ -336,9 +343,9 @@ func TestHandleServiceActionRoutesSuccessfulRestartAndStop(t *testing.T) {
 
 func TestHandleServiceActionPreservesLegacyAcknowledgement(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
-	reactor := newOperatorActionTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, nil, nil)
+	reactor := newOperatorActionTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, nil, nil)
 
-	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "legacy-request", PubKey: "operator", Kind: KindServiceAction, Tags: nostr.Tags{{"service", "svc-1"}, {"action", "scale"}, {"reason", "capacity"}}})
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: testNostrID("legacy-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey), Kind: KindServiceAction, Tags: nostr.Tags{{"service", "svc-1"}, {"action", "scale"}, {"reason", "capacity"}}})
 
 	if len(capture.events) != 1 {
 		t.Fatalf("published events = %d, want legacy acknowledgement", len(capture.events))
@@ -351,9 +358,9 @@ func TestHandleServiceActionPreservesLegacyAcknowledgement(t *testing.T) {
 func TestHandleAdoptionScanRequestRejectsUnauthorized(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
 	stub := &stubAdoptionOperatorService{}
-	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{"allowed"}}, capture, stub)
+	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testServiceKey)}}, capture, stub)
 
-	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: "scan-request", PubKey: "denied", Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}]}`})
+	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: testNostrID("scan-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testOtherKey), Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}]}`})
 
 	if stub.scanCalled {
 		t.Fatal("adoption service should not be called for unauthorized request")
@@ -374,9 +381,9 @@ func TestHandleAdoptionScanRequestRejectsUnauthorized(t *testing.T) {
 func TestHandleAdoptionScanRequestRejectsDockerHost(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
 	stub := &stubAdoptionOperatorService{}
-	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{"operator"}}, capture, stub)
+	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, stub)
 
-	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: "scan-request", PubKey: "operator", Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker","docker_host":"tcp://docker.internal:2376"}]}`})
+	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: testNostrID("scan-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey), Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker","docker_host":"tcp://docker.internal:2376"}]}`})
 
 	if stub.scanCalled {
 		t.Fatal("adoption service should not be called when docker_host is present")
@@ -396,9 +403,9 @@ func TestHandleAdoptionScanRequestRejectsDockerHost(t *testing.T) {
 func TestHandleAdoptionImportRequestRejectsUnauthorized(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
 	stub := &stubAdoptionOperatorService{}
-	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{"allowed"}}, capture, stub)
+	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testServiceKey)}}, capture, stub)
 
-	reactor.handleAdoptionImportRequest(context.Background(), &nostr.Event{ID: "import-request", PubKey: "denied", Kind: KindAdoptionImportRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}],"import_all":true}`})
+	reactor.handleAdoptionImportRequest(context.Background(), &nostr.Event{ID: testNostrID("import-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testOtherKey), Kind: KindAdoptionImportRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}],"import_all":true}`})
 
 	if stub.importCalled {
 		t.Fatal("adoption service should not be called for unauthorized import request")
@@ -444,9 +451,9 @@ func TestHandleAdoptionScanRequestPublishesSanitizedResult(t *testing.T) {
 			Adoptable:               true,
 		}},
 	}}}
-	reactor := newAdoptionTestReactor(t, Config{AuthorizedPubkeys: []string{"global-operator"}}, capture, stub)
+	reactor := newAdoptionTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, stub)
 
-	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: "scan-request", PubKey: "global-operator", Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":" Prod ","endpoint_ref":"prod-docker","environment_name":" Prod "}]}`})
+	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: testNostrID("scan-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey), Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":" Prod ","endpoint_ref":"prod-docker","environment_name":" Prod "}]}`})
 
 	if !stub.scanCalled {
 		t.Fatal("adoption scan service was not called")
@@ -499,9 +506,9 @@ func TestHandleAdoptionImportRequestPublishesPartialFailureResult(t *testing.T) 
 		{TargetName: "prod", ContainerID: "abc123", ContainerName: "api", ServiceName: "api", ServiceID: &serviceID, Status: "created", RedactedEnvironmentKeys: []string{"DB_PASSWORD"}},
 		{TargetName: "prod", ContainerID: "def456", ContainerName: "worker", Status: "failed", Error: "image unsupported"},
 	}}
-	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{"operator"}}, capture, stub)
+	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, stub)
 
-	reactor.handleAdoptionImportRequest(context.Background(), &nostr.Event{ID: "import-request", PubKey: "operator", Kind: KindAdoptionImportRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}],"import_all":true}`})
+	reactor.handleAdoptionImportRequest(context.Background(), &nostr.Event{ID: testNostrID("import-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey), Kind: KindAdoptionImportRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}],"import_all":true}`})
 
 	if !stub.importCalled {
 		t.Fatal("adoption import service was not called")
@@ -530,9 +537,9 @@ func TestHandleAdoptionImportRequestPublishesPartialFailureResult(t *testing.T) 
 func TestHandleAdoptionScanRequestPublishesOperationFailure(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
 	stub := &stubAdoptionOperatorService{scanErr: errors.New("runtime unavailable")}
-	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{"operator"}}, capture, stub)
+	reactor := newAdoptionTestReactor(t, Config{AdoptionAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, stub)
 
-	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: "scan-request", PubKey: "operator", Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}]}`})
+	reactor.handleAdoptionScanRequest(context.Background(), &nostr.Event{ID: testNostrID("scan-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey), Kind: KindAdoptionScanRequest, Content: `{"targets":[{"name":"prod","endpoint_ref":"prod-docker"}]}`})
 
 	if len(capture.events) != 2 {
 		t.Fatalf("published events = %d, want status and failure result", len(capture.events))
@@ -552,7 +559,7 @@ func newAdoptionTestReactor(t *testing.T, cfg Config, capture *captureNostrPubli
 
 func newOperatorActionTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, adoption AdoptionOperatorService, runtimeLifecycle RuntimeLifecycleOperatorService) *Reactor {
 	t.Helper()
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -561,8 +568,8 @@ func newOperatorActionTestReactor(t *testing.T, cfg Config, capture *captureNost
 
 func assertSignedEvent(t *testing.T, ev nostr.Event) {
 	t.Helper()
-	if ok, err := ev.CheckSignature(); err != nil || !ok {
-		t.Fatalf("published event signature invalid: ok=%v err=%v", ok, err)
+	if !ev.VerifySignature() {
+		t.Fatalf("published event signature invalid")
 	}
 }
 
@@ -612,11 +619,11 @@ func TestDeployStepProgressionEmitsStatusEvents(t *testing.T) {
 			Source:        "direct_runtime",
 		},
 	}
-	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, nil, runtimeStub)
 
 	reactor.handleServiceAction(context.Background(), &nostr.Event{
-		ID:      "deploy-steps-request",
-		PubKey:  "operator",
+		ID:      testNostrID("deploy-steps-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindServiceAction,
 		Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `"}`,
 	})
@@ -685,11 +692,11 @@ func TestDeployStepProgressionBackwardCompatible(t *testing.T) {
 			Source:        "direct_runtime",
 		},
 	}
-	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, nil, runtimeStub)
 
 	reactor.handleServiceAction(context.Background(), &nostr.Event{
-		ID:      "compat-request",
-		PubKey:  "operator",
+		ID:      testNostrID("compat-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindServiceAction,
 		Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`,
 	})
@@ -733,11 +740,11 @@ func TestRuntimeActionResultCarriesObservationID(t *testing.T) {
 		Source:         "direct_runtime",
 		NormalizedHash: "sha256:obs-hash",
 	}}
-	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, nil, runtimeStub)
 
 	reactor.handleServiceAction(context.Background(), &nostr.Event{
-		ID:      "enriched-deploy-request",
-		PubKey:  "operator",
+		ID:      testNostrID("enriched-deploy-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindServiceAction,
 		Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`,
 	})
@@ -762,11 +769,11 @@ func TestRuntimeActionResultOmitsObservationTagsWhenNil(t *testing.T) {
 	envID := uuid.New()
 	// Restart returns nil observation
 	runtimeStub := &stubRuntimeLifecycleOperatorService{restartResp: nil}
-	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, nil, runtimeStub)
 
 	reactor.handleServiceAction(context.Background(), &nostr.Event{
-		ID:      "restart-request",
-		PubKey:  "operator",
+		ID:      testNostrID("restart-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, testRequesterKey),
 		Kind:    KindServiceAction,
 		Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`,
 	})

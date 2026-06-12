@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/llm"
@@ -198,7 +198,7 @@ func TestOpenClawSidecarExecutesProvisionAndPublishesCorrelatedResult(t *testing
 	if err != nil {
 		t.Fatalf("HandleControlEvent error = %v", err)
 	}
-	if result.Status != "success" || result.Method != RuntimeMethodProvision || result.RequestEvent != request.ID || result.OperatorRequestEvent != "operator-request" {
+	if result.Status != "success" || result.Method != RuntimeMethodProvision || result.RequestEvent != request.ID.Hex() || result.OperatorRequestEvent != "operator-request" {
 		t.Fatalf("unexpected result envelope: %+v", result)
 	}
 	if len(driver.calls) != 1 || driver.calls[0].Method != RuntimeMethodProvision || driver.calls[0].AgentID != "agent-alice" {
@@ -208,10 +208,10 @@ func TestOpenClawSidecarExecutesProvisionAndPublishesCorrelatedResult(t *testing
 		t.Fatalf("published count = %d, want result", len(transport.published))
 	}
 	published := transport.published[0]
-	if published.Kind != domain.KindRuntimeControlResult || published.PubKey != runtime.pubkey || !published.CheckID() {
+	if published.Kind != nostr.Kind(domain.KindRuntimeControlResult) || published.PubKey.Hex() != runtime.pubkey || !published.CheckID() {
 		t.Fatalf("result event not signed by runtime: kind=%d pubkey=%s", published.Kind, published.PubKey)
 	}
-	if tagValue(published.Tags, tagEvent) != request.ID || tagValue(published.Tags, tagPubkey) != controller.pubkey || tagValue(published.Tags, "idempotency-key") != "idem-soulfactory.provision" {
+	if tagValue(published.Tags, tagEvent) != request.ID.Hex() || tagValue(published.Tags, tagPubkey) != controller.pubkey || tagValue(published.Tags, "idempotency-key") != "idem-soulfactory.provision" {
 		t.Fatalf("result tags are not correlated: %#v", published.Tags)
 	}
 	parsed, ok := parseRuntimeControlResultEvent(&published)
@@ -344,7 +344,7 @@ func TestOpenClawSidecarCommandDriverInvokesWrapperDryRunAndCachesReplay(t *test
 	if err != nil {
 		t.Fatalf("HandleControlEvent wrapper dry-run error = %v", err)
 	}
-	if result.Status != "success" || result.Method != RuntimeMethodProvision || result.RequestEvent != request.ID || result.OperatorRequestEvent != "operator-request" {
+	if result.Status != "success" || result.Method != RuntimeMethodProvision || result.RequestEvent != request.ID.Hex() || result.OperatorRequestEvent != "operator-request" {
 		t.Fatalf("unexpected wrapper result envelope: %+v", result)
 	}
 	if result.Result["runtime_binding"] != "openclaw://agents/agent-alice" || result.Result["state"] != "running" {
@@ -358,9 +358,8 @@ func TestOpenClawSidecarCommandDriverInvokesWrapperDryRunAndCachesReplay(t *test
 		t.Fatalf("published count after first request = %d, want 1", len(transport.published))
 	}
 	published := transport.published[0]
-	signatureOK, signatureErr := published.CheckSignature()
-	if published.Kind != domain.KindRuntimeControlResult || published.PubKey != runtime.pubkey || !published.CheckID() || signatureErr != nil || !signatureOK {
-		t.Fatalf("result event is not a signed 38386 from runtime: kind=%d pubkey=%s signatureOK=%v signatureErr=%v", published.Kind, published.PubKey, signatureOK, signatureErr)
+	if published.Kind != nostr.Kind(domain.KindRuntimeControlResult) || published.PubKey.Hex() != runtime.pubkey || !published.CheckID() || !published.VerifySignature() {
+		t.Fatalf("result event is not a signed 38386 from runtime: kind=%d pubkey=%s signatureOK=%v", published.Kind, published.PubKey.Hex(), published.VerifySignature())
 	}
 	parsed, ok := parseRuntimeControlResultEvent(&published)
 	if !ok || !runtimeResultCorrelates(parsed, request, RuntimeAdapterRequest{Method: RuntimeMethodProvision, IdempotencyKey: "idem-soulfactory.provision", Operator: RuntimeOperatorRef{RequestEvent: "operator-request"}, Target: RuntimeTargetRef{RuntimePubkey: runtime.pubkey, AgentID: "agent-alice"}, Soul: RuntimeSoulRef{ID: "soul-alice", SpecHash: "sha256:spec"}}, controller.pubkey) {
@@ -386,13 +385,13 @@ func TestOpenClawSidecarCommandDriverInvokesWrapperDryRunAndCachesReplay(t *test
 	if err != nil {
 		t.Fatalf("HandleControlEvent idempotency conflict publish error = %v", err)
 	}
-	if conflictResult.Status != "rejected" || conflictResult.Error == nil || conflictResult.Error.Code != "duplicate_conflict" || conflictResult.RequestEvent != conflict.ID {
+	if conflictResult.Status != "rejected" || conflictResult.Error == nil || conflictResult.Error.Code != "duplicate_conflict" || conflictResult.RequestEvent != conflict.ID.Hex() {
 		t.Fatalf("unexpected idempotency conflict result: %+v", conflictResult)
 	}
 	if got := countWrapperShimInvocations(t, wrapperRoot); got != 1 {
 		t.Fatalf("wrapper invocations after idempotency conflict = %d, want 1", got)
 	}
-	if len(transport.published) != 3 || tagValue(transport.published[2].Tags, tagStatus) != "rejected" || tagValue(transport.published[2].Tags, tagEvent) != conflict.ID {
+	if len(transport.published) != 3 || tagValue(transport.published[2].Tags, tagStatus) != "rejected" || tagValue(transport.published[2].Tags, tagEvent) != conflict.ID.Hex() {
 		t.Fatalf("conflict 38386 result is not correlated/rejected: %#v", transport.published)
 	}
 }
@@ -453,7 +452,7 @@ func TestOpenClawSidecarPersistsIdempotencyAcrossRestart(t *testing.T) {
 	if len(driver2.calls) != 0 {
 		t.Fatalf("restarted sidecar driver calls = %d, want 0", len(driver2.calls))
 	}
-	if len(transport2.published) != 1 || tagValue(transport2.published[0].Tags, tagEvent) != request.ID {
+	if len(transport2.published) != 1 || tagValue(transport2.published[0].Tags, tagEvent) != request.ID.Hex() {
 		t.Fatalf("restarted sidecar did not republish cached correlated result: %#v", transport2.published)
 	}
 }
@@ -506,7 +505,7 @@ func TestOpenClawSidecarAvatarRuntimeMethodsPublish38386Results(t *testing.T) {
 	if progress, ok := result.Result["progress_events"].([]map[string]interface{}); !ok || len(progress) != 2 {
 		t.Fatalf("progress events = %#v", result.Result["progress_events"])
 	}
-	if len(transport.published) != 1 || transport.published[0].Kind != domain.KindRuntimeControlResult {
+	if len(transport.published) != 1 || transport.published[0].Kind != nostr.Kind(domain.KindRuntimeControlResult) {
 		t.Fatalf("published avatar result events = %#v", transport.published)
 	}
 
@@ -622,7 +621,7 @@ func TestOpenClawSidecarPersonaConfigureAndPreview(t *testing.T) {
 	if preview.Status != "success" || preview.Method != RuntimeMethodPersonaPreview || preview.Result["applied"] != false || preview.Result["hot_reload"] != false {
 		t.Fatalf("unexpected persona preview result: %+v", preview)
 	}
-	if len(transport.published) != 2 || transport.published[0].Kind != domain.KindRuntimeControlResult || transport.published[1].Kind != domain.KindRuntimeControlResult {
+	if len(transport.published) != 2 || transport.published[0].Kind != nostr.Kind(domain.KindRuntimeControlResult) || transport.published[1].Kind != nostr.Kind(domain.KindRuntimeControlResult) {
 		t.Fatalf("published persona result events = %+v, want two 38386 results", transport.published)
 	}
 }

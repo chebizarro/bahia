@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
@@ -63,7 +63,7 @@ func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 
 func (r *Reactor) handleDNSDriftRemediate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized DNS drift remediation request")
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSDriftRemediateResult, dnsActionDriftRemediate, "error", "unauthorized", "requester not in authorized list", nil)
 		return
@@ -95,7 +95,7 @@ func (r *Reactor) handleDNSDriftRemediate(ctx context.Context, event *nostr.Even
 
 func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized DNS zone create request")
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "unauthorized", "requester not in authorized list", nil)
 		return
@@ -153,7 +153,7 @@ func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 
 func (r *Reactor) handleDNSRecordOverride(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized DNS record override request")
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "unauthorized", "requester not in authorized list", nil)
 		return
@@ -174,7 +174,7 @@ func (r *Reactor) handleDNSRecordOverride(ctx context.Context, event *nostr.Even
 	if override.CreatedAt.IsZero() {
 		override.CreatedAt = time.Now().UTC()
 	}
-	override.OperatorPubkey = event.PubKey
+	override.OperatorPubkey = event.PubKey.Hex()
 	if err := domain.ValidateDNSRecordOverride(&override); err != nil {
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "validation_error", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()})
 		return
@@ -197,7 +197,7 @@ func (r *Reactor) handleDNSRecordOverride(ctx context.Context, event *nostr.Even
 
 func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized DNS policy apply request")
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "unauthorized", "requester not in authorized list", nil)
 		return
@@ -261,7 +261,7 @@ func (r *Reactor) dnsPersistenceOperator() DNSPersistenceOperator {
 }
 
 func (r *Reactor) publishDNSUnsupported(ctx context.Context, event *nostr.Event, resultKind int, action, reason string) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		_ = r.publishDNSOperationResult(ctx, event, resultKind, action, "error", "unauthorized", "requester not in authorized list", nil)
 		return
 	}

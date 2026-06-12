@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -17,12 +17,12 @@ import (
 
 func TestHandleBackupRunRequestCreatesDurableRunAndInvokesExecutor(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, recipe := newBackupRequestRegistryFixture()
 	executor := &recordingBackupExecutor{calls: make(chan uuid.UUID, 1)}
 	responder := &recordingBackupRunResponder{}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestHandleBackupRunRequestCreatesDurableRunAndInvokesExecutor(t *testing.T)
 		if run == nil {
 			t.Fatalf("executor got run %s but registry has no run", runID)
 		}
-		if run.RecipeID != recipe.ID || run.RequestEventID != request.ID || run.RequestDTag != "backup:daily:prod" {
+		if run.RecipeID != recipe.ID || run.RequestEventID != request.ID.Hex() || run.RequestDTag != "backup:daily:prod" {
 			t.Fatalf("unexpected run: %#v", run)
 		}
 		if run.Metadata["nostr_request_pubkey"] != requestPubkey || run.Metadata["nostr_recipe_coord"] != "recipe:daily:v1" {
@@ -59,12 +59,12 @@ func TestHandleBackupRunRequestCreatesDurableRunAndInvokesExecutor(t *testing.T)
 
 func TestHandleBackupRunRequestIsIdempotentByRequesterKindAndDTag(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	executor := &recordingBackupExecutor{calls: make(chan uuid.UUID, 2)}
 	responder := &recordingBackupRunResponder{}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
 	reactor.backupRegistry = registry
 	reactor.backupExecutor = executor
@@ -95,13 +95,13 @@ func TestHandleBackupRunRequestIsIdempotentByRequesterKindAndDTag(t *testing.T) 
 
 func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	sourceRun := registry.addRestoreEligibleRun()
 	executor := &recordingBackupRestoreExecutor{calls: make(chan uuid.UUID, 1)}
 	responder := &recordingBackupRestoreResponder{}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
 	reactor.backupRegistry = registry
 	reactor.backupRestoreExecutor = executor
@@ -141,11 +141,11 @@ func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
 
 func TestHandleBackupRepositoryRegisterRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	capture := &captureNostrPublisher{published: 1}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
 	reactor.backupRegistry = registry
 	request := signedLLMRequest(t, requestKey, KindBackupRepositoryRegister, `{"name":"archive","backend":"kopia","repository_uri":"kopia://archive","metadata":{"site":"west"}}`, nostr.Tags{{"d", "repository:archive"}, {"repository", "archive"}, {"backend", "kopia"}})
@@ -166,11 +166,11 @@ func TestHandleBackupRepositoryRegisterRequestAppliesRegistryRecordAndPublishesR
 
 func TestHandleBackupPolicyApplyRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	capture := &captureNostrPublisher{published: 1}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
 	reactor.backupRegistry = registry
 	request := signedLLMRequest(t, requestKey, KindBackupPolicyApply, `{"name":"monthly-verified","require_verification":true,"verification_mode":"kopia_snapshot_verify"}`, nostr.Tags{{"d", "policy:monthly-verified"}, {"policy", "monthly-verified"}, {"verification", "kopia_snapshot_verify"}})
@@ -190,11 +190,11 @@ func TestHandleBackupPolicyApplyRequestAppliesRegistryRecordAndPublishesResult(t
 
 func TestHandleBackupRecipeApplyRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	capture := &captureNostrPublisher{published: 1}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
 	reactor.backupRegistry = registry
 	repoID := registry.firstRepositoryID()
@@ -216,11 +216,11 @@ func TestHandleBackupRecipeApplyRequestAppliesRegistryRecordAndPublishesResult(t
 
 func TestHandleBackupDefinitionApplyRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, recipe := newBackupRequestRegistryFixture()
 	capture := &captureNostrPublisher{published: 1}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupDefinitionRegistry(registry))
 	reactor.backupRegistry = registry
 	policyID := *recipe.PolicyID
@@ -241,14 +241,14 @@ func TestHandleBackupDefinitionApplyRequestAppliesRegistryRecordAndPublishesResu
 
 func TestHandleBackupDefinitionApplyRequestReusesExistingDefinitionIDAndCanonicalReferenceNames(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, recipe := newBackupRequestRegistryFixture()
 	policyID := *recipe.PolicyID
 	existingID := uuid.New()
 	registry.definitions[existingID] = &domain.BackupDefinition{ID: existingID, Name: "daily-prod", RepositoryID: recipe.RepositoryID, RepositoryName: "primary", PolicyID: policyID, PolicyName: "verified", RecipeID: recipe.ID, RecipeName: recipe.Name, RecipeVersion: recipe.Version, CreatedBy: requestPubkey}
 	capture := &captureNostrPublisher{published: 1}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupDefinitionRegistry(registry))
 	reactor.backupRegistry = registry
 	request := signedLLMRequest(t, requestKey, KindBackupDefinitionApply, fmt.Sprintf(`{"name":"daily-prod","repository_id":"%s","repository_name":"wrong","policy_id":"%s","policy_name":"wrong","recipe_id":"%s","recipe_name":"wrong","recipe_version":"wrong"}`, recipe.RepositoryID, policyID, recipe.ID), nostr.Tags{{"d", "definition:daily-prod"}})
@@ -266,8 +266,8 @@ func TestHandleBackupDefinitionApplyRequestReusesExistingDefinitionIDAndCanonica
 
 func TestHandleBackupVerificationRequestDoesNotReinvokeExecutorForExistingVerification(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	run := registry.addRestoreEligibleRun()
 	run.VerificationMode = domain.BackupVerificationKopiaSnapshotVerify
@@ -275,7 +275,7 @@ func TestHandleBackupVerificationRequestDoesNotReinvokeExecutorForExistingVerifi
 	registry.verifications[run.ID] = existing
 	capture := &captureNostrPublisher{published: 1}
 	executor := &recordingBackupVerificationExecutor{calls: make(chan uuid.UUID, 1)}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupVerificationExecutor(executor))
 	reactor.backupRegistry = registry
 	request := signedLLMRequest(t, requestKey, KindBackupVerificationRequest, fmt.Sprintf(`{"backup_run_id":"%s","mode":"kopia_snapshot_verify"}`, run.ID), nostr.Tags{{"d", "verify:daily"}, {"backup_run_id", run.ID.String()}})
@@ -296,12 +296,12 @@ func TestHandleBackupVerificationRequestDoesNotReinvokeExecutorForExistingVerifi
 
 func TestHandleBackupRepositoryProbeRequestPublishesQueuedResultAndInvokesExecutor(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	capture := &captureNostrPublisher{published: 1}
 	executor := &recordingBackupRepositoryProbeExecutor{calls: make(chan uuid.UUID, 1)}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupRepositoryProbeExecutor(executor))
 	reactor.backupRegistry = registry
 	repoID := registry.firstRepositoryID()
@@ -326,14 +326,14 @@ func TestHandleBackupRepositoryProbeRequestPublishesQueuedResultAndInvokesExecut
 
 func TestHandleBackupVerificationRequestRecordsPendingVerificationAndInvokesExecutor(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	run := registry.addRestoreEligibleRun()
 	run.VerificationMode = domain.BackupVerificationKopiaSnapshotVerify
 	capture := &captureNostrPublisher{published: 1}
 	executor := &recordingBackupVerificationExecutor{calls: make(chan uuid.UUID, 1)}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupVerificationExecutor(executor))
 	reactor.backupRegistry = registry
 	request := signedLLMRequest(t, requestKey, KindBackupVerificationRequest, fmt.Sprintf(`{"backup_run_id":"%s","mode":"kopia_snapshot_verify"}`, run.ID), nostr.Tags{{"d", "verify:daily"}, {"backup_run_id", run.ID.String()}, {"verification_mode", "kopia_snapshot_verify"}})
@@ -359,12 +359,12 @@ func TestHandleBackupVerificationRequestRecordsPendingVerificationAndInvokesExec
 
 func TestHandleBackupRetentionRequestCreatesDurableRunAndInvokesExecutor(t *testing.T) {
 	ctx := context.Background()
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
 	executor := &recordingBackupRetentionExecutor{calls: make(chan uuid.UUID, 1)}
 	responder := &recordingBackupRetentionResponder{}
-	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
 	reactor.backupRegistry = registry
 	reactor.backupRetentionExecutor = executor
@@ -391,19 +391,20 @@ func TestHandleBackupRetentionRequestCreatesDurableRunAndInvokesExecutor(t *test
 
 func TestBackupRequestKindsAreOmittedFromRuntimeSubscription(t *testing.T) {
 	since := nostr.Now()
-	reactor := &Reactor{config: Config{AuthorizedPubkeys: []string{"operator"}}}
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
+	reactor := &Reactor{config: Config{AuthorizedPubkeys: []string{operatorPubkey}}}
 	filters := reactor.buildRequestSubscriptionFilters(since)
 	if len(filters) != 1 {
 		t.Fatalf("expected one canonical runtime filter, got %d", len(filters))
 	}
 	for _, legacy := range backupRequestKinds() {
 		for _, kind := range filters[0].Kinds {
-			if kind == legacy {
+			if kind == nostr.Kind(legacy) {
 				t.Fatalf("canonical runtime filter still includes legacy backup request kind %d: %#v", legacy, filters[0].Kinds)
 			}
 		}
 	}
-	if len(filters[0].Authors) != 1 || filters[0].Authors[0] != "operator" {
+	if len(filters[0].Authors) != 1 || filters[0].Authors[0].Hex() != operatorPubkey {
 		t.Fatalf("canonical runtime filter should scope ContextVM reads to authorized operators: %#v", filters[0].Authors)
 	}
 }
@@ -412,7 +413,7 @@ func TestBackupRunResponderPublishesResultAttestationAndPersistsPublishSummaries
 	ctx := context.Background()
 	publisher := &captureBackupResultPublisher{results: []nostrpool.PublishResult{{RelayURL: "wss://relay.accepted.example", Accepted: true}, {RelayURL: "wss://relay.blocked.example", Reason: "blocked: policy denied"}}}
 	registry := &recordingBackupPublishRegistry{}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -437,8 +438,8 @@ func TestBackupRunResponderPublishesResultAttestationAndPersistsPublishSummaries
 	assertReactorTag(t, result.Tags, "run", run.ID.String())
 	assertReactorTag(t, result.Tags, "verification", string(domain.BackupVerificationFailed))
 	assertReactorTag(t, result.Tags, "repository", "primary")
-	if ok, err := result.CheckSignature(); err != nil || !ok {
-		t.Fatalf("result signature invalid: ok=%v err=%v", ok, err)
+	if !result.VerifySignature() {
+		t.Fatalf("result signature invalid")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {

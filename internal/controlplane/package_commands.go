@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -205,7 +205,7 @@ func (p *PackageCommandPublisher) publish(ctx context.Context, method string, ta
 	if err != nil {
 		return nil, err
 	}
-	receipt := &PackageCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, RepositoryRegistryKind: KindCASControlState, ArtifactRegistryKind: KindCASControlState, PromotionRegistryKind: KindCASControlState, DriftEventKind: KindNIP38Status, PublishedRelays: published}
+	receipt := &PackageCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, RepositoryRegistryKind: KindCASControlState, ArtifactRegistryKind: KindCASControlState, PromotionRegistryKind: KindCASControlState, DriftEventKind: KindNIP38Status, PublishedRelays: published}
 	receipt.RepositoryID = tagValueNostr(ev.Tags, "repository")
 	receipt.RepositoryName = tagValueNostr(ev.Tags, "repository_name")
 	receipt.PackageName = tagValueNostr(ev.Tags, "package")

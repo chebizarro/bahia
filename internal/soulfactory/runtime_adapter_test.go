@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -29,7 +29,7 @@ type fakeRuntimeAdapterTransport struct {
 
 func (f *fakeRuntimeAdapterTransport) Publish(_ context.Context, event nostr.Event) (int, error) {
 	f.published = append(f.published, event)
-	if f.resultSub != nil && event.Kind == domain.KindRuntimeControlRequest {
+	if f.resultSub != nil && event.Kind == nostr.Kind(domain.KindRuntimeControlRequest) {
 		if f.wrongFirst != nil {
 			f.sendResult(f.wrongFirst)
 		}
@@ -44,16 +44,16 @@ func (f *fakeRuntimeAdapterTransport) SubscribeAllWithEOSE(_ context.Context, fi
 	if len(filters) == 0 {
 		return nil, errors.New("missing filters")
 	}
-	kind := 0
+	kind := nostr.Kind(0)
 	if len(filters[0].Kinds) > 0 {
 		kind = filters[0].Kinds[0]
 	}
 	switch kind {
-	case domain.KindRuntimeCapability:
+	case nostr.Kind(domain.KindRuntimeCapability):
 		return bufferedSubscription(f.capabilities...), nil
-	case kindNIP65RelayListMetadata:
+	case nostr.Kind(kindNIP65RelayListMetadata):
 		return bufferedSubscription(f.nip65...), nil
-	case domain.KindRuntimeControlResult:
+	case nostr.Kind(domain.KindRuntimeControlResult):
 		events := make(chan *nostr.Event, 8)
 		eose := make(chan struct{})
 		close(eose)
@@ -100,18 +100,18 @@ func (f *fakeRuntimeAdapterTransport) buildRuntimeResult(request nostr.Event) *n
 		Schema:               domain.SoulFactoryRuntimeControlSchema,
 		Method:               envelope.Method,
 		IdempotencyKey:       envelope.IdempotencyKey,
-		RequestEvent:         request.ID,
+		RequestEvent:         request.ID.Hex(),
 		OperatorRequestEvent: envelope.Operator.RequestEvent,
 		Status:               status,
 		Result:               result,
 		Error:                f.resultError,
 	})
 	event := &nostr.Event{
-		Kind:      domain.KindRuntimeControlResult,
+		Kind:      nostr.Kind(domain.KindRuntimeControlResult),
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{tagPubkey, envelope.Controller.Pubkey},
-			{tagEvent, request.ID},
+			{tagEvent, request.ID.Hex()},
 			{"method", envelope.Method},
 			{"idempotency-key", envelope.IdempotencyKey},
 			{tagAgentID, envelope.Target.AgentID},
@@ -122,7 +122,11 @@ func (f *fakeRuntimeAdapterTransport) buildRuntimeResult(request nostr.Event) *n
 		},
 		Content: string(content),
 	}
-	_ = event.Sign(runtimeAdapterTestRuntimeSecret)
+	secret, err := nostr.SecretKeyFromHex(runtimeAdapterTestRuntimeSecret)
+	if err != nil {
+		panic(err)
+	}
+	_ = event.Sign(secret)
 	return event
 }
 
@@ -296,8 +300,8 @@ func TestRuntimeAdapterSignsRequestSelectsRelaysAndRequiresCorrelatedResult(t *t
 		t.Fatalf("published count = %d, want 1", len(transport.published))
 	}
 	request := transport.published[0]
-	if request.Kind != domain.KindRuntimeControlRequest || request.PubKey != controller.pubkey || !request.CheckID() {
-		t.Fatalf("request not signed as controller: kind=%d pubkey=%s id=%s", request.Kind, request.PubKey, request.ID)
+	if request.Kind != nostr.Kind(domain.KindRuntimeControlRequest) || request.PubKey.Hex() != controller.pubkey || !request.CheckID() {
+		t.Fatalf("request not signed as controller: kind=%d pubkey=%s id=%s", request.Kind, request.PubKey.Hex(), request.ID.Hex())
 	}
 	if got := tagValue(request.Tags, tagPubkey); got != runtime.pubkey {
 		t.Fatalf("request target p = %q, want runtime pubkey", got)
@@ -320,7 +324,7 @@ func TestRuntimeAdapterSignsRequestSelectsRelaysAndRequiresCorrelatedResult(t *t
 	if !hasFilter(transport.filters, domain.KindRuntimeCapability, nostr.TagMap{tagRuntime: []string{"openclaw"}}) {
 		t.Fatalf("missing runtime-scoped capability filter: %#v", transport.filters)
 	}
-	if !hasFilter(transport.filters, domain.KindRuntimeControlResult, nostr.TagMap{tagEvent: []string{request.ID}, tagPubkey: []string{controller.pubkey}, "idempotency-key": []string{envelope.IdempotencyKey}}) {
+	if !hasFilter(transport.filters, domain.KindRuntimeControlResult, nostr.TagMap{tagEvent: []string{request.ID.Hex()}, tagPubkey: []string{controller.pubkey}, "idempotency-key": []string{envelope.IdempotencyKey}}) {
 		t.Fatalf("missing correlated result filter: %#v", transport.filters)
 	}
 }
@@ -383,7 +387,7 @@ func signedRuntimeCapabilityEventAt(t *testing.T, signer fakeSigner, createdAt i
 	if err != nil {
 		t.Fatalf("marshal capability: %v", err)
 	}
-	event := &nostr.Event{Kind: domain.KindRuntimeCapability, CreatedAt: nostr.Timestamp(createdAt), Tags: tags, Content: string(body)}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeCapability), CreatedAt: nostr.Timestamp(createdAt), Tags: tags, Content: string(body)}
 	if err := signer.Sign(t.Context(), event); err != nil {
 		t.Fatalf("sign capability: %v", err)
 	}
@@ -392,7 +396,7 @@ func signedRuntimeCapabilityEventAt(t *testing.T, signer fakeSigner, createdAt i
 
 func signedNIP65Event(t *testing.T, signer fakeSigner, tags nostr.Tags) *nostr.Event {
 	t.Helper()
-	event := &nostr.Event{Kind: kindNIP65RelayListMetadata, CreatedAt: nostr.Now(), Tags: tags}
+	event := &nostr.Event{Kind: nostr.Kind(kindNIP65RelayListMetadata), CreatedAt: nostr.Now(), Tags: tags}
 	if err := signer.Sign(t.Context(), event); err != nil {
 		t.Fatalf("sign nip65: %v", err)
 	}
@@ -410,7 +414,7 @@ func signedRuntimeResultForDifferentRequest(t *testing.T, signer fakeSigner, con
 		Status:               "success",
 		Result:               map[string]interface{}{"agent_id": "wrong"},
 	})
-	event := &nostr.Event{Kind: domain.KindRuntimeControlResult, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagPubkey, controllerPubkey}, {tagEvent, stringsRepeat("e", 64)}, {"idempotency-key", "sha256:wrong"}, {tagSchema, domain.SoulFactoryRuntimeControlSchema}}, Content: string(content)}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeControlResult), CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagPubkey, controllerPubkey}, {tagEvent, stringsRepeat("e", 64)}, {"idempotency-key", "sha256:wrong"}, {tagSchema, domain.SoulFactoryRuntimeControlSchema}}, Content: string(content)}
 	if err := signer.Sign(t.Context(), event); err != nil {
 		t.Fatalf("sign wrong result: %v", err)
 	}
@@ -429,7 +433,7 @@ func relayTags(tags nostr.Tags) []string {
 
 func hasFilter(filters []nostr.Filter, kind int, tags nostr.TagMap) bool {
 	for _, filter := range filters {
-		if len(filter.Kinds) == 0 || filter.Kinds[0] != kind {
+		if len(filter.Kinds) == 0 || filter.Kinds[0] != nostr.Kind(kind) {
 			continue
 		}
 		matched := true

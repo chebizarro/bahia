@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -342,7 +342,7 @@ func TestNIP98AuthorizationHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	provider, err := NewNIP98PrivateKeyProvider(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
 	}
@@ -521,7 +521,7 @@ func TestAuthorizationProviderErrorPreventsRequest(t *testing.T) {
 }
 
 func TestNIP98ProviderCreatesFreshEventPerRequest(t *testing.T) {
-	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	provider, err := NewNIP98PrivateKeyProvider(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
 	}
@@ -585,16 +585,24 @@ func assertNIP98Event(t *testing.T, event nostr.Event, method, absoluteURL strin
 	if !event.CheckID() {
 		t.Fatal("event ID does not match serialized event")
 	}
-	ok, err := event.CheckSignature()
-	if err != nil || !ok {
-		t.Fatalf("event signature valid = %v, err = %v", ok, err)
+	if !event.VerifySignature() {
+		t.Fatalf("event signature invalid")
 	}
-	if got := event.Tags.GetFirst([]string{"u"}); got == nil || got.Value() != absoluteURL {
-		t.Fatalf("u tag = %v, want %s", got, absoluteURL)
+	if got := firstNIP98TagValue(event.Tags, "u"); got != absoluteURL {
+		t.Fatalf("u tag = %q, want %s", got, absoluteURL)
 	}
-	if got := event.Tags.GetFirst([]string{"method"}); got == nil || got.Value() != method {
-		t.Fatalf("method tag = %v, want %s", got, method)
+	if got := firstNIP98TagValue(event.Tags, "method"); got != method {
+		t.Fatalf("method tag = %q, want %s", got, method)
 	}
+}
+
+func firstNIP98TagValue(tags nostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
 }
 
 func TestStreamLiveLogs(t *testing.T) {
@@ -613,7 +621,7 @@ func TestStreamLiveLogs(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	provider, err := NewNIP98PrivateKeyProvider(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
 	}

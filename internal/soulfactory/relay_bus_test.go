@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 type fakeRelayEndpoint struct {
@@ -83,7 +83,7 @@ func (s *fakeRelaySubscription) Close()                             {}
 
 func signedRelayBusEvent(t *testing.T, signer fakeSigner, kind int, content string) *nostr.Event {
 	t.Helper()
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Content: content}
+	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Content: content}
 	if err := signer.Sign(t.Context(), event); err != nil {
 		t.Fatalf("sign event: %v", err)
 	}
@@ -115,6 +115,21 @@ func mustReceiveSignal[T any](t *testing.T, ch <-chan T, _ string) {
 
 func immediateRelayBusBackoff(context.Context, int) error { return nil }
 
+func newEOSEOnlyRelayBus(t *testing.T) *SoulFactoryRelayBus {
+	t.Helper()
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	for i := 0; i < cap(endpoint.subscribeQueue); i++ {
+		subscription := newFakeRelaySubscription()
+		endpoint.subscribeQueue <- subscription
+		close(subscription.eose)
+	}
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	return bus
+}
+
 func TestRelayBusPublishRequiresAtLeastOneAcceptedOK(t *testing.T) {
 	accepted := newFakeRelayEndpoint("wss://accepted.example")
 	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
@@ -125,7 +140,7 @@ func TestRelayBusPublishRequiresAtLeastOneAcceptedOK(t *testing.T) {
 		t.Fatalf("new bus: %v", err)
 	}
 
-	count, err := bus.Publish(t.Context(), nostr.Event{ID: "event-1"})
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-1")})
 	if err != nil {
 		t.Fatalf("Publish() error = %v, want success with one accepted OK", err)
 	}
@@ -144,7 +159,7 @@ func TestRelayBusPublishReportsOKFalseAndAllRelayReject(t *testing.T) {
 		t.Fatalf("new bus: %v", err)
 	}
 
-	count, err := bus.Publish(t.Context(), nostr.Event{ID: "event-2"})
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-2")})
 	if err == nil {
 		t.Fatal("Publish() error = nil, want all-relay reject error")
 	}
@@ -168,7 +183,7 @@ func TestRelayBusEOSETransitionsToRealtimeWithoutClosingEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{1}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
 	if err != nil {
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
@@ -189,7 +204,7 @@ func TestRelayBusEOSETransitionsToRealtimeWithoutClosingEvents(t *testing.T) {
 	}
 }
 
-func TestRelayBusEOSEDoesNotWaitForRelayThatFailsInitialSubscribe(t *testing.T) {
+func TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *testing.T) {
 	signer := newFakeSigner(t)
 	healthy := newFakeRelayEndpoint("wss://healthy.example")
 	healthySub := newFakeRelaySubscription()
@@ -206,13 +221,56 @@ func TestRelayBusEOSEDoesNotWaitForRelayThatFailsInitialSubscribe(t *testing.T) 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{1}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
 	if err != nil {
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
 	mustReceiveFilters(t, healthy.subscribeCalls)
 	mustReceiveFilters(t, failed.subscribeCalls)
 	close(healthySub.eose)
+	select {
+	case <-sub.EndOfStoredEvents:
+		t.Fatal("EOSE closed before failed relay recovered and sent EOSE")
+	default:
+	}
+
+	recoveredSub := newFakeRelaySubscription()
+	failed.subscribeQueue <- recoveredSub
+	mustReceiveFilters(t, failed.subscribeCalls)
+	close(recoveredSub.eose)
+	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
+}
+
+func TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill(t *testing.T) {
+	signer := newFakeSigner(t)
+	endpoint := newFakeRelayEndpoint("wss://closed.example")
+	first := newFakeRelaySubscription()
+	second := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- first
+	endpoint.subscribeQueue <- second
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{endpoint},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+	)
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	if err != nil {
+		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+	}
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+	first.closed <- "closed: relay restart"
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+	select {
+	case <-sub.EndOfStoredEvents:
+		t.Fatal("EOSE closed after CLOSED-before-EOSE instead of waiting for reissued subscription")
+	default:
+	}
+	close(second.eose)
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
 }
 
@@ -234,7 +292,7 @@ func TestRelayBusClosedAuthRequiredAuthenticatesAndReissuesSubscription(t *testi
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{1}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
 	if err != nil {
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
@@ -265,7 +323,7 @@ func TestRelayBusClosedAuthRequiredIsHandledWhenEventsClosesFirst(t *testing.T) 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	if _, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{1}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}}); err != nil {
+	if _, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}}); err != nil {
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
 	mustReceiveFilters(t, endpoint.subscribeCalls)
@@ -287,7 +345,7 @@ func TestRelayBusDeduplicatesDuplicateEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{1}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
 	if err != nil {
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
@@ -320,7 +378,7 @@ func TestRelayBusReconnectReissuesSubscriptionWithSameFilters(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	filters := []nostr.Filter{{Kinds: []int{1}, Tags: nostr.TagMap{"p": []string{signer.pubkey}, "t": []string{"task-1"}}}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}, "t": []string{"task-1"}}}}
 
 	if _, err := bus.SubscribeAllWithEOSE(ctx, filters); err != nil {
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)

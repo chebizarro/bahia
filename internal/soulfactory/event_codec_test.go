@@ -5,16 +5,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func TestEventCodecParsesProvisioningRequestsLegacyAndStructured(t *testing.T) {
 	legacy := &nostr.Event{
-		ID:        "legacy-5950",
-		Kind:      domain.KindProvisioningRequest,
+		ID:        soulTestID("legacy-5950"),
+		Kind:      nostr.Kind(domain.KindProvisioningRequest),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags:      nostr.Tags{{"agent-id", "scout"}, {"name", "Scout"}},
 		Content:   `{"brief":"Monitor deployments"}`,
 	}
@@ -30,10 +30,10 @@ func TestEventCodecParsesProvisioningRequestsLegacyAndStructured(t *testing.T) {
 	}
 
 	structured := &nostr.Event{
-		ID:        "structured-5950",
-		Kind:      domain.KindProvisioningRequest,
+		ID:        soulTestID("structured-5950"),
+		Kind:      nostr.Kind(domain.KindProvisioningRequest),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags: nostr.Tags{
 			{"agent-id", "navigator"},
 			{"draft", "31952:operator:navigator"},
@@ -59,10 +59,10 @@ func TestEventCodecParsesProvisioningRequestsLegacyAndStructured(t *testing.T) {
 
 func TestEventCodecRejectsMalformedJSONContent(t *testing.T) {
 	badRequest := &nostr.Event{
-		ID:        "bad-5950",
-		Kind:      domain.KindProvisioningRequest,
+		ID:        soulTestID("bad-5950"),
+		Kind:      nostr.Kind(domain.KindProvisioningRequest),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags:      nostr.Tags{{"agent-id", "scout"}},
 		Content:   `{"brief":`,
 	}
@@ -71,10 +71,10 @@ func TestEventCodecRejectsMalformedJSONContent(t *testing.T) {
 	}
 
 	badAction := &nostr.Event{
-		ID:        "bad-1950",
-		Kind:      domain.KindSoulAction,
+		ID:        soulTestID("bad-1950"),
+		Kind:      nostr.Kind(domain.KindSoulAction),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags:      nostr.Tags{{"soul", "31951:factory:scout"}, {"action", "update"}},
 		Content:   `{"patch":`,
 	}
@@ -85,10 +85,10 @@ func TestEventCodecRejectsMalformedJSONContent(t *testing.T) {
 
 func TestEventCodecParsesSoulActionsLegacyAndStructured(t *testing.T) {
 	legacy := &nostr.Event{
-		ID:        "legacy-1950",
-		Kind:      domain.KindSoulAction,
+		ID:        soulTestID("legacy-1950"),
+		Kind:      nostr.Kind(domain.KindSoulAction),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags:      nostr.Tags{{"soul", "31951:factory:scout"}, {"action", "regenerate"}},
 		Content:   `{"brief":"New mission brief"}`,
 	}
@@ -101,10 +101,10 @@ func TestEventCodecParsesSoulActionsLegacyAndStructured(t *testing.T) {
 	}
 
 	structured := &nostr.Event{
-		ID:        "structured-1950",
-		Kind:      domain.KindSoulAction,
+		ID:        soulTestID("structured-1950"),
+		Kind:      nostr.Kind(domain.KindSoulAction),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags: nostr.Tags{
 			{"soul", "31951:factory:scout"},
 			{"action", "update"},
@@ -126,10 +126,10 @@ func TestEventCodecParsesSoulActionsLegacyAndStructured(t *testing.T) {
 	}
 
 	draftEventOnly := &nostr.Event{
-		ID:        "draft-event-only-1950",
-		Kind:      domain.KindSoulAction,
+		ID:        soulTestID("draft-event-only-1950"),
+		Kind:      nostr.Kind(domain.KindSoulAction),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags: nostr.Tags{
 			{"soul", "31951:factory:scout"},
 			{"action", string(domain.SoulActionHotReload)},
@@ -292,7 +292,7 @@ func TestEventCodecDraftV2CustomizationSpecsRoundTrip(t *testing.T) {
 		t.Fatalf("draft schema = %#v", raw["schema"])
 	}
 
-	event.ID = "draft-v2-event"
+	event.ID = soulTestID("draft-v2-event")
 	parsed, err := ParseSoulDraftEvent(event)
 	if err != nil {
 		t.Fatalf("ParseSoulDraftEvent v2 error = %v", err)
@@ -420,10 +420,10 @@ func TestMergeSoulDraftContentPartialUpdateDeepMerges(t *testing.T) {
 
 func TestEventCodecMaintainsV1DraftBackwardCompatibility(t *testing.T) {
 	event := &nostr.Event{
-		ID:        "legacy-draft-event",
-		Kind:      domain.KindSoulDraft,
+		ID:        soulTestID("legacy-draft-event"),
+		Kind:      nostr.Kind(domain.KindSoulDraft),
 		CreatedAt: nostr.Now(),
-		PubKey:    "operator",
+		PubKey:    soulTestPubKey("operator"),
 		Tags:      nostr.Tags{{"d", "legacy"}, {"name", "Legacy"}, {"tier", "lightweight"}},
 		Content:   `{"brief":"Legacy brief","avatar_prompt":"Pixel art owl","allowed_kinds":[1,30023],"assets":{"avatar_ref":"blossom:avatar","voice_ref":"voice:legacy"}}`,
 	}
@@ -459,7 +459,7 @@ func TestEventCodecDraftAndRuntimeControlShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSoulDraftEvent error = %v", err)
 	}
-	draftEvent.ID = "draft-event-id"
+	draftEvent.ID = soulTestID("draft-event-id")
 	parsedDraft, err := ParseSoulDraftEvent(draftEvent)
 	if err != nil {
 		t.Fatalf("ParseSoulDraftEvent error = %v", err)
@@ -475,26 +475,26 @@ func TestEventCodecDraftAndRuntimeControlShapes(t *testing.T) {
 		Operator:       RuntimeOperatorRef{Pubkey: "operator", RequestEvent: "5950-event"},
 		Controller:     RuntimeControllerRef{Pubkey: "controller"},
 		Target:         RuntimeTargetRef{Runtime: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey", AgentID: "scout"},
-		Soul:           RuntimeSoulRef{ID: "scout", Draft: draftEvent.ID, SpecHash: "sha256:draft"},
+		Soul:           RuntimeSoulRef{ID: "scout", Draft: draftEvent.ID.Hex(), SpecHash: "sha256:draft"},
 		Params:         map[string]interface{}{"identity": map[string]interface{}{"name": "Scout"}},
 	}
 	runtimeEvent, err := BuildRuntimeControlRequestEvent(envelope)
 	if err != nil {
 		t.Fatalf("BuildRuntimeControlRequestEvent error = %v", err)
 	}
-	if runtimeEvent.Kind != domain.KindRuntimeControlRequest || findTag(runtimeEvent, "schema") != domain.SoulFactoryRuntimeControlSchema {
+	if runtimeEvent.Kind != nostr.Kind(domain.KindRuntimeControlRequest) || findTag(runtimeEvent, "schema") != domain.SoulFactoryRuntimeControlSchema {
 		t.Fatalf("runtime event kind/tags = %d %+v", runtimeEvent.Kind, runtimeEvent.Tags)
 	}
 	parsedEnvelope, err := ParseRuntimeControlRequestEvent(runtimeEvent)
 	if err != nil {
 		t.Fatalf("ParseRuntimeControlRequestEvent error = %v", err)
 	}
-	if parsedEnvelope.Method != "soulfactory.provision" || parsedEnvelope.Target.Runtime != domain.RuntimeTargetOpenClaw || parsedEnvelope.Soul.SpecHash != "sha256:draft" || parsedEnvelope.Soul.Draft != "draft-event-id" {
+	if parsedEnvelope.Method != "soulfactory.provision" || parsedEnvelope.Target.Runtime != domain.RuntimeTargetOpenClaw || parsedEnvelope.Soul.SpecHash != "sha256:draft" || parsedEnvelope.Soul.Draft != draftEvent.ID.Hex() {
 		t.Fatalf("parsed runtime envelope = %+v", parsedEnvelope)
 	}
 
 	tagOnlyRuntime := &nostr.Event{
-		Kind: domain.KindRuntimeControlRequest,
+		Kind: nostr.Kind(domain.KindRuntimeControlRequest),
 		Tags: nostr.Tags{
 			{"p", "runtime-pubkey"},
 			{"method", "soulfactory.update"},

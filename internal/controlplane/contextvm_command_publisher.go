@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (*nostr.Event, int, string, error) {

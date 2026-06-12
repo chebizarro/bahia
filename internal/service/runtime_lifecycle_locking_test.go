@@ -522,10 +522,10 @@ func TestConvergence_DeployUpdatesDesiredArtifactAndDriftStatus(t *testing.T) {
 	// Seed with a different desired artifact.
 	oldArtifactID := uuid.New()
 	if err := stateRepo.Upsert(ctx, &domain.EnvironmentServiceState{
-		ServiceID:       svc.ID,
-		EnvironmentID:   env.ID,
+		ServiceID:         svc.ID,
+		EnvironmentID:     env.ID,
 		DesiredArtifactID: &oldArtifactID,
-		DriftStatus:     domain.DriftStatusInSync,
+		DriftStatus:       domain.DriftStatusInSync,
 	}); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}

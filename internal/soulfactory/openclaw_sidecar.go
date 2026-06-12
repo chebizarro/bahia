@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -228,9 +228,17 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 	if err := s.PublishCapability(ctx); err != nil {
 		return err
 	}
+	authors := make([]nostr.PubKey, 0, len(s.trustedList))
+	for _, trustedPubkey := range s.trustedList {
+		parsed, err := nostr.PubKeyFromHex(trustedPubkey)
+		if err != nil {
+			return fmt.Errorf("invalid trusted OpenClaw controller pubkey: %w", err)
+		}
+		authors = append(authors, parsed)
+	}
 	filters := []nostr.Filter{{
-		Kinds:   []int{domain.KindRuntimeControlRequest},
-		Authors: s.trustedList,
+		Kinds:   []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
+		Authors: authors,
 		Tags: nostr.TagMap{
 			tagPubkey: []string{s.runtimePubkey},
 			tagSchema: []string{domain.SoulFactoryRuntimeControlSchema},
@@ -313,12 +321,12 @@ func (s *OpenClawSidecar) BuildCapabilityEvent() (*nostr.Event, error) {
 	appendRelayTags("write", s.relayHints.Write)
 	appendRelayTags("control", s.relayHints.Control)
 	tags = append(tags, s.capabilityTags...)
-	event := &nostr.Event{Kind: domain.KindRuntimeCapability, CreatedAt: nostr.Timestamp(s.now().Unix()), Tags: tags, Content: string(content)}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeCapability), CreatedAt: nostr.Timestamp(s.now().Unix()), Tags: tags, Content: string(content)}
 	if err := signGoNostrEvent(context.Background(), s.signer, event); err != nil {
 		return nil, fmt.Errorf("sign OpenClaw capability: %w", err)
 	}
-	if event.PubKey != s.runtimePubkey {
-		return nil, fmt.Errorf("OpenClaw capability signed by %s, want runtime pubkey %s", event.PubKey, s.runtimePubkey)
+	if event.PubKey.Hex() != s.runtimePubkey {
+		return nil, fmt.Errorf("OpenClaw capability signed by %s, want runtime pubkey %s", event.PubKey.Hex(), s.runtimePubkey)
 	}
 	return event, nil
 }
@@ -395,7 +403,7 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 	if event == nil {
 		return nil, controlError("invalid_schema", "nil runtime control request", false)
 	}
-	if event.Kind != domain.KindRuntimeControlRequest {
+	if event.Kind != nostr.Kind(domain.KindRuntimeControlRequest) {
 		return nil, controlError("invalid_schema", fmt.Sprintf("unexpected runtime control kind %d", event.Kind), false)
 	}
 	if !validSignedEvent(event) {
@@ -406,7 +414,7 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 		return nil, controlError("invalid_schema", err.Error(), false)
 	}
 	request := &OpenClawValidatedRequest{Event: event, Envelope: envelope}
-	if event.PubKey == s.runtimePubkey {
+	if event.PubKey.Hex() == s.runtimePubkey {
 		return request, controlError("unauthorized_controller", "runtime must not accept self-authored control requests", false)
 	}
 	for _, tag := range []string{tagPubkey, "method", tagEvent, tagSoul, tagAgentID, "controller", "idempotency-key", tagSpecHash, tagSchema} {
@@ -423,10 +431,10 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 	if tagValue(event.Tags, tagPubkey) != s.runtimePubkey || envelope.Target.RuntimePubkey != s.runtimePubkey {
 		return request, controlError("misaddressed_request", "request is not addressed to this OpenClaw runtime pubkey", false)
 	}
-	if tagValue(event.Tags, "controller") != envelope.Controller.Pubkey || envelope.Controller.Pubkey != event.PubKey {
+	if tagValue(event.Tags, "controller") != envelope.Controller.Pubkey || envelope.Controller.Pubkey != event.PubKey.Hex() {
 		return request, controlError("unauthorized_controller", "controller tag/content must match the signing pubkey", false)
 	}
-	if _, ok := s.trusted[event.PubKey]; !ok {
+	if _, ok := s.trusted[event.PubKey.Hex()]; !ok {
 		return request, controlError("unauthorized_controller", "controller pubkey is not trusted by this OpenClaw sidecar", false)
 	}
 	if !stringInSlice(envelope.Method, s.methods) || tagValue(event.Tags, "method") != envelope.Method {
@@ -470,7 +478,7 @@ func (s *OpenClawSidecar) publishOutcome(ctx context.Context, requestEvent *nost
 		Schema:               domain.SoulFactoryRuntimeControlSchema,
 		Method:               envelope.Method,
 		IdempotencyKey:       envelope.IdempotencyKey,
-		RequestEvent:         requestEvent.ID,
+		RequestEvent:         requestEvent.ID.Hex(),
 		OperatorRequestEvent: envelope.Operator.RequestEvent,
 		Status:               outcome.Status,
 		Result:               outcome.Result,
@@ -482,7 +490,7 @@ func (s *OpenClawSidecar) publishOutcome(ctx context.Context, requestEvent *nost
 	}
 	tags := nostr.Tags{
 		{tagPubkey, envelope.Controller.Pubkey},
-		{tagEvent, requestEvent.ID},
+		{tagEvent, requestEvent.ID.Hex()},
 		{"method", envelope.Method},
 		{"idempotency-key", envelope.IdempotencyKey},
 		{tagAgentID, envelope.Target.AgentID},
@@ -491,12 +499,12 @@ func (s *OpenClawSidecar) publishOutcome(ctx context.Context, requestEvent *nost
 		{tagSchema, domain.SoulFactoryRuntimeControlSchema},
 		{tagStatus, outcome.Status},
 	}
-	event := &nostr.Event{Kind: domain.KindRuntimeControlResult, CreatedAt: nostr.Timestamp(s.now().Unix()), Tags: tags, Content: string(content)}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeControlResult), CreatedAt: nostr.Timestamp(s.now().Unix()), Tags: tags, Content: string(content)}
 	if err := signGoNostrEvent(ctx, s.signer, event); err != nil {
 		return nil, fmt.Errorf("sign OpenClaw runtime result: %w", err)
 	}
-	if event.PubKey != s.runtimePubkey {
-		return nil, fmt.Errorf("OpenClaw result signed by %s, want runtime pubkey %s", event.PubKey, s.runtimePubkey)
+	if event.PubKey.Hex() != s.runtimePubkey {
+		return nil, fmt.Errorf("OpenClaw result signed by %s, want runtime pubkey %s", event.PubKey.Hex(), s.runtimePubkey)
 	}
 	accepted, err := s.transport.Publish(ctx, *event)
 	if err != nil {

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -151,13 +151,14 @@ func TestHandleLLMRollbackRequestCreatesRollbackIntent(t *testing.T) {
 	stateRepo := &reactorLLMStateRepo{state: &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &currentIntentID, DriftStatus: domain.DriftStatusInSync}}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, envRepo, intentRepo, nil, nil, stateRepo, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
 
-	privateKey := nostr.GeneratePrivateKey()
+	privateKey := nostr.Generate().Hex()
 	signer, err := NewPrivateKeySigner(privateKey)
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	reactor := NewReactor(Config{PrivateKey: privateKey, AuthorizedPubkeys: []string{"authorized-pubkey"}}, nil, nostrpool.NewRelayPool(nil, zap.NewNop()), signer, zap.NewNop(), WithLLMRegistry(llmRegistry))
-	reactor.handleLLMRollbackRequest(ctx, &nostr.Event{ID: "rollback-request", PubKey: "authorized-pubkey", Kind: KindLLMRollbackRequest, Content: `{"route_id":"` + routeID.String() + `","environment_id":"` + envID.String() + `","requested_by":"operator"}`})
+	authorizedPubkey := testNostrPubKeyHexFromPrivateKey(t, privateKey)
+	reactor := NewReactor(Config{PrivateKey: privateKey, AuthorizedPubkeys: []string{authorizedPubkey}}, nil, nostrpool.NewRelayPool(nil, zap.NewNop()), signer, zap.NewNop(), WithLLMRegistry(llmRegistry))
+	reactor.handleLLMRollbackRequest(ctx, &nostr.Event{ID: testNostrID("rollback-request"), PubKey: testNostrPubKeyFromPrivateKey(t, privateKey), Kind: KindLLMRollbackRequest, Content: `{"route_id":"` + routeID.String() + `","environment_id":"` + envID.String() + `","requested_by":"operator"}`})
 
 	if len(intentRepo.intents) != 3 {
 		t.Fatalf("expected rollback intent to be created, got %d intents", len(intentRepo.intents))
@@ -172,7 +173,7 @@ func TestHandleLLMRollbackRequestCreatesRollbackIntent(t *testing.T) {
 	if rollbackIntent.RequestedBy != "operator" {
 		t.Fatalf("expected requested_by operator, got %q", rollbackIntent.RequestedBy)
 	}
-	if rollbackIntent.Metadata["nostr_event_id"] != "rollback-request" || rollbackIntent.Metadata["nostr_request_pubkey"] != "authorized-pubkey" {
+	if rollbackIntent.Metadata["nostr_event_id"] != testNostrID("rollback-request").Hex() || rollbackIntent.Metadata["nostr_request_pubkey"] != authorizedPubkey {
 		t.Fatalf("missing Nostr correlation metadata: %#v", rollbackIntent.Metadata)
 	}
 	if stateRepo.state.DesiredReleaseID == nil || *stateRepo.state.DesiredReleaseID != previousReleaseID {

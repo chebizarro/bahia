@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 )
@@ -59,8 +59,8 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 
 func TestResolveNostrPrivateKeyInputPrecedence(t *testing.T) {
 	resetNostrKeyGlobals(t)
-	envKey := nostr.GeneratePrivateKey()
-	flagKey := nostr.GeneratePrivateKey()
+	envKey := nostr.Generate().Hex()
+	flagKey := nostr.Generate().Hex()
 	t.Setenv("BAHIA_NOSTR_NSEC", envKey)
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 
@@ -80,10 +80,10 @@ func TestResolveNostrPrivateKeyInputPrecedence(t *testing.T) {
 func TestResolveNostrPrivateKeyInputRejectsAmbiguousFlags(t *testing.T) {
 	resetNostrKeyGlobals(t)
 	cmd := newAuthFlagTestCommand()
-	if err := cmd.PersistentFlags().Set("nsec", nostr.GeneratePrivateKey()); err != nil {
+	if err := cmd.PersistentFlags().Set("nsec", nostr.Generate().Hex()); err != nil {
 		t.Fatalf("set nsec flag: %v", err)
 	}
-	if err := cmd.PersistentFlags().Set("privkey", nostr.GeneratePrivateKey()); err != nil {
+	if err := cmd.PersistentFlags().Set("privkey", nostr.Generate().Hex()); err != nil {
 		t.Fatalf("set privkey flag: %v", err)
 	}
 	if _, err := resolveNostrPrivateKeyInput(cmd); err == nil {
@@ -102,7 +102,7 @@ func TestResolveNIP98ProviderValidatesKey(t *testing.T) {
 	}
 
 	cmd = newAuthFlagTestCommand()
-	key := nostr.GeneratePrivateKey()
+	key := nostr.Generate().Hex()
 	if err := cmd.PersistentFlags().Set("privkey", key); err != nil {
 		t.Fatalf("set privkey flag: %v", err)
 	}
@@ -114,7 +114,11 @@ func TestResolveNIP98ProviderValidatesKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublicKey() error = %v", err)
 	}
-	wantPubkey, _ := nostr.GetPublicKey(key)
+	secret, err := nostr.SecretKeyFromHex(key)
+	if err != nil {
+		t.Fatalf("SecretKeyFromHex() error = %v", err)
+	}
+	wantPubkey := secret.Public().Hex()
 	if pubkey != wantPubkey {
 		t.Fatalf("pubkey = %s, want %s", pubkey, wantPubkey)
 	}

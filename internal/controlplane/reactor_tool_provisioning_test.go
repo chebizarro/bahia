@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -96,7 +96,8 @@ func (r *toolProvisioningRepoFake) LogApproval(context.Context, uuid.UUID, strin
 func TestHandleToolProvisionRequestProcessesIntentFromEvent(t *testing.T) {
 	t.Parallel()
 
-	requester := "1111111111111111111111111111111111111111111111111111111111111111"
+	requesterKey := nostr.Generate().Hex()
+	requester := testNostrPubKeyHexFromPrivateKey(t, requesterKey)
 	serviceID := uuid.New()
 	envID := uuid.New()
 	repo := &toolProvisioningRepoFake{denylist: []domain.ToolDenylistEntry{{
@@ -126,7 +127,7 @@ func TestHandleToolProvisionRequestProcessesIntentFromEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	event := &nostr.Event{ID: "request-event", PubKey: requester, Kind: KindToolProvisionRequest, Content: string(content)}
+	event := &nostr.Event{ID: testNostrID("request-event"), PubKey: testNostrPubKeyFromPrivateKey(t, requesterKey), Kind: KindToolProvisionRequest, Content: string(content)}
 	if err := reactor.handleToolProvisionRequest(context.Background(), event); err != nil {
 		t.Fatalf("handle tool provision request: %v", err)
 	}

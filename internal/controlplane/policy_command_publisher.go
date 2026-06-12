@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -152,7 +152,7 @@ func (p *PolicyCommandPublisher) publish(ctx context.Context, kind int, defaultP
 	if agentID := strings.TrimSpace(cmd.AgentID); agentID != "" {
 		eventTags = append(eventTags, nostr.Tag{"agent", agentID})
 	}
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: eventTags, Content: string(body)}
+	ev := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: eventTags, Content: string(body)}
 	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
 		return nil, fmt.Errorf("sign policy command: %w", err)
 	}
@@ -172,7 +172,7 @@ func (p *PolicyCommandPublisher) publish(ctx context.Context, kind int, defaultP
 }
 
 func policyReceiptFromEvent(ev *nostr.Event, dTag string, published int, status string) *PolicyCommandReceipt {
-	receipt := &PolicyCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: ev.Kind, ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(ev.Kind), DTag: dTag, IdempotencyKey: dTag, Status: status, PublishedRelays: published}
+	receipt := &PolicyCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: int(ev.Kind), ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(int(ev.Kind)), DTag: dTag, IdempotencyKey: dTag, Status: status, PublishedRelays: published}
 	populatePolicyReceiptTags(receipt, ev.Tags)
 	return receipt
 }

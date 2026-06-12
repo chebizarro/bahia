@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -47,7 +47,7 @@ func TestReactorUsesReplayCursorPlannerForRequestSubscriptionSince(t *testing.T)
 	filters := r.buildRequestSubscriptionFiltersForCurrentCursor(context.Background())
 	want := gonostr.Timestamp(latest.Add(-time.Second).Unix())
 	for i, filter := range filters {
-		if filter.Since == nil || *filter.Since != want {
+		if filter.Since != want {
 			t.Fatalf("filter %d since mismatch: got %v want %v", i, filter.Since, want)
 		}
 	}
@@ -105,22 +105,23 @@ func TestReactorAuditsAcceptedInboundEventToRepository(t *testing.T) {
 
 	r.handleEvent(ctx, event)
 
-	rec, err := repo.GetByID(ctx, event.ID)
+	rec, err := repo.GetByID(ctx, event.ID.Hex())
 	if err != nil {
 		t.Fatalf("get audit record: %v", err)
 	}
 	if rec == nil {
 		t.Fatal("expected inbound control-plane event to be audited")
 	}
-	if rec.Kind != event.Kind || rec.PubKey != event.PubKey || rec.Content != event.Content || rec.Sig != event.Sig {
+	if rec.Kind != int(event.Kind) || rec.PubKey != event.PubKey.Hex() || rec.Content != event.Content || rec.Sig != gonostr.HexEncodeToString(event.Sig[:]) {
 		t.Fatalf("audit record mismatch: got %#v for event %#v", rec, event)
 	}
 }
 
 func signedControlPlaneTestEventAt(t *testing.T, kind int, createdAt gonostr.Timestamp) *gonostr.Event {
 	t.Helper()
-	ev := &gonostr.Event{Kind: kind, CreatedAt: createdAt, Content: "{}", Tags: gonostr.Tags{}}
-	if err := ev.Sign("1111111111111111111111111111111111111111111111111111111111111111"); err != nil {
+	ev := &gonostr.Event{Kind: gonostr.Kind(kind), CreatedAt: createdAt, Content: "{}", Tags: gonostr.Tags{}}
+	secret := testNostrSecretKey(t, "1111111111111111111111111111111111111111111111111111111111111111")
+	if err := ev.Sign(secret); err != nil {
 		t.Fatalf("sign event: %v", err)
 	}
 	return ev

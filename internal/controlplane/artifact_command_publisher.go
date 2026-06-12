@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -118,7 +118,7 @@ func (p *ArtifactCommandPublisher) PublishArtifactRegisterRequest(ctx context.Co
 		return nil, fmt.Errorf("sign artifact register request: %w", err)
 	}
 	published, err := p.publisher.Publish(ctx, *ev)
-	receipt := &ArtifactCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindArtifactRegister, ResultKind: KindActionResult, RegistryKind: KindArtifactRegistry, Status: "submitted", PublishedRelays: published, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}
+	receipt := &ArtifactCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindArtifactRegister, ResultKind: KindActionResult, RegistryKind: KindArtifactRegistry, Status: "submitted", PublishedRelays: published, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}
 	if err != nil {
 		receipt.Status = "error"
 		receipt.Error = err.Error()

@@ -3,13 +3,13 @@ package controlplane
 import (
 	"context"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/events"
 )
 
 func (r *Reactor) handleFailoverRequest(ctx context.Context, event *gonostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.logger.Warn("unauthorized failover request", "event_id", event.ID, "requester", event.PubKey)
 		return
 	}
@@ -26,7 +26,7 @@ func (r *Reactor) handleFailoverRequest(ctx context.Context, event *gonostr.Even
 }
 
 func (r *Reactor) handleRecoveryRequest(ctx context.Context, event *gonostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.logger.Warn("unauthorized recovery request", "event_id", event.ID, "requester", event.PubKey)
 		return
 	}

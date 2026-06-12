@@ -48,5 +48,42 @@
       "description": "Known compatibility or remaining migration gaps are tracked in Beads rather than comments or handoff prose.",
       "tests": ["bahia-ncxo created for NIP-44 stored-secret compatibility", "bahia-u2ma updated for Item 2 status"]
     }
+  ],
+  "item_3_acceptance_criteria": [
+    {
+      "id": "AC-ITEM3-001",
+      "description": "No active Go import, module dependency, or tested production/test scope reference to github.com/nbd-wtf/go-nostr or its subpackages remains in go.mod, go.sum, cmd, pkg, internal, or test/integration.",
+      "tests": ["rg -n \"github.com/nbd-wtf/go-nostr|go-nostr\" go.mod go.sum cmd pkg internal test/integration --glob '!_git_data/**'"]
+    },
+    {
+      "id": "AC-ITEM3-002",
+      "description": "Residual Item 3 packages compile and pass targeted tests against fiatjaf.com/nostr.",
+      "tests": ["GOCACHE=/tmp/bahia-go-cache go test ./cmd/... ./pkg/client/... ./internal/api/... ./internal/app/... ./internal/controlplane/... ./internal/mcp/... ./internal/service/... ./internal/soulfactory/... ./test/integration/..."]
+    },
+    {
+      "id": "AC-ITEM3-003",
+      "description": "The complete repository Go test suite passes after dependency cleanup.",
+      "tests": ["GOCACHE=/tmp/bahia-go-cache go test ./..."]
+    },
+    {
+      "id": "AC-ITEM3-004",
+      "description": "Module cleanup removes github.com/nbd-wtf/go-nostr from go.mod/go.sum while preserving fiatjaf.com/nostr at the resolved version.",
+      "tests": ["GOCACHE=/tmp/bahia-go-cache go mod tidy", "rg scoped dependency search"]
+    },
+    {
+      "id": "AC-ITEM3-005",
+      "description": "Nostr-native semantics remain event-driven and hardened in touched paths, including scoped filters, real EOSE, OK/AUTH/CLOSED handling, inbound validation, and no polling/sleep completion logic.",
+      "tests": ["TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys", "TestDownstreamResultMatchesReceiptRejectsWrongCorrelation", "TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure", "TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill", "targeted package tests", "Oracle review follow-up"]
+    },
+    {
+      "id": "AC-ITEM3-006",
+      "description": "Remaining compatibility and hardening work is captured in Beads, with bahia-u2ma closed only after verification and bahia-ncxo retained for stored-secret compatibility if still outstanding.",
+      "tests": ["bd show/update/close records", "PSTF defects and verification report updated"]
+    },
+    {
+      "id": "AC-ITEM3-007",
+      "description": "Final quality gates and repo hygiene pass before commit and push.",
+      "tests": ["git diff --check", "git pull --rebase --autostash", "git push", "git status"]
+    }
   ]
 }

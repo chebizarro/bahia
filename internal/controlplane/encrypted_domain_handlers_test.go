@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -194,14 +194,11 @@ func encryptedRequestForTest(t *testing.T, pubkey string, payload any) Encrypted
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	return EncryptedRequest{Event: &nostr.Event{PubKey: pubkey}, Envelope: EncryptedRequestEnvelope{Payload: encoded}}
+	return EncryptedRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromHex(t, pubkey)}, Envelope: EncryptedRequestEnvelope{Payload: encoded}}
 }
 
 func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *testing.T) {
-	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	paymentRepo := &encryptedPaymentRepo{records: []domain.PaymentRecord{{WorkerPubkey: "worker-a", AmountSats: 21}}}
 	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
 		Payments: service.NewPaymentService(paymentRepo, nil, nil, zap.NewNop()),
@@ -221,10 +218,7 @@ func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *
 }
 
 func TestEncryptedDomainHandlers_CreateOrgHonorsBootstrapOwnerAndAddsOwner(t *testing.T) {
-	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	orgs := newEncryptedOrgRepo()
 	members := &encryptedMemberRepo{}
 	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
@@ -254,10 +248,7 @@ func TestEncryptedDomainHandlers_CreateOrgHonorsBootstrapOwnerAndAddsOwner(t *te
 }
 
 func TestEncryptedDomainHandlers_CreateInviteRejectsOwnerRoleFromAdmin(t *testing.T) {
-	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	orgID := uuid.New()
 	orgs := newEncryptedOrgRepo()
 	_ = orgs.Create(context.Background(), &domain.Organization{ID: orgID, Name: "demo", DisplayName: "Demo", OwnerPubkey: "owner"})
@@ -265,7 +256,7 @@ func TestEncryptedDomainHandlers_CreateInviteRejectsOwnerRoleFromAdmin(t *testin
 	invites := &encryptedInviteRepo{}
 	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{Orgs: orgs, Members: members, Invites: invites, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
 
-	_, err = handlers.CreateInvite(context.Background(), encryptedRequestForTest(t, requesterPubkey, map[string]any{
+	_, err := handlers.CreateInvite(context.Background(), encryptedRequestForTest(t, requesterPubkey, map[string]any{
 		"org_id": orgID.String(),
 		"pubkey": "b",
 		"role":   string(domain.RoleOwner),
@@ -279,10 +270,7 @@ func TestEncryptedDomainHandlers_CreateInviteRejectsOwnerRoleFromAdmin(t *testin
 }
 
 func TestEncryptedDomainHandlers_OrgDetailReturnsAdminInvitesEncrypted(t *testing.T) {
-	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	orgID := uuid.New()
 	orgs := newEncryptedOrgRepo()
 	_ = orgs.Create(context.Background(), &domain.Organization{ID: orgID, Name: "demo", DisplayName: "Demo", OwnerPubkey: requesterPubkey})

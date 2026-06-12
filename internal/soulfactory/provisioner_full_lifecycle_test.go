@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -47,7 +47,8 @@ func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T)
 	}
 
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	attachPublishCapture(reactor)
 	_ = NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
 
@@ -113,7 +114,8 @@ func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T)
 
 func TestLifecycleHandlerResumeRequiresSuspendedSoul(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) {
 		return &domain.AgentSoul{AgentID: "scout", Status: domain.SoulStatusActive}, nil

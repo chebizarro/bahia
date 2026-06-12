@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )

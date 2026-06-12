@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 const (
@@ -195,5 +195,5 @@ func (p *WorkerCommandPublisher) publishPlacement(ctx context.Context, method st
 	if err != nil {
 		return nil, err
 	}
-	return &WorkerCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, StateKind: KindCASControlState, DTag: dTag, PublishedRelays: published, WorkerPubKey: workerPubKey, EnvironmentID: environmentID, WorkloadID: workloadID, WorkloadKind: workloadKind, Command: command}, nil
+	return &WorkerCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, StateKind: KindCASControlState, DTag: dTag, PublishedRelays: published, WorkerPubKey: workerPubKey, EnvironmentID: environmentID, WorkloadID: workloadID, WorkloadKind: workloadKind, Command: command}, nil
 }

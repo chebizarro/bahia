@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // RelayPublishResult records one relay's OK outcome for a published event.
@@ -200,12 +200,13 @@ func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters 
 			return
 		}
 		seenMu.Lock()
-		if _, duplicate := seen[ev.ID]; duplicate {
+		eventID := ev.ID.Hex()
+		if _, duplicate := seen[eventID]; duplicate {
 			seenMu.Unlock()
 			return
 		}
-		seen[ev.ID] = struct{}{}
-		seenOrder = append(seenOrder, ev.ID)
+		seen[eventID] = struct{}{}
+		seenOrder = append(seenOrder, eventID)
 		if len(seenOrder) > relayBusSeenLimit {
 			oldest := seenOrder[0]
 			seenOrder = seenOrder[1:]
@@ -282,7 +283,6 @@ func (b *SoulFactoryRelayBus) runRelaySubscription(ctx context.Context, endpoint
 	for ctx.Err() == nil {
 		sub, err := endpoint.Subscribe(ctx, filters)
 		if err != nil {
-			markInitialEOSE()
 			attempt++
 			b.logger.Warn("relay subscription failed", "relay", relayURL, "attempt", attempt, "error", err)
 			if waitErr := b.backoff(ctx, attempt); waitErr != nil {
@@ -482,12 +482,21 @@ func (e *goNostrRelayEndpoint) Subscribe(ctx context.Context, filters []nostr.Fi
 	if relay == nil {
 		return nil, fmt.Errorf("relay is not connected")
 	}
-	sub, err := relay.Subscribe(ctx, filters)
-	if err != nil {
-		e.resetRelay()
-		return nil, err
+	ctx, cancel := context.WithCancel(ctx)
+	subs := make([]*nostr.Subscription, 0, len(filters))
+	for _, filter := range filters {
+		sub, err := relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{})
+		if err != nil {
+			cancel()
+			for _, existing := range subs {
+				existing.Unsub()
+			}
+			e.resetRelay()
+			return nil, err
+		}
+		subs = append(subs, sub)
 	}
-	return goNostrRelaySubscription{sub: sub}, nil
+	return newGoNostrRelaySubscription(ctx, cancel, subs), nil
 }
 
 func (e *goNostrRelayEndpoint) Auth(ctx context.Context, signer relayAuthSigner) error {
@@ -500,7 +509,7 @@ func (e *goNostrRelayEndpoint) Auth(ctx context.Context, signer relayAuthSigner)
 	if relay == nil {
 		return fmt.Errorf("relay is not connected")
 	}
-	return relay.Auth(ctx, func(event *nostr.Event) error { return signer.Sign(ctx, event) })
+	return relay.Auth(ctx, func(authCtx context.Context, event *nostr.Event) error { return signer.Sign(authCtx, event) })
 }
 
 func (e *goNostrRelayEndpoint) Close() {
@@ -520,7 +529,7 @@ func (e *goNostrRelayEndpoint) ensureConnected(ctx context.Context) error {
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	relay, err := nostr.RelayConnect(connectCtx, e.url)
+	relay, err := nostr.RelayConnect(connectCtx, e.url, nostr.RelayOptions{})
 	if err != nil {
 		e.relay = nil
 		return err
@@ -539,33 +548,116 @@ func (e *goNostrRelayEndpoint) resetRelay() {
 }
 
 type goNostrRelaySubscription struct {
-	sub *nostr.Subscription
+	cancel context.CancelFunc
+	subs   []*nostr.Subscription
+	events chan *nostr.Event
+	eose   chan struct{}
+	closed chan string
 }
 
-func (s goNostrRelaySubscription) Events() <-chan *nostr.Event {
-	if s.sub == nil {
+func newGoNostrRelaySubscription(ctx context.Context, cancel context.CancelFunc, subs []*nostr.Subscription) *goNostrRelaySubscription {
+	s := &goNostrRelaySubscription{
+		cancel: cancel,
+		subs:   subs,
+		events: make(chan *nostr.Event, 64),
+		eose:   make(chan struct{}),
+		closed: make(chan string, len(subs)),
+	}
+	var wg sync.WaitGroup
+	var closedWG sync.WaitGroup
+	eoseObserved := make(chan struct{}, len(subs))
+	wg.Add(len(subs))
+	closedWG.Add(len(subs))
+	for _, sub := range subs {
+		sub := sub
+		go func() {
+			defer wg.Done()
+			for event := range sub.Events {
+				event := event
+				select {
+				case s.events <- &event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		go func() {
+			select {
+			case <-sub.EndOfStoredEvents:
+				select {
+				case eoseObserved <- struct{}{}:
+				case <-ctx.Done():
+				}
+			case <-ctx.Done():
+			}
+		}()
+		go func() {
+			defer closedWG.Done()
+			select {
+			case reason, ok := <-sub.ClosedReason:
+				if ok {
+					select {
+					case s.closed <- reason:
+					case <-ctx.Done():
+					}
+				}
+			case <-ctx.Done():
+			}
+		}()
+	}
+	go func() {
+		for i := 0; i < len(subs); i++ {
+			select {
+			case <-eoseObserved:
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(s.eose)
+	}()
+	go func() {
+		wg.Wait()
+		close(s.events)
+	}()
+	go func() {
+		closedWG.Wait()
+		close(s.closed)
+	}()
+	return s
+}
+
+func (s *goNostrRelaySubscription) Events() <-chan *nostr.Event {
+	if s == nil || s.events == nil {
 		return closedEventChannel()
 	}
-	return s.sub.Events
+	return s.events
 }
 
-func (s goNostrRelaySubscription) EndOfStoredEvents() <-chan struct{} {
-	if s.sub == nil {
+func (s *goNostrRelaySubscription) EndOfStoredEvents() <-chan struct{} {
+	if s == nil || s.eose == nil {
 		return closedStructChannel()
 	}
-	return s.sub.EndOfStoredEvents
+	return s.eose
 }
 
-func (s goNostrRelaySubscription) ClosedReason() <-chan string {
-	if s.sub == nil {
+func (s *goNostrRelaySubscription) ClosedReason() <-chan string {
+	if s == nil || s.closed == nil {
 		return closedStringChannel()
 	}
-	return s.sub.ClosedReason
+	return s.closed
 }
 
-func (s goNostrRelaySubscription) Close() {
-	if s.sub != nil {
-		s.sub.Unsub()
+func (s *goNostrRelaySubscription) Close() {
+	if s == nil {
+		return
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	for _, sub := range s.subs {
+		if sub != nil {
+			sub.Unsub()
+		}
 	}
 }
 

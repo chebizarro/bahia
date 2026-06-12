@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -82,7 +82,11 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 }
 
 func (r *AssistantSessionRecoveryRunner) queryRecentSessions(ctx context.Context, servicePubkey string) ([]domain.AssistantSession, error) {
-	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{domain.KindAssistantSessionState}, Authors: []string{servicePubkey}, Tags: nostr.TagMap{"schema": []string{domain.AssistantSessionSchema}}, Limit: r.limit}})
+	serviceAuthor, err := nostr.PubKeyFromHex(servicePubkey)
+	if err != nil {
+		return nil, fmt.Errorf("decode service pubkey: %w", err)
+	}
+	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{serviceAuthor}, Tags: nostr.TagMap{"schema": []string{domain.AssistantSessionSchema}}, Limit: r.limit}})
 	if err != nil {
 		return nil, err
 	}
@@ -110,13 +114,14 @@ func (r *AssistantSessionRecoveryRunner) queryRecentSessions(ctx context.Context
 			if ev == nil {
 				continue
 			}
-			if _, dup := seenEvents[ev.ID]; dup {
+			eventID := ev.ID.Hex()
+			if _, dup := seenEvents[eventID]; dup {
 				continue
 			}
-			seenEvents[ev.ID] = struct{}{}
+			seenEvents[eventID] = struct{}{}
 			var session domain.AssistantSession
 			if err := json.Unmarshal([]byte(ev.Content), &session); err != nil {
-				r.logger.Warn("failed to parse recovered assistant session", "event_id", ev.ID, "error", err)
+				r.logger.Warn("failed to parse recovered assistant session", "event_id", eventID, "error", err)
 				continue
 			}
 			if session.SessionID == "" {
@@ -231,7 +236,11 @@ func (r *AssistantSessionRecoveryRunner) findTerminalResult(ctx context.Context,
 	if receipt == nil || receipt.RequestEventID == "" || len(receipt.ResultKinds) == 0 {
 		return downstreamOutcome{Status: "blocked"}, fmt.Errorf("downstream receipt is missing observable result metadata")
 	}
-	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: append([]int(nil), receipt.ResultKinds...), Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
+	resultKinds := make([]nostr.Kind, 0, len(receipt.ResultKinds))
+	for _, kind := range receipt.ResultKinds {
+		resultKinds = append(resultKinds, nostr.Kind(kind))
+	}
+	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: resultKinds, Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
 	if err != nil {
 		return downstreamOutcome{Status: "blocked"}, err
 	}
@@ -257,10 +266,11 @@ func (r *AssistantSessionRecoveryRunner) findTerminalResult(ctx context.Context,
 			if ev == nil {
 				continue
 			}
-			if _, dup := seen[ev.ID]; dup {
+			eventID := ev.ID.Hex()
+			if _, dup := seen[eventID]; dup {
 				continue
 			}
-			seen[ev.ID] = struct{}{}
+			seen[eventID] = struct{}{}
 			status := terminalStatus(ev)
 			if status == "completed" || status == "failed" {
 				return downstreamOutcome{Status: status, Event: ev}, nil

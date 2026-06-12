@@ -44,3 +44,9 @@ func SignNostrEvent(ctx context.Context, signer canonicalnostr.Signer, ev *canon
 	}
 	return signer.SignEvent(ctx, ev)
 }
+
+// SignGoNostrEvent is retained as a source-compatible wrapper for older
+// control-plane call sites; the event type is now the canonical fiatjaf module.
+func SignGoNostrEvent(ctx context.Context, signer canonicalnostr.Signer, ev *canonicalnostr.Event) error {
+	return SignNostrEvent(ctx, signer, ev)
+}

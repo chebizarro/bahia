@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -25,8 +25,8 @@ func assertContextVMCommand(t *testing.T, ev nostr.Event, method string) map[str
 	if ev.Kind != KindContextVMMessage {
 		t.Fatalf("expected ContextVM command kind %d, got %d", KindContextVMMessage, ev.Kind)
 	}
-	if ok, err := ev.CheckSignature(); err != nil || !ok {
-		t.Fatalf("published event signature invalid: ok=%v err=%v", ok, err)
+	if !ev.VerifySignature() {
+		t.Fatalf("published event signature invalid")
 	}
 	assertReactorTag(t, ev.Tags, "method", method)
 	assertReactorTag(t, ev.Tags, ContextVMRoutingTag, ContextVMWireVersion)
@@ -47,7 +47,7 @@ func assertContextVMCommand(t *testing.T, ev nostr.Event, method string) map[str
 func TestLLMCommandPublisherPublishesCanonicalRouteCreateRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestLLMCommandPublisherPublishesCanonicalRouteCreateRequest(t *testing.T) {
 func TestLLMCommandPublisherRejectsEmptyRouteCreateName(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLLMCommandPublisherRejectsEmptyRouteCreateName(t *testing.T) {
 func TestLLMCommandPublisherPublishesCanonicalReleaseRegisterRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestLLMCommandPublisherPublishesCanonicalReleaseRegisterRequest(t *testing.
 func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 func TestLLMCommandPublisherPublishesCanonicalDeployRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestLLMCommandPublisherPublishesCanonicalDeployRequest(t *testing.T) {
 func TestLLMCommandPublisherFailsWhenNoRelayAcceptsRouteCreateDeployOrRollback(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}

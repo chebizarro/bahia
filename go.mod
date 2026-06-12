@@ -12,10 +12,10 @@ require (
 	github.com/knadh/koanf/providers/env v1.0.0
 	github.com/knadh/koanf/providers/file v1.1.2
 	github.com/knadh/koanf/v2 v2.1.2
-	github.com/nbd-wtf/go-nostr v0.48.3
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.11.1
+	go.etcd.io/etcd/client/v3 v3.6.11
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/sync v0.20.0
@@ -71,7 +71,6 @@ require (
 	github.com/valyala/fasthttp v1.59.0 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.11 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.6.11 // indirect
-	go.etcd.io/etcd/client/v3 v3.6.11 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	golang.org/x/mod v0.34.0 // indirect

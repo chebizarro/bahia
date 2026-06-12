@@ -13,10 +13,10 @@ import (
 // --- Mock repositories for payment service tests ---
 
 type mockPaymentRepo struct {
-	records   map[uuid.UUID]*domain.PaymentRecord
-	byHash    map[string]*domain.PaymentRecord
-	byRun     map[uuid.UUID][]domain.PaymentRecord
-	byWorker  map[string][]domain.PaymentRecord
+	records  map[uuid.UUID]*domain.PaymentRecord
+	byHash   map[string]*domain.PaymentRecord
+	byRun    map[uuid.UUID][]domain.PaymentRecord
+	byWorker map[string][]domain.PaymentRecord
 }
 
 func newMockPaymentRepo() *mockPaymentRepo {

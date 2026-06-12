@@ -522,7 +522,7 @@ func (h *EncryptedDomainHandlers) requireOrgDeps() error {
 }
 
 func requestPrincipal(request EncryptedRequest) *auth.Principal {
-	pubkey := normalizeEncryptedPubkey(request.Event.PubKey)
+	pubkey := normalizeEncryptedPubkey(request.Event.PubKey.Hex())
 	return &auth.Principal{Subject: pubkey, Method: auth.MethodNIP98, PubKey: pubkey}
 }
 

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -67,9 +67,9 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 		ID:                 uuid.New(),
 		RecipeID:           recipe.ID,
 		RepositoryID:       recipe.RepositoryID,
-		RequestedBy:        event.PubKey,
-		RequestEventID:     event.ID,
-		RequestKind:        event.Kind,
+		RequestedBy:        event.PubKey.Hex(),
+		RequestEventID:     event.ID.Hex(),
+		RequestKind:        int(event.Kind),
 		RequestDTag:        tagValueNostr(event.Tags, "d"),
 		Status:             domain.RunStatusQueued,
 		Backend:            recipe.Backend,
@@ -123,7 +123,7 @@ func (r *Reactor) authorizeBackupRequest(ctx context.Context, event *nostr.Event
 }
 
 func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nostr.Event, step string, resultKind int) bool {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
 		return false
 	}
@@ -202,9 +202,9 @@ func backupNostrMetadata(event *nostr.Event, requestMetadata map[string]any, ext
 			metadata[k] = v
 		}
 	}
-	metadata["nostr_event_id"] = event.ID
-	metadata["nostr_request_pubkey"] = event.PubKey
-	metadata["nostr_request_kind"] = event.Kind
+	metadata["nostr_event_id"] = event.ID.Hex()
+	metadata["nostr_request_pubkey"] = event.PubKey.Hex()
+	metadata["nostr_request_kind"] = int(event.Kind)
 	metadata["nostr_d_tag"] = tagValueNostr(event.Tags, "d")
 	for _, key := range []string{"recipe", "recipe_id", "repository", "repository_id", "policy", "policy_id", "target", "backend", "site", "environment", "worker", "verification"} {
 		if value := tagValueNostr(event.Tags, key); value != "" {
@@ -252,14 +252,16 @@ func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent 
 }
 
 func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent *nostr.Event, resultKind int, status, code, message string) error {
-	content := map[string]any{"request_event_id": requestEvent.ID, "status": status, "message": message}
+	requestEventID := requestEvent.ID.Hex()
+	requestPubkey := requestEvent.PubKey.Hex()
+	content := map[string]any{"request_event_id": requestEventID, "status": status, "message": message}
 	if status == "failed" || status == "rejected" {
 		content["error"] = map[string]any{"code": code, "message": message}
 	}
 	body, _ := json.Marshal(content)
-	tags := nostr.Tags{{"d", "result:" + requestEvent.ID}, {"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", status}, {"result", code}}
+	tags := nostr.Tags{{"d", "result:" + requestEventID}, {"e", requestEventID, "", "reply"}, {"p", requestPubkey}, {"status", status}, {"result", code}}
 	tags = appendBackupRequestTags(tags, requestEvent)
-	event := &nostr.Event{Kind: resultKind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	event := &nostr.Event{Kind: nostr.Kind(resultKind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign backup result: %w", err)
 	}

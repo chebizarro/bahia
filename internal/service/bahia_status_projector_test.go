@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,16 +35,16 @@ func TestBahiaStatusProjectorPublishesEachStatusEvent(t *testing.T) {
 	}))
 
 	require.Len(t, recorder.events, 3)
-	require.Equal(t, kindBahiaIdentityDefinition, recorder.events[0].Kind)
+	require.Equal(t, gonostr.Kind(kindBahiaIdentityDefinition), recorder.events[0].Kind)
 	require.Equal(t, "bahia-instance-1", bahiaStatusTagValue(recorder.events[0].Tags, "d"))
 	identity := decodeBahiaStatusContent[BahiaIdentityPayload](t, recorder.events[0].Content)
 	require.Equal(t, "full", identity.Mode)
 
-	require.Equal(t, kindBahiaReplayCheckpoint, recorder.events[1].Kind)
+	require.Equal(t, gonostr.Kind(kindBahiaReplayCheckpoint), recorder.events[1].Kind)
 	checkpoint := decodeBahiaStatusContent[ReplayCheckpointPayload](t, recorder.events[1].Content)
 	require.Equal(t, int64(1779559300), checkpoint.Cursors["system_snapshot"])
 
-	require.Equal(t, kindBahiaReadinessStatus, recorder.events[2].Kind)
+	require.Equal(t, gonostr.Kind(kindBahiaReadinessStatus), recorder.events[2].Kind)
 	readiness := decodeBahiaStatusContent[ReadinessStatusPayload](t, recorder.events[2].Content)
 	require.False(t, readiness.Ready)
 	require.Equal(t, "ok", readiness.Checks["relay_quorum"])

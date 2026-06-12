@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 func TestWorkerLegacyKindConstantsRemainMigrationOnly(t *testing.T) {
@@ -27,14 +27,11 @@ func TestWorkerReadModelRuntimeAcceptsCanonicalStateKindOnly(t *testing.T) {
 func TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	workerKey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-	if err != nil {
-		t.Fatalf("worker pubkey: %v", err)
-	}
+	workerKey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	publisher := NewWorkerCommandPublisher(capture, signer)
 
 	receipt, err := publisher.PublishWorkerCordonRequest(ctx, WorkerLifecycleCommand{
@@ -64,19 +61,19 @@ func TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation(t *test
 	if content["worker_pubkey"] != workerKey || content["reason"] != "kernel upgrade" || content["idempotency_key"] != "cordon-1" {
 		t.Fatalf("unexpected content: %#v", content)
 	}
-	if ok, err := ev.CheckSignature(); err != nil || !ok {
-		t.Fatalf("signature invalid: ok=%v err=%v", ok, err)
+	if !ev.VerifySignature() {
+		t.Fatalf("signature invalid")
 	}
 }
 
 func TestWorkerCommandPublisherPublishesLabelsUpdateAndGeneratesIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	workerKey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	workerKey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	publisher := NewWorkerCommandPublisher(capture, signer)
 
 	receipt, err := publisher.PublishWorkerLabelsUpdateRequest(ctx, WorkerLabelsUpdateCommand{WorkerPubKey: workerKey, Labels: map[string]string{"role": "inference"}, Reason: "pool assignment"})
@@ -100,11 +97,11 @@ func TestWorkerCommandPublisherPublishesLabelsUpdateAndGeneratesIdempotencyKey(t
 func TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	workerKey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	workerKey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	publisher := NewWorkerCommandPublisher(capture, signer)
 
 	policyReceipt, err := publisher.PublishWorkerPolicyApplyRequest(ctx, WorkerPolicyApplyCommand{
@@ -147,11 +144,11 @@ func TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin(t *testing.T) 
 func TestWorkerCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	workerKey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	workerKey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
 	publisher := NewWorkerCommandPublisher(capture, signer)
 
 	if _, err := publisher.PublishWorkerDrainRequest(ctx, WorkerLifecycleCommand{WorkerPubKey: workerKey}); err == nil {

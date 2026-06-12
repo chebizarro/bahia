@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -41,7 +41,11 @@ func (s RelayFirstPrivateKeySigner) Sign(_ context.Context, ev *gonostr.Event) e
 	if ev == nil {
 		return fmt.Errorf("nostr registry event is nil")
 	}
-	return ev.Sign(privateKey)
+	secret, err := gonostr.SecretKeyFromHex(privateKey)
+	if err != nil {
+		return fmt.Errorf("decode nostr registry signer private key: %w", err)
+	}
+	return ev.Sign(secret)
 }
 
 // RelayFirstRegistry wraps RegistryService so canonical relay publication succeeds before local cache writes.
@@ -217,7 +221,7 @@ func (r *RelayFirstRegistry) publishCanonical(ctx context.Context, kind int, tag
 	if r.signer == nil {
 		return fmt.Errorf("nostr registry signer is not configured")
 	}
-	ev := gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Tags: tags, Content: content}
+	ev := gonostr.Event{Kind: gonostr.Kind(kind), CreatedAt: gonostr.Now(), Tags: tags, Content: content}
 	if err := r.signer.Sign(ctx, &ev); err != nil {
 		return fmt.Errorf("sign %s event: %w", label, err)
 	}
@@ -228,7 +232,7 @@ func (r *RelayFirstRegistry) publishCanonical(ctx context.Context, kind int, tag
 	if published == 0 {
 		return fmt.Errorf("publish %s event: no relay accepted the event", label)
 	}
-	r.logger.Debug("relay-first registry event published", zap.Int("kind", kind), zap.String("event_id", ev.ID), zap.Int("relays", published))
+	r.logger.Debug("relay-first registry event published", zap.Int("kind", kind), zap.String("event_id", ev.ID.Hex()), zap.Int("relays", published))
 	return nil
 }
 

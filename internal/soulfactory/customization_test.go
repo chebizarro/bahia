@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -74,8 +74,8 @@ func TestCustomizationDraftV2EventCodecRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSoulDraftEvent() error = %v", err)
 	}
-	event.ID = "draft-event-id"
-	event.PubKey = strings.Repeat("a", 64)
+	event.ID = soulTestID("draft-event-id")
+	event.PubKey = soulTestPubKey("draft-author")
 
 	parsed, err := ParseSoulDraftEvent(event)
 	if err != nil {

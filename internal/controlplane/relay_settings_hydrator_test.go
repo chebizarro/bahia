@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -14,14 +14,14 @@ import (
 )
 
 func TestRelaySettingsHydratorFilterIsScopedToCanonicalState(t *testing.T) {
-	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{ServicePubkey: servicePubkey, Logger: zap.NewNop()})
 
 	filter := h.filter()
-	if len(filter.Kinds) != 1 || filter.Kinds[0] != kinds.CASControlState {
+	if len(filter.Kinds) != 1 || filter.Kinds[0] != nostr.Kind(kinds.CASControlState) {
 		t.Fatalf("unexpected filter kinds: %#v", filter.Kinds)
 	}
-	if len(filter.Authors) != 1 || filter.Authors[0] != servicePubkey {
+	if len(filter.Authors) != 1 || filter.Authors[0].Hex() != servicePubkey {
 		t.Fatalf("unexpected filter authors: %#v", filter.Authors)
 	}
 	if got := filter.Tags["d"]; len(got) != 1 || got[0] != RelaySettingsDTag {
@@ -36,7 +36,7 @@ func TestRelaySettingsHydratorFilterIsScopedToCanonicalState(t *testing.T) {
 }
 
 func TestRelaySettingsHydratorStoresLatestValidReplaceableStateWithoutMutatingConfig(t *testing.T) {
-	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	cfg := &config.Config{Nostr: config.NostrConfig{BrowserRelays: []string{"wss://old.example"}}}
 	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
 		ServicePubkey: servicePubkey,
@@ -95,20 +95,20 @@ func TestRelaySettingsHydratorStoresLatestValidReplaceableStateWithoutMutatingCo
 
 func TestRelaySettingsHydratorTieBreaksEqualTimestampsByLowestEventID(t *testing.T) {
 	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{Logger: zap.NewNop()})
-	if !h.shouldApply(&nostr.Event{ID: "bbbb", CreatedAt: nostr.Timestamp(100)}) {
+	if !h.shouldApply(&nostr.Event{ID: relaySettingsTestID(0xbb), CreatedAt: nostr.Timestamp(100)}) {
 		t.Fatalf("first event should apply")
 	}
-	if !h.shouldApply(&nostr.Event{ID: "aaaa", CreatedAt: nostr.Timestamp(100)}) {
+	if !h.shouldApply(&nostr.Event{ID: relaySettingsTestID(0xaa), CreatedAt: nostr.Timestamp(100)}) {
 		t.Fatalf("lower event id should win same-created_at replaceable tie")
 	}
-	if h.shouldApply(&nostr.Event{ID: "cccc", CreatedAt: nostr.Timestamp(100)}) {
+	if h.shouldApply(&nostr.Event{ID: relaySettingsTestID(0xcc), CreatedAt: nostr.Timestamp(100)}) {
 		t.Fatalf("higher event id should not replace same-created_at winner")
 	}
 }
 
 func TestRelaySettingsHydratorRejectsWrongAuthorOrSchema(t *testing.T) {
-	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
-	otherPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	otherPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
 		ServicePubkey: servicePubkey,
 		Logger:        zap.NewNop(),
@@ -116,8 +116,8 @@ func TestRelaySettingsHydratorRejectsWrongAuthorOrSchema(t *testing.T) {
 	})
 
 	wrongAuthor := signedRelaySettingsStateEventWithKey(t, testRequesterKey, time.Unix(1_000, 0).UTC(), RelayPolicyState{Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://browser.example"}})
-	if wrongAuthor.PubKey != otherPubkey {
-		t.Fatalf("test event author mismatch: %s", wrongAuthor.PubKey)
+	if wrongAuthor.PubKey.Hex() != otherPubkey {
+		t.Fatalf("test event author mismatch: %s", wrongAuthor.PubKey.Hex())
 	}
 	if h.handleEvent(context.Background(), wrongAuthor) {
 		t.Fatalf("wrong service author should not apply")
@@ -130,7 +130,7 @@ func TestRelaySettingsHydratorRejectsWrongAuthorOrSchema(t *testing.T) {
 }
 
 func TestRelaySettingsHydratorAcceptsTopologyEmptyCanonicalState(t *testing.T) {
-	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
 		ServicePubkey: servicePubkey,
 		Logger:        zap.NewNop(),
@@ -162,7 +162,7 @@ func TestRelaySettingsHydratorAcceptsTopologyEmptyCanonicalState(t *testing.T) {
 }
 
 func TestRelaySettingsHydratorProcessesEventAndEOSEDeterministically(t *testing.T) {
-	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0).UTC(), RelayPolicyState{Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://browser.example"}})
 	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
 		Pool:          nostradapter.NewRelayPool([]string{"wss://relay.example"}, zap.NewNop()),
@@ -200,7 +200,7 @@ func TestRelaySettingsHydratorHandlesClosedAuthWithoutPolling(t *testing.T) {
 }
 
 func TestRelaySettingsHydratorInvokesSnapshotCallbackAfterStorage(t *testing.T) {
-	servicePubkey, _ := nostr.GetPublicKey(testServiceKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0).UTC(), RelayPolicyState{
 		Schema:          RelaySettingsSchema,
 		ContextVMRelays: []string{"wss://contextvm.example"},
@@ -247,6 +247,12 @@ func TestRelaySettingsHydratorInvokesSnapshotCallbackAfterStorage(t *testing.T) 
 	if callbackCount != 1 {
 		t.Fatalf("duplicate event invoked callback: count=%d", callbackCount)
 	}
+}
+
+func relaySettingsTestID(last byte) nostr.ID {
+	var id nostr.ID
+	id[31] = last
+	return id
 }
 
 func signedRelaySettingsStateEvent(t *testing.T, createdAt time.Time, state RelayPolicyState) *nostr.Event {

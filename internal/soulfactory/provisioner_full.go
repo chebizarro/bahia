@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/adapters/agentmemory"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
@@ -104,9 +105,17 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	}
 	resolved.applyToSoul(soul)
 
+	requestID, err := nostr.IDFromHex(strings.TrimSpace(run.RequestID))
+	if err != nil {
+		return nil, fmt.Errorf("parse provisioning request event id: %w", err)
+	}
+	requesterPubkey, err := nostr.PubKeyFromHex(strings.TrimSpace(run.RequesterPubkey))
+	if err != nil {
+		return nil, fmt.Errorf("parse provisioning requester pubkey: %w", err)
+	}
 	requestEvent := &nostr.Event{
-		ID:     run.RequestID,
-		PubKey: run.RequesterPubkey,
+		ID:     requestID,
+		PubKey: requesterPubkey,
 	}
 
 	totalSteps := len(domain.ProvisioningSteps)
@@ -627,7 +636,7 @@ func applyRuntimeProvisionResult(soul *domain.AgentSoul, resolved *resolvedProvi
 	soul.Runtime.Target = resolved.Runtime.Target
 	soul.Runtime.RuntimePubkey = firstNonEmpty(stringResult(result.Result, "runtime_pubkey"), resolved.Runtime.RuntimePubkey)
 	if soul.Runtime.RuntimePubkey == "" && result.Event != nil {
-		soul.Runtime.RuntimePubkey = result.Event.PubKey
+		soul.Runtime.RuntimePubkey = result.Event.PubKey.Hex()
 	}
 	soul.Runtime.RuntimeBinding = firstNonEmpty(stringResult(result.Result, "runtime_binding"), soul.Runtime.RuntimeBinding)
 	soul.Runtime.State = firstNonEmpty(stringResult(result.Result, "state"), soul.Runtime.State, "running")

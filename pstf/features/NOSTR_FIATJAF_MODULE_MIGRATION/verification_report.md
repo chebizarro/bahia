@@ -3,14 +3,14 @@
 ## Item 1 scope
 Migrated the core canonical adapter/helper layer to `fiatjaf.com/nostr` while avoiding the broad downstream CLI/public-client/protocol-consumer sweep.
 
-## Evidence
+## Item 1 evidence
 - `internal/adapters/nostr/**`, `internal/nostrutil/**`, and `internal/controlplane/signer.go` contain no `github.com/nbd-wtf/go-nostr` imports.
 - `go.mod` pins `fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026`.
 - Targeted tests passed:
   - `go test ./internal/nostrutil ./internal/adapters/nostr/...`
   - Results: helper package compiled, adapter package passed, relayadmin package passed.
 
-## Nostr semantics checked
+## Item 1 Nostr semantics checked
 - Relay subscriptions remain callback/channel-driven with EVENT, EOSE, CLOSED, and AUTH handling.
 - `RelayPool` uses fiatjaf subscriptions per scoped filter and disables fiatjaf's fake EOSE timeout to avoid timeout-based historical completion.
 - Publishing continues to verify OK acceptance through fiatjaf relay publish results/errors and preserves partial-failure behavior.
@@ -19,14 +19,8 @@ Migrated the core canonical adapter/helper layer to `fiatjaf.com/nostr` while av
 - Review follow-up fixed multi-filter subscription coverage: `RelayPool.Subscribe` now rejects multi-filter calls instead of silently subscribing only one filter, and `SubscribeAllWithEOSE` only accepts relays with subscriptions for every requested filter.
 - Review follow-up restored an explicit non-negative kind validation guard; fiatjaf kinds are unsigned, so negative kinds are unrepresentable, but the trust-boundary invariant remains encoded.
 
-## Blockers outside Item 1
-`go test ./internal/controlplane` is blocked by downstream consumers still using `github.com/nbd-wtf/go-nostr`. The first compile blocker is:
-
-```text
-internal/notifications/nostr_dm.go:74:45: cannot use ev (variable of struct type "github.com/nbd-wtf/go-nostr".Event) as "fiatjaf.com/nostr".Event value in argument to s.relayPool.Publish
-```
-
-Additional remaining imports exist in downstream Item 2/3 areas such as `internal/controlplane`, `internal/notifications`, `pkg/client`, `pkg/discovery`, `cmd/cli`, `internal/soulfactory`, and non-core adapters. These were intentionally not migrated in Item 1.
+## Item 1 blockers later resolved
+`go test ./internal/controlplane` was blocked after Item 1 by downstream consumers still using `github.com/nbd-wtf/go-nostr`, first observed at `internal/notifications/nostr_dm.go`. Items 2 and 3 resolved the downstream migration and active dependency cleanup.
 
 ## Item 2 scope
 Migrated downstream protocol/NIP consumers in `internal/adapters/{secrets,signet,loom,hiveci,blossom,sbom,signing}/**`, `internal/auth/**`, `internal/fipsbridge/**`, `internal/notifications/**`, `internal/nostrmigration/**`, and `pkg/discovery/**` from `github.com/nbd-wtf/go-nostr` to `fiatjaf.com/nostr`, reusing `internal/nostrutil` for canonical key decoding, signing, pubkey/ID hex handling, and NIP-44 conversation key derivation.
@@ -48,6 +42,50 @@ Migrated downstream protocol/NIP consumers in `internal/adapters/{secrets,signet
 - Oracle review identified that relay backfill in `internal/nostrmigration/runner.go` recorded relay events before validation. Item 2 now validates historical backfill events before persistence/migration using canonical event ID/signature checks, tag structure checks, created_at presence, future-skew bounds, and configured backfill since/until bounds without rejecting legitimately old legacy events solely by age.
 - Added `TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording` to prove tampered relay backfill events are rejected before repository recording or migration publishing.
 
-## Item 2 remaining tracked work
-- `bahia-ncxo` tracks verification/migration for any existing NIP-44 stored secrets created by the prior private-key-as-recipient self-encryption path.
-- Item 3 remains responsible for public clients, CLI, residual controlplane/service/soulfactory/test imports, dependency cleanup, repo-wide verification, and final removal of `github.com/nbd-wtf/go-nostr` from `go.mod`/`go.sum`.
+## Item 3 scope
+Completed the residual repo-wide migration in `cmd/**`, `pkg/client/**`, `internal/api/**`, `internal/app/**`, `internal/controlplane/**`, `internal/mcp/**`, `internal/service/**`, `internal/soulfactory/**`, and `test/integration/**`, plus module dependency cleanup.
+
+## Item 3 dependency cleanup
+- `go.mod` and `go.sum` no longer contain `github.com/nbd-wtf/go-nostr`.
+- `go.mod` retains `fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026` after `GOCACHE=/tmp/bahia-go-cache go mod tidy`.
+- Active scoped search passed with no matches:
+  - `rg -n "github.com/nbd-wtf/go-nostr|go-nostr" go.mod go.sum cmd pkg internal test/integration --glob '!_git_data/**'`
+
+## Item 3 Nostr semantics checked and hardened
+- Controlplane request subscription author filters now fail closed when configured authorized/factory pubkeys are malformed; malformed non-empty allowlists cannot collapse into broad authorless subscriptions. Verified by `TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys`.
+- Assistant downstream terminal result handling now validates result kind, `#e` request correlation, nonzero and future-bounded timestamp, canonical event ID, and Schnorr signature before trusting terminal status. Verified by `TestDownstreamResultMatchesReceiptRejectsWrongCorrelation` and package tests.
+- SoulFactory relay bus no longer marks historical catch-up complete on subscribe failure, CLOSED-before-EOSE, or cancellation. Merged EOSE channels close only after real EOSE from all underlying subscriptions. Verified by `TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure` and `TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill`.
+- SoulFactory backfill/query tests that previously used placeholder production-like relay URLs now use deterministic fake relay EOSE behavior so tests do not depend on hidden network behavior or encode hardcoded production paths.
+- Residual Item 3 code and tests construct canonical signed fiatjaf events, typed IDs/pubkeys/kinds/signatures, and scoped relay filters. No polling/sleep completion logic was introduced for event delivery or historical catch-up.
+
+## Item 3 verification evidence
+- Targeted SoulFactory review test:
+  - `GOCACHE=/tmp/bahia-go-cache go test ./internal/soulfactory -timeout 30s`
+  - Result: passed, `ok github.com/openagentsinc/bahia/internal/soulfactory 7.719s`.
+- Targeted review packages:
+  - `GOCACHE=/tmp/bahia-go-cache go test ./internal/controlplane ./internal/service ./internal/soulfactory`
+  - Result: passed for all listed packages.
+- Targeted residual Item 3 packages:
+  - `GOCACHE=/tmp/bahia-go-cache go test ./cmd/... ./pkg/client/... ./internal/api/... ./internal/app/... ./internal/controlplane/... ./internal/mcp/... ./internal/service/... ./internal/soulfactory/... ./test/integration/...`
+  - Result: all listed packages passed or reported `[no test files]`.
+- Full repository test suite:
+  - `GOCACHE=/tmp/bahia-go-cache go test ./...`
+  - Result: all packages passed or reported `[no test files]`.
+- Module cleanup:
+  - `GOCACHE=/tmp/bahia-go-cache go mod tidy`
+  - Result: passed with no reintroduction of the old module.
+- Whitespace hygiene:
+  - `git diff --check`
+  - Result: passed.
+
+## Historical reference review
+A broad repository search still finds `github.com/nbd-wtf/go-nostr` / `go-nostr` only in historical planning, archival, or PSTF documentation, not in active Go imports or module dependencies. Allowed historical references observed before closeout include:
+- `docs/archive/REVIEW-AND-ROADMAP-2024.md`
+- `docs/analysis/nostr-fiatjaf-migration-orchestration.md`
+- `pstf/features/NOSTR_FIATJAF_MODULE_MIGRATION/*`
+- `pstf/features/BUCKET5_BLOSSOM_AUTH_BACKEND_TESTS/verification_report.md`
+
+## Remaining tracked work
+- `bahia-ncxo` remains open for NIP-44 stored-secret compatibility verification/migration because no representative persisted legacy ciphertext fixture was available in Items 2 or 3.
+- Additional hardening follow-ups from Item 3 review are tracked in Beads for expected responder-author validation, deterministic relay-protocol edge tests, and bounded/persistent ContextVM idempotency. These are not active go-nostr migration blockers.
+- `bahia-u2ma` can be closed after final commit/pull/rebase/push/status verification because the active repo-wide module migration and cleanup are complete.

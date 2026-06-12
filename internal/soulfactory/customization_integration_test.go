@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -22,7 +22,16 @@ func TestIntegrationCreateSoulWithFullCustomization(t *testing.T) {
 	draft.Content.Runtime.RuntimePubkey = "runtime-pubkey"
 	draft.Content.Runtime.CapabilityRef = "capability-full"
 
-	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	close(subscription.eose)
+	relayBus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	reactor.relayBus = relayBus
 	capture := attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	reactor.getTemplateFn = func(context.Context, string) (*domain.SoulTemplate, error) {
@@ -192,7 +201,16 @@ func runIntegrationProvisionForRuntime(t *testing.T, signer fakeSigner, target d
 	content.Runtime.CapabilityRef = string(target) + "-capability"
 	content.SpecHash = "sha256:" + string(target)
 	draft := &domain.SoulDraft{EventID: string(target) + "-draft", AgentID: "parity-" + string(target), Name: "Parity", Tier: domain.SoulTierHeavy, CreatedBy: signer.pubkey, Content: content}
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	close(subscription.eose)
+	relayBus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	reactor.relayBus = relayBus
 	attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	runtime := &integrationRuntimeAdapter{runtime: target, bindingPrefix: binding, methods: []string{RuntimeMethodProvision, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure, RuntimeMethodPersonaUpdate, RuntimeMethodAvatarGenerate}}
@@ -210,7 +228,16 @@ func runIntegrationHotReload(t *testing.T, signer fakeSigner, current, proposed 
 	currentDraft := &domain.SoulDraft{EventID: "draft-current", AgentID: "scout", CreatedBy: signer.pubkey, Content: current}
 	proposedDraft := &domain.SoulDraft{EventID: "draft-proposed", AgentID: "scout", CreatedBy: signer.pubkey, Content: proposed}
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: current.Identity.Name, Purpose: current.Identity.Purpose, Tier: current.Identity.Tier, Status: domain.SoulStatusActive, DraftRef: "31952:" + signer.pubkey + ":scout", DraftEventID: currentDraft.EventID, SpecHash: current.SpecHash, Runtime: current.Runtime, Assets: current.Assets, CreatedAt: time.Now().UTC()}
-	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	close(subscription.eose)
+	relayBus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	reactor.relayBus = relayBus
 	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, eventID string) (*domain.SoulDraft, error) {
@@ -225,7 +252,7 @@ func runIntegrationHotReload(t *testing.T, signer fakeSigner, current, proposed 
 	}
 	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
 	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{runtime.runtime: runtime})
-	err := handler.HandleAction(t.Context(), buildActionEvent(t, signer, "hot-reload", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionHotReload)}, {"draft-event", proposedDraft.EventID}, {"spec-hash", proposed.SpecHash}, {"previous-spec-hash", current.SpecHash}}, ""))
+	err = handler.HandleAction(t.Context(), buildActionEvent(t, signer, "hot-reload", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionHotReload)}, {"draft-event", proposedDraft.EventID}, {"spec-hash", proposed.SpecHash}, {"previous-spec-hash", current.SpecHash}}, ""))
 	if wantErr == nil && err != nil {
 		t.Fatalf("HandleAction(hot-reload) error = %v", err)
 	}
@@ -266,7 +293,8 @@ func (a *integrationRuntimeAdapter) DiscoverCapabilities(context.Context, domain
 	if len(methods) == 0 {
 		methods = []string{RuntimeMethodProvision, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure, RuntimeMethodPersonaUpdate, RuntimeMethodAvatarGenerate}
 	}
-	return []RuntimeCapability{{Runtime: a.runtime, Pubkey: string(a.runtime) + "-runtime-pubkey", Methods: methods, ControlSchema: domain.SoulFactoryRuntimeControlSchema, ControllerPubkeys: []string{"controller"}, Coordinate: "30317:" + string(a.runtime) + ":capability"}}, nil
+	runtimePubkey := soulTestPubKeyHex(string(a.runtime) + "-runtime-pubkey")
+	return []RuntimeCapability{{Runtime: a.runtime, Pubkey: runtimePubkey, Methods: methods, ControlSchema: domain.SoulFactoryRuntimeControlSchema, ControllerPubkeys: []string{"controller"}, Coordinate: "30317:" + string(a.runtime) + ":capability"}}, nil
 }
 
 func (a *integrationRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapterRequest) (*RuntimeControlResultEnvelope, error) {
@@ -274,5 +302,6 @@ func (a *integrationRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapte
 	if a.failOn > 0 && len(a.requests) == a.failOn {
 		return &RuntimeControlResultEnvelope{Schema: domain.SoulFactoryRuntimeControlSchema, Method: req.Method, Status: "failed", Error: &RuntimeControlError{Code: "runtime_error", Message: "runtime error"}}, fmt.Errorf("runtime error")
 	}
-	return &RuntimeControlResultEnvelope{Schema: domain.SoulFactoryRuntimeControlSchema, Method: req.Method, IdempotencyKey: "sha256:test", OperatorRequestEvent: req.Operator.RequestEvent, Status: "success", Result: map[string]interface{}{"agent_id": req.Target.AgentID, "runtime": req.Target.Runtime, "runtime_pubkey": string(req.Target.Runtime) + "-runtime-pubkey", "runtime_binding": a.bindingPrefix + "://agents/" + req.Target.AgentID, "state": "running", "spec_hash": req.Soul.SpecHash, "capability_ref": "capability-" + string(req.Target.Runtime)}, Event: &nostr.Event{PubKey: string(req.Target.Runtime) + "-runtime-pubkey"}}, nil
+	runtimePubkey := firstNonEmpty(req.Target.RuntimePubkey, soulTestPubKeyHex(string(req.Target.Runtime)+"-runtime-pubkey"))
+	return &RuntimeControlResultEnvelope{Schema: domain.SoulFactoryRuntimeControlSchema, Method: req.Method, IdempotencyKey: "sha256:test", OperatorRequestEvent: req.Operator.RequestEvent, RequestEvent: "runtime-request", Status: "success", Result: map[string]interface{}{"agent_id": req.Target.AgentID, "runtime": req.Target.Runtime, "runtime_pubkey": runtimePubkey, "runtime_binding": a.bindingPrefix + "://agents/" + req.Target.AgentID, "state": "running", "spec_hash": req.Soul.SpecHash, "capability_ref": "capability-" + string(req.Target.Runtime)}, Event: &nostr.Event{PubKey: soulTestPubKey(runtimePubkey)}}, nil
 }

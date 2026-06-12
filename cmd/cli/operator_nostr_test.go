@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
@@ -80,10 +80,7 @@ func TestResolveOperatorRelaysPrecedence(t *testing.T) {
 
 	t.Run("trusted bootstrap discovery runs only after final relay config is absent", func(t *testing.T) {
 		resetOperatorGlobals(t)
-		servicePubkey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-		if err != nil {
-			t.Fatalf("derive service pubkey: %v", err)
-		}
+		servicePubkey := nostr.Generate().Public().Hex()
 		cmd := newOperatorFlagTestCommand(t)
 		if err := cmd.Root().PersistentFlags().Set("bootstrap-relay", "wss://bootstrap.example"); err != nil {
 			t.Fatalf("set bootstrap relay: %v", err)
@@ -114,10 +111,7 @@ func TestResolveOperatorRelaysPrecedence(t *testing.T) {
 
 	t.Run("service pubkey can provide single-service discovery trust", func(t *testing.T) {
 		resetOperatorGlobals(t)
-		servicePubkey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-		if err != nil {
-			t.Fatalf("derive service pubkey: %v", err)
-		}
+		servicePubkey := nostr.Generate().Public().Hex()
 		t.Setenv("BAHIA_NOSTR_BOOTSTRAP_RELAYS", "wss://bootstrap.example")
 		cmd := newOperatorFlagTestCommand(t)
 		if err := cmd.Root().PersistentFlags().Set("service-pubkey", servicePubkey); err != nil {
@@ -162,7 +156,7 @@ func TestResolveOperatorRelaysPrecedence(t *testing.T) {
 
 func TestPolicyCreateUsesSignerFirstOperatorClient(t *testing.T) {
 	resetOperatorGlobals(t)
-	key := nostr.GeneratePrivateKey()
+	key := nostr.Generate().Hex()
 	cmd := newOperatorFlagTestCommand(t)
 	cmd.SetContext(context.Background())
 	nostrPrivateKey = key
@@ -207,11 +201,8 @@ func TestParsePolicyRulesJSONAcceptsArrayAndRejectsEmpty(t *testing.T) {
 
 func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
 	resetOperatorGlobals(t)
-	key := nostr.GeneratePrivateKey()
-	servicePubkey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
-	if err != nil {
-		t.Fatalf("derive service pubkey: %v", err)
-	}
+	key := nostr.Generate().Hex()
+	servicePubkey := nostr.Generate().Public().Hex()
 	factoryCalls := 0
 	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
 		factoryCalls++
@@ -251,7 +242,7 @@ func TestAdoptRawTargetCommandRequiresExplicitFallback(t *testing.T) {
 func TestOperatorHTTPFallbackOnlyForExplicitPreAcceptanceFailures(t *testing.T) {
 	resetOperatorGlobals(t)
 	cmd := newOperatorFlagTestCommand(t)
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.GeneratePrivateKey())
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
 	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
 	operatorHTTPFallback = true
 

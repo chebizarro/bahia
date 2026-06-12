@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -360,14 +360,39 @@ func (c *ToolProvisioningCoordinator) publishStatus(ctx context.Context, intent 
 	if c.responder == nil || intent == nil {
 		return
 	}
-	_ = c.responder.PublishStatus(ctx, &nostr.Event{ID: intent.NostrEventID, PubKey: intent.RequesterPubkey}, intent, step, message)
+	requestEvent, err := c.requestEventForIntent(intent)
+	if err != nil {
+		c.logger.Warn("tool provisioning status publish skipped: invalid nostr request metadata", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+		return
+	}
+	_ = c.responder.PublishStatus(ctx, requestEvent, intent, step, message)
 }
 
 func (c *ToolProvisioningCoordinator) publishResult(ctx context.Context, intent *domain.ToolProvisionIntent, success bool, errMsg string) {
 	if c.responder == nil || intent == nil {
 		return
 	}
-	_ = c.responder.PublishResult(ctx, &nostr.Event{ID: intent.NostrEventID, PubKey: intent.RequesterPubkey}, intent, success, errMsg)
+	requestEvent, err := c.requestEventForIntent(intent)
+	if err != nil {
+		c.logger.Warn("tool provisioning result publish skipped: invalid nostr request metadata", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+		return
+	}
+	_ = c.responder.PublishResult(ctx, requestEvent, intent, success, errMsg)
+}
+
+func (c *ToolProvisioningCoordinator) requestEventForIntent(intent *domain.ToolProvisionIntent) (*nostr.Event, error) {
+	if intent == nil {
+		return nil, fmt.Errorf("tool provisioning intent is nil")
+	}
+	eventID, err := nostr.IDFromHex(strings.TrimSpace(intent.NostrEventID))
+	if err != nil {
+		return nil, fmt.Errorf("decode request event id: %w", err)
+	}
+	pubkey, err := nostr.PubKeyFromHex(strings.TrimSpace(intent.RequesterPubkey))
+	if err != nil {
+		return nil, fmt.Errorf("decode requester pubkey: %w", err)
+	}
+	return &nostr.Event{ID: eventID, PubKey: pubkey}, nil
 }
 
 func (c *ToolProvisioningCoordinator) targetRef(hash string) string {

@@ -3,7 +3,7 @@ package controlplane
 import (
 	"context"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -114,9 +114,9 @@ func (r *Reactor) handleHeartbeatObservation(ctx context.Context, event *gonostr
 
 func continuitySource(event *gonostr.Event) events.NostrSource {
 	return events.NostrSource{
-		EventID:   event.ID,
-		Kind:      event.Kind,
-		PubKey:    event.PubKey,
+		EventID:   event.ID.Hex(),
+		Kind:      int(event.Kind),
+		PubKey:    event.PubKey.Hex(),
 		CreatedAt: event.CreatedAt.Time(),
 	}
 }

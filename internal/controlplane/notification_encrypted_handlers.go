@@ -67,7 +67,7 @@ func (h *notificationEncryptedHandler) register(transport *EncryptedRequestTrans
 			Envelope: EncryptedRequestEnvelope{
 				Version:         ContextVMWireVersion,
 				Operation:       request.RPC.Method,
-				RequesterPubkey: request.Event.PubKey,
+				RequesterPubkey: request.Event.PubKey.Hex(),
 				Payload:         request.RPC.Params,
 			},
 		})

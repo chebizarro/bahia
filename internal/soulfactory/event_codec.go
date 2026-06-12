@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -70,7 +70,7 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 	if event == nil {
 		return nil, fmt.Errorf("nil provisioning event")
 	}
-	req := &domain.ProvisioningRequest{EventID: event.ID, Requester: event.PubKey}
+	req := &domain.ProvisioningRequest{EventID: event.ID.Hex(), Requester: event.PubKey.Hex()}
 
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
@@ -159,8 +159,8 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 	}
 	action := &domain.SoulAction{
 		ID:        domain.NewUUID(),
-		EventID:   event.ID,
-		Initiator: event.PubKey,
+		EventID:   event.ID.Hex(),
+		Initiator: event.PubKey.Hex(),
 		CreatedAt: event.CreatedAt.Time(),
 	}
 
@@ -229,7 +229,7 @@ func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 	if event == nil {
 		return nil
 	}
-	soul := &domain.AgentSoul{EventID: event.ID, SoulMD: event.Content, CreatedAt: event.CreatedAt.Time()}
+	soul := &domain.AgentSoul{EventID: event.ID.Hex(), SoulMD: event.Content, CreatedAt: event.CreatedAt.Time()}
 
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
@@ -329,7 +329,7 @@ func ParseSoulDraftEvent(event *nostr.Event) (*domain.SoulDraft, error) {
 	if event == nil {
 		return nil, fmt.Errorf("nil soul draft event")
 	}
-	draft := &domain.SoulDraft{ID: domain.NewUUID(), EventID: event.ID, CreatedBy: event.PubKey, CreatedAt: event.CreatedAt.Time(), UpdatedAt: event.CreatedAt.Time()}
+	draft := &domain.SoulDraft{ID: domain.NewUUID(), EventID: event.ID.Hex(), CreatedBy: event.PubKey.Hex(), CreatedAt: event.CreatedAt.Time(), UpdatedAt: event.CreatedAt.Time()}
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
 			continue
@@ -716,8 +716,8 @@ func BuildProvisioningStatusEvent(requestEvent *nostr.Event, step domain.Provisi
 		Kind:      domain.KindProvisioningStatus,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
-			{tagEvent, requestEvent.ID, "", "reply"},
-			{tagPubkey, requestEvent.PubKey},
+			{tagEvent, requestEvent.ID.Hex(), "", "reply"},
+			{tagPubkey, requestEvent.PubKey.Hex()},
 			{tagStatus, "processing"},
 			{tagStep, string(step)},
 			{tagProgress, strconv.Itoa(current), strconv.Itoa(total)},
@@ -746,8 +746,8 @@ func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain
 	}
 
 	tags := nostr.Tags{
-		{tagEvent, requestEvent.ID, "", "reply"},
-		{tagPubkey, requestEvent.PubKey},
+		{tagEvent, requestEvent.ID.Hex(), "", "reply"},
+		{tagPubkey, requestEvent.PubKey.Hex()},
 		{tagStatus, "success"},
 		{tagSoul, soulCoordinate(factoryPubkey, soul.AgentID)},
 		{tagAgentPubkey, soul.NostrPubkey},
@@ -763,8 +763,8 @@ func BuildProvisioningErrorResultEvent(requestEvent *nostr.Event, step, message 
 		Kind:      domain.KindProvisioningResult,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
-			{tagEvent, requestEvent.ID, "", "reply"},
-			{tagPubkey, requestEvent.PubKey},
+			{tagEvent, requestEvent.ID.Hex(), "", "reply"},
+			{tagPubkey, requestEvent.PubKey.Hex()},
 			{tagStatus, "error"},
 			{tagStep, step},
 			{"error", step},
@@ -864,7 +864,7 @@ func BuildActionResultEvent(action *domain.SoulAction, status string, data map[s
 	if shape == ActionResultLegacy {
 		kind = domain.KindSoulActionLegacyResult
 	}
-	return &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: content}, nil
+	return &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: tags, Content: content}, nil
 }
 
 // RuntimeControlEnvelope is the JSON content of a kind:38384 runtime control request.

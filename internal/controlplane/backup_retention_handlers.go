@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -58,9 +58,9 @@ func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr
 		ID:             uuid.New(),
 		RepositoryID:   repositoryID,
 		PolicyID:       &policyID,
-		RequestedBy:    event.PubKey,
-		RequestEventID: event.ID,
-		RequestKind:    event.Kind,
+		RequestedBy:    event.PubKey.Hex(),
+		RequestEventID: event.ID.Hex(),
+		RequestKind:    int(event.Kind),
 		RequestDTag:    tagValueNostr(event.Tags, "d"),
 		Status:         domain.RunStatusQueued,
 		DryRun:         req.DryRun,

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
@@ -100,9 +100,17 @@ func discoverOperatorRelaysWithTransport(ctx context.Context, trustedPubkeys []s
 		return nil, fmt.Errorf("operator bootstrap discovery transport is not configured")
 	}
 
+	trustedAuthors := make([]nostr.PubKey, 0, len(trustedPubkeys))
+	for _, pubkey := range trustedPubkeys {
+		parsed, err := nostr.PubKeyFromHex(pubkey)
+		if err != nil {
+			return nil, fmt.Errorf("parse trusted service pubkey: %w", err)
+		}
+		trustedAuthors = append(trustedAuthors, parsed)
+	}
 	filter := nostr.Filter{
-		Kinds:   []int{kinds.RelaySetDiscovery},
-		Authors: trustedPubkeys,
+		Kinds:   []nostr.Kind{nostr.Kind(kinds.RelaySetDiscovery)},
+		Authors: trustedAuthors,
 		Tags: nostr.TagMap{
 			"d": []string{operatorContextVMRelaySet, operatorBrowserRelaySet},
 		},
@@ -181,10 +189,11 @@ func recordTrustedOperatorRelayEvent(event *nostr.Event, trusted map[string]stru
 	if !ok {
 		return
 	}
-	if _, duplicate := seen[event.ID]; duplicate {
+	eventID := event.ID.Hex()
+	if _, duplicate := seen[eventID]; duplicate {
 		return
 	}
-	seen[event.ID] = struct{}{}
+	seen[eventID] = struct{}{}
 	key := operatorRelaySetKey(candidate.author, dTag)
 	if existing, exists := relaySets[key]; !exists || candidateIsNewer(candidate, existing) {
 		relaySets[key] = candidate
@@ -192,10 +201,11 @@ func recordTrustedOperatorRelayEvent(event *nostr.Event, trusted map[string]stru
 }
 
 func trustedOperatorRelaySetCandidate(event *nostr.Event, trusted map[string]struct{}) (operatorRelaySetCandidate, string, bool) {
-	if event == nil || event.Kind != kinds.RelaySetDiscovery || !validSignedEvent(event) {
+	if event == nil || event.Kind != nostr.Kind(kinds.RelaySetDiscovery) || !validSignedEvent(event) {
 		return operatorRelaySetCandidate{}, "", false
 	}
-	if _, ok := trusted[event.PubKey]; !ok {
+	pubkey := event.PubKey.Hex()
+	if _, ok := trusted[pubkey]; !ok {
 		return operatorRelaySetCandidate{}, "", false
 	}
 	dTag := firstTagValue(event.Tags, "d")
@@ -206,7 +216,7 @@ func trustedOperatorRelaySetCandidate(event *nostr.Event, trusted map[string]str
 	if len(relays) == 0 {
 		return operatorRelaySetCandidate{}, "", false
 	}
-	return operatorRelaySetCandidate{author: event.PubKey, eventID: event.ID, createdAt: event.CreatedAt, relays: relays}, dTag, true
+	return operatorRelaySetCandidate{author: pubkey, eventID: event.ID.Hex(), createdAt: event.CreatedAt, relays: relays}, dTag, true
 }
 
 func chooseOperatorRelaySet(relaySets map[string]operatorRelaySetCandidate, trustedPubkeys []string, closedReasons []string) ([]string, error) {

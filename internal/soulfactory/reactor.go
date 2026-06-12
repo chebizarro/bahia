@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -38,7 +38,6 @@ type Config struct {
 // Reactor subscribes to Nostr events and dispatches handlers.
 type Reactor struct {
 	config                   Config
-	pool                     *nostr.SimplePool
 	generator                SoulGenerator
 	signer                   Signer
 	provisioner              ProvisioningEngine
@@ -124,7 +123,6 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 
 	r := &Reactor{
 		config:      config,
-		pool:        nostr.NewSimplePool(context.Background()),
 		generator:   generator,
 		signer:      signer,
 		provisioner: unavailableProvisioningEngine{},
@@ -166,12 +164,12 @@ func (r *Reactor) Run(ctx context.Context) error {
 	now := nostr.Now()
 	filters := []nostr.Filter{
 		{
-			Kinds: []int{domain.KindProvisioningRequest},
-			Since: &now,
+			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
+			Since: now,
 		},
 		{
-			Kinds: []int{domain.KindSoulAction},
-			Since: &now,
+			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
+			Since: now,
 		},
 	}
 
@@ -221,9 +219,9 @@ func (r *Reactor) Run(ctx context.Context) error {
 // handleEvent dispatches events to the appropriate handler.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	switch event.Kind {
-	case domain.KindProvisioningRequest:
+	case nostr.Kind(domain.KindProvisioningRequest):
 		go r.handleProvisioningRequest(ctx, event)
-	case domain.KindSoulAction:
+	case nostr.Kind(domain.KindSoulAction):
 		go r.handleSoulAction(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
@@ -236,7 +234,7 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	logger.Info("received provisioning request")
 
 	// Validate authorization
-	if !r.isAuthorizedProvisioner(event.PubKey) {
+	if !r.isAuthorizedProvisioner(event.PubKey.Hex()) {
 		logger.Warn("unauthorized provisioning request")
 		if err := r.publishError(ctx, event, "unauthorized", "requester not in authorized provisioners list"); err != nil {
 			logger.Error("failed to publish provisioning error", "error", err)
@@ -278,12 +276,12 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	// live delivery of the same request cannot race into provisioning.
 	run := &domain.ProvisioningRun{
 		ID:              domain.NewUUID(),
-		RequestID:       event.ID,
+		RequestID:       event.ID.Hex(),
 		AgentID:         req.AgentID,
 		Status:          domain.ProvisioningStatusRunning,
 		CurrentStep:     domain.StepGenerate,
 		Steps:           make([]domain.ProvisioningStepResult, 0, len(domain.ProvisioningSteps)),
-		RequesterPubkey: event.PubKey,
+		RequesterPubkey: event.PubKey.Hex(),
 		DraftRef:        req.DraftRef,
 		DraftEventID:    req.DraftEventID,
 		SpecHash:        req.SpecHash,
@@ -291,12 +289,12 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	}
 
 	r.mu.Lock()
-	if existingRun := r.runs[event.ID]; existingRun != nil && existingRun.Status == domain.ProvisioningStatusRunning {
+	if existingRun := r.runs[event.ID.Hex()]; existingRun != nil && existingRun.Status == domain.ProvisioningStatusRunning {
 		r.mu.Unlock()
 		logger.Info("ignoring duplicate in-flight provisioning request")
 		return
 	}
-	r.runs[event.ID] = run
+	r.runs[event.ID.Hex()] = run
 	r.mu.Unlock()
 
 	// Run provisioning workflow
@@ -382,7 +380,7 @@ func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, 
 
 func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Event, action *domain.SoulAction, message string) error {
 	if action.Initiator == "" {
-		action.Initiator = sourceEvent.PubKey
+		action.Initiator = sourceEvent.PubKey.Hex()
 	}
 	event, err := BuildActionResultEvent(action, "error", map[string]interface{}{"error": message}, ActionResultLegacy)
 	if err != nil {
@@ -413,7 +411,7 @@ func (r *Reactor) PublishSoul(ctx context.Context, soul *domain.AgentSoul) error
 		return fmt.Errorf("sign soul event: %w", err)
 	}
 
-	soul.EventID = event.ID
+	soul.EventID = event.ID.Hex()
 
 	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
@@ -480,19 +478,35 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 		return nil, nil
 	}
 
-	// Query for the soul event using QuerySingle
-	result := r.pool.QuerySingle(ctx, r.config.Relays, nostr.Filter{
-		Kinds:   []int{domain.KindAgentSoul},
-		Tags:    map[string][]string{"d": {agentID}},
-		Authors: []string{r.config.SoulFactoryPubkey},
-		Limit:   1,
-	})
-
-	if result == nil || result.Event == nil {
+	relays := normalizeUsablePublishRelays(r.config.Relays)
+	if len(relays) == 0 {
+		return nil, fmt.Errorf("no Soul Factory relays configured for soul lookup")
+	}
+	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(r.signer), WithRelayBusLogger(r.logger))
+	if err != nil {
+		return nil, err
+	}
+	defer bus.Close()
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)},
+		Tags:  map[string][]string{"d": {agentID}},
+		Limit: 1,
+	}
+	if factoryPubkey := strings.TrimSpace(r.config.SoulFactoryPubkey); factoryPubkey != "" {
+		parsed, err := nostr.PubKeyFromHex(factoryPubkey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Soul Factory pubkey for soul lookup: %w", err)
+		}
+		filter.Authors = []nostr.PubKey{parsed}
+	}
+	events, err := bus.Query(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 || events[0] == nil {
 		return nil, nil
 	}
-
-	return r.parseSoulEvent(result.Event), nil
+	return r.parseSoulEvent(events[0]), nil
 }
 
 func normalizeSoulLookupRef(value string) string {

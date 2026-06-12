@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/adapters/llm"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -234,7 +234,7 @@ func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAd
 func startupTestConfig(mode Mode) *config.Config {
 	cfg := config.Defaults()
 	cfg.Mode = string(mode)
-	cfg.Nostr.PrivateKey = nostr.GeneratePrivateKey()
+	cfg.Nostr.PrivateKey = nostr.Generate().Hex()
 	cfg.Nostr.Relays = nil
 	cfg.Loom.Relays = nil
 	cfg.Reconcile.Enabled = true
@@ -251,10 +251,8 @@ type fakeSoulFactorySigner struct {
 
 func newFakeSoulFactorySigner(t *testing.T) *fakeSoulFactorySigner {
 	t.Helper()
-	secret := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secret)
-	require.NoError(t, err)
-	return &fakeSoulFactorySigner{secret: secret, pubkey: pubkey}
+	secret := nostr.Generate()
+	return &fakeSoulFactorySigner{secret: secret.Hex(), pubkey: secret.Public().Hex()}
 }
 
 func (s *fakeSoulFactorySigner) Connect(context.Context) error {
@@ -272,12 +270,20 @@ func (s *fakeSoulFactorySigner) Close() error {
 }
 
 func (s *fakeSoulFactorySigner) Sign(_ context.Context, event *nostr.Event) error {
-	return event.Sign(s.secret)
+	secret, err := nostr.SecretKeyFromHex(s.secret)
+	if err != nil {
+		return err
+	}
+	return event.Sign(secret)
 }
 
 func (s *fakeSoulFactorySigner) ProvisionAgent(context.Context, string, []int) (string, string, string, error) {
-	npub, err := nip19.EncodePublicKey(s.pubkey)
-	return s.pubkey, npub, "bunker://" + s.pubkey, err
+	pubkey, err := nostr.PubKeyFromHex(s.pubkey)
+	if err != nil {
+		return "", "", "", err
+	}
+	npub := nip19.EncodeNpub(pubkey)
+	return s.pubkey, npub, "bunker://" + s.pubkey, nil
 }
 
 func (s *fakeSoulFactorySigner) RevokeAgent(context.Context, string) error  { return nil }

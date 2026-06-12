@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -104,7 +104,7 @@ func (r *LLMResponder) publish(ctx context.Context, progress bool, intent *domai
 		}
 	}
 	body, _ := json.Marshal(bodyPayload)
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	ev := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.sign(ctx, ev); err != nil {
 		return err
 	}
@@ -125,8 +125,8 @@ func (r *LLMResponder) record(ctx context.Context, ev *nostr.Event, intent *doma
 	if entityID == uuid.Nil {
 		entityID = intent.ID
 	}
-	if _, err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: "llm.provisioning.reply", EntityID: &entityID}); err != nil {
-		r.logger.Warn("failed to record LLM provisioning reply", zap.String("event_id", ev.ID), zap.Error(err))
+	if _, err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID.Hex(), Kind: int(ev.Kind), PubKey: ev.PubKey.Hex(), Content: ev.Content, Tags: tagsJSON, Sig: nostr.HexEncodeToString(ev.Sig[:]), CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: "llm.provisioning.reply", EntityID: &entityID}); err != nil {
+		r.logger.Warn("failed to record LLM provisioning reply", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
 	}
 }
 

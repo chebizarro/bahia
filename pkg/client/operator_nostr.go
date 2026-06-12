@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
-	"github.com/nbd-wtf/go-nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"go.uber.org/zap"
@@ -148,10 +148,11 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 	if signer == nil {
 		return nil, fmt.Errorf("nostr private key is required")
 	}
-	pubkey, err := nostr.GetPublicKey(privateKey)
+	secret, err := nostr.SecretKeyFromHex(privateKey)
 	if err != nil {
-		return nil, fmt.Errorf("derive Nostr public key: %w", err)
+		return nil, fmt.Errorf("parse Nostr private key: %w", err)
 	}
+	pubkey := secret.Public().Hex()
 	relays := normalizeOperatorRelays(cfg.Relays)
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("at least one operator relay is required")
@@ -440,7 +441,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	if err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: err}
 	}
-	event := &nostr.Event{Kind: controlplane.KindContextVMMessage, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	event := &nostr.Event{Kind: nostr.Kind(controlplane.KindContextVMMessage), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	if c.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
@@ -451,11 +452,15 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	}
 
 	filter := nostr.Filter{
-		Kinds: []int{controlplane.KindContextVMMessage},
-		Tags:  nostr.TagMap{"e": []string{event.ID}, "p": []string{c.pubkey}},
+		Kinds: []nostr.Kind{nostr.Kind(controlplane.KindContextVMMessage)},
+		Tags:  nostr.TagMap{"e": []string{event.ID.Hex()}, "p": []string{c.pubkey}},
 	}
 	if c.servicePubkey != "" {
-		filter.Authors = []string{c.servicePubkey}
+		serviceAuthor, err := nostr.PubKeyFromHex(c.servicePubkey)
+		if err != nil {
+			return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: fmt.Errorf("parse service pubkey: %w", err)}
+		}
+		filter.Authors = []nostr.PubKey{serviceAuthor}
 	}
 	filters := []nostr.Filter{filter}
 	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
@@ -522,16 +527,17 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			if !ok {
 				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result")}
 			}
-			if reply == nil || reply.Kind != controlplane.KindContextVMMessage || !validSignedEvent(reply) || !correlatesTo(reply, event.ID, c.pubkey) {
+			if reply == nil || reply.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !validSignedEvent(reply) || !correlatesTo(reply, event.ID.Hex(), c.pubkey) {
 				continue
 			}
-			if c.servicePubkey != "" && reply.PubKey != c.servicePubkey {
+			if c.servicePubkey != "" && reply.PubKey.Hex() != c.servicePubkey {
 				continue
 			}
-			if _, duplicate := seen[reply.ID]; duplicate {
+			replyID := reply.ID.Hex()
+			if _, duplicate := seen[replyID]; duplicate {
 				continue
 			}
-			seen[reply.ID] = struct{}{}
+			seen[replyID] = struct{}{}
 			var rpc contextVMRPCResponse
 			if err := json.Unmarshal([]byte(reply.Content), &rpc); err != nil || rpc.JSONRPC != "2.0" || !contextVMResponseIDMatches(rpc.ID, requestID) {
 				continue
@@ -725,8 +731,7 @@ func validSignedEvent(event *nostr.Event) bool {
 	if createdAt > now+600 || createdAt < now-365*24*60*60 {
 		return false
 	}
-	ok, err := event.CheckSignature()
-	return err == nil && ok
+	return event.VerifySignature()
 }
 
 func correlatesTo(event *nostr.Event, requestID, pubkey string) bool {
@@ -736,8 +741,8 @@ func correlatesTo(event *nostr.Event, requestID, pubkey string) bool {
 func statusEventFromNostr(event *nostr.Event) OperatorStatusEvent {
 	tags := tagMap(event.Tags)
 	return OperatorStatusEvent{
-		Kind:      event.Kind,
-		EventID:   event.ID,
+		Kind:      int(event.Kind),
+		EventID:   event.ID.Hex(),
 		Status:    firstValue(tags, "status"),
 		Step:      firstValue(tags, "step"),
 		Action:    firstValue(tags, "action"),

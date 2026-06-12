@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -93,7 +93,7 @@ func (r *recordingDNSPolicyRepository) Delete(context.Context, uuid.UUID) error 
 
 func TestDNSDriftRemediateHandlerTriggersReconcile(t *testing.T) {
 	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
-	event := &nostr.Event{ID: "dns-remediate", PubKey: pubkey, Kind: KindDNSDriftRemediateRequest, Content: `{"zone":"prod.example"}`}
+	event := &nostr.Event{ID: testNostrID("dns-remediate"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSDriftRemediateRequest), Content: `{"zone":"prod.example"}`}
 
 	reactor.handleDNSDriftRemediate(context.Background(), event)
 
@@ -107,7 +107,7 @@ func TestDNSDriftRemediateHandlerTriggersReconcile(t *testing.T) {
 
 func TestDNSZoneCreateExistingZoneReturnsSuccess(t *testing.T) {
 	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
-	event := &nostr.Event{ID: "dns-zone-create", PubKey: pubkey, Kind: KindDNSZoneCreateRequest, Content: `{"zone":"prod.example"}`}
+	event := &nostr.Event{ID: testNostrID("dns-zone-create"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSZoneCreateRequest), Content: `{"zone":"prod.example"}`}
 
 	reactor.handleDNSZoneCreate(context.Background(), event)
 
@@ -121,7 +121,7 @@ func TestDNSZoneCreateExistingZoneReturnsSuccess(t *testing.T) {
 func TestDNSZoneCreateUnknownZoneReturnsUnsupported(t *testing.T) {
 	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
 	operator.zones = map[string]bool{}
-	event := &nostr.Event{ID: "dns-zone-create-unknown", PubKey: pubkey, Kind: KindDNSZoneCreateRequest, Content: `{"zone":"unknown.example"}`}
+	event := &nostr.Event{ID: testNostrID("dns-zone-create-unknown"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSZoneCreateRequest), Content: `{"zone":"unknown.example"}`}
 
 	reactor.handleDNSZoneCreate(context.Background(), event)
 
@@ -138,7 +138,7 @@ func TestDNSZoneCreatePersistsZoneWhenRepositoryAvailable(t *testing.T) {
 	reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
 	zone := domain.DNSZone{Name: "edge.example", Visibility: domain.ZoneVisibilityEdge, BackendRef: "edge-dns", TTL: 300}
 	content, _ := json.Marshal(zone)
-	event := &nostr.Event{ID: "dns-zone-create-durable", PubKey: pubkey, Kind: KindDNSZoneCreateRequest, Content: string(content)}
+	event := &nostr.Event{ID: testNostrID("dns-zone-create-durable"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSZoneCreateRequest), Content: string(content)}
 
 	reactor.handleDNSZoneCreate(context.Background(), event)
 
@@ -158,7 +158,7 @@ func TestDNSRecordOverridePersistsWithOperatorPubkey(t *testing.T) {
 	reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
 	override := domain.DNSRecordOverride{ZoneName: "prod.example", RecordName: "api", RecordType: domain.DNSRecordTypeA, Value: "192.0.2.10", TTL: 60, Reason: "maintenance drain"}
 	content, _ := json.Marshal(override)
-	event := &nostr.Event{ID: "dns-record-override", PubKey: pubkey, Kind: KindDNSRecordOverrideRequest, Content: string(content)}
+	event := &nostr.Event{ID: testNostrID("dns-record-override"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSRecordOverrideRequest), Content: string(content)}
 
 	reactor.handleDNSRecordOverride(context.Background(), event)
 
@@ -196,7 +196,7 @@ func TestDNSDurableHandlersInvalidPayloadsReturnErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}}
 			reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
-			event := &nostr.Event{ID: "dns-invalid-" + tc.name, PubKey: pubkey, Kind: tc.kind, Content: tc.content}
+			event := &nostr.Event{ID: testNostrID("dns-invalid-" + tc.name), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(tc.kind), Content: tc.content}
 
 			tc.handle(reactor, context.Background(), event)
 
@@ -220,7 +220,7 @@ func TestDNSPolicyApplyValidPayloadPersistsPolicyAndTriggersReconcile(t *testing
 		Enabled: true,
 	}
 	content, _ := json.Marshal(policy)
-	event := &nostr.Event{ID: "dns-policy-apply", PubKey: pubkey, Kind: KindDNSPolicyApplyRequest, Content: string(content)}
+	event := &nostr.Event{ID: testNostrID("dns-policy-apply"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSPolicyApplyRequest), Content: string(content)}
 
 	reactor.handleDNSPolicyApply(context.Background(), event)
 
@@ -251,7 +251,7 @@ func TestDNSPolicyApplyValidPayloadPersistsPolicyAndTriggersReconcile(t *testing
 func TestDNSPolicyApplyInvalidPayloadReturnsValidationError(t *testing.T) {
 	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
 	operator.policyRepo = &recordingDNSPolicyRepository{}
-	event := &nostr.Event{ID: "dns-policy-apply-invalid", PubKey: pubkey, Kind: KindDNSPolicyApplyRequest, Content: `{"name":"invalid","rules":[]}`}
+	event := &nostr.Event{ID: testNostrID("dns-policy-apply-invalid"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSPolicyApplyRequest), Content: `{"name":"invalid","rules":[]}`}
 
 	reactor.handleDNSPolicyApply(context.Background(), event)
 
@@ -275,7 +275,7 @@ func TestDNSUnsupportedHandlersPublishDeterministicResults(t *testing.T) {
 	}
 	for _, tc := range cases {
 		capture.events = nil
-		reactor.handleDNSRequest(context.Background(), &nostr.Event{ID: "dns-unsupported", PubKey: pubkey, Kind: tc.kind, Content: `{}`})
+		reactor.handleDNSRequest(context.Background(), &nostr.Event{ID: testNostrID("dns-unsupported"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(tc.kind), Content: `{}`})
 		result := assertDNSPublishedKind(t, capture.events, tc.resultKind)
 		assertDNSResultStatus(t, result, "failed")
 		assertDNSResultStep(t, result, "unsupported")
@@ -291,14 +291,10 @@ func newDNSHandlerTestReactor(t *testing.T) (*Reactor, *captureNostrPublisher, s
 
 func newDNSHandlerTestReactorWithOperator(t *testing.T, operator DNSControlPlaneOperator) (*Reactor, *captureNostrPublisher, string) {
 	t.Helper()
-	privateKey := nostr.GeneratePrivateKey()
+	privateKey, pubkey := testNostrKeypair()
 	signer, err := NewPrivateKeySigner(privateKey)
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
-	}
-	pubkey, err := nostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("public key: %v", err)
 	}
 	capture := &captureNostrPublisher{published: 1}
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{pubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithDNSOperator(operator))
@@ -310,14 +306,14 @@ func assertDNSPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.
 	legacyKind := strconv.Itoa(kind)
 	if isLegacyDNSObservableKind(kind) {
 		for _, ev := range events {
-			if ev.Kind == kind {
+			if int(ev.Kind) == kind {
 				t.Fatalf("legacy DNS kind %d was published directly; events=%#v", kind, events)
 			}
 		}
 		for _, ev := range events {
 			if tagValueNostr(ev.Tags, "legacy_kind") == legacyKind {
-				if ok, err := ev.CheckSignature(); err != nil || !ok {
-					t.Fatalf("canonical event for legacy kind %d signature invalid: ok=%v err=%v", kind, ok, err)
+				if ok := ev.VerifySignature(); !ok {
+					t.Fatalf("canonical event for legacy kind %d signature invalid", kind)
 				}
 				return ev
 			}
@@ -325,9 +321,9 @@ func assertDNSPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.
 		t.Fatalf("canonical event carrying legacy_kind %d not published; events=%#v", kind, events)
 	}
 	for _, ev := range events {
-		if ev.Kind == kind {
-			if ok, err := ev.CheckSignature(); err != nil || !ok {
-				t.Fatalf("kind %d signature invalid: ok=%v err=%v", kind, ok, err)
+		if int(ev.Kind) == kind {
+			if ok := ev.VerifySignature(); !ok {
+				t.Fatalf("kind %d signature invalid", kind)
 			}
 			return ev
 		}

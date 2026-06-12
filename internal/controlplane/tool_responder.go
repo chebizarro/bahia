@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -93,8 +93,8 @@ func (r *ToolResponder) publishReply(ctx context.Context, requestEvent *nostr.Ev
 	}
 	body, _ := json.Marshal(content)
 	tags := nostr.Tags{
-		{"e", requestEvent.ID, "", "reply"},
-		{"p", requestEvent.PubKey},
+		{"e", requestEvent.ID.Hex(), "", "reply"},
+		{"p", requestEvent.PubKey.Hex()},
 		{"status", status},
 		{"step", step},
 		{"intent", intent.ID.String()},
@@ -121,7 +121,7 @@ func (r *ToolResponder) record(ctx context.Context, ev *nostr.Event, entityType 
 		return
 	}
 	tagsJSON, _ := json.Marshal(ev.Tags)
-	if _, err := r.nostrRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: entityType, EntityID: entityID}); err != nil {
-		r.logger.Warn("failed to record tool provisioning event", zap.String("event_id", ev.ID), zap.Error(err))
+	if _, err := r.nostrRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID.Hex(), Kind: int(ev.Kind), PubKey: ev.PubKey.Hex(), Content: ev.Content, Tags: tagsJSON, Sig: nostr.HexEncodeToString(ev.Sig[:]), CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: entityType, EntityID: entityID}); err != nil {
+		r.logger.Warn("failed to record tool provisioning event", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
 	}
 }

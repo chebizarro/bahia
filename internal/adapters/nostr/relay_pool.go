@@ -848,7 +848,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 				case ev, ok := <-eventsCh:
 					if !ok {
 						// The upstream subscription is over. Drain a CLOSED reason if it is already
-						// available. If go-nostr has marked the subscription context as relay CLOSED,
+						// available. If the relay library has marked the subscription context as relay CLOSED,
 						// keep waiting for the protocol reason instead of racing channel ordering.
 						if closedCh != nil {
 							select {

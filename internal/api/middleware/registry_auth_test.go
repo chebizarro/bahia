@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/openagentsinc/bahia/internal/auth"
@@ -23,9 +23,13 @@ func makeNIP98Token(t *testing.T, method, url string) string {
 		Kind:      27235,
 		Content:   "",
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags: nostr.Tags{{"u", url}, {"method", method}},
+		Tags:      nostr.Tags{{"u", url}, {"method", method}},
 	}
-	if err := ev.Sign(testNIP98Key); err != nil {
+	secret, err := nostr.SecretKeyFromHex(testNIP98Key)
+	if err != nil {
+		t.Fatalf("decode secret key: %v", err)
+	}
+	if err := ev.Sign(secret); err != nil {
 		t.Fatalf("sign: %v", err)
 	}
 	b, _ := json.Marshal(ev)

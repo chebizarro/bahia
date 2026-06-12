@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func TestServiceCommandPublisherPublishesCanonicalServiceCreateRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestServiceCommandPublisherPublishesCanonicalServiceCreateRequest(t *testin
 func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteEvaluateRequests(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteEvaluat
 func TestToolApprovalCommandPublisherPublishesCanonicalApprovalResponse(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestToolApprovalCommandPublisherPublishesCanonicalApprovalResponse(t *testi
 func TestPolicyCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}

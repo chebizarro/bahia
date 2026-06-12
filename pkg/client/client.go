@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -96,7 +96,11 @@ func (p *NIP98PrivateKeyProvider) AuthorizationHeader(ctx context.Context, metho
 		},
 		Content: "",
 	}
-	if err := event.Sign(privateKey); err != nil {
+	secret, err := nostr.SecretKeyFromHex(privateKey)
+	if err != nil {
+		return "", fmt.Errorf("parse Nostr private key: %w", err)
+	}
+	if err := event.Sign(secret); err != nil {
 		return "", fmt.Errorf("sign NIP-98 event: %w", err)
 	}
 	eventJSON, err := json.Marshal(event)
@@ -112,11 +116,11 @@ func (p *NIP98PrivateKeyProvider) PublicKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pubkey, err := nostr.GetPublicKey(privateKey)
+	secret, err := nostr.SecretKeyFromHex(privateKey)
 	if err != nil {
-		return "", fmt.Errorf("derive Nostr public key: %w", err)
+		return "", fmt.Errorf("parse Nostr private key: %w", err)
 	}
-	return pubkey, nil
+	return secret.Public().Hex(), nil
 }
 
 // Npub returns the NIP-19 npub form of the provider's public key.
@@ -125,11 +129,11 @@ func (p *NIP98PrivateKeyProvider) Npub() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	npub, err := nip19.EncodePublicKey(pubkey)
+	parsed, err := nostr.PubKeyFromHex(pubkey)
 	if err != nil {
-		return "", fmt.Errorf("encode npub: %w", err)
+		return "", fmt.Errorf("parse Nostr public key: %w", err)
 	}
-	return npub, nil
+	return nip19.EncodeNpub(parsed), nil
 }
 
 func (p *NIP98PrivateKeyProvider) normalizedPrivateKey() (string, error) {
@@ -160,8 +164,8 @@ func NormalizeNostrPrivateKey(privateKey string) (string, error) {
 	if err != nil || len(decoded) != 32 {
 		return "", fmt.Errorf("nostr private key must be 32 bytes of hex or nsec")
 	}
-	if _, err := nostr.GetPublicKey(key); err != nil {
-		return "", fmt.Errorf("derive Nostr public key: %w", err)
+	if _, err := nostr.SecretKeyFromHex(key); err != nil {
+		return "", fmt.Errorf("parse Nostr private key: %w", err)
 	}
 	return strings.ToLower(key), nil
 }

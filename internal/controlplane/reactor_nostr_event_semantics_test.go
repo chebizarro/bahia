@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -47,17 +47,20 @@ func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
 		Source:        "direct_runtime",
 	}
 
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
 	reactor := newOperatorActionTestReactor(t,
-		Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}},
+		Config{DirectRuntimeAuthorizedPubkeys: []string{operatorPubkey}},
 		capture, nil, &statusCapturingRuntimeStub{
 			obs:           runtimeStub.deployResp,
 			capturedSteps: &capturedSteps,
 		},
 	)
 
+	requestEventID := testNostrID("deploy-step-test")
 	requestEvent := &nostr.Event{
-		ID:      "deploy-step-test",
-		PubKey:  "operator",
+		ID:      requestEventID,
+		PubKey:  testNostrPubKeyFromPrivateKey(t, operatorKey),
 		Kind:    KindServiceAction,
 		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID),
 	}
@@ -82,8 +85,8 @@ func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
 
 	// The first status event should be the initial "executing" step from handleDirectRuntimeActionRequest.
 	first := statusEvents[0]
-	assertReactorTag(t, first.Tags, "e", "deploy-step-test")
-	assertReactorTag(t, first.Tags, "p", "operator")
+	assertReactorTag(t, first.Tags, "e", requestEventID.Hex())
+	assertReactorTag(t, first.Tags, "p", operatorPubkey)
 	assertReactorTag(t, first.Tags, "status", "processing")
 	assertReactorTag(t, first.Tags, "action", "deploy")
 	assertReactorTag(t, first.Tags, "step", "executing")
@@ -91,8 +94,8 @@ func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
 
 	// All status events must have correlation tags.
 	for i, ev := range statusEvents {
-		assertReactorTag(t, ev.Tags, "e", "deploy-step-test")
-		assertReactorTag(t, ev.Tags, "p", "operator")
+		assertReactorTag(t, ev.Tags, "e", requestEventID.Hex())
+		assertReactorTag(t, ev.Tags, "p", operatorPubkey)
 		assertReactorTag(t, ev.Tags, "action", "deploy")
 		foundStep := false
 		for _, tag := range ev.Tags {
@@ -137,15 +140,17 @@ func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 		},
 	}
 
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
 	reactor := newOperatorActionTestReactor(t,
-		Config{DirectRuntimeAuthorizedPubkeys: []string{"op1"}},
+		Config{DirectRuntimeAuthorizedPubkeys: []string{operatorPubkey}},
 		capture, nil, runtimeStub,
 	)
 
-	requestEventID := "request-correlation-test-" + uuid.NewString()[:8]
+	requestEventID := testNostrID("request-correlation-test-" + uuid.NewString()[:8])
 	reactor.handleServiceAction(context.Background(), &nostr.Event{
 		ID:      requestEventID,
-		PubKey:  "op1",
+		PubKey:  testNostrPubKeyFromPrivateKey(t, operatorKey),
 		Kind:    KindServiceAction,
 		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID),
 	})
@@ -163,8 +168,8 @@ func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 	}
 
 	// Verify correlation tags.
-	assertReactorTag(t, result.Tags, "e", requestEventID)
-	assertReactorTag(t, result.Tags, "p", "op1")
+	assertReactorTag(t, result.Tags, "e", requestEventID.Hex())
+	assertReactorTag(t, result.Tags, "p", operatorPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
 	assertReactorTag(t, result.Tags, "action", "deploy")
 	assertReactorTag(t, result.Tags, "service", serviceID.String())
@@ -173,7 +178,7 @@ func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
 
 	// Verify the e tag has the "reply" marker (NIP-10 style).
 	for _, tag := range result.Tags {
-		if len(tag) >= 2 && tag[0] == "e" && tag[1] == requestEventID {
+		if len(tag) >= 2 && tag[0] == "e" && tag[1] == requestEventID.Hex() {
 			if len(tag) < 4 || tag[3] != "reply" {
 				t.Fatalf("e tag missing reply marker: %v", tag)
 			}
@@ -242,8 +247,10 @@ func TestFailurePathsPublishTerminalResults(t *testing.T) {
 			runtimeStub := &stubRuntimeLifecycleOperatorService{}
 			tc.setupErr(runtimeStub)
 
+			operatorKey := nostr.Generate().Hex()
+			operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
 			reactor := newOperatorActionTestReactor(t,
-				Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}},
+				Config{DirectRuntimeAuthorizedPubkeys: []string{operatorPubkey}},
 				capture, nil, runtimeStub,
 			)
 
@@ -253,10 +260,10 @@ func TestFailurePathsPublishTerminalResults(t *testing.T) {
 				content = fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID)
 			}
 
-			requestEventID := tc.action + "-fail-" + uuid.NewString()[:8]
+			requestEventID := testNostrID(tc.action + "-fail-" + uuid.NewString()[:8])
 			reactor.handleServiceAction(context.Background(), &nostr.Event{
 				ID:      requestEventID,
-				PubKey:  "operator",
+				PubKey:  testNostrPubKeyFromPrivateKey(t, operatorKey),
 				Kind:    KindServiceAction,
 				Content: content,
 			})
@@ -280,8 +287,8 @@ func TestFailurePathsPublishTerminalResults(t *testing.T) {
 			}
 
 			// Verify correlation tags on failure result.
-			assertReactorTag(t, result.Tags, "e", requestEventID)
-			assertReactorTag(t, result.Tags, "p", "operator")
+			assertReactorTag(t, result.Tags, "e", requestEventID.Hex())
+			assertReactorTag(t, result.Tags, "p", operatorPubkey)
 			assertReactorTag(t, result.Tags, "status", "failed")
 			assertReactorTag(t, result.Tags, "action", tc.action)
 			assertSignedEvent(t, *result)
@@ -333,8 +340,10 @@ func TestDeployStatusStepProgressionPublishesAllSteps(t *testing.T) {
 		service.DeployStepProjecting,
 	}
 
+	operatorKey := nostr.Generate().Hex()
+	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, operatorKey)
 	reactor := newOperatorActionTestReactor(t,
-		Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}},
+		Config{DirectRuntimeAuthorizedPubkeys: []string{operatorPubkey}},
 		capture, nil, &allStepsRuntimeStub{
 			obs:   &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: envID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
 			steps: expectedSteps,
@@ -342,8 +351,8 @@ func TestDeployStatusStepProgressionPublishesAllSteps(t *testing.T) {
 	)
 
 	reactor.handleServiceAction(context.Background(), &nostr.Event{
-		ID:      "step-progression-test",
-		PubKey:  "operator",
+		ID:      testNostrID("step-progression-test"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, operatorKey),
 		Kind:    KindServiceAction,
 		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID),
 	})

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -123,11 +123,8 @@ func TestHandleLLMRouteCreatePublishesCorrelatedResult(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
 	routeRepo := &mutableLLMRouteRepo{byID: map[uuid.UUID]*domain.LLMRoute{}, byName: map[string]*domain.LLMRoute{}}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, nil, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMRouteCreate, `{"name":"chat-prod","description":"chat completions","gateway_config":{"public_model":"bahia/chat"}}`, nil)
 
@@ -144,7 +141,7 @@ func TestHandleLLMRouteCreatePublishesCorrelatedResult(t *testing.T) {
 		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
 	assertSignedEvent(t, result)
@@ -169,11 +166,8 @@ func TestHandleLLMReleaseRegisterPublishesCorrelatedResult(t *testing.T) {
 	}, byName: map[string]*domain.LLMRoute{}}
 	releaseRepo := &mutableLLMReleaseRepo{byID: map[uuid.UUID]*domain.LLMRelease{}}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMReleaseRegister, `{"version":"v1","model_ref":"hf://example/model","model_source":"huggingface","external_backend":{"base_url":"https://llm.example.com"}}`, nostr.Tags{{"route", routeID.String()}})
 
@@ -190,7 +184,7 @@ func TestHandleLLMReleaseRegisterPublishesCorrelatedResult(t *testing.T) {
 		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
 	assertReactorTag(t, result.Tags, "route", routeID.String())
@@ -223,11 +217,8 @@ func TestHandleLLMDeployRequestPublishesAcceptedStatus(t *testing.T) {
 	intentRepo := &reactorLLMIntentRepo{intents: map[uuid.UUID]*domain.LLMDeploymentIntent{}, order: []uuid.UUID{}}
 	stateRepo := &reactorLLMStateRepo{}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, envRepo, intentRepo, nil, nil, stateRepo, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMDeployRequest, `{}`, nostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}, {"release", releaseID.String()}})
 
@@ -243,7 +234,7 @@ func TestHandleLLMDeployRequestPublishesAcceptedStatus(t *testing.T) {
 	if intent.RequestedBy != requestPubkey {
 		t.Fatalf("requested_by = %q, want requester pubkey %q", intent.RequestedBy, requestPubkey)
 	}
-	if intent.Metadata["nostr_event_id"] != request.ID || intent.Metadata["nostr_request_pubkey"] != requestPubkey {
+	if intent.Metadata["nostr_event_id"] != request.ID.Hex() || intent.Metadata["nostr_request_pubkey"] != requestPubkey {
 		t.Fatalf("missing Nostr metadata: %#v", intent.Metadata)
 	}
 	if len(capture.events) != 1 {
@@ -254,7 +245,7 @@ func TestHandleLLMDeployRequestPublishesAcceptedStatus(t *testing.T) {
 		t.Fatalf("status kind = %d, want %d", status.Kind, KindNIP38Status)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, status.Tags, "e", request.ID)
+	assertReactorTag(t, status.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, status.Tags, "p", requestPubkey)
 	assertReactorTag(t, status.Tags, "status", "processing")
 	assertReactorTag(t, status.Tags, "step", "accepted")
@@ -294,11 +285,8 @@ func TestHandleLLMRollbackRequestPublishesAcceptedStatus(t *testing.T) {
 	}
 	stateRepo := &reactorLLMStateRepo{state: &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &currentIntentID, DriftStatus: domain.DriftStatusInSync}}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, envRepo, intentRepo, nil, nil, stateRepo, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMRollbackRequest, `{}`, nostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}})
 
@@ -314,7 +302,7 @@ func TestHandleLLMRollbackRequestPublishesAcceptedStatus(t *testing.T) {
 	if intent.RequestedBy != requestPubkey {
 		t.Fatalf("requested_by = %q, want requester pubkey %q", intent.RequestedBy, requestPubkey)
 	}
-	if intent.Metadata["nostr_event_id"] != request.ID || intent.Metadata["nostr_request_pubkey"] != requestPubkey {
+	if intent.Metadata["nostr_event_id"] != request.ID.Hex() || intent.Metadata["nostr_request_pubkey"] != requestPubkey {
 		t.Fatalf("missing Nostr metadata: %#v", intent.Metadata)
 	}
 	if len(capture.events) != 1 {
@@ -325,7 +313,7 @@ func TestHandleLLMRollbackRequestPublishesAcceptedStatus(t *testing.T) {
 		t.Fatalf("status kind = %d, want %d", status.Kind, KindNIP38Status)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, status.Tags, "e", request.ID)
+	assertReactorTag(t, status.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, status.Tags, "p", requestPubkey)
 	assertReactorTag(t, status.Tags, "status", "processing")
 	assertReactorTag(t, status.Tags, "step", "accepted")
@@ -361,11 +349,8 @@ func TestHandleLLMDeploymentApprovalApprovesPendingIntent(t *testing.T) {
 	if err := llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
 		t.Fatalf("create intent: %v", err)
 	}
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMDeploymentApproval, `{}`, nostr.Tags{{"intent", intent.ID.String()}, {"decision", "approve"}})
 
@@ -383,7 +368,7 @@ func TestHandleLLMDeploymentApprovalApprovesPendingIntent(t *testing.T) {
 		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
 	assertReactorTag(t, result.Tags, "result", "approve")
@@ -425,11 +410,8 @@ func TestHandleLLMDeploymentApprovalRejectsPendingIntentAndRepairsState(t *testi
 	if err := llmRegistry.CreateDeploymentIntent(ctx, pendingIntent); err != nil {
 		t.Fatalf("create pending intent: %v", err)
 	}
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMDeploymentApproval, `{}`, nostr.Tags{{"intent", pendingIntent.ID.String()}, {"decision", "reject"}})
 
@@ -453,7 +435,7 @@ func TestHandleLLMDeploymentApprovalRejectsPendingIntentAndRepairsState(t *testi
 		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "success")
 	assertReactorTag(t, result.Tags, "result", "reject")
@@ -486,11 +468,8 @@ func TestHandleLLMDeploymentApprovalRejectsInvalidDecision(t *testing.T) {
 	if err := llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
 		t.Fatalf("create intent: %v", err)
 	}
-	requestKey := nostr.GeneratePrivateKey()
-	requestPubkey, err := nostr.GetPublicKey(requestKey)
-	if err != nil {
-		t.Fatalf("request pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
 	request := signedLLMRequest(t, requestKey, KindLLMDeploymentApproval, `{}`, nostr.Tags{{"intent", intent.ID.String()}, {"decision", "later"}})
 
@@ -508,7 +487,7 @@ func TestHandleLLMDeploymentApprovalRejectsInvalidDecision(t *testing.T) {
 		t.Fatalf("result kind = %d, want %d", result.Kind, KindContextVMMessage)
 	}
 	assertNoLegacyStatusResultEvents(t, capture.events)
-	assertReactorTag(t, result.Tags, "e", request.ID)
+	assertReactorTag(t, result.Tags, "e", request.ID.Hex())
 	assertReactorTag(t, result.Tags, "p", requestPubkey)
 	assertReactorTag(t, result.Tags, "status", "error")
 	assertReactorTag(t, result.Tags, "step", "validation_error")
@@ -526,7 +505,7 @@ func TestHandleLLMDeploymentApprovalRejectsInvalidDecision(t *testing.T) {
 
 func newLLMRequestTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, llmRegistry *service.LLMRegistryService) *Reactor {
 	t.Helper()
-	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
@@ -535,8 +514,8 @@ func newLLMRequestTestReactor(t *testing.T, cfg Config, capture *captureNostrPub
 
 func signedLLMRequest(t *testing.T, privateKey string, kind int, content string, tags nostr.Tags) *nostr.Event {
 	t.Helper()
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: content}
-	if err := event.Sign(privateKey); err != nil {
+	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: tags, Content: content}
+	if err := event.Sign(testNostrSecretKey(t, privateKey)); err != nil {
 		t.Fatalf("sign request event: %v", err)
 	}
 	return event

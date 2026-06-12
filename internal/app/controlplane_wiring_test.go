@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -103,7 +103,7 @@ type appWiringBackupMCPPublisher struct{}
 func (appWiringBackupMCPPublisher) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
 
 func TestConfigurePolicyToolMCPDepsWiresSignerFirstPublishers(t *testing.T) {
-	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	require.NoError(t, err)
 	deps := mcp.ServerDeps{}
 
@@ -115,7 +115,7 @@ func TestConfigurePolicyToolMCPDepsWiresSignerFirstPublishers(t *testing.T) {
 }
 
 func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testing.T) {
-	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	require.NoError(t, err)
 
 	for _, tt := range []struct {
@@ -141,7 +141,7 @@ func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testi
 func TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels(t *testing.T) {
 	var _ mcp.BackupReadModelRepository = (*repository.PgBackupControlPlaneRepository)(nil)
 
-	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	require.NoError(t, err)
 	readModels := repository.NewPgBackupControlPlaneRepository(nil)
 	deps := mcp.ServerDeps{}

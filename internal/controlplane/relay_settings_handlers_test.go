@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -35,7 +35,7 @@ func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
 	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
-	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 
 	params := RelayPolicyState{
 		BrowserRelays:   []string{"wss://browser.example", "wss://browser.example"},
@@ -55,7 +55,7 @@ func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
 		}}},
 	}
 	raw, _ := json.Marshal(params)
-	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: raw}})
 	if err != nil {
 		t.Fatalf("ApplyPolicy error: %v", err)
 	}
@@ -105,15 +105,13 @@ func TestRelaySettingsApplyDoesNotMutateRuntimeConfig(t *testing.T) {
 	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
-	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
-
 	params := RelayPolicyState{
 		BrowserRelays:   []string{"wss://updated-browser.example"},
 		ContextVMRelays: []string{"wss://updated-contextvm.example"},
 		ServiceRelays:   []string{"wss://updated-service.example"},
 	}
 	raw, _ := json.Marshal(params)
-	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: raw}})
 	if err != nil {
 		t.Fatalf("ApplyPolicy error: %v", err)
 	}
@@ -153,8 +151,7 @@ func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
 			h.publisher = publisher
 			h.signer = signer
-			requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
-			_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: []byte(tc.policy)}})
+			_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: []byte(tc.policy)}})
 			if err == nil {
 				t.Fatalf("expected validation error")
 			}
@@ -171,8 +168,7 @@ func TestRelaySettingsGetPolicyDoesNotPublishMutationState(t *testing.T) {
 	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{Nostr: config.NostrConfig{BrowserRelays: []string{"wss://browser.example"}}}, Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
-	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
-	result, err := h.GetPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}})
+	result, err := h.GetPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}})
 	if err != nil {
 		t.Fatalf("GetPolicy error: %v", err)
 	}
@@ -187,7 +183,7 @@ func TestRelaySettingsGetPolicyDoesNotPublishMutationState(t *testing.T) {
 func TestRelayAdminCallRequiresConfiguredAuthorizedTarget(t *testing.T) {
 	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, AdminClient: &fakeRelayAdminClient{}, Logger: zap.NewNop()})
 	raw := []byte(`{"target_ref":"public","method":"supportedmethods"}`)
-	_, err := h.CallRelayAdmin(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: "requester"}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	_, err := h.CallRelayAdmin(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: raw}})
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("error = %v, want configured target rejection", err)
 	}
@@ -196,7 +192,7 @@ func TestRelayAdminCallRequiresConfiguredAuthorizedTarget(t *testing.T) {
 func TestRelayAdminCallUsesConfiguredNIP86Client(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	signer, _ := NewPrivateKeySigner(testServiceKey)
-	requesterPubkey, _ := nostr.GetPublicKey(testRequesterKey)
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	admin := &fakeRelayAdminClient{}
 	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{Nostr: config.NostrConfig{RelayAdministration: config.RelayAdministrationConfig{Enabled: true, Targets: []config.RelayAdministrationTarget{{
 		Ref:                  "sidecar",
@@ -207,7 +203,7 @@ func TestRelayAdminCallUsesConfiguredNIP86Client(t *testing.T) {
 	h.publisher = publisher
 	h.signer = signer
 	raw := []byte(`{"target_ref":"sidecar","method":"allowpubkey","params":["` + requesterPubkey + `","operator requested"]}`)
-	_, err := h.CallRelayAdmin(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: requesterPubkey}, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	_, err := h.CallRelayAdmin(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: raw}})
 	if err != nil {
 		t.Fatalf("CallRelayAdmin error: %v", err)
 	}

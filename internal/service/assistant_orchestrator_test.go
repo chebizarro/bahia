@@ -2,16 +2,16 @@ package service
 
 import (
 	"context"
-	"encoding/hex"
+	"crypto/sha256"
 	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
-	"github.com/nbd-wtf/go-nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -114,7 +114,7 @@ func TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting(t *testi
 		t.Fatalf("tool invocations before downstream result = %d, want 1", got)
 	}
 
-	subscriber.publishResult(&nostr.Event{ID: "result-1", Kind: 7961, Tags: nostr.Tags{{"e", "downstream-1"}, {"status", "completed"}}, Content: `{"status":"completed"}`})
+	subscriber.publishResult(assistantSignedResultEvent(t, "result-1", 7961, "downstream-1", "completed"))
 
 	first := waitApprovalResult(t, firstDone)
 	if first.err != nil {
@@ -122,6 +122,15 @@ func TestAssistantOrchestratorSuppressesDuplicateApprovalWhileExecuting(t *testi
 	}
 	if got := invoker.callCount(); got != 1 {
 		t.Fatalf("tool invocations after downstream result = %d, want 1", got)
+	}
+}
+
+func TestDownstreamResultMatchesReceiptRejectsWrongCorrelation(t *testing.T) {
+	receipt := &domain.AsyncToolReceipt{RequestEventID: "downstream-1", ResultKinds: []int{7961}}
+	event := assistantSignedResultEvent(t, "result-wrong-correlation", 7961, "other-request", "completed")
+
+	if downstreamResultMatchesReceipt(event, receipt) {
+		t.Fatal("downstreamResultMatchesReceipt accepted terminal event with wrong #e correlation")
 	}
 }
 
@@ -335,7 +344,7 @@ func assistantPromptRequest(sessionID, turnID, prompt string) domain.AssistantPr
 
 func assistantPromptSource(sessionID, turnID string) AssistantRequestSource {
 	id := "prompt-" + turnID
-	return AssistantRequestSource{Event: &nostr.Event{ID: id, PubKey: "operator", Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-turn:" + sessionID + ":" + turnID}
+	return AssistantRequestSource{Event: &nostr.Event{ID: assistantTestID(id), PubKey: assistantTestPubKey("operator"), Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-turn:" + sessionID + ":" + turnID}
 }
 
 func assistantApprovalRequest(sessionID, planHash, decision string) domain.AssistantApprovalRequest {
@@ -344,18 +353,38 @@ func assistantApprovalRequest(sessionID, planHash, decision string) domain.Assis
 
 func assistantApprovalSource(sessionID, suffix string) AssistantRequestSource {
 	id := "approval-" + suffix
-	return AssistantRequestSource{Event: &nostr.Event{ID: id, PubKey: "operator", Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-approval:" + sessionID + ":" + suffix}
+	return AssistantRequestSource{Event: &nostr.Event{ID: assistantTestID(id), PubKey: assistantTestPubKey("operator"), Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-approval:" + sessionID + ":" + suffix}
 }
 
 func testAssistantSigner(t *testing.T) canonicalnostr.Signer {
 	t.Helper()
-	decoded, err := hex.DecodeString(nostr.GeneratePrivateKey())
-	if err != nil {
-		t.Fatalf("decode private key: %v", err)
+	secret := nostr.Generate()
+	return keyer.NewPlainKeySigner([32]byte(secret))
+}
+
+func assistantTestID(label string) nostr.ID {
+	sum := sha256.Sum256([]byte(label))
+	return nostr.ID(sum)
+}
+
+func assistantSignedResultEvent(t *testing.T, label string, kind int, requestEventID string, status string) *nostr.Event {
+	t.Helper()
+	secret := nostr.Generate()
+	event := &nostr.Event{
+		Kind:      nostr.Kind(kind),
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{{"e", requestEventID}, {"status", status}},
+		Content:   `{"status":"` + status + `"}`,
 	}
-	var secret [32]byte
-	copy(secret[:], decoded)
-	return keyer.NewPlainKeySigner(secret)
+	if err := event.Sign(secret); err != nil {
+		t.Fatalf("sign %s result event: %v", label, err)
+	}
+	return event
+}
+
+func assistantTestPubKey(label string) nostr.PubKey {
+	sum := sha256.Sum256([]byte(label))
+	return nostr.PubKey(sum)
 }
 
 type assistantTestChatClient struct{ plan *domain.AssistantPlan }
@@ -387,7 +416,7 @@ func (p *assistantTestPublisher) eventsOfKind(kind int) []nostr.Event {
 	defer p.mu.Unlock()
 	out := make([]nostr.Event, 0)
 	for _, ev := range p.events {
-		if ev.Kind == kind {
+		if ev.Kind == nostr.Kind(kind) {
 			out = append(out, ev)
 		}
 	}

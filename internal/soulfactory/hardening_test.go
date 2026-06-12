@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -28,23 +28,24 @@ type fakeSigner struct {
 
 func newFakeSigner(t *testing.T) fakeSigner {
 	t.Helper()
-	secret := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(secret)
-	if err != nil {
-		t.Fatalf("get public key: %v", err)
-	}
-	return fakeSigner{secret: secret, pubkey: pubkey}
+	secret := nostr.Generate()
+	return fakeSigner{secret: secret.Hex(), pubkey: secret.Public().Hex()}
 }
 
 func (s fakeSigner) Sign(ctx context.Context, event *nostr.Event) error {
-	return event.Sign(s.secret)
+	secret, err := nostr.SecretKeyFromHex(s.secret)
+	if err != nil {
+		return err
+	}
+	return event.Sign(secret)
 }
 
 func (s fakeSigner) ProvisionAgent(ctx context.Context, agentID string, allowedKinds []int) (pubkey, npub, bunkerURI string, err error) {
-	npub, err = nip19.EncodePublicKey(s.pubkey)
+	pubkeyValue, err := nostr.PubKeyFromHex(s.pubkey)
 	if err != nil {
 		return "", "", "", err
 	}
+	npub = nip19.EncodeNpub(pubkeyValue)
 	return s.pubkey, npub, "bunker://test", nil
 }
 
@@ -64,10 +65,10 @@ func TestDefaultReactorProvisioningFailsClosed(t *testing.T) {
 func TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine(t *testing.T) {
 	signer := newFakeSigner(t)
 	reactor := NewReactor(Config{
-		Relays:            []string{"wss://relay.example"},
 		AuthorizedPubkeys: []string{signer.pubkey},
 		SoulFactoryPubkey: signer.pubkey,
 	}, fakeGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "no-engine", nostr.Tags{{"agent-id", "agent"}}, `{"brief":"brief"}`)
 
@@ -98,7 +99,7 @@ func TestFullProvisionerSkipsUnconfiguredOptionalSteps(t *testing.T) {
 	reactor.provisioner = full
 	run := &domain.ProvisioningRun{
 		ID:              domain.NewUUID(),
-		RequestID:       "request",
+		RequestID:       soulTestID("request").Hex(),
 		RequesterPubkey: newFakeSigner(t).pubkey,
 		Steps:           []domain.ProvisioningStepResult{},
 	}

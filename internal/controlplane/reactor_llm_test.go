@@ -3,8 +3,8 @@ package controlplane
 import (
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -14,8 +14,8 @@ func TestAppendLLMRequestTagsAddsContentAndTagCorrelation(t *testing.T) {
 	releaseID := uuid.New()
 	intentID := uuid.New()
 	request := &nostr.Event{
-		ID:      "llm-request",
-		PubKey:  "requester",
+		ID:      testNostrID("llm-request"),
+		PubKey:  testNostrPubKeyFromPrivateKey(t, nostr.Generate().Hex()),
 		Kind:    KindLLMDeployRequest,
 		Content: `{"route_id":"` + routeID.String() + `","environment_id":"` + envID.String() + `","release_id":"` + releaseID.String() + `"}`,
 		Tags:    nostr.Tags{{"intent", intentID.String()}},

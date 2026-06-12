@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nbd-wtf/go-nostr"
 	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
@@ -43,8 +44,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/docs"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/nostrmigration"
 	"github.com/openagentsinc/bahia/internal/notifications"
@@ -256,7 +257,7 @@ func New(cfg *config.Config) (*App, error) {
 	var continuityProjectionPublisher service.ContinuityNostrPublishFunc
 	if controlPlanePool != nil && controlPlaneSigner != nil {
 		continuityProjectionPublisher = func(ctx context.Context, kind int, tags nostr.Tags, content string) error {
-			ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: content}
+			ev := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: tags, Content: content}
 			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, ev); err != nil {
 				return fmt.Errorf("sign continuity projection event: %w", err)
 			}
@@ -410,7 +411,9 @@ func New(cfg *config.Config) (*App, error) {
 
 	servicePubkey := ""
 	if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-		servicePubkey, _ = nostr.GetPublicKey(cfg.Nostr.PrivateKey)
+		if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
+			servicePubkey = secret.Public().Hex()
+		}
 	}
 	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
 		RequestedTier:       int(policy.RequestedTier),
@@ -807,7 +810,9 @@ func New(cfg *config.Config) (*App, error) {
 		})
 		servicePubkey := ""
 		if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-			servicePubkey, _ = nostr.GetPublicKey(cfg.Nostr.PrivateKey)
+			if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
+				servicePubkey = secret.Public().Hex()
+			}
 		}
 		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, Logger: slog.Default()}), RunnerTier(Tier3))
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey))
@@ -999,8 +1004,8 @@ func New(cfg *config.Config) (*App, error) {
 			MLCommands:       mlCommandPublisher,
 			LLMRegistry:      llmRegistry,
 
-			HealthProvider:   healthProvider,
-			ModePolicy:       policy,
+			HealthProvider: healthProvider,
+			ModePolicy:     policy,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -2189,10 +2194,10 @@ func (p *auditedNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (in
 		tagsJSON, marshalErr := json.Marshal(ev.Tags)
 		if marshalErr != nil {
 			if p.logger != nil {
-				p.logger.Warn("failed to marshal audited assistant event tags", zap.String("event_id", ev.ID), zap.Error(marshalErr))
+				p.logger.Warn("failed to marshal audited assistant event tags", zap.String("event_id", ev.ID.Hex()), zap.Error(marshalErr))
 			}
-		} else if _, recordErr := p.repo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC()}); recordErr != nil && p.logger != nil {
-			p.logger.Warn("failed to audit assistant event", zap.String("event_id", ev.ID), zap.Error(recordErr))
+		} else if _, recordErr := p.repo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID.Hex(), Kind: int(ev.Kind), PubKey: ev.PubKey.Hex(), Content: ev.Content, Tags: tagsJSON, Sig: hex.EncodeToString(ev.Sig[:]), CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC()}); recordErr != nil && p.logger != nil {
+			p.logger.Warn("failed to audit assistant event", zap.String("event_id", ev.ID.Hex()), zap.Error(recordErr))
 		}
 	}
 	return published, err
@@ -2268,8 +2273,8 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.Assista
 			add(pubkey)
 		}
 		if cfg.Assistant.Enabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-			if pubkey, err := nostr.GetPublicKey(cfg.Nostr.PrivateKey); err == nil {
-				add(pubkey)
+			if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
+				add(secret.Public().Hex())
 			}
 		}
 	}
@@ -2293,8 +2298,8 @@ func assistantToolNames(server *mcp.Server) []string {
 func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) service.AssistantIdentity {
 	identity := service.AssistantIdentity{AgentID: soulfactory.OperatorAssistantAgentID}
 	if cfg != nil && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-		if pubkey, err := nostr.GetPublicKey(cfg.Nostr.PrivateKey); err == nil {
-			identity.Pubkey = pubkey
+		if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
+			identity.Pubkey = secret.Public().Hex()
 		}
 	}
 	if cfg == nil || (!cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
@@ -2410,9 +2415,13 @@ func newDocsRelayQuerier(pool *nostrAdapter.RelayPool, pubkey string, logger *za
 		queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
+		parsedPubkey, err := nostr.PubKeyFromHex(pubkey)
+		if err != nil {
+			return nil, fmt.Errorf("parse docs author pubkey: %w", err)
+		}
 		filter := nostr.Filter{
-			Kinds:   []int{kinds.LongFormContent},
-			Authors: []string{pubkey},
+			Kinds:   []nostr.Kind{nostr.Kind(kinds.LongFormContent)},
+			Authors: []nostr.PubKey{parsedPubkey},
 			Tags: nostr.TagMap{
 				"t": []string{"bahia-docs"},
 			},

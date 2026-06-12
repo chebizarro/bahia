@@ -8,14 +8,14 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
 func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesContextVMProgressResultDedup(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	artifactID := "artifact-1"
@@ -71,13 +71,13 @@ func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesContextVMProgress
 	assertTagValue(t, published.Tags, "method", "service/action")
 	assertTagValue(t, published.Tags, controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion)
 	filter := transport.onlyFilter(t)
-	if got := filter.Kinds; len(got) != 1 || got[0] != controlplane.KindContextVMMessage {
+	if got := filter.Kinds; len(got) != 1 || got[0] != nostr.Kind(controlplane.KindContextVMMessage) {
 		t.Fatalf("filter kinds = %#v, want ContextVM kind", got)
 	}
-	if got := filter.Tags["e"]; len(got) != 1 || got[0] != published.ID {
+	if got := filter.Tags["e"]; len(got) != 1 || got[0] != published.ID.Hex() {
 		t.Fatalf("filter #e = %#v, want request id %s", got, published.ID)
 	}
-	if got := filter.Tags["p"]; len(got) != 1 || got[0] != published.PubKey {
+	if got := filter.Tags["p"]; len(got) != 1 || got[0] != published.PubKey.Hex() {
 		t.Fatalf("filter #p = %#v, want requester pubkey %s", got, published.PubKey)
 	}
 }
@@ -95,8 +95,8 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			requestKey := nostr.GeneratePrivateKey()
-			replyKey := nostr.GeneratePrivateKey()
+			requestKey := nostr.Generate().Hex()
+			replyKey := nostr.Generate().Hex()
 			transport := newFakeOperatorTransport()
 			client := newTestOperatorClient(t, requestKey, transport)
 			transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -126,17 +126,14 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 }
 
 func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
-	servicePubkey, err := nostr.GetPublicKey(replyKey)
-	if err != nil {
-		t.Fatalf("service pubkey: %v", err)
-	}
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	servicePubkey := mustOperatorTestPubKey(t, replyKey)
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.servicePubkey = servicePubkey
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedContextVMResult(t, nostr.GeneratePrivateKey(), ev, map[string]any{"action": "spoofed"})
+		transport.events <- signedContextVMResult(t, nostr.Generate().Hex(), ev, map[string]any{"action": "spoofed"})
 		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 		return 1, nil
 	}
@@ -146,14 +143,14 @@ func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
 	published := transport.onlyPublished(t)
 	assertTagValue(t, published.Tags, "p", servicePubkey)
 	filter := transport.onlyFilter(t)
-	if got := filter.Authors; len(got) != 1 || got[0] != servicePubkey {
+	if got := filter.Authors; len(got) != 1 || got[0].Hex() != servicePubkey {
 		t.Fatalf("filter authors = %#v, want service pubkey", got)
 	}
 }
 
 func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateContextVMReplies(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -162,11 +159,11 @@ func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateContextVMReplies(t *testi
 		transport.events <- invalid
 		future := signedContextVMResult(t, replyKey, ev, map[string]any{"action": "future"})
 		future.CreatedAt = nostr.Timestamp(int64(nostr.Now()) + 601)
-		if err := future.Sign(replyKey); err != nil {
+		if err := future.Sign(mustOperatorTestSecret(t, replyKey)); err != nil {
 			t.Fatalf("sign future reply: %v", err)
 		}
 		transport.events <- future
-		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", "different", "", "reply"}, {"p", ev.PubKey}}, contextVMResponseContent(t, ev, map[string]any{"action": "restart"}))
+		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", "different", "", "reply"}, {"p", ev.PubKey.Hex()}}, contextVMResponseContent(t, ev, map[string]any{"action": "restart"}))
 		good := signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 		transport.events <- good
 		transport.events <- good
@@ -182,8 +179,8 @@ func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateContextVMReplies(t *testi
 }
 
 func TestOperatorRuntimeTerminalFailure(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -224,8 +221,8 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			requestKey := nostr.GeneratePrivateKey()
-			replyKey := nostr.GeneratePrivateKey()
+			requestKey := nostr.Generate().Hex()
+			replyKey := nostr.Generate().Hex()
 			transport := newFakeOperatorTransport()
 			client := newTestOperatorClient(t, requestKey, transport)
 			transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -256,8 +253,8 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 }
 
 func TestOperatorAdoptionErrorEnvelope(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -271,8 +268,8 @@ func TestOperatorAdoptionErrorEnvelope(t *testing.T) {
 }
 
 func TestOperatorContextVMErrorIsPostAcceptanceFailure(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -287,7 +284,7 @@ func TestOperatorContextVMErrorIsPostAcceptanceFailure(t *testing.T) {
 }
 
 func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -310,7 +307,7 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 }
 
 func TestOperatorReplySubscriptionClosedAfterPublishIsPostAcceptanceFailure(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -332,7 +329,7 @@ func TestOperatorReplySubscriptionClosedAfterPublishIsPostAcceptanceFailure(t *t
 }
 
 func TestOperatorPublishNoRelayAcceptedIsPreAcceptanceFailure(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
@@ -352,7 +349,7 @@ func TestOperatorPublishNoRelayAcceptedIsPreAcceptanceFailure(t *testing.T) {
 }
 
 func TestOperatorPublishOKFalseAuthRequiredPreservesPreAcceptanceReason(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishResultsFn = func(ctx context.Context, ev nostr.Event) ([]nostrpool.PublishResult, error) {
@@ -377,8 +374,8 @@ func TestOperatorPublishOKFalseAuthRequiredPreservesPreAcceptanceReason(t *testi
 }
 
 func TestOperatorReplyAuthClosedAuthenticatesAndResubscribesWithoutRepublish(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.relays = []string{"wss://auth.example"}
@@ -415,8 +412,8 @@ func TestOperatorReplyAuthClosedAuthenticatesAndResubscribesWithoutRepublish(t *
 }
 
 func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
-	replyKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.relays = []string{"wss://auth.example", "wss://open.example"}
@@ -436,7 +433,7 @@ func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testi
 }
 
 func TestOperatorReplyClosedAllRelaysAfterPublishIsPostAcceptanceFailure(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.relays = []string{"wss://auth.example", "wss://closed.example"}
@@ -460,7 +457,7 @@ func TestOperatorReplyClosedAllRelaysAfterPublishIsPostAcceptanceFailure(t *test
 }
 
 func TestOperatorSubscribeFailureIsPreAcceptanceFailure(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	transport.subscribeErr = errors.New("subscription unavailable")
 	client := newTestOperatorClient(t, requestKey, transport)
@@ -475,7 +472,7 @@ func TestOperatorSubscribeFailureIsPreAcceptanceFailure(t *testing.T) {
 }
 
 func TestOperatorAdoptionRejectsDockerHostBeforePublish(t *testing.T) {
-	requestKey := nostr.GeneratePrivateKey()
+	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	_, err := client.ScanAdoptionNostr(context.Background(), AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: "unix:///var/run/docker.sock"}}}, nil)
@@ -585,6 +582,20 @@ func (f *fakeOperatorTransport) onlyFilter(t *testing.T) nostr.Filter {
 	return f.filters[0]
 }
 
+func mustOperatorTestSecret(t *testing.T, privateKey string) nostr.SecretKey {
+	t.Helper()
+	secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(privateKey))
+	if err != nil {
+		t.Fatalf("parse nostr private key: %v", err)
+	}
+	return secret
+}
+
+func mustOperatorTestPubKey(t *testing.T, privateKey string) string {
+	t.Helper()
+	return mustOperatorTestSecret(t, privateKey).Public().Hex()
+}
+
 func newTestOperatorClient(t *testing.T, privateKey string, transport operatorRelayTransport) *OperatorControlPlaneClient {
 	t.Helper()
 	normalized, err := NormalizeNostrPrivateKey(privateKey)
@@ -595,10 +606,7 @@ func newTestOperatorClient(t *testing.T, privateKey string, transport operatorRe
 	if err != nil {
 		t.Fatalf("NewPrivateKeySigner() error = %v", err)
 	}
-	pubkey, err := nostr.GetPublicKey(normalized)
-	if err != nil {
-		t.Fatalf("GetPublicKey() error = %v", err)
-	}
+	pubkey := mustOperatorTestPubKey(t, normalized)
 	return &OperatorControlPlaneClient{relays: []string{"wss://relay.example"}, privateKey: normalized, signer: signer, pubkey: pubkey, transport: transport}
 }
 
@@ -613,7 +621,7 @@ func decodePublishedContextVMRequest(t *testing.T, event nostr.Event) contextVMR
 
 func signedContextVMResult(t *testing.T, privateKey string, request nostr.Event, result any) *nostr.Event {
 	t.Helper()
-	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID, "", "reply"}, {"p", request.PubKey}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, contextVMResponseContent(t, request, result))
+	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID.Hex(), "", "reply"}, {"p", request.PubKey.Hex()}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, contextVMResponseContent(t, request, result))
 }
 
 func signedContextVMError(t *testing.T, privateKey string, request nostr.Event, message string) *nostr.Event {
@@ -623,7 +631,7 @@ func signedContextVMError(t *testing.T, privateKey string, request nostr.Event, 
 	if err != nil {
 		t.Fatalf("encode ContextVM error: %v", err)
 	}
-	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID, "", "reply"}, {"p", request.PubKey}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, string(body))
+	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID.Hex(), "", "reply"}, {"p", request.PubKey.Hex()}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, string(body))
 }
 
 func contextVMResponseContent(t *testing.T, request nostr.Event, result any) string {
@@ -642,8 +650,8 @@ func contextVMResponseContent(t *testing.T, request nostr.Event, result any) str
 
 func signedOperatorReply(t *testing.T, privateKey string, kind int, tags nostr.Tags, content string) *nostr.Event {
 	t.Helper()
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: content}
-	if err := event.Sign(privateKey); err != nil {
+	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: tags, Content: content}
+	if err := event.Sign(mustOperatorTestSecret(t, privateKey)); err != nil {
 		t.Fatalf("sign reply event: %v", err)
 	}
 	return event
@@ -654,9 +662,8 @@ func assertSignedEvent(t *testing.T, event nostr.Event) {
 	if !event.CheckID() {
 		t.Fatalf("event ID does not match serialized event: %#v", event)
 	}
-	ok, err := event.CheckSignature()
-	if err != nil || !ok {
-		t.Fatalf("event signature ok = %v, err = %v", ok, err)
+	if !event.VerifySignature() {
+		t.Fatalf("event signature invalid")
 	}
 }
 

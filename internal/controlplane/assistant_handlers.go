@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -36,7 +36,7 @@ func (a assistantContextVMAdapter) handlePrompt(ctx context.Context, request Con
 	if strings.TrimSpace(payload.SessionID) == "" || strings.TrimSpace(payload.TurnID) == "" || strings.TrimSpace(payload.Prompt) == "" {
 		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "prompt request requires session_id, turn_id, and prompt", "error": "prompt request requires session_id, turn_id, and prompt"}, nil
 	}
-	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey) {
+	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey.Hex()) {
 		return service.AssistantOperationResult{"status": "failed", "step": "unauthorized_participant", "session_id": payload.SessionID, "summary": "requester is not a participant in this assistant session", "error": "requester is not a participant in this assistant session"}, nil
 	}
 	return a.orchestrator.HandlePromptRequest(ctx, assistantSourceFromContextVM(request), payload)
@@ -54,7 +54,7 @@ func (a assistantContextVMAdapter) handleApproval(ctx context.Context, request C
 	if payload.Decision != "approve" && payload.Decision != "reject" && payload.Decision != "cancel" {
 		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "decision must be approve, reject, or cancel", "error": "decision must be approve, reject, or cancel"}, nil
 	}
-	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey) {
+	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey.Hex()) {
 		return service.AssistantOperationResult{"status": "failed", "step": "unauthorized_participant", "session_id": payload.SessionID, "summary": "requester is not a participant in this assistant session", "error": "requester is not a participant in this assistant session"}, nil
 	}
 	return a.orchestrator.HandleApprovalRequest(ctx, assistantSourceFromContextVM(request), payload)
@@ -63,12 +63,12 @@ func (a assistantContextVMAdapter) handleApproval(ctx context.Context, request C
 func assistantSourceFromContextVM(request ContextVMRequest) service.AssistantRequestSource {
 	dedupKey := strings.TrimSpace(request.ProgressToken)
 	if dedupKey == "" && request.Event != nil {
-		dedupKey = request.Event.ID
+		dedupKey = request.Event.ID.Hex()
 	}
 	source := service.AssistantRequestSource{Event: request.Event, DedupKey: dedupKey}
 	if request.Event != nil {
-		source.OperatorPubkey = request.Event.PubKey
-		source.RequestID = request.Event.ID
+		source.OperatorPubkey = request.Event.PubKey.Hex()
+		source.RequestID = request.Event.ID.Hex()
 	}
 	return source
 }

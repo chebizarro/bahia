@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	pkgclient "github.com/openagentsinc/bahia/pkg/client"
 )
@@ -43,7 +43,11 @@ type staticSoulSigner struct {
 }
 
 func (s staticSoulSigner) Sign(_ context.Context, event *nostr.Event) error {
-	return event.Sign(s.privateKey)
+	secret, err := nostr.SecretKeyFromHex(s.privateKey)
+	if err != nil {
+		return fmt.Errorf("parse soul factory private key: %w", err)
+	}
+	return event.Sign(secret)
 }
 
 type soulClientSigner interface {
@@ -106,7 +110,7 @@ func (c *NostrClient) ListSouls(ctx context.Context, limit int, status string) (
 	if limit <= 0 {
 		limit = 50
 	}
-	filters := []nostr.Filter{{Kinds: []int{domain.KindAgentSoul}, Limit: limit}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Limit: limit}}
 	events, err := c.collectEvents(ctx, filters)
 	if err != nil {
 		return nil, err
@@ -120,7 +124,7 @@ func (c *NostrClient) ListSouls(ctx context.Context, limit int, status string) (
 		if status != "" && string(soul.Status) != status {
 			continue
 		}
-		key := soulKey(soul.AgentID, ev.PubKey)
+		key := soulKey(soul.AgentID, ev.PubKey.Hex())
 		current, ok := latest[key]
 		if !ok || soul.CreatedAt.After(current.CreatedAt) {
 			latest[key] = *soul
@@ -139,7 +143,7 @@ func (c *NostrClient) GetSoul(ctx context.Context, agentID string) (*domain.Agen
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id is required")
 	}
-	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []int{domain.KindAgentSoul}, Tags: nostr.TagMap{"d": []string{agentID}}, Limit: 10}})
+	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Tags: nostr.TagMap{"d": []string{agentID}}, Limit: 10}})
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +164,7 @@ func (c *NostrClient) ListTemplates(ctx context.Context, limit int, tier string)
 	if limit <= 0 {
 		limit = 50
 	}
-	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []int{domain.KindSoulTemplate}, Limit: limit}})
+	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulTemplate)}, Limit: limit}})
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +177,7 @@ func (c *NostrClient) ListTemplates(ctx context.Context, limit int, tier string)
 		if tier != "" && string(template.Tier) != tier {
 			continue
 		}
-		key := soulKey(template.Identifier, ev.PubKey)
+		key := soulKey(template.Identifier, ev.PubKey.Hex())
 		current, ok := latest[key]
 		if !ok || template.UpdatedAt.After(current.UpdatedAt) {
 			latest[key] = *template
@@ -249,7 +253,7 @@ func (c *NostrClient) PublishProvisionRequest(ctx context.Context, req domain.Pr
 	if err != nil {
 		return nil, err
 	}
-	event := &nostr.Event{Kind: domain.KindProvisioningRequest, CreatedAt: now, Tags: tags, Content: string(content)}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindProvisioningRequest), CreatedAt: now, Tags: tags, Content: string(content)}
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign provisioning request: %w", err)
 	}
@@ -260,14 +264,14 @@ func (c *NostrClient) PublishProvisionRequest(ctx context.Context, req domain.Pr
 		}
 		return nil, err
 	}
-	return &SoulFactoryRequestReceipt{RequestID: event.ID, RequesterPubkey: event.PubKey, AcceptedRelays: published, StatusKind: domain.KindProvisioningStatus, ResultKind: domain.KindProvisioningResult}, nil
+	return &SoulFactoryRequestReceipt{RequestID: event.ID.Hex(), RequesterPubkey: event.PubKey.Hex(), AcceptedRelays: published, StatusKind: domain.KindProvisioningStatus, ResultKind: domain.KindProvisioningResult}, nil
 }
 
 func (c *NostrClient) AwaitProvisioningResult(ctx context.Context, receipt *SoulFactoryRequestReceipt, onStatus func(SoulFactoryStatusEvent)) (*domain.ProvisioningRun, error) {
 	if receipt == nil || receipt.RequestID == "" || receipt.RequesterPubkey == "" {
 		return nil, fmt.Errorf("valid provisioning receipt is required")
 	}
-	filters := []nostr.Filter{{Kinds: []int{domain.KindProvisioningStatus, domain.KindProvisioningResult}, Tags: nostr.TagMap{"e": []string{receipt.RequestID}, "p": []string{receipt.RequesterPubkey}}}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult)}, Tags: nostr.TagMap{"e": []string{receipt.RequestID}, "p": []string{receipt.RequesterPubkey}}}}
 	reply, err := c.awaitTerminal(ctx, filters, map[int]bool{domain.KindProvisioningStatus: true}, map[int]bool{domain.KindProvisioningResult: true}, func(ev *nostr.Event) {
 		if onStatus != nil {
 			onStatus(statusEventFromNostr(ev))
@@ -299,11 +303,11 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 		}
 		content = string(body)
 	}
-	event := &nostr.Event{Kind: domain.KindSoulAction, CreatedAt: nostr.Now(), Tags: tags, Content: content}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindSoulAction), CreatedAt: nostr.Now(), Tags: tags, Content: content}
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign soul action: %w", err)
 	}
-	filters := []nostr.Filter{{Kinds: []int{domain.KindProvisioningStatus, domain.KindProvisioningResult, domain.KindSoulActionLegacyResult}, Tags: nostr.TagMap{"e": []string{event.ID}}}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)}, Tags: nostr.TagMap{"e": []string{event.ID.Hex()}}}}
 	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, fmt.Errorf("subscribe for soul action result: %w", err)
@@ -328,17 +332,17 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 			if !ok {
 				return nil, fmt.Errorf("soul action subscription closed before terminal result")
 			}
-			if !validSignedEvent(reply) || !tagHasValue(reply.Tags, "e", event.ID) {
+			if !validSignedEvent(reply) || !tagHasValue(reply.Tags, "e", event.ID.Hex()) {
 				continue
 			}
-			if _, duplicate := seen[reply.ID]; duplicate {
+			if _, duplicate := seen[reply.ID.Hex()]; duplicate {
 				continue
 			}
-			seen[reply.ID] = struct{}{}
-			if reply.Kind == domain.KindProvisioningStatus {
+			seen[reply.ID.Hex()] = struct{}{}
+			if reply.Kind == nostr.Kind(domain.KindProvisioningStatus) {
 				continue
 			}
-			if domain.IsLifecycleResultKind(reply.Kind) {
+			if domain.IsLifecycleResultKind(int(reply.Kind)) {
 				return reply, nil
 			}
 		}
@@ -370,10 +374,10 @@ func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter)
 			if ev == nil || !validSignedEvent(ev) {
 				continue
 			}
-			if _, duplicate := seen[ev.ID]; duplicate {
+			if _, duplicate := seen[ev.ID.Hex()]; duplicate {
 				continue
 			}
-			seen[ev.ID] = struct{}{}
+			seen[ev.ID.Hex()] = struct{}{}
 			result = append(result, ev)
 		}
 	}
@@ -400,17 +404,17 @@ func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter,
 			if ev == nil || !validSignedEvent(ev) {
 				continue
 			}
-			if _, duplicate := seen[ev.ID]; duplicate {
+			if _, duplicate := seen[ev.ID.Hex()]; duplicate {
 				continue
 			}
-			seen[ev.ID] = struct{}{}
-			if statusKinds[ev.Kind] {
+			seen[ev.ID.Hex()] = struct{}{}
+			if statusKinds[int(ev.Kind)] {
 				if onStatus != nil {
 					onStatus(ev)
 				}
 				continue
 			}
-			if terminalKinds[ev.Kind] {
+			if terminalKinds[int(ev.Kind)] {
 				return ev, nil
 			}
 		}
@@ -421,7 +425,7 @@ func ParseSoulEvent(event *nostr.Event) *domain.AgentSoul {
 	if event == nil {
 		return nil
 	}
-	soul := &domain.AgentSoul{EventID: event.ID, SoulMD: event.Content, CreatedAt: event.CreatedAt.Time()}
+	soul := &domain.AgentSoul{EventID: event.ID.Hex(), SoulMD: event.Content, CreatedAt: event.CreatedAt.Time()}
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
 			continue
@@ -490,7 +494,7 @@ func ParseTemplateEvent(event *nostr.Event) *domain.SoulTemplate {
 	if event == nil {
 		return nil
 	}
-	template := &domain.SoulTemplate{EventID: event.ID, Author: event.PubKey, BasePrompt: event.Content, CreatedAt: event.CreatedAt.Time(), UpdatedAt: event.CreatedAt.Time()}
+	template := &domain.SoulTemplate{EventID: event.ID.Hex(), Author: event.PubKey.Hex(), BasePrompt: event.Content, CreatedAt: event.CreatedAt.Time(), UpdatedAt: event.CreatedAt.Time()}
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
 			continue
@@ -551,7 +555,7 @@ func provisioningRunFromTerminalEvent(requestID string, event *nostr.Event) *dom
 
 func statusEventFromNostr(event *nostr.Event) SoulFactoryStatusEvent {
 	tags := tagMap(event.Tags)
-	return SoulFactoryStatusEvent{Kind: event.Kind, EventID: event.ID, Status: firstValue(tags, "status"), Step: firstValue(tags, "step"), Action: firstValue(tags, "action"), Message: strings.TrimSpace(event.Content), Tags: tags}
+	return SoulFactoryStatusEvent{Kind: int(event.Kind), EventID: event.ID.Hex(), Status: firstValue(tags, "status"), Step: firstValue(tags, "step"), Action: firstValue(tags, "action"), Message: strings.TrimSpace(event.Content), Tags: tags}
 }
 
 func validSignedEvent(event *nostr.Event) bool {
@@ -563,8 +567,7 @@ func validSignedEvent(event *nostr.Event) bool {
 	if createdAt > now+600 || createdAt < now-365*24*60*60 {
 		return false
 	}
-	ok, err := event.CheckSignature()
-	return err == nil && ok
+	return event.VerifySignature()
 }
 
 func tagHasValue(tags nostr.Tags, name, value string) bool {
@@ -639,7 +642,7 @@ func signGoNostrEvent(ctx context.Context, signer soulClientSigner, event *nostr
 	if err := signer.Sign(ctx, event); err != nil {
 		return err
 	}
-	if event.PubKey == "" {
+	if event.PubKey == (nostr.PubKey{}) {
 		return fmt.Errorf("signed event is missing pubkey")
 	}
 	return nil

@@ -5,8 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"log/slog"
 )
@@ -136,7 +135,7 @@ func TestMCPServerActionAndRegenerateUseSignedActions(t *testing.T) {
 		publishProvisionFn: func(context.Context, domain.ProvisioningRequest) (*SoulFactoryRequestReceipt, error) { return nil, nil },
 		executeSoulActionFn: func(_ context.Context, soulRef string, action domain.SoulActionType, reason, newBrief string) (*nostr.Event, error) {
 			calls = append(calls, strings.Join([]string{soulRef, string(action), reason, newBrief}, "|"))
-			return &nostr.Event{ID: uuid.NewString(), Tags: nostr.Tags{{"status", "completed"}}, Content: `{"ok":true}`}, nil
+			return &nostr.Event{ID: soulTestID("mcp-action-result"), Tags: nostr.Tags{{"status", "completed"}}, Content: `{"ok":true}`}, nil
 		},
 	}
 	server := newTestMCPServer(t, client)

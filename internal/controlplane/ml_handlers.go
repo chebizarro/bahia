@@ -7,13 +7,13 @@ import (
 	"strconv"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func (r *Reactor) authorizeMLRequest(ctx context.Context, event *nostr.Event, resultKind int, step string) bool {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		_ = r.publishMLResult(ctx, event, resultKind, "rejected", step, "requester not in authorized list", nil, nil)
 		return false
 	}
@@ -48,7 +48,7 @@ func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Eve
 	}
 	run := &domain.MLRecipeRun{
 		RecipeID:    recipe.ID,
-		RequestedBy: event.PubKey,
+		RequestedBy: event.PubKey.Hex(),
 		Status:      domain.RunStatusQueued,
 		Inputs:      req.Inputs,
 		Parameters:  req.Parameters,
@@ -68,7 +68,7 @@ func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Eve
 }
 
 func (r *Reactor) handleMLModelImportRequest(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "rejected", "unauthorized", "requester not in authorized list", nil, nil)
 		return
 	}
@@ -112,7 +112,7 @@ func (r *Reactor) handleMLInferenceDeployRequest(ctx context.Context, event *nos
 		EndpointID:        endpoint.ID,
 		EnvironmentID:     endpoint.EnvironmentID,
 		ModelVersionID:    version.ID,
-		RequestedBy:       event.PubKey,
+		RequestedBy:       event.PubKey.Hex(),
 		SourceKind:        domain.SourceKindEventTriggered,
 		RuntimePreference: domain.MLRuntimeKind(firstNonEmpty(req.RuntimePreference, tagValueNostr(event.Tags, "runtime"))),
 		Metadata:          metadata,
@@ -196,7 +196,7 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 	}
 	requestedBy := req.RequestedBy
 	if requestedBy == "" {
-		requestedBy = event.PubKey
+		requestedBy = event.PubKey.Hex()
 	}
 	endpointCoord := firstNonEmpty(req.Endpoint, tagValueNostr(event.Tags, "endpoint"))
 	intent, err := r.mlRegistry.RollbackWithMetadata(ctx, endpoint.ID, endpoint.EnvironmentID, requestedBy, mlNostrMetadata(event, map[string]any{
@@ -444,7 +444,7 @@ func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event
 		content["model_version"] = modelVersionCoord
 	}
 	tags := nostr.Tags{
-		{"d", "result:" + requestEvent.ID},
+		{"d", "result:" + requestEvent.ID.Hex()},
 		{"status", status},
 	}
 	if endpointCoord != "" {

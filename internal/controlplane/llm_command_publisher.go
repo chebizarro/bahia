@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -266,13 +266,13 @@ func (p *LLMCommandPublisher) publish(ctx context.Context, method string, status
 	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, "", tags, content, "LLM command")
 	if err != nil {
 		if ev != nil && published > 0 {
-			return &LLMCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, StatusKind: statusKind, ResultKind: resultKind, RegistryKind: KindCASControlState, StateKind: KindCASControlState, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
+			return &LLMCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindContextVMMessage, StatusKind: statusKind, ResultKind: resultKind, RegistryKind: KindCASControlState, StateKind: KindCASControlState, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
 		}
 		return nil, err
 	}
 	return &LLMCommandReceipt{
-		RequestEventID:  ev.ID,
-		RequestPubkey:   ev.PubKey,
+		RequestEventID:  ev.ID.Hex(),
+		RequestPubkey:   ev.PubKey.Hex(),
 		RequestKind:     KindContextVMMessage,
 		StatusKind:      statusKind,
 		ResultKind:      resultKind,

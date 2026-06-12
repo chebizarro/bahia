@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -138,7 +138,7 @@ func (r *BackupRestoreResponder) signPublishRecord(ctx context.Context, kind int
 	if r.publisher == nil || r.signer == nil {
 		return map[string]any{"kind": kind, "published": false, "error": "backup restore responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("backup restore responder publisher or signer is not configured")
 	}
-	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: content}
+	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: content}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return map[string]any{"kind": kind, "published": false, "error": err.Error(), "recorded_at": time.Now().UTC().Format(time.RFC3339)}, err
 	}
@@ -166,8 +166,8 @@ func (r *BackupRestoreResponder) record(ctx context.Context, ev *nostr.Event, en
 		return
 	}
 	tagsJSON, _ := json.Marshal(ev.Tags)
-	if _, err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: entityType, EntityID: entityID}); err != nil {
-		r.logger.Warn("failed to record backup restore reply event", zap.String("event_id", ev.ID), zap.String("entity_type", entityType), zap.Error(err))
+	if _, err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID.Hex(), Kind: int(ev.Kind), PubKey: ev.PubKey.Hex(), Content: ev.Content, Tags: tagsJSON, Sig: nostr.HexEncodeToString(ev.Sig[:]), CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: entityType, EntityID: entityID}); err != nil {
+		r.logger.Warn("failed to record backup restore reply event", zap.String("event_id", ev.ID.Hex()), zap.String("entity_type", entityType), zap.Error(err))
 	}
 }
 

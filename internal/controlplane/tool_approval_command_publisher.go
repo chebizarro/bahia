@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 // ToolApprovalCommandPublisher emits canonical tool provisioning approval responses.
@@ -93,9 +93,9 @@ func (p *ToolApprovalCommandPublisher) PublishToolApprovalResponse(ctx context.C
 
 func toolApprovalReceiptFromEvent(ev *nostr.Event, dTag string, published int, status string) *ToolApprovalCommandReceipt {
 	return &ToolApprovalCommandReceipt{
-		RequestEventID:  ev.ID,
-		RequestPubkey:   ev.PubKey,
-		RequestKind:     ev.Kind,
+		RequestEventID:  ev.ID.Hex(),
+		RequestPubkey:   ev.PubKey.Hex(),
+		RequestKind:     int(ev.Kind),
 		ResultKind:      KindContextVMMessage,
 		ReadModelKind:   KindCASControlState,
 		DTag:            dTag,

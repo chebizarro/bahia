@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -96,7 +96,7 @@ func (c *packageCLIClient) AwaitPackageResult(ctx context.Context, receipt *cont
 		return nil, fmt.Errorf("package client is not configured")
 	}
 	filters := []nostr.Filter{{
-		Kinds: []int{receipt.StatusKind, receipt.ResultKind},
+		Kinds: []nostr.Kind{nostr.Kind(receipt.StatusKind), nostr.Kind(receipt.ResultKind)},
 		Tags:  nostr.TagMap{"e": []string{receipt.RequestEventID}, "p": []string{receipt.RequestPubkey}},
 	}}
 	sub, err := c.pool.SubscribeAllWithEOSE(ctx, filters)
@@ -119,17 +119,18 @@ func (c *packageCLIClient) AwaitPackageResult(ctx context.Context, receipt *cont
 			if ev == nil || !validPackageReply(ev, receipt) {
 				continue
 			}
-			if _, duplicate := seen[ev.ID]; duplicate {
+			eventID := ev.ID.Hex()
+			if _, duplicate := seen[eventID]; duplicate {
 				continue
 			}
-			seen[ev.ID] = struct{}{}
-			if ev.Kind == receipt.StatusKind {
+			seen[eventID] = struct{}{}
+			if ev.Kind == nostr.Kind(receipt.StatusKind) {
 				if onStatus != nil {
 					onStatus(packageStatusFromEvent(ev))
 				}
 				continue
 			}
-			if ev.Kind == receipt.ResultKind {
+			if ev.Kind == nostr.Kind(receipt.ResultKind) {
 				return ev, nil
 			}
 		}
@@ -495,8 +496,7 @@ func validPackageReply(event *nostr.Event, receipt *controlplane.PackageCommandR
 	if !event.CheckID() {
 		return false
 	}
-	ok, err := event.CheckSignature()
-	if err != nil || !ok {
+	if !event.VerifySignature() {
 		return false
 	}
 	return tagHasValueLocal(event.Tags, "e", receipt.RequestEventID) && tagHasValueLocal(event.Tags, "p", receipt.RequestPubkey)
@@ -504,7 +504,7 @@ func validPackageReply(event *nostr.Event, receipt *controlplane.PackageCommandR
 
 func packageStatusFromEvent(event *nostr.Event) packageStatusEvent {
 	tags := tagMapFromNostr(event.Tags)
-	return packageStatusEvent{Kind: event.Kind, EventID: event.ID, Status: firstTagMapValue(tags, "status"), Step: firstTagMapValue(tags, "step"), Message: firstTagMapValue(tags, "message"), Tags: tags}
+	return packageStatusEvent{Kind: int(event.Kind), EventID: event.ID.Hex(), Status: firstTagMapValue(tags, "status"), Step: firstTagMapValue(tags, "step"), Message: firstTagMapValue(tags, "message"), Tags: tags}
 }
 
 func tagMapFromNostr(tags nostr.Tags) map[string][]string {

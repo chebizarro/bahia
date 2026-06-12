@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -285,7 +285,7 @@ type packageIntentFields struct {
 }
 
 func (r *Reactor) decodePackageRequest(ctx context.Context, event *nostr.Event, dest any) bool {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.publishPackageError(ctx, event, "", "unauthorized", "requester not in authorized list")
 		return false
 	}
@@ -301,7 +301,7 @@ func (r *Reactor) decodePackageRequest(ctx context.Context, event *nostr.Event, 
 }
 
 func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, operation domain.PackageOperation, fields packageIntentFields, payload any) (*domain.PackageIntent, bool) {
-	existing, _ := r.packageProjection.GetIntentByRequestEventID(ctx, event.ID)
+	existing, _ := r.packageProjection.GetIntentByRequestEventID(ctx, event.ID.Hex())
 	if existing != nil && existing.Status.Terminal() {
 		_ = r.publishPackageResult(ctx, event, existing, string(operation), existing.ResultPayload, existing.ErrorMessage)
 		return existing, false
@@ -315,7 +315,7 @@ func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, op
 		_ = json.Unmarshal(b, &requestPayload)
 	}
 	now := time.Now().UTC()
-	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: event.ID, Operation: operation, RepositoryName: fields.RepositoryName, Namespace: strings.Trim(fields.Namespace, "/"), PackageName: fields.PackageName, Version: fields.Version, Filename: fields.Filename, RequesterPubkey: event.PubKey, RequestPayload: requestPayload, Status: domain.PackageIntentStatusAccepted, CreatedAt: now, UpdatedAt: now}
+	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: event.ID.Hex(), Operation: operation, RepositoryName: fields.RepositoryName, Namespace: strings.Trim(fields.Namespace, "/"), PackageName: fields.PackageName, Version: fields.Version, Filename: fields.Filename, RequesterPubkey: event.PubKey.Hex(), RequestPayload: requestPayload, Status: domain.PackageIntentStatusAccepted, CreatedAt: now, UpdatedAt: now}
 	if fields.RepositoryID != uuid.Nil {
 		intent.RepositoryID = &fields.RepositoryID
 	}
@@ -378,7 +378,7 @@ func (r *Reactor) lookupPackageRepository(ctx context.Context, id uuid.UUID, nam
 }
 
 func (r *Reactor) publishPackageStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, step, status, message string) error {
-	content := map[string]any{"intent_id": intent.ID.String(), "request_event_id": requestEvent.ID, "operation": string(intent.Operation), "step": step, "status": status, "message": message}
+	content := map[string]any{"intent_id": intent.ID.String(), "request_event_id": requestEvent.ID.Hex(), "operation": string(intent.Operation), "step": step, "status": status, "message": message}
 	tags := packageReplyTags(requestEvent, intent, step, status)
 	tags = append(tags, nostr.Tag{"domain", "package"}, nostr.Tag{"schema", "bahia.status.package.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPackageStatus)})
 	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, content); err != nil {
@@ -392,7 +392,7 @@ func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.
 		result = map[string]any{}
 	}
 	result["intent_id"] = intent.ID.String()
-	result["request_event_id"] = requestEvent.ID
+	result["request_event_id"] = requestEvent.ID.Hex()
 	result["operation"] = operation
 	status := stringFromAny(result["status"])
 	if status == "" {
@@ -417,12 +417,12 @@ func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.
 }
 
 func (r *Reactor) publishPackageError(ctx context.Context, requestEvent *nostr.Event, operation domain.PackageOperation, step, message string) error {
-	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: requestEvent.ID, Operation: operation, RequesterPubkey: requestEvent.PubKey, Status: domain.PackageIntentStatusFailed, ErrorMessage: message}
+	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: requestEvent.ID.Hex(), Operation: operation, RequesterPubkey: requestEvent.PubKey.Hex(), Status: domain.PackageIntentStatusFailed, ErrorMessage: message}
 	return r.publishPackageResult(ctx, requestEvent, intent, string(operation), map[string]any{"status": "failed", "step": step, "error": message}, message)
 }
 
 func packageReplyTags(requestEvent *nostr.Event, intent *domain.PackageIntent, step, status string) nostr.Tags {
-	tags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"operation", string(intent.Operation)}, {"status", status}, {"step", step}, {"intent", intent.ID.String()}}
+	tags := nostr.Tags{{"e", requestEvent.ID.Hex(), "", "reply"}, {"p", requestEvent.PubKey.Hex()}, {"operation", string(intent.Operation)}, {"status", status}, {"step", step}, {"intent", intent.ID.String()}}
 	if intent.RepositoryID != nil {
 		tags = append(tags, nostr.Tag{"repository", intent.RepositoryID.String()})
 	}
@@ -449,7 +449,7 @@ func (r *Reactor) publishPackageRepositoryRegistry(ctx context.Context, repo *do
 	if _, err := r.publishEvent(ctx, event); err != nil {
 		return err
 	}
-	repo.LastEventID = event.ID
+	repo.LastEventID = event.ID.Hex()
 	repo.LastEventCreatedAt = event.CreatedAt.Time()
 	return r.packageProjection.UpsertRepository(ctx, repo)
 }
@@ -463,7 +463,7 @@ func (r *Reactor) publishPackageArtifactRegistry(ctx context.Context, artifact *
 	if _, err := r.publishEvent(ctx, event); err != nil {
 		return err
 	}
-	artifact.LastEventID = event.ID
+	artifact.LastEventID = event.ID.Hex()
 	artifact.LastEventCreatedAt = event.CreatedAt.Time()
 	return r.packageProjection.UpsertArtifact(ctx, artifact)
 }
@@ -479,7 +479,7 @@ func (r *Reactor) publishPackagePromotionRegistry(ctx context.Context, publicati
 	if _, err := r.publishEvent(ctx, event); err != nil {
 		return err
 	}
-	publication.LastEventID = event.ID
+	publication.LastEventID = event.ID.Hex()
 	publication.LastEventCreatedAt = event.CreatedAt.Time()
 	return r.packageProjection.UpsertPublication(ctx, publication)
 }

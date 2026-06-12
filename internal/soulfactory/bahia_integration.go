@@ -308,7 +308,7 @@ func runtimeEventID(result *RuntimeControlResultEnvelope) string {
 	if result == nil || result.Event == nil {
 		return ""
 	}
-	return strings.TrimSpace(result.Event.ID)
+	return strings.TrimSpace(result.Event.ID.Hex())
 }
 
 // SyncSoulStatus synchronizes bahia deployment status back to the soul.

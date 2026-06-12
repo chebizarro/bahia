@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/auth"
@@ -170,10 +170,7 @@ func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID,
 
 func encryptedAuthDeps(t *testing.T, serviceID, orgID uuid.UUID, role domain.Role) (*fakeEncryptedServiceRepo, *auth.RBAC) {
 	t.Helper()
-	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, OrgID: orgID, Name: "api"}}}
 	members := &fakeEncryptedMemberRepo{members: map[string]*domain.OrgMember{}}
 	_ = members.Add(context.Background(), &domain.OrgMember{OrgID: orgID, Pubkey: requesterPubkey, Role: role})

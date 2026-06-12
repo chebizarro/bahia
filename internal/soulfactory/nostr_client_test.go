@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -56,11 +56,11 @@ func TestNostrClientPublishProvisionRequestMatchesBrowserEventShape(t *testing.T
 		t.Fatalf("published events = %d, want 1", len(transport.published))
 	}
 	event := transport.published[0]
-	if event.Kind != domain.KindProvisioningRequest || event.PubKey != signer.pubkey || !event.CheckID() {
-		t.Fatalf("published event identity = kind:%d pubkey:%s id-ok:%v", event.Kind, event.PubKey, event.CheckID())
+	if event.Kind != nostr.Kind(domain.KindProvisioningRequest) || event.PubKey.Hex() != signer.pubkey || !event.CheckID() {
+		t.Fatalf("published event identity = kind:%d pubkey:%s id-ok:%v", event.Kind, event.PubKey.Hex(), event.CheckID())
 	}
-	if ok, err := event.CheckSignature(); err != nil || !ok {
-		t.Fatalf("published event signature ok=%v err=%v", ok, err)
+	if !event.VerifySignature() {
+		t.Fatalf("published event signature invalid")
 	}
 	for tag, want := range map[string]string{
 		tagAgentID:       "scout",

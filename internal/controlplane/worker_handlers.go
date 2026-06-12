@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -238,7 +238,7 @@ func (r *Reactor) handleWorkloadPinRequest(ctx context.Context, event *nostr.Eve
 }
 
 func (r *Reactor) decodeWorkerRequest(ctx context.Context, event *nostr.Event, command string, requireLabels bool) (*workerCommandRequest, bool) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "rejected", "unauthorized", "requester not in authorized list", nil)
 		return nil, false
 	}
@@ -294,7 +294,7 @@ func (r *Reactor) decodeWorkerRequest(ctx context.Context, event *nostr.Event, c
 }
 
 func (r *Reactor) decodePlacementPolicyRequest(ctx context.Context, event *nostr.Event, command string, requirePolicy bool, requireWorker bool) (*workerCommandRequest, bool) {
-	if !r.isAuthorized(event.PubKey) {
+	if !r.isAuthorized(event.PubKey.Hex()) {
 		_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), EnvironmentID: environmentIDFromEvent(event), WorkloadID: workloadIDFromEvent(event), WorkloadKind: workloadKindFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "rejected", "unauthorized", "requester not in authorized list", nil)
 		return nil, false
 	}
@@ -790,7 +790,7 @@ func workerReplyTags(requestEvent *nostr.Event, req *workerCommandRequest, comma
 		workerPubKey = req.WorkerPubKey
 		idempotencyKey = req.IdempotencyKey
 	}
-	tags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"command", command}, {"status", status}, {"step", step}}
+	tags := nostr.Tags{{"e", requestEvent.ID.Hex(), "", "reply"}, {"p", requestEvent.PubKey.Hex()}, {"command", command}, {"status", status}, {"step", step}}
 	if workerPubKey != "" {
 		tags = append(tags, nostr.Tag{"worker", workerPubKey})
 	}

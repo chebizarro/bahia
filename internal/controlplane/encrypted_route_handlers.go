@@ -106,7 +106,7 @@ type encryptedRouteHandler = EncryptedRequestHandler
 func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedRequestTransport, operation string, handler encryptedRouteHandler) {
 	transport.RegisterHandler(operation, handler)
 	transport.RegisterContextVMHandler(operation, func(ctx context.Context, request ContextVMRequest) (any, error) {
-		return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey, Payload: request.RPC.Params}})
+		return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey.Hex(), Payload: request.RPC.Params}})
 	})
 }
 
@@ -190,7 +190,7 @@ func (h *EncryptedRouteHandlers) CreateSecret(ctx context.Context, request Encry
 		EncryptedValue:   encrypted,
 		EncryptionMethod: method,
 		Version:          1,
-		CreatedBy:        normalizeEncryptedPubkey(request.Event.PubKey),
+		CreatedBy:        normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}

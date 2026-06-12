@@ -9,18 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func buildActionEvent(t *testing.T, signer fakeSigner, eventID string, tags nostr.Tags, content string) *nostr.Event {
 	t.Helper()
+	pubkey, err := nostr.PubKeyFromHex(signer.pubkey)
+	if err != nil {
+		t.Fatalf("parse signer pubkey: %v", err)
+	}
 	event := &nostr.Event{
-		ID:        eventID,
-		Kind:      domain.KindSoulAction,
+		ID:        soulTestID(eventID),
+		Kind:      nostr.Kind(domain.KindSoulAction),
 		CreatedAt: nostr.Now(),
-		PubKey:    signer.pubkey,
+		PubKey:    pubkey,
 		Tags:      tags,
 		Content:   content,
 	}
@@ -48,6 +52,7 @@ func TestLifecycleHandlerRejectsMalformedUnauthorizedAndProcessesValidActions(t 
 		authorized,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(_ context.Context, soulRef string) (*domain.AgentSoul, error) {
 		if normalizeSoulLookupRef(soulRef) != soul.AgentID {
@@ -93,7 +98,8 @@ func TestLifecycleHandlerRejectsMalformedUnauthorizedAndProcessesValidActions(t 
 		capture.events = nil
 		soul.Status = domain.SoulStatusActive
 		soul.DeployStatus = "healthy"
-		err := handler.HandleAction(t.Context(), buildActionEvent(t, authorized, "suspend", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionSuspend)}, {"reason", "maintenance"}}, ""))
+		actionEvent := buildActionEvent(t, authorized, "suspend", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionSuspend)}, {"reason", "maintenance"}}, "")
+		err := handler.HandleAction(t.Context(), actionEvent)
 		if err != nil {
 			t.Fatalf("HandleAction() error = %v", err)
 		}
@@ -120,8 +126,8 @@ func TestLifecycleHandlerRejectsMalformedUnauthorizedAndProcessesValidActions(t 
 		if len(actionResults) != 1 {
 			t.Fatalf("action result count = %d, want 1", len(actionResults))
 		}
-		if got := findTag(actionResults[0], "e"); got != "suspend" {
-			t.Fatalf("action result reply tag = %q, want suspend", got)
+		if got := findTag(actionResults[0], "e"); got != actionEvent.ID.Hex() {
+			t.Fatalf("action result reply tag = %q, want %s", got, actionEvent.ID.Hex())
 		}
 		if got := findTag(actionResults[0], "request-kind"); got != fmt.Sprint(domain.KindSoulAction) {
 			t.Fatalf("action result request-kind = %q, want 1950", got)
@@ -160,6 +166,7 @@ func TestLifecycleHandlerRegenerateRequiresBriefAndRepublishesUpdatedIdentity(t 
 		authorized,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(_ context.Context, soulRef string) (*domain.AgentSoul, error) {
 		if normalizeSoulLookupRef(soulRef) != soul.AgentID {
@@ -335,6 +342,7 @@ func TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishes
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {
@@ -456,6 +464,7 @@ func TestLifecycleHandlerRollbackRestoresPreviousDraft(t *testing.T) {
 		CreatedAt:            time.Now().UTC(),
 	}
 	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, draftEventID string) (*domain.SoulDraft, error) {
@@ -504,6 +513,7 @@ func TestLifecycleHandlerHotReloadRollsBackRuntimeOn38386Error(t *testing.T) {
 	proposedDraft := &domain.SoulDraft{EventID: "draft-proposed-event", AgentID: "scout", CreatedBy: signer.pubkey, Content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research deeply", Tier: domain.SoulTierStandard}, Voice: domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "new-voice"}, Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, SpecHash: "sha256:new", PreviousSpecHash: "sha256:old"}}
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard, Status: domain.SoulStatusActive, DraftRef: "31952:" + signer.pubkey + ":scout", DraftEventID: currentDraft.EventID, SpecHash: "sha256:old", Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, CreatedAt: time.Now().UTC()}
 	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, draftEventID string) (*domain.SoulDraft, error) {
@@ -564,7 +574,7 @@ func (a *failingRuntimeAdapter) Execute(ctx context.Context, req RuntimeAdapterR
 			"spec_hash":       req.Soul.SpecHash,
 			"capability_ref":  "capability-event",
 		},
-		Event: &nostr.Event{PubKey: "runtime-pubkey"},
+		Event: &nostr.Event{PubKey: soulTestPubKey("runtime-pubkey")},
 	}, nil
 }
 
@@ -587,6 +597,7 @@ func TestLifecycleHandlerReplayDoesNotDuplicateSideEffects(t *testing.T) {
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(_ context.Context, soulRef string) (*domain.AgentSoul, error) {
 		if normalizeSoulLookupRef(soulRef) != soul.AgentID {
@@ -634,10 +645,11 @@ func TestLifecycleHandlerSkipsExecutionWhenTerminalResultAlreadyExists(t *testin
 		signer,
 		slog.Default(),
 	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.findLifecycleResultFn = func(context.Context, string) (*nostr.Event, error) {
-		return &nostr.Event{ID: "terminal-7950", Kind: domain.KindProvisioningResult, Tags: nostr.Tags{{"request-kind", fmt.Sprint(domain.KindSoulAction)}}}, nil
+		return &nostr.Event{ID: soulTestID("terminal-7950"), Kind: nostr.Kind(domain.KindProvisioningResult), Tags: nostr.Tags{{"request-kind", fmt.Sprint(domain.KindSoulAction)}}}, nil
 	}
 
 	event := buildActionEvent(t, signer.fakeSigner, "already-terminal", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionSuspend)}}, "")

@@ -233,7 +233,7 @@ func TestOCIRegistryService_ListTagsAndReferrers(t *testing.T) {
 
 func TestOCIRegistryService_PutManifest(t *testing.T) {
 	repo := &mockOCIRegistryRepo{blobsInRepo: map[string]bool{
-		"sha256:cfg":   true,
+		"sha256:cfg":    true,
 		"sha256:layer1": true,
 	}}
 	svc := newTestOCIService(t, repo, "http://example.invalid")
