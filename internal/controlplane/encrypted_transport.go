@@ -43,6 +43,8 @@ const (
 	ContextVMMethodMLRecipeRun     = "ml/recipe-run"
 	ContextVMMethodApprovalApprove = "approval/approve"
 	ContextVMMethodToolsCall       = "tools/call"
+
+	encryptedRequestReplayLookback = 2 * time.Minute
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
@@ -279,27 +281,60 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	if t.subscriber == nil {
 		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
-	now := nostr.Now()
-	filter := nostr.Filter{Kinds: []int{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: &now}
+	since := nostr.Timestamp(time.Now().Add(-encryptedRequestReplayLookback).Unix())
+	filter := nostr.Filter{Kinds: []int{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: &since}
 	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
 		filter.Tags = nostr.TagMap{"p": []string{servicePubkey}}
 	}
+	t.logger.Info("subscribing to ContextVM encrypted request events",
+		zap.Ints("kinds", filter.Kinds),
+		zap.Time("since", time.Unix(int64(since), 0).UTC()),
+		zap.Duration("lookback", encryptedRequestReplayLookback),
+		zap.Strings("p_tags", filter.Tags["p"]),
+	)
 	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
 		return fmt.Errorf("subscribe to encrypted request/result events: %w", err)
 	}
+	defer merged.Close()
+	t.logger.Info("subscribed to ContextVM encrypted request events")
 	for {
 		select {
 		case <-ctx.Done():
+			t.logger.Info("ContextVM encrypted request transport shutting down")
 			return ctx.Err()
+		case eose, ok := <-merged.RelayEOSE:
+			if ok {
+				t.logger.Debug("relay sent ContextVM encrypted request EOSE", zap.String("relay", eose.RelayURL), zap.String("subscription_id", eose.SubscriptionID))
+			} else {
+				merged.RelayEOSE = nil
+			}
+		case closed, ok := <-merged.Closed:
+			if ok {
+				t.logger.Warn("relay closed ContextVM encrypted request subscription",
+					zap.String("relay", closed.RelayURL),
+					zap.String("subscription_id", closed.SubscriptionID),
+					zap.String("reason", closed.Reason),
+				)
+			} else {
+				merged.Closed = nil
+			}
 		case _, ok := <-merged.EndOfStoredEvents:
 			if !ok {
 				merged.EndOfStoredEvents = nil
+			} else {
+				t.logger.Debug("ContextVM encrypted request subscription caught up with stored events")
 			}
 		case ev, ok := <-merged.Events:
 			if !ok {
+				t.logger.Warn("ContextVM encrypted request subscription events channel closed")
 				return nil
 			}
+			t.logger.Debug("received ContextVM encrypted request event",
+				zap.String("event_id", ev.ID),
+				zap.Int("kind", ev.Kind),
+				zap.String("pubkey", ev.PubKey),
+			)
 			t.HandleEvent(ctx, ev)
 		}
 	}
@@ -328,6 +363,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 			return
 		}
 		if !t.matchesContextVMWrapperRouting(outer) {
+			t.logger.Debug("ContextVM gift wrap not addressed to this service", zap.String("event_id", outer.ID), zap.String("service_pubkey", t.responder.ServicePubkey()))
 			return
 		}
 		unwrapped, err := t.unwrapContextVMEvent(outer)
@@ -342,6 +378,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		}
 	}
 	if inner == nil || inner.Kind != KindContextVMMessage {
+		t.logger.Debug("ContextVM wrapper did not contain a ContextVM message", zap.String("event_id", outer.ID))
 		return
 	}
 	if err := nostrpool.ValidateInboundEvent(inner, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
@@ -349,13 +386,16 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		return
 	}
 	if t.dedup.IsDuplicate(inner.ID) {
+		t.logger.Debug("duplicate ContextVM event ignored", zap.String("event_id", inner.ID))
 		return
 	}
 	t.dedup.MarkSeen(inner.ID)
 	if !t.matchesContextVMRouting(inner) {
+		t.logger.Debug("ContextVM event not routed to this service", zap.String("event_id", inner.ID), zap.String("service_pubkey", t.responder.ServicePubkey()))
 		return
 	}
 	if !t.authorized(inner.PubKey) {
+		t.logger.Warn("unauthorized ContextVM requester", zap.String("event_id", inner.ID), zap.String("requester_pubkey", inner.PubKey))
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}})
 		return
 	}
@@ -378,11 +418,13 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	}
 	handler := t.contextVMHandlers[rpc.Method]
 	if handler == nil {
+		t.logger.Warn("ContextVM method not found", zap.String("event_id", inner.ID), zap.String("method", rpc.Method))
 		response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Error: &JSONRPCError{Code: -32601, Message: "method not found"}}
 		t.cacheContextVMResponse(inner.PubKey, progressToken, response)
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 		return
 	}
+	t.logger.Info("dispatching ContextVM request", zap.String("event_id", inner.ID), zap.String("method", rpc.Method), zap.String("requester_pubkey", inner.PubKey))
 	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
 	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Result: result}
 	if err != nil {
