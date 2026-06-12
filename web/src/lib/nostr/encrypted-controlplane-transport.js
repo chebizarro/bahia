@@ -1,6 +1,9 @@
-import { authState, encryptWithAuth, ensureEncryptedSignerReady, signWithAuth } from '$lib/stores/auth.js';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools';
+import { authState, ensureEncryptedSignerReady, signWithAuth } from '$lib/stores/auth.js';
 import { createNostrPoolClient } from './client.js';
 import {
+  CONTEXTVM_GIFT_WRAP_KIND,
+  CONTEXTVM_MESSAGE_KIND,
   ENCRYPTED_REQUEST_KIND,
   ENCRYPTED_REQUEST_ROUTING_TAG,
   ENCRYPTED_REQUEST_WIRE_VERSION,
@@ -55,15 +58,21 @@ export class EncryptedControlplaneTransport {
     await ensureEncryptedSignerReady(this.servicePubkey);
 
     const envelope = buildContextVMRequest({ operation, payload, requestId });
-    const ciphertext = await encryptWithAuth(this.servicePubkey, jsonContent(envelope));
     const mergedTags = [
       ...normalizeTags(tags),
       ['p', this.servicePubkey],
       [ENCRYPTED_REQUEST_ROUTING_TAG, ENCRYPTED_REQUEST_WIRE_VERSION],
       ['method', envelope.method]
     ];
+    const innerEvent = await signWithAuth({ kind: CONTEXTVM_MESSAGE_KIND, created_at, tags: mergedTags, content: jsonContent(envelope) });
 
-    return signWithAuth({ kind, created_at, tags: mergedTags, content: ciphertext });
+    if (kind !== CONTEXTVM_GIFT_WRAP_KIND) return innerEvent;
+
+    const wrapperSecretKey = generateSecretKey();
+    const wrapperPubkey = getPublicKey(wrapperSecretKey);
+    const conversationKey = nip44.v2.utils.getConversationKey(wrapperSecretKey, this.servicePubkey);
+    const ciphertext = nip44.v2.encrypt(jsonContent(innerEvent), conversationKey);
+    return finalizeEvent({ kind, pubkey: wrapperPubkey, created_at, tags: [['p', this.servicePubkey]], content: ciphertext }, wrapperSecretKey);
   }
 
   async publishEncryptedRequest(event) {
@@ -85,11 +94,14 @@ export class EncryptedControlplaneTransport {
     return awaitEncryptedResultForTransport(this, options);
   }
 
-  async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, ...request } = {}) {
+  async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, timeoutMs = 30000, ...request } = {}) {
     throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const waitSignal = abortController?.signal || signal;
     const forwardAbort = () => abortController?.abort(signal?.reason);
+    const timeout = abortController && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? setTimeout(() => abortController.abort(new Error(`ContextVM request timed out after ${timeoutMs}ms waiting for result`)), timeoutMs)
+      : null;
     let resultPromise = null;
 
     try {
@@ -113,6 +125,7 @@ export class EncryptedControlplaneTransport {
       if (signal?.aborted) throw signalAbortError(signal, 'ContextVM request aborted before publish');
       throw error;
     } finally {
+      if (timeout) clearTimeout(timeout);
       signal?.removeEventListener?.('abort', forwardAbort);
       this.disconnect();
     }

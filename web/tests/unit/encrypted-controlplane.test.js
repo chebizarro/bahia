@@ -10,6 +10,8 @@ const authMock = vi.hoisted(() => ({
   signWithAuth: vi.fn()
 }));
 
+const SERVICE_PUBKEY = 'a70a59980b1be3070959800f94f4221d54ef77a71d686ac85fedadfc586813a0';
+
 const canonicalDiscoveryFixture = JSON.parse(
   readFileSync(resolve(process.cwd(), '../test/fixtures/system_discovery_sidecar_first.json'), 'utf8')
 );
@@ -20,7 +22,7 @@ const systemMock = vi.hoisted(() => ({
       encrypted_nostr_requests: true
     },
     nostr: {
-      service_pubkey: 'b'.repeat(64),
+      service_pubkey: SERVICE_PUBKEY,
       browser_relays: ['wss://relay.example']
     }
   }))
@@ -56,7 +58,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://relay.example']
       }
     });
@@ -75,7 +77,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://public.example'],
         contextvm_relays: ['wss://contextvm.example']
       }
@@ -91,7 +93,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://my-relay.example']
       }
     })).toEqual(['wss://my-relay.example']);
@@ -100,7 +102,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://my-relay.example']
       }
     })).toBe(true);
@@ -112,7 +114,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: false
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://relay.example']
       }
     };
@@ -138,7 +140,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://relay.example']
       }
     })).toBe(true);
@@ -146,29 +148,30 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('builds encrypted request events without targeting public browser relays', async () => {
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     const event = await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 }, requestId: 'ctxvm-req-1' });
 
-    const plaintext = JSON.parse(authMock.encryptWithAuth.mock.calls[0][1]);
-    expect(plaintext).toEqual({
+    expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
+      kind: module.CONTEXTVM_MESSAGE_KIND,
+      tags: expect.arrayContaining([['p', SERVICE_PUBKEY], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION], ['method', 'payments/history']])
+    }));
+    expect(JSON.parse(authMock.signWithAuth.mock.calls[0][0].content)).toEqual({
       jsonrpc: '2.0',
       id: 'ctxvm-req-1',
       method: 'payments/history',
       params: { limit: 10, _meta: { progressToken: 'ctxvm-req-1' } }
     });
-    expect(authMock.ensureEncryptedSignerReady).toHaveBeenCalledWith('b'.repeat(64));
-    expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
-      kind: module.CONTEXTVM_MESSAGE_KIND,
-      tags: expect.arrayContaining([['p', 'b'.repeat(64)], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION], ['method', 'payments/history']]),
-      content: expect.stringMatching(/^cipher:/)
-    }));
-    expect(event.id).toBe('request-id');
+    expect(authMock.ensureEncryptedSignerReady).toHaveBeenCalledWith(SERVICE_PUBKEY);
+    expect(event.kind).toBe(module.ENCRYPTED_REQUEST_KIND);
+    expect(event.pubkey).not.toBe(authMock.authState.pubkey);
+    expect(event.tags).toEqual([['p', SERVICE_PUBKEY]]);
+    expect(event.content).toEqual(expect.any(String));
   });
 
   it('fails locally before publish when the signer lacks browser-visible NIP-44 support', async () => {
     authMock.ensureEncryptedSignerReady.mockRejectedValueOnce(new Error('Failed to encrypt with NIP-44: signer bridge unavailable'));
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     await expect(transport.requestEncryptedResult({ operation: 'notifications/channels-list', payload: {} }))
       .rejects.toThrow('signer bridge unavailable');
@@ -180,7 +183,7 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        service_pubkey: 'b'.repeat(64),
+        service_pubkey: SERVICE_PUBKEY,
         browser_relays: ['wss://relay.example'],
         contextvm_relays: ['wss://contextvm.example']
       }
@@ -188,7 +191,7 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
     const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
 
     await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: 'request-id' });
@@ -206,19 +209,19 @@ describe('encrypted controlplane transport', () => {
       handlers = nextHandlers;
       return unsubscribe;
     });
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1', contextVMRequestId: 'ctxvm-req-1' });
-    await handlers.onEvent({ id: 'other', pubkey: 'b'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
-    await handlers.onEvent({ id: 'spoofed', pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
+    await handlers.onEvent({ id: 'other', kind: module.ENCRYPTED_RESULT_KIND, pubkey: 'c'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
+    await handlers.onEvent({ id: 'spoofed', kind: module.CONTEXTVM_MESSAGE_KIND, pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
     handlers.onEose('wss://relay.example');
-    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"ctxvm-req-1","result":{"status":"ok","payload":{"count":1}}}' });
-    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
+    await handlers.onEvent({ id: 'result-1', kind: module.ENCRYPTED_RESULT_KIND, pubkey: 'd'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"ctxvm-req-1","result":{"status":"ok","payload":{"count":1}}}' });
+    await handlers.onEvent({ id: 'result-1', kind: module.ENCRYPTED_RESULT_KIND, pubkey: 'd'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
 
     await expect(promise).resolves.toMatchObject({ payload: { status: 'ok', payload: { count: 1 } } });
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(client.subscribe).toHaveBeenCalledWith(
-      [{ kinds: [module.CONTEXTVM_MESSAGE_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)], authors: ['b'.repeat(64)] }],
+      [{ kinds: [module.ENCRYPTED_RESULT_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)] }],
       expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function) })
     );
   });
@@ -227,7 +230,7 @@ describe('encrypted controlplane transport', () => {
     const unsubscribe = vi.fn();
     client.subscribe.mockReturnValueOnce(unsubscribe);
     client.publish.mockResolvedValueOnce([{ relay: 'wss://requests.example', sent: true, accepted: false, message: 'blocked: no' }]);
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     await expect(transport.requestEncryptedResult({ operation: 'payments.history', payload: { limit: 5 } })).rejects.toThrow('blocked: no');
 
@@ -241,10 +244,10 @@ describe('encrypted controlplane transport', () => {
       return vi.fn();
     });
     authMock.decryptWithAuth.mockRejectedValueOnce(new Error('bad ciphertext'));
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
-    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'not-decryptable' });
+    await handlers.onEvent({ id: 'result-1', kind: module.ENCRYPTED_RESULT_KIND, pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'not-decryptable' });
 
     await expect(promise).rejects.toThrow('bad ciphertext');
   });
@@ -255,10 +258,10 @@ describe('encrypted controlplane transport', () => {
       handlers = nextHandlers;
       return vi.fn();
     });
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     const missing = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
-    await handlers.onEvent({ id: 'result-missing-correlation', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"other","result":{}}' });
+    await handlers.onEvent({ id: 'result-missing-correlation', kind: module.ENCRYPTED_RESULT_KIND, pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"other","result":{}}' });
     await expect(missing).rejects.toThrow('ContextVM encrypted result payload did not correlate');
   });
 
@@ -268,7 +271,7 @@ describe('encrypted controlplane transport', () => {
       handlers = nextHandlers;
       return vi.fn();
     });
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     const authFailure = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     handlers.onClosed('auth-required: sign in', 'wss://relay.example');
@@ -287,7 +290,7 @@ describe('encrypted controlplane transport', () => {
       handlers = nextHandlers;
       return vi.fn();
     });
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
 
     client.getConnectedRelays.mockReturnValueOnce(null);
     const unknownRelays = transport.awaitEncryptedResult({ requestEventId: 'req-unknown-relays' });
@@ -301,7 +304,7 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('does not publish encrypted ContextVM requests when operation cancellation is already aborted', async () => {
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
     const controller = new AbortController();
     controller.abort(new Error('operator cancelled before publish'));
 
@@ -315,7 +318,7 @@ describe('encrypted controlplane transport', () => {
   it('rejects result waiting only from operation cancellation when relays remain open without a result', async () => {
     const unsubscribe = vi.fn();
     client.subscribe.mockImplementation((_filters, _handlers) => unsubscribe);
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
     const controller = new AbortController();
 
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1', signal: controller.signal });

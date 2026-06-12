@@ -1,5 +1,10 @@
 import { authState, decryptWithAuth } from '$lib/stores/auth.js';
-import { ENCRYPTED_RESULT_KIND } from './encrypted-controlplane-constants.js';
+import {
+  CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND,
+  CONTEXTVM_GIFT_WRAP_KIND,
+  CONTEXTVM_MESSAGE_KIND,
+  ENCRYPTED_RESULT_KIND
+} from './encrypted-controlplane-constants.js';
 import {
   extractContextVMResult,
   formatClosedRelays,
@@ -9,6 +14,26 @@ import {
   signalAbortError
 } from './encrypted-controlplane-utils.js';
 import { ensureHexPubkey } from './nostr-hex.js';
+
+function isContextVMWrapperKind(kind) {
+  return kind === CONTEXTVM_GIFT_WRAP_KIND || kind === CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND;
+}
+
+async function parseContextVMResultPayload(event, servicePubkey) {
+  if (isContextVMWrapperKind(event.kind)) {
+    return parseJson(await decryptWithAuth(event.pubkey, event.content || ''));
+  }
+
+  try {
+    return parseJson(event.content || '');
+  } catch (plaintextError) {
+    try {
+      return parseJson(await decryptWithAuth(servicePubkey, event.content || ''));
+    } catch {
+      throw plaintextError;
+    }
+  }
+}
 
 export function awaitEncryptedResultForTransport(transport, {
   requestEventId,
@@ -58,17 +83,22 @@ export function awaitEncryptedResultForTransport(transport, {
     }
 
     signal?.addEventListener?.('abort', onAbort, { once: true });
-    const filter = { kinds: resultKinds, '#e': [requestEventId], '#p': [requesterPubkey], authors: [servicePubkey] };
-    unsubscribe = transport.client.subscribe([filter], {
+    const wrapperKinds = resultKinds.filter(isContextVMWrapperKind);
+    const messageKinds = resultKinds.filter((kind) => !isContextVMWrapperKind(kind));
+    const filters = [];
+    if (wrapperKinds.length > 0) filters.push({ kinds: wrapperKinds, '#e': [requestEventId], '#p': [requesterPubkey] });
+    if (messageKinds.length > 0) filters.push({ kinds: messageKinds, '#e': [requestEventId], '#p': [requesterPubkey], authors: [servicePubkey] });
+    if (filters.length === 0) filters.push({ kinds: [CONTEXTVM_MESSAGE_KIND], '#e': [requestEventId], '#p': [requesterPubkey], authors: [servicePubkey] });
+
+    unsubscribe = transport.client.subscribe(filters, {
       onEvent: async (event) => {
-        if (event?.pubkey !== servicePubkey) return;
         if (!hasTagValue(event, 'e', requestEventId) || !hasTagValue(event, 'p', requesterPubkey)) return;
+        if (!isContextVMWrapperKind(event.kind) && event?.pubkey !== servicePubkey) return;
         if (seen.has(event.id)) return;
         seen.add(event.id);
 
         try {
-          const plaintext = await decryptWithAuth(servicePubkey, event.content || '');
-          const payload = parseJson(plaintext);
+          const payload = await parseContextVMResultPayload(event, servicePubkey);
           const resultPayload = extractContextVMResult(payload, requestEventId, contextVMRequestId);
           settle(resolve, { event, payload: resultPayload, jsonrpc: payload?.jsonrpc === '2.0' ? payload : null });
         } catch (error) {
