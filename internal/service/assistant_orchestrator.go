@@ -18,6 +18,12 @@ import (
 
 const defaultAssistantAgentID = "bahia-operator-assistant"
 
+const (
+	assistantPublishTimeout = 10 * time.Second
+	assistantContextTimeout = 20 * time.Second
+	assistantLLMTimeout     = 110 * time.Second
+)
+
 // AssistantChatClient is the LLM planner surface used by the orchestrator.
 type AssistantChatClient interface {
 	PlanFromPrompt(ctx context.Context, systemPrompt string, userPrompt string) (*domain.AssistantPlan, error)
@@ -195,6 +201,7 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 	session.State = domain.AssistantSessionStatePlanning
 	session.CurrentTurnID = req.TurnID
 	session.CurrentRequestID = event.ID
+	o.logger.Info("assistant prompt started", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", event.ID)
 	if err := o.publishSession(ctx, session); err != nil {
 		return nil, err
 	}
@@ -202,16 +209,23 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 		return nil, err
 	}
 
-	contextBlock, err := o.contextBuilder.BuildContext(ctx, routeContextStrings(req.RouteContext), req.SelectedRefs, session.TranscriptSummary)
+	contextCtx, cancelContext := context.WithTimeout(ctx, assistantContextTimeout)
+	contextBlock, err := o.contextBuilder.BuildContext(contextCtx, routeContextStrings(req.RouteContext), req.SelectedRefs, session.TranscriptSummary)
+	cancelContext()
 	if err != nil {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
+		o.logger.Warn("assistant context build failed", "session_id", req.SessionID, "turn_id", req.TurnID, "error", err)
 		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "context_error", map[string]any{"summary": "failed to build assistant context", "error": err.Error()}), nil)
 	}
-	plan, err := o.planFromPrompt(ctx, event, req.SessionID, o.systemPrompt(), o.userPrompt(req, contextBlock))
+	o.logger.Info("assistant context built", "session_id", req.SessionID, "turn_id", req.TurnID, "context_bytes", len(contextBlock))
+	llmCtx, cancelLLM := context.WithTimeout(ctx, assistantLLMTimeout)
+	plan, err := o.planFromPrompt(llmCtx, event, req.SessionID, o.systemPrompt(), o.userPrompt(req, contextBlock))
+	cancelLLM()
 	if err != nil {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
+		o.logger.Warn("assistant planning failed", "session_id", req.SessionID, "turn_id", req.TurnID, "error", err)
 		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "llm_error", map[string]any{"summary": "assistant planning failed", "error": err.Error()}), nil)
 	}
 	if plan == nil {
@@ -844,7 +858,9 @@ func (o *AssistantOrchestrator) signAndPublish(ctx context.Context, ev *nostr.Ev
 	if o.publisher == nil {
 		return fmt.Errorf("assistant publisher is not configured")
 	}
-	published, err := o.publisher.Publish(ctx, *ev)
+	publishCtx, cancel := context.WithTimeout(ctx, assistantPublishTimeout)
+	defer cancel()
+	published, err := o.publisher.Publish(publishCtx, *ev)
 	if err != nil {
 		return fmt.Errorf("publish assistant event: %w", err)
 	}

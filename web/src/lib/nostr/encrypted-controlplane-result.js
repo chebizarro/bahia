@@ -21,7 +21,11 @@ function isContextVMWrapperKind(kind) {
 
 async function parseContextVMResultPayload(event, servicePubkey) {
   if (isContextVMWrapperKind(event.kind)) {
-    return parseJson(await decryptWithAuth(event.pubkey, event.content || ''));
+    const payload = parseJson(await decryptWithAuth(event.pubkey, event.content || ''));
+    if (payload?.kind === CONTEXTVM_MESSAGE_KIND && typeof payload.content === 'string') {
+      return parseJson(payload.content);
+    }
+    return payload;
   }
 
   try {
