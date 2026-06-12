@@ -1,0 +1,20 @@
+{
+  "feature_id": "WEB_RELAY_BACKED_PLAYWRIGHT_HARNESS",
+  "tests": [
+    {
+      "command": "pnpm exec playwright test tests/e2e/relay-backed-web-functionality.spec.js --reporter=list",
+      "covers": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "result": "4 passed"
+    },
+    {
+      "command": "go test ./cmd/bahia-test-relay",
+      "covers": ["AC1", "AC2"],
+      "result": "passed: package builds, no test files"
+    },
+    {
+      "command": "pnpm lint",
+      "covers": ["AC5"],
+      "result": "passed: svelte-check found 0 errors and 0 warnings"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "feature_id": "WEB_RELAY_BACKED_PLAYWRIGHT_HARNESS",
+  "title": "Relay-backed Playwright harness for Bahia web functionality",
+  "status": "implemented_vertical_slice",
+  "intent": "Replace browser-only WebSocket mocks for meaningful web functionality coverage with a local Nostr relay that serves signed Bahia discovery, read-model, DNS, FIPS mesh, worker, package, ML, backup, and activity events through real REQ/EVENT/EOSE/NIP-11 semantics.",
+  "observed_behavior_before": "Existing Playwright route-console regression coverage used page.addInitScript WebSocket mocks and sparse data. It caught runtime crashes but did not prove that the app could hydrate from a real relay or validate signed relay events.",
+  "implemented_behavior": "A local khatru relay command seeds valid signed events and Playwright starts it as a test fixture. New e2e tests configure bootstrap discovery to the relay, leave the browser WebSocket implementation intact, and assert dashboard, service/deployment/package/worker, DNS/FIPS mesh, and activity surfaces hydrate through real relay subscriptions.",
+  "out_of_scope_follow_up": "Full assistant, Soul Factory, encrypted mutation, and every route/action workflow coverage remains follow-up work tracked in Beads. Docs NIP-23 relay cache timing was observed during exploration but is not asserted by the initial stable vertical slice."
+}

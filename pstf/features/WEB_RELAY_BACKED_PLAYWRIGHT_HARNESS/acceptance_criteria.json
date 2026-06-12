@@ -1,0 +1,30 @@
+{
+  "feature_id": "WEB_RELAY_BACKED_PLAYWRIGHT_HARNESS",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "A local test relay serves NIP-11 metadata and Nostr WebSocket subscriptions without replacing browser WebSocket.",
+      "tests": ["relay-backed-web-functionality.spec.js beforeAll startBahiaTestRelay"]
+    },
+    {
+      "id": "AC2",
+      "description": "Seed data includes trusted Bahia system discovery and relay set events so the app discovers the local relay before EOSE.",
+      "tests": ["dashboard hydrates first-party read models through real REQ/EVENT/EOSE"]
+    },
+    {
+      "id": "AC3",
+      "description": "Signed control-plane read models hydrate visible dashboard and route data via real EVENT handling.",
+      "tests": ["dashboard hydrates first-party read models through real REQ/EVENT/EOSE", "service, deployment, package, and worker routes render seeded relay projections"]
+    },
+    {
+      "id": "AC4",
+      "description": "DNS and FIPS mesh surfaces use relay metadata and DNS/worker read models from the local relay.",
+      "tests": ["DNS and FIPS mesh pages use relay metadata and DNS read models"]
+    },
+    {
+      "id": "AC5",
+      "description": "Relay-backed activity events appear on the Events route and the tested flows produce no page or console errors.",
+      "tests": ["events consume relay-backed audit events", "attachRuntimeErrorGuards assertions in each test"]
+    }
+  ]
+}
