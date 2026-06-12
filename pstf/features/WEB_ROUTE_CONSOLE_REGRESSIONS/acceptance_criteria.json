@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_ROUTE_CONSOLE_REGRESSIONS",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "Representative static and dynamic Bahia web routes render in Chromium without uncaught page errors.",
+      "testable": true
+    },
+    {
+      "id": "AC-2",
+      "description": "Representative static and dynamic Bahia web routes render in Chromium without unexpected console errors, including bootstrap-discovery failures.",
+      "testable": true
+    },
+    {
+      "id": "AC-3",
+      "description": "The DNS route test provides deterministic NIP-11 metadata for the configured test relay, preventing external DNS/network failures from appearing as route console errors.",
+      "testable": true
+    },
+    {
+      "id": "AC-4",
+      "description": "Regression coverage uses Nostr event-stream harness semantics: scoped REQ delivery receives EVENTs and EOSE rather than timeout-based completion assertions.",
+      "testable": true
+    }
+  ]
+}

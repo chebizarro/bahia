@@ -1,0 +1,26 @@
+{
+  "feature_id": "WEB_ROUTE_CONSOLE_REGRESSIONS",
+  "tests": [
+    {
+      "test": "web/tests/e2e/route-console-regression.spec.js",
+      "type": "playwright-e2e",
+      "acceptance_criteria": ["AC-1", "AC-2", "AC-3", "AC-4"],
+      "routes": [
+        "/", "/services", "/services/svc-1", "/environments", "/environments/env-1",
+        "/deployments", "/deployments/pending", "/deployments/dep-1", "/deployments/runs/run-1",
+        "/artifacts", "/artifacts/art-1", "/backup", "/backup/plans", "/backup/plans/plan-1",
+        "/continuity", "/dns", "/docs", "/docs/features-services", "/events", "/fleet-health",
+        "/llm", "/ml", "/notifications", "/notifications/new", "/notifications/log", "/notifications/notif-1/edit",
+        "/orgs", "/orgs/new", "/orgs/org-1", "/packages", "/packages/pkg-1", "/payments",
+        "/policies", "/policies/policy-1", "/settings", "/settings/profile", "/settings/relays",
+        "/souls", "/souls/new", "/souls/soul-1", "/souls/soul-1/edit", "/workers", "/workers/<pubkey>"
+      ],
+      "assertions": [
+        "body is visible after route navigation",
+        "attachRuntimeErrorGuards reports no pageerror entries",
+        "attachRuntimeErrorGuards reports no console error entries",
+        "http://relay.test.local NIP-11 metadata is fulfilled by the E2E harness"
+      ]
+    }
+  ]
+}

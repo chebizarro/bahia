@@ -1,0 +1,26 @@
+{
+  "feature_id": "WEB_ROUTE_CONSOLE_REGRESSIONS",
+  "title": "Bahia web routes render without runtime console errors",
+  "status": "verified",
+  "beads_issue": "bahia-rso1",
+  "observed_behavior": [
+    "A Playwright MCP route sweep initially produced bootstrap-discovery console errors when the ad hoc MCP harness emitted EOSE without scoped discovery EVENTs.",
+    "After correcting the MCP harness to deliver stored discovery EVENTs before EOSE, representative routes rendered without app console/page errors.",
+    "The new Playwright regression initially exposed a deterministic DNS route harness gap: /dns fetched NIP-11 metadata for ws://relay.test.local and Chromium logged Failed to load resource: net::ERR_NAME_NOT_RESOLVED."
+  ],
+  "intended_behavior": [
+    "Every representative Bahia dashboard route should render under deterministic Nostr and REST E2E harnesses without uncaught page errors or unexpected console errors.",
+    "Nostr bootstrap discovery in the harness must preserve event-stream semantics by delivering scoped EVENT messages before EOSE.",
+    "Routes that perform relay capability discovery must receive deterministic NIP-11 metadata responses in tests instead of relying on external DNS or network availability."
+  ],
+  "scope": {
+    "included": [
+      "web/tests/e2e route-level console regression coverage",
+      "deterministic NIP-11 metadata fulfillment for the test relay"
+    ],
+    "excluded": [
+      "Changing production DNS or relay subscription semantics",
+      "Changing user-facing route behavior"
+    ]
+  }
+}
