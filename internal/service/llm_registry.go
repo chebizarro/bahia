@@ -128,6 +128,9 @@ func (s *LLMRegistryService) ListRoutes(ctx context.Context, limit, offset int) 
 	if limit <= 0 {
 		limit = 100
 	}
+	if s == nil {
+		return nil, nil
+	}
 	if s.mlBacked() {
 		models, err := s.ml.ListModels(ctx, domain.MLTaskKindChatCompletions, limit, offset)
 		if err != nil {
@@ -138,6 +141,9 @@ func (s *LLMRegistryService) ListRoutes(ctx context.Context, limit, offset int) 
 			routes = append(routes, *MLModelToLLMRoute(&models[i]))
 		}
 		return routes, nil
+	}
+	if s.routes == nil {
+		return nil, nil
 	}
 	return s.routes.List(ctx, limit, offset)
 }
@@ -719,6 +725,9 @@ func (s *LLMRegistryService) GetRouteState(ctx context.Context, routeID, envID u
 }
 
 func (s *LLMRegistryService) ListEnvironmentRouteStates(ctx context.Context, envID uuid.UUID) ([]domain.LLMRouteState, error) {
+	if s == nil {
+		return nil, nil
+	}
 	if s.mlBacked() {
 		states, err := s.ListAllRouteStates(ctx)
 		if err != nil {
@@ -732,10 +741,16 @@ func (s *LLMRegistryService) ListEnvironmentRouteStates(ctx context.Context, env
 		}
 		return out, nil
 	}
+	if s.state == nil {
+		return nil, nil
+	}
 	return s.state.ListByEnvironment(ctx, envID)
 }
 
 func (s *LLMRegistryService) ListRouteStates(ctx context.Context, routeID uuid.UUID) ([]domain.LLMRouteState, error) {
+	if s == nil {
+		return nil, nil
+	}
 	if s.mlBacked() {
 		states, err := s.ListAllRouteStates(ctx)
 		if err != nil {
@@ -749,10 +764,16 @@ func (s *LLMRegistryService) ListRouteStates(ctx context.Context, routeID uuid.U
 		}
 		return out, nil
 	}
+	if s.state == nil {
+		return nil, nil
+	}
 	return s.state.ListByRoute(ctx, routeID)
 }
 
 func (s *LLMRegistryService) ListAllRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
+	if s == nil {
+		return nil, nil
+	}
 	if s.mlBacked() {
 		states, err := s.ml.ListInferenceStates(ctx)
 		if err != nil {
@@ -764,10 +785,16 @@ func (s *LLMRegistryService) ListAllRouteStates(ctx context.Context) ([]domain.L
 		}
 		return out, nil
 	}
+	if s.state == nil {
+		return nil, nil
+	}
 	return s.state.ListAll(ctx)
 }
 
 func (s *LLMRegistryService) ListDriftedRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
+	if s == nil {
+		return nil, nil
+	}
 	if s.mlBacked() {
 		states, err := s.ListAllRouteStates(ctx)
 		if err != nil {
@@ -780,6 +807,9 @@ func (s *LLMRegistryService) ListDriftedRouteStates(ctx context.Context) ([]doma
 			}
 		}
 		return out, nil
+	}
+	if s.state == nil {
+		return nil, nil
 	}
 	return s.state.ListDrifted(ctx)
 }

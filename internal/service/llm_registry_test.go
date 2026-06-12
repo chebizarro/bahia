@@ -11,6 +11,50 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestLLMRegistryListMethodsTolerateMissingLegacyRepositories(t *testing.T) {
+	reg := NewLLMRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+
+	routes, err := reg.ListRoutes(t.Context(), 25, 0)
+	if err != nil {
+		t.Fatalf("ListRoutes() error = %v", err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("ListRoutes() returned %d routes, want 0", len(routes))
+	}
+
+	allStates, err := reg.ListAllRouteStates(t.Context())
+	if err != nil {
+		t.Fatalf("ListAllRouteStates() error = %v", err)
+	}
+	if len(allStates) != 0 {
+		t.Fatalf("ListAllRouteStates() returned %d states, want 0", len(allStates))
+	}
+
+	envStates, err := reg.ListEnvironmentRouteStates(t.Context(), uuid.New())
+	if err != nil {
+		t.Fatalf("ListEnvironmentRouteStates() error = %v", err)
+	}
+	if len(envStates) != 0 {
+		t.Fatalf("ListEnvironmentRouteStates() returned %d states, want 0", len(envStates))
+	}
+
+	routeStates, err := reg.ListRouteStates(t.Context(), uuid.New())
+	if err != nil {
+		t.Fatalf("ListRouteStates() error = %v", err)
+	}
+	if len(routeStates) != 0 {
+		t.Fatalf("ListRouteStates() returned %d states, want 0", len(routeStates))
+	}
+
+	drifted, err := reg.ListDriftedRouteStates(t.Context())
+	if err != nil {
+		t.Fatalf("ListDriftedRouteStates() error = %v", err)
+	}
+	if len(drifted) != 0 {
+		t.Fatalf("ListDriftedRouteStates() returned %d states, want 0", len(drifted))
+	}
+}
+
 func TestLLMRegistryCreateIntentAndObservationState(t *testing.T) {
 	routeID, releaseID, envID := uuid.New(), uuid.New(), uuid.New()
 	repos := newLLMRegistryFakes(routeID, releaseID, envID)
