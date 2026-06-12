@@ -17,6 +17,8 @@ const SIDEBAR_STORAGE_KEY = 'bahia_assistant_sidebar';
 const RECENT_TRANSCRIPT_SECONDS = 14 * 24 * 60 * 60;
 const TRANSCRIPT_LIMIT = 300;
 const SESSION_LIMIT = 100;
+const ASSISTANT_PROMPT_TIMEOUT_MS = 120000;
+const ASSISTANT_APPROVAL_TIMEOUT_MS = 180000;
 
 export const assistantConnection = $state({
   status: 'idle', // idle | waiting_auth | bootstrapping | live | disconnected | error
@@ -488,7 +490,8 @@ export async function publishAssistantPrompt({ prompt, sessionId, routeContext =
     operation: 'assistant/prompt',
     payload: content,
     tags: [['session', resolvedSessionId], ['turn', turnId]],
-    signal
+    signal,
+    timeoutMs: ASSISTANT_PROMPT_TIMEOUT_MS
   });
 
   applyLocalAssistantItem(assistantResultItem(response, resolvedSessionId));
@@ -519,7 +522,8 @@ export async function publishAssistantApproval({ sessionId, planHash, decision, 
     operation: 'assistant/approval',
     payload: content,
     tags: [['session', sessionId], ['plan-hash', effectivePlanHash], ['decision', decision]],
-    signal
+    signal,
+    timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS
   });
 
   applyLocalAssistantItem(assistantResultItem(response, sessionId));
