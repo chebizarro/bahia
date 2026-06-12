@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip19"
+	gonostr "fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -234,7 +234,7 @@ func (s *FIPSSubscriber) filter() gonostr.Filter {
 		tags["protocol"] = []string{s.appNamespace}
 	}
 	return gonostr.Filter{
-		Kinds: []int{FIPSOverlayAdvertKind},
+		Kinds: []gonostr.Kind{canonicalKind(FIPSOverlayAdvertKind)},
 		Tags:  tags,
 	}
 }
@@ -260,22 +260,22 @@ func (s *FIPSSubscriber) handleEvent(ctx context.Context, ev *gonostr.Event) {
 	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
 		if ev != nil {
-			eventID = ev.ID
+			eventID = eventIDHex(ev)
 		}
 		s.logger.Warn("dropping invalid FIPS advert", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	worker, advert, err := s.workerFromEvent(ctx, ev)
 	if err != nil {
-		s.logger.Warn("dropping FIPS advert", zap.String("event_id", ev.ID), zap.String("pubkey", ev.PubKey), zap.Error(err))
+		s.logger.Warn("dropping FIPS advert", zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", eventPubKeyHex(ev)), zap.Error(err))
 		return
 	}
 	if worker == nil {
-		s.logger.Debug("ignoring FIPS advert from unknown worker", zap.String("event_id", ev.ID), zap.String("pubkey", ev.PubKey))
+		s.logger.Debug("ignoring FIPS advert from unknown worker", zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", eventPubKeyHex(ev)))
 		return
 	}
 	if err := s.workerRepo.Upsert(ctx, worker); err != nil {
-		s.logger.Warn("updating worker from FIPS advert failed", zap.String("event_id", ev.ID), zap.String("pubkey", ev.PubKey), zap.Error(err))
+		s.logger.Warn("updating worker from FIPS advert failed", zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", eventPubKeyHex(ev)), zap.Error(err))
 		return
 	}
 	for _, handler := range s.handlers {
@@ -284,7 +284,7 @@ func (s *FIPSSubscriber) handleEvent(ctx context.Context, ev *gonostr.Event) {
 }
 
 func (s *FIPSSubscriber) workerFromEvent(ctx context.Context, ev *gonostr.Event) (*domain.Worker, OverlayAdvert, error) {
-	if ev.Kind != FIPSOverlayAdvertKind {
+	if !eventKindMatches(ev, FIPSOverlayAdvertKind) {
 		return nil, OverlayAdvert{}, fmt.Errorf("unexpected event kind %d", ev.Kind)
 	}
 	if !eventHasTagValue(ev.Tags, "d", FIPSOverlayAdvertIdentifier) {
@@ -293,8 +293,9 @@ func (s *FIPSSubscriber) workerFromEvent(ctx context.Context, ev *gonostr.Event)
 	if s.appNamespace != "" && !eventHasTagValue(ev.Tags, "protocol", s.appNamespace) {
 		return nil, OverlayAdvert{}, fmt.Errorf("missing expected protocol tag %q", s.appNamespace)
 	}
+	pubkey := eventPubKeyHex(ev)
 	if len(s.allowedPubkeys) > 0 {
-		if _, ok := s.allowedPubkeys[strings.ToLower(ev.PubKey)]; !ok {
+		if _, ok := s.allowedPubkeys[strings.ToLower(pubkey)]; !ok {
 			return nil, OverlayAdvert{}, fmt.Errorf("pubkey is not allowlisted")
 		}
 	}
@@ -303,11 +304,11 @@ func (s *FIPSSubscriber) workerFromEvent(ctx context.Context, ev *gonostr.Event)
 		return nil, OverlayAdvert{}, err
 	}
 	endpoints := advert.FIPSEndpoints()
-	overlayIP, err := FIPSOverlayAddress(ev.PubKey)
+	overlayIP, err := FIPSOverlayAddress(pubkey)
 	if err != nil {
 		return nil, OverlayAdvert{}, err
 	}
-	worker, err := s.workerRepo.GetByPubKey(ctx, ev.PubKey)
+	worker, err := s.workerRepo.GetByPubKey(ctx, pubkey)
 	if err != nil {
 		return nil, OverlayAdvert{}, fmt.Errorf("lookup worker by pubkey: %w", err)
 	}
@@ -317,8 +318,8 @@ func (s *FIPSSubscriber) workerFromEvent(ctx context.Context, ev *gonostr.Event)
 		}
 		now := s.now()
 		worker = &domain.Worker{
-			PubKey:              ev.PubKey,
-			Name:                ev.PubKey,
+			PubKey:              pubkey,
+			Name:                pubkey,
 			MaxConcurrentJobs:   1,
 			LastAdvertisementAt: now,
 			Status:              domain.WorkerStatusOnline,

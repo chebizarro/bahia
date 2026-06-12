@@ -1,0 +1,37 @@
+{
+  "feature_id": "NOSTR_FIATJAF_MODULE_MIGRATION",
+  "title": "Migrate Bahia Nostr code from github.com/nbd-wtf/go-nostr to fiatjaf.com/nostr",
+  "item_1_scope": {
+    "status": "implemented_with_downstream_blockers_recorded",
+    "included_paths": [
+      "internal/adapters/nostr/**",
+      "internal/adapters/nostr/relayadmin/**",
+      "internal/nostrutil/**",
+      "internal/controlplane/signer.go",
+      "go.mod",
+      "go.sum"
+    ],
+    "excluded_paths": [
+      "broad CLI/public-client/protocol-consumer sweep",
+      "notifications, controlplane reactors/publishers, public pkg/client/pkg/discovery, soul factory, fips bridge, docs publishers, blossom/sbom/signing/signet adapters"
+    ]
+  },
+  "intended_behavior": [
+    "The core canonical Nostr adapter/helper layer uses fiatjaf.com/nostr event, relay, filter, key, signing, validation, NIP-11, and NIP-19 APIs.",
+    "Core adapter subscriptions remain event-driven with scoped REQ filters and explicit EVENT/EOSE/CLOSED/AUTH handling.",
+    "Publishing continues to verify relay OK outcomes through fiatjaf relay Publish errors and records partial failure metadata.",
+    "Inbound events are validated with canonical event ID, Schnorr signature, timestamp, tag, and content checks before persistence or dispatch.",
+    "No polling or sleep-based completion logic is introduced for relay event delivery or historical catch-up."
+  ],
+  "observed_behavior_before": [
+    "Core adapter files imported github.com/nbd-wtf/go-nostr and relied on string-shaped Event ID, PubKey, Kind, Sig, filter author/kind, and signing APIs.",
+    "The repository already had an older fiatjaf.com/nostr module pin but the core adapter layer was still coupled to go-nostr."
+  ],
+  "implementation_notes": [
+    "Added internal/nostrutil to centralize canonical fiatjaf private-key decoding, event signing, pubkey derivation, signature hex encoding, kind conversion, and pubkey filter conversion.",
+    "Added adapter-local canonical helpers to keep repository string records and domain metadata stable while the relay/event layer uses fiatjaf typed IDs, pubkeys, kinds, and signatures.",
+    "Updated RelayPool subscription wrappers for fiatjaf single-filter subscriptions and disabled fiatjaf fake EOSE timeout with MaxWaitForEOSE set to math.MaxInt64 duration, preserving Bahia EOSE semantics.",
+    "Updated relay AUTH signing to fiatjaf Auth callback signature and canonical event signing.",
+    "Updated core adapter tests and fixtures to use typed fiatjaf events and valid canonical pubkeys where filter scoping is asserted."
+  ]
+}

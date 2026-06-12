@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
@@ -570,7 +570,7 @@ func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) 
 	if err := decodeContent(ev, &worker); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), ev.PubKey), worker.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), eventPubKeyHex(ev)), worker.UpdatedAt, false, func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{Worker: &worker}
 	}), nil
 }
@@ -621,7 +621,7 @@ func decodeWorkerAdvertisementProjection(ev *gonostr.Event) (*DecodedProjectionE
 			return nil, fmt.Errorf("decode worker advertisement content: %w", err)
 		}
 	}
-	worker := &domain.Worker{PubKey: ev.PubKey, Name: content.Name, Description: content.Description, MaxConcurrentJobs: content.MaxConcurrentJobs, CurrentQueueDepth: content.CurrentQueueDepth, Resources: content.Resources, Accelerators: content.Accelerators, RuntimeTarget: content.RuntimeTarget, MLCapabilities: content.MLCapabilities, LastAdvertisementAt: ev.CreatedAt.Time().UTC(), Status: domain.WorkerStatusOnline, CreatedAt: ev.CreatedAt.Time().UTC(), UpdatedAt: ev.CreatedAt.Time().UTC()}
+	worker := &domain.Worker{PubKey: eventPubKeyHex(ev), Name: content.Name, Description: content.Description, MaxConcurrentJobs: content.MaxConcurrentJobs, CurrentQueueDepth: content.CurrentQueueDepth, Resources: content.Resources, Accelerators: content.Accelerators, RuntimeTarget: content.RuntimeTarget, MLCapabilities: content.MLCapabilities, LastAdvertisementAt: ev.CreatedAt.Time().UTC(), Status: domain.WorkerStatusOnline, CreatedAt: ev.CreatedAt.Time().UTC(), UpdatedAt: ev.CreatedAt.Time().UTC()}
 	for _, tag := range ev.Tags {
 		if len(tag) < 2 {
 			continue
@@ -711,7 +711,7 @@ func decodeHeartbeatProjection(ev *gonostr.Event) (*DecodedProjectionEvent, erro
 func decodeContinuityCommandProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 	var command *ContinuityCommandRequest
 	var err error
-	if ev.Kind == KindFailoverRequest {
+	if eventKindMatches(ev, KindFailoverRequest) {
 		command, err = DecodeFailoverRequestEvent(ev)
 	} else {
 		command, err = DecodeRecoveryRequestEvent(ev)
@@ -728,7 +728,7 @@ func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEven
 		return nil, err
 	}
 	previous := domain.ContinuityMode("")
-	if ev.Kind == KindDegradedModeActivation {
+	if eventKindMatches(ev, KindDegradedModeActivation) {
 		previous = domain.ContinuityMode(tagValueLocal(ev.Tags, "previous_profile"))
 	}
 	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), firstTime(status.ChangedAt, ev.CreatedAt.Time().UTC()), false, func(out *DecodedProjectionEvent) {
@@ -742,12 +742,12 @@ func decodeNoopProjection(group string, tier int, family ProjectionFamily) Decod
 			return nil, fmt.Errorf("projection event is nil")
 		}
 		return &DecodedProjectionEvent{
-			Kind:      ev.Kind,
+			Kind:      eventKindInt(ev),
 			DTag:      noopProjectionDTag(ev),
 			Group:     group,
 			Tier:      tier,
 			Timestamp: ev.CreatedAt.Time().UTC(),
-			SourceID:  ev.ID,
+			SourceID:  eventIDHex(ev),
 			Family:    family,
 		}, nil
 	}
@@ -780,7 +780,7 @@ func noopProjectionDTag(ev *gonostr.Event) string {
 		tagValueLocal(ev.Tags, "run"),
 		tagValueLocal(ev.Tags, "policy"),
 		tagValueLocal(ev.Tags, "e"),
-		ev.ID,
+		eventIDHex(ev),
 	)
 }
 
@@ -801,7 +801,7 @@ func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, u
 	if updatedAt.IsZero() {
 		updatedAt = ev.CreatedAt.Time().UTC()
 	}
-	out := &DecodedProjectionEvent{Kind: ev.Kind, DTag: firstNonBlank(tagValueLocal(ev.Tags, "d"), entityKey), Group: "", Tier: 0, Timestamp: updatedAt.UTC(), SourceID: ev.ID, Family: family, Tombstone: tombstone}
+	out := &DecodedProjectionEvent{Kind: eventKindInt(ev), DTag: firstNonBlank(tagValueLocal(ev.Tags, "d"), entityKey), Group: "", Tier: 0, Timestamp: updatedAt.UTC(), SourceID: eventIDHex(ev), Family: family, Tombstone: tombstone}
 	if out.DTag == "" {
 		out.DTag = entityKey
 	}
@@ -812,7 +812,7 @@ func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, u
 }
 
 func continuityDTag(ev *gonostr.Event) string {
-	return firstNonBlank(tagValueLocal(ev.Tags, "d"), tagValueLocal(ev.Tags, "service"), tagValueLocal(ev.Tags, "worker"), ev.ID)
+	return firstNonBlank(tagValueLocal(ev.Tags, "d"), tagValueLocal(ev.Tags, "service"), tagValueLocal(ev.Tags, "worker"), eventIDHex(ev))
 }
 
 func tagValueLocal(tags gonostr.Tags, key string) string {

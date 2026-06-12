@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -184,7 +184,7 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 	}
 
 	ev := nostr.Event{
-		Kind:      kind,
+		Kind:      canonicalKind(kind),
 		Content:   string(content),
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags: nostr.Tags{
@@ -193,7 +193,7 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 		},
 	}
 
-	if err := ev.Sign(p.privateKey); err != nil {
+	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
 		p.logger.Error("failed to sign nostr event", zap.Error(err))
 		return
 	}
@@ -208,18 +208,18 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 	if p.eventRepo != nil {
 		tagsJSON, _ := json.Marshal(ev.Tags)
 		rec := &repository.NostrEventRecord{
-			ID:         ev.ID,
-			Kind:       ev.Kind,
-			PubKey:     ev.PubKey,
+			ID:         ev.ID.Hex(),
+			Kind:       int(ev.Kind),
+			PubKey:     ev.PubKey.Hex(),
 			Content:    ev.Content,
 			Tags:       tagsJSON,
-			Sig:        ev.Sig,
+			Sig:        eventSignatureHex(&ev),
 			CreatedAt:  ev.CreatedAt.Time(),
 			EntityType: label,
 		}
 		if _, recordErr := p.eventRepo.Record(ctx, rec); recordErr != nil {
 			p.logger.Warn("failed to record nostr event to audit table",
-				zap.String("event_id", ev.ID),
+				zap.String("event_id", ev.ID.Hex()),
 				zap.Error(recordErr),
 			)
 		}
@@ -228,7 +228,7 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 	if published > 0 {
 		p.logger.Debug("nostr event published",
 			zap.String("event_type", label),
-			zap.String("event_id", ev.ID),
+			zap.String("event_id", ev.ID.Hex()),
 			zap.Int("relays", published),
 		)
 	}
@@ -254,8 +254,8 @@ func (p *Publisher) Subscribe(ctx context.Context, kinds []int, handler func(ev 
 	}
 
 	filters := []nostr.Filter{{
-		Kinds: kinds,
-		Since: &since,
+		Kinds: filterKindsFromInts(kinds),
+		Since: since,
 	}}
 
 	merged, err := p.pool.SubscribeAllWithEOSE(ctx, filters)
@@ -306,8 +306,8 @@ func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr
 	if p.privateKey == "" {
 		return nil, fmt.Errorf("nostr publisher private key not configured")
 	}
-	if err := ev.Sign(p.privateKey); err != nil {
-		return nil, fmt.Errorf("signing nostr event: %w", err)
+	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
+		return nil, err
 	}
 	return p.pool.PublishWithResults(ctx, *ev)
 }

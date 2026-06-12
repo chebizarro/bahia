@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 )
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ func TestBackwardCompat_LegacyPayloadsDecodeWithoutError(t *testing.T) {
 	for kind, gp := range goldenLegacyPayloads() {
 		t.Run(fmt.Sprintf("kind_%d", kind), func(t *testing.T) {
 			ev := &gonostr.Event{
-				Kind:      kind,
+				Kind:      canonicalKind(kind),
 				CreatedAt: gonostr.Now(),
 				Tags:      gp.tags,
 				Content:   gp.content,
@@ -151,7 +151,7 @@ func TestBackwardCompat_EnrichedPayloadsIncludeNewFields(t *testing.T) {
 	for kind, gp := range goldenEnrichedPayloads() {
 		t.Run(fmt.Sprintf("kind_%d", kind), func(t *testing.T) {
 			ev := &gonostr.Event{
-				Kind:      kind,
+				Kind:      canonicalKind(kind),
 				CreatedAt: gonostr.Now(),
 				Tags:      gp.tags,
 				Content:   gp.content,
@@ -252,7 +252,7 @@ func TestBackwardCompat_DecodersTolerateMissingOptionalFields(t *testing.T) {
 	// State without desired_hash, renderer, target
 	t.Run("state_missing_enrichment", func(t *testing.T) {
 		ev := &gonostr.Event{
-			Kind:      KindServiceState,
+			Kind:      canonicalKind(KindServiceState),
 			CreatedAt: gonostr.Now(),
 			Tags:      gonostr.Tags{{"d", "svc:env"}},
 			Content:   `{"deleted":false,"service_id":"svc","environment_id":"env","drift_status":"unknown","updated_at":"2026-01-01T00:00:00Z"}`,
@@ -272,7 +272,7 @@ func TestBackwardCompat_DecodersTolerateMissingOptionalFields(t *testing.T) {
 	// Intent without desired_hash, renderer, target
 	t.Run("intent_missing_enrichment", func(t *testing.T) {
 		ev := &gonostr.Event{
-			Kind:      KindDeploymentIntentRegistry,
+			Kind:      canonicalKind(KindDeploymentIntentRegistry),
 			CreatedAt: gonostr.Now(),
 			Tags:      gonostr.Tags{{"d", "intent-bare"}},
 			Content:   `{"deleted":false,"id":"intent-bare","service_id":"svc","environment_id":"env","artifact_id":"art","status":"approved","updated_at":"2026-01-01T00:00:00Z"}`,
@@ -292,7 +292,7 @@ func TestBackwardCompat_DecodersTolerateMissingOptionalFields(t *testing.T) {
 	// Run without renderer, desired_hash, revision_hash, target, apply_summary, observation_id
 	t.Run("run_missing_enrichment", func(t *testing.T) {
 		ev := &gonostr.Event{
-			Kind:      KindDeploymentRunRegistry,
+			Kind:      canonicalKind(KindDeploymentRunRegistry),
 			CreatedAt: gonostr.Now(),
 			Tags:      gonostr.Tags{{"d", "run-bare"}},
 			Content:   `{"deleted":false,"id":"run-bare","deployment_intent_id":"intent-1","status":"succeeded","updated_at":"2026-01-01T00:00:00Z"}`,
@@ -404,7 +404,7 @@ func TestBackwardCompat_DecodersIgnoreUnknownFutureFields(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ev := &gonostr.Event{
-				Kind:      tc.kind,
+				Kind:      canonicalKind(tc.kind),
 				CreatedAt: gonostr.Now(),
 				Tags:      gonostr.Tags{{"d", tc.dtag}},
 				Content:   tc.content,
@@ -529,7 +529,7 @@ func TestBackwardCompat_ReplaceableDTagSemantics(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ev := &gonostr.Event{
-				Kind:      tc.kind,
+				Kind:      canonicalKind(tc.kind),
 				CreatedAt: gonostr.Timestamp(now.Unix()),
 				Tags:      tc.tags,
 				Content:   tc.content,
@@ -552,7 +552,7 @@ func TestBackwardCompat_GoldenPayloadRoundTrip(t *testing.T) {
 
 	t.Run("legacy_state_roundtrip", func(t *testing.T) {
 		gp := goldenLegacyPayloads()[KindServiceState]
-		ev := &gonostr.Event{Kind: KindServiceState, CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
+		ev := &gonostr.Event{Kind: canonicalKind(KindServiceState), CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
 		decoded := catalogDecode(t, catalog, ev)
 		reJSON, err := json.Marshal(decoded.State)
 		if err != nil {
@@ -573,7 +573,7 @@ func TestBackwardCompat_GoldenPayloadRoundTrip(t *testing.T) {
 
 	t.Run("enriched_state_roundtrip", func(t *testing.T) {
 		gp := goldenEnrichedPayloads()[KindServiceState]
-		ev := &gonostr.Event{Kind: KindServiceState, CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
+		ev := &gonostr.Event{Kind: canonicalKind(KindServiceState), CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
 		decoded := catalogDecode(t, catalog, ev)
 		reJSON, err := json.Marshal(decoded.State)
 		if err != nil {
@@ -596,7 +596,7 @@ func TestBackwardCompat_GoldenPayloadRoundTrip(t *testing.T) {
 
 	t.Run("enriched_intent_roundtrip", func(t *testing.T) {
 		gp := goldenEnrichedPayloads()[KindDeploymentIntentRegistry]
-		ev := &gonostr.Event{Kind: KindDeploymentIntentRegistry, CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
+		ev := &gonostr.Event{Kind: canonicalKind(KindDeploymentIntentRegistry), CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
 		decoded := catalogDecode(t, catalog, ev)
 		reJSON, err := json.Marshal(decoded.Intent)
 		if err != nil {
@@ -616,7 +616,7 @@ func TestBackwardCompat_GoldenPayloadRoundTrip(t *testing.T) {
 
 	t.Run("enriched_run_roundtrip", func(t *testing.T) {
 		gp := goldenEnrichedPayloads()[KindDeploymentRunRegistry]
-		ev := &gonostr.Event{Kind: KindDeploymentRunRegistry, CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
+		ev := &gonostr.Event{Kind: canonicalKind(KindDeploymentRunRegistry), CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
 		decoded := catalogDecode(t, catalog, ev)
 		reJSON, err := json.Marshal(decoded.Run)
 		if err != nil {
@@ -651,7 +651,7 @@ func TestBackwardCompat_FamilyAssignmentUnchanged(t *testing.T) {
 
 	for kind, gp := range goldenLegacyPayloads() {
 		t.Run(fmt.Sprintf("legacy_kind_%d_family", kind), func(t *testing.T) {
-			ev := &gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
+			ev := &gonostr.Event{Kind: canonicalKind(kind), CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
 			decoded := catalogDecode(t, catalog, ev)
 			wantFamily := expectedFamilies[kind]
 			if decoded.Family != wantFamily {
@@ -662,7 +662,7 @@ func TestBackwardCompat_FamilyAssignmentUnchanged(t *testing.T) {
 
 	for kind, gp := range goldenEnrichedPayloads() {
 		t.Run(fmt.Sprintf("enriched_kind_%d_family", kind), func(t *testing.T) {
-			ev := &gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
+			ev := &gonostr.Event{Kind: canonicalKind(kind), CreatedAt: gonostr.Now(), Tags: gp.tags, Content: gp.content}
 			decoded := catalogDecode(t, catalog, ev)
 			wantFamily := expectedFamilies[kind]
 			if decoded.Family != wantFamily {
@@ -684,8 +684,8 @@ func TestBackwardCompat_MixedLegacyAndEnrichedStream(t *testing.T) {
 	enrichedState := goldenEnrichedPayloads()[KindServiceState]
 
 	events := []*gonostr.Event{
-		{Kind: KindServiceState, CreatedAt: gonostr.Timestamp(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC).Unix()), Tags: legacyState.tags, Content: legacyState.content},
-		{Kind: KindServiceState, CreatedAt: gonostr.Timestamp(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC).Unix()), Tags: enrichedState.tags, Content: enrichedState.content},
+		{Kind: canonicalKind(KindServiceState), CreatedAt: gonostr.Timestamp(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC).Unix()), Tags: legacyState.tags, Content: legacyState.content},
+		{Kind: canonicalKind(KindServiceState), CreatedAt: gonostr.Timestamp(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC).Unix()), Tags: enrichedState.tags, Content: enrichedState.content},
 	}
 
 	for i, ev := range events {

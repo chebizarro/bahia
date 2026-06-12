@@ -1,6 +1,6 @@
 package nostr
 
-import gonostr "github.com/nbd-wtf/go-nostr"
+import gonostr "fiatjaf.com/nostr"
 
 const (
 	SystemDiscoverySchema = "bahia.system-discovery.v1"

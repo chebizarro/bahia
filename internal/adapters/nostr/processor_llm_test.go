@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -44,12 +44,30 @@ func (p *capturePublisher) Publish(_ context.Context, e events.Event) {
 }
 func (p *capturePublisher) Subscribe(events.EventType, events.Handler) {}
 
+func processorTestWorkerPubKeyHex(t *testing.T) string {
+	t.Helper()
+	pubkey, err := publicKeyHexFromPrivateKeyHex(testNostrPrivateKey)
+	if err != nil {
+		t.Fatalf("derive worker pubkey: %v", err)
+	}
+	return pubkey
+}
+
+func processorTestWorkerPubKey(t *testing.T) gonostr.PubKey {
+	t.Helper()
+	pubkey, err := gonostr.PubKeyFromHex(processorTestWorkerPubKeyHex(t))
+	if err != nil {
+		t.Fatalf("decode worker pubkey: %v", err)
+	}
+	return pubkey
+}
+
 func TestProcessorWorkerAdvertisementParsesLLMRuntimeMetadata(t *testing.T) {
 	repo := &captureWorkerRepo{}
 	processor := NewProcessor(nil, repo, zap.NewNop())
 	ev := &gonostr.Event{
-		PubKey:    "worker-pubkey",
-		Kind:      kindLoomWorkerAd,
+		PubKey:    processorTestWorkerPubKey(t),
+		Kind:      canonicalKind(kindLoomWorkerAd),
 		CreatedAt: gonostr.Now(),
 		Content:   `{"name":"gpu-worker","resources":{"cpu_cores":32,"memory_gb":256,"disk_gb":1000},"accelerators":[{"vendor":"nvidia","model":"L40S","count":1,"memory_gb":48,"driver":"535"}],"runtime_target":{"type":"compose","endpoint_ref":"gpu-a","compose_dir":"/srv/llm","public_base_url":"https://gpu-a.example"}}`,
 	}
@@ -73,8 +91,8 @@ func TestProcessorWorkerAdvertisementParsesTelemetryAssessesPressureAndPublishes
 	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop())
 	sampledAt := time.Now().UTC().Truncate(time.Second)
 	ev := &gonostr.Event{
-		PubKey:    "worker-pubkey",
-		Kind:      kindLoomWorkerAd,
+		PubKey:    processorTestWorkerPubKey(t),
+		Kind:      canonicalKind(kindLoomWorkerAd),
 		CreatedAt: gonostr.Timestamp(sampledAt.Unix()),
 		Content:   fmt.Sprintf(`{"name":"telemetry-worker","max_concurrent_jobs":2,"current_queue_depth":0,"telemetry":{"sampled_at":%q,"memory":{"total_bytes":68719476736,"available_bytes":42949672960},"disk":{"path":"/","total_bytes":1073741824000,"available_bytes":322122547200},"thermal":{"max_temperature_c":60,"throttled":false}}}`, sampledAt.Format(time.RFC3339)),
 	}
@@ -92,7 +110,7 @@ func TestProcessorWorkerAdvertisementParsesTelemetryAssessesPressureAndPublishes
 		t.Fatalf("published events = %d, want 1", len(publisher.events))
 	}
 	published := publisher.events[0]
-	if published.Type != events.EventWorkerTelemetryObserved || published.EntityID != "worker-pubkey" {
+	if published.Type != events.EventWorkerTelemetryObserved || published.EntityID != processorTestWorkerPubKeyHex(t) {
 		t.Fatalf("published event = %#v", published)
 	}
 	payload, ok := published.Data.(events.WorkerTelemetryObserved)
@@ -113,8 +131,8 @@ func TestProcessorWorkerAdvertisementUsesConfiguredPressureThresholds(t *testing
 	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop(), WithPressureThresholds(thresholds))
 	sampledAt := time.Now().UTC().Truncate(time.Second)
 	ev := &gonostr.Event{
-		PubKey:    "worker-pubkey",
-		Kind:      kindLoomWorkerAd,
+		PubKey:    processorTestWorkerPubKey(t),
+		Kind:      canonicalKind(kindLoomWorkerAd),
 		CreatedAt: gonostr.Timestamp(sampledAt.Unix()),
 		Content:   fmt.Sprintf(`{"name":"telemetry-worker","max_concurrent_jobs":2,"current_queue_depth":0,"telemetry":{"sampled_at":%q,"memory":{"total_bytes":68719476736,"available_bytes":42949672960},"disk":{"path":"/","total_bytes":1073741824000,"available_bytes":322122547200},"thermal":{"max_temperature_c":60,"throttled":false}}}`, sampledAt.Format(time.RFC3339)),
 	}
@@ -131,12 +149,12 @@ func TestProcessorWorkerAdvertisementUsesConfiguredPressureThresholds(t *testing
 }
 
 func TestProcessorWorkerAdvertisementSkipsTelemetryEventForStaleAd(t *testing.T) {
-	repo := &captureWorkerRepo{worker: &domain.Worker{PubKey: "worker-pubkey", LastAdvertisementAt: fixedProcessorTime().Add(time.Minute)}}
+	repo := &captureWorkerRepo{worker: &domain.Worker{PubKey: processorTestWorkerPubKeyHex(t), LastAdvertisementAt: fixedProcessorTime().Add(time.Minute)}}
 	publisher := &capturePublisher{}
 	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop())
 	ev := &gonostr.Event{
-		PubKey:    "worker-pubkey",
-		Kind:      kindLoomWorkerAd,
+		PubKey:    processorTestWorkerPubKey(t),
+		Kind:      canonicalKind(kindLoomWorkerAd),
 		CreatedAt: gonostr.Timestamp(fixedProcessorTime().Unix()),
 		Content:   `{"name":"stale-worker","telemetry":{"sampled_at":"2026-05-24T12:00:00Z"}}`,
 	}

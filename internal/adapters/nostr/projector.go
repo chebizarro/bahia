@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -1887,7 +1887,11 @@ func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
 	p.dnsCacheHydrated = true
 	servicePubkey := ""
 	if p.privateKey != "" {
-		servicePubkey, _ = gonostr.GetPublicKey(p.privateKey)
+		var deriveErr error
+		servicePubkey, deriveErr = publicKeyHexFromPrivateKeyHex(p.privateKey)
+		if deriveErr != nil {
+			return fmt.Errorf("derive DNS endpoint projection service pubkey: %w", deriveErr)
+		}
 	}
 	seen := map[string]struct{}{}
 	for _, record := range records {
@@ -3186,13 +3190,13 @@ func isLLMEvent(t events.EventType) bool {
 
 func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
 	ev := gonostr.Event{
-		Kind:      kind,
+		Kind:      canonicalKind(kind),
 		CreatedAt: gonostr.Now(),
 		Tags:      tags,
 		Content:   content,
 	}
-	if err := ev.Sign(p.privateKey); err != nil {
-		return fmt.Errorf("sign event: %w", err)
+	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
+		return err
 	}
 	published, err := p.publisher.Publish(ctx, ev)
 	if err != nil {
@@ -3204,21 +3208,21 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	if p.eventRepo != nil {
 		tagsJSON, _ := json.Marshal(ev.Tags)
 		if _, err := p.eventRepo.Record(ctx, &repository.NostrEventRecord{
-			ID:         ev.ID,
-			Kind:       ev.Kind,
-			PubKey:     ev.PubKey,
+			ID:         eventIDHex(&ev),
+			Kind:       eventKindInt(&ev),
+			PubKey:     eventPubKeyHex(&ev),
 			Content:    ev.Content,
 			Tags:       tagsJSON,
-			Sig:        ev.Sig,
+			Sig:        eventSignatureHex(&ev),
 			CreatedAt:  ev.CreatedAt.Time(),
 			ReceivedAt: time.Now().UTC(),
 			EntityType: entityType,
 			EntityID:   entityID,
 		}); err != nil {
-			p.logger.Warn("failed to record projected Nostr event", zap.String("event_id", ev.ID), zap.Int("kind", ev.Kind), zap.Error(err))
+			p.logger.Warn("failed to record projected Nostr event", zap.String("event_id", eventIDHex(&ev)), zap.Int("kind", eventKindInt(&ev)), zap.Error(err))
 		}
 	}
-	p.logger.Debug("projected Nostr event published", zap.Int("kind", kind), zap.String("event_id", ev.ID), zap.Int("relays", published))
+	p.logger.Debug("projected Nostr event published", zap.Int("kind", kind), zap.String("event_id", eventIDHex(&ev)), zap.Int("relays", published))
 	return nil
 }
 

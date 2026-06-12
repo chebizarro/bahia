@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -77,7 +77,7 @@ func TestFIPSOverlayAddressKnownVector(t *testing.T) {
 
 func TestFIPSSubscriberFilterUsesFixedDTagAndOptionalProtocolNamespace(t *testing.T) {
 	unscoped := NewFIPSSubscriber(nil, newFIPSTestWorkerRepo(), zap.NewNop())
-	require.Equal(t, []int{FIPSOverlayAdvertKind}, unscoped.filter().Kinds)
+	require.Equal(t, []gonostr.Kind{canonicalKind(FIPSOverlayAdvertKind)}, unscoped.filter().Kinds)
 	require.Equal(t, []string{FIPSOverlayAdvertIdentifier}, unscoped.filter().Tags["d"])
 	require.NotContains(t, unscoped.filter().Tags, "protocol")
 
@@ -107,7 +107,7 @@ func TestFIPSSubscriberMatchesWorkerByPubkeyAndAppliesAdvert(t *testing.T) {
 		"endpoints":[{"transport":"udp","addr":"203.0.113.45:2121"}]
 	}`)
 	repo := newFIPSTestWorkerRepo(&domain.Worker{
-		PubKey:              ev.PubKey,
+		PubKey:              eventPubKeyHex(ev),
 		Name:                "worker-a",
 		MaxConcurrentJobs:   2,
 		LastAdvertisementAt: now,
@@ -120,7 +120,7 @@ func TestFIPSSubscriberMatchesWorkerByPubkeyAndAppliesAdvert(t *testing.T) {
 
 	require.Len(t, repo.upserts, 1)
 	updated := repo.upserts[0]
-	require.Equal(t, ev.PubKey, updated.PubKey)
+	require.Equal(t, eventPubKeyHex(ev), updated.PubKey)
 	require.NotEmpty(t, updated.FIPSOverlayAddr)
 	require.Equal(t, []domain.FIPSTransportEndpoint{{Transport: "udp", Address: "203.0.113.45:2121"}}, updated.FIPSEndpoints)
 }
@@ -147,7 +147,7 @@ func TestFIPSSubscriberRequiresFixedIdentifier(t *testing.T) {
 		"version":1,
 		"endpoints":[{"transport":"udp","addr":"203.0.113.45:2121"}]
 	}`)
-	repo := newFIPSTestWorkerRepo(&domain.Worker{PubKey: ev.PubKey})
+	repo := newFIPSTestWorkerRepo(&domain.Worker{PubKey: eventPubKeyHex(ev)})
 	subscriber := NewFIPSSubscriber(nil, repo, zap.NewNop(), withFIPSClock(func() time.Time { return now }))
 
 	subscriber.handleEvent(context.Background(), ev)
@@ -165,7 +165,7 @@ func TestFIPSSubscriberRequiresConfiguredProtocolTag(t *testing.T) {
 	missingProtocol := signedFIPSAdvertEvent(t, now, content)
 	wrongProtocol := signedFIPSAdvertEvent(t, now, content, gonostr.Tag{"protocol", "other-namespace"})
 	matchingProtocol := signedFIPSAdvertEvent(t, now, content, gonostr.Tag{"protocol", "bahia-mesh-v1"})
-	repo := newFIPSTestWorkerRepo(&domain.Worker{PubKey: missingProtocol.PubKey})
+	repo := newFIPSTestWorkerRepo(&domain.Worker{PubKey: eventPubKeyHex(missingProtocol)})
 	subscriber := NewFIPSSubscriber(nil, repo, zap.NewNop(), WithFIPSAppNamespace("bahia-mesh-v1"), withFIPSClock(func() time.Time { return now }))
 
 	subscriber.handleEvent(context.Background(), missingProtocol)
@@ -179,11 +179,11 @@ func TestFIPSSubscriberRequiresConfiguredProtocolTag(t *testing.T) {
 func signedFIPSAdvertEvent(t *testing.T, createdAt time.Time, content string, extraTags ...gonostr.Tag) *gonostr.Event {
 	t.Helper()
 	ev := &gonostr.Event{
-		Kind:      FIPSOverlayAdvertKind,
+		Kind:      canonicalKind(FIPSOverlayAdvertKind),
 		CreatedAt: gonostr.Timestamp(createdAt.Unix()),
 		Content:   content,
 		Tags:      append(gonostr.Tags{{"d", FIPSOverlayAdvertIdentifier}}, extraTags...),
 	}
-	require.NoError(t, ev.Sign(testNostrPrivateKey))
+	require.NoError(t, signEventWithPrivateKeyHex(ev, testNostrPrivateKey))
 	return ev
 }

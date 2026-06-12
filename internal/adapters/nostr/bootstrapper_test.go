@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -135,7 +135,7 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
 		require.Len(t, filters, 1)
 		require.Len(t, filters[0].Kinds, 1)
-		kind := filters[0].Kinds[0]
+		kind := int(filters[0].Kinds[0])
 
 		attemptsMu.Lock()
 		attemptsByKind[kind]++
@@ -198,7 +198,7 @@ func TestBootstrapperSkipsMalformedEventsAndContinuesGroup(t *testing.T) {
 		if err := decodeContent(ev, &payload); err != nil {
 			return nil, err
 		}
-		return &DecodedProjectionEvent{Kind: ev.Kind, DTag: tagValueLocal(ev.Tags, "d"), Timestamp: ev.CreatedAt.Time().UTC(), SourceID: ev.ID}, nil
+		return &DecodedProjectionEvent{Kind: eventKindInt(ev), DTag: tagValueLocal(ev.Tags, "d"), Timestamp: ev.CreatedAt.Time().UTC(), SourceID: eventIDHex(ev)}, nil
 	}
 
 	err := bootstrapper.Run(context.Background())
@@ -220,19 +220,19 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 		},
 		decoders: map[int]DecodeFunc{
 			testKindTier0Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
-				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+				return &DecodedProjectionEvent{Kind: eventKindInt(ev), SourceID: eventIDHex(ev), Timestamp: ev.CreatedAt.Time().UTC()}, nil
 			},
 			testKindTier1Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
-				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+				return &DecodedProjectionEvent{Kind: eventKindInt(ev), SourceID: eventIDHex(ev), Timestamp: ev.CreatedAt.Time().UTC()}, nil
 			},
 			testKindTier1Live: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
-				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+				return &DecodedProjectionEvent{Kind: eventKindInt(ev), SourceID: eventIDHex(ev), Timestamp: ev.CreatedAt.Time().UTC()}, nil
 			},
 			testKindTier2Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
-				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+				return &DecodedProjectionEvent{Kind: eventKindInt(ev), SourceID: eventIDHex(ev), Timestamp: ev.CreatedAt.Time().UTC()}, nil
 			},
 			testKindTier2Live: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
-				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+				return &DecodedProjectionEvent{Kind: eventKindInt(ev), SourceID: eventIDHex(ev), Timestamp: ev.CreatedAt.Time().UTC()}, nil
 			},
 		},
 	}
@@ -245,23 +245,34 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 	}
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
 
+	servicePubkey, err := publicKeyHexFromPrivateKeyHex(testNostrPrivateKey)
+	require.NoError(t, err)
+	operatorOne, err := publicKeyHexFromPrivateKeyHex("2222222222222222222222222222222222222222222222222222222222222222")
+	require.NoError(t, err)
+	operatorTwo, err := publicKeyHexFromPrivateKeyHex("3333333333333333333333333333333333333333333333333333333333333333")
+	require.NoError(t, err)
+	projectionAuthors, err := filterAuthorsFromHex([]string{servicePubkey})
+	require.NoError(t, err)
+	controlPlaneAuthors, err := filterAuthorsFromHex([]string{operatorOne, operatorTwo})
+	require.NoError(t, err)
+
 	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
 		RequestedTier:       2,
 		SnapshotTimeout:     50 * time.Millisecond,
 		CatchupTimeout:      50 * time.Millisecond,
-		ProjectionAuthors:   []string{"service-pubkey"},
-		ControlPlaneAuthors: []string{"operator-a", "operator-b"},
+		ProjectionAuthors:   []string{servicePubkey},
+		ControlPlaneAuthors: []string{operatorOne, operatorTwo},
 	})
 
-	err := bootstrapper.attemptBootstrap(context.Background())
+	err = bootstrapper.attemptBootstrap(context.Background())
 
 	require.Error(t, err)
 	require.NotEmpty(t, captured)
-	require.Equal(t, []string{"service-pubkey"}, captured[0].Authors)
-	require.Equal(t, []string{"operator-a", "operator-b"}, captured[1].Authors)
-	require.Equal(t, []string{"service-pubkey"}, captured[2].Authors)
-	require.Equal(t, []string{"operator-a", "operator-b"}, captured[3].Authors)
-	require.Equal(t, []string{"operator-a", "operator-b"}, captured[4].Authors)
+	require.Equal(t, projectionAuthors, captured[0].Authors)
+	require.Equal(t, controlPlaneAuthors, captured[1].Authors)
+	require.Equal(t, projectionAuthors, captured[2].Authors)
+	require.Equal(t, controlPlaneAuthors, captured[3].Authors)
+	require.Equal(t, controlPlaneAuthors, captured[4].Authors)
 }
 
 func TestBootstrapperProgressReturnsSnapshot(t *testing.T) {
@@ -329,10 +340,10 @@ func testBootstrapCatalog() *KindCatalog {
 			kind := kind
 			catalog.decoders[kind] = func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 				return &DecodedProjectionEvent{
-					Kind:      ev.Kind,
+					Kind:      eventKindInt(ev),
 					DTag:      tagValueLocal(ev.Tags, "d"),
 					Timestamp: ev.CreatedAt.Time().UTC(),
-					SourceID:  ev.ID,
+					SourceID:  eventIDHex(ev),
 					Family:    ProjectionFamily(fmt.Sprintf("test-%d", kind)),
 				}, nil
 			}
@@ -347,7 +358,7 @@ func setBootstrapSubscribeScript(t *testing.T, scripts map[int]scriptedBootstrap
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
 		require.Len(t, filters, 1)
 		require.Len(t, filters[0].Kinds, 1)
-		script, ok := scripts[filters[0].Kinds[0]]
+		script, ok := scripts[int(filters[0].Kinds[0])]
 		if !ok {
 			return nil, fmt.Errorf("unexpected subscription for kind %d", filters[0].Kinds[0])
 		}
@@ -388,11 +399,11 @@ func scriptedMergedSubscription(ctx context.Context, script scriptedBootstrapSub
 func signedBootstrapEvent(t *testing.T, kind int, dTag string) *gonostr.Event {
 	t.Helper()
 	event := &gonostr.Event{
-		Kind:      kind,
+		Kind:      canonicalKind(kind),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", dTag}},
 		Content:   `{"ok":true}`,
 	}
-	require.NoError(t, event.Sign(gonostr.GeneratePrivateKey()))
+	require.NoError(t, signEventWithPrivateKeyHex(event, gonostr.Generate().Hex()))
 	return event
 }

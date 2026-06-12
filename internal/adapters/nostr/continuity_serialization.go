@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -142,7 +142,7 @@ func DecodeContinuityProfileEvent(event *gonostr.Event) (*domain.ServiceContinui
 	if event == nil {
 		return nil, fmt.Errorf("continuity profile event is nil")
 	}
-	if event.Kind != KindContinuityProfile {
+	if !eventKindMatches(event, KindContinuityProfile) {
 		return nil, fmt.Errorf("unexpected continuity profile kind %d", event.Kind)
 	}
 	if continuityTagValue(event.Tags, "d") == "" {
@@ -153,7 +153,7 @@ func DecodeContinuityProfileEvent(event *gonostr.Event) (*domain.ServiceContinui
 		PrimaryWorkerPubKey: strings.TrimSpace(continuityTagValue(event.Tags, "primary")),
 		Profiles:            map[domain.ContinuityMode]domain.ContinuityProfileSpec{},
 		UpdatedAt:           event.CreatedAt.Time().UTC(),
-		SourceEventID:       event.ID,
+		SourceEventID:       eventIDHex(event),
 	}
 	var current domain.ContinuityMode
 	for _, tag := range event.Tags {
@@ -275,7 +275,7 @@ func DecodeStandbyNodeDefinitionEvent(event *gonostr.Event) (*StandbyNodeDefinit
 	if event == nil {
 		return nil, fmt.Errorf("standby node definition event is nil")
 	}
-	if event.Kind != KindStandbyNodeDefinition {
+	if !eventKindMatches(event, KindStandbyNodeDefinition) {
 		return nil, fmt.Errorf("unexpected standby node definition kind %d", event.Kind)
 	}
 	if continuityTagValue(event.Tags, "d") == "" {
@@ -290,7 +290,7 @@ func DecodeStandbyNodeDefinitionEvent(event *gonostr.Event) (*StandbyNodeDefinit
 		ArtifactRef:   firstNonEmpty(continuityTagValue(event.Tags, "artifact_ref"), continuityTagValue(event.Tags, "image_ref"), continuityTagValue(event.Tags, "artifact"), continuityTagValue(event.Tags, "artifact_id")),
 		Supports:      continuityTagValues(event.Tags, "supports"),
 		UpdatedAt:     event.CreatedAt.Time().UTC(),
-		SourceEventID: event.ID,
+		SourceEventID: eventIDHex(event),
 	}
 	for _, raw := range continuityTagValues(event.Tags, "profile") {
 		mode := domain.ContinuityMode(raw)
@@ -323,7 +323,7 @@ func DecodeReplicationPolicyEvent(event *gonostr.Event) (*domain.ReplicationPoli
 	if event == nil {
 		return nil, fmt.Errorf("replication policy event is nil")
 	}
-	if event.Kind != KindReplicationPolicy {
+	if !eventKindMatches(event, KindReplicationPolicy) {
 		return nil, fmt.Errorf("unexpected replication policy kind %d", event.Kind)
 	}
 	if continuityTagValue(event.Tags, "d") == "" {
@@ -343,7 +343,7 @@ func DecodeReplicationPolicyEvent(event *gonostr.Event) (*domain.ReplicationPoli
 		policy.ServiceKey = serviceTag
 	}
 	policy.UpdatedAt = event.CreatedAt.Time().UTC()
-	policy.SourceEventID = event.ID
+	policy.SourceEventID = eventIDHex(event)
 	if err := validateReplicationPolicy(&policy); err != nil {
 		return nil, err
 	}
@@ -385,10 +385,10 @@ func DecodeHeartbeatObservationEvent(event *gonostr.Event) (*domain.HeartbeatObs
 	if event == nil {
 		return nil, fmt.Errorf("heartbeat observation event is nil")
 	}
-	if event.Kind != KindNIP38Status && event.Kind != KindHeartbeatObservation {
+	if !eventKindMatches(event, KindNIP38Status) && !eventKindMatches(event, KindHeartbeatObservation) {
 		return nil, fmt.Errorf("unexpected heartbeat observation kind %d", event.Kind)
 	}
-	if event.Kind == KindNIP38Status {
+	if eventKindMatches(event, KindNIP38Status) {
 		if schema := continuityTagValue(event.Tags, "schema"); schema != "" && schema != heartbeatObservationStatusSchema {
 			return nil, fmt.Errorf("unexpected heartbeat observation schema %q", schema)
 		}
@@ -412,7 +412,7 @@ func DecodeHeartbeatObservationEvent(event *gonostr.Event) (*domain.HeartbeatObs
 		}
 	}
 	obs := &domain.HeartbeatObservation{
-		WorkerPubKey: firstNonEmpty(continuityTagValue(event.Tags, "worker"), continuityTagValue(event.Tags, "p"), event.PubKey),
+		WorkerPubKey: firstNonEmpty(continuityTagValue(event.Tags, "worker"), continuityTagValue(event.Tags, "p"), eventPubKeyHex(event)),
 		ObservedAt:   event.CreatedAt.Time().UTC(),
 		Sequence:     sequence,
 		Interval:     interval,
@@ -466,7 +466,7 @@ func decodeContinuityRecipeEvent(event *gonostr.Event, expectedKind int, expecte
 	if event == nil {
 		return nil, fmt.Errorf("continuity recipe event is nil")
 	}
-	if event.Kind != expectedKind {
+	if !eventKindMatches(event, expectedKind) {
 		return nil, fmt.Errorf("unexpected continuity recipe kind %d", event.Kind)
 	}
 	if continuityTagValue(event.Tags, "d") == "" {
@@ -496,7 +496,7 @@ func decodeContinuityRecipeEvent(event *gonostr.Event, expectedKind int, expecte
 	}
 	recipe.Kind = expectedRecipeKind
 	recipe.UpdatedAt = event.CreatedAt.Time().UTC()
-	recipe.SourceEventID = event.ID
+	recipe.SourceEventID = eventIDHex(event)
 	if err := recipe.Validate(); err != nil {
 		return nil, err
 	}
@@ -531,7 +531,7 @@ func decodeContinuityCommandEvent(event *gonostr.Event, expectedKind int) (*Cont
 	if event == nil {
 		return nil, fmt.Errorf("continuity command event is nil")
 	}
-	if event.Kind != expectedKind {
+	if !eventKindMatches(event, expectedKind) {
 		return nil, fmt.Errorf("unexpected continuity command kind %d", event.Kind)
 	}
 	idempotencyKey := strings.TrimSpace(continuityTagValue(event.Tags, "d"))
@@ -565,8 +565,8 @@ func decodeContinuityCommandEvent(event *gonostr.Event, expectedKind int) (*Cont
 		req.RecipeName = continuityTagValue(event.Tags, "recipe")
 	}
 	req.IdempotencyKey = idempotencyKey
-	req.RequestedBy = event.PubKey
-	req.RequestEventID = event.ID
+	req.RequestedBy = eventPubKeyHex(event)
+	req.RequestEventID = eventIDHex(event)
 	if err := validateContinuityCommandRequest(&req); err != nil {
 		return nil, err
 	}
@@ -574,7 +574,7 @@ func decodeContinuityCommandEvent(event *gonostr.Event, expectedKind int) (*Cont
 }
 
 func continuityEventBase(kind int, tags gonostr.Tags, content string) gonostr.Event {
-	return gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Tags: tags, Content: content}
+	return gonostr.Event{Kind: canonicalKind(kind), CreatedAt: gonostr.Now(), Tags: tags, Content: content}
 }
 
 func encodeBahiaSystemEvent(kind int, dTag, topic string, payload any) gonostr.Event {
@@ -586,7 +586,7 @@ func decodeBahiaSystemEvent(ev *gonostr.Event, expectedKind int, out any, label 
 	if ev == nil {
 		return fmt.Errorf("%s event is nil", label)
 	}
-	if ev.Kind != expectedKind {
+	if !eventKindMatches(ev, expectedKind) {
 		return fmt.Errorf("unexpected %s kind %d", label, ev.Kind)
 	}
 	if continuityTagValue(ev.Tags, "d") == "" {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -14,7 +14,7 @@ import (
 
 func newTestSubscription() *gonostr.Subscription {
 	return &gonostr.Subscription{
-		Events:            make(chan *gonostr.Event, 4),
+		Events:            make(chan gonostr.Event, 4),
 		EndOfStoredEvents: make(chan struct{}),
 		ClosedReason:      make(chan string, 1),
 	}
@@ -71,10 +71,10 @@ func TestMergeSubscriptionsForwardsEventsWithoutWaitingForEOSE(t *testing.T) {
 
 	sub := newTestSubscription()
 	merged := mergeSubscriptions(ctx, []*gonostr.Subscription{sub}, 4)
-	ev := &gonostr.Event{ID: "event-1", Kind: 5101}
+	ev := gonostr.Event{Kind: canonicalKind(5101)}
 
 	sub.Events <- ev
-	require.Same(t, ev, <-merged.Events)
+	require.Equal(t, eventKindInt(&ev), eventKindInt(<-merged.Events))
 
 	close(sub.EndOfStoredEvents)
 	<-merged.EndOfStoredEvents
@@ -234,12 +234,12 @@ func TestRelayPoolSubscribeAuthRequiredWithoutCredentialsRecordsAuthUnavailableM
 	markRelayConnectedForSubscribeTest(pool, relayURL)
 
 	attempts := 0
-	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ []gonostr.Filter) (*gonostr.Subscription, error) {
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
 		attempts++
 		return nil, errors.New("couldn't subscribe to [{Kinds:[1]}] at wss://auth.example: auth-required: sign in")
 	})
 
-	sub, err := pool.Subscribe(context.Background(), []gonostr.Filter{{Kinds: []int{1}}})
+	sub, err := pool.Subscribe(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
 	require.Nil(t, sub)
 	require.Error(t, err)
 	require.Equal(t, 1, attempts, "missing AUTH credentials must not trigger a fallback subscribe path")
@@ -250,18 +250,59 @@ func TestRelayPoolSubscribeAuthRequiredWithoutCredentialsRecordsAuthUnavailableM
 	require.Equal(t, "auth-unavailable: auth-required: sign in: no private key configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
 }
 
+func TestRelayPoolSubscribeRejectsMultiFilterSilentDrop(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://relay.example")
+	markRelayConnectedForSubscribeTest(pool, "wss://relay.example")
+
+	_, err := pool.Subscribe(context.Background(), []gonostr.Filter{
+		{Kinds: []gonostr.Kind{canonicalKind(1)}},
+		{Kinds: []gonostr.Kind{canonicalKind(2)}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires exactly one filter")
+}
+
+func TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter(t *testing.T) {
+	const relayURL = "wss://relay.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+
+	var subs []*gonostr.Subscription
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		sub := newTestSubscription()
+		subs = append(subs, sub)
+		return sub, nil
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{
+		{Kinds: []gonostr.Kind{canonicalKind(1)}},
+		{Kinds: []gonostr.Kind{canonicalKind(2)}},
+	})
+	require.NoError(t, err)
+	require.Len(t, subs, 2)
+
+	close(subs[0].EndOfStoredEvents)
+	close(subs[1].EndOfStoredEvents)
+	require.Equal(t, relayURL, (<-merged.RelayEOSE).RelayURL)
+	require.Equal(t, relayURL, (<-merged.RelayEOSE).RelayURL)
+	<-merged.EndOfStoredEvents
+
+	close(subs[0].Events)
+	close(subs[1].Events)
+}
+
 func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t *testing.T) {
 	const relayURL = "wss://auth-eose.example"
 	pool := newRelayPoolWithManagedRelays(relayURL)
 	markRelayConnectedForSubscribeTest(pool, relayURL)
 
 	attempts := 0
-	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ []gonostr.Filter) (*gonostr.Subscription, error) {
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
 		attempts++
 		return nil, errors.New("relay CLOSED: auth-required: sign in before replay")
 	})
 
-	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []int{30002}}})
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(30002)}}})
 	require.Nil(t, merged)
 	require.Error(t, err)
 	require.Equal(t, 1, attempts, "missing AUTH credentials must fail the merged EOSE subscription without fallback")
@@ -273,7 +314,7 @@ func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t
 }
 
 func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {
-	privateKey := gonostr.GeneratePrivateKey()
+	privateKey := gonostr.Generate().Hex()
 	publisher := NewPublisher(config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true}, nil, nil, zap.NewNop())
 	require.NotNil(t, publisher)
 	require.NotNil(t, publisher.pool)
@@ -301,7 +342,7 @@ func TestRelayPoolURLsReturnsImmutableSnapshot(t *testing.T) {
 }
 
 func TestRelayPoolAuthenticateRelayNormalizesRelayURLForLookup(t *testing.T) {
-	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop(), WithPrivateKey(gonostr.GeneratePrivateKey()))
+	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop(), WithPrivateKey(gonostr.Generate().Hex()))
 	pool.relays["wss://relay.example"] = &managedRelay{url: "wss://relay.example"}
 
 	err := pool.AuthenticateRelay(context.Background(), "relay.example")
@@ -411,12 +452,12 @@ func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
 }
 
 func markRelayConnectedForSubscribeTest(pool *RelayPool, relayURL string) {
-	pool.relays[relayURL].relay = gonostr.NewRelay(context.Background(), relayURL)
+	pool.relays[relayURL].relay = gonostr.NewRelay(context.Background(), relayURL, gonostr.RelayOptions{})
 	pool.relays[relayURL].connected = true
 	pool.health.GetOrCreate(relayURL).SetConnected(true)
 }
 
-func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Context, []gonostr.Filter) (*gonostr.Subscription, error)) {
+func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Context, gonostr.Filter) (*gonostr.Subscription, error)) {
 	t.Helper()
 	original := subscribeOnRelay
 	subscribeOnRelay = fn

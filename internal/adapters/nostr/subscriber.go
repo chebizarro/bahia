@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -288,7 +288,7 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
 		if ev != nil {
-			eventID = ev.ID
+			eventID = eventIDHex(ev)
 		}
 		s.logger.Warn("dropping invalid inbound event before persistence",
 			zap.String("event_id", eventID),
@@ -296,10 +296,10 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		)
 		return
 	}
-	if isLegacyProductionRuntimeKind(ev.Kind) {
+	if isLegacyProductionRuntimeKind(eventKindInt(ev)) {
 		s.logger.Warn("dropping legacy inbound event after migration boundary",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
+			zap.String("event_id", eventIDHex(ev)),
+			zap.Int("kind", eventKindInt(ev)),
 		)
 		return
 	}
@@ -308,19 +308,19 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 	tagsJSON, err := json.Marshal(ev.Tags)
 	if err != nil {
 		s.logger.Warn("failed to marshal event tags",
-			zap.String("event_id", ev.ID),
+			zap.String("event_id", eventIDHex(ev)),
 			zap.Error(err),
 		)
 		tagsJSON = []byte("[]")
 	}
 
 	rec := &repository.NostrEventRecord{
-		ID:         ev.ID,
-		Kind:       ev.Kind,
-		PubKey:     ev.PubKey,
+		ID:         eventIDHex(ev),
+		Kind:       eventKindInt(ev),
+		PubKey:     eventPubKeyHex(ev),
 		Content:    ev.Content,
 		Tags:       tagsJSON,
-		Sig:        ev.Sig,
+		Sig:        eventSignatureHex(ev),
 		CreatedAt:  ev.CreatedAt.Time(),
 		ReceivedAt: time.Now().UTC(),
 	}
@@ -328,26 +328,26 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 	inserted, err := s.eventRepo.Record(ctx, rec)
 	if err != nil {
 		s.logger.Warn("failed to persist inbound event",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
+			zap.String("event_id", eventIDHex(ev)),
+			zap.Int("kind", eventKindInt(ev)),
 			zap.Error(err),
 		)
 		return
 	}
 	if !inserted {
 		s.logger.Debug("skipping already-persisted event",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
+			zap.String("event_id", eventIDHex(ev)),
+			zap.Int("kind", eventKindInt(ev)),
 		)
 		return
 	}
 
-	s.recordLastSeen(ev.Kind, ev.CreatedAt.Time())
-	s.dedup.MarkSeen(ev.ID)
+	s.recordLastSeen(eventKindInt(ev), ev.CreatedAt.Time())
+	s.dedup.MarkSeen(eventIDHex(ev))
 	s.logger.Debug("inbound event persisted",
-		zap.String("event_id", ev.ID),
-		zap.Int("kind", ev.Kind),
-		zap.String("pubkey", ev.PubKey),
+		zap.String("event_id", eventIDHex(ev)),
+		zap.Int("kind", eventKindInt(ev)),
+		zap.String("pubkey", eventPubKeyHex(ev)),
 	)
 
 	// Invoke handlers - only for non-duplicate events.
@@ -387,7 +387,11 @@ func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filt
 		if err != nil {
 			return err
 		}
-		filters = append(filters, s.filterForKinds(kinds, since, authors))
+		filter, err := s.filterForKinds(kinds, since, authors)
+		if err != nil {
+			return err
+		}
+		filters = append(filters, filter)
 		return nil
 	}
 
@@ -406,18 +410,22 @@ func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filt
 	return filters, nil
 }
 
-func (s *Subscriber) filterForKinds(kinds []int, since *nostr.Timestamp, authors []string) nostr.Filter {
-	filter := nostr.Filter{Kinds: append([]int(nil), kinds...), Since: since}
+func (s *Subscriber) filterForKinds(kinds []int, since nostr.Timestamp, authors []string) (nostr.Filter, error) {
+	filter := nostr.Filter{Kinds: filterKindsFromInts(kinds), Since: since}
 	if len(authors) > 0 {
-		filter.Authors = append([]string(nil), authors...)
+		converted, err := filterAuthorsFromHex(authors)
+		if err != nil {
+			return nostr.Filter{}, err
+		}
+		filter.Authors = converted
 	}
 	if s.backfillLimit > 0 {
 		filter.Limit = s.backfillLimit
 	}
-	return filter
+	return filter, nil
 }
 
-func (s *Subscriber) subscriptionSince(ctx context.Context, kinds []int, authors []string) (*nostr.Timestamp, error) {
+func (s *Subscriber) subscriptionSince(ctx context.Context, kinds []int, authors []string) (nostr.Timestamp, error) {
 	cursorUnix := s.latestSeenForKinds(kinds)
 	if s.eventRepo != nil {
 		var latest *time.Time
@@ -428,7 +436,7 @@ func (s *Subscriber) subscriptionSince(ctx context.Context, kinds []int, authors
 			latest, err = s.eventRepo.LatestCreatedAtForKinds(ctx, kinds)
 		}
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		if latest != nil && latest.Unix() > cursorUnix {
 			cursorUnix = latest.Unix()
@@ -520,11 +528,10 @@ func cloneStrings(in []string) []string {
 	return append([]string(nil), in...)
 }
 
-func timestampFromTime(t time.Time) *nostr.Timestamp {
+func timestampFromTime(t time.Time) nostr.Timestamp {
 	return timestampFromUnix(t.Unix())
 }
 
-func timestampFromUnix(unix int64) *nostr.Timestamp {
-	ts := nostr.Timestamp(unix)
-	return &ts
+func timestampFromUnix(unix int64) nostr.Timestamp {
+	return nostr.Timestamp(unix)
 }

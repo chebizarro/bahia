@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
@@ -188,9 +188,9 @@ func TestSubscriberBuildSubscriptionFiltersOmitsLegacyProductionKinds(t *testing
 	filters, err := sub.buildSubscriptionFilters(context.Background())
 	require.NoError(t, err)
 	require.Len(t, filters, 1)
-	require.Equal(t, []int{5101}, filters[0].Kinds)
+	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, filters[0].Kinds)
 	require.Empty(t, filters[0].Authors, "legacy production kinds must be omitted from runtime subscriptions")
-	require.Equal(t, int64(500), int64(*filters[0].Since))
+	require.Equal(t, int64(500), int64(filters[0].Since))
 	require.Equal(t, 10, filters[0].Limit)
 }
 
@@ -217,13 +217,13 @@ func TestSubscriberBuildSubscriptionFiltersUsesPersistedAndLastSeenCursor(t *tes
 	filters, err := sub.buildSubscriptionFilters(ctx)
 	require.NoError(t, err)
 	require.Len(t, filters, 1)
-	require.Equal(t, int64(99), int64(*filters[0].Since), "persisted cursor should be replayed with one-second overlap")
+	require.Equal(t, int64(99), int64(filters[0].Since), "persisted cursor should be replayed with one-second overlap")
 	require.Equal(t, 25, filters[0].Limit)
 
 	sub.recordLastSeen(5101, time.Unix(125, 0).UTC())
 	filters, err = sub.buildSubscriptionFilters(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(124), int64(*filters[0].Since), "in-memory cursor should win over older persisted cursor")
+	require.Equal(t, int64(124), int64(filters[0].Since), "in-memory cursor should win over older persisted cursor")
 }
 
 func TestSubscriberBuildSubscriptionFiltersUsesSeparateScopedCursors(t *testing.T) {
@@ -243,9 +243,9 @@ func TestSubscriberBuildSubscriptionFiltersUsesSeparateScopedCursors(t *testing.
 	filters, err := sub.buildSubscriptionFilters(ctx)
 	require.NoError(t, err)
 	require.Len(t, filters, 1)
-	require.Equal(t, []int{5101}, filters[0].Kinds)
+	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, filters[0].Kinds)
 	require.Empty(t, filters[0].Authors)
-	require.Equal(t, int64(199), int64(*filters[0].Since), "legacy command rows must not create runtime cursors")
+	require.Equal(t, int64(199), int64(filters[0].Since), "legacy command rows must not create runtime cursors")
 }
 
 func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testing.T) {
@@ -258,7 +258,7 @@ func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testi
 	filters, err := sub.buildSubscriptionFilters(context.Background())
 	require.NoError(t, err)
 	require.Len(t, filters, 1)
-	require.Equal(t, int64(500), int64(*filters[0].Since))
+	require.Equal(t, int64(500), int64(filters[0].Since))
 }
 
 func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T) {
@@ -275,9 +275,9 @@ func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T)
 	require.Len(t, filters, 1)
 
 	open := filters[0]
-	require.Equal(t, []int{5101}, open.Kinds)
+	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, open.Kinds)
 	require.Empty(t, open.Authors)
-	require.Equal(t, int64(500), int64(*open.Since))
+	require.Equal(t, int64(500), int64(open.Since))
 	require.Equal(t, 10, open.Limit)
 }
 
@@ -286,12 +286,12 @@ func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *tes
 	repo := newMemoryNostrEventRepo()
 	now := time.Unix(200, 0).UTC()
 	ev := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
-	repo.failRecordID = ev.ID
+	repo.failRecordID = eventIDHex(ev)
 
 	var handled []string
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) {
-			handled = append(handled, ev.ID)
+			handled = append(handled, eventIDHex(ev))
 		}),
 		withClock(func() time.Time { return now }),
 	)
@@ -301,7 +301,7 @@ func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *tes
 	require.Nil(t, repo.latest)
 
 	sub.handleEvent(ctx, ev)
-	require.Equal(t, []string{ev.ID}, handled)
+	require.Equal(t, []string{eventIDHex(ev)}, handled)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
 }
 
@@ -312,7 +312,7 @@ func TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp(t 
 	ev := signedTestEvent(t, KindCASControlState, time.Unix(105, 0).UTC())
 	ev.Tags = gonostr.Tags{{"d", "ml:endpoint-state:qwen:prod"}, {"domain", "ml"}, {"schema", "bahia.ml.endpoint-state.v1"}, {"entity", "endpoint-state"}, {"endpoint", "endpoint:qwen:prod"}, {"status", "healthy"}}
 	ev.Content = `{"endpoint":"endpoint:qwen:prod","status":"healthy"}`
-	require.NoError(t, ev.Sign(testNostrPrivateKey))
+	require.NoError(t, signEventWithPrivateKeyHex(ev, testNostrPrivateKey))
 
 	var handled []string
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
@@ -337,12 +337,12 @@ func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *test
 	now := time.Unix(200, 0).UTC()
 	persistedEvent := signedTestEvent(t, 5101, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, &repository.NostrEventRecord{
-		ID:        persistedEvent.ID,
-		Kind:      persistedEvent.Kind,
-		PubKey:    persistedEvent.PubKey,
+		ID:        eventIDHex(persistedEvent),
+		Kind:      eventKindInt(persistedEvent),
+		PubKey:    eventPubKeyHex(persistedEvent),
 		Content:   persistedEvent.Content,
 		Tags:      json.RawMessage("[]"),
-		Sig:       persistedEvent.Sig,
+		Sig:       eventSignatureHex(persistedEvent),
 		CreatedAt: persistedEvent.CreatedAt.Time(),
 	})
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *test
 	var handled []string
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) {
-			handled = append(handled, ev.ID)
+			handled = append(handled, eventIDHex(ev))
 		}),
 		withClock(func() time.Time { return now }),
 	)
@@ -360,7 +360,7 @@ func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *test
 
 	newEvent := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
 	sub.handleEvent(ctx, newEvent)
-	require.Equal(t, []string{newEvent.ID}, handled)
+	require.Equal(t, []string{eventIDHex(newEvent)}, handled)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
 }
 
@@ -373,7 +373,7 @@ func TestSubscriberHandleEventDropsLegacyProductionKindBeforePersistence(t *test
 	var handled []string
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) {
-			handled = append(handled, ev.ID)
+			handled = append(handled, eventIDHex(ev))
 		}),
 		withClock(func() time.Time { return now }),
 	)
@@ -382,7 +382,7 @@ func TestSubscriberHandleEventDropsLegacyProductionKindBeforePersistence(t *test
 	require.Empty(t, handled)
 	require.Equal(t, 0, repo.inserted)
 	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5961}))
-	require.False(t, sub.dedup.IsDuplicate(legacy.ID))
+	require.False(t, sub.dedup.IsDuplicate(eventIDHex(legacy)))
 }
 
 func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testing.T) {
@@ -391,12 +391,11 @@ func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testin
 	now := time.Unix(200, 0).UTC()
 	valid := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
 	invalid := *valid
-	invalid.ID = "not-a-valid-id"
-
+	invalid.ID = gonostr.ID{}
 	var handled []string
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) {
-			handled = append(handled, ev.ID)
+			handled = append(handled, eventIDHex(ev))
 		}),
 		withClock(func() time.Time { return now }),
 	)
@@ -405,5 +404,5 @@ func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testin
 	require.Empty(t, handled)
 	require.Equal(t, 0, repo.inserted)
 	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5101}))
-	require.False(t, sub.dedup.IsDuplicate(valid.ID))
+	require.False(t, sub.dedup.IsDuplicate(eventIDHex(valid)))
 }

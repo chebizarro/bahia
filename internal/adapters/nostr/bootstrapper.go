@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"go.uber.org/zap"
 )
 
@@ -186,7 +186,12 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		if !group.Snapshot {
 			continue
 		}
-		ok, applied, err := b.runGroup(ctx, group, b.snapshotFilters(group, startedAt), b.config.SnapshotTimeout)
+		filters, filterErr := b.snapshotFilters(group, startedAt)
+		if filterErr != nil {
+			b.logger.Warn("bootstrap snapshot filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
+			continue
+		}
+		ok, applied, err := b.runGroup(ctx, group, filters, b.config.SnapshotTimeout)
 		decodedEvents += applied
 		if err != nil {
 			b.logger.Warn("bootstrap snapshot group failed", zap.String("group", group.Name), zap.Error(err))
@@ -202,7 +207,12 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		if group.Snapshot {
 			continue
 		}
-		ok, applied, err := b.runGroup(ctx, group, b.liveFilters(ctx, group, startedAt), b.config.CatchupTimeout)
+		filters, filterErr := b.liveFilters(ctx, group, startedAt)
+		if filterErr != nil {
+			b.logger.Warn("bootstrap live filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
+			continue
+		}
+		ok, applied, err := b.runGroup(ctx, group, filters, b.config.CatchupTimeout)
 		decodedEvents += applied
 		if err != nil {
 			b.logger.Warn("bootstrap live catch-up group failed", zap.String("group", group.Name), zap.Error(err))
@@ -291,8 +301,8 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 				if errors.As(err, &decodeErr) {
 					b.logger.Warn("bootstrap event skipped",
 						zap.String("group", group.Name),
-						zap.Int("kind", event.Kind),
-						zap.String("event_id", event.ID),
+						zap.Int("kind", eventKindInt(event)),
+						zap.String("event_id", eventIDHex(event)),
 						zap.Error(decodeErr))
 					continue
 				}
@@ -305,15 +315,15 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 
 func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, event *gonostr.Event) error {
 	if err := ValidateInboundEvent(event, time.Now().UTC(), InboundEventMaxFutureSkew); err != nil {
-		return fmt.Errorf("validate bootstrap event %s kind %d: %w", event.ID, event.Kind, err)
+		return fmt.Errorf("validate bootstrap event %s kind %d: %w", eventIDHex(event), eventKindInt(event), err)
 	}
-	decoder, ok := b.catalog.Decoder(event.Kind)
+	decoder, ok := b.catalog.Decoder(eventKindInt(event))
 	if !ok {
-		return &bootstrapEventDecodeError{err: fmt.Errorf("no decoder registered for kind %d", event.Kind)}
+		return &bootstrapEventDecodeError{err: fmt.Errorf("no decoder registered for kind %d", eventKindInt(event))}
 	}
 	decoded, err := decoder(event)
 	if err != nil {
-		return &bootstrapEventDecodeError{err: fmt.Errorf("decode bootstrap event %s kind %d: %w", event.ID, event.Kind, err)}
+		return &bootstrapEventDecodeError{err: fmt.Errorf("decode bootstrap event %s kind %d: %w", eventIDHex(event), eventKindInt(event), err)}
 	}
 	if decoded == nil {
 		return nil
@@ -321,7 +331,7 @@ func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, ev
 	decoded.Group = group.Name
 	decoded.Tier = group.Tier
 	if decoded.SourceID == "" {
-		decoded.SourceID = event.ID
+		decoded.SourceID = eventIDHex(event)
 	}
 	if decoded.Timestamp.IsZero() {
 		decoded.Timestamp = event.CreatedAt.Time().UTC()
@@ -330,23 +340,31 @@ func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, ev
 		return nil
 	}
 	if err := b.cache.Apply(ctx, decoded); err != nil {
-		return fmt.Errorf("apply bootstrap event %s kind %d: %w", event.ID, event.Kind, err)
+		return fmt.Errorf("apply bootstrap event %s kind %d: %w", eventIDHex(event), eventKindInt(event), err)
 	}
 	return nil
 }
 
-func (b *Bootstrapper) snapshotFilters(group ReplayGroup, startedAt time.Time) []gonostr.Filter {
+func (b *Bootstrapper) snapshotFilters(group ReplayGroup, startedAt time.Time) ([]gonostr.Filter, error) {
 	until := gonostr.Timestamp(startedAt.Unix())
-	return []gonostr.Filter{b.scopedFilter(group, gonostr.Filter{Kinds: append([]int(nil), group.Kinds...), Until: &until})}
+	filter, err := b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Until: until})
+	if err != nil {
+		return nil, err
+	}
+	return []gonostr.Filter{filter}, nil
 }
 
-func (b *Bootstrapper) liveFilters(ctx context.Context, group ReplayGroup, startedAt time.Time) []gonostr.Filter {
+func (b *Bootstrapper) liveFilters(ctx context.Context, group ReplayGroup, startedAt time.Time) ([]gonostr.Filter, error) {
 	since := b.cursorSince(ctx, group.Kinds)
 	if since == nil {
 		fallback := gonostr.Timestamp(startedAt.Unix())
 		since = &fallback
 	}
-	return []gonostr.Filter{b.scopedFilter(group, gonostr.Filter{Kinds: append([]int(nil), group.Kinds...), Since: since})}
+	filter, err := b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Since: *since})
+	if err != nil {
+		return nil, err
+	}
+	return []gonostr.Filter{filter}, nil
 }
 
 func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Timestamp {
@@ -356,18 +374,22 @@ func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Ti
 	return b.cursorPlanner.ComputeSince(ctx, kinds)
 }
 
-func (b *Bootstrapper) scopedFilter(group ReplayGroup, filter gonostr.Filter) gonostr.Filter {
+func (b *Bootstrapper) scopedFilter(group ReplayGroup, filter gonostr.Filter) (gonostr.Filter, error) {
+	var authors []string
 	switch group.Name {
 	case "system_snapshot", "worker_snapshot", "core_registry_snapshot":
-		if len(b.config.ProjectionAuthors) > 0 {
-			filter.Authors = append([]string(nil), b.config.ProjectionAuthors...)
-		}
+		authors = b.config.ProjectionAuthors
 	case "continuity_snapshot", "continuity_live", "core_control_plane_live":
-		if len(b.config.ControlPlaneAuthors) > 0 {
-			filter.Authors = append([]string(nil), b.config.ControlPlaneAuthors...)
-		}
+		authors = b.config.ControlPlaneAuthors
 	}
-	return filter
+	if len(authors) > 0 {
+		converted, err := filterAuthorsFromHex(authors)
+		if err != nil {
+			return gonostr.Filter{}, err
+		}
+		filter.Authors = converted
+	}
+	return filter, nil
 }
 
 func (b *Bootstrapper) computeReadyTier(completed map[string]bool) int {

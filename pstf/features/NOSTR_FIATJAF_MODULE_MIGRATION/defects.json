@@ -1,0 +1,14 @@
+{
+  "feature_id": "NOSTR_FIATJAF_MODULE_MIGRATION",
+  "defects": [
+    {
+      "id": "DEF-ITEM2-001",
+      "title": "Downstream go-nostr notification publisher cannot compile against migrated RelayPool.Publish signature",
+      "status": "open_tracked_in_beads",
+      "beads_issue": "bahia-u2ma",
+      "observed_behavior": "go test ./internal/controlplane fails because internal/notifications/nostr_dm.go creates a github.com/nbd-wtf/go-nostr.Event and passes it to RelayPool.Publish, which now accepts fiatjaf.com/nostr.Event.",
+      "intended_behavior": "Downstream protocol consumers should use fiatjaf.com/nostr event/signing/encryption APIs or a deliberate compatibility boundary in their own migration slice.",
+      "scope_decision": "Not fixed in Item 1 because notifications/controlplane protocol consumers are part of the broader Item 2/3 sweep."
+    }
+  ]
+}

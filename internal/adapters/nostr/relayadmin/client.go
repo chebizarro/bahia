@@ -15,7 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 const (
@@ -154,7 +155,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if client.privateKey == "" {
 		return nil, ErrMissingPrivateKey
 	}
-	pubkey, err := nostr.GetPublicKey(client.privateKey)
+	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(client.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("deriving relay administrator pubkey: %w", err)
 	}
@@ -277,9 +278,13 @@ func (c *Client) DisallowKind(ctx context.Context, targetRef string, kind int) e
 
 func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) {
 	payloadHash := sha256.Sum256(body)
+	pubkey, err := nostr.PubKeyFromHex(c.pubkey)
+	if err != nil {
+		return "", fmt.Errorf("decoding relay administrator pubkey: %w", err)
+	}
 	event := &nostr.Event{
-		Kind:      27235,
-		PubKey:    c.pubkey,
+		Kind:      nostr.Kind(27235),
+		PubKey:    pubkey,
 		CreatedAt: nostr.Timestamp(c.now().Unix()),
 		Tags: nostr.Tags{
 			{"u", relayURL},
@@ -288,7 +293,7 @@ func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) 
 		},
 		Content: "",
 	}
-	if err := event.Sign(c.privateKey); err != nil {
+	if err := nostrutil.SignEventWithHexKey(event, c.privateKey); err != nil {
 		return "", fmt.Errorf("signing nip-98 event: %w", err)
 	}
 	eventJSON, err := json.Marshal(event)

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr/nip11"
+	"fiatjaf.com/nostr/nip11"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"

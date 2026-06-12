@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -324,7 +324,7 @@ func requiredDecoderFixture(kind int) *gonostr.Event {
 		{"policy", "policy-1"},
 		{"worker", "worker-pubkey"},
 	}
-	ev := &gonostr.Event{ID: "event-id", PubKey: "author-pubkey", Kind: kind, CreatedAt: gonostr.Now(), Tags: tags, Content: "{}"}
+	ev := &gonostr.Event{ID: gonostr.ID{1}, PubKey: gonostr.PubKey{1}, Kind: canonicalKind(kind), CreatedAt: gonostr.Now(), Tags: tags, Content: "{}"}
 	switch kind {
 	case KindContinuityProfile:
 		ev.Tags = gonostr.Tags{{"d", "continuity-profile:svc.api"}, {"service", "svc.api"}, {"profile", "full"}}
@@ -430,13 +430,13 @@ func assertStringSetEqual(t *testing.T, got []string, want []string) {
 
 func catalogDecode(t *testing.T, catalog *KindCatalog, ev *gonostr.Event) *DecodedProjectionEvent {
 	t.Helper()
-	decoder, ok := catalog.Decoder(ev.Kind)
+	decoder, ok := catalog.Decoder(eventKindInt(ev))
 	if !ok {
-		t.Fatalf("no decoder for kind %d", ev.Kind)
+		t.Fatalf("no decoder for kind %d", eventKindInt(ev))
 	}
 	decoded, err := decoder(ev)
 	if err != nil {
-		t.Fatalf("decode kind %d: %v", ev.Kind, err)
+		t.Fatalf("decode kind %d: %v", eventKindInt(ev), err)
 	}
 	return decoded
 }
@@ -444,7 +444,7 @@ func catalogDecode(t *testing.T, catalog *KindCatalog, ev *gonostr.Event) *Decod
 func TestCatalogDecodesLegacyStateWithoutDesiredMetadata(t *testing.T) {
 	catalog := NewKindCatalog()
 	ev := &gonostr.Event{
-		Kind:      KindServiceState,
+		Kind:      canonicalKind(KindServiceState),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", "svc:env"}, {"service", "svc"}, {"environment", "env"}, {"drift_status", "unknown"}},
 		Content:   `{"deleted":false,"service_id":"svc","environment_id":"env","drift_status":"unknown","updated_at":"2026-05-01T00:00:00Z"}`,
@@ -464,7 +464,7 @@ func TestCatalogDecodesLegacyStateWithoutDesiredMetadata(t *testing.T) {
 func TestCatalogDecodesEnrichedStateWithDesiredMetadata(t *testing.T) {
 	catalog := NewKindCatalog()
 	ev := &gonostr.Event{
-		Kind:      KindServiceState,
+		Kind:      canonicalKind(KindServiceState),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", "svc:env"}, {"service", "svc"}, {"environment", "env"}, {"drift_status", "in_sync"}, {"desired_hash", "sha256:abc"}},
 		Content:   `{"deleted":false,"service_id":"svc","environment_id":"env","drift_status":"in_sync","desired_hash":"sha256:abc","renderer":"compose","target":"api-prod","updated_at":"2026-05-26T00:00:00Z"}`,
@@ -487,7 +487,7 @@ func TestCatalogDecodesEnrichedStateWithDesiredMetadata(t *testing.T) {
 func TestCatalogDecodesLegacyIntentWithoutDesiredHash(t *testing.T) {
 	catalog := NewKindCatalog()
 	ev := &gonostr.Event{
-		Kind:      KindDeploymentIntentRegistry,
+		Kind:      canonicalKind(KindDeploymentIntentRegistry),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", "intent-123"}, {"intent", "intent-123"}, {"status", "deploying"}},
 		Content:   `{"deleted":false,"id":"intent-123","service_id":"svc","environment_id":"env","artifact_id":"art","status":"deploying","updated_at":"2026-05-01T00:00:00Z"}`,
@@ -504,7 +504,7 @@ func TestCatalogDecodesLegacyIntentWithoutDesiredHash(t *testing.T) {
 func TestCatalogDecodesEnrichedIntentWithDesiredHash(t *testing.T) {
 	catalog := NewKindCatalog()
 	ev := &gonostr.Event{
-		Kind:      KindDeploymentIntentRegistry,
+		Kind:      canonicalKind(KindDeploymentIntentRegistry),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", "intent-123"}, {"intent", "intent-123"}, {"status", "deploying"}, {"desired_hash", "sha256:xyz"}},
 		Content:   `{"deleted":false,"id":"intent-123","service_id":"svc","environment_id":"env","artifact_id":"art","status":"deploying","desired_hash":"sha256:xyz","renderer":"docker","target":"api-prod","updated_at":"2026-05-26T00:00:00Z"}`,
@@ -524,7 +524,7 @@ func TestCatalogDecodesEnrichedIntentWithDesiredHash(t *testing.T) {
 func TestCatalogDecodesLegacyRunWithoutApplyMetadata(t *testing.T) {
 	catalog := NewKindCatalog()
 	ev := &gonostr.Event{
-		Kind:      KindDeploymentRunRegistry,
+		Kind:      canonicalKind(KindDeploymentRunRegistry),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", "run-123"}, {"run", "run-123"}, {"status", "succeeded"}},
 		Content:   `{"deleted":false,"id":"run-123","deployment_intent_id":"intent-123","status":"succeeded","updated_at":"2026-05-01T00:00:00Z"}`,
@@ -541,7 +541,7 @@ func TestCatalogDecodesLegacyRunWithoutApplyMetadata(t *testing.T) {
 func TestCatalogDecodesEnrichedRunWithApplyMetadata(t *testing.T) {
 	catalog := NewKindCatalog()
 	ev := &gonostr.Event{
-		Kind:      KindDeploymentRunRegistry,
+		Kind:      canonicalKind(KindDeploymentRunRegistry),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"d", "run-123"}, {"run", "run-123"}, {"status", "succeeded"}, {"renderer", "compose"}},
 		Content:   `{"deleted":false,"id":"run-123","deployment_intent_id":"intent-123","status":"succeeded","renderer":"compose","desired_hash":"sha256:h1","revision_hash":"sha256:r1","target":"api-prod","apply_summary":"recreated 1 service","observation_id":"obs-123","updated_at":"2026-05-26T00:00:00Z"}`,

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -36,15 +36,16 @@ type captureProjectionPublisher struct {
 func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	kind := eventKindInt(&ev)
 	if p.errorsByKind != nil {
-		if err := p.errorsByKind[ev.Kind]; err != nil {
+		if err := p.errorsByKind[kind]; err != nil {
 			return 0, err
 		}
 	}
-	if p.zeroAcceptedKind != nil && p.zeroAcceptedKind[ev.Kind] {
+	if p.zeroAcceptedKind != nil && p.zeroAcceptedKind[kind] {
 		return 0, nil
 	}
-	if ev.Kind == kinds.RelaySetDiscovery {
+	if kind == kinds.RelaySetDiscovery {
 		dTag := eventDTag(ev)
 		if p.errorsByRelayD != nil {
 			if err := p.errorsByRelayD[dTag]; err != nil {
@@ -64,7 +65,7 @@ func (p *captureProjectionPublisher) byKind(kind int) []gonostr.Event {
 	defer p.mu.Unlock()
 	var out []gonostr.Event
 	for _, ev := range p.events {
-		if ev.Kind == kind || (isCanonicalRuntimeKind(ev.Kind) && hasTag(ev.Tags, "legacy_kind", strconv.Itoa(kind))) {
+		if eventKindInt(&ev) == kind || (isCanonicalRuntimeKind(eventKindInt(&ev)) && hasTag(ev.Tags, "legacy_kind", strconv.Itoa(kind))) {
 			out = append(out, ev)
 		}
 	}
@@ -1393,9 +1394,8 @@ func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind in
 	if len(events) != 1 {
 		t.Fatalf("expected one event of kind %d, got %d", kind, len(events))
 	}
-	ok, err := events[0].CheckSignature()
-	if err != nil || !ok {
-		t.Fatalf("event kind %d has invalid signature: ok=%v err=%v", kind, ok, err)
+	if !events[0].VerifySignature() {
+		t.Fatalf("event kind %d has invalid signature", kind)
 	}
 	return events[0]
 }
@@ -1406,9 +1406,8 @@ func assertOneRelaySet(t *testing.T, sink *captureProjectionPublisher, dTag stri
 	if len(matched) != 1 {
 		t.Fatalf("expected one relay set %s, got %d", dTag, len(matched))
 	}
-	ok, err := matched[0].CheckSignature()
-	if err != nil || !ok {
-		t.Fatalf("relay set %s has invalid signature: ok=%v err=%v", dTag, ok, err)
+	if !matched[0].VerifySignature() {
+		t.Fatalf("relay set %s has invalid signature", dTag)
 	}
 	return matched[0]
 }
@@ -1441,7 +1440,7 @@ func eventDTag(ev gonostr.Event) string {
 
 func assertProjectorTestPubkey(t *testing.T) string {
 	t.Helper()
-	pubkey, err := gonostr.GetPublicKey(projectorTestPrivateKey)
+	pubkey, err := publicKeyHexFromPrivateKeyHex(projectorTestPrivateKey)
 	if err != nil {
 		t.Fatalf("derive projector test pubkey: %v", err)
 	}
@@ -1450,8 +1449,8 @@ func assertProjectorTestPubkey(t *testing.T) string {
 
 func assertEventPubkey(t *testing.T, ev gonostr.Event, want string) {
 	t.Helper()
-	if ev.PubKey != want {
-		t.Fatalf("event kind %d pubkey = %s, want %s", ev.Kind, ev.PubKey, want)
+	if ev.PubKey.Hex() != want {
+		t.Fatalf("event kind %d pubkey = %s, want %s", eventKindInt(&ev), ev.PubKey.Hex(), want)
 	}
 }
 
@@ -1462,20 +1461,20 @@ func assertTag(t *testing.T, ev gonostr.Event, key, value string) {
 			return
 		}
 	}
-	t.Fatalf("event kind %d missing tag %s=%s; tags=%v", ev.Kind, key, value, ev.Tags)
+	t.Fatalf("event kind %d missing tag %s=%s; tags=%v", eventKindInt(&ev), key, value, ev.Tags)
 }
 
 func assertExactTags(t *testing.T, ev gonostr.Event, want gonostr.Tags) {
 	t.Helper()
 	if !reflect.DeepEqual(ev.Tags, want) {
-		t.Fatalf("event kind %d tags = %#v, want exact protocol envelope %#v", ev.Kind, ev.Tags, want)
+		t.Fatalf("event kind %d tags = %#v, want exact protocol envelope %#v", eventKindInt(&ev), ev.Tags, want)
 	}
 }
 
 func assertSystemDiscoveryEnvelopeForBrowser(t *testing.T, ev gonostr.Event) {
 	t.Helper()
-	if ev.Kind != kinds.ContextVMServerAnnouncement {
-		t.Fatalf("discovery kind = %d, want %d", ev.Kind, kinds.ContextVMServerAnnouncement)
+	if eventKindInt(&ev) != kinds.ContextVMServerAnnouncement {
+		t.Fatalf("discovery kind = %d, want %d", eventKindInt(&ev), kinds.ContextVMServerAnnouncement)
 	}
 	if eventDTag(ev) != SystemDiscoveryDTag {
 		t.Fatalf("discovery d tag = %q, want %q", eventDTag(ev), SystemDiscoveryDTag)
@@ -1569,7 +1568,7 @@ func assertNoTag(t *testing.T, ev gonostr.Event, key, value string) {
 			continue
 		}
 		if value == "" || tag[1] == value {
-			t.Fatalf("event kind %d unexpectedly had tag %s=%s; tags=%v", ev.Kind, key, tag[1], ev.Tags)
+			t.Fatalf("event kind %d unexpectedly had tag %s=%s; tags=%v", eventKindInt(&ev), key, tag[1], ev.Tags)
 		}
 	}
 }
@@ -1581,14 +1580,14 @@ func assertRelayPreferenceTag(t *testing.T, ev gonostr.Event, relay, marker stri
 			return
 		}
 	}
-	t.Fatalf("event kind %d missing NIP-65 relay preference %s/%s; tags=%v", ev.Kind, relay, marker, ev.Tags)
+	t.Fatalf("event kind %d missing NIP-65 relay preference %s/%s; tags=%v", eventKindInt(&ev), relay, marker, ev.Tags)
 }
 
 func assertNoRelayPreferenceTag(t *testing.T, ev gonostr.Event, relay, marker string) {
 	t.Helper()
 	for _, tag := range ev.Tags {
 		if len(tag) >= 3 && tag[0] == "r" && tag[1] == relay && tag[2] == marker {
-			t.Fatalf("event kind %d unexpectedly had NIP-65 relay preference %s/%s; tags=%v", ev.Kind, relay, marker, ev.Tags)
+			t.Fatalf("event kind %d unexpectedly had NIP-65 relay preference %s/%s; tags=%v", eventKindInt(&ev), relay, marker, ev.Tags)
 		}
 	}
 }

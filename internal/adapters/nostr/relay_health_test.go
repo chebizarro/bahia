@@ -87,8 +87,8 @@ func TestRelayHealth_Stats(t *testing.T) {
 
 func TestRelayHealthStats_IsHealthy(t *testing.T) {
 	tests := []struct {
-		name        string
-		stats       RelayHealthStats
+		name          string
+		stats         RelayHealthStats
 		expectHealthy bool
 	}{
 		{
@@ -149,8 +149,8 @@ func TestRelayHealthStats_IsHealthy(t *testing.T) {
 
 func TestRelayHealthStats_IsDegraded(t *testing.T) {
 	tests := []struct {
-		name          string
-		stats         RelayHealthStats
+		name           string
+		stats          RelayHealthStats
 		expectDegraded bool
 	}{
 		{

@@ -1,0 +1,31 @@
+{
+  "feature_id": "NOSTR_FIATJAF_MODULE_MIGRATION",
+  "test_runs": [
+    {
+      "command": "go test ./internal/nostrutil ./internal/adapters/nostr/...",
+      "result": "passed",
+      "evidence": [
+        "? github.com/openagentsinc/bahia/internal/nostrutil [no test files]",
+        "ok github.com/openagentsinc/bahia/internal/adapters/nostr 0.324s",
+        "ok github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin 0.429s"
+      ],
+      "acceptance_criteria": ["AC-ITEM1-001", "AC-ITEM1-002", "AC-ITEM1-003", "AC-ITEM1-004"]
+    },
+    {
+      "command": "go test ./internal/controlplane",
+      "result": "failed_blocked_outside_item_1_scope",
+      "evidence": [
+        "internal/notifications/nostr_dm.go:74:45: cannot use ev (github.com/nbd-wtf/go-nostr.Event) as fiatjaf.com/nostr.Event value in argument to s.relayPool.Publish"
+      ],
+      "acceptance_criteria": ["AC-ITEM1-005"]
+    },
+    {
+      "command": "rg -n \"github.com/nbd-wtf/go-nostr\" internal cmd pkg",
+      "result": "remaining_imports_outside_item_1_scope",
+      "evidence": [
+        "Representative remaining consumers include internal/notifications/nostr_dm.go, internal/controlplane/* publishers/reactors, pkg/client/*, pkg/discovery/*, cmd/cli/*, internal/soulfactory/*, internal/fipsbridge/*, and other non-core adapters."
+      ],
+      "acceptance_criteria": ["AC-ITEM1-005"]
+    }
+  ]
+}

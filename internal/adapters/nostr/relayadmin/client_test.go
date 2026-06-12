@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 func TestDisabledClientFailsClosed(t *testing.T) {
@@ -28,13 +28,11 @@ func TestDisabledClientFailsClosed(t *testing.T) {
 }
 
 func TestClientRequiresAuthorizedConfiguredTarget(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("GetPublicKey() error = %v", err)
-	}
+	secret := nostr.Generate()
+	privateKey := secret.Hex()
+	pubkey := secret.Public().Hex()
 
-	_, err = NewClient(Config{
+	_, err := NewClient(Config{
 		Enabled:       true,
 		PrivateKeyHex: privateKey,
 		Targets: []Target{{
@@ -65,11 +63,9 @@ func TestClientRequiresAuthorizedConfiguredTarget(t *testing.T) {
 }
 
 func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("GetPublicKey() error = %v", err)
-	}
+	secret := nostr.Generate()
+	privateKey := secret.Hex()
+	pubkey := secret.Public().Hex()
 
 	var receivedBody []byte
 	var receivedAuth string
@@ -125,8 +121,8 @@ func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
 	if event.Kind != 27235 {
 		t.Fatalf("event.Kind = %d, want 27235", event.Kind)
 	}
-	if event.PubKey != pubkey {
-		t.Fatalf("event.PubKey = %s, want %s", event.PubKey, pubkey)
+	if event.PubKey.Hex() != pubkey {
+		t.Fatalf("event.PubKey = %s, want %s", event.PubKey.Hex(), pubkey)
 	}
 	if event.CreatedAt != nostr.Timestamp(1_700_000_000) {
 		t.Fatalf("event.CreatedAt = %v", event.CreatedAt)
@@ -135,21 +131,15 @@ func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
 	assertTag(t, event, "method", http.MethodPost)
 	hash := sha256.Sum256(receivedBody)
 	assertTag(t, event, "payload", hex.EncodeToString(hash[:]))
-	ok, err := event.CheckSignature()
-	if err != nil {
-		t.Fatalf("CheckSignature() error = %v", err)
-	}
-	if !ok {
+	if !event.VerifySignature() {
 		t.Fatal("event signature is invalid")
 	}
 }
 
 func TestClientRejectsExternalPlaintextAdministrationEndpoints(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("GetPublicKey() error = %v", err)
-	}
+	secret := nostr.Generate()
+	privateKey := secret.Hex()
+	pubkey := secret.Public().Hex()
 	tests := []struct {
 		name   string
 		target Target
@@ -177,11 +167,9 @@ func TestClientRejectsExternalPlaintextAdministrationEndpoints(t *testing.T) {
 }
 
 func TestCallRejectsContextVMMutationMethodsBeforeHTTP(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("GetPublicKey() error = %v", err)
-	}
+	secret := nostr.Generate()
+	privateKey := secret.Hex()
+	pubkey := secret.Public().Hex()
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -206,11 +194,9 @@ func TestCallRejectsContextVMMutationMethodsBeforeHTTP(t *testing.T) {
 }
 
 func TestCallReportsHTTPAndRelayErrors(t *testing.T) {
-	privateKey := nostr.GeneratePrivateKey()
-	pubkey, err := nostr.GetPublicKey(privateKey)
-	if err != nil {
-		t.Fatalf("GetPublicKey() error = %v", err)
-	}
+	secret := nostr.Generate()
+	privateKey := secret.Hex()
+	pubkey := secret.Public().Hex()
 	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))

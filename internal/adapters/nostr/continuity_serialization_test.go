@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +18,7 @@ func TestBahiaIdentitySerializationRoundTrip(t *testing.T) {
 	}
 
 	event := EncodeBahiaIdentity(payload, "bahia-instance-1")
-	require.Equal(t, KindBahiaIdentityDefinition, event.Kind)
+	require.Equal(t, canonicalKind(KindBahiaIdentityDefinition), event.Kind)
 	require.Equal(t, "bahia-instance-1", continuityTagValue(event.Tags, "d"))
 	require.ElementsMatch(t, []string{"bahia", "bahia-identity"}, continuityTagValues(event.Tags, "t"))
 	require.NotEmpty(t, event.Content)
@@ -39,7 +39,7 @@ func TestReplayCheckpointSerializationRoundTrip(t *testing.T) {
 	}
 
 	event := EncodeReplayCheckpoint(payload, "bahia-instance-1")
-	require.Equal(t, KindBahiaReplayCheckpoint, event.Kind)
+	require.Equal(t, canonicalKind(KindBahiaReplayCheckpoint), event.Kind)
 	require.Equal(t, "bahia-instance-1", continuityTagValue(event.Tags, "d"))
 	require.ElementsMatch(t, []string{"bahia", "bahia-replay-checkpoint"}, continuityTagValues(event.Tags, "t"))
 	require.NotEmpty(t, event.Content)
@@ -62,7 +62,7 @@ func TestReadinessStatusSerializationRoundTrip(t *testing.T) {
 	}
 
 	event := EncodeReadinessStatus(payload, "bahia-instance-1")
-	require.Equal(t, KindBahiaReadinessStatus, event.Kind)
+	require.Equal(t, canonicalKind(KindBahiaReadinessStatus), event.Kind)
 	require.Equal(t, "bahia-instance-1", continuityTagValue(event.Tags, "d"))
 	require.ElementsMatch(t, []string{"bahia", "bahia-readiness"}, continuityTagValues(event.Tags, "t"))
 	require.NotEmpty(t, event.Content)
@@ -74,7 +74,7 @@ func TestReadinessStatusSerializationRoundTrip(t *testing.T) {
 
 func TestBahiaSystemDecodeRejectsWrongKindAndMissingDTag(t *testing.T) {
 	event := EncodeBahiaIdentity(BahiaIdentityPayload{Version: "v0.9.0"}, "bahia-instance-1")
-	event.Kind = KindBahiaReplayCheckpoint
+	event.Kind = canonicalKind(KindBahiaReplayCheckpoint)
 	_, err := DecodeBahiaIdentity(&event)
 	require.ErrorContains(t, err, "unexpected Bahia identity kind")
 
@@ -103,7 +103,7 @@ func TestContinuityProfileSerializationUsesProfileTagBlocks(t *testing.T) {
 
 	event, err := EncodeContinuityProfileEvent(profile)
 	require.NoError(t, err)
-	require.Equal(t, KindContinuityProfile, event.Kind)
+	require.Equal(t, canonicalKind(KindContinuityProfile), event.Kind)
 	require.Equal(t, "continuity-profile:svc.api", continuityTagValue(event.Tags, "d"))
 	require.Equal(t, "svc.api", continuityTagValue(event.Tags, "service"))
 
@@ -119,7 +119,7 @@ func TestContinuityProfileSerializationUsesProfileTagBlocks(t *testing.T) {
 
 func TestContinuityProfileDecodeRejectsBlockTagsBeforeProfile(t *testing.T) {
 	event := gonostr.Event{
-		Kind:      KindContinuityProfile,
+		Kind:      canonicalKind(KindContinuityProfile),
 		CreatedAt: gonostr.Now(),
 		Tags: gonostr.Tags{
 			{"d", "continuity-profile:svc.api"},
@@ -148,7 +148,7 @@ func TestFailoverPolicySerializationUsesIndexedTagsAndJSONContent(t *testing.T) 
 
 	event, err := EncodeFailoverPolicyEvent(recipe)
 	require.NoError(t, err)
-	require.Equal(t, KindFailoverPolicy, event.Kind)
+	require.Equal(t, canonicalKind(KindFailoverPolicy), event.Kind)
 	require.Equal(t, "svc.api", continuityTagValue(event.Tags, "service"))
 	require.Equal(t, "failover", continuityTagValue(event.Tags, "recipe-kind"))
 	require.NotEmpty(t, event.Content)
@@ -172,7 +172,7 @@ func TestRecoveryWorkflowSerializationUsesRecoveryRecipeKind(t *testing.T) {
 
 	event, err := EncodeRecoveryWorkflowEvent(recipe)
 	require.NoError(t, err)
-	require.Equal(t, KindRecoveryWorkflow, event.Kind)
+	require.Equal(t, canonicalKind(KindRecoveryWorkflow), event.Kind)
 	require.Equal(t, "recovery", continuityTagValue(event.Tags, "recipe-kind"))
 
 	decoded, err := DecodeRecoveryWorkflowEvent(&event)
@@ -196,7 +196,7 @@ func TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags(t *
 
 	event, err := EncodeStandbyNodeDefinitionEvent(definition)
 	require.NoError(t, err)
-	require.Equal(t, KindStandbyNodeDefinition, event.Kind)
+	require.Equal(t, canonicalKind(KindStandbyNodeDefinition), event.Kind)
 	require.Equal(t, "edge-02", continuityTagValue(event.Tags, "host"))
 	require.Equal(t, "standby", continuityTagValue(event.Tags, "role"))
 	require.Equal(t, "registry.example/svc-api:sha256-deadbeef", continuityTagValue(event.Tags, "artifact_ref"))
@@ -226,7 +226,7 @@ func TestReplicationPolicySerializationUsesIndexedTagsAndJSONContent(t *testing.
 
 	event, err := EncodeReplicationPolicyEvent(policy)
 	require.NoError(t, err)
-	require.Equal(t, KindReplicationPolicy, event.Kind)
+	require.Equal(t, canonicalKind(KindReplicationPolicy), event.Kind)
 	require.Equal(t, "replication-policy:svc.api", continuityTagValue(event.Tags, "d"))
 	require.NotEmpty(t, event.Content)
 
@@ -249,7 +249,7 @@ func TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags(t *t
 
 	event, err := EncodeHeartbeatObservationEvent(observation)
 	require.NoError(t, err)
-	require.Equal(t, KindNIP38Status, event.Kind)
+	require.Equal(t, canonicalKind(KindNIP38Status), event.Kind)
 	require.Equal(t, "continuity:heartbeat:workerpubkey", continuityTagValue(event.Tags, "d"))
 	require.Equal(t, "continuity", continuityTagValue(event.Tags, "domain"))
 	require.Equal(t, heartbeatObservationStatusSchema, continuityTagValue(event.Tags, "schema"))
@@ -281,7 +281,7 @@ func TestContinuityCommandSerializationRequiresServiceTargetAndDTag(t *testing.T
 
 	event, err := EncodeFailoverRequestEvent(request)
 	require.NoError(t, err)
-	require.Equal(t, KindFailoverRequest, event.Kind)
+	require.Equal(t, canonicalKind(KindFailoverRequest), event.Kind)
 	require.Equal(t, "svc.api", continuityTagValue(event.Tags, "service"))
 	require.Equal(t, "standbypubkey", continuityTagValue(event.Tags, "target"))
 	require.Equal(t, "degraded", continuityTagValue(event.Tags, "profile"))
@@ -308,7 +308,7 @@ func TestRecoveryRequestSerializationUsesRecoveryKind(t *testing.T) {
 
 	event, err := EncodeRecoveryRequestEvent(request)
 	require.NoError(t, err)
-	require.Equal(t, KindRecoveryRequest, event.Kind)
+	require.Equal(t, canonicalKind(KindRecoveryRequest), event.Kind)
 	require.Equal(t, "recovery", continuityTagValue(event.Tags, "command"))
 
 	decoded, err := DecodeRecoveryRequestEvent(&event)

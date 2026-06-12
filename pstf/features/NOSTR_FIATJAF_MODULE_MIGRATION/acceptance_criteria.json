@@ -1,0 +1,30 @@
+{
+  "feature_id": "NOSTR_FIATJAF_MODULE_MIGRATION",
+  "item_1_acceptance_criteria": [
+    {
+      "id": "AC-ITEM1-001",
+      "description": "No github.com/nbd-wtf/go-nostr imports remain in internal/adapters/nostr/**, internal/nostrutil/**, or internal/controlplane/signer.go.",
+      "tests": ["grep scoped import check"]
+    },
+    {
+      "id": "AC-ITEM1-002",
+      "description": "Core adapter publish, subscribe, AUTH, EOSE, CLOSED, validation, dedupe, and projection tests compile and pass against latest fiatjaf.com/nostr.",
+      "tests": ["go test ./internal/nostrutil ./internal/adapters/nostr/..."]
+    },
+    {
+      "id": "AC-ITEM1-003",
+      "description": "Relay subscription migration preserves event-driven EOSE semantics and does not use timeout-based completion for catch-up.",
+      "tests": ["TestMergeSubscriptionsClosesEOSEAfterAllRelaysEOSE", "TestMergeSubscriptionsDoesNotSignalEOSEWhenRelayClosesBeforeEOSE", "TestMergeSubscriptionsForwardsEventsWithoutWaitingForEOSE", "TestRelayPoolSubscribeRejectsMultiFilterSilentDrop", "TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter", "TestBootstrapperScopesRequiredGroupsToConfiguredAuthors"]
+    },
+    {
+      "id": "AC-ITEM1-004",
+      "description": "Inbound relay events remain validated before persistence/dispatch using canonical event ID, pubkey, signature, timestamp, and tag checks.",
+      "tests": ["TestValidateInboundEventAcceptsValidSignedEvent", "TestValidateInboundEventRejectsInvalidEvents", "TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch"]
+    },
+    {
+      "id": "AC-ITEM1-005",
+      "description": "Downstream go-nostr consumers outside Item 1 are not migrated in this slice and are tracked as blockers for later items.",
+      "tests": ["go test ./internal/controlplane failure captured", "rg github.com/nbd-wtf/go-nostr internal cmd pkg output captured"]
+    }
+  ]
+}

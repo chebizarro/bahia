@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 )
 
 const (
@@ -26,17 +26,17 @@ func ValidateInboundEvent(ev *gonostr.Event, now time.Time, maxFutureSkew time.D
 		maxFutureSkew = InboundEventMaxFutureSkew
 	}
 
-	if ev.Kind < 0 {
-		return fmt.Errorf("invalid kind %d", ev.Kind)
-	}
-	if err := validateHexField("id", ev.ID, 64); err != nil {
+	if err := validateHexField("id", ev.ID.Hex(), 64); err != nil {
 		return err
 	}
-	if err := validateHexField("pubkey", ev.PubKey, 64); err != nil {
+	if err := validateHexField("pubkey", ev.PubKey.Hex(), 64); err != nil {
 		return err
 	}
-	if err := validateHexField("signature", ev.Sig, 128); err != nil {
+	if err := validateHexField("signature", eventSignatureHex(ev), 128); err != nil {
 		return err
+	}
+	if eventKindInt(ev) < 0 {
+		return fmt.Errorf("kind must be non-negative")
 	}
 	if ev.CreatedAt <= 0 {
 		return fmt.Errorf("created_at is required")
@@ -54,11 +54,7 @@ func ValidateInboundEvent(ev *gonostr.Event, now time.Time, maxFutureSkew time.D
 	if !ev.CheckID() {
 		return fmt.Errorf("event id does not match serialized event")
 	}
-	ok, err := ev.CheckSignature()
-	if err != nil {
-		return fmt.Errorf("invalid signature: %w", err)
-	}
-	if !ok {
+	if !ev.VerifySignature() {
 		return fmt.Errorf("invalid signature")
 	}
 	return nil

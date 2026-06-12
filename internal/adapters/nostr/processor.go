@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -74,7 +74,7 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 	}
 
 	var err error
-	switch ev.Kind {
+	switch eventKindInt(ev) {
 	// --- Loom protocol kinds ---
 	case kindLoomWorkerAd:
 		err = p.handleWorkerAdvertisement(ctx, ev)
@@ -90,14 +90,14 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 
 	if err != nil {
 		p.logger.Warn("event processing failed",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
+			zap.String("event_id", eventIDHex(ev)),
+			zap.Int("kind", eventKindInt(ev)),
 			zap.Error(err),
 		)
 	} else {
 		p.logger.Info("event processed",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
+			zap.String("event_id", eventIDHex(ev)),
+			zap.Int("kind", eventKindInt(ev)),
 		)
 	}
 }
@@ -130,7 +130,7 @@ func (p *Processor) handleBuildRegister(ctx context.Context, ev *gonostr.Event) 
 
 	sourceEventID := cmd.SourceEventID
 	if sourceEventID == "" {
-		sourceEventID = ev.ID // link back to the Nostr event
+		sourceEventID = eventIDHex(ev) // link back to the Nostr event
 	}
 
 	build := &domain.Build{
@@ -196,8 +196,8 @@ func (p *Processor) handleIntentCreate(ctx context.Context, ev *gonostr.Event) e
 
 	// Use event author as actor (same as REST resolveActor).
 	requestedBy := cmd.RequestedBy
-	if ev.PubKey != "" {
-		requestedBy = ev.PubKey
+	if eventPubKeyHex(ev) != "" {
+		requestedBy = eventPubKeyHex(ev)
 	}
 
 	sourceKind := domain.SourceKind(cmd.SourceKind)
@@ -254,8 +254,8 @@ func (p *Processor) handleRollback(ctx context.Context, ev *gonostr.Event) error
 	}
 
 	requestedBy := cmd.RequestedBy
-	if ev.PubKey != "" {
-		requestedBy = ev.PubKey
+	if eventPubKeyHex(ev) != "" {
+		requestedBy = eventPubKeyHex(ev)
 	}
 
 	_, err := p.registry.Rollback(ctx, cmd.ServiceID, cmd.EnvironmentID, requestedBy)
@@ -269,7 +269,7 @@ func (p *Processor) handleRollback(ctx context.Context, ev *gonostr.Event) error
 func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.Event) error {
 	if p.workerRepo == nil {
 		p.logger.Debug("worker advertisement ignored (no worker repo configured)",
-			zap.String("pubkey", ev.PubKey))
+			zap.String("pubkey", eventPubKeyHex(ev)))
 		return nil
 	}
 
@@ -289,8 +289,9 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		_ = json.Unmarshal([]byte(ev.Content), &content)
 	}
 
+	pubkey := eventPubKeyHex(ev)
 	w := &domain.Worker{
-		PubKey:              ev.PubKey,
+		PubKey:              pubkey,
 		Name:                content.Name,
 		Description:         content.Description,
 		MaxConcurrentJobs:   content.MaxConcurrentJobs,
@@ -356,19 +357,19 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 	w.MLCapabilities = domain.NormalizeWorkerMLCapabilities(*w)
 
 	if err := p.workerRepo.Upsert(ctx, w); err != nil {
-		return fmt.Errorf("upserting worker %s: %w", ev.PubKey, err)
+		return fmt.Errorf("upserting worker %s: %w", pubkey, err)
 	}
 
-	canonical, err := p.workerRepo.GetByPubKey(ctx, ev.PubKey)
+	canonical, err := p.workerRepo.GetByPubKey(ctx, pubkey)
 	if err != nil {
-		return fmt.Errorf("reloading worker %s: %w", ev.PubKey, err)
+		return fmt.Errorf("reloading worker %s: %w", pubkey, err)
 	}
 	if canonical == nil {
-		return fmt.Errorf("reloading worker %s: not found after upsert", ev.PubKey)
+		return fmt.Errorf("reloading worker %s: not found after upsert", pubkey)
 	}
 	if canonical.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
 		p.logger.Info("stale worker advertisement ignored after repository timestamp guard",
-			zap.String("pubkey", ev.PubKey),
+			zap.String("pubkey", pubkey),
 			zap.Time("event_created_at", ev.CreatedAt.Time()),
 			zap.Time("stored_last_advertisement_at", canonical.LastAdvertisementAt),
 		)
@@ -377,18 +378,18 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 
 	canonical.Pressure = service.AssessWithThresholds(*canonical, time.Now().UTC(), p.pressureThresholds)
 	if err := p.workerRepo.Upsert(ctx, canonical); err != nil {
-		return fmt.Errorf("upserting worker pressure %s: %w", ev.PubKey, err)
+		return fmt.Errorf("upserting worker pressure %s: %w", pubkey, err)
 	}
-	assessed, err := p.workerRepo.GetByPubKey(ctx, ev.PubKey)
+	assessed, err := p.workerRepo.GetByPubKey(ctx, pubkey)
 	if err != nil {
-		return fmt.Errorf("reloading assessed worker %s: %w", ev.PubKey, err)
+		return fmt.Errorf("reloading assessed worker %s: %w", pubkey, err)
 	}
 	if assessed == nil {
-		return fmt.Errorf("reloading assessed worker %s: not found after pressure upsert", ev.PubKey)
+		return fmt.Errorf("reloading assessed worker %s: not found after pressure upsert", pubkey)
 	}
 	if assessed.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
 		p.logger.Info("worker telemetry event skipped after newer advertisement won pressure upsert",
-			zap.String("pubkey", ev.PubKey),
+			zap.String("pubkey", pubkey),
 			zap.Time("event_created_at", ev.CreatedAt.Time()),
 			zap.Time("stored_last_advertisement_at", assessed.LastAdvertisementAt),
 		)
@@ -402,7 +403,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 	})
 
 	p.logger.Info("worker advertisement processed",
-		zap.String("pubkey", ev.PubKey),
+		zap.String("pubkey", pubkey),
 		zap.String("name", assessed.Name),
 		zap.Int("software_count", len(assessed.Software)),
 	)

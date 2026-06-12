@@ -4,13 +4,14 @@ package nostr
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip11"
 	"go.uber.org/zap"
 )
 
@@ -318,8 +319,8 @@ func authUnavailableMetadata(relayReason string, authErr error) string {
 	return fmt.Sprintf("auth-unavailable: %s: %s", reason, authErr.Error())
 }
 
-var subscribeOnRelay = func(relay *nostr.Relay, ctx context.Context, filters []nostr.Filter) (*nostr.Subscription, error) {
-	return relay.Subscribe(ctx, filters)
+var subscribeOnRelay = func(relay *nostr.Relay, ctx context.Context, filter nostr.Filter) (*nostr.Subscription, error) {
+	return relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{MaxWaitForEOSE: time.Duration(math.MaxInt64)})
 }
 
 // IsRateLimitedReason returns true if a relay protocol reason indicates rate limiting.
@@ -396,7 +397,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 						p.recordRelayConnectionState(mr.url, true)
 						p.logger.Info("event accepted by relay after NIP-42 AUTH",
 							zap.String("relay", mr.url),
-							zap.String("event_id", ev.ID),
+							zap.String("event_id", ev.ID.Hex()),
 						)
 						result.Accepted = true
 						return result
@@ -407,14 +408,14 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 				} else {
 					p.logger.Warn("publish AUTH retry failed",
 						zap.String("relay", mr.url),
-						zap.String("event_id", ev.ID),
+						zap.String("event_id", ev.ID.Hex()),
 						zap.Error(authErr),
 					)
 				}
 			}
 			result.Reason = reason
 			p.recordRelayPublishFailure(mr.url, reason)
-			p.logPublishRejection(mr.url, ev.ID, reason)
+			p.logPublishRejection(mr.url, ev.ID.Hex(), reason)
 			return result
 		}
 
@@ -425,7 +426,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		p.recordRelayPublishFailure(mr.url, err.Error())
 		p.logger.Warn("publish failed (transport error), marking relay disconnected",
 			zap.String("relay", mr.url),
-			zap.String("event_id", ev.ID),
+			zap.String("event_id", ev.ID.Hex()),
 			zap.Error(err),
 		)
 		result.Error = fmt.Errorf("publishing to %s: %w", mr.url, err)
@@ -437,7 +438,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 	p.recordRelayConnectionState(mr.url, true)
 	p.logger.Debug("event accepted by relay",
 		zap.String("relay", mr.url),
-		zap.String("event_id", ev.ID),
+		zap.String("event_id", ev.ID.Hex()),
 	)
 	result.Accepted = true
 	return result
@@ -570,6 +571,10 @@ func (e publishAggregateError) Unwrap() []error {
 // Subscribe creates a subscription on the first available relay.
 // It attempts each relay in order and returns the first successful subscription.
 func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nostr.Subscription, error) {
+	if len(filters) != 1 {
+		return nil, fmt.Errorf("single-relay Subscribe requires exactly one filter, got %d; use SubscribeAllWithEOSE for multi-filter coverage", len(filters))
+	}
+
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -595,11 +600,12 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 			p.recordRelayConnectionState(mr.url, true)
 		}
 
-		sub, err := subscribeOnRelay(mr.relay, ctx, filters)
+		filter := filters[0]
+		sub, err := subscribeOnRelay(mr.relay, ctx, filter)
 		recordedAuthUnavailable := false
 		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
 			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-				sub, err = subscribeOnRelay(mr.relay, ctx, filters)
+				sub, err = subscribeOnRelay(mr.relay, ctx, filter)
 			} else {
 				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
 				recordedAuthUnavailable = true
@@ -673,6 +679,10 @@ func (p *RelayPool) SubscribeAll(ctx context.Context, filters []nostr.Filter) (<
 // SubscribeAllWithEOSE creates subscriptions on all connected relays and merges events.
 // Returns a MergedSubscription with both the event channel and an EOSE signal.
 func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*MergedSubscription, error) {
+	if len(filters) == 0 {
+		return nil, fmt.Errorf("at least one subscription filter is required")
+	}
+
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -701,26 +711,47 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 			p.recordRelayConnectionState(mr.url, true)
 		}
 
-		sub, err := subscribeOnRelay(mr.relay, subCtx, filters)
-		recordedAuthUnavailable := false
-		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
-			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-				sub, err = subscribeOnRelay(mr.relay, subCtx, filters)
-			} else {
-				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
-				recordedAuthUnavailable = true
+		relaySubs := make([]*nostr.Subscription, 0, len(filters))
+		var lastErr error
+		relayComplete := true
+		for _, filter := range filters {
+			sub, err := subscribeOnRelay(mr.relay, subCtx, filter)
+			recordedAuthUnavailable := false
+			if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
+				if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
+					sub, err = subscribeOnRelay(mr.relay, subCtx, filter)
+				} else {
+					p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
+					recordedAuthUnavailable = true
+				}
 			}
-		}
-		if err != nil && !recordedAuthUnavailable {
-			p.recordRelayError(mr.url, err.Error())
+			if err != nil {
+				lastErr = err
+				relayComplete = false
+				if !recordedAuthUnavailable {
+					p.recordRelayError(mr.url, err.Error())
+				}
+				break
+			}
+			relaySubs = append(relaySubs, sub)
 		}
 		mr.mu.Unlock()
-		if err != nil {
+		if !relayComplete || len(relaySubs) != len(filters) {
+			for _, sub := range relaySubs {
+				if sub != nil {
+					sub.Unsub()
+				}
+			}
+			if lastErr != nil {
+				p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(lastErr))
+			}
 			continue
 		}
 		p.recordRelayConnectionState(mr.url, true)
 
-		subs = append(subs, relaySubscription{relayURL: mr.url, sub: sub})
+		for _, sub := range relaySubs {
+			subs = append(subs, relaySubscription{relayURL: mr.url, sub: sub})
+		}
 	}
 
 	if len(subs) == 0 {
@@ -764,7 +795,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 			defer eventsWg.Done()
 			s := rs.sub
 			var eoseCh <-chan struct{}
-			var eventsCh <-chan *nostr.Event
+			var eventsCh <-chan nostr.Event
 			var closedCh <-chan string
 			if s != nil {
 				eoseCh = s.EndOfStoredEvents
@@ -835,8 +866,9 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 						}
 						return
 					}
+					event := ev
 					select {
-					case merged <- ev:
+					case merged <- &event:
 					case <-ctx.Done():
 						return
 					}
@@ -1143,13 +1175,13 @@ func (p *RelayPool) GetMaxSubscriptions(relayURL string) int {
 // buildRelayOptions creates RelayOption slice with notice handler.
 // Note: NIP-42 AUTH requires manual handling via relay.Auth() when auth-required
 // errors are detected in publish results.
-func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOption {
-	return nostr.WithNoticeHandler(func(notice string) {
+func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOptions {
+	return nostr.RelayOptions{NoticeHandler: func(_ *nostr.Relay, notice string) {
 		p.logger.Info("relay notice",
 			zap.String("relay", relayURL),
 			zap.String("notice", notice),
 		)
-	})
+	}}
 }
 
 func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *managedRelay) error {
@@ -1161,8 +1193,8 @@ func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *mana
 	}
 
 	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", mr.url))
-	if err := mr.relay.Auth(ctx, func(event *nostr.Event) error {
-		return event.Sign(p.privateKey)
+	if err := mr.relay.Auth(ctx, func(_ context.Context, event *nostr.Event) error {
+		return signEventWithPrivateKeyHex(event, p.privateKey)
 	}); err != nil {
 		p.logger.Error("NIP-42 AUTH failed",
 			zap.String("relay", mr.url),

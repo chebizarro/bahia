@@ -3,7 +3,7 @@ package nostr
 import (
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr/nip11"
+	"fiatjaf.com/nostr/nip11"
 	"go.uber.org/zap"
 )
 

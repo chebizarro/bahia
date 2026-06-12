@@ -1,11 +1,10 @@
 package nostr
 
 import (
-	"strings"
 	"testing"
 	"time"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,12 +13,12 @@ const testNostrPrivateKey = "111111111111111111111111111111111111111111111111111
 func signedTestEvent(t *testing.T, kind int, createdAt time.Time) *gonostr.Event {
 	t.Helper()
 	ev := &gonostr.Event{
-		Kind:      kind,
+		Kind:      canonicalKind(kind),
 		CreatedAt: gonostr.Timestamp(createdAt.Unix()),
 		Content:   "{}",
 		Tags:      gonostr.Tags{},
 	}
-	require.NoError(t, ev.Sign(testNostrPrivateKey))
+	require.NoError(t, signEventWithPrivateKeyHex(ev, testNostrPrivateKey))
 	return ev
 }
 
@@ -45,7 +44,7 @@ func TestValidateInboundEventRejectsInvalidEvents(t *testing.T) {
 			name: "id mismatch",
 			ev: func() *gonostr.Event {
 				ev := signedTestEvent(t, 5101, now)
-				ev.ID = strings.Repeat("0", 64)
+				ev.ID = gonostr.ID{}
 				return ev
 			},
 		},
@@ -53,7 +52,7 @@ func TestValidateInboundEventRejectsInvalidEvents(t *testing.T) {
 			name: "signature mismatch",
 			ev: func() *gonostr.Event {
 				ev := signedTestEvent(t, 5101, now)
-				ev.Sig = strings.Repeat("0", 128)
+				ev.Sig = [64]byte{}
 				return ev
 			},
 		},
@@ -66,18 +65,18 @@ func TestValidateInboundEventRejectsInvalidEvents(t *testing.T) {
 			ev:   func() *gonostr.Event { return signedTestEvent(t, 5101, now.Add(-InboundEventMaxPastAge-time.Second)) },
 		},
 		{
-			name: "malformed pubkey",
+			name: "pubkey mismatch",
 			ev: func() *gonostr.Event {
 				ev := signedTestEvent(t, 5101, now)
-				ev.PubKey = "not-hex"
+				ev.PubKey = gonostr.PubKey{}
 				return ev
 			},
 		},
 		{
 			name: "invalid tag structure",
 			ev: func() *gonostr.Event {
-				ev := &gonostr.Event{Kind: 5101, CreatedAt: gonostr.Timestamp(now.Unix()), Content: "{}", Tags: gonostr.Tags{{}}}
-				require.NoError(t, ev.Sign(testNostrPrivateKey))
+				ev := &gonostr.Event{Kind: canonicalKind(5101), CreatedAt: gonostr.Timestamp(now.Unix()), Content: "{}", Tags: gonostr.Tags{{}}}
+				require.NoError(t, signEventWithPrivateKeyHex(ev, testNostrPrivateKey))
 				return ev
 			},
 		},

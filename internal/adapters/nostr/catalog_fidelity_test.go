@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -120,7 +120,7 @@ func TestCoreProjectionDecodersRoundTripEncodedPayloadFields(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if got.DTag != tc.dtag || got.SourceID != event.ID || got.Timestamp.IsZero() {
+			if got.DTag != tc.dtag || got.SourceID != eventIDHex(&event) || got.Timestamp.IsZero() {
 				t.Fatalf("projection metadata mismatch: %#v", got)
 			}
 			tc.assert(got)
@@ -141,5 +141,5 @@ func TestProjectionFidelityDocumentsKnownLossyDomainFields(t *testing.T) {
 
 func projectionEvent(kind int, dtag string, body map[string]any, createdAt time.Time) gonostr.Event {
 	content, _ := json.Marshal(body)
-	return gonostr.Event{ID: "evt-" + dtag, Kind: kind, CreatedAt: gonostr.Timestamp(createdAt.Unix()), Tags: gonostr.Tags{{"d", dtag}, {"deleted", "false"}}, Content: string(content)}
+	return gonostr.Event{ID: gonostr.ID{1}, Kind: canonicalKind(kind), CreatedAt: gonostr.Timestamp(createdAt.Unix()), Tags: gonostr.Tags{{"d", dtag}, {"deleted", "false"}}, Content: string(content)}
 }

@@ -62,7 +62,7 @@ func TestEventDeduplicator_Eviction(t *testing.T) {
 	// Since we don't have a "Contains" method, we test eviction indirectly:
 	// After adding event5, event2 should be evicted (event1 was already evicted).
 	d.IsDuplicate("event5")
-	
+
 	// Size should still be 3.
 	if d.Size() != 3 {
 		t.Errorf("expected size 3, got %d", d.Size())
