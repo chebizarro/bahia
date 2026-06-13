@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_SOULFACTORY_SIDECAR_READS",
+  "title": "SoulFactory sidecar relay support",
+  "issue": "bahia-v0rp",
+  "observed_behavior": {
+    "route": "/souls/new",
+    "symptom": "Browser logs incomplete EOSE warnings because the Bahia sidecar closes REQ filters for SoulFactory kinds 31950, 31951, 31952, and 30317 as not readable."
+  },
+  "intended_behavior": {
+    "summary": "SoulFactory is direct Nostr interop, not Bahia legacy control-plane traffic. The sidecar relay accepts valid signed SoulFactory lifecycle events and allows browser-safe REQ filters for SoulFactory templates, souls, drafts, capabilities, requests, progress, and results.",
+    "event_kinds": [31950, 31951, 31952, 5950, 6950, 7950, 1950, 1951, 30317, 38384, 38386],
+    "semantics": ["REQ", "EVENT", "EOSE", "OK", "CLOSED"]
+  },
+  "scope": [
+    "internal/kinds shared policy",
+    "internal/relaysidecar read/write policy",
+    "web Nostr kind facade",
+    "protocol and user documentation"
+  ],
+  "out_of_scope": [
+    "Changing SoulFactory event payload schemas",
+    "Replacing SoulFactory with ContextVM or REST",
+    "Relaxing Bahia legacy custom kind fail-closed migration policy"
+  ]
+}

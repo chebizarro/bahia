@@ -1,0 +1,35 @@
+{
+  "feature_id": "WEB_SOULFACTORY_SIDECAR_READS",
+  "tests": [
+    {
+      "command": "go test ./internal/kinds ./internal/nostrmigration ./internal/relaysidecar -count=1",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "command": "cd web && pnpm exec vitest run --config vitest.config.js tests/unit/nostr-client-parsing.test.js",
+      "criteria": [
+        "AC4"
+      ]
+    },
+    {
+      "command": "cd web && pnpm lint",
+      "criteria": [
+        "AC4"
+      ]
+    },
+    {
+      "command": "git diff --check",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    }
+  ]
+}

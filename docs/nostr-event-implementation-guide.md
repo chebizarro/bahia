@@ -163,6 +163,7 @@ Bahia relay-purpose taxonomy:
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service relay boundary; not automatically public browser bootstrap. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing only; not service-strategy authorization. |
 | Repository/ngit | Repository maintainer or SoulFactory | `nostr.nip34_relays`, NIP-34 `30617` `relays` tags, and `30618` state | Repository announcement discovery queries advertised NIP-34 relays when configured; branch/state lookups query repository-specific `relays` tags before global Bahia read relays. Missing NIP-34 relays remain a degraded fallback, not generic control-plane policy. |
+| SoulFactory agent lifecycle | Operator, SoulFactory controller, runtime sidecar | SoulFactory kinds `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | Direct Nostr agent-lifecycle interop. Bahia sidecar treats these as open interop data for valid signed events; they are not Bahia legacy control-plane kinds or migration inputs. |
 | DM receive routing | Receiving identity | NIP-51 `10050` | Explicit DM-enabled features and identities only; public bootstrap and ContextVM relay readiness do not imply DM readiness. |
 | FIPS public adverts | FIPS/Bahia operator | Existing FIPS overlay advert contract plus explicit bridge relay config | Public advert boundary; safe only for information intentionally exposed as FIPS overlay metadata. |
 | FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets or explicit bridge relay config | Sensitive endpoint/control boundary; sharing with public relays is an explicit exposure decision. |
@@ -225,7 +226,7 @@ Other standard NIPs may be used directly when their semantics fit. Examples incl
 
 Legacy Bahia kind constants may still exist for migration inventory, fixture decoding, or historical documentation. They are not production runtime policy.
 
-Production runtime code must not publish or newly subscribe to these legacy families:
+Production runtime code must not publish or newly subscribe to these legacy families, excluding the explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386`:
 
 - request kinds `5941`-`6006`, `38390`-`38399`, `38400`-`38431`, and older encrypted request/result kinds `5980`/`7980`
 - status/result ranges `6941`, `6961`-`6997`, `7941`-`7997`

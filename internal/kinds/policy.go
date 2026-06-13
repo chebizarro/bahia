@@ -39,9 +39,9 @@ func IsBahiaProjectionKind(kind int) bool {
 
 // IsOpenInteropKind returns true if the kind is an open interop kind that
 // does not require authorization. These are events from external systems
-// (Loom, Hive-CI) that interoperate with Bahia.
+// (Loom, Hive-CI, NIP-34, SoulFactory) that interoperate with Bahia.
 func IsOpenInteropKind(kind int) bool {
-	return isLoomInteropKind(kind) || isHiveCIInteropKind(kind) || kind == NIP22Comment || IsNIP34Kind(kind)
+	return isLoomInteropKind(kind) || isHiveCIInteropKind(kind) || kind == NIP22Comment || IsNIP34Kind(kind) || IsSoulFactoryKind(kind)
 }
 
 func isLoomInteropKind(kind int) bool {
@@ -71,6 +71,23 @@ func IsNIP34Kind(kind int) bool {
 		NIP34Patch, NIP34PullRequest, NIP34PullRequestUpdate, NIP34Issue,
 		NIP34StatusOpen, NIP34StatusAppliedOrMerged, NIP34StatusClosed, NIP34StatusDraft,
 		NIP34RepositoryAnnouncement, NIP34RepositoryState:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSoulFactoryKind returns true for the SoulFactory event family Bahia uses
+// as Nostr-native agent lifecycle interop. These are not legacy Bahia control-
+// plane request/status/result/read-model kinds; the web app and SoulFactory
+// reactors exchange them directly through relays with normal REQ/EVENT/EOSE/OK
+// semantics.
+func IsSoulFactoryKind(kind int) bool {
+	switch kind {
+	case SoulFactoryTemplate, SoulFactoryAgentSoul, SoulFactoryDraft,
+		SoulFactoryProvisioningRequest, SoulFactoryProvisioningStatus, SoulFactoryProvisioningResult,
+		SoulFactoryAction, SoulFactoryActionLegacyResult,
+		SoulFactoryRuntimeCapability, SoulFactoryRuntimeControl, SoulFactoryRuntimeResult:
 		return true
 	default:
 		return false

@@ -47,6 +47,8 @@ describe('Nostr Client - Parsing Functions', () => {
   let parseSoulEvent;
   let parseTemplateEvent;
   let KINDS;
+  let isOpenInteropKind;
+  let isReadableKind;
   let BAHIA_READ_MODEL_KINDS;
   let BAHIA_STATUS_KINDS;
   let BAHIA_STATE_SCHEMAS;
@@ -77,6 +79,8 @@ describe('Nostr Client - Parsing Functions', () => {
     replaceableKey = module.replaceableKey;
     shouldAcceptReplaceableEvent = module.shouldAcceptReplaceableEvent;
     isReplaceableTombstone = module.isReplaceableTombstone;
+    isOpenInteropKind = module.isOpenInteropKind;
+    isReadableKind = module.isReadableKind;
     dedupeReplaceableEvents = module.dedupeReplaceableEvents;
     parseRuntimeCapabilityEvent = module.parseRuntimeCapabilityEvent;
     runtimeCapabilitySupports = module.runtimeCapabilitySupports;
@@ -102,6 +106,25 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(KINDS.RUNTIME_CAPABILITY).toBe(30317);
       expect(KINDS.RUNTIME_CONTROL_REQUEST).toBe(38384);
       expect(KINDS.RUNTIME_CONTROL_RESULT).toBe(38386);
+    });
+
+    it('classifies Soul Factory kinds as sidecar-readable open interop', () => {
+      for (const kind of [
+        KINDS.SOUL_TEMPLATE,
+        KINDS.AGENT_SOUL,
+        KINDS.SOUL_DRAFT,
+        KINDS.PROVISIONING_REQUEST,
+        KINDS.PROVISIONING_STATUS,
+        KINDS.PROVISIONING_RESULT,
+        KINDS.SOUL_ACTION,
+        KINDS.SOUL_ACTION_LEGACY_RESULT,
+        KINDS.RUNTIME_CAPABILITY,
+        KINDS.RUNTIME_CONTROL_REQUEST,
+        KINDS.RUNTIME_CONTROL_RESULT
+      ]) {
+        expect(isOpenInteropKind(kind)).toBe(true);
+        expect(isReadableKind(kind)).toBe(true);
+      }
     });
 
     it('exports canonical Bahia controlplane kinds and schema identifiers, not old Bahia aliases', () => {

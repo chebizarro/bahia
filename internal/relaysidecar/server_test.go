@@ -451,6 +451,60 @@ func TestSidecarAllowsNIP34Kinds(t *testing.T) {
 	}
 }
 
+func TestSidecarAllowsSoulFactoryInteropKinds(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.MaxQueryLimit = 100
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	publisherSK := nostr.Generate()
+	for _, tc := range []struct {
+		name string
+		kind int
+	}{
+		{name: "template", kind: kinds.SoulFactoryTemplate},
+		{name: "agent soul", kind: kinds.SoulFactoryAgentSoul},
+		{name: "draft", kind: kinds.SoulFactoryDraft},
+		{name: "provisioning request", kind: kinds.SoulFactoryProvisioningRequest},
+		{name: "provisioning status", kind: kinds.SoulFactoryProvisioningStatus},
+		{name: "provisioning result", kind: kinds.SoulFactoryProvisioningResult},
+		{name: "action", kind: kinds.SoulFactoryAction},
+		{name: "legacy action result", kind: kinds.SoulFactoryActionLegacyResult},
+		{name: "runtime capability", kind: kinds.SoulFactoryRuntimeCapability},
+		{name: "runtime control", kind: kinds.SoulFactoryRuntimeControl},
+		{name: "runtime result", kind: kinds.SoulFactoryRuntimeResult},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readFilter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(tc.kind)}}
+			reject, msg := server.Relay().OnRequest(context.Background(), readFilter)
+			if reject {
+				t.Fatalf("expected SoulFactory kind %d to be readable, got rejection %q", tc.kind, msg)
+			}
+
+			event := nostr.Event{
+				CreatedAt: nostr.Now(),
+				Kind:      nostr.Kind(tc.kind),
+				Tags: nostr.Tags{
+					nostr.Tag{"d", tc.name},
+					nostr.Tag{"agent-id", "scout"},
+				},
+				Content: `{"schema":"soulfactory-test/v1"}`,
+			}
+			if err := event.Sign(publisherSK); err != nil {
+				t.Fatalf("sign SoulFactory event: %v", err)
+			}
+			if skipBroadcast, err := server.Relay().AddEvent(context.Background(), event); err != nil || skipBroadcast {
+				t.Fatalf("expected sidecar to accept SoulFactory kind %d, skipBroadcast=%v err=%v", tc.kind, skipBroadcast, err)
+			}
+		})
+	}
+}
+
 func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 	serviceSK := nostr.Generate()
 	servicePubkey := nostr.GetPublicKey(serviceSK)

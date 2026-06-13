@@ -38,6 +38,7 @@ For the canonical control-plane contract, prefer:
 | NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
 | NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
 | NIP-34 + NIP-22 comments | Repository announcements, repository relay hints, repository state, patches, PRs, issues, status, and replies | ✅ repository/ngit-specific routing input and sidecar open interop surface |
+| SoulFactory | Agent templates, drafts, provisioning/lifecycle requests, runtime capabilities, and correlated results | ✅ Nostr-native agent lifecycle interop and sidecar open interop surface |
 | NIP-11 / NIP-66 | Relay metadata and optional monitor events | ✅ advisory capability/liveness metadata only |
 | NIP-86 + NIP-98 | Optional relay-owner HTTP administration with payload-bound signed HTTP authorization | 🟡 opt-in administration surface for Bahia-owned/authorized relays only; not ContextVM transport |
 | Loom | Distributed job execution protocol | ✅ implemented as external protocol interop |
@@ -84,6 +85,8 @@ The Bahia service key also publishes an advisory NIP-65 kind `10002` relay list.
 
 NIP-34 repository announcement discovery uses `nostr.nip34_relays` when configured. Repository branch/state lookups then use the selected repository announcement's own `relays` tag values for scoped `30618` filters before falling back to global Bahia read relays. The sidecar policy accepts NIP-22 comments (`1111`) plus NIP-34 kinds `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618` as open interop data so deployments may advertise the sidecar as a NIP-34 relay without CLOSED rejections for repository collaboration events.
 
+SoulFactory uses direct Nostr events rather than REST lifecycle endpoints. The sidecar policy accepts SoulFactory kinds `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` as open interop data so `/souls/new`, lifecycle views, the Bahia SoulFactory reactor, and OpenClaw runtime sidecars can publish, read, and correlate templates, drafts, souls, provisioning/action requests, progress, runtime capabilities, runtime-control requests, and terminal results without relay CLOSED rejections. These kinds are not Bahia legacy control-plane kinds and are not migration inputs.
+
 NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured, and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
 
 ### 4. REST and HTTP MCP
@@ -97,7 +100,7 @@ NIP-11 metadata and optional NIP-66 monitor events are advisory health/capabilit
 
 ## Legacy Bahia Custom Kinds
 
-Historical Bahia-specific ranges are retained only for startup migration, historical conversion tests, and fail-closed fixtures:
+Historical Bahia-specific ranges are retained only for startup migration, historical conversion tests, and fail-closed fixtures. This table excludes the explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` even where their numbers overlap historical Bahia ranges:
 
 | Legacy family | Historical purpose | Canonical target |
 |---------------|--------------------|------------------|

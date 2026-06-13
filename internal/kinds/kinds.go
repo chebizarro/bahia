@@ -158,7 +158,7 @@ const (
 )
 
 // =============================================================================
-// Interop Kinds (Loom, Hive-CI, NIP-34)
+// Interop Kinds (Loom, Hive-CI, NIP-34, SoulFactory)
 // =============================================================================
 
 const (
@@ -183,6 +183,18 @@ const (
 	NIP34StatusDraft            = 1633
 	NIP34RepositoryAnnouncement = 30617
 	NIP34RepositoryState        = 30618
+
+	SoulFactoryAction              = 1950
+	SoulFactoryActionLegacyResult  = 1951
+	SoulFactoryProvisioningRequest = 5950
+	SoulFactoryProvisioningStatus  = 6950
+	SoulFactoryProvisioningResult  = 7950
+	SoulFactoryRuntimeCapability   = 30317
+	SoulFactoryRuntimeControl      = 38384
+	SoulFactoryRuntimeResult       = 38386
+	SoulFactoryTemplate            = 31950
+	SoulFactoryAgentSoul           = 31951
+	SoulFactoryDraft               = 31952
 )
 
 // =============================================================================

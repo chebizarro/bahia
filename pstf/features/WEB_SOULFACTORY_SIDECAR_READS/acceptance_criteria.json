@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_SOULFACTORY_SIDECAR_READS",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "The shared kind policy classifies SoulFactory kinds as direct interop instead of Bahia legacy migration inventory.",
+      "verification": "internal/kinds policy tests and nostrmigration manifest coverage"
+    },
+    {
+      "id": "AC2",
+      "description": "The sidecar accepts REQ filters for SoulFactory kinds used by /souls/new and does not return CLOSED not-readable messages for those kinds.",
+      "verification": "internal/relaysidecar server policy test over 31950, 31951, 31952, 30317 and related lifecycle/result kinds"
+    },
+    {
+      "id": "AC3",
+      "description": "The sidecar accepts valid signed SoulFactory events for the same event family and still validates event IDs, signatures, and timestamps through the existing policy path.",
+      "verification": "internal/relaysidecar AddEvent regression test"
+    },
+    {
+      "id": "AC4",
+      "description": "The frontend SoulFactory kind facade uses the shared generated kind constants so web and backend sidecar policy cannot drift silently.",
+      "verification": "internal/kinds generated drift test and web lint"
+    }
+  ]
+}

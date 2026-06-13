@@ -263,6 +263,10 @@ bahia souls templates get research-agent
 | 6950 | ProvisioningStatus | Progress updates |
 | 7950 | ProvisioningResult | Final result |
 | 1950 | SoulAction | Lifecycle actions |
+| 1951 | SoulAction legacy result | Backward-compatible lifecycle result alias |
+| 30317 | RuntimeCapability | Runtime capability announcement |
+| 38384 | RuntimeControlRequest | Runtime-directed control request |
+| 38386 | RuntimeControlResult | Runtime-directed result |
 
 ## Nostr-First Provisioning Flow
 
@@ -274,6 +278,8 @@ Soul creation is signer-first and event-driven:
 4. Clients subscribe to the correlated Nostr events for durable truth. A ContextVM or MCP acknowledgment is not completion.
 
 REST provisioning and lifecycle routes are intentionally not part of SoulFactory. Do not integrate against a REST create/provision/suspend/resume path; use signed Nostr events and scoped subscriptions.
+
+The Bahia sidecar relay accepts the SoulFactory event family above as open interop data. Browser routes such as `/souls/new` can query `31950`, `31951`, `31952`, and `30317` through the sidecar without CLOSED rejections, and operators/runtimes can publish correlated SoulFactory request, progress, and result events through the same relay boundary when their signatures and event IDs are valid.
 
 ## Agent Self-Provisioning
 

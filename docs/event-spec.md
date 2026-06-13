@@ -11,7 +11,7 @@ Bahia publishes signed Nostr events for control-plane intent, state, status, dis
 - **Discovery**: ContextVM announcements `11316`-`11320` and NIP-51 relay sets `30002`.
 - **Deletion**: NIP-09 kind `5` where relay-level deletion semantics apply; durable domain tombstones may still be represented as canonical replacement state with `deleted=true`.
 
-Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `31000`-`31024`, `38390`-`38431`, `5980`, `7980`) are migration inventory only. Production code should not subscribe to them as live control-plane contracts.
+Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `31000`-`31024`, `38390`-`38431`, `5980`, `7980`) are migration inventory only, excluding explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` where their numbers overlap those ranges. Production code should not subscribe to legacy Bahia families as live control-plane contracts.
 
 ## Production Event Families
 
@@ -28,6 +28,7 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 | `10002` | Relay preference | Advisory NIP-65 service relay read/write hints for wider Nostr routing. |
 | `10050` | DM relay list | Optional NIP-51 DM receive routing only for explicitly configured DM-enabled Bahia features and identities. |
 | `30617`, `30618` | Repository | NIP-34 repository announcements and state; repository relay hints are repository-specific routing inputs. |
+| `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | SoulFactory interop | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results. |
 | `5` | Deletion | NIP-09 deletion event for relay-level deletion semantics. |
 
 ## ContextVM Intent Structure
@@ -222,9 +223,9 @@ This is idempotent and safe to run every startup. If the migration fails because
 
 | Legacy family | Historical purpose | Canonical target |
 |---------------|--------------------|------------------|
-| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
-| `6961`-`6997` | status/progress | `30315`, `4903`, correlated ContextVM responses, or domain observables |
-| `7961`-`7997` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
+| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` excluding SoulFactory interop `5950`, `1950`, `38384` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
+| `6961`-`6997` excluding SoulFactory interop `6950` | status/progress | `30315`, `4903`, correlated ContextVM responses, or domain observables |
+| `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
 | worker cleanup lifecycle | resource-pressure cleanup state | `30900` with `schema=bahia.state.worker-cleanup.v1`, `domain=worker`, and narrow `worker`/`status` tags |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |

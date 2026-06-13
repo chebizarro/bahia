@@ -2,7 +2,7 @@
 
 Bahia's production Nostr control plane is now ContextVM-first. Mutation intent uses ContextVM JSON-RPC kind `25910`, usually encrypted with ContextVM CEP-4 / NIP-59 wrappers (`1059` or `21059`). Long-running truth is observed through canonical Nostr events, not through legacy Bahia request/status/result kind families.
 
-Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, and `7980` are migration inventory only. New clients must not publish or subscribe to those numbers as production runtime contracts.
+Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, and `7980` are migration inventory only, excluding explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` where their numbers overlap those ranges. New clients must not publish or subscribe to legacy Bahia numbers as production runtime contracts.
 
 ## Production Kind Families
 
@@ -17,6 +17,7 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | Relay preferences | `10002` | outbound replaceable | Advisory NIP-65 service read/write hints; not Bahia bootstrap |
 | DM relay lists | `10050` | optional replaceable | NIP-51 DM receive routing only for explicitly configured DM-enabled features and identities |
 | Repository state | `30617`, `30618` | inbound/outbound by repository owner | NIP-34 repository announcements and state; repository relay hints are preferred for repository operations |
+| SoulFactory interop | `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | inbound/outbound by operators, SoulFactory controllers, and runtimes | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results |
 | Deletions | `5` | outbound/inbound | NIP-09 delete events where relay-level deletion semantics apply |
 
 ## ContextVM Mutation Methods
@@ -233,9 +234,9 @@ These families are retained only for migration manifests, historical conversion 
 
 | Legacy range | Historical purpose | Canonical target |
 |--------------|--------------------|------------------|
-| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
-| `6961`-`6997` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
-| `7961`-`7997` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
+| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` excluding SoulFactory interop `5950`, `1950`, `38384` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
+| `6961`-`6997` excluding SoulFactory interop `6950` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
+| `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003` | read models | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
 | worker cleanup lifecycle | Fleet Health cleanup status | `30900` with `schema=bahia.state.worker-cleanup.v1`; mutation remains encrypted ContextVM `worker/cleanup` |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
