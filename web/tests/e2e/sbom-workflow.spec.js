@@ -53,13 +53,13 @@ function serviceEvent() {
   });
 }
 
-function artifactPayload({ id = ARTIFACT_ID, packages = [], sbom = null, attestation = null } = {}) {
+function artifactPayload({ id = ARTIFACT_ID, name = null, packages = [], sbom = null, attestation = null } = {}) {
   return {
     schema: 'bahia.registry.artifact.v1',
     id,
     service_id: SERVICE_ID,
-    name: id === ARTIFACT_ID ? 'registry.example.com/bahia/sbom-demo' : 'registry.example.com/bahia/no-sbom',
-    version: '1.2.3',
+    name: name || (id === ARTIFACT_ID ? 'registry.example.com/bahia/sbom-demo' : 'registry.example.com/bahia/no-sbom'),
+    image_repo: id === ARTIFACT_ID ? 'registry.example.com/bahia/sbom-demo' : 'registry.example.com/bahia/no-sbom',
     artifact_type: 'container_image',
     image_tag: '1.2.3',
     digest: 'sha256:111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000',
@@ -121,7 +121,7 @@ test.describe('SBOM workflow', () => {
       authenticated: true,
       extension: true,
       systemInfo: relaySystemInfo,
-      nostrEvents: [serviceEvent(), artifactEvent()]
+      nostrEvents: [serviceEvent(), artifactEvent({ name: '1.2.3' })]
     });
 
     await page.goto('/artifacts');

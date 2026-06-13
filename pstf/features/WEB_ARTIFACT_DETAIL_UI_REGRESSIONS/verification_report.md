@@ -1,6 +1,6 @@
 # Verification Report: WEB_ARTIFACT_DETAIL_UI_REGRESSIONS
 
-Beads issues: `bahia-zgvc`, `bahia-g5d3`, `bahia-a0zf`
+Beads issues: `bahia-zgvc`, `bahia-g5d3`, `bahia-a0zf`, `bahia-cg7j`
 
 ## Verification status
 
@@ -14,7 +14,8 @@ Verified for the touched artifact detail/SBOM scope. The artifact route renders 
 - Playwright SBOM workflow tests fail immediately if `/api/v1/artifacts/:id/sbom` or `/api/v1/artifacts/:id/sbom/attestation` is requested.
 - The SBOM fixture uses the repository's supported read-model transport shape: kind `30900` with `schema=bahia.registry.artifact.v1` and `legacy_kind=31966` metadata.
 - Artifact detail code does not add or restore any REST artifact detail/SBOM fallback.
-- Artifact registry list columns now map the actual relay-backed projection shape: `name`/`image_repo` for Name, `version`/`image_tag` for Version, and `digest`/`image_digest` for a dedicated Digest column. The list hydration reacts to collection updates from relay catch-up instead of freezing on the initial empty projection.
+- Artifact registry list columns now map the actual relay-backed projection shape: `image_repo`/`repository` for Name, `version`/`image_tag`/`tag` for Version, and `digest`/`image_digest` for a dedicated Digest column. The list hydration reacts to collection updates from relay catch-up instead of freezing on the initial empty projection.
+- Registry list coverage includes the observed ambiguous shape where generic `name` equals the tag/version while `image_repo` carries the repository display name; Version still renders from `image_tag`.
 
 ## Tests run
 

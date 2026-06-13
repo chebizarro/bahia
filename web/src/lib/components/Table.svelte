@@ -51,7 +51,7 @@
               {:else if col.render}
                 {@html col.render(row)}
               {:else}
-                {row[col.key] ?? '-'}
+                {resolveColumnText(col, row)}
               {/if}
             </td>
           {/each}

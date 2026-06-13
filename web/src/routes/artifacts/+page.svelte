@@ -156,15 +156,14 @@
   }
 
   function artifactNameLabel(artifact) {
-    return artifact?.name || artifact?.image_repo || artifact?.repository || artifact?.artifact_id || artifact?.id || '-';
+    return artifact?.image_repo || artifact?.repository || artifact?.name || artifact?.artifact_id || artifact?.id || '-';
   }
 
   function artifactVersionLabel(artifact) {
-    const name = String(artifactNameLabel(artifact)).trim();
     const candidates = [artifact?.version, artifact?.image_tag, artifact?.tag, artifact?.metadata?.version];
     for (const candidate of candidates) {
       const value = String(candidate || '').trim();
-      if (value && value !== name) return value;
+      if (value) return value;
     }
     return '-';
   }
