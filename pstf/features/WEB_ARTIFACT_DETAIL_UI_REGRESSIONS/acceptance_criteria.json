@@ -1,0 +1,13 @@
+{
+  "feature_id": "WEB_ARTIFACT_DETAIL_UI_REGRESSIONS",
+  "criteria": [
+    { "id": "AC1", "description": "Light-mode code blocks use high-contrast text on the code background." },
+    { "id": "AC2", "description": "Artifact detail title/back navigation are stacked and artifact IDs wrap within the page." },
+    { "id": "AC3", "description": "Artifact overview cards use consistent value typography and long values are clipped or wrapped safely." },
+    { "id": "AC4", "description": "Artifact version does not duplicate artifact name and uses a file/version icon instead of the unknown icon." },
+    { "id": "AC5", "description": "Artifact refresh can load the artifact detail from the artifact REST read model if the in-memory projection is empty." },
+    { "id": "AC6", "description": "SBOM tab renders supported artifact-projection SBOM data and does not call unsupported SBOM detail endpoints." },
+    { "id": "AC7", "description": "Signature verification button says Verify and raw ContextVM/method-not-found errors are converted to user-facing wording." },
+    { "id": "AC8", "description": "High-visibility auth and DNS copy avoids protocol numbers and ContextVM transport wording." }
+  ]
+}

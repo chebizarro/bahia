@@ -140,7 +140,7 @@ export function authPresentation(authState = {}, authenticated = false) {
     mode: 'anonymous',
     extensionAvailable: Boolean(authState.extensionAvailable),
     buttonLabel: authState.extensionAvailable ? 'Login with Nostr' : 'No Extension',
-    buttonTitle: authState.extensionAvailable ? 'Login with Nostr extension' : 'No Nostr extension detected (NIP-07)',
+    buttonTitle: authState.extensionAvailable ? 'Login with Nostr extension' : 'No browser signer detected',
     showError: Boolean(authState.status === 'error' && authState.error),
     error: authState.error || ''
   };

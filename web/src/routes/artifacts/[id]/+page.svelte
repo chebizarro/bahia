@@ -10,7 +10,7 @@
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
-  import { api } from '$lib/api/client.js';
+  import { BahiaClient, api } from '$lib/api/client.js';
   import {
     ArtifactIcon,
     CopyIcon,
@@ -24,7 +24,6 @@
   } from '$lib/icons/domain-icons.js';
 
   let artifact = $state(null);
-  let service = $state(null);
   let sbomPackages = $state([]);
   let sbomData = $state(null);
   let sbomAttestation = $state(null);
@@ -34,6 +33,7 @@
   let hasVerifiedSig = $state(false);
   let loading = $state(true);
   let error = $state(null);
+  let loadSequence = 0;
   
   // Tab state
   let activeTab = $state('overview'); // overview, sbom, signatures
@@ -43,6 +43,9 @@
   let verifyError = $state(null);
 
   let artifactId = $derived(page.params.id);
+  let service = $derived(artifact?.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null);
+  let displayName = $derived(artifact?.name || artifact?.image_repo || artifact?.image_tag || 'Artifact Details');
+  let displayVersion = $derived(artifactVersionLabel(artifact));
 
   // SBOM table columns
   let sbomColumns = $derived([
@@ -86,59 +89,84 @@
   });
 
   async function loadArtifact(id = artifactId) {
+    const sequence = ++loadSequence;
     loading = true;
     error = null;
 
     try {
-      await Promise.all([loadArtifacts(), loadServices()]);
-      artifact = artifacts.find((candidate) => candidate.id === id) || null;
-      if (!artifact) {
-        throw new Error('Artifact not found');
+      let detailError = null;
+      let loadedArtifact = null;
+      const cachedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
+      const client = api || (typeof window !== 'undefined' ? new BahiaClient() : null);
+
+      if (client?.getArtifact) {
+        try {
+          loadedArtifact = await client.getArtifact(id);
+        } catch (err) {
+          detailError = err;
+        }
       }
 
-      service = artifact.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null;
-      sbomData = null;
-      sbomAttestation = null;
-      sbomLoaded = false;
-      sbomPackages = Array.isArray(artifact.sbom_packages) ? artifact.sbom_packages : [];
-      signatures = Array.isArray(artifact.signatures) ? artifact.signatures : [];
-      hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(artifact.signature_ref || artifact.verified_signature);
+      if (!loadedArtifact && cachedArtifact) {
+        loadedArtifact = cachedArtifact;
+      }
+
+      if (!loadedArtifact) {
+        await Promise.allSettled([loadArtifacts(), loadServices()]);
+        loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
+      } else {
+        void loadServices();
+      }
+
+      if (!loadedArtifact) {
+        throw detailError || new Error('Artifact not found');
+      }
+      if (sequence !== loadSequence) return;
+
+      artifact = loadedArtifact;
+      resetSBOMFromArtifact(loadedArtifact);
+      signatures = Array.isArray(loadedArtifact.signatures) ? loadedArtifact.signatures : [];
+      hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(loadedArtifact.signature_ref || loadedArtifact.verified_signature);
     } catch (err) {
+      if (sequence !== loadSequence) return;
       error = err.message || 'Failed to load artifact';
       console.error('Error loading artifact:', err);
     } finally {
-      loading = false;
+      if (sequence === loadSequence) loading = false;
     }
   }
 
-  async function loadSBOMDetails() {
-    if (!artifactId || sbomLoading) return;
-    sbomLoading = true;
-    
-    try {
-      // Load SBOM data and attestation in parallel
-      const [sbomResult, attestationResult] = await Promise.allSettled([
-        api?.getSBOM(artifactId),
-        api?.getSBOMAttestation(artifactId)
-      ]);
-      
-      if (sbomResult.status === 'fulfilled' && sbomResult.value) {
-        sbomData = sbomResult.value;
-        // If packages weren't loaded from artifact, try from SBOM
-        if (sbomPackages.length === 0 && sbomResult.value.packages) {
-          sbomPackages = sbomResult.value.packages;
-        }
-      }
-      
-      if (attestationResult.status === 'fulfilled' && attestationResult.value) {
-        sbomAttestation = attestationResult.value;
-      }
-    } catch (err) {
-      console.error('Error loading SBOM details:', err);
-    } finally {
-      sbomLoaded = true;
-      sbomLoading = false;
-    }
+  function resetSBOMFromArtifact(source) {
+    const embeddedSBOM = source?.sbom || source?.sbom_data || null;
+    const embeddedAttestation = source?.sbom_attestation || source?.attestation || null;
+    sbomData = embeddedSBOM || artifactSBOMSummary(source);
+    sbomAttestation = embeddedAttestation;
+    sbomPackages = Array.isArray(source?.sbom_packages)
+      ? source.sbom_packages
+      : Array.isArray(embeddedSBOM?.packages)
+        ? embeddedSBOM.packages
+        : [];
+    sbomLoaded = true;
+    sbomLoading = false;
+  }
+
+  function artifactSBOMSummary(source) {
+    if (!source) return null;
+    const summary = {
+      format: source.sbom_format || source.sbom_type || null,
+      generator: source.sbom_generator || null,
+      source_url: source.sbom_url || source.sbom_ref || null,
+      raw_hash: source.sbom_hash || null,
+      package_count: Array.isArray(source.sbom_packages) ? source.sbom_packages.length : source.sbom_package_count,
+      created_at: source.sbom_created_at || null,
+      ntia: source.sbom_ntia || null
+    };
+    return Object.values(summary).some((value) => value !== null && value !== undefined && value !== '') ? summary : null;
+  }
+
+  function loadSBOMDetails() {
+    if (!artifact || sbomLoading) return;
+    resetSBOMFromArtifact(artifact);
   }
 
   // Load SBOM details when switching to SBOM tab
@@ -163,7 +191,7 @@
         verifyError = 'No signatures were discovered for this artifact.';
       }
     } catch (err) {
-      verifyError = err.message || 'Failed to verify signatures';
+      verifyError = userFacingVerifyError(err);
     } finally {
       verifying = false;
     }
@@ -213,6 +241,27 @@
     // Prettify snake_case / kebab-case
     return String(t).replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
+
+  function artifactVersionLabel(artifact) {
+    const candidates = [artifact?.version, artifact?.image_tag, artifact?.tag, artifact?.metadata?.version];
+    const name = String(artifact?.name || '').trim();
+    for (const candidate of candidates) {
+      const value = String(candidate || '').trim();
+      if (value && value !== name) return value;
+    }
+    return '-';
+  }
+
+  function userFacingVerifyError(err) {
+    const message = String(err?.message || '').trim();
+    if (!message) return 'Failed to verify signatures';
+    if (/method not found/i.test(message)) return 'Signature verification is not available from this Bahia service yet.';
+    return message
+      .replace(/ContextVM requests/gi, 'Bahia requests')
+      .replace(/ContextVM request/gi, 'Bahia request')
+      .replace(/ContextVM/gi, 'Bahia service')
+      .replace(/NIP-07|NIP-46/gi, 'Nostr signer');
+  }
 </script>
 
 <div class="page">
@@ -233,7 +282,7 @@
         {:else}
           <a href="/services" class="back-link">← Services</a>
         {/if}
-        <h1 class="title-with-icon"><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> <span>{artifact.name || artifact.image_tag || 'Artifact Details'}</span></h1>
+        <h1 class="title-with-icon"><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> <span>{displayName}</span></h1>
         <p class="artifact-id"><code>{artifact.id}</code></p>
       </div>
     </div>
@@ -268,9 +317,9 @@
       {#if activeTab === 'overview'}
         <!-- Overview Tab -->
         <div class="overview-grid">
-          <Card title="Name" titleIcon={ArtifactIcon} value={artifact.name || artifact.image_tag || '-'} />
+          <Card title="Name" titleIcon={ArtifactIcon} value={displayName} />
           <Card title="Type" titleIcon={GenericFileIcon} value={artifactTypeLabel(artifact)} />
-          <Card title="Version" titleIcon={UnknownIcon} value={artifact.version || artifact.image_tag || '-'} />
+          <Card title="Version" titleIcon={GenericFileIcon} value={displayVersion} />
           <Card title="Size" titleIcon={ArtifactIcon} value={formatBytes(artifact.size_bytes)} />
           <Card title="Signature" titleIcon={hasVerifiedSig ? SuccessIcon : WarningIcon} value={hasVerifiedSig ? 'Verified' : signatures.length > 0 ? 'Needs verification' : 'Not signed'} />
           <!-- Digest card: small font, middle-truncated, tooltip + copy on click -->
@@ -371,7 +420,7 @@
                 loading={verifying}
                 onclick={handleVerifySignatures}
               >
-                Verify via ContextVM
+                Verify
               </LoadingButton>
             </div>
           </div>
@@ -413,8 +462,9 @@
 
   .header {
     display: flex;
+    flex-direction: column;
     align-items: flex-start;
-    justify-content: space-between;
+    gap: 0.5rem;
     margin-bottom: 1.5rem;
   }
 
@@ -434,7 +484,7 @@
   }
 
   .back-link {
-    display: inline-block;
+    display: block;
     color: var(--primary);
     text-decoration: none;
     font-size: 0.875rem;
@@ -449,6 +499,12 @@
     margin: 0.5rem 0 0;
     font-size: 0.875rem;
     color: var(--text-muted);
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .artifact-id code {
+    overflow-wrap: anywhere;
   }
 
   .loading {
@@ -518,6 +574,23 @@
     padding: 1.5rem;
     border: 1px solid var(--border-color, #2a2a4a);
     min-width: 0;
+  }
+
+  :global(.overview-grid .card) {
+    min-width: 0;
+  }
+
+  :global(.overview-grid .card-value) {
+    font-size: 1rem;
+    line-height: 1.35;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
   }
 
   .card-label {
@@ -611,6 +684,13 @@
   .detail-value {
     font-size: 0.875rem;
     color: var(--text-primary);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .detail-value code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .service-link {

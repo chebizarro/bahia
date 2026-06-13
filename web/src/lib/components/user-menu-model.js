@@ -2,13 +2,13 @@ export const anonymousMenuItems = [
   {
     id: 'nip07',
     label: 'Browser Extension',
-    description: 'Use NIP-07 signer',
+    description: 'Use your browser signer',
     action: 'login-nip07'
   },
   {
     id: 'nip46',
     label: 'Nostr Connect',
-    description: 'Use NIP-46 remote signer',
+    description: 'Use a remote signer',
     action: 'settings',
     href: '/settings#nostr-connect'
   }

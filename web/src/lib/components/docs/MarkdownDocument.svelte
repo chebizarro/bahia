@@ -79,6 +79,7 @@
   :global(.markdown-document code) {
     border-radius: 4px;
     background: var(--code-bg, rgba(148, 163, 184, 0.16));
+    color: var(--code-text, #f8fafc);
     padding: 0.1rem 0.3rem;
     font-size: 0.9em;
   }
@@ -93,6 +94,7 @@
 
   :global(.markdown-document pre code) {
     background: transparent;
+    color: inherit;
     padding: 0;
   }
 

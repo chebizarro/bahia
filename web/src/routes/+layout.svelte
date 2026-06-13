@@ -120,6 +120,10 @@
     --success: #10b981;
     --warning: #f59e0b;
     --error: #ef4444;
+    --code-bg: rgba(148, 163, 184, 0.16);
+    --code-text: #e5e5e5;
+    --code-block-bg: #111827;
+    --code-block-text: #f8fafc;
   }
   :global([data-theme='light']) {
     --bg: #f8f9fa;
@@ -133,6 +137,22 @@
     --success: #059669;
     --warning: #d97706;
     --error: #dc2626;
+    --code-bg: rgba(15, 23, 42, 0.08);
+    --code-text: #212529;
+    --code-block-bg: #111827;
+    --code-block-text: #f8fafc;
+  }
+  :global(pre),
+  :global(code) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  }
+  :global(pre) {
+    background: var(--code-block-bg);
+    color: var(--code-block-text);
+  }
+  :global(pre code) {
+    color: inherit;
+    background: transparent;
   }
   .app {
     min-height: 100vh;

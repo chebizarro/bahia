@@ -53,25 +53,32 @@ function serviceEvent() {
   });
 }
 
-function artifactEvent({ id = ARTIFACT_ID, packages = [] } = {}) {
+function artifactPayload({ id = ARTIFACT_ID, packages = [], sbom = null, attestation = null } = {}) {
+  return {
+    schema: 'bahia.registry.artifact.v1',
+    id,
+    service_id: SERVICE_ID,
+    name: id === ARTIFACT_ID ? 'registry.example.com/bahia/sbom-demo' : 'registry.example.com/bahia/no-sbom',
+    version: '1.2.3',
+    artifact_type: 'container_image',
+    image_tag: '1.2.3',
+    digest: 'sha256:111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000',
+    size_bytes: 52428800,
+    sbom_packages: packages,
+    ...(sbom ? { sbom } : {}),
+    ...(attestation ? { sbom_attestation: attestation } : {}),
+    created_at: '2026-05-13T12:00:00.000Z',
+    deleted: false
+  };
+}
+
+function artifactEvent(options = {}) {
+  const artifact = artifactPayload(options);
   return nostrEvent({
-    id: `${id}-event`,
+    id: `${artifact.id}-event`,
     kind: KINDS.ARTIFACT_REGISTRY,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['d', id], ['artifact', id], ['service', SERVICE_ID], ['deleted', 'false']],
-    content: {
-      schema: 'bahia.registry.artifact.v1',
-      id,
-      service_id: SERVICE_ID,
-      name: id === ARTIFACT_ID ? 'registry.example.com/bahia/sbom-demo' : 'registry.example.com/bahia/no-sbom',
-      version: '1.2.3',
-      artifact_type: 'container_image',
-      image_tag: '1.2.3',
-      digest: 'sha256:111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000',
-      size_bytes: 52428800,
-      sbom_packages: packages,
-      created_at: '2026-05-13T12:00:00.000Z',
-      deleted: false
-    }
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['d', artifact.id], ['artifact', artifact.id], ['service', SERVICE_ID], ['deleted', 'false']],
+    content: artifact
   });
 }
 
@@ -79,18 +86,20 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function mockSBOMEndpoints(page, artifactId, { sbom = null, attestation = null } = {}) {
+async function mockArtifactReadModel(page, artifact) {
+  const escapedArtifactId = escapeRegExp(artifact.id);
+  await page.route(new RegExp(`/api/v1/artifacts/${escapedArtifactId}$`), (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: artifact })
+  }));
+}
+
+async function failOnUnsupportedSBOMEndpoints(page, artifactId) {
   const escapedArtifactId = escapeRegExp(artifactId);
-  await page.route(new RegExp(`/api/v1/artifacts/${escapedArtifactId}/sbom$`), (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ data: sbom })
-  }));
-  await page.route(new RegExp(`/api/v1/artifacts/${escapedArtifactId}/sbom/attestation$`), (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ data: attestation })
-  }));
+  await page.route(new RegExp(`/api/v1/artifacts/${escapedArtifactId}/sbom(?:/attestation)?$`), (route) => {
+    throw new Error(`Artifact SBOM tab should not call unsupported endpoint: ${route.request().url()}`);
+  });
 }
 
 async function openCreatePolicyDialog(page) {
@@ -155,11 +164,15 @@ test.describe('SBOM workflow', () => {
       }
     };
 
+    const artifact = artifactPayload({ packages, sbom, attestation });
     await installE2EMocks(page, {
+      authenticated: true,
+      extension: true,
       systemInfo: relaySystemInfo,
-      nostrEvents: [serviceEvent(), artifactEvent()]
+      nostrEvents: [serviceEvent(), artifactEvent({ packages, sbom, attestation })]
     });
-    await mockSBOMEndpoints(page, ARTIFACT_ID, { sbom, attestation });
+    await mockArtifactReadModel(page, artifact);
+    await failOnUnsupportedSBOMEndpoints(page, ARTIFACT_ID);
 
     await page.goto(`/artifacts/${ARTIFACT_ID}`);
     await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/sbom-demo' })).toBeVisible();
@@ -181,11 +194,15 @@ test.describe('SBOM workflow', () => {
   });
 
   test('artifact SBOM tab shows an empty state when no attestation exists', async ({ page }) => {
+    const artifact = artifactPayload({ id: NO_SBOM_ARTIFACT_ID });
     await installE2EMocks(page, {
+      authenticated: true,
+      extension: true,
       systemInfo: relaySystemInfo,
       nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
     });
-    await mockSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
+    await mockArtifactReadModel(page, artifact);
+    await failOnUnsupportedSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
 
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}`);
     await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();

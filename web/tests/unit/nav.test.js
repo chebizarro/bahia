@@ -180,7 +180,7 @@ describe('nav model helpers', () => {
       mode: 'anonymous',
       extensionAvailable: false,
       buttonLabel: 'No Extension',
-      buttonTitle: 'No Nostr extension detected (NIP-07)',
+      buttonTitle: 'No browser signer detected',
       showError: true,
       error: 'missing extension'
     });

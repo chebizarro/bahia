@@ -1,0 +1,29 @@
+{
+  "feature_id": "WEB_ARTIFACT_DETAIL_UI_REGRESSIONS",
+  "tests": [
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js::artifact page displays SBOM attestation details",
+      "criteria": ["AC6"],
+      "type": "Playwright e2e",
+      "notes": "Artifact event embeds SBOM and attestation data; test fails if unsupported SBOM endpoints are requested."
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js::artifact SBOM tab shows an empty state when no attestation exists",
+      "criteria": ["AC6"],
+      "type": "Playwright e2e",
+      "notes": "Empty state is driven by artifact projection data and test fails on unsupported endpoint calls."
+    },
+    {
+      "test": "web/tests/unit/nav.test.js::derives loading and anonymous auth presentation states",
+      "criteria": ["AC8"],
+      "type": "Vitest unit",
+      "notes": "Verifies anonymous auth title no longer exposes protocol number wording."
+    },
+    {
+      "test": "svelte-check",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC7", "AC8"],
+      "type": "static check",
+      "notes": "Covers Svelte syntax/type validity for UI changes."
+    }
+  ]
+}

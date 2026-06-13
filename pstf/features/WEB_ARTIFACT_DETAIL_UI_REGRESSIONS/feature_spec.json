@@ -1,0 +1,40 @@
+{
+  "feature_id": "WEB_ARTIFACT_DETAIL_UI_REGRESSIONS",
+  "beads_issue": "bahia-zgvc",
+  "title": "Artifact detail UI regression fixes and implementation-language cleanup",
+  "observed_behavior": [
+    "Light-mode code blocks can inherit dark text on gray code backgrounds.",
+    "Artifact detail cards duplicate artifact name and version when only image_tag is available.",
+    "Artifact detail back navigation and page title can appear as a single visual group instead of the stacked detail-page pattern.",
+    "Artifact detail cards use inconsistent large value text, causing clipping and overflow.",
+    "The version card uses the unknown/question-mark icon.",
+    "Long artifact and metadata identifiers can overflow detail containers.",
+    "The artifact SBOM tab calls unsupported artifact SBOM REST endpoints from the browser.",
+    "The signature verification button and some auth/DNS copy expose implementation details such as ContextVM and protocol numbers."
+  ],
+  "intended_behavior": [
+    "Code blocks remain readable in light and dark themes.",
+    "Artifact overview cards display distinct product fields without duplicating name as version.",
+    "Artifact detail navigation, headings, cards, and identifiers remain visually consistent and bounded.",
+    "Artifact SBOM content renders from the artifact read model/projection without calling unsupported endpoints.",
+    "High-visibility user-facing copy uses product language while implementation constants remain internal."
+  ],
+  "scope": [
+    "web/src/routes/artifacts/[id]/+page.svelte",
+    "web/src/lib/api/client.js",
+    "web/src/routes/+layout.svelte",
+    "web/src/lib/components/docs/MarkdownDocument.svelte",
+    "web/src/lib/components/UserMenu.svelte",
+    "web/src/lib/components/user-menu-model.js",
+    "web/src/lib/components/nav-model.js",
+    "web/src/routes/dns/page-model.js",
+    "web/src/routes/settings/profile/+page.svelte",
+    "web/tests/e2e/sbom-workflow.spec.js",
+    "web/tests/unit/nav.test.js"
+  ],
+  "out_of_scope": [
+    "Backend SBOM endpoint routing changes.",
+    "Full admin/settings terminology redesign for relay/operator-only panels.",
+    "Protocol-level Nostr implementation changes."
+  ]
+}

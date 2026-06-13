@@ -1,0 +1,23 @@
+{
+  "feature_id": "WEB_ARTIFACT_DETAIL_UI_REGRESSIONS",
+  "defects": [
+    {
+      "id": "D1",
+      "status": "fixed",
+      "observed": "Artifact SBOM tab attempted unsupported /api/v1/artifacts/{id}/sbom and /sbom/attestation requests from the browser.",
+      "resolution": "Artifact route now derives SBOM display data from artifact projection fields and e2e tests fail if those unsupported endpoints are requested."
+    },
+    {
+      "id": "D2",
+      "status": "fixed",
+      "observed": "Artifact overview and detail UI allowed duplicate version/name, inconsistent value sizes, unknown version icon, and overflowing IDs.",
+      "resolution": "Artifact route now derives distinct display name/version values, uses a file icon for version, and constrains wrapping/clipping."
+    },
+    {
+      "id": "D3",
+      "status": "fixed",
+      "observed": "High-visibility artifact/auth/DNS labels exposed implementation terminology.",
+      "resolution": "Visible strings in touched routes/components now use product-level wording; deeper admin settings cleanup is tracked separately."
+    }
+  ]
+}

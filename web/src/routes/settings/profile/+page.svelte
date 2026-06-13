@@ -89,7 +89,7 @@
       </div>
     {:else}
       <div class="status-card" role="status">
-        Publishing through {authState.authMethod === 'nip46' ? 'NIP-46 remote signer' : 'NIP-07 browser signer'} to {writableRelays.length} writable relay{writableRelays.length === 1 ? '' : 's'}.
+        Publishing through your {authState.authMethod === 'nip46' ? 'remote signer' : 'browser signer'} to {writableRelays.length} writable relay{writableRelays.length === 1 ? '' : 's'}.
       </div>
     {/if}
 

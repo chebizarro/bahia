@@ -35,12 +35,12 @@
       ...item,
       disabled: item.id === 'nip07' && !authUi.extensionAvailable,
       description: item.id === 'nip07' && !authUi.extensionAvailable
-        ? 'Use NIP-07 signer (not detected)'
+        ? 'Browser signer not detected'
         : item.description
     }));
   });
 
-  let authMethodLabel = $derived(authState.authMethod === 'nip46' ? 'NIP-46 Remote Signer' : 'NIP-07 Extension');
+  let authMethodLabel = $derived(authState.authMethod === 'nip46' ? 'Remote Signer' : 'Browser Extension');
   let triggerLabel = $derived(authUi.mode === 'authenticated' ? authUi.displayLabel : 'Sign In');
 
   // Close menu on navigation - use untrack to prevent `open` from becoming a dependency
@@ -219,7 +219,7 @@
       aria-haspopup="menu"
       aria-expanded={open}
       aria-controls="user-menu"
-      title={authUi.extensionAvailable ? 'Sign in with Nostr' : 'NIP-07 not detected; Nostr Connect is available in settings'}
+      title={authUi.extensionAvailable ? 'Sign in with Nostr' : 'Browser signer not detected; Nostr Connect is available in settings'}
       bind:this={triggerEl}
       onclick={handleTriggerClick}
       onkeydown={handleTriggerKeydown}
