@@ -3,17 +3,36 @@
   "tests": [
     {
       "command": "pnpm exec playwright test tests/e2e/relay-backed-web-functionality.spec.js --reporter=list",
-      "covers": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7", "AC8", "AC9"],
-      "result": "8 passed"
+      "covers": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5",
+        "AC6",
+        "AC7",
+        "AC8",
+        "AC9"
+      ],
+      "result": "8 passed; assistant test now asserts real bubble click, aria-expanded=true, and relay-backed transcript hydration"
     },
     {
       "command": "go test ./cmd/bahia-test-relay",
-      "covers": ["AC1", "AC2", "AC6", "AC7", "AC8", "AC9"],
+      "covers": [
+        "AC1",
+        "AC2",
+        "AC6",
+        "AC7",
+        "AC8",
+        "AC9"
+      ],
       "result": "passed: package builds, no test files"
     },
     {
       "command": "pnpm lint",
-      "covers": ["AC5"],
+      "covers": [
+        "AC5"
+      ],
       "result": "passed: svelte-check found 0 errors and 0 warnings"
     }
   ]

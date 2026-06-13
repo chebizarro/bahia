@@ -1,9 +1,22 @@
 <script>
-  let { panelOpen = false, hasUnread = false, status = 'idle', onclick } = $props();
+  import { toggleAssistantPanel } from '$lib/stores/assistant.svelte.js';
+
+  let { panelOpen = false, hasUnread = false, status = 'idle' } = $props();
 
   const label = $derived(panelOpen ? 'Close assistant chat' : 'Open assistant chat');
   const badgeClass = $derived(status === 'disconnected' || status === 'error' ? 'connection' : 'unread');
   const showBadge = $derived(hasUnread || status === 'disconnected' || status === 'error');
+
+  function attachToggle(node) {
+    node.dataset.toggleAttached = 'true';
+    node.addEventListener('click', toggleAssistantPanel);
+    return {
+      destroy() {
+        delete node.dataset.toggleAttached;
+        node.removeEventListener('click', toggleAssistantPanel);
+      }
+    };
+  }
 </script>
 
 <button
@@ -13,7 +26,7 @@
   type="button"
   aria-label={label}
   aria-expanded={panelOpen}
-  onclick={onclick}
+  use:attachToggle
 >
   {#if panelOpen}
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">

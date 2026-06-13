@@ -82,10 +82,11 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
     const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
 
     await page.goto('/');
-    await page.evaluate(async () => {
-      const { toggleAssistantPanel } = await import('/src/lib/stores/assistant.svelte.js');
-      toggleAssistantPanel();
-    });
+    await page.waitForLoadState('networkidle');
+    const bubble = page.locator('.assistant-bubble');
+    await expect(bubble).toHaveAttribute('data-toggle-attached', 'true');
+    await page.getByRole('button', { name: 'Open assistant chat' }).click();
+    await expect(bubble).toHaveAttribute('aria-expanded', 'true');
 
     const panel = page.locator('.assistant-panel[data-state="open"]');
     await expect(panel).toBeVisible();
