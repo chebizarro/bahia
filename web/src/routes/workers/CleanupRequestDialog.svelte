@@ -138,8 +138,8 @@
       <strong>{selectedMode.label}</strong>
       <p>{selectedMode.description}</p>
       <ul>
-        <li>Bahia sends an encrypted ContextVM <code>worker/cleanup</code> intent.</li>
-        <li>The worker executes locally and reports durable cleanup status through Nostr state.</li>
+        <li>Bahia sends a protected cleanup request to the selected worker.</li>
+        <li>The worker executes locally and reports durable cleanup status back to Bahia.</li>
         <li>Protected refs from continuity and standby assignments remain policy-owned by Bahia.</li>
       </ul>
     </div>
@@ -272,8 +272,6 @@
 
   .mode-details p { color: var(--text-muted); }
   .mode-details ul { margin: 0.75rem 0 0; padding-left: 1.1rem; color: var(--text-muted); }
-  .mode-details code { color: #bfdbfe; }
-
   .field {
     display: grid;
     gap: 0.4rem;

@@ -2,7 +2,7 @@
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { RelayIcon } from '$lib/icons/domain-icons.js';
-  import { nostr, saveRelayConfig, getDefaultRelays, hasSavedRelayConfig } from '$lib/nostr/client.js';
+  import { nostr, saveRelayConfig, getDefaultRelays, getConfiguredRelays, hasSavedRelayConfig } from '$lib/nostr/client.js';
   import { applyRelayPolicy, buildRelayPolicyPayload, callRelayAdmin, subscribeRelayPolicyReadModel } from '$lib/nostr/relay-settings-controlplane.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
   import { toast } from '$lib/components/toast.js';
@@ -22,7 +22,7 @@
   let operatorPolicySaving = $state(false);
   let relayAdminCalling = $state(false);
   let browserPolicyInput = $state('');
-  let contextVMPolicyInput = $state('');
+  let requestRelayPolicyInput = $state('');
   let servicePolicyInput = $state('');
   let monitorPubkeysInput = $state('');
   let nip34RelaysInput = $state('');
@@ -44,7 +44,7 @@
       connectionStatus = status;
     });
 
-    relays = nostr.getRelays();
+    relays = hasSavedRelayConfig() ? getConfiguredRelays() : nostr.getRelays();
     void loadSharedSystemInfo().catch(() => {});
 
     return () => {
@@ -78,7 +78,7 @@
     ];
     if (!servicePubkey || policyRelays.length === 0) return;
 
-    operatorPolicyHydrationStatus = 'subscribing to canonical 30900 state';
+    operatorPolicyHydrationStatus = 'loading service relay policy';
     operatorPolicyHydrationError = '';
     const unsubscribe = subscribeRelayPolicyReadModel({
       relays: policyRelays,
@@ -89,14 +89,14 @@
         if (operatorPolicyDirty) {
           pendingCanonicalRelayPolicyState = state;
           pendingCanonicalRelayPolicyReceivedAt = receivedAt;
-          operatorPolicyHydrationStatus = 'canonical 30900 state pending; local edits preserved';
+          operatorPolicyHydrationStatus = 'service relay policy pending; local edits preserved';
           operatorPolicyHydrationError = '';
           return;
         }
         if (pendingPublishedRelayPolicyPayload && !relayPolicyPayloadMatchesState(pendingPublishedRelayPolicyPayload, state)) {
           pendingCanonicalRelayPolicyState = state;
           pendingCanonicalRelayPolicyReceivedAt = receivedAt;
-          operatorPolicyHydrationStatus = 'canonical 30900 state pending; published mutation awaiting confirmation';
+          operatorPolicyHydrationStatus = 'service relay policy pending; published update awaiting confirmation';
           operatorPolicyHydrationError = '';
           return;
         }
@@ -104,22 +104,22 @@
         pendingCanonicalRelayPolicyState = null;
         pendingCanonicalRelayPolicyReceivedAt = '';
         pendingPublishedRelayPolicyPayload = null;
-        operatorPolicyHydrationStatus = 'hydrated from canonical 30900 state';
+        operatorPolicyHydrationStatus = 'loaded from service relay policy';
         operatorPolicyHydrationError = '';
         operatorPolicyHydratedAt = receivedAt;
       },
       onEose: () => {
-        if (operatorPolicyHydrationStatus === 'subscribing to canonical 30900 state') {
-          operatorPolicyHydrationStatus = operatorPolicyInitialized ? 'canonical 30900 catch-up complete' : 'no canonical 30900 state found before EOSE';
+        if (operatorPolicyHydrationStatus === 'loading service relay policy') {
+          operatorPolicyHydrationStatus = operatorPolicyInitialized ? 'service relay policy sync complete' : 'no service relay policy found during initial sync';
         }
       },
       onClosed: (reason, relay, metadata = {}) => {
-        const authSuffix = metadata?.authRequired ? ' (AUTH required)' : '';
-        operatorPolicyHydrationError = `${relay}: ${reason || 'subscription closed'}${authSuffix}`;
-        operatorPolicyHydrationStatus = 'canonical state subscription interrupted';
+        const authSuffix = metadata?.authRequired ? ' (authentication required)' : '';
+        operatorPolicyHydrationError = `${relay}: ${reason || 'relay interrupted'}${authSuffix}`;
+        operatorPolicyHydrationStatus = 'service relay policy sync interrupted';
       },
       onAuth: (_challenge, relay) => {
-        operatorPolicyHydrationError = `${relay}: AUTH required for relay-settings state subscription`;
+        operatorPolicyHydrationError = `${relay}: authentication required for relay settings`;
       }
     });
 
@@ -141,7 +141,7 @@
 
   function applyOperatorRelayPolicyState(nostrConfig = {}, { markClean = false } = {}) {
     browserPolicyInput = listToTextarea(nostrConfig.browser_relays || []);
-    contextVMPolicyInput = listToTextarea(nostrConfig.contextvm_relays || []);
+    requestRelayPolicyInput = listToTextarea(nostrConfig.contextvm_relays || []);
     servicePolicyInput = listToTextarea(nostrConfig.service_relays || []);
     nip34RelaysInput = listToTextarea(nostrConfig.nip34_relays || []);
     monitorPubkeysInput = listToTextarea(nostrConfig.trusted_relay_monitor_pubkeys || []);
@@ -165,7 +165,7 @@
   function applyPendingCanonicalRelayPolicy() {
     if (!pendingCanonicalRelayPolicyState) return;
     applyOperatorRelayPolicyState(pendingCanonicalRelayPolicyState, { markClean: true });
-    operatorPolicyHydrationStatus = 'applied pending canonical 30900 state';
+    operatorPolicyHydrationStatus = 'applied pending service relay policy';
     operatorPolicyHydrationError = '';
     operatorPolicyHydratedAt = pendingCanonicalRelayPolicyReceivedAt || new Date().toISOString();
     pendingCanonicalRelayPolicyState = null;
@@ -176,7 +176,7 @@
   function keepLocalRelayPolicyEdits() {
     pendingCanonicalRelayPolicyState = null;
     pendingCanonicalRelayPolicyReceivedAt = '';
-    operatorPolicyHydrationStatus = 'local edits preserved; pending canonical state dismissed';
+    operatorPolicyHydrationStatus = 'local edits preserved; pending service policy dismissed';
   }
 
   function parseJsonArray(value, label) {
@@ -188,11 +188,11 @@
   }
 
   function buildOperatorRelayPolicy() {
-    const adminTargets = parseJsonArray(relayAdminTargetsInput, 'NIP-86 targets');
+    const adminTargets = parseJsonArray(relayAdminTargetsInput, 'managed relay targets');
     const dmRelays = textareaToList(dmRelaysInput);
     return {
       browser_relays: textareaToList(browserPolicyInput),
-      contextvm_relays: textareaToList(contextVMPolicyInput),
+      contextvm_relays: textareaToList(requestRelayPolicyInput),
       service_relays: textareaToList(servicePolicyInput),
       nip34_relays: textareaToList(nip34RelaysInput),
       trusted_relay_monitor_pubkeys: textareaToList(monitorPubkeysInput),
@@ -219,10 +219,10 @@
       pendingPublishedRelayPolicyPayload = policy;
       pendingCanonicalRelayPolicyState = null;
       pendingCanonicalRelayPolicyReceivedAt = '';
-      operatorPolicyHydrationStatus = 'relay policy mutation accepted; awaiting canonical 30900 confirmation';
-      toast.success(`Relay policy mutation accepted${accepted ? ` by ${accepted} relay${accepted === 1 ? '' : 's'}` : ''}`);
+      operatorPolicyHydrationStatus = 'relay policy update accepted; awaiting service confirmation';
+      toast.success(`Relay policy update accepted${accepted ? ` by ${accepted} relay${accepted === 1 ? '' : 's'}` : ''}`);
     } catch (err) {
-      toast.error(err?.message || 'Failed to publish relay policy mutation');
+      toast.error(err?.message || 'Failed to publish relay policy update');
     } finally {
       operatorPolicySaving = false;
     }
@@ -231,12 +231,12 @@
   async function runRelayAdminCall() {
     relayAdminCalling = true;
     try {
-      const params = parseJsonArray(relayAdminParamsInput, 'NIP-86 params');
+      const params = parseJsonArray(relayAdminParamsInput, 'relay administration params');
       const response = await callRelayAdmin({ targetRef: relayAdminTargetRef, method: relayAdminMethod, params });
       const result = response?.result || response?.resultEvent || response;
-      toast.success(`NIP-86 ${relayAdminMethod} accepted: ${JSON.stringify(result).slice(0, 160)}`);
+      toast.success(`Relay administration method accepted: ${JSON.stringify(result).slice(0, 160)}`);
     } catch (err) {
-      toast.error(err?.message || 'Failed to publish NIP-86 relay admin mutation');
+      toast.error(err?.message || 'Failed to publish relay administration request');
     } finally {
       relayAdminCalling = false;
     }
@@ -355,7 +355,7 @@
 <section id="operator-relay-policy" class="settings-section relay-policy-section">
   <h2><RelayIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Operator Relay Policy</h2>
   <p class="section-description">
-    Add or remove persistent Bahia relay policy through ContextVM Nostr mutations. Durable truth is the service-signed relay settings state; this is not local browser storage.
+    Add or remove persistent Bahia relay policy. Durable truth is the service-signed relay settings state; this is not local browser storage.
   </p>
   <p class="section-description relay-policy-hydration-status">
     Canonical state: {operatorPolicyHydrationStatus}{operatorPolicyHydratedAt ? ` at ${operatorPolicyHydratedAt}` : ''}{operatorPolicyHydrationError ? ` — ${operatorPolicyHydrationError}` : ''}
@@ -363,10 +363,10 @@
   {#if pendingCanonicalRelayPolicyState}
     <div class="pending-canonical-policy">
       <p class="section-description">
-        A newer canonical 30900 state arrived{pendingCanonicalRelayPolicyReceivedAt ? ` at ${pendingCanonicalRelayPolicyReceivedAt}` : ''}. Local edits were preserved; apply the canonical state explicitly or keep editing locally.
+        A newer service-signed relay policy arrived{pendingCanonicalRelayPolicyReceivedAt ? ` at ${pendingCanonicalRelayPolicyReceivedAt}` : ''}. Local edits were preserved; apply the service policy explicitly or keep editing locally.
       </p>
       <div class="relay-actions">
-        <LoadingButton variant="secondary" onclick={applyPendingCanonicalRelayPolicy}>Apply Canonical State</LoadingButton>
+        <LoadingButton variant="secondary" onclick={applyPendingCanonicalRelayPolicy}>Apply Service Policy</LoadingButton>
         <LoadingButton variant="secondary" onclick={keepLocalRelayPolicyEdits}>Keep Local Edits</LoadingButton>
       </div>
     </div>
@@ -378,8 +378,8 @@
   </label>
 
   <label class="relay-field">
-    <span>ContextVM request/reply relays</span>
-    <textarea class="relay-textarea" rows="3" bind:value={contextVMPolicyInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://contextvm-relay.example"></textarea>
+    <span>Secure request relays</span>
+    <textarea class="relay-textarea" rows="3" bind:value={requestRelayPolicyInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://request-relay.example"></textarea>
   </label>
 
   <label class="relay-field">
@@ -388,37 +388,37 @@
   </label>
 
   <label class="relay-field">
-    <span>NIP-34 repository relays</span>
-    <textarea class="relay-textarea" rows="3" bind:value={nip34RelaysInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://nip34-relay.example"></textarea>
-    <span class="field-hint">Relays used for NIP-34 git repository operations (kind 30617/30618). Separate from browser and service relays.</span>
+    <span>Repository relays</span>
+    <textarea class="relay-textarea" rows="3" bind:value={nip34RelaysInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://repository-relay.example"></textarea>
+    <span class="field-hint">Relays used for repository discovery and git operations. Separate from browser and service relays.</span>
   </label>
 
   <label class="relay-field">
-    <span>Trusted NIP-66 monitor pubkeys</span>
+    <span>Trusted relay monitor pubkeys</span>
     <textarea class="relay-textarea monospace" rows="3" bind:value={monitorPubkeysInput} oninput={markOperatorRelayPolicyDirty} placeholder="64-hex monitor pubkey, one per line"></textarea>
   </label>
 
   <label class="relay-field">
-    <span>Notification DM relays (NIP-51 kind 10050)</span>
+    <span>Notification message relays</span>
     <textarea class="relay-textarea" rows="3" bind:value={dmRelaysInput} oninput={markOperatorRelayPolicyDirty} placeholder="wss://dm-relay.example"></textarea>
   </label>
 
   <label class="relay-field">
-    <span>NIP-86 managed relay targets</span>
-    <textarea class="relay-textarea monospace" rows="6" bind:value={relayAdminTargetsInput} oninput={markOperatorRelayPolicyDirty} placeholder="JSON array of managed NIP-86 target objects"></textarea>
+    <span>Managed relay targets</span>
+    <textarea class="relay-textarea monospace" rows="6" bind:value={relayAdminTargetsInput} oninput={markOperatorRelayPolicyDirty} placeholder="JSON array of managed relay target objects"></textarea>
   </label>
 
   <div class="relay-actions">
-    <LoadingButton variant="primary" loading={operatorPolicySaving} onclick={saveOperatorRelayPolicy}>Publish Relay Policy Mutation</LoadingButton>
+    <LoadingButton variant="primary" loading={operatorPolicySaving} onclick={saveOperatorRelayPolicy}>Publish Relay Policy Update</LoadingButton>
   </div>
 
   <div class="relay-admin-call">
-    <h3>NIP-86 Relay Administration</h3>
-    <p class="section-description">Calls are routed through Bahia ContextVM first, then restricted to configured Bahia-owned or Bahia-authorized relay targets.</p>
+    <h3>Relay Administration</h3>
+    <p class="section-description">Administration requests are restricted to configured Bahia-owned or Bahia-authorized relay targets.</p>
     <Input placeholder="target ref, e.g. sidecar" bind:value={relayAdminTargetRef} />
-    <Input placeholder="NIP-86 method, e.g. supportedmethods" bind:value={relayAdminMethod} />
+    <Input placeholder="administration method, e.g. supportedmethods" bind:value={relayAdminMethod} />
     <textarea class="relay-textarea monospace" rows="3" bind:value={relayAdminParamsInput} placeholder='JSON array params, e.g. []'></textarea>
-    <LoadingButton variant="secondary" loading={relayAdminCalling} onclick={runRelayAdminCall}>Run NIP-86 Method</LoadingButton>
+    <LoadingButton variant="secondary" loading={relayAdminCalling} onclick={runRelayAdminCall}>Run Administration Method</LoadingButton>
   </div>
 </section>
 

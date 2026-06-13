@@ -149,7 +149,7 @@
             title={searchQuery ? 'No matching repositories' : 'No repositories found'}
             message={searchQuery
               ? 'Try a different search term or add a repository manually.'
-              : 'No NIP-34 repository announcements found on connected relays.'}
+              : 'No repository announcements found on connected relays.'}
           />
         {:else}
           <div class="repo-list">

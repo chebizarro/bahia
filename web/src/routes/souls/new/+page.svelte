@@ -447,7 +447,7 @@
         <div><strong>Signer error</strong><p>{authError}</p></div>
       {:else if !hasExtension}
         <ConfiguredIcon size={22} strokeWidth={1.75} ariaHidden="true" />
-        <div><strong>Nostr signer required</strong><p>Use NIP-07 or Nostr Connect to sign each draft checkpoint and provisioning event.</p></div>
+        <div><strong>Nostr signer required</strong><p>Use a browser or remote signer to sign each draft checkpoint and provisioning event.</p></div>
       {:else if isAuthenticated && userPubkey}
         <SuccessIcon size={22} strokeWidth={1.75} ariaHidden="true" />
         <div><strong>Authenticated</strong><p>{userPubkey.slice(0, 8)}…{userPubkey.slice(-8)}</p></div>
@@ -507,7 +507,7 @@
               <label>Purpose<textarea id="brief" rows="5" bind:value={purpose} placeholder="What should this soul do?"></textarea></label>
               <div class="two-col">
                 <label>Tier<select id="tier" bind:value={tier}><option value="lightweight">Lightweight</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
-                <label>NIP-05 target<input bind:value={nip05} placeholder="optional" /></label>
+                <label>Profile identifier target<input bind:value={nip05} placeholder="optional" /></label>
               </div>
               {#if showAdvanced}
                 <div class="two-col advanced-inline">
@@ -576,7 +576,7 @@
             {#if showAdvanced}
               <div class="form-section advanced-inline">
                 <h3>Relays</h3>
-                <label class="checkbox-row"><input type="checkbox" bind:checked={nip65Discovery} /> Use NIP-65 relay discovery when available</label>
+                <label class="checkbox-row"><input type="checkbox" bind:checked={nip65Discovery} /> Use signer relay discovery when available</label>
                 <label>Read relays<textarea rows="2" bind:value={readRelays} placeholder="wss://relay.example"></textarea></label>
                 <label>Write relays<textarea rows="2" bind:value={writeRelays}></textarea></label>
                 <label>Control relays<textarea rows="2" bind:value={controlRelays}></textarea></label>

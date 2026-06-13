@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, PUBLIC_RELAY, SERVICE_PUBKEY } from './harnesses/service-deployment-public.js';
+import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, PUBLIC_RELAY } from './harnesses/service-deployment-public.js';
+import { RELAY_OPERATOR_PUBKEY } from './relay-harness.js';
 
+const SERVICE_PUBKEY = RELAY_OPERATOR_PUBKEY;
 const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
 
 function deploymentHistoryState() {
@@ -195,6 +197,20 @@ async function installEncryptedRunLogHarness(page) {
         window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(operation);
         originalSend.call(this, data);
 
+        const responseEnvelope = {
+          jsonrpc: '2.0',
+          id: envelope.id || event.id,
+          result: {
+            status: 'ok',
+            payload: {
+              logs: {
+                stdout: 'deploy started\ndeploy complete',
+                stderr: 'warning: none'
+              }
+            }
+          }
+        };
+        const responsePlaintext = JSON.stringify(responseEnvelope);
         const resultEvent = {
           id: `result-${event.id}`,
           kind: KIND_CONTEXTVM,
@@ -206,19 +222,9 @@ async function installEncryptedRunLogHarness(page) {
             ['encrypted', 'contextvm-jsonrpc-v1'],
             ['method', operation]
           ],
-          content: `enc44:${JSON.stringify({
-            jsonrpc: '2.0',
-            id: envelope.id || event.id,
-            result: {
-              status: 'ok',
-              payload: {
-                logs: {
-                  stdout: 'deploy started\ndeploy complete',
-                  stderr: 'warning: none'
-                }
-              }
-            }
-          })}`,
+          content: String(event.content || '').startsWith('mock-nip44:')
+            ? `mock-nip44:${btoa(unescape(encodeURIComponent(responsePlaintext)))}`
+            : `enc44:${responsePlaintext}`,
           sig: '0'.repeat(128)
         };
 
@@ -244,7 +250,7 @@ async function installEncryptedRunLogHarness(page) {
 
 test.beforeEach(async ({ page }) => {
   await installE2EMocks(page, { systemInfo });
-  await installPublicServiceDeploymentHarness(page, { initialState: deploymentHistoryState() });
+  await installPublicServiceDeploymentHarness(page, { servicePubkey: SERVICE_PUBKEY, initialState: deploymentHistoryState() });
   await installEncryptedRunLogHarness(page);
 });
 
@@ -307,11 +313,11 @@ test.describe('Deployment history and run details current-contract smoke', () =>
     });
   });
 
-  test('loads completed run logs through encrypted request/result transport', async ({ page }) => {
+  test('loads completed run logs from Bahia service records', async ({ page }) => {
     await page.goto('/deployments/runs/run-completed-1');
 
     await expect(page.getByRole('heading', { name: 'Deployment Run' })).toBeVisible();
-    await expect(page.getByText('Transport: public relay run projection + ContextVM request/result fetch for stored stdout/stderr snapshots.')).toBeVisible();
+    await expect(page.getByText('Stored stdout/stderr snapshots are loaded from Bahia service records for this run.')).toBeVisible();
     await expect(page.locator('pre.logs')).toContainText('deploy started');
 
     await page.getByRole('button', { name: 'stderr' }).click();

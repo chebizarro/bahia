@@ -216,7 +216,7 @@
         <label>Purpose<textarea rows="5" bind:value={purpose}></textarea></label>
         <div class="two-col">
           <label>Tier<select bind:value={tier}><option value="lightweight">Lightweight</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
-          <label>NIP-05 target<input type="text" bind:value={nip05} /></label>
+          <label>Profile identifier target<input type="text" bind:value={nip05} /></label>
         </div>
       </section>
 
@@ -238,7 +238,7 @@
 
       <section>
         <h2>Relays, repository, assets</h2>
-        <label><input type="checkbox" bind:checked={nip65Discovery} /> Use NIP-65 relay discovery</label>
+        <label><input type="checkbox" bind:checked={nip65Discovery} /> Use signer relay discovery</label>
         <label>Read relays<textarea rows="2" bind:value={readRelays}></textarea></label>
         <label>Write relays<textarea rows="2" bind:value={writeRelays}></textarea></label>
         <label>Control relays<textarea rows="2" bind:value={controlRelays}></textarea></label>

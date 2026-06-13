@@ -88,7 +88,8 @@
     overflow-x: auto;
     border: 1px solid var(--border-color);
     border-radius: 10px;
-    background: var(--code-bg, rgba(15, 23, 42, 0.7));
+    background: var(--code-block-bg, #111827);
+    color: var(--code-block-text, #f8fafc);
     padding: 1rem;
   }
 

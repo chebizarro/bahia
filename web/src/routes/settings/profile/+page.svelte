@@ -75,7 +75,7 @@
   <div class="header">
     <a class="back-link" href="/settings">← Settings</a>
     <h1>Nostr Profile</h1>
-    <p class="subtitle">Edit your kind-0 metadata and publish it with the active NIP-07 or NIP-46 signer.</p>
+    <p class="subtitle">Edit your profile metadata and publish it with the active signer.</p>
   </div>
 
   <section class="settings-section profile-section">
@@ -85,7 +85,7 @@
       </div>
     {:else if writableRelays.length === 0}
       <div class="status-card error" role="alert">
-        No writable Nostr relays are available from your signer or NIP-65 relay list.
+        No writable Nostr relays are available from your signer or relay list.
       </div>
     {:else}
       <div class="status-card" role="status">
@@ -137,7 +137,7 @@
         </label>
 
         <label class="field">
-          <span>NIP-05 identifier</span>
+          <span>Profile identifier</span>
           <Input name="nip05" bind:value={form.nip05} error={fieldErrors.nip05} disabled={saving} oninput={markDirty} placeholder="alice@example.com" />
           {#if fieldErrors.nip05}<small class="validation-error">{fieldErrors.nip05}</small>{/if}
         </label>

@@ -38,7 +38,7 @@
   <header class="page-header">
     <p class="eyebrow">Documentation</p>
     <h1>Bahia User Guide</h1>
-    <p class="subtitle">Documentation published as NIP-23 long-form content on the Nostr relay.</p>
+    <p class="subtitle">Documentation published on the Bahia relay.</p>
   </header>
 
   {#if loading}
@@ -50,7 +50,7 @@
       <button type="button" onclick={loadDocsCatalog}>Retry</button>
     </div>
   {:else if docsCatalog.count === 0}
-    <EmptyState title="No documentation topics found" message="No NIP-23 documentation events were found on the relay." />
+    <EmptyState title="No documentation topics found" message="No documentation topics were found on the relay." />
   {:else}
     <div class="catalog-summary" aria-live="polite">{docsCatalog.count} topics available</div>
     <DocsCatalog groups={docsCatalog.groups} topics={docsCatalog.topics} />

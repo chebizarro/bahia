@@ -74,7 +74,7 @@
     detectedDefaultBranch = null;
     branchesError = null;
 
-    // Only fetch branches for NIP-34 repos
+    // Only fetch branches for relay-backed repositories
     if (!isNostrRepository(selection)) {
       return;
     }

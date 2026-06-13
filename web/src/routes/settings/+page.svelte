@@ -171,9 +171,9 @@
   </div>
 
   <div class="settings-grid">
-    <!-- NIP-46 Nostr Connect -->
+    <!-- Remote signer connection -->
     <section class="settings-section">
-      <h2><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Nostr Connect (NIP-46)</h2>
+      <h2><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Remote Signer</h2>
       <p class="section-description">
         Connect this browser session to a remote signer using Nostr Connect. Paste or scan a <code>nostrconnect://</code> URI from your signer app.
       </p>
@@ -289,14 +289,14 @@
         {/if}
         {#if serviceRelayList.length > 0}
           <div class="config-row">
-            <span class="config-label">Service Relay List (NIP-51)</span>
+            <span class="config-label">Service Relay List</span>
             <span class="config-value">
               {serviceRelayList.join(', ')}
             </span>
           </div>
         {:else}
           <div class="config-row">
-            <span class="config-label">Service Relay List (NIP-51)</span>
+            <span class="config-label">Service Relay List</span>
             <span class="config-value">Not advertised</span>
           </div>
         {/if}

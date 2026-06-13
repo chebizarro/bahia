@@ -1,0 +1,23 @@
+{
+  "feature_id": "WEB_IMPLEMENTATION_LANGUAGE_CLEANUP",
+  "beads": ["bahia-ss5y"],
+  "observed_behavior": [
+    "High-visibility web UI copy exposed implementation details such as protocol/NIP numbers, ContextVM transport wording, signer-first wording, EOSE, and CLOSED.",
+    "Light-mode markdown code blocks used the inline-code background path and could render with poor code-block contrast."
+  ],
+  "intended_behavior": [
+    "Operator-facing UI uses product-level language unless protocol detail is necessary for diagnostics or developer-facing configuration.",
+    "Relay lifecycle implementation terms remain in code and diagnostics where required, but high-visibility route labels, buttons, helper text, and empty states avoid unnecessary protocol jargon.",
+    "Markdown code blocks use the code-block theme tokens and render as white text on a dark block background in light mode."
+  ],
+  "scope": [
+    "web/src/lib/components",
+    "web/src/routes",
+    "web/tests/e2e/settings-relay-visibility.spec.js",
+    "web/tests/unit/connection-status.test.js"
+  ],
+  "out_of_scope": [
+    "Renaming persisted schema fields such as contextvm_relays or callback names such as onEose/onClosed.",
+    "Removing protocol terms from low-level Nostr libraries, protocol tests, or internal event validation code."
+  ]
+}

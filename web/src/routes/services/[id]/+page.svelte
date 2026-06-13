@@ -109,7 +109,7 @@
     editDetectedDefaultBranch = null;
     editBranchesError = null;
 
-    // Only fetch branches for NIP-34 repos
+    // Only fetch branches for relay-backed repositories
     if (!isNostrRepository(selection)) {
       return;
     }
@@ -226,7 +226,7 @@
       if (sequence !== loadSequence || id !== serviceId) return;
       secrets = [];
       secretsError = secretErr?.message || 'Failed to load service secrets';
-      console.warn('Failed to load service secrets via ContextVM requests:', secretErr);
+      console.warn('Failed to load service secrets through protected service requests:', secretErr);
     } finally {
       if (sequence === loadSequence && id === serviceId) {
         secretsLoading = false;

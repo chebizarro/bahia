@@ -19,9 +19,7 @@
   let activeTab = $state('stdout');
   let runId = $derived(page.params.id);
   let loadSequence = 0;
-
-  const RUN_DETAIL_WAIT_MS = 5000;
-  const RUN_DETAIL_POLL_MS = 50;
+  let lastRunRequestId = null;
 
   let isCompleted = $derived(Boolean(run && ['succeeded', 'failed', 'cancelled', 'timeout'].includes(String(run.status || '').toLowerCase())));
   let progressPercent = $derived(calculateProgress(run?.status));
@@ -29,23 +27,22 @@
 
   $effect(() => {
     const id = runId;
-    if (!id) return;
-    void loadRun(id);
+    if (!id || id === lastRunRequestId) return;
+    lastRunRequestId = id;
+    run = null;
+    loading = true;
+    logsLoading = true;
+    error = null;
+    logsError = null;
+    void untrack(() => loadRun(id));
   });
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  async function waitForRunProjection(id, sequence) {
-    const deadline = Date.now() + RUN_DETAIL_WAIT_MS;
-    while (sequence === loadSequence && id === runId) {
-      const match = untrack(() => deploymentRuns.find((candidate) => candidate.id === id) || null);
-      if (match || Date.now() >= deadline) return match;
-      await sleep(RUN_DETAIL_POLL_MS);
-    }
-    return null;
-  }
+  $effect(() => {
+    const id = runId;
+    if (!id || run?.id === id) return;
+    const loadedRun = deploymentRuns.find((candidate) => candidate.id === id) || null;
+    if (loadedRun) applyLoadedRun(loadedRun);
+  });
 
   async function loadRun(id = runId) {
     const sequence = ++loadSequence;
@@ -57,12 +54,11 @@
     try {
       await loadDeploymentRuns();
       if (sequence !== loadSequence || id !== runId) return;
-      run = await waitForRunProjection(id, sequence);
-      if (sequence !== loadSequence || id !== runId) return;
-      if (!run) {
+      const loadedRun = deploymentRuns.find((candidate) => candidate.id === id) || null;
+      if (!loadedRun) {
         throw new Error('Deployment run not found');
       }
-      await loadLogs(id);
+      applyLoadedRun(loadedRun);
     } catch (err) {
       error = err.message || 'Failed to load deployment run';
     } finally {
@@ -73,12 +69,20 @@
     }
   }
 
-  async function loadLogs(id = runId) {
+  function applyLoadedRun(loadedRun) {
+    run = loadedRun;
+    error = null;
+    loading = false;
+    void loadLogs(runId, loadedRun);
+  }
+
+  async function loadLogs(id = runId, sourceRun = run) {
     logsError = null;
 
-    if (!run || !isCompleted) {
+    if (!sourceRun || !['succeeded', 'failed', 'cancelled', 'timeout'].includes(String(sourceRun.status || '').toLowerCase())) {
       stdoutLogs = '';
       stderrLogs = '';
+      logsLoading = false;
       return;
     }
 
@@ -203,7 +207,7 @@
 
     <Card>
       <h2>Run Logs</h2>
-      <p class="transport-note">Transport: public relay run projection + ContextVM request/result fetch for stored stdout/stderr snapshots.</p>
+      <p class="transport-note">Stored stdout/stderr snapshots are loaded from Bahia service records for this run.</p>
 
       {#if !isCompleted}
         <EmptyState

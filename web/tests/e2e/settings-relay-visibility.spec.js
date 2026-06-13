@@ -41,14 +41,14 @@ const systemInfo = {
 };
 
 test.describe('Settings relay visibility', () => {
-  test('shows service-authored NIP-51 relay-list data instead of raw system discovery relays', async ({ page }) => {
+  test('shows service-authored relay-list data instead of raw system discovery relays', async ({ page }) => {
     await installE2EMocks(page, { systemInfo });
 
     await page.goto('/settings');
 
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     const serverConfig = page.locator('section', { hasText: 'Server Configuration' });
-    await expect(serverConfig.getByText('Service Relay List (NIP-51)')).toBeVisible();
+    await expect(serverConfig.getByText('Service Relay List')).toBeVisible();
     await expect(serverConfig.getByText(SERVICE_RELAYS.join(', '))).toBeVisible();
     await expect(serverConfig).not.toContainText(BROWSER_RELAY);
   });
@@ -85,9 +85,9 @@ test.describe('Settings relay visibility', () => {
     await page.goto('/settings/relays');
 
     const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
-    await expect(operatorPolicy.getByText('hydrated from canonical 30900 state')).toBeVisible();
+    await expect(operatorPolicy.getByText('loaded from service relay policy')).toBeVisible();
     await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://canonical-browser.example');
-    await expect(operatorPolicy.locator('label', { hasText: 'ContextVM request/reply relays' }).locator('textarea')).toHaveValue('wss://canonical-contextvm.example');
+    await expect(operatorPolicy.locator('label', { hasText: 'Secure request relays' }).locator('textarea')).toHaveValue('wss://canonical-contextvm.example');
     await expect(operatorPolicy.locator('label', { hasText: 'Service publish/backfill relays' }).locator('textarea')).toHaveValue('wss://canonical-service.example');
     await expect.poll(async () => page.evaluate(() => (window.__BAHIA_E2E_WS_CONNECTIONS || []).map((socket) => socket.url))).toContain('ws://service-read.test.local/');
   });
@@ -114,9 +114,9 @@ test.describe('Settings relay visibility', () => {
 
     await page.evaluate((event) => window.__bahiaPushNostrEvent(event), relaySettingsStateEvent({ browserRelays: ['wss://canonical-newer.example'], createdAt: now }));
 
-    await expect(operatorPolicy.getByText('canonical 30900 state pending; local edits preserved')).toBeVisible();
+    await expect(operatorPolicy.getByText('service relay policy pending; local edits preserved')).toBeVisible();
     await expect(browserPolicy).toHaveValue('wss://local-dirty.example');
-    await expect(operatorPolicy.getByRole('button', { name: 'Apply Canonical State' })).toBeVisible();
+    await expect(operatorPolicy.getByRole('button', { name: 'Apply Service Policy' })).toBeVisible();
     await expect(operatorPolicy.getByRole('button', { name: 'Keep Local Edits' })).toBeVisible();
   });
 
@@ -135,11 +135,11 @@ test.describe('Settings relay visibility', () => {
     await page.goto('/settings/relays');
 
     await expect(page.getByRole('heading', { name: 'Operator Relay Policy' })).toBeVisible();
-    await expect(page.getByText('ContextVM request/reply relays')).toBeVisible();
-    await expect(page.getByText('Trusted NIP-66 monitor pubkeys')).toBeVisible();
-    await expect(page.getByText('Notification DM relays (NIP-51 kind 10050)')).toBeVisible();
-    await expect(page.getByText('NIP-86 managed relay targets')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Publish Relay Policy Mutation' })).toBeVisible();
+    await expect(page.getByText('Secure request relays')).toBeVisible();
+    await expect(page.getByText('Trusted relay monitor pubkeys')).toBeVisible();
+    await expect(page.getByText('Notification message relays')).toBeVisible();
+    await expect(page.getByText('Managed relay targets')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Publish Relay Policy Update' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Browser Session Relays' })).toBeVisible();
     await expect(page.getByText('Local emergency override for this browser session only')).toBeVisible();
   });
@@ -167,12 +167,13 @@ test.describe('Settings relay visibility', () => {
   });
 
   test('removing the final local browser relay is not overwritten by discovery fallback', async ({ page }) => {
-    await installE2EMocks(page, { systemInfo });
     await page.addInitScript(() => {
-      if (localStorage.getItem('bahia_nostr_relays') === null) {
+      if (sessionStorage.getItem('__bahia_single_local_relay_seeded') !== 'true') {
         localStorage.setItem('bahia_nostr_relays', JSON.stringify(['ws://single-local-relay.test.local']));
+        sessionStorage.setItem('__bahia_single_local_relay_seeded', 'true');
       }
     });
+    await installE2EMocks(page, { systemInfo });
 
     await page.goto('/settings/relays');
 

@@ -49,7 +49,7 @@
   const endpointCount = $derived(endpoints.length);
   const unhealthyCount = $derived(endpoints.filter((endpoint) => healthTone(valueOf(endpoint, ['health', 'status', 'health_status'])) !== 'healthy').length);
   const operatorReady = $derived(authState.status === 'authenticated' && Boolean(authState.pubkey));
-  const commandDisabledReason = $derived(operatorReady ? '' : 'Authenticate with NIP-07 or NIP-46 before signing DNS commands.');
+  const commandDisabledReason = $derived(operatorReady ? '' : 'Connect a signer before signing DNS commands.');
   const recentCommandRuns = $derived(dnsState.commandRuns || []);
 
   const zoneOptions = $derived(uniqueValues(zones, ['name', 'zone', 'zone_name']));
@@ -181,9 +181,9 @@
     </div>
   {/if}
 
-  <div class="connection-status" aria-label="DNS Nostr subscription status">
+  <div class="connection-status" aria-label="DNS relay sync status">
     <span class={`badge ${dnsState.connection.status === 'live' ? 'healthy' : dnsState.connection.status === 'error' || dnsState.connection.status === 'auth-required' ? 'critical' : 'unknown'}`}>{dnsState.connection.status}</span>
-    <span>{dnsState.connection.relays.length} relay{dnsState.connection.relays.length === 1 ? '' : 's'} · {dnsState.connection.eoseRelays.length} EOSE</span>
+    <span>{dnsState.connection.relays.length} relay{dnsState.connection.relays.length === 1 ? '' : 's'} · {dnsState.connection.eoseRelays.length} synced</span>
   </div>
 
   <section class="panel command-panel" aria-label="DNS Nostr command controls">

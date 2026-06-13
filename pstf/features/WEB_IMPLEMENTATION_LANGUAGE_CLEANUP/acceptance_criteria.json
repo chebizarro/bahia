@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_IMPLEMENTATION_LANGUAGE_CLEANUP",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Common route and settings UI labels avoid unnecessary NIP, ContextVM, signer-first, EOSE, and CLOSED wording.",
+      "tests": ["settings-relay-visibility e2e", "connection-status unit", "static search review"]
+    },
+    {
+      "id": "AC2",
+      "description": "Relay connection status presents user-facing sync/interruption wording while preserving internal event-driven relay semantics.",
+      "tests": ["tests/unit/connection-status.test.js"]
+    },
+    {
+      "id": "AC3",
+      "description": "Light-mode markdown code blocks use code-block colors rather than inline-code colors.",
+      "tests": ["svelte-check", "static CSS review"]
+    },
+    {
+      "id": "AC4",
+      "description": "No REST API additions or REST fallbacks are introduced by this cleanup.",
+      "tests": ["git diff review", "SBOM e2e unsupported endpoint guards"]
+    }
+  ]
+}

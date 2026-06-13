@@ -77,7 +77,7 @@ function artifactEvent(options = {}) {
   return nostrEvent({
     id: `${artifact.id}-event`,
     kind: KINDS.ARTIFACT_REGISTRY,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['d', artifact.id], ['artifact', artifact.id], ['service', SERVICE_ID], ['deleted', 'false']],
+    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['legacy_kind', '31966'], ['d', artifact.id], ['artifact', artifact.id], ['service', SERVICE_ID], ['deleted', 'false']],
     content: artifact
   });
 }

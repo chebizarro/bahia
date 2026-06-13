@@ -108,7 +108,7 @@
     const eventId = result?.id || result?.request_event_id;
     if (!eventId) return result?.message || fallback;
     const requestPreview = String(eventId).slice(0, 12);
-    return `${action} command published as Nostr request ${requestPreview}…; watch correlated ContextVM result events and ML read models for completion.`;
+    return `${action} submitted (${requestPreview}…). Watch the deployment and model status panels for completion.`;
   }
 
   async function publishMLCommand(operation, payload) {
@@ -140,7 +140,7 @@
     resetNotice();
     try {
       const result = await publishMLCommand('ml/model-import', buildImportPayload(importForm));
-      setSuccess(formatNostrReceipt('Model import', result, 'Model import command published. Watch correlated ContextVM result events and ML read models for completion.'));
+      setSuccess(formatNostrReceipt('Model import', result, 'Model import submitted. Watch the model status panels for completion.'));
       importForm = { ...importForm, model_slug: '', source_uri: '', revision: '' };
     } catch (err) {
       setFailure(err.message || 'Failed to submit model import');
@@ -213,7 +213,7 @@
         pinMessage = pinResult?.message ? ` ${pinResult.message}.` : ' Existing endpoint pin command accepted.';
       }
       const result = await publishMLCommand('ml/inference-deploy', buildDeployPayload(deployForm));
-      const deploymentReceipt = formatNostrReceipt('Inference deployment', result, `Inference deployment command published with ${preview.estimated_eligible_count} eligible worker(s). Watch correlated ContextVM result events and ML read models for completion.`);
+      const deploymentReceipt = formatNostrReceipt('Inference deployment', result, `Inference deployment submitted with ${preview.estimated_eligible_count} eligible worker(s). Watch the endpoint status panels for completion.`);
       setSuccess(`${deploymentReceipt}${pinMessage}`);
       deployForm = { ...deployForm, endpoint: '', model_version: '' };
     } catch (err) {
@@ -415,7 +415,7 @@
     <div class="workflow-grid">
       <section class="panel">
         <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Import Model</h2>
-        <p class="transport-note">This form publishes a signed Nostr ML import command. Submission is not completion; monitor correlated ContextVM result events and ML read models.</p>
+        <p class="transport-note">Submitting starts a signed model import. Completion appears in the model status panels after Bahia records the result.</p>
         <form onsubmit={handleImport} data-testid="ml-import-form">
           <label>
             Model slug
@@ -457,7 +457,7 @@
 
       <section class="panel">
         <h2><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Deploy Inference Endpoint</h2>
-        <p class="transport-note">Deployment submission publishes a signed Nostr inference command and completes only through correlated ContextVM result events and ML read models. Existing endpoint pinning publishes signer-first workload placement events before deployment.</p>
+        <p class="transport-note">Deployment submission starts an inference rollout. Completion appears in the endpoint status panels after Bahia records the result. Existing endpoint pinning updates worker placement before deployment.</p>
         <form onsubmit={handleDeploy} data-testid="ml-deploy-form">
           <label>
             Endpoint coordinate

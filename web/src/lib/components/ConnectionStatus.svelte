@@ -11,9 +11,9 @@
     disconnected: { tone: 'disconnected', label: 'Disconnected', detail: 'Not connected' },
     discovering: { tone: 'connecting', label: 'Connecting', detail: 'Discovering relays' },
     connecting: { tone: 'connecting', label: 'Connecting', detail: 'Connecting to relays' },
-    syncing: { tone: 'syncing', label: 'Syncing', detail: 'EOSE pending' },
-    bootstrapping: { tone: 'syncing', label: 'Syncing', detail: 'EOSE pending' },
-    live: { tone: 'live', label: 'Live', detail: 'Connected, EOSE received' },
+    syncing: { tone: 'syncing', label: 'Syncing', detail: 'Initial sync pending' },
+    bootstrapping: { tone: 'syncing', label: 'Syncing', detail: 'Initial sync pending' },
+    live: { tone: 'live', label: 'Live', detail: 'Connected and up to date' },
     error: { tone: 'error', label: 'Error', detail: 'Connection error' }
   };
 
@@ -27,7 +27,7 @@
   let errorMessage = $derived(connection.lastError?.message || connection.lastError || 'Relay connection error');
   let title = $derived(connection.status === 'error' ? errorMessage : `${presentation.label}: ${presentation.detail}`);
   let lastEventLabel = $derived(formatTimestamp(connection.lastEventAt));
-  let lastEoseLabel = $derived(formatTimestamp(connection.lastEoseAt));
+  let lastSyncLabel = $derived(formatTimestamp(connection.lastEoseAt));
   let retryVisible = $derived(['error', 'disconnected'].includes(connection.status));
   let retryDisabled = $derived(retrying || ['discovering', 'connecting', 'syncing', 'bootstrapping'].includes(connection.status));
 
@@ -108,8 +108,8 @@
           <dd>{lastEventLabel}</dd>
         </div>
         <div>
-          <dt>Last EOSE</dt>
-          <dd>{lastEoseLabel}</dd>
+          <dt>Last sync</dt>
+          <dd>{lastSyncLabel}</dd>
         </div>
       </dl>
 

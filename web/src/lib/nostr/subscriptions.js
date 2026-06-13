@@ -17,7 +17,7 @@ const RELAY_CONFIG_KEY = 'bahia_nostr_relays';
 /**
  * Get configured relays from localStorage or return defaults
  */
-function getConfiguredRelays() {
+export function getConfiguredRelays() {
   if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return DEFAULT_RELAYS;
 
   try {

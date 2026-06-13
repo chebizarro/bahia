@@ -228,7 +228,7 @@
   <div class="page-header">
     <div>
       <h1><LlmIcon size={24} strokeWidth={1.75} ariaHidden="true" /> LLM Control Plane</h1>
-      <p class="subtitle">Signer-first route creation, release registration, deployment, rollback, approval, and relay-backed route-state visibility.</p>
+      <p class="subtitle">Signed route creation, release registration, deployment, rollback, approval, and relay-backed route-state visibility.</p>
     </div>
     <div class="connection-card" data-testid="llm-connection-status">
       <strong>{controlplaneConnection.status}</strong>

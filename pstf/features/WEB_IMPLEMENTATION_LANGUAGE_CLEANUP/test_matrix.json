@@ -1,0 +1,29 @@
+{
+  "feature_id": "WEB_IMPLEMENTATION_LANGUAGE_CLEANUP",
+  "tests": [
+    {
+      "test": "npm run test:unit -- --run tests/unit/connection-status.test.js",
+      "criteria": ["AC2"],
+      "type": "Vitest unit",
+      "result": "PASS"
+    },
+    {
+      "test": "npx playwright test tests/e2e/settings-relay-visibility.spec.js --workers=1 --reporter=line",
+      "criteria": ["AC1"],
+      "type": "Playwright e2e",
+      "result": "PASS"
+    },
+    {
+      "test": "npx playwright test tests/e2e/sbom-workflow.spec.js -g \"artifact (page displays SBOM attestation details|SBOM tab shows an empty state)\" --workers=1 --reporter=line",
+      "criteria": ["AC4"],
+      "type": "Playwright e2e",
+      "result": "PASS"
+    },
+    {
+      "test": "npm run lint",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "type": "svelte-check",
+      "result": "PASS"
+    }
+  ]
+}

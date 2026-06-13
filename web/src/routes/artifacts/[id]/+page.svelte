@@ -1,6 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { tick, untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -33,6 +34,7 @@
   let loading = $state(true);
   let error = $state(null);
   let loadSequence = 0;
+  let lastArtifactRequestId = null;
   
   // Tab state
   let activeTab = $state('overview'); // overview, sbom, signatures
@@ -83,8 +85,19 @@
 
   $effect(() => {
     const id = artifactId;
-    if (!id) return;
-    void loadArtifact(id);
+    if (!id || id === lastArtifactRequestId) return;
+    lastArtifactRequestId = id;
+    artifact = null;
+    loading = true;
+    error = null;
+    void untrack(() => loadArtifact(id));
+  });
+
+  $effect(() => {
+    const id = artifactId;
+    if (!id || artifact?.id === id) return;
+    const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
+    if (loadedArtifact) applyLoadedArtifact(loadedArtifact);
   });
 
   async function loadArtifact(id = artifactId) {
@@ -94,6 +107,7 @@
 
     try {
       await Promise.allSettled([loadArtifacts(), loadServices()]);
+      await tick();
       const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
 
       if (!loadedArtifact) {
@@ -101,10 +115,7 @@
       }
       if (sequence !== loadSequence) return;
 
-      artifact = loadedArtifact;
-      resetSBOMFromArtifact(loadedArtifact);
-      signatures = Array.isArray(loadedArtifact.signatures) ? loadedArtifact.signatures : [];
-      hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(loadedArtifact.signature_ref || loadedArtifact.verified_signature);
+      applyLoadedArtifact(loadedArtifact);
     } catch (err) {
       if (sequence !== loadSequence) return;
       error = err.message || 'Failed to load artifact';
@@ -112,6 +123,15 @@
     } finally {
       if (sequence === loadSequence) loading = false;
     }
+  }
+
+  function applyLoadedArtifact(loadedArtifact) {
+    artifact = loadedArtifact;
+    resetSBOMFromArtifact(loadedArtifact);
+    signatures = Array.isArray(loadedArtifact.signatures) ? loadedArtifact.signatures : [];
+    hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(loadedArtifact.signature_ref || loadedArtifact.verified_signature);
+    error = null;
+    loading = false;
   }
 
   function resetSBOMFromArtifact(source) {
@@ -130,12 +150,13 @@
 
   function artifactSBOMSummary(source) {
     if (!source) return null;
+    const hasPackageList = Array.isArray(source.sbom_packages) && source.sbom_packages.length > 0;
     const summary = {
       format: source.sbom_format || source.sbom_type || null,
       generator: source.sbom_generator || null,
       source_url: source.sbom_url || source.sbom_ref || null,
       raw_hash: source.sbom_hash || null,
-      package_count: Array.isArray(source.sbom_packages) ? source.sbom_packages.length : source.sbom_package_count,
+      package_count: hasPackageList ? source.sbom_packages.length : source.sbom_package_count,
       created_at: source.sbom_created_at || null,
       ntia: source.sbom_ntia || null
     };

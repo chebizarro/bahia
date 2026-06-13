@@ -77,7 +77,7 @@
     // Can always open when authenticated or anonymous with any available signer
     if (authUi.mode === 'loading') return false;
     if (authUi.mode === 'authenticated') return true;
-    // Anonymous: allow if extension available or NIP-46 available
+    // Anonymous: allow if browser or remote signer options are available
     return authUi.extensionAvailable || menuItems.some((item) => !item.disabled);
   }
 
@@ -219,7 +219,7 @@
       aria-haspopup="menu"
       aria-expanded={open}
       aria-controls="user-menu"
-      title={authUi.extensionAvailable ? 'Sign in with Nostr' : 'Browser signer not detected; Nostr Connect is available in settings'}
+      title={authUi.extensionAvailable ? 'Sign in with Nostr' : 'Connect a signer from settings'}
       bind:this={triggerEl}
       onclick={handleTriggerClick}
       onkeydown={handleTriggerKeydown}
@@ -229,7 +229,7 @@
         Sign In
       {:else}
         <WarningIcon size={16} strokeWidth={1.75} ariaHidden="true" />
-        No Signer
+        Connect Signer
       {/if}
       <span class="chevron" aria-hidden="true">▾</span>
     </button>

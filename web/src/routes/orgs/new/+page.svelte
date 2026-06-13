@@ -12,7 +12,7 @@
   let submitting = $state(false);
   let errors = $state({});
 
-  // Auto-generate NIP-05 compliant name from display name
+  // Auto-generate a URL-safe organization name from display name
   $effect(() => {
     if (displayName && !name) {
       name = displayName.toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^[-.]|[-.]$/g, '').slice(0, 32);
@@ -25,7 +25,7 @@
     if (!name) {
       errors.name = 'Name is required';
     } else if (!/^[a-z0-9][a-z0-9._-]*[a-z0-9]$|^[a-z0-9]$/.test(name)) {
-      errors.name = 'Name must start and end with a letter or digit, and may contain lowercase letters, numbers, hyphens, underscores, and dots (NIP-05 compatible)';
+      errors.name = 'Name must start and end with a letter or digit, and may contain lowercase letters, numbers, hyphens, underscores, and dots';
     } else if (name.length < 3) {
       errors.name = 'Name must be at least 3 characters';
     } else if (name.length > 32) {
@@ -74,7 +74,7 @@
         />
       </FormField>
 
-      <FormField label="URL Name" error={errors.name} hint="NIP-05 compatible — lowercase letters, numbers, hyphens, underscores, and dots. Cannot be changed later.">
+      <FormField label="URL Name" error={errors.name} hint="Lowercase letters, numbers, hyphens, underscores, and dots. Cannot be changed later.">
         <Input
           bind:value={name}
           placeholder="my-team"

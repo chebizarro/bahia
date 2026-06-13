@@ -50,7 +50,7 @@ describe('ConnectionStatus', () => {
     const text = textOf(target);
     expect(text).toContain('Relays 2');
     expect(text).toContain('Last event');
-    expect(text).toContain('Last EOSE');
+    expect(text).toContain('Last sync');
     expect(text).toContain('wss://relay-a.example');
     expect(text).toContain('wss://relay-b.example');
   });

@@ -255,7 +255,7 @@
         void loadHistory();
       },
       onClosed: () => {
-        // Relay CLOSED is informational here; terminal lifecycle state comes only from 7950/1951 result events.
+        // Relay interruptions are informational here; terminal lifecycle state comes only from result events.
       }
     });
   }

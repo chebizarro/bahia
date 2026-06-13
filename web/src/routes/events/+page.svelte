@@ -132,7 +132,7 @@
     idle: '⚪ Not connected',
     discovering: '🟡 Discovering relay',
     connecting: '🟡 Connecting to relay',
-    bootstrapping: '🟡 Waiting for EOSE',
+    bootstrapping: '🟡 Waiting for initial sync',
     live: '🟢 Connected via Nostr relay',
     disconnected: '⚪ Relay disconnected',
     error: '🔴 Relay error'
