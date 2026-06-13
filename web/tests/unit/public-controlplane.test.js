@@ -173,6 +173,51 @@ describe('public controlplane command helpers', () => {
     expect(rollbackResult).toMatchObject({ requestEventId: 'req-2', event: { id: 'result-llm-rollback', kind: 25910 } });
   });
 
+  it('generates artifact SBOMs through canonical ContextVM encrypted requests', async () => {
+    await api.generateArtifactSBOM({
+      id: 'artifact-1',
+      name: 'registry.example.com/acme/api',
+      image_repo: 'registry.example.com/acme/api',
+      image_tag: '1.2.3',
+      digest: 'sha256:abc123'
+    });
+
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'sbom/generate',
+      tags: [
+        ['domain', 'sbom'],
+        ['operation', 'sbom/generate'],
+        ['subject_type', 'artifact'],
+        ['artifact', 'artifact-1'],
+        ['subject', 'sha256:abc123'],
+        ['generator', 'syft']
+      ],
+      payload: {
+        idempotencyKey: 'web.sbom.generate:artifact:artifact-1:sha256:abc123:spdx,cyclonedx:syft',
+        subject: {
+          type: 'artifact',
+          id: 'artifact-1',
+          display_name: 'registry.example.com/acme/api',
+          digest: 'sha256:abc123'
+        },
+        source: {
+          kind: 'oci-image',
+          locator: 'registry.example.com/acme/api@sha256:abc123'
+        },
+        formats: ['spdx', 'cyclonedx'],
+        generator: 'syft',
+        storage: 'blossom'
+      },
+      signal: undefined,
+      timeoutMs: undefined
+    });
+  });
+
+  it('rejects artifact SBOM generation without an immutable digest', () => {
+    expect(() => api.generateArtifactSBOM({ id: 'artifact-1', image_repo: 'registry.example.com/acme/api' })).toThrow('artifact digest is required');
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
+  });
+
   it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
     requestEncryptedResultMock.mockResolvedValueOnce({
       requestEventId: 'req-1',

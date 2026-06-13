@@ -15,9 +15,9 @@
     },
     {
       "id": "D3",
-      "status": "tracked",
-      "description": "Broad browser E2E coverage does not yet drive a signer-first SBOM generate/import UI/control surface through ContextVM and observe 30315/4903/30078/30004 relay outcomes end-to-end.",
-      "evidence": "Current deterministic coverage proves the service, event builders, REST compatibility, MCP compatibility, and artifact/event UI slices. Broader browser E2E is tracked in Bead bahia-wf2k with acceptance criteria for injected EVENT/EOSE/OK behavior and no sleep/polling completion."
+      "status": "partially_fixed",
+      "description": "Broad browser E2E coverage for signer-first SBOM workflows was missing. The artifact generate/regenerate UI slice now publishes sbom/generate through encrypted ContextVM and verifies 30315/4903/30078/30004 mock relay outcomes; browser import workflow coverage remains outside the artifact generate/regenerate UI slice.",
+      "evidence": "Generate/regenerate slice covered by web/tests/unit/public-controlplane.test.js and web/tests/e2e/sbom-workflow.spec.js. Import-specific browser workflow coverage remains tracked by Bead bahia-wf2k if a user-facing import control is added."
     },
     {
       "id": "D4",

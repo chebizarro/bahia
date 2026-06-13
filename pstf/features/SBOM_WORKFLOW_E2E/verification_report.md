@@ -48,6 +48,21 @@ Existing targeted UI evidence from prior SBOM PSTF work remains applicable:
 cd web && pnpm test:e2e --reporter=line tests/e2e/environments-crud-smoke.spec.js tests/e2e/sbom-workflow.spec.js
 ```
 
+## Web artifact generate/regenerate slice — 2026-06-13
+
+- `web/src/lib/stores/public-controlplane.svelte.js` now builds encrypted ContextVM `sbom/generate` requests for artifact subjects with immutable digest, OCI image source locator, SPDX/CycloneDX formats, Syft generator, Blossom storage, scoped tags, and deterministic idempotency keys.
+- `web/src/routes/artifacts/[id]/+page.svelte` now exposes **Generate SBOM** and **Regenerate SBOM** from the SBOM tab, publishes through the Nostr ContextVM helper, does not call REST generation endpoints, and tells users that durable completion is reflected by SBOM reference and availability-list events.
+- `web/tests/e2e/helpers.js` can now deterministically observe gift-wrapped SBOM generate requests and inject `30315`, `4903`, `30078`, and `30004` mock relay outcomes for browser verification without sleeps.
+
+Targeted gates for this slice:
+
+```bash
+cd web && npm run test:unit -- tests/unit/public-controlplane.test.js
+cd web && npm run test:e2e -- --reporter=line tests/e2e/sbom-workflow.spec.js
+```
+
+Results: PASS on 2026-06-13. A focused Oracle review flagged two fixes before final gates: the UI now keeps the explicit ContextVM request event ID instead of displaying the result event ID, and the production SBOM path remains on the default encrypted result kind rather than accepting raw `25910` results for test convenience.
+
 ## Remaining tracked work
 
 - `bahia-wqj5`: Define canonical package and repository ContextVM subject locators before enabling automatic digest lookup for ambiguous package/repository subjects.

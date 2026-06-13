@@ -195,14 +195,39 @@ export async function installE2EMocks(
       localStorage.setItem('__bahia_e2e_service_secrets', JSON.stringify(state || {}));
     }
 
-    function handleEncryptedServiceSecretRequest(event) {
-      if (event?.kind !== 25910 || !String(event.content || '').startsWith('mock-nip44:')) return null;
-      let envelope;
+    function decodeEncryptedContextVMEnvelope(event) {
+      if (event?.kind !== 25910) return null;
+      const content = String(event.content || '');
       try {
-        envelope = JSON.parse(decodeURIComponent(escape(atob(String(event.content).replace(/^mock-nip44:/, '')))));
+        if (content.startsWith('mock-nip44:')) {
+          return JSON.parse(decodeURIComponent(escape(atob(content.replace(/^mock-nip44:/, '')))));
+        }
+        return JSON.parse(content);
       } catch {
         return null;
       }
+    }
+
+    function encryptedContextVMResponse(event, envelope, payload, tags = []) {
+      const response = {
+        request_event_id: event.id,
+        status: 'success',
+        payload
+      };
+      return {
+        id: `mock-result-${event.id}`,
+        kind: 25910,
+        pubkey: servicePubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['e', event.id], ['p', event.kind === 1059 ? pubkey : event.pubkey], ['encrypted', 'contextvm-jsonrpc-v1'], ...tags],
+        content: JSON.stringify(response),
+        sig: 'mock-service-signature'
+      };
+    }
+
+    function handleEncryptedServiceSecretRequest(event) {
+      const envelope = decodeEncryptedContextVMEnvelope(event);
+      if (!envelope) return null;
       const operation = String(envelope.method || envelope.operation || '');
       const params = { ...(envelope.params || envelope.payload || {}) };
       delete params._meta;
@@ -244,20 +269,95 @@ export async function installE2EMocks(
         payload = { value: secrets.find((secret) => secret.id === params.secret_id)?.value || '' };
       }
 
-      const response = {
-        jsonrpc: '2.0',
-        id: envelope.id || event.id,
-        result: { status: 'success', payload }
-      };
-      return {
-        id: `mock-result-${event.id}`,
-        kind: 25910,
+      return encryptedContextVMResponse(event, envelope, payload);
+    }
+
+    function handleEncryptedSBOMRequest(event) {
+      let envelope = decodeEncryptedContextVMEnvelope(event);
+      if (!envelope && event?.kind === 1059 && window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION?.operation === 'sbom/generate') {
+        envelope = {
+          id: event.id,
+          method: 'sbom/generate',
+          params: window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION.payload || {}
+        };
+        delete window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION;
+      }
+      if (!envelope) return null;
+      const operation = String(envelope.method || envelope.operation || '');
+      if (operation !== 'sbom/generate') return null;
+      const params = { ...(envelope.params || envelope.payload || {}) };
+      delete params._meta;
+      const subject = params.subject || {};
+      const artifactId = String(subject.id || 'artifact-sbom-e2e');
+      const digest = String(subject.digest || 'sha256:mock-sbom-digest');
+      const formats = Array.isArray(params.formats) && params.formats.length > 0 ? params.formats.map(String) : ['spdx'];
+      const generator = String(params.generator || 'syft');
+      const now = Math.floor(Date.now() / 1000);
+      const payloadSha = 'a'.repeat(64);
+      const statusDTag = `sbom:run:${artifactId}:${now}`;
+      const runId = `run-${artifactId}-${now}`;
+      const referenceEventIds = [];
+
+      const statusEvent = {
+        id: `mock-sbom-status-${event.id}`,
+        kind: 30315,
         pubkey: servicePubkey,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [['e', event.id], ['p', event.pubkey], ['encrypted', 'contextvm-jsonrpc-v1']],
-        content: `mock-nip44:${btoa(unescape(encodeURIComponent(JSON.stringify(response))))}`,
-        sig: 'mock-service-signature'
+        created_at: now,
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.status.v1'], ['d', statusDTag], ['artifact', artifactId], ['status', 'completed']],
+        content: JSON.stringify({ schema: 'bahia.sbom.status.v1', run_id: runId, artifact_id: artifactId, status: 'completed' }),
+        sig: '0'.repeat(128)
       };
+      persistMockNostrEvent(statusEvent);
+
+      for (const format of formats) {
+        const referenceDTag = `sbom:ref:${artifactId}:${format}:${payloadSha.slice(0, 12)}`;
+        const referenceEvent = {
+          id: `mock-sbom-ref-${format}-${event.id}`,
+          kind: 30078,
+          pubkey: servicePubkey,
+          created_at: now,
+          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['format', format], ['generator', generator]],
+          content: JSON.stringify({ schema: 'bahia.sbom.ref.v1', domain: 'sbom', event_type: 'sbom.ref', artifact_id: artifactId, subject: { type: 'artifact', id: artifactId, digest }, format, storage: { type: 'blossom', uri: `blossom://mock/${artifactId}.${format}.json` }, payload_sha256: payloadSha, generator }),
+          sig: '0'.repeat(128)
+        };
+        referenceEventIds.push(referenceEvent.id);
+        persistMockNostrEvent(referenceEvent);
+      }
+
+      const availabilityEvent = {
+        id: `mock-sbom-availability-${event.id}`,
+        kind: 30004,
+        pubkey: servicePubkey,
+        created_at: now,
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId]],
+        content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://mock/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator })) }),
+        sig: '0'.repeat(128)
+      };
+      persistMockNostrEvent(availabilityEvent);
+
+      const auditEvent = {
+        id: `mock-sbom-audit-${event.id}`,
+        kind: 4903,
+        pubkey: servicePubkey,
+        created_at: now,
+        tags: [['domain', 'sbom'], ['schema', 'bahia.audit.v1'], ['type', 'sbom.generated'], ['event_type', 'sbom.generated'], ['artifact', artifactId]],
+        content: JSON.stringify({ schema: 'bahia.audit.v1', type: 'sbom.generated', event_type: 'sbom.generated', entity_id: artifactId, data: { formats, generator } }),
+        sig: '0'.repeat(128)
+      };
+      persistMockNostrEvent(auditEvent);
+      window.dispatchEvent(new CustomEvent('__bahia_e2e_sbom_generated', {
+        detail: { artifactId, formats, generator, requestEventId: event.id }
+      }));
+
+      return encryptedContextVMResponse(event, envelope, {
+        run_id: runId,
+        subject,
+        manifest_ids: formats.map((format) => `manifest-${artifactId}-${format}`),
+        reference_event_ids: referenceEventIds,
+        availability_event_id: availabilityEvent.id,
+        status_d_tag: statusDTag,
+        publish_state: 'published'
+      }, [['domain', 'sbom'], ['operation', 'sbom/generate']]);
     }
 
     class MockWebSocket {
@@ -311,7 +411,7 @@ export async function installE2EMocks(
         } else if (Array.isArray(message) && message[0] === 'EVENT') {
           const event = message[1];
           persistMockNostrEvent(event);
-          const encryptedResult = handleEncryptedServiceSecretRequest(event);
+          const encryptedResult = handleEncryptedServiceSecretRequest(event) || handleEncryptedSBOMRequest(event);
           if (encryptedResult) {
             persistMockNostrEvent(encryptedResult);
             setTimeout(() => this.emitEvent(encryptedResult), 0);

@@ -7,6 +7,7 @@ function operationResultEvent({ requestEventId, resultEvent, result }) {
   if (result !== undefined) {
     return {
       id: resultEvent?.id || requestEventId || '',
+      requestEventId: requestEventId || '',
       kind: resultEvent?.kind || 25910,
       tags: resultEvent?.tags || [['e', requestEventId || '']],
       content: JSON.stringify(result ?? {})
@@ -14,6 +15,7 @@ function operationResultEvent({ requestEventId, resultEvent, result }) {
   }
   return resultEvent || {
     id: requestEventId || '',
+    requestEventId: requestEventId || '',
     kind: 25910,
     tags: [['e', requestEventId || '']],
     content: JSON.stringify({})
@@ -170,6 +172,66 @@ export function rejectLLMDeploymentIntent(id) {
 
 export function registerArtifact(payload) {
   return publishCommand({ operation: 'artifact/register', tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
+}
+
+function artifactDigest(artifact) {
+  return String(artifact?.digest || artifact?.image_digest || artifact?.metadata?.digest || '').trim();
+}
+
+function artifactImageLocator(artifact, digest = artifactDigest(artifact)) {
+  const explicit = String(artifact?.image_ref || artifact?.oci_ref || artifact?.source_ref || '').trim();
+  if (explicit) return explicit;
+  const repo = String(artifact?.image_repo || artifact?.repository || artifact?.name || '').trim();
+  const tag = String(artifact?.image_tag || artifact?.tag || artifact?.version || '').trim();
+  if (repo && digest) return `${repo}@${digest}`;
+  if (repo && tag) return `${repo}:${tag}`;
+  return '';
+}
+
+function artifactDisplayName(artifact) {
+  return String(artifact?.name || artifact?.image_repo || artifact?.image_tag || artifact?.id || '').trim();
+}
+
+export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft', signal, timeoutMs } = {}) {
+  const artifactId = String(artifact?.id || '').trim();
+  if (!artifactId) throw new Error('artifact id is required');
+  const digest = artifactDigest(artifact);
+  if (!digest) throw new Error('artifact digest is required');
+  const locator = artifactImageLocator(artifact, digest);
+  if (!locator) throw new Error('artifact image locator is required');
+  const normalizedFormats = Array.from(new Set((Array.isArray(formats) ? formats : [formats]).map((format) => String(format || '').trim()).filter(Boolean)));
+  if (normalizedFormats.length === 0) throw new Error('at least one SBOM format is required');
+  const generatorId = String(generator || 'syft').trim() || 'syft';
+  const idempotencyKey = `web.sbom.generate:artifact:${artifactId}:${digest}:${normalizedFormats.join(',')}:${generatorId}`;
+  return publishCommand({
+    operation: 'sbom/generate',
+    tags: [
+      ['domain', 'sbom'],
+      ['operation', 'sbom/generate'],
+      ['subject_type', 'artifact'],
+      ['artifact', artifactId],
+      ['subject', digest],
+      ['generator', generatorId]
+    ],
+    content: {
+      idempotencyKey,
+      subject: {
+        type: 'artifact',
+        id: artifactId,
+        display_name: artifactDisplayName(artifact),
+        digest
+      },
+      source: {
+        kind: 'oci-image',
+        locator
+      },
+      formats: normalizedFormats,
+      generator: generatorId,
+      storage: 'blossom'
+    },
+    signal,
+    timeoutMs
+  });
 }
 
 export function promotePackage(payload) {

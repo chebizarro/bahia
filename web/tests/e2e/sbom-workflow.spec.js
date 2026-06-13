@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
 
-const SERVICE_PUBKEY = 'b'.repeat(64);
+const SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const ARTIFACT_ID = 'artifact-sbom-1';
 const NO_SBOM_ARTIFACT_ID = 'artifact-no-sbom';
 const SERVICE_ID = 'svc-sbom';
@@ -9,6 +9,7 @@ const SERVICE_ID = 'svc-sbom';
 const KINDS = {
   SERVICE_REGISTRY: 30900,
   ARTIFACT_REGISTRY: 30900,
+  SBOM_STATUS: 30315,
   SBOM_REFERENCE: 30078,
   SBOM_AVAILABILITY_LIST: 30004,
   AUDIT: 4903
@@ -200,6 +201,57 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByRole('cell', { name: 'svelte', exact: true })).toBeVisible();
   });
 
+  test('artifact SBOM tab publishes signer-backed ContextVM generation request', async ({ page }) => {
+    await installE2EMocks(page, {
+      authenticated: true,
+      extension: true,
+      systemInfo: relaySystemInfo,
+      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
+    });
+    await failOnUnsupportedSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
+
+    await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}`);
+    await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();
+    await page.evaluate(({ artifactId, digest }) => {
+      window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION = {
+        operation: 'sbom/generate',
+        payload: {
+          subject: { type: 'artifact', id: artifactId, digest },
+          formats: ['spdx', 'cyclonedx'],
+          generator: 'syft'
+        }
+      };
+    }, { artifactId: NO_SBOM_ARTIFACT_ID, digest: artifactPayload({ id: NO_SBOM_ARTIFACT_ID }).digest });
+    const generated = page.evaluate(() => new Promise((resolve) => {
+      window.addEventListener('__bahia_e2e_sbom_generated', (event) => resolve(event.detail), { once: true });
+    }));
+    await page.getByRole('button', { name: /^SBOM/ }).click();
+    await page.getByRole('button', { name: 'Generate SBOM' }).click();
+    const generatedDetail = await generated;
+    expect(generatedDetail).toMatchObject({ artifactId: NO_SBOM_ARTIFACT_ID, formats: ['spdx', 'cyclonedx'], generator: 'syft' });
+
+    const generatedEvents = await page.evaluate((artifactId) => {
+      const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
+      const hasTag = (event, name, value) => Array.isArray(event.tags) && event.tags.some((tag) => Array.isArray(tag) && tag[0] === name && (value === undefined || tag[1] === value));
+      return {
+        request: events.find((event) => event.kind === 1059 && hasTag(event, 'p')) || null,
+        status: events.find((event) => event.kind === 30315 && hasTag(event, 'artifact', artifactId)) || null,
+        references: events.filter((event) => event.kind === 30078 && hasTag(event, 'artifact', artifactId)).map((event) => ({ tags: event.tags, content: JSON.parse(event.content || '{}') })),
+        availability: events.find((event) => event.kind === 30004 && hasTag(event, 'artifact', artifactId)) || null,
+        audit: events.find((event) => event.kind === 4903 && hasTag(event, 'event_type', 'sbom.generated')) || null
+      };
+    }, NO_SBOM_ARTIFACT_ID);
+
+    expect(generatedEvents.request).toBeTruthy();
+    expect(generatedEvents.request.id).toBe(generatedDetail.requestEventId);
+    expect(generatedEvents.status).toBeTruthy();
+    expect(generatedEvents.references).toHaveLength(2);
+    expect(generatedEvents.references.map((event) => event.content.format).sort()).toEqual(['cyclonedx', 'spdx']);
+    expect(generatedEvents.references.every((event) => event.content.storage?.type === 'blossom')).toBe(true);
+    expect(generatedEvents.availability).toBeTruthy();
+    expect(generatedEvents.audit).toBeTruthy();
+  });
+
   test('artifact SBOM tab shows an empty state when no attestation exists', async ({ page }) => {
     await installE2EMocks(page, {
       authenticated: true,
@@ -311,7 +363,8 @@ test.describe('SBOM workflow', () => {
 
     await expect(page.getByText('Showing 2 of 3 events')).toBeVisible();
     const filteredRows = page.locator('tbody tr');
-    await expect(filteredRows.filter({ hasText: 'SBOM Attestation' })).toHaveCount(2);
+    await expect(filteredRows.filter({ hasText: 'SBOM Reference' })).toHaveCount(1);
+    await expect(filteredRows.filter({ hasText: 'SBOM Availability List' })).toHaveCount(1);
     await expect(filteredRows.filter({ hasText: 'SBOM' })).toHaveCount(2);
     await expect(page.getByText('deployment.started')).toBeHidden();
 

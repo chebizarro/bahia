@@ -130,8 +130,8 @@ Signer-first generation and import use ContextVM methods over kind `25910`:
   "params": {
     "idempotencyKey": "sbom-art-456-spdx",
     "subject": { "type": "artifact", "id": "art-456", "digest": "sha256:<artifact-digest>" },
-    "source": { "kind": "image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
-    "formats": ["spdx"],
+    "source": { "kind": "oci-image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
+    "formats": ["spdx", "cyclonedx"],
     "generator": "syft",
     "storage": "blossom"
   }
@@ -165,9 +165,11 @@ bahia sbom search --package "log4j" --version "<2.17.0"
 
 ### Web UI
 
-1. Go to artifact detail
-2. Click **SBOM** tab
-3. View attestation details, Blossom location, hashes, NTIA status, and package list
+1. Go to artifact detail.
+2. Click the **SBOM** tab.
+3. Click **Generate SBOM** when no manifest exists, or **Regenerate SBOM** when an existing attestation should be refreshed. The browser publishes a signer-backed encrypted ContextVM `sbom/generate` request; it does not call a REST generation endpoint.
+4. Watch for `30078` SBOM reference events and the subject `30004` availability list to confirm durable completion. The ContextVM reply only confirms request handling.
+5. View attestation details, Blossom location, hashes, NTIA status, and package list after the artifact read projection updates.
 
 ## Signatures
 

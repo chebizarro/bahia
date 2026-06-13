@@ -11,6 +11,7 @@
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
+  import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
   import {
     ArtifactIcon,
     CopyIcon,
@@ -29,6 +30,9 @@
   let sbomAttestation = $state(null);
   let sbomLoading = $state(false);
   let sbomLoaded = $state(false);
+  let sbomGenerating = $state(false);
+  let sbomGenerateError = $state(null);
+  let sbomRequestEventId = $state(null);
   let signatures = $state([]);
   let hasVerifiedSig = $state(false);
   let loading = $state(true);
@@ -47,6 +51,8 @@
   let service = $derived(artifact?.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null);
   let displayName = $derived(artifact?.name || artifact?.image_repo || artifact?.image_tag || 'Artifact Details');
   let displayVersion = $derived(artifactVersionLabel(artifact));
+  let canGenerateSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && artifactImageLocator(artifact)));
+  let sbomActionLabel = $derived(sbomData || sbomAttestation || sbomPackages.length > 0 ? 'Regenerate SBOM' : 'Generate SBOM');
 
   // SBOM table columns
   let sbomColumns = $derived([
@@ -168,6 +174,22 @@
     resetSBOMFromArtifact(artifact);
   }
 
+  async function handleGenerateSBOM() {
+    if (!artifact || sbomGenerating) return;
+    sbomGenerating = true;
+    sbomGenerateError = null;
+    sbomRequestEventId = null;
+    try {
+      const event = await generateArtifactSBOM(artifact);
+      sbomRequestEventId = event?.requestEventId || event?.id || null;
+      toast.success('SBOM generation request published through Nostr ContextVM');
+    } catch (err) {
+      sbomGenerateError = userFacingSBOMError(err);
+    } finally {
+      sbomGenerating = false;
+    }
+  }
+
   // Load SBOM details when switching to SBOM tab
   $effect(() => {
     if (activeTab === 'sbom' && artifactId && !sbomLoaded && !sbomLoading) {
@@ -249,6 +271,31 @@
       if (value && value !== name) return value;
     }
     return '-';
+  }
+
+  function artifactSBOMDigest(artifact) {
+    return String(artifact?.digest || artifact?.image_digest || artifact?.metadata?.digest || '').trim();
+  }
+
+  function artifactImageLocator(artifact) {
+    const explicit = String(artifact?.image_ref || artifact?.oci_ref || artifact?.source_ref || '').trim();
+    if (explicit) return explicit;
+    const repo = String(artifact?.image_repo || artifact?.repository || artifact?.name || '').trim();
+    const digest = artifactSBOMDigest(artifact);
+    const tag = String(artifact?.image_tag || artifact?.tag || artifact?.version || '').trim();
+    if (repo && digest) return `${repo}@${digest}`;
+    if (repo && tag) return `${repo}:${tag}`;
+    return '';
+  }
+
+  function userFacingSBOMError(err) {
+    const message = String(err?.message || '').trim();
+    if (!message) return 'Failed to publish SBOM generation request';
+    return message
+      .replace(/ContextVM requests/gi, 'Bahia requests')
+      .replace(/ContextVM request/gi, 'Bahia request')
+      .replace(/ContextVM/gi, 'Bahia service')
+      .replace(/NIP-07|NIP-46/gi, 'Nostr signer');
   }
 
   function userFacingVerifyError(err) {
@@ -394,12 +441,41 @@
 
       {:else if activeTab === 'sbom'}
         <!-- SBOM Tab -->
-        <SBOMDetails
-          sbom={sbomData}
-          packages={sbomPackages}
-          attestation={sbomAttestation}
-          loading={sbomLoading}
-        />
+        <section class="sbom-section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title"><SbomIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>SBOM</span></h2>
+              <p class="section-subtitle">Generate SPDX and CycloneDX manifests by publishing a signer-backed Nostr ContextVM <code>sbom/generate</code> request.</p>
+            </div>
+            <div class="header-actions">
+              <LoadingButton
+                variant="primary"
+                loading={sbomGenerating}
+                disabled={!canGenerateSBOM}
+                onclick={handleGenerateSBOM}
+              >
+                {sbomActionLabel}
+              </LoadingButton>
+            </div>
+          </div>
+
+          {#if sbomGenerateError}
+            <p class="error-message">{sbomGenerateError}</p>
+          {/if}
+          {#if !canGenerateSBOM}
+            <p class="warning-message">This artifact needs an immutable digest and image locator before Bahia can generate an SBOM.</p>
+          {/if}
+          {#if sbomRequestEventId}
+            <p class="info-message">Request event <code>{formatDigestMiddle(sbomRequestEventId)}</code> was published. Completion is reflected by SBOM reference and availability-list events.</p>
+          {/if}
+
+          <SBOMDetails
+            sbom={sbomData}
+            packages={sbomPackages}
+            attestation={sbomAttestation}
+            loading={sbomLoading}
+          />
+        </section>
 
       {:else if activeTab === 'signatures'}
         <!-- Signatures Tab -->
@@ -702,6 +778,7 @@
   }
 
   /* SBOM and Signatures Sections */
+  .sbom-section,
   .signatures-section {
     background: var(--card-bg);
     border-radius: 8px;
@@ -728,13 +805,41 @@
     gap: 0.75rem;
   }
 
-  .error-message {
-    color: var(--error);
+  .section-subtitle {
+    margin: 0.375rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.45;
+  }
+
+  .section-subtitle code {
+    color: var(--text-primary);
+  }
+
+  .error-message,
+  .warning-message,
+  .info-message {
     font-size: 0.875rem;
     margin: 0 0 1rem;
     padding: 0.75rem;
-    background: rgba(239, 68, 68, 0.1);
     border-radius: 4px;
+  }
+
+  .error-message {
+    color: var(--error);
+    background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+
+  .warning-message {
+    color: var(--warning, #f59e0b);
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+
+  .info-message {
+    color: var(--text-primary);
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
   }
 </style>

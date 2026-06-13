@@ -205,6 +205,19 @@
       "acceptance_criteria": [
         "AC6"
       ]
+    },
+    {
+      "test": "web/tests/unit/public-controlplane.test.js :: generates artifact SBOMs through canonical ContextVM encrypted requests / rejects artifact SBOM generation without an immutable digest",
+      "acceptance_criteria": [
+        "AC13"
+      ]
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab publishes signer-backed ContextVM generation request",
+      "acceptance_criteria": [
+        "AC5",
+        "AC13"
+      ]
     }
   ]
 }
