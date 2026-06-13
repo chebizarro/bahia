@@ -1,0 +1,13 @@
+{
+  "feature_id": "WEB_DOCS_NOSTR_LOADING",
+  "title": "Relay-backed web documentation loading",
+  "beads": ["bahia-yvtn"],
+  "observed_behavior": "The documentation client could persist an empty docs event array in localStorage and later treat that empty cache as valid documentation data, preventing a fresh relay query and making docs appear unavailable even when NIP-23 documentation events exist on the relay.",
+  "intended_behavior": "The web documentation pages load user guide content from scoped Nostr subscriptions to NIP-23 kind 30023 events tagged bahia-docs. Empty event snapshots are not documentation truth and must not be cached as a substitute for relay data.",
+  "architecture_constraints": [
+    "No REST documentation fallback.",
+    "No bundled/local documentation fallback in production web loading.",
+    "No fake Nostr events generated from local markdown.",
+    "Use scoped relay query filters for kind 30023 and #t=bahia-docs."
+  ]
+}

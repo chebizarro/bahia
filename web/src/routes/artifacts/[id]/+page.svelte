@@ -10,7 +10,6 @@
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
-  import { BahiaClient, api } from '$lib/api/client.js';
   import {
     ArtifactIcon,
     CopyIcon,
@@ -94,32 +93,11 @@
     error = null;
 
     try {
-      let detailError = null;
-      let loadedArtifact = null;
-      const cachedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
-      const client = api || (typeof window !== 'undefined' ? new BahiaClient() : null);
-
-      if (client?.getArtifact) {
-        try {
-          loadedArtifact = await client.getArtifact(id);
-        } catch (err) {
-          detailError = err;
-        }
-      }
-
-      if (!loadedArtifact && cachedArtifact) {
-        loadedArtifact = cachedArtifact;
-      }
+      await Promise.allSettled([loadArtifacts(), loadServices()]);
+      const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
 
       if (!loadedArtifact) {
-        await Promise.allSettled([loadArtifacts(), loadServices()]);
-        loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
-      } else {
-        void loadServices();
-      }
-
-      if (!loadedArtifact) {
-        throw detailError || new Error('Artifact not found');
+        throw new Error('Artifact not found');
       }
       if (sequence !== loadSequence) return;
 

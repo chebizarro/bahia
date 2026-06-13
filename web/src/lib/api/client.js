@@ -86,10 +86,6 @@ export class BahiaClient {
     return data.data;
   }
 
-  getArtifact(artifactId) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}`);
-  }
-
   getSBOM(artifactId) {
     return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`);
   }

@@ -12,13 +12,15 @@ Partially verified. Static checks and targeted unit tests pass. Artifact SBOM e2
 - Playwright SBOM workflow tests were updated to fail if unsupported artifact SBOM endpoints are requested.
 - Artifact detail UI CSS constrains overview card values and wraps long identifiers.
 - Global code-block theme variables separate inline code colors from code-block colors; code blocks use a dark background with white text in light and dark themes.
-- Artifact detail loading now prefers the artifact REST read model for rich detail data, falls back to cached projections if needed, then uses a control-plane bootstrap fallback.
+- Artifact detail loading is relay projection-backed: the route calls `loadArtifacts()` and `loadServices()`, then resolves the artifact from the Nostr-backed artifact store. The erroneous `/api/v1/artifacts/:id` REST fallback was removed because it violates the repository's Nostr-first architecture.
 - High-visibility labels in artifact verification, auth menu, DNS command forms, nav auth title, and profile publish status were changed to product-level wording.
 
 ## Tests run
 
 - PASS: `npm run test:unit -- --run tests/unit/nav.test.js tests/unit/SBOMDetails.test.ts tests/unit/api-client-core.test.js tests/unit/api-client-extended.test.js tests/unit/api-client.test.js`
   - 5 files passed, 36 tests passed.
+- PASS: `npm run test:unit -- --run tests/unit/docs-nostr.test.js tests/unit/docs-ui.test.js tests/unit/api-client-extended.test.js tests/unit/api-client-core.test.js tests/unit/api-client.test.js`
+  - 5 files passed, 27 tests passed.
 - PASS: `npm run lint`
   - `svelte-check found 0 errors and 0 warnings`.
 - BLOCKED: `npx playwright test tests/e2e/sbom-workflow.spec.js -g "artifact (page displays SBOM attestation details|SBOM tab shows an empty state)" --workers=1`
@@ -28,7 +30,7 @@ Partially verified. Static checks and targeted unit tests pass. Artifact SBOM e2
 
 ## Review
 
-- Oracle review identified and the patch addressed: richer detail endpoint preference over minimal cached projections, reactive service derivation after async service loads, and separated inline-code/code-block contrast variables.
+- The prior artifact REST detail fallback was removed after architecture review; artifact detail remains backed by Nostr projection loading rather than request/response HTTP.
 
 ## Remaining work
 

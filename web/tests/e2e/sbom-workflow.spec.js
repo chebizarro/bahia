@@ -86,15 +86,6 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function mockArtifactReadModel(page, artifact) {
-  const escapedArtifactId = escapeRegExp(artifact.id);
-  await page.route(new RegExp(`/api/v1/artifacts/${escapedArtifactId}$`), (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ data: artifact })
-  }));
-}
-
 async function failOnUnsupportedSBOMEndpoints(page, artifactId) {
   const escapedArtifactId = escapeRegExp(artifactId);
   await page.route(new RegExp(`/api/v1/artifacts/${escapedArtifactId}/sbom(?:/attestation)?$`), (route) => {
@@ -164,14 +155,12 @@ test.describe('SBOM workflow', () => {
       }
     };
 
-    const artifact = artifactPayload({ packages, sbom, attestation });
     await installE2EMocks(page, {
       authenticated: true,
       extension: true,
       systemInfo: relaySystemInfo,
       nostrEvents: [serviceEvent(), artifactEvent({ packages, sbom, attestation })]
     });
-    await mockArtifactReadModel(page, artifact);
     await failOnUnsupportedSBOMEndpoints(page, ARTIFACT_ID);
 
     await page.goto(`/artifacts/${ARTIFACT_ID}`);
@@ -194,14 +183,12 @@ test.describe('SBOM workflow', () => {
   });
 
   test('artifact SBOM tab shows an empty state when no attestation exists', async ({ page }) => {
-    const artifact = artifactPayload({ id: NO_SBOM_ARTIFACT_ID });
     await installE2EMocks(page, {
       authenticated: true,
       extension: true,
       systemInfo: relaySystemInfo,
       nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
     });
-    await mockArtifactReadModel(page, artifact);
     await failOnUnsupportedSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
 
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}`);

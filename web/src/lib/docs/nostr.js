@@ -28,7 +28,7 @@ function readCache() {
     const snapshot = JSON.parse(raw);
     const age = Date.now() - Number(snapshot?.cachedAt || 0);
     if (age > DOCS_CACHE_TTL_MS) return null;
-    if (!Array.isArray(snapshot?.events)) return null;
+    if (!Array.isArray(snapshot?.events) || snapshot.events.length === 0) return null;
     return snapshot;
   } catch {
     return null;
@@ -41,6 +41,7 @@ function readCache() {
  */
 function writeCache(events) {
   if (!browser || typeof localStorage?.setItem !== 'function') return;
+  if (!Array.isArray(events) || events.length === 0) return;
   try {
     localStorage.setItem(DOCS_CACHE_KEY, JSON.stringify({
       cachedAt: Date.now(),

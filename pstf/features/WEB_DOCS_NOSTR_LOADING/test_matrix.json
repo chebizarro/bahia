@@ -1,0 +1,29 @@
+{
+  "feature_id": "WEB_DOCS_NOSTR_LOADING",
+  "tests": [
+    {
+      "test": "web/tests/unit/docs-nostr.test.js::ignores an empty docs cache and queries relay-backed NIP-23 events",
+      "criteria": ["AC1", "AC2", "AC5"],
+      "type": "Vitest unit",
+      "notes": "Mocks relay query output and verifies the exact scoped kind 30023 #t=bahia-docs query is used after an empty cache is rejected."
+    },
+    {
+      "test": "web/tests/unit/docs-nostr.test.js::does not cache empty relay snapshots as documentation truth",
+      "criteria": ["AC3", "AC5"],
+      "type": "Vitest unit",
+      "notes": "Verifies an empty relay result does not write bahia_docs_cache."
+    },
+    {
+      "test": "web/tests/unit/docs-nostr.test.js::resolves a single topic from the relay event catalog",
+      "criteria": ["AC4", "AC5"],
+      "type": "Vitest unit",
+      "notes": "Verifies topic and link resolution from relay event content only."
+    },
+    {
+      "test": "web/tests/unit/docs-ui.test.js",
+      "criteria": ["AC4"],
+      "type": "Vitest unit",
+      "notes": "Verifies docs catalog and topic route rendering behavior around the Nostr docs client interface."
+    }
+  ]
+}

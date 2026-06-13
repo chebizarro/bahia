@@ -89,7 +89,6 @@ describe('BahiaClient HTTP-native interop contract', () => {
     expect(methods).toEqual([
       'checkBlossomHealth',
       'fetch',
-      'getArtifact',
       'getBlossomServers',
       'getBlossomStats',
       'getSBOM',

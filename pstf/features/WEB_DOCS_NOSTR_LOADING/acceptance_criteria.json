@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_DOCS_NOSTR_LOADING",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Documentation catalog loading uses a scoped Nostr query for kind 30023 events tagged bahia-docs."
+    },
+    {
+      "id": "AC2",
+      "description": "An empty cached docs event array is ignored so the client queries the relay again."
+    },
+    {
+      "id": "AC3",
+      "description": "Empty relay snapshots are not persisted as successful documentation cache entries."
+    },
+    {
+      "id": "AC4",
+      "description": "Single-topic document loading resolves documents and internal markdown links from the relay-backed event catalog."
+    },
+    {
+      "id": "AC5",
+      "description": "The production docs path does not introduce REST, bundled markdown, local-file, or fake-event fallback behavior."
+    }
+  ]
+}
