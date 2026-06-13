@@ -132,11 +132,19 @@
     loadBlossomBlobs();
   }
 
+  function hasSBOM(artifact) {
+    return Boolean(artifact?.sbom || artifact?.sbom_data || artifact?.sbom_url || artifact?.sbom_ref || artifact?.sbom_hash || (Array.isArray(artifact?.sbom_packages) && artifact.sbom_packages.length > 0));
+  }
+
   function getSBOMBadge(artifact) {
-    if (artifact.sbom || artifact.sbom_data || artifact.sbom_url || artifact.sbom_ref || artifact.sbom_hash || (Array.isArray(artifact.sbom_packages) && artifact.sbom_packages.length > 0)) {
+    if (hasSBOM(artifact)) {
       return { variant: 'success', text: 'Available' };
     }
     return { variant: 'default', text: 'None' };
+  }
+
+  function sbomActionLabel(artifact) {
+    return hasSBOM(artifact) ? 'Regenerate SBOM' : 'Generate SBOM';
   }
 
   function getSignatureBadge(artifact) {
@@ -253,6 +261,11 @@
         const badge = getSignatureBadge(r);
         return `<span class="badge-cell ${badge.variant}">${badge.text}</span>`;
       }
+    },
+    {
+      key: 'sbom_action',
+      label: 'SBOM Action',
+      render: (r) => `<a href="/artifacts/${encodeURIComponent(r.id)}?tab=sbom" class="sbom-action-link">${escapeHtml(sbomActionLabel(r))}</a>`
     }
   ]);
 
@@ -587,6 +600,17 @@
     padding: 0.2rem 0.4rem;
     border-radius: 3px;
   }
+  :global(.sbom-action-link) {
+    color: var(--primary);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  :global(.sbom-action-link:hover) {
+    text-decoration: underline;
+  }
+
   :global(.download-link) {
     color: var(--primary);
     text-decoration: none;

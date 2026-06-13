@@ -90,6 +90,10 @@
   ]);
 
   $effect(() => {
+    if (page.url.searchParams.get('tab') === 'sbom') activeTab = 'sbom';
+  });
+
+  $effect(() => {
     const id = artifactId;
     if (!id || id === lastArtifactRequestId) return;
     lastArtifactRequestId = id;
@@ -331,6 +335,17 @@
         <h1 class="title-with-icon"><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> <span>{displayName}</span></h1>
         <p class="artifact-id"><code>{artifact.id}</code></p>
       </div>
+      <div class="header-actions header-sbom-actions">
+        <LoadingButton
+          variant="primary"
+          loading={sbomGenerating}
+          disabled={!canGenerateSBOM}
+          onclick={handleGenerateSBOM}
+        >
+          {sbomActionLabel}
+        </LoadingButton>
+        <button class="link-button" onclick={() => activeTab = 'sbom'}>Open SBOM tab</button>
+      </div>
     </div>
 
     <!-- Tabs -->
@@ -537,10 +552,29 @@
 
   .header {
     display: flex;
-    flex-direction: column;
     align-items: flex-start;
-    gap: 0.5rem;
+    justify-content: space-between;
+    gap: 1rem;
     margin-bottom: 1.5rem;
+  }
+
+  .header-sbom-actions {
+    flex-shrink: 0;
+    padding-top: 1.5rem;
+  }
+
+  .link-button {
+    background: none;
+    border: none;
+    color: var(--primary);
+    cursor: pointer;
+    font-size: 0.875rem;
+    padding: 0;
+    text-decoration: none;
+  }
+
+  .link-button:hover {
+    text-decoration: underline;
   }
 
   .title-with-icon,
@@ -790,6 +824,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 1rem;
     margin-bottom: 1.5rem;
   }
 

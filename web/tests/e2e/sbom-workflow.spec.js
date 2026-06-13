@@ -133,6 +133,7 @@ test.describe('SBOM workflow', () => {
     await expect(row.locator('td').nth(1)).toContainText('sbom-service');
     await expect(row.locator('td').nth(2)).toHaveText('1.2.3');
     await expect(row.locator('td').nth(3)).toContainText('sha256:111122223333…ff0000');
+    await expect(row.getByRole('link', { name: 'Generate SBOM' })).toHaveAttribute('href', `/artifacts/${ARTIFACT_ID}?tab=sbom`);
   });
 
   test('artifact page displays SBOM attestation details', async ({ page }) => {
@@ -212,6 +213,7 @@ test.describe('SBOM workflow', () => {
 
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}`);
     await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Generate SBOM' }).first()).toBeVisible();
     await page.evaluate(({ artifactId, digest }) => {
       window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION = {
         operation: 'sbom/generate',
@@ -225,8 +227,7 @@ test.describe('SBOM workflow', () => {
     const generated = page.evaluate(() => new Promise((resolve) => {
       window.addEventListener('__bahia_e2e_sbom_generated', (event) => resolve(event.detail), { once: true });
     }));
-    await page.getByRole('button', { name: /^SBOM/ }).click();
-    await page.getByRole('button', { name: 'Generate SBOM' }).click();
+    await page.getByRole('button', { name: 'Generate SBOM' }).first().click();
     const generatedDetail = await generated;
     expect(generatedDetail).toMatchObject({ artifactId: NO_SBOM_ARTIFACT_ID, formats: ['spdx', 'cyclonedx'], generator: 'syft' });
 
@@ -250,6 +251,23 @@ test.describe('SBOM workflow', () => {
     expect(generatedEvents.references.every((event) => event.content.storage?.type === 'blossom')).toBe(true);
     expect(generatedEvents.availability).toBeTruthy();
     expect(generatedEvents.audit).toBeTruthy();
+  });
+
+  test('artifact registry SBOM action opens detail page on SBOM tab', async ({ page }) => {
+    await installE2EMocks(page, {
+      authenticated: true,
+      extension: true,
+      systemInfo: relaySystemInfo,
+      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
+    });
+
+    await page.goto('/artifacts');
+    const row = page.locator('tbody tr', { hasText: 'registry.example.com/bahia/no-sbom' }).first();
+    await row.getByRole('link', { name: 'Generate SBOM' }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/artifacts/${NO_SBOM_ARTIFACT_ID}\\?tab=sbom$`));
+    await expect(page.getByRole('heading', { name: 'SBOM', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Generate SBOM' }).first()).toBeVisible();
   });
 
   test('artifact SBOM tab shows an empty state when no attestation exists', async ({ page }) => {

@@ -165,11 +165,12 @@ bahia sbom search --package "log4j" --version "<2.17.0"
 
 ### Web UI
 
-1. Go to artifact detail.
-2. Click the **SBOM** tab.
-3. Click **Generate SBOM** when no manifest exists, or **Regenerate SBOM** when an existing attestation should be refreshed. The browser publishes a signer-backed encrypted ContextVM `sbom/generate` request; it does not call a REST generation endpoint.
-4. Watch for `30078` SBOM reference events and the subject `30004` availability list to confirm durable completion. The ContextVM reply only confirms request handling.
-5. View attestation details, Blossom location, hashes, NTIA status, and package list after the artifact read projection updates.
+1. Go to **Artifacts → Registry**.
+2. Use the per-row **Generate SBOM** or **Regenerate SBOM** action to open the artifact directly on its SBOM tab.
+3. On artifact detail, the same **Generate SBOM** or **Regenerate SBOM** action is also visible in the page header and on the SBOM tab.
+4. The browser publishes a signer-backed encrypted ContextVM `sbom/generate` request; it does not call a REST generation endpoint.
+5. Watch for `30078` SBOM reference events and the subject `30004` availability list to confirm durable completion. The ContextVM reply only confirms request handling.
+6. View attestation details, Blossom location, hashes, NTIA status, and package list after the artifact read projection updates.
 
 ## Signatures
 
