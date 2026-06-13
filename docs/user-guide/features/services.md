@@ -21,7 +21,7 @@ Service creation is signer-first. Clients publish a ContextVM JSON-RPC `service/
 3. Fill in the form:
    - **Name**: Unique identifier (e.g., `payment-api`)
    - **Display Name**: Human-friendly name (optional)
-   - **Repository**: Git repository URL
+   - **Repository**: Git repository URL, or a NIP-34 repository selected from configured `nostr.nip34_relays`
    - **Description**: What the service does
 4. Click **Create** to publish the signed Nostr command
 
@@ -42,6 +42,10 @@ Publish a ContextVM `service/create` request as kind `25910` or inside an encryp
 ```
 
 Require relay `OK` with `accepted=true`, then subscribe to canonical observables scoped by `service`.
+
+## Repository Selection
+
+The service form can use a direct repository URL or a NIP-34 repository announcement. NIP-34 repository discovery queries the configured `nostr.nip34_relays` set for kind `30617` announcements; selected repositories retain their own `relays` tag values for subsequent branch/state lookups against kind `30618`.
 
 ## Service Properties
 

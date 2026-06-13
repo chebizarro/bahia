@@ -102,6 +102,18 @@ export const LOOM_JOB_RESULT = 5101;
 export const LOOM_JOB_CANCELLATION = 5102;
 export const HIVE_CI_WORKFLOW_RUN = 5401;
 export const HIVE_CI_WORKFLOW_RESULT = 5402;
+export const NIP22_COMMENT = 1111;
+export const NIP34_USER_GRASP_LIST = 10317;
+export const NIP34_PATCH = 1617;
+export const NIP34_PULL_REQUEST = 1618;
+export const NIP34_PULL_REQUEST_UPDATE = 1619;
+export const NIP34_ISSUE = 1621;
+export const NIP34_STATUS_OPEN = 1630;
+export const NIP34_STATUS_APPLIED_OR_MERGED = 1631;
+export const NIP34_STATUS_CLOSED = 1632;
+export const NIP34_STATUS_DRAFT = 1633;
+export const NIP34_REPOSITORY_ANNOUNCEMENT = 30617;
+export const NIP34_REPOSITORY_STATE = 30618;
 export const CONTEXT_VM_MESSAGE = 25910;
 export const CONTEXT_VM_GIFT_WRAP = 1059;
 export const CONTEXT_VM_EPHEMERAL_GIFT_WRAP = 21059;
@@ -368,6 +380,18 @@ export function isOpenInteropKind(kind) {
     case LOOM_JOB_CANCELLATION:
     case HIVE_CI_WORKFLOW_RUN:
     case HIVE_CI_WORKFLOW_RESULT:
+    case NIP22_COMMENT:
+    case NIP34_USER_GRASP_LIST:
+    case NIP34_PATCH:
+    case NIP34_PULL_REQUEST:
+    case NIP34_PULL_REQUEST_UPDATE:
+    case NIP34_ISSUE:
+    case NIP34_STATUS_OPEN:
+    case NIP34_STATUS_APPLIED_OR_MERGED:
+    case NIP34_STATUS_CLOSED:
+    case NIP34_STATUS_DRAFT:
+    case NIP34_REPOSITORY_ANNOUNCEMENT:
+    case NIP34_REPOSITORY_STATE:
       return true;
     default:
       return false;

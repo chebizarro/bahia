@@ -233,9 +233,11 @@ The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstra
 
 ### Repository Relay Hints
 
-NIP-34 repository announcements (`30617`) may include a `relays` tag. Bahia preserves those tag values as repository `relayUrls` in browser selections. When a user selects a NIP-34 repository, branch/state lookup for kind `30618` queries those repository relays first with the scoped filter `{ kinds: [30618], authors: [repo_pubkey], "#d": [repo_identifier] }`.
+NIP-34 repository announcements (`30617`) may include a `relays` tag. Bahia preserves those tag values as repository `relayUrls` in browser selections. Repository announcement discovery itself uses the advertised `nostr.nip34_relays` policy when configured, instead of replacing the global Bahia singleton connection or querying only the browser sidecar.
 
-If a NIP-34 repository has no `relays` tag values, Bahia queries the globally connected Bahia read relays as a degraded fallback and surfaces degraded metadata with reason `missing_repository_relays`. Incomplete `EOSE` remains visible through branch lookup degraded metadata, including relay summary and partial event count.
+When a user selects a NIP-34 repository, branch/state lookup for kind `30618` queries that repository's own `relays` tag values first with the scoped filter `{ kinds: [30618], authors: [repo_pubkey], "#d": [repo_identifier] }`.
+
+If no NIP-34 relay policy or repository `relays` tag values are available, Bahia queries the globally connected Bahia read relays as a degraded fallback. Missing repository relay hints surface degraded metadata with reason `missing_repository_relays`. Incomplete `EOSE` remains visible through branch lookup degraded metadata, including relay summary and partial event count. The Bahia sidecar read/write policy accepts NIP-22 comments (`1111`) plus NIP-34 kinds `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618` as open interop data so a sidecar can be used as a NIP-34 relay when deployment policy advertises it.
 
 ### Encrypted Request Transport
 

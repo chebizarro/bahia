@@ -1,5 +1,5 @@
-import { authState } from '$lib/stores/auth.js';
-import { nostr, fetchRepositories } from '$lib/nostr/client.js';
+import { fetchRepositories } from '$lib/nostr/client.js';
+import { currentSystemInfo, loadSystemInfo } from '$lib/stores/system.svelte.js';
 
 export const repositories = $state([]);
 
@@ -13,7 +13,8 @@ export const meta = $state({
   lastLoadedAt: null,
   requestSeq: 0,
   authors: null,
-  eose: null
+  eose: null,
+  relayUrls: []
 });
 
 // CI enrichment state
@@ -33,20 +34,40 @@ function normalizeUrl(url) {
   return (url || '').trim().replace(/\/+$/, '').toLowerCase();
 }
 
-function toRelayList(relaysRecord) {
-  if (!relaysRecord || typeof relaysRecord !== 'object') {
+function normalizeRelayUrls(value) {
+  const values = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const relayUrls = [];
+  for (const entry of values) {
+    const relay = typeof entry === 'string' ? entry.trim() : '';
+    if (!relay || seen.has(relay)) continue;
+    seen.add(relay);
+    relayUrls.push(relay);
+  }
+  return relayUrls;
+}
+
+function systemRepositoryRelays(info) {
+  return normalizeRelayUrls(info?.nostr?.nip34_relays);
+}
+
+async function resolveRepositoryRelays() {
+  const current = systemRepositoryRelays(currentSystemInfo());
+  if (current.length > 0) return current;
+
+  try {
+    return systemRepositoryRelays(await loadSystemInfo());
+  } catch (err) {
+    console.warn('[repositories] Failed to load NIP-34 relay configuration:', err);
     return [];
   }
+}
 
-  return Object.entries(relaysRecord)
-    .filter(([url, policy]) => {
-      if (!url) return false;
-      if (policy == null) return true;
-      if (typeof policy.read === 'boolean') return policy.read;
-      if (typeof policy === 'boolean') return policy;
-      return true;
-    })
-    .map(([url]) => url);
+function sameStringArray(a, b) {
+  const left = Array.isArray(a) ? a : [];
+  const right = Array.isArray(b) ? b : [];
+  if (left.length !== right.length) return false;
+  return left.every((value, idx) => value === right[idx]);
 }
 
 function sameAuthors(a, b) {
@@ -68,7 +89,8 @@ export async function ensureRepositoryConnection() {
 
 export async function loadRepositories({ authors = null, force = false } = {}) {
   const normalizedAuthors = normalizeAuthors(authors);
-  const shouldReload = force || repositories.length === 0 || !sameAuthors(meta.authors, normalizedAuthors);
+  const relayUrls = await resolveRepositoryRelays();
+  const shouldReload = force || repositories.length === 0 || !sameAuthors(meta.authors, normalizedAuthors) || !sameStringArray(meta.relayUrls, relayUrls);
 
   if (!shouldReload) {
     return repositories;
@@ -81,7 +103,7 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
 
   try {
     await ensureRepositoryConnection();
-    const fetched = await fetchRepositories({ authors: normalizedAuthors });
+    const fetched = await fetchRepositories({ authors: normalizedAuthors, relayUrls });
 
     if (meta.requestSeq !== nextSeq) {
       return repositories;
@@ -92,6 +114,7 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
     meta.eose = fetched?.eose || null;
     meta.lastLoadedAt = Date.now();
     meta.authors = normalizedAuthors;
+    meta.relayUrls = relayUrls;
 
     // Trigger CI enrichment (non-blocking)
     const repos = [...repositories];

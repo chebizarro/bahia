@@ -1,0 +1,27 @@
+{
+  "feature_id": "WEB_NIP34_RELAY_ROUTING",
+  "beads": ["bahia-dq6k"],
+  "title": "Route services NIP-34 repository discovery through advertised NIP-34 relays",
+  "observed_behavior": [
+    "The Services route repository picker queried kind 30617 repository announcements through the global Bahia relay pool, which could resolve to the browser sidecar only.",
+    "The relay sidecar rejected kind 30617 reads with CLOSED reason: blocked: event kind 30617 is not readable from the Bahia sidecar."
+  ],
+  "intended_behavior": [
+    "Repository announcement discovery uses configured nostr.nip34_relays when present without replacing the global Bahia singleton relay connection.",
+    "NIP-34 repository state lookups continue to use selected repository relays tag values for scoped 30618 filters.",
+    "The Bahia sidecar accepts all NIP-34 collaboration kinds from the local NIP-34 spec, plus NIP-22 comments used for NIP-34 replies, as open interop data so deployments can advertise the sidecar as a NIP-34 relay."
+  ],
+  "scope": [
+    "web/src/lib/stores/discovery.svelte.js",
+    "web/src/lib/stores/repositories.svelte.js",
+    "web/src/lib/nostr/repositories.js",
+    "internal/kinds",
+    "internal/relaysidecar",
+    "docs/user-guide/nostr-integration.md",
+    "docs/nostr-event-implementation-guide.md",
+    "docs/protocol-compatibility.md"
+  ],
+  "out_of_scope": [
+    "Service secrets ContextVM method-not-found behavior from the same console log; track separately if it remains reproducible after this fix."
+  ]
+}

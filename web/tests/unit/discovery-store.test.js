@@ -141,8 +141,8 @@ describe('Nostr system discovery store', () => {
     expect(info.features.relay_read_models).toBe(true);
     expect(info.nostr.service_pubkey).toBe(trustedPubkey);
     expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
-      expect(info.nostr.contextvm_relays).toEqual(['wss://contextvm.example/relay']);
-      expect(info.nostr.trusted_relay_monitor_pubkeys).toEqual([]);
+    expect(info.nostr.contextvm_relays).toEqual(['wss://contextvm.example/relay']);
+    expect(info.nostr.trusted_relay_monitor_pubkeys).toEqual([]);
     expect(info.nostr.contextvm_relay_metadata).toEqual({
       source: 'bahia-contextvm-v1',
       degraded: false,
@@ -150,6 +150,15 @@ describe('Nostr system discovery store', () => {
     });
     expect(info._discovery.relay_sets['bahia-browser-v1']).toHaveLength(2);
     expect(info._discovery.relay_sets['bahia-contextvm-v1']).toEqual(['wss://contextvm.example/relay']);
+  });
+
+  it('carries NIP-34 repository relay policy from service discovery payload', () => {
+    const normalized = store.normalizeDiscoveryEvents([
+      systemDiscovery({ content: { nostr: { nip34_relays: ['https://nip34.example/relay', 'wss://nip34.example/relay'] } } }),
+      relaySet('bahia-browser-v1', ['wss://browser.example'])
+    ], [trustedPubkey]);
+
+    expect(normalized.nostr.nip34_relays).toEqual(['wss://nip34.example/relay']);
   });
 
   it('carries trusted NIP-66 monitor pubkeys from service discovery payload', () => {

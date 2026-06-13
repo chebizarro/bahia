@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('$lib/stores/auth.js', () => ({
-  authState: { relays: {} }
+vi.mock('$lib/stores/system.svelte.js', () => ({
+  currentSystemInfo: vi.fn(),
+  loadSystemInfo: vi.fn()
 }));
 
 vi.mock('$lib/nostr/client.js', () => ({
@@ -14,25 +15,27 @@ vi.mock('$lib/nostr/client.js', () => ({
 
 describe('repositories store', () => {
   let store;
-  let authModule;
+  let systemModule;
   let nostrModule;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
 
-    authModule = await import('$lib/stores/auth.js');
+    systemModule = await import('$lib/stores/system.svelte.js');
     nostrModule = await import('$lib/nostr/client.js');
-    authModule.authState.relays = {
-      'wss://auth-read.example': { read: true, write: true },
-      'wss://auth-write-only.example': { read: false, write: true }
-    };
+    systemModule.currentSystemInfo.mockReturnValue({
+      nostr: {
+        nip34_relays: ['wss://nip34.example', ' wss://nip34-backup.example ', 'wss://nip34.example']
+      }
+    });
+    systemModule.loadSystemInfo.mockResolvedValue({ nostr: { nip34_relays: ['wss://loaded-nip34.example'] } });
 
     nostrModule.fetchRepositories.mockResolvedValue([]);
     store = await import('$lib/stores/repositories.svelte.js');
   });
 
-  it('loads repositories, uses auth relays, and marks CI as public read-model only', async () => {
+  it('loads repositories through advertised NIP-34 relays and marks CI as public read-model only', async () => {
     const repos = [
       { displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha', primaryUrl: 'https://github.com/org/alpha' },
       { displayName: 'Beta', repoCoordinate: 'github.com/org/beta', primaryUrl: 'https://github.com/org/beta' }
@@ -42,7 +45,12 @@ describe('repositories store', () => {
     const result = await store.loadRepositories({ authors: ['bob', 'alice', 'bob'] });
 
     expect(nostrModule.nostr.connect).not.toHaveBeenCalled();
-    expect(nostrModule.fetchRepositories).toHaveBeenCalledWith({ authors: ['alice', 'bob'] });
+    expect(systemModule.loadSystemInfo).not.toHaveBeenCalled();
+    expect(nostrModule.fetchRepositories).toHaveBeenCalledWith({
+      authors: ['alice', 'bob'],
+      relayUrls: ['wss://nip34.example', 'wss://nip34-backup.example']
+    });
+    expect(store.meta.relayUrls).toEqual(['wss://nip34.example', 'wss://nip34-backup.example']);
     expect(result).toHaveLength(2);
 
     await Promise.resolve();
@@ -51,7 +59,7 @@ describe('repositories store', () => {
     expect(store.repositories[1].ci.state).toBe('empty');
   });
 
-  it('does not reload for same normalized authors unless forced', async () => {
+  it('does not reload for same normalized authors and relay policy unless forced', async () => {
     nostrModule.fetchRepositories.mockResolvedValue([{ displayName: 'Alpha' }]);
 
     await store.loadRepositories({ authors: ['alice', 'bob'] });
@@ -61,6 +69,49 @@ describe('repositories store', () => {
 
     await store.loadRepositories({ authors: ['bob', 'alice'], force: true });
     expect(nostrModule.fetchRepositories).toHaveBeenCalledTimes(2);
+  });
+
+  it('reloads when the advertised NIP-34 relay policy changes', async () => {
+    nostrModule.fetchRepositories.mockResolvedValue([{ displayName: 'Alpha' }]);
+
+    await store.loadRepositories({ force: true });
+    systemModule.currentSystemInfo.mockReturnValue({
+      nostr: { nip34_relays: ['wss://changed-nip34.example'] }
+    });
+    await store.loadRepositories();
+
+    expect(nostrModule.fetchRepositories).toHaveBeenCalledTimes(2);
+    expect(nostrModule.fetchRepositories).toHaveBeenLastCalledWith({
+      authors: null,
+      relayUrls: ['wss://changed-nip34.example']
+    });
+  });
+
+  it('loads NIP-34 relays from system info when current info is not cached', async () => {
+    systemModule.currentSystemInfo.mockReturnValue(null);
+    systemModule.loadSystemInfo.mockResolvedValue({
+      nostr: { nip34_relays: ['wss://loaded-nip34.example'] }
+    });
+
+    await store.loadRepositories({ force: true });
+
+    expect(systemModule.loadSystemInfo).toHaveBeenCalledTimes(1);
+    expect(nostrModule.fetchRepositories).toHaveBeenCalledWith({
+      authors: null,
+      relayUrls: ['wss://loaded-nip34.example']
+    });
+  });
+
+  it('falls back to global repository relays when NIP-34 relay discovery fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    systemModule.currentSystemInfo.mockReturnValue(null);
+    systemModule.loadSystemInfo.mockRejectedValue(new Error('discovery unavailable'));
+
+    await store.loadRepositories({ force: true });
+
+    expect(warn).toHaveBeenCalledWith('[repositories] Failed to load NIP-34 relay configuration:', expect.any(Error));
+    expect(nostrModule.fetchRepositories).toHaveBeenCalledWith({ authors: null, relayUrls: [] });
+    warn.mockRestore();
   });
 
   it('records degraded EOSE metadata for partial repository read models', async () => {

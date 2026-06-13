@@ -6,8 +6,7 @@
 import { KINDS, NostrIncompleteEOSEError, nostr, partialEventsFromIncompleteEose } from './client.js';
 import { uniqueRelays } from './pool-utils.js';
 
-// Repo state event kind (NIP-34)
-const REPO_STATE_KIND = 30618;
+const REPO_STATE_KIND = KINDS.REPOSITORY_STATE;
 
 /**
  * Parse branches from a repo state event's tags

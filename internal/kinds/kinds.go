@@ -158,7 +158,7 @@ const (
 )
 
 // =============================================================================
-// Interop Kinds (Loom, Hive-CI)
+// Interop Kinds (Loom, Hive-CI, NIP-34)
 // =============================================================================
 
 const (
@@ -169,6 +169,20 @@ const (
 
 	HiveCIWorkflowRun    = 5401
 	HiveCIWorkflowResult = 5402
+
+	NIP22Comment = 1111
+
+	NIP34UserGraspList          = 10317
+	NIP34Patch                  = 1617
+	NIP34PullRequest            = 1618
+	NIP34PullRequestUpdate      = 1619
+	NIP34Issue                  = 1621
+	NIP34StatusOpen             = 1630
+	NIP34StatusAppliedOrMerged  = 1631
+	NIP34StatusClosed           = 1632
+	NIP34StatusDraft            = 1633
+	NIP34RepositoryAnnouncement = 30617
+	NIP34RepositoryState        = 30618
 )
 
 // =============================================================================

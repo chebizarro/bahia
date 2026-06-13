@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_NIP34_RELAY_ROUTING",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Repository announcement discovery on Services preserves and uses configured nostr.nip34_relays for kind 30617 queries when available.",
+      "verification": ["web/tests/unit/discovery-store.test.js", "web/tests/unit/repositories-store.test.js", "web/tests/unit/repositories-nip34.test.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Repository discovery does not call nostr.connect with NIP-07/user relay lists and does not replace the global Bahia singleton relay connection.",
+      "verification": ["web/tests/unit/repositories-store.test.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The Bahia sidecar accepts read filters for all NIP-34 kinds from the local NIP-34 spec plus NIP-22 comments used for NIP-34 replies, and accepts signed repository announcement publishes as open interop events.",
+      "verification": ["internal/kinds/policy_test.go", "internal/relaysidecar/server_test.go"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Frontend and backend NIP-34 kind constants remain drift-checked between internal/kinds/kinds.go and web/src/lib/nostr/kinds.gen.js.",
+      "verification": ["internal/kinds/generated_drift_test.go"]
+    }
+  ]
+}

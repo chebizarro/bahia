@@ -1,4 +1,5 @@
 import { KINDS } from './kinds.js';
+import { uniqueRelays } from './pool-utils.js';
 import { attachReadModelMetadata, queryOrPartial, readModelEvents } from './subscriptions.js';
 
 export function parseRepositoryEvent(event) {
@@ -73,7 +74,7 @@ export function parseRepositoryEvent(event) {
   return repo;
 }
 
-export async function fetchRepositories({ authors = null, limit = 200, since = null } = {}) {
+export async function fetchRepositories({ authors = null, limit = 200, since = null, relayUrls = null } = {}) {
   const filter = {
     kinds: [KINDS.REPOSITORY],
     limit
@@ -87,7 +88,11 @@ export async function fetchRepositories({ authors = null, limit = 200, since = n
     filter.since = since;
   }
 
-  const result = await queryOrPartial([filter], { scope: 'repositories' });
+  const repositoryRelays = Array.isArray(relayUrls) ? uniqueRelays(relayUrls) : [];
+  const queryOptions = repositoryRelays.length > 0
+    ? { scope: 'repositories', relays: repositoryRelays }
+    : { scope: 'repositories' };
+  const result = await queryOrPartial([filter], queryOptions);
   const deduped = new Map();
 
   for (const event of readModelEvents(result)) {

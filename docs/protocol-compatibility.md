@@ -37,7 +37,7 @@ For the canonical control-plane contract, prefer:
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
 | NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
 | NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
-| NIP-34 | Repository relay hints and repository state | ✅ repository/ngit-specific routing input |
+| NIP-34 + NIP-22 comments | Repository announcements, repository relay hints, repository state, patches, PRs, issues, status, and replies | ✅ repository/ngit-specific routing input and sidecar open interop surface |
 | NIP-11 / NIP-66 | Relay metadata and optional monitor events | ✅ advisory capability/liveness metadata only |
 | NIP-86 + NIP-98 | Optional relay-owner HTTP administration with payload-bound signed HTTP authorization | 🟡 opt-in administration surface for Bahia-owned/authorized relays only; not ContextVM transport |
 | Loom | Distributed job execution protocol | ✅ implemented as external protocol interop |
@@ -81,6 +81,8 @@ Desired-state runtime metadata is an additive observable contract, not a new pro
 Bahia publishes service-key NIP-51 kind `30002` relay sets for canonical bootstrap and topology. `bahia-browser-v1` remains the browser-safe discovery/read set, `bahia-contextvm-v1` is the preferred ContextVM request/reply set, and `bahia-service-v1` is the backend service publish/backfill set.
 
 The Bahia service key also publishes an advisory NIP-65 kind `10002` relay list. Its `r` tags mark ContextVM request relays as `read` and service publish/backfill relays as `write`, giving wider Nostr clients standard author-routing hints. This event does not authorize relay use, does not replace ContextVM discovery, and must not replace the NIP-51 `30002` relay sets for Bahia bootstrap.
+
+NIP-34 repository announcement discovery uses `nostr.nip34_relays` when configured. Repository branch/state lookups then use the selected repository announcement's own `relays` tag values for scoped `30618` filters before falling back to global Bahia read relays. The sidecar policy accepts NIP-22 comments (`1111`) plus NIP-34 kinds `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618` as open interop data so deployments may advertise the sidecar as a NIP-34 relay without CLOSED rejections for repository collaboration events.
 
 NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured, and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
 

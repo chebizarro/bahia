@@ -162,7 +162,7 @@ Bahia relay-purpose taxonomy:
 | ContextVM request/reply | Bahia service | NIP-51 `30002`, `d=bahia-contextvm-v1` | Preferred relay set for ContextVM mutation traffic; absence may fall back to browser relays with degraded metadata. |
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service relay boundary; not automatically public browser bootstrap. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing only; not service-strategy authorization. |
-| Repository/ngit | Repository maintainer or SoulFactory | NIP-34 `30617` `relays` tags and `30618` state | Repository-specific routing hints; branch/state lookups query these relays before global Bahia read relays. Missing repository relays are a degraded fallback, not generic control-plane policy. |
+| Repository/ngit | Repository maintainer or SoulFactory | `nostr.nip34_relays`, NIP-34 `30617` `relays` tags, and `30618` state | Repository announcement discovery queries advertised NIP-34 relays when configured; branch/state lookups query repository-specific `relays` tags before global Bahia read relays. Missing NIP-34 relays remain a degraded fallback, not generic control-plane policy. |
 | DM receive routing | Receiving identity | NIP-51 `10050` | Explicit DM-enabled features and identities only; public bootstrap and ContextVM relay readiness do not imply DM readiness. |
 | FIPS public adverts | FIPS/Bahia operator | Existing FIPS overlay advert contract plus explicit bridge relay config | Public advert boundary; safe only for information intentionally exposed as FIPS overlay metadata. |
 | FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets or explicit bridge relay config | Sensitive endpoint/control boundary; sharing with public relays is an explicit exposure decision. |
@@ -402,7 +402,7 @@ Implementation rules:
 2. The migration must be idempotent. Re-running startup must not duplicate canonical events.
 3. Migrated events must publish canonical `kind` values and may include metadata tags such as `legacy_kind`, `migrated-from`, `migration`, and `schema`.
 4. Runtime publishers and subscribers should not include legacy kind support just to ease rollout.
-5. The relay sidecar should allow canonical production kinds and reject legacy runtime kinds unless a migration path explicitly needs read access.
+5. The relay sidecar should allow canonical production kinds and approved open interop kinds, including NIP-22 comments `1111` and NIP-34 `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618`; it should reject legacy runtime kinds unless a migration path explicitly needs read access.
 6. If a new migration transform is added, update `docs/control-planes.md`, `docs/event-spec.md`, `docs/nostr-commands.md`, `docs/protocol-compatibility.md`, and the PSTF verification evidence for the migration feature.
 
 ## Implementation checklist

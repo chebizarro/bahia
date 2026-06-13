@@ -41,10 +41,36 @@ func IsBahiaProjectionKind(kind int) bool {
 // does not require authorization. These are events from external systems
 // (Loom, Hive-CI) that interoperate with Bahia.
 func IsOpenInteropKind(kind int) bool {
+	return isLoomInteropKind(kind) || isHiveCIInteropKind(kind) || kind == NIP22Comment || IsNIP34Kind(kind)
+}
+
+func isLoomInteropKind(kind int) bool {
 	switch kind {
 	case LoomWorkerAdvertisement, LoomJobStatusUpdate, LoomJobResult, LoomJobCancellation:
 		return true
+	default:
+		return false
+	}
+}
+
+func isHiveCIInteropKind(kind int) bool {
+	switch kind {
 	case HiveCIWorkflowRun, HiveCIWorkflowResult:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsNIP34Kind returns true for the NIP-34 git collaboration event kinds that
+// Bahia exposes through its sidecar relay as open interop data. NIP-34 replies
+// use NIP-22 kind 1111 and are included separately in IsOpenInteropKind.
+func IsNIP34Kind(kind int) bool {
+	switch kind {
+	case NIP34UserGraspList,
+		NIP34Patch, NIP34PullRequest, NIP34PullRequestUpdate, NIP34Issue,
+		NIP34StatusOpen, NIP34StatusAppliedOrMerged, NIP34StatusClosed, NIP34StatusDraft,
+		NIP34RepositoryAnnouncement, NIP34RepositoryState:
 		return true
 	default:
 		return false

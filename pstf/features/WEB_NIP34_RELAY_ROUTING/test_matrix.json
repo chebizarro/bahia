@@ -1,0 +1,25 @@
+{
+  "feature_id": "WEB_NIP34_RELAY_ROUTING",
+  "tests": [
+    {
+      "name": "repositories store resolves configured NIP-34 relays",
+      "command": "cd web && pnpm exec vitest run --config vitest.config.js tests/unit/discovery-store.test.js tests/unit/repositories-store.test.js",
+      "criteria": ["AC1", "AC2"]
+    },
+    {
+      "name": "repository Nostr query forwards explicit relay URLs",
+      "command": "cd web && pnpm exec vitest run --config vitest.config.js tests/unit/repositories-nip34.test.js",
+      "criteria": ["AC1"]
+    },
+    {
+      "name": "sidecar/kind policy accepts NIP-34 and NIP-22 reply open interop kinds",
+      "command": "go test ./internal/kinds ./internal/relaysidecar",
+      "criteria": ["AC3", "AC4"]
+    },
+    {
+      "name": "web lint",
+      "command": "cd web && pnpm lint",
+      "criteria": ["AC1", "AC2"]
+    }
+  ]
+}

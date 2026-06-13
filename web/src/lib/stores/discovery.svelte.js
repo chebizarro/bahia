@@ -98,6 +98,9 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
   }
 
   const browserRelays = relaySets[BROWSER_RELAY_SET_DTAG] || [];
+  const nip34Relays = Array.isArray(payload.nostr?.nip34_relays)
+    ? Array.from(new Set(payload.nostr.nip34_relays.map(normalizeRelayUrl).filter(Boolean)))
+    : [];
   if (browserRelays.length === 0) {
     throw new Error('No trusted Bahia browser relay set received before EOSE');
   }
@@ -127,6 +130,7 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
       contextvm_relay_metadata: contextVMRelayMetadata,
       sidecar_url: browserRelays[0] || '',
       service_relays: relaySets[SERVICE_RELAY_SET_DTAG] || [],
+      nip34_relays: nip34Relays,
       trusted_relay_monitor_pubkeys: Array.isArray(payload.nostr?.trusted_relay_monitor_pubkeys)
         ? payload.nostr.trusted_relay_monitor_pubkeys
         : [],

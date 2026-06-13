@@ -396,7 +396,62 @@ func TestSidecarRejectsUnauthorizedRequestKind(t *testing.T) {
 	}
 }
 
-func TestSidecarAcceptsNIP23LongFormKindsFromServicePubkeyAndAllowsRead(t *testing.T) {
+func TestSidecarAllowsNIP34Kinds(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	publisherSK := nostr.Generate()
+	repositoryEvent := nostr.Event{
+		CreatedAt: nostr.Now(),
+		Kind:      nostr.Kind(kinds.NIP34RepositoryAnnouncement),
+		Tags: nostr.Tags{
+			nostr.Tag{"d", "bahia"},
+			nostr.Tag{"name", "Bahia"},
+			nostr.Tag{"relays", "wss://relay.example"},
+		},
+		Content: "",
+	}
+	if err := repositoryEvent.Sign(publisherSK); err != nil {
+		t.Fatalf("sign NIP-34 repository event: %v", err)
+	}
+	if skipBroadcast, err := server.Relay().AddEvent(context.Background(), repositoryEvent); err != nil || skipBroadcast {
+		t.Fatalf("expected sidecar to accept NIP-34 repository event, skipBroadcast=%v err=%v", skipBroadcast, err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		kind int
+	}{
+		{name: "NIP-22 comment", kind: kinds.NIP22Comment},
+		{name: "user grasp list", kind: kinds.NIP34UserGraspList},
+		{name: "patch", kind: kinds.NIP34Patch},
+		{name: "pull request", kind: kinds.NIP34PullRequest},
+		{name: "pull request update", kind: kinds.NIP34PullRequestUpdate},
+		{name: "issue", kind: kinds.NIP34Issue},
+		{name: "status open", kind: kinds.NIP34StatusOpen},
+		{name: "status applied or merged", kind: kinds.NIP34StatusAppliedOrMerged},
+		{name: "status closed", kind: kinds.NIP34StatusClosed},
+		{name: "status draft", kind: kinds.NIP34StatusDraft},
+		{name: "repository announcement", kind: kinds.NIP34RepositoryAnnouncement},
+		{name: "repository state", kind: kinds.NIP34RepositoryState},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readFilter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(tc.kind)}}
+			reject, msg := server.Relay().OnRequest(context.Background(), readFilter)
+			if reject {
+				t.Fatalf("expected NIP-34 kind %d to be readable, got rejection %q", tc.kind, msg)
+			}
+		})
+	}
+}
+
+func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 	serviceSK := nostr.Generate()
 	servicePubkey := nostr.GetPublicKey(serviceSK)
 	unauthorizedSK := nostr.Generate()
