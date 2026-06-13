@@ -259,7 +259,7 @@ func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{10002, 30002, 30078, 11316, 11317, 11318, 11319, 11320, 31410, 31411, 30360}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{10002, 30002, 30004, 30078, 11316, 11317, 11318, 11319, 11320, 31410, 31411, 30360}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected canonical discovery/SBOM kinds to be readable, got rejection %q", msg)

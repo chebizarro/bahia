@@ -114,6 +114,18 @@ type SBOMRepository interface {
 	SearchPackagesByName(ctx context.Context, name string, limit int) ([]domain.SBOMPackage, error)
 }
 
+// SBOMManifestRepository manages subject-neutral SBOM manifest projections.
+type SBOMManifestRepository interface {
+	CreateManifest(ctx context.Context, manifest *domain.SBOMManifest) error
+	ProjectManifest(ctx context.Context, manifest *domain.SBOMManifest, packages []domain.SBOMManifestPackage) error
+	GetManifestByID(ctx context.Context, id uuid.UUID) (*domain.SBOMManifest, error)
+	ListManifestsBySubject(ctx context.Context, subject domain.SBOMSubject, limit int) ([]domain.SBOMManifest, error)
+	UpdateManifestPublishState(ctx context.Context, id uuid.UUID, state domain.SBOMPublishState, referenceEventID, availabilityEventID, publishError string) error
+	CreateManifestPackages(ctx context.Context, packages []domain.SBOMManifestPackage) error
+	ListPackagesByManifest(ctx context.Context, manifestID uuid.UUID) ([]domain.SBOMManifestPackage, error)
+	SearchManifestPackagesByName(ctx context.Context, name string, limit int) ([]domain.SBOMManifestPackage, error)
+}
+
 // PaymentRecordRepository manages Cashu payment records.
 type PaymentRecordRepository interface {
 	Create(ctx context.Context, rec *domain.PaymentRecord) error

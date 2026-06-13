@@ -3,23 +3,51 @@
   "criteria": [
     {
       "id": "AC1",
-      "description": "Artifact details expose the SBOM tab and render attestation format, generator, storage, hashes, NTIA compliance, and packages when SBOM data exists."
+      "description": "Real SBOM generation for artifact, package, repository, or deployment subjects uses a configured generator and yields valid SPDX or CycloneDX JSON."
     },
     {
       "id": "AC2",
-      "description": "Artifact SBOM tab renders a clear empty state when no SBOM or attestation is available."
+      "description": "Generated or imported SBOM payload bytes are stored on Blossom and verified against the exact payload SHA-256 before canonical publication."
     },
     {
       "id": "AC3",
-      "description": "Policy creation visual builder can add SBOM-related rules and preserve them when switching to JSON editor."
+      "description": "SBOM reference publication builds kind 30078 NIP-78 app-data events with subject, format, storage, location, payload hash, generator, NTIA, and resource tags, and treats relay OK acceptance as required."
     },
     {
       "id": "AC4",
-      "description": "Policy creation rejects visual-builder submission without at least one rule."
+      "description": "SBOM availability publication builds kind 30004 NIP-51 complete availability lists for each subject version, dedupes entries, preserves existing published subject entries, and does not publish legacy kind 30079 as canonical state."
     },
     {
       "id": "AC5",
-      "description": "Events page can display and filter canonical SBOM attestation/index events without showing non-SBOM events."
+      "description": "SBOM generation/import orchestration is event-driven: ContextVM sbom/generate and sbom/import intents emit 30315 status progression, 4903 audit facts, accepted 30078 references, and accepted 30004 availability lists without polling or timeout-based completion."
+    },
+    {
+      "id": "AC6",
+      "description": "REST POST /artifacts/{id}/sbom remains a non-Nostr compatibility import endpoint that delegates to the SBOM import service and does not bypass Blossom/Nostr publication."
+    },
+    {
+      "id": "AC7",
+      "description": "Existing artifact SBOM GET/package/search APIs and MCP read tools continue to read compatibility projections populated from canonical SBOM manifest projections."
+    },
+    {
+      "id": "AC8",
+      "description": "Artifact details expose the SBOM tab and render attestation format, generator, storage, hashes, NTIA compliance, and packages when SBOM data exists."
+    },
+    {
+      "id": "AC9",
+      "description": "Artifact SBOM tab renders a clear empty state when no SBOM or attestation is available."
+    },
+    {
+      "id": "AC10",
+      "description": "Policy creation visual builder can add SBOM-related rules, preserve them when switching to JSON editor, and reject visual-builder submission without at least one rule."
+    },
+    {
+      "id": "AC11",
+      "description": "Events page can display and filter canonical SBOM reference and availability-list events without showing non-SBOM events."
+    },
+    {
+      "id": "AC12",
+      "description": "User documentation explains artifact, package, deployment, Nostr, REST compatibility, Blossom storage, generator, and MCP SBOM workflows."
     }
   ]
 }

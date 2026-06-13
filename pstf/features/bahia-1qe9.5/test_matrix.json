@@ -1,0 +1,55 @@
+{
+  "feature_id": "bahia-1qe9.5",
+  "tests": [
+    {
+      "test": "TestBuildSBOMReferenceEvent",
+      "criteria": ["AC1"],
+      "evidence": "Validates 30078 kind, subject-key d tag, required SBOM domain/schema/subject/storage/location/x/media_type/generator/ntia/resource tags, deterministic CreatedAt, and JSON attestation content."
+    },
+    {
+      "test": "TestBuildSBOMReferenceEventRejectsDigestMismatch",
+      "criteria": ["AC1"],
+      "evidence": "Rejects a 30078 reference when attestation subject digest does not match the subject digest."
+    },
+    {
+      "test": "TestBuildSBOMAvailabilityListEvent",
+      "criteria": ["AC2"],
+      "evidence": "Validates 30004 kind, subject-key d tag, subject tags, a-tag coordinate, sbom summary tag shape, and deterministic dedupe."
+    },
+    {
+      "test": "TestIndexPublisher_PublishAttestationRequiresAcceptedOK",
+      "criteria": ["AC3"],
+      "evidence": "Publishes a 30078 reference only when deterministic fake relay OK has accepted=true."
+    },
+    {
+      "test": "TestIndexPublisher_PublishAttestationRejectsRelayOKFalse",
+      "criteria": ["AC3"],
+      "evidence": "Fails 30078 publish success when OK accepted=false includes a rejection reason."
+    },
+    {
+      "test": "TestIndexPublisher_PublishAttestationRejectsAuthRequiredOKFalse",
+      "criteria": ["AC3"],
+      "evidence": "Fails distinctly for auth-required relay OK rejection."
+    },
+    {
+      "test": "TestIndexPublisher_PublishAttestationRejectsClosedPublishPath",
+      "criteria": ["AC3"],
+      "evidence": "Fails distinctly when the publish path reports a closed relay/error outcome."
+    },
+    {
+      "test": "TestIndexPublisher_PublishAttestationAcceptsAdapterCompatibleOKResults",
+      "criteria": ["AC3"],
+      "evidence": "Verifies the SBOM publisher can consume adapter-compatible PublishSignedEventWithResults relay OK result structs without importing the adapter package."
+    },
+    {
+      "test": "TestIndexPublisher_PublishIndexRequiresAcceptedOK",
+      "criteria": ["AC3"],
+      "evidence": "Publishes a 30004 availability list only when deterministic fake relay OK has accepted=true."
+    },
+    {
+      "test": "TestIndexPublisher_PublishIndexRejectsRelayOKFalse",
+      "criteria": ["AC3"],
+      "evidence": "Fails 30004 publish success when OK accepted=false includes a rejection reason."
+    }
+  ]
+}

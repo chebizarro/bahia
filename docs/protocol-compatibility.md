@@ -35,7 +35,7 @@ For the canonical control-plane contract, prefer:
 | NIP-98 | Bahia HTTP authentication and OCI push auth | ✅ implemented |
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
-| NIP-51 / NIP-65 | Relay sets and relay list metadata | ✅ canonical bootstrap/routing inputs |
+| NIP-51 / NIP-65 | Relay sets, SBOM availability lists, and relay list metadata | ✅ canonical bootstrap/routing and curated SBOM availability inputs |
 | NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
 | NIP-34 + NIP-22 comments | Repository announcements, repository relay hints, repository state, patches, PRs, issues, status, and replies | ✅ repository/ngit-specific routing input and sidecar open interop surface |
 | SoulFactory | Agent templates, drafts, provisioning/lifecycle requests, runtime capabilities, and correlated results | ✅ Nostr-native agent lifecycle interop and sidecar open interop surface |
@@ -68,7 +68,8 @@ Desired-state runtime metadata is an additive observable contract, not a new pro
 | Kind(s) | Purpose |
 |---------|---------|
 | `30900` | Canonical control-plane state projection |
-| `30078` | NIP-78 app-specific configuration, registries, and UI/operator projection data |
+| `30078` | NIP-78 app-specific configuration, registries, UI/operator projection data, and SBOM reference app-data (`schema=bahia.sbom.ref.v1`) |
+| `30004` | NIP-51 Curation Set for complete SBOM availability lists (`schema=bahia.sbom.available-list.v1`) |
 | `30315` | NIP-38 operational status |
 | `4903` | Immutable audit fact / attestation / provenance breadcrumb |
 | `11316`-`11320` | ContextVM discovery and capability announcements |
@@ -108,6 +109,7 @@ Historical Bahia-specific ranges are retained only for startup migration, histor
 | `6961`-`6997` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | `7961`-`7997` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| `30079` | SBOM index | read-only compatibility; canonical SBOM availability uses NIP-51 `30004` |
 | worker cleanup lifecycle | Fleet Health cleanup status | `30900` with `schema=bahia.state.worker-cleanup.v1`; no legacy live command kind is introduced |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
@@ -175,6 +177,6 @@ Clients and agents should:
 4. Subscribe to canonical observables with scoped filters before or immediately after publishing.
 5. Wait for `EOSE` for historical catch-up, then keep subscriptions open.
 6. Treat ContextVM responses as acknowledgments, not durable long-running completion.
-7. Avoid REST polling and legacy-kind subscriptions for runtime truth.
+7. Avoid REST polling and legacy-kind subscriptions for runtime truth, including legacy SBOM kind `30079`.
 8. Treat desired-state metadata as optional and sanitized; never expect public relay events to expose secret plaintext, generated Compose env-file contents, or raw Docker endpoint credentials.
 

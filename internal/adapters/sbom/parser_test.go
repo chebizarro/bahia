@@ -17,16 +17,16 @@ func TestParse_SPDX(t *testing.T) {
 		DocumentNamespace: "https://example.com/test",
 		Packages: []spdxPackage{
 			{
-				Name:        "lodash",
-				VersionInfo: "4.17.21",
+				Name:             "lodash",
+				VersionInfo:      "4.17.21",
 				LicenseConcluded: "MIT",
 				ExternalRefs: []spdxExternalRef{
 					{ReferenceType: "purl", ReferenceLocator: "pkg:npm/lodash@4.17.21"},
 				},
 			},
 			{
-				Name:        "express",
-				VersionInfo: "4.18.2",
+				Name:            "express",
+				VersionInfo:     "4.18.2",
 				LicenseDeclared: "MIT",
 				ExternalRefs: []spdxExternalRef{
 					{ReferenceType: "purl", ReferenceLocator: "pkg:npm/express@4.18.2"},
@@ -85,6 +85,100 @@ func TestParse_SPDX(t *testing.T) {
 		if p.ID == uuid.Nil {
 			t.Error("package ID should not be nil")
 		}
+	}
+}
+
+func TestParseManifest_SPDX(t *testing.T) {
+	doc := spdxDocument{
+		SPDXVersion:       "SPDX-2.3",
+		DataLicense:       "CC0-1.0",
+		SPDXID:            "SPDXRef-DOCUMENT",
+		Name:              "repo-sbom",
+		DocumentNamespace: "https://example.com/repo",
+		Packages: []spdxPackage{
+			{
+				Name:             "cobra",
+				VersionInfo:      "1.8.0",
+				LicenseConcluded: "Apache-2.0",
+				ExternalRefs: []spdxExternalRef{
+					{ReferenceType: "purl", ReferenceLocator: "pkg:golang/github.com/spf13/cobra@v1.8.0"},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(doc)
+	subject := domain.SBOMSubject{
+		Type:        domain.SBOMSubjectRepository,
+		ID:          "github.com/openagentsinc/bahia",
+		DisplayName: "Bahia repository",
+		Digest:      "git:1111111111111111111111111111111111111111",
+	}
+
+	result, err := ParseManifest(data, subject)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Manifest.Subject != subject {
+		t.Fatalf("manifest subject mismatch: got %#v want %#v", result.Manifest.Subject, subject)
+	}
+	if result.Manifest.Format != domain.SBOMFormatSPDX {
+		t.Errorf("manifest format = %q, want spdx", result.Manifest.Format)
+	}
+	if result.Manifest.MediaType != MediaTypeSPDX {
+		t.Errorf("manifest media type = %q, want %q", result.Manifest.MediaType, MediaTypeSPDX)
+	}
+	if result.Manifest.PayloadSHA256 == "" {
+		t.Fatal("expected payload sha256")
+	}
+	if result.Manifest.PackageCount != 1 || len(result.Packages) != 1 {
+		t.Fatalf("package count mismatch: manifest=%d packages=%d", result.Manifest.PackageCount, len(result.Packages))
+	}
+	if result.Packages[0].ManifestID != result.Manifest.ID {
+		t.Error("package manifest ID mismatch")
+	}
+	if result.Packages[0].Name != "cobra" || result.Packages[0].Ecosystem != "golang" || result.Packages[0].License != "Apache-2.0" {
+		t.Fatalf("unexpected parsed package: %#v", result.Packages[0])
+	}
+}
+
+func TestParseManifest_CycloneDX(t *testing.T) {
+	bom := cyclonedxBOM{
+		BOMFormat:   "CycloneDX",
+		SpecVersion: "1.5",
+		Version:     1,
+		Components: []cyclonedxComponent{
+			{Name: "requests", Version: "2.31.0", PURL: "pkg:pypi/requests@2.31.0"},
+		},
+		Vulnerabilities: []cyclonedxVuln{
+			{ID: "CVE-2024-0001", Ratings: []struct {
+				Severity string `json:"severity"`
+			}{{Severity: "high"}}},
+		},
+	}
+	data, _ := json.Marshal(bom)
+	subject := domain.SBOMSubject{
+		Type:   domain.SBOMSubjectPackage,
+		ID:     "pkg:pypi/example@1.0.0",
+		Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+
+	result, err := ParseManifest(data, subject)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Manifest.Format != domain.SBOMFormatCycloneDX {
+		t.Errorf("manifest format = %q, want cyclonedx", result.Manifest.Format)
+	}
+	if result.Manifest.MediaType != MediaTypeCycloneDX {
+		t.Errorf("manifest media type = %q, want %q", result.Manifest.MediaType, MediaTypeCycloneDX)
+	}
+	if result.Manifest.VulnerabilityCount != 1 || result.Manifest.HighCount != 1 {
+		t.Fatalf("vulnerability counts mismatch: got vuln=%d high=%d", result.Manifest.VulnerabilityCount, result.Manifest.HighCount)
+	}
+	if len(result.Packages) != 1 || result.Packages[0].Ecosystem != "pypi" {
+		t.Fatalf("unexpected parsed packages: %#v", result.Packages)
 	}
 }
 

@@ -1315,7 +1315,7 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	if !ok {
 		t.Fatalf("control_plane.methods missing: %#v", controlPlane["methods"])
 	}
-	for _, method := range []string{"service/deploy", "service/rollback", "worker/cordon", "dns/zone-create", "ml/recipe-run", "ml/inference-deploy"} {
+	for _, method := range []string{"service/deploy", "service/rollback", "worker/cordon", "dns/zone-create", "ml/recipe-run", "ml/inference-deploy", "sbom/generate", "sbom/import"} {
 		assertDiscoveryStringContains(t, methods, method)
 	}
 	assertDiscoveryContainsNoLegacyKinds(t, payload)

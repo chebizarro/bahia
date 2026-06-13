@@ -1,0 +1,33 @@
+{
+  "feature_id": "bahia-1qe9.2",
+  "tests": [
+    {
+      "test": "go test ./internal/domain",
+      "acceptance_criteria": ["AC1"]
+    },
+    {
+      "test": "go test ./internal/repository :: TestPgSBOMRepository_CreateManifest_DedupesBySubjectFormatGeneratorPayload",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "test": "go test ./internal/repository :: TestPgSBOMRepository_ListManifestsBySubject",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "test": "go test ./internal/repository :: TestPgSBOMRepository_UpdateManifestPublishState",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "test": "go test ./internal/repository :: TestPgSBOMRepository_SearchManifestPackagesByName",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "test": "go test ./internal/repository :: TestArtifactSBOMFromManifest_PreservesArtifactCompatibilityProjection",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "test": "migration review: internal/db/migrations/000043_sbom_manifests.up.sql and .down.sql",
+      "acceptance_criteria": ["AC2"]
+    }
+  ]
+}

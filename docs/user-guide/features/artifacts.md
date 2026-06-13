@@ -116,30 +116,50 @@ bahia artifacts get art-456 -o json
 
 ## SBOM (Software Bill of Materials)
 
-Bahia can store and query SBOMs for artifacts.
+Bahia supports real SBOM generation and import for artifact subjects. The canonical workflow stores exact SBOM payload bytes on Blossom, publishes a `30078` NIP-78 SBOM reference event, then publishes/replaces a complete `30004` NIP-51 availability list for the artifact subject. Historical `30079` SBOM index events are read-only compatibility data and are not used for new publication.
 
-### Ingesting SBOM
+### Generating or importing SBOMs
+
+Signer-first generation and import use ContextVM methods over kind `25910`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sbom-art-456-spdx",
+  "method": "sbom/generate",
+  "params": {
+    "idempotencyKey": "sbom-art-456-spdx",
+    "subject": { "type": "artifact", "id": "art-456", "digest": "sha256:<artifact-digest>" },
+    "source": { "kind": "image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
+    "formats": ["spdx"],
+    "generator": "syft",
+    "storage": "blossom"
+  }
+}
+```
+
+`generator: "auto"` chooses cdxgen for repository CycloneDX generation only when the operator enabled a cdxgen binary; otherwise Syft is the default generator. Generated/imported payloads must use Blossom storage. Direct OCI or package-backend SBOM writes are intentionally outside this path.
+
+The existing REST endpoint remains a compatibility import path for non-Nostr clients:
 
 ```bash
-# Generate SBOM with Syft
-syft registry.example.com/my-api:v2.0.0 -o spdx-json > sbom.json
-
-# Upload to Bahia
 curl -X POST "$BAHIA_URL/api/v1/artifacts/$ARTIFACT_ID/sbom" \
   -H "Content-Type: application/json" \
   -d @sbom.json
 ```
 
+That endpoint delegates to the SBOM import service, uploads/verifies the payload on Blossom, publishes canonical Nostr observables, and keeps the artifact SBOM read projection available.
+
 ### Viewing SBOM
 
 ```bash
-# Get SBOM
+# Get SBOM compatibility projection
 bahia artifacts sbom art-456
 
-# List packages
+# List indexed packages
 bahia artifacts sbom art-456 --packages
 
-# Search for vulnerable packages
+# Search package projections
 bahia sbom search --package "log4j" --version "<2.17.0"
 ```
 
@@ -147,7 +167,7 @@ bahia sbom search --package "log4j" --version "<2.17.0"
 
 1. Go to artifact detail
 2. Click **SBOM** tab
-3. View package list and search
+3. View attestation details, Blossom location, hashes, NTIA status, and package list
 
 ## Signatures
 

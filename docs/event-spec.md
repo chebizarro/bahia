@@ -8,7 +8,7 @@ Bahia publishes signed Nostr events for control-plane intent, state, status, dis
 - **State**: canonical control-plane projections in kind `30900`, plus NIP-78 app-specific data in kind `30078`.
 - **Status**: NIP-38 operational status kind `30315`.
 - **Audit**: Cascadia/Bahia audit kind `4903`.
-- **Discovery**: ContextVM announcements `11316`-`11320` and NIP-51 relay sets `30002`.
+- **Discovery/collections**: ContextVM announcements `11316`-`11320`, NIP-51 relay sets `30002`, and NIP-51 curation sets `30004` where a domain needs curated reference inventories such as SBOM availability.
 - **Deletion**: NIP-09 kind `5` where relay-level deletion semantics apply; durable domain tombstones may still be represented as canonical replacement state with `deleted=true`.
 
 Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `31000`-`31024`, `38390`-`38431`, `5980`, `7980`) are migration inventory only, excluding explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` where their numbers overlap those ranges. Production code should not subscribe to legacy Bahia families as live control-plane contracts.
@@ -20,7 +20,8 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 | `25910` | Intent | ContextVM JSON-RPC request/response messages. Method names use `<domain>/<operation>`. |
 | `1059`, `21059` | Intent transport | CEP-4 / NIP-59 gift-wrap envelopes for encrypted ContextVM messages. |
 | `30900` | State | Canonical addressable control-plane state projection. |
-| `30078` | State/app data | NIP-78 app-specific configuration, registries, and UI/operator projection data. |
+| `30078` | State/app data | NIP-78 app-specific configuration, registries, and UI/operator projection data; SBOM reference events use `schema=bahia.sbom.ref.v1`. |
+| `30004` | Collection | NIP-51 Curation Set for SBOM availability lists and other curated reference inventories. |
 | `30315` | Status | NIP-38 operational status for agents, workers, services, and long-running actions. |
 | `4903` | Audit | Immutable audit fact / attestation / provenance breadcrumb. |
 | `11316`-`11320` | Discovery | ContextVM server, tools, resources, templates, and prompts announcements. |
@@ -160,6 +161,7 @@ Bahia discovery is ContextVM-compatible:
 | `11319` | Resource templates list |
 | `11320` | Prompts list |
 | `30002` | NIP-51 relay sets such as browser, ContextVM, service, and operational relay sets; canonical Bahia bootstrap topology |
+| `30004` | NIP-51 Curation Set for complete SBOM availability lists, using `domain=sbom` and `schema=bahia.sbom.available-list.v1` |
 | `10002` | NIP-65 relay preferences; advisory service read/write hints for wider Nostr routing |
 | `10050` | Optional NIP-51 DM relay list for explicitly configured DM-enabled features and receiving identities; never inferred from browser, ContextVM, or service relay sets |
 | `30617` / `30618` | NIP-34 repository announcement and state; repository relay hints are preferred before global Bahia read relays for repository operations |
@@ -167,6 +169,16 @@ Bahia discovery is ContextVM-compatible:
 The service-authored `10002` list marks ContextVM request relays with `read` and service publish/backfill relays with `write`. It does not replace ContextVM discovery or the NIP-51 `30002` relay sets. NIP-11 relay metadata and optional NIP-66 monitor events are advisory capability/liveness metadata only; they do not establish service trust, override trusted service pubkeys, or authorize removing all configured relays. NIP-86 is an optional HTTP relay-owner administration API protected with NIP-98 authorization, not a Nostr event kind and not a ContextVM mutation transport.
 
 Legacy discovery kind `31974` is migration input only.
+
+## SBOM Reference and Availability Events
+
+SBOM payload bytes are stored outside Nostr, typically in Blossom. Nostr carries durable references and availability state:
+
+- Kind `30078` is the canonical SBOM reference app-data event. It uses `domain=sbom`, `schema=bahia.sbom.ref.v1`, and `d=sbom:ref:<subject-key>:<format>:<payload-sha256>`. Content is the in-toto-style SBOM attestation envelope. Tags identify the subject, format, storage backend, location URI, payload SHA-256 (`x`), media type, generator, and NTIA status.
+- Kind `30004` is the canonical SBOM availability list. It uses `domain=sbom`, `schema=bahia.sbom.available-list.v1`, and `d=sbom:available:<subject-type>:<subject-key>`. The list is replaced as a complete set for one subject version and includes `a` tags to `30078` reference coordinates plus `sbom` summary tags.
+- Kind `30079` is historical read-only SBOM index data. Production publishers must not create new `30079` events.
+
+Relay `OK` acceptance is required before a publisher treats either the `30078` reference or `30004` availability list as published.
 
 ## Loom and Hive-CI External Protocol Events
 
@@ -227,6 +239,7 @@ This is idempotent and safe to run every startup. If the migration fails because
 | `6961`-`6997` excluding SoulFactory interop `6950` | status/progress | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| `30079` | historical SBOM index | read-only compatibility; canonical SBOM availability uses NIP-51 `30004` |
 | worker cleanup lifecycle | resource-pressure cleanup state | `30900` with `schema=bahia.state.worker-cleanup.v1`, `domain=worker`, and narrow `worker`/`status` tags |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |

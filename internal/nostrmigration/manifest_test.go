@@ -77,6 +77,12 @@ func TestManifestCanonicalTargets(t *testing.T) {
 	discovery, ok := Lookup(kinds.SystemDiscovery)
 	require.True(t, ok)
 	require.Equal(t, CanonicalContextVMDiscovery, discovery.CanonicalKind)
+
+	legacySBOMIndex, ok := Lookup(kinds.LegacySBOMIndex)
+	require.True(t, ok)
+	require.Equal(t, CanonicalNIP51AvailabilityList, legacySBOMIndex.CanonicalKind)
+	require.Equal(t, LayerCollection, legacySBOMIndex.Layer)
+	require.Equal(t, "bahia.sbom.available-list.v1", legacySBOMIndex.Schema)
 }
 
 func TestResolveDispositionDisambiguatesConflictingLegacyWorkerAliases(t *testing.T) {
@@ -212,6 +218,8 @@ func TestKindConstantsAreMappedOrJustified(t *testing.T) {
 		kinds.BackupDefinitionRegistry: "BackupDefinitionRegistry",
 		kinds.BackupPolicyRegistry:     "BackupPolicyRegistry",
 		kinds.BackupRepositoryRegistry: "BackupRepositoryRegistry",
+		kinds.SBOMReference:            "SBOMReference",
+		kinds.LegacySBOMIndex:          "LegacySBOMIndex",
 	}
 	for kind, names := range constantsByKind(constants) {
 		if len(names) < 2 {

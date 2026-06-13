@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-1qe9.4",
+  "tests": [
+    {
+      "test": "go test ./internal/adapters/sbom -run 'Test(SyftGenerator|Cdxgen|GeneratorRegistry|ValidateGenerateRequest)'",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"]
+    },
+    {
+      "test": "go test ./internal/adapters/sbom",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"]
+    }
+  ]
+}

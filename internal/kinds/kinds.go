@@ -243,12 +243,16 @@ const (
 )
 
 // =============================================================================
-// SBOM / Attestation Kinds
+// SBOM Reference and Availability Kinds
 // =============================================================================
 
 const (
-	SBOMAttestation = 30078
-	SBOMIndex       = 30079
+	SBOMReference        = 30078
+	SBOMAvailabilityList = 30004
+	LegacySBOMIndex      = 30079
+
+	SBOMAttestation = SBOMReference
+	SBOMIndex       = LegacySBOMIndex
 )
 
 // =============================================================================

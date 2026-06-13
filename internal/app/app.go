@@ -31,6 +31,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	sbomAdapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/adapters/signing"
@@ -147,6 +148,7 @@ func New(cfg *config.Config) (*App, error) {
 	var workerRepo repository.WorkerRepository
 	var paymentRepo repository.PaymentRecordRepository
 	var sbomRepo repository.SBOMRepository
+	var sbomManifestRepo repository.SBOMManifestRepository
 	var sigRepo repository.ArtifactSignatureRepository
 	var policyRepo repository.DeploymentPolicyRepository
 	var secretRepo repository.SecretRepository
@@ -167,7 +169,9 @@ func New(cfg *config.Config) (*App, error) {
 		toolProvisionRepo = repository.NewPgToolProvisioningRepository(pool)
 		workerRepo = repository.NewPgWorkerRepository(pool)
 		paymentRepo = repository.NewPgPaymentRecordRepository(pool)
-		sbomRepo = repository.NewPgSBOMRepository(pool)
+		pgSBOMRepo := repository.NewPgSBOMRepository(pool)
+		sbomRepo = pgSBOMRepo
+		sbomManifestRepo = pgSBOMRepo
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
 		policyRepo = repository.NewPgDeploymentPolicyRepository(pool)
 		secretRepo = repository.NewPgSecretRepository(pool)
@@ -649,8 +653,27 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("blossom client enabled", zap.Strings("servers", blossomCfg.Servers))
 	}
 	var runLogService *runtime.LogService
+	var sbomOrchestrator *service.SBOMOrchestrator
 	if blossomClient != nil {
 		runLogService = runtime.NewLogService(blossomClient, nil, logger)
+		generatorRegistry, err := sbomAdapter.NewGeneratorRegistry(sbomAdapter.NewSyftGenerator(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
+		}
+		sbomOrchestrator = service.NewSBOMOrchestrator(service.SBOMOrchestratorConfig{
+			Generators: generatorRegistry,
+			Storage:    sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default()),
+			Repo:       sbomManifestRepo,
+			Publisher:  sbomPublishAdapter{publisher: nostrPub},
+			Resolver: service.SBOMSubjectResolver{
+				Artifacts:   artifactRepo,
+				Deployments: intentRepo,
+				Packages:    packageProjection,
+				Services:    serviceRepo,
+			},
+			Pubkey: servicePubkey,
+			Logger: logger,
+		})
 	}
 
 	// OCI Registry wiring.
@@ -892,6 +915,7 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:      logger,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
+		controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomOrchestrator)
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
 	}
@@ -985,6 +1009,7 @@ func New(cfg *config.Config) (*App, error) {
 			RuntimeResolver:  runtimeResolver,
 			Payments:         paymentSvc,
 			SBOMs:            sbomRepo,
+			SBOMImporter:     sbomOrchestrator,
 			Artifacts:        artifactRepo,
 			Policies:         policySvc,
 			Adoption:         adoptionSvc,
@@ -2402,6 +2427,25 @@ type encryptedRequestTransportRunner struct {
 func (r *encryptedRequestTransportRunner) Name() string { return "encrypted-request-result-events" }
 func (r *encryptedRequestTransportRunner) Run(ctx context.Context) error {
 	return r.transport.Run(ctx)
+}
+
+type sbomPublishAdapter struct {
+	publisher *nostrAdapter.Publisher
+}
+
+func (a sbomPublishAdapter) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomAdapter.PublishOKResult, error) {
+	if a.publisher == nil {
+		return nil, fmt.Errorf("nostr publisher is not configured")
+	}
+	results, err := a.publisher.PublishSignedEventWithResults(ctx, ev)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]sbomAdapter.PublishOKResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, sbomAdapter.PublishOKResult{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
+	}
+	return out, nil
 }
 
 // newDocsRelayQuerier creates a NostrDocsQuerier that queries existing NIP-23

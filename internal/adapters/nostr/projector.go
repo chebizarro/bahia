@@ -2178,8 +2178,10 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 		"package/drift-detect",
 		"approval/approve",
 		"tools/call",
+		"sbom/generate",
+		"sbom/import",
 	}
-	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step"}
+	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step", "subject", "subject_type"}
 	mcpFields := []string{"request_event_id", "request_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "observable_kinds"}
 	if llmEnabled {
 		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")

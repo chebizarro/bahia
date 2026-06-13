@@ -14,17 +14,95 @@ const (
 	SBOMFormatCycloneDX SBOMFormat = "cyclonedx"
 )
 
+// SBOMSubjectType identifies the Bahia resource type described by an SBOM.
+type SBOMSubjectType string
+
+const (
+	SBOMSubjectArtifact   SBOMSubjectType = "artifact"
+	SBOMSubjectDeployment SBOMSubjectType = "deployment"
+	SBOMSubjectPackage    SBOMSubjectType = "package"
+	SBOMSubjectRepository SBOMSubjectType = "repository"
+)
+
+// SBOMSubject identifies the resource and immutable version described by an SBOM.
+type SBOMSubject struct {
+	Type        SBOMSubjectType `json:"type"`
+	ID          string          `json:"id"`
+	DisplayName string          `json:"display_name,omitempty"`
+	Digest      string          `json:"digest"`
+}
+
+// SBOMPublishState tracks whether canonical Nostr observables were published.
+type SBOMPublishState string
+
+const (
+	SBOMPublishDraft     SBOMPublishState = "draft"
+	SBOMPublishPublished SBOMPublishState = "published"
+	SBOMPublishFailed    SBOMPublishState = "failed"
+)
+
+// SBOMSourceKind records how the SBOM payload entered Bahia.
+type SBOMSourceKind string
+
+const (
+	SBOMSourceGenerated SBOMSourceKind = "generated"
+	SBOMSourceImported  SBOMSourceKind = "imported"
+	SBOMSourceExternal  SBOMSourceKind = "external"
+)
+
+// SBOMManifest stores a subject-neutral SBOM projection. Canonical truth remains the
+// Nostr 30078 reference event and 30004 availability list.
+type SBOMManifest struct {
+	ID                  uuid.UUID        `json:"id"`
+	Subject             SBOMSubject      `json:"subject"`
+	Format              SBOMFormat       `json:"format"`
+	MediaType           string           `json:"media_type,omitempty"`
+	StorageType         SBOMStorageType  `json:"storage_type"`
+	StorageURI          string           `json:"storage_uri"`
+	PayloadSHA256       string           `json:"payload_sha256"`
+	Generator           SBOMGenerator    `json:"generator"`
+	PackageCount        int              `json:"package_count"`
+	VulnerabilityCount  int              `json:"vulnerability_count"`
+	CriticalCount       int              `json:"critical_count"`
+	HighCount           int              `json:"high_count"`
+	NTIAStatus          string           `json:"ntia_status,omitempty"`
+	NTIA                *NTIACompliance  `json:"ntia,omitempty"`
+	ReferenceEventID    string           `json:"reference_event_id,omitempty"`
+	ReferenceDTag       string           `json:"reference_d_tag,omitempty"`
+	AvailabilityEventID string           `json:"availability_event_id,omitempty"`
+	AvailabilityDTag    string           `json:"availability_d_tag,omitempty"`
+	PublishState        SBOMPublishState `json:"publish_state"`
+	PublishError        string           `json:"publish_error,omitempty"`
+	SourceKind          SBOMSourceKind   `json:"source_kind"`
+	Metadata            map[string]any   `json:"metadata,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
+	PublishedAt         *time.Time       `json:"published_at,omitempty"`
+}
+
+// SBOMManifestPackage represents a package indexed for a subject-neutral SBOM manifest.
+type SBOMManifestPackage struct {
+	ID         uuid.UUID `json:"id"`
+	ManifestID uuid.UUID `json:"manifest_id"`
+	Name       string    `json:"name"`
+	Version    string    `json:"version"`
+	Ecosystem  string    `json:"ecosystem,omitempty"`
+	License    string    `json:"license,omitempty"`
+	PURL       string    `json:"purl,omitempty"`
+	CPE        string    `json:"cpe,omitempty"`
+}
+
 // ArtifactSBOM stores a parsed SBOM record for an artifact.
 type ArtifactSBOM struct {
 	ID                 uuid.UUID      `json:"id"`
 	ArtifactID         uuid.UUID      `json:"artifact_id"`
 	Format             SBOMFormat     `json:"format"`
-	SourceURL          string         `json:"source_url,omitempty"`    // Blossom or OCI referrer
+	SourceURL          string         `json:"source_url,omitempty"` // Blossom or OCI referrer
 	PackageCount       int            `json:"package_count"`
 	VulnerabilityCount int            `json:"vulnerability_count"`
 	CriticalCount      int            `json:"critical_count"`
 	HighCount          int            `json:"high_count"`
-	RawHash            string         `json:"raw_hash,omitempty"`     // SHA-256 of raw SBOM
+	RawHash            string         `json:"raw_hash,omitempty"` // SHA-256 of raw SBOM
 	Metadata           map[string]any `json:"metadata,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
 }
@@ -37,8 +115,8 @@ type SBOMPackage struct {
 	Version   string    `json:"version"`
 	Ecosystem string    `json:"ecosystem,omitempty"` // e.g. "npm", "go", "pypi"
 	License   string    `json:"license,omitempty"`
-	PURL      string    `json:"purl,omitempty"`      // Package URL (pkg:type/name@version)
-	CPE       string    `json:"cpe,omitempty"`       // Common Platform Enumeration
+	PURL      string    `json:"purl,omitempty"` // Package URL (pkg:type/name@version)
+	CPE       string    `json:"cpe,omitempty"`  // Common Platform Enumeration
 }
 
 // HasVulnerabilities returns true if the SBOM has any known vulnerabilities.
@@ -153,28 +231,32 @@ type NTIACompliance struct {
 	IsCompliant bool `json:"isCompliant"`
 }
 
-// --- SBOM Index Types (NIP-51-style lists) ---
+// --- SBOM Availability List Types (NIP-51 lists) ---
 
-// SBOMIndexEntry represents a single SBOM reference in an index list.
+// SBOMIndexEntry represents a single SBOM reference in an availability list.
 type SBOMIndexEntry struct {
 	// SubjectDigest is the artifact digest this SBOM describes.
 	SubjectDigest string `json:"subjectDigest"`
-	// AttestationID is the Nostr event ID of the attestation.
+	// AttestationID is the Nostr event ID or addressable coordinate of the reference event.
 	AttestationID string `json:"attestationId,omitempty"`
+	// ReferenceDTag is the d tag of the canonical 30078 reference event.
+	ReferenceDTag string `json:"referenceDTag,omitempty"`
 	// Format is the SBOM format.
 	Format SBOMFormat `json:"format"`
 	// LocationURI is where to fetch the SBOM.
 	LocationURI string `json:"locationUri"`
 	// StorageType is the backend type.
 	StorageType SBOMStorageType `json:"storageType"`
+	// PayloadSHA256 is the SHA-256 digest of the externally stored SBOM payload.
+	PayloadSHA256 string `json:"payloadSha256,omitempty"`
 	// GeneratorID identifies the SBOM generator.
 	GeneratorID string `json:"generatorId,omitempty"`
 	// Timestamp is when this entry was added.
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// SBOMIndex is a NIP-51-style parameterized list of SBOMs for a subject.
-// Published as a replaceable Nostr event (kind 30078 with d-tag).
+// SBOMIndex is a NIP-51 availability list of SBOMs for a subject.
+// Published canonically as kind 30004; historical kind 30079 is read-only legacy data.
 type SBOMIndex struct {
 	// SubjectType indicates what the index is for (artifact, service, deployment).
 	SubjectType string `json:"subjectType"`

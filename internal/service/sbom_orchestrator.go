@@ -1,0 +1,454 @@
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
+	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/repository"
+	"go.uber.org/zap"
+)
+
+const (
+	KindSBOMStatus = 30315
+	KindSBOMAudit  = 4903
+)
+
+type SBOMVerifiedPublisher interface {
+	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
+}
+
+type SBOMGenerateRequest struct {
+	IDempotencyKey string                    `json:"idempotencyKey"`
+	Subject        domain.SBOMSubject        `json:"subject"`
+	Source         sbomadapter.SourceRequest `json:"source"`
+	Formats        []domain.SBOMFormat       `json:"formats"`
+	Generator      sbomadapter.GeneratorID   `json:"generator"`
+	Storage        domain.SBOMStorageType    `json:"storage"`
+}
+
+type SBOMImportRequest struct {
+	IDempotencyKey string                 `json:"idempotencyKey"`
+	Subject        domain.SBOMSubject     `json:"subject"`
+	Format         domain.SBOMFormat      `json:"format,omitempty"`
+	Payload        []byte                 `json:"-"`
+	Location       *domain.SBOMLocation   `json:"location,omitempty"`
+	Storage        domain.SBOMStorageType `json:"storage"`
+	Generator      domain.SBOMGenerator   `json:"generator,omitempty"`
+}
+
+type SBOMRunResult struct {
+	RunID             string                  `json:"run_id"`
+	Subject           domain.SBOMSubject      `json:"subject"`
+	ManifestIDs       []uuid.UUID             `json:"manifest_ids"`
+	ReferenceEventIDs []string                `json:"reference_event_ids"`
+	AvailabilityID    string                  `json:"availability_event_id"`
+	StatusDTag        string                  `json:"status_d_tag"`
+	PublishState      domain.SBOMPublishState `json:"publish_state"`
+}
+
+type SBOMSubjectResolver struct {
+	Artifacts   repository.ArtifactRepository
+	Deployments repository.DeploymentIntentRepository
+	Packages    repository.PackageControlPlaneRepository
+	Services    repository.ServiceRepository
+}
+
+func (r SBOMSubjectResolver) Resolve(ctx context.Context, subject domain.SBOMSubject) (domain.SBOMSubject, error) {
+	subject.ID = strings.TrimSpace(subject.ID)
+	subject.Digest = strings.TrimSpace(subject.Digest)
+	if subject.Type == "" || subject.ID == "" {
+		return subject, fmt.Errorf("SBOM subject type and id are required")
+	}
+	if subject.Digest != "" {
+		return subject, nil
+	}
+	id, idErr := uuid.Parse(subject.ID)
+	switch subject.Type {
+	case domain.SBOMSubjectArtifact:
+		if r.Artifacts == nil || idErr != nil {
+			return subject, fmt.Errorf("artifact subject digest is required when artifact repository/id resolution is unavailable")
+		}
+		artifact, err := r.Artifacts.GetByID(ctx, id)
+		if err != nil {
+			return subject, fmt.Errorf("resolve artifact subject: %w", err)
+		}
+		subject.Digest = artifact.ImageDigest
+		subject.DisplayName = strings.TrimSpace(artifact.ImageRepo + ":" + artifact.ImageTag)
+	case domain.SBOMSubjectDeployment:
+		if r.Deployments == nil || idErr != nil {
+			return subject, fmt.Errorf("deployment subject digest is required when deployment repository/id resolution is unavailable")
+		}
+		intent, err := r.Deployments.GetByID(ctx, id)
+		if err != nil {
+			return subject, fmt.Errorf("resolve deployment subject: %w", err)
+		}
+		if intent.DesiredHash == "" {
+			return subject, fmt.Errorf("deployment %s has no desired_hash; deployment SBOM subject digest is ambiguous", subject.ID)
+		}
+		subject.Digest = intent.DesiredHash
+		subject.DisplayName = subject.ID
+	case domain.SBOMSubjectPackage:
+		return subject, fmt.Errorf("package subject digest resolution requires package artifact coordinates; provide subject.digest")
+	case domain.SBOMSubjectRepository:
+		return subject, fmt.Errorf("repository subject digest resolution requires a git commit digest; provide subject.digest")
+	default:
+		return subject, fmt.Errorf("unsupported SBOM subject type %q", subject.Type)
+	}
+	if subject.Digest == "" {
+		return subject, fmt.Errorf("resolved %s subject %s has no digest", subject.Type, subject.ID)
+	}
+	return subject, nil
+}
+
+type SBOMOrchestrator struct {
+	Generators *sbomadapter.GeneratorRegistry
+	Storage    *sbomadapter.StorageResolver
+	Repo       repository.SBOMManifestRepository
+	Publisher  SBOMVerifiedPublisher
+	Resolver   SBOMSubjectResolver
+	Pubkey     string
+	Logger     *zap.Logger
+
+	mu      sync.Mutex
+	results map[string]SBOMRunResult
+	locks   map[string]*sync.Mutex
+}
+
+type SBOMOrchestratorConfig struct {
+	Generators *sbomadapter.GeneratorRegistry
+	Storage    *sbomadapter.StorageResolver
+	Repo       repository.SBOMManifestRepository
+	Publisher  SBOMVerifiedPublisher
+	Resolver   SBOMSubjectResolver
+	Pubkey     string
+	Logger     *zap.Logger
+}
+
+func NewSBOMOrchestrator(cfg SBOMOrchestratorConfig) *SBOMOrchestrator {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &SBOMOrchestrator{Generators: cfg.Generators, Storage: cfg.Storage, Repo: cfg.Repo, Publisher: cfg.Publisher, Resolver: cfg.Resolver, Pubkey: strings.TrimSpace(cfg.Pubkey), Logger: logger.Named("sbom-orchestrator"), results: map[string]SBOMRunResult{}, locks: map[string]*sync.Mutex{}}
+}
+
+func (s *SBOMOrchestrator) Generate(ctx context.Context, req SBOMGenerateRequest) (*SBOMRunResult, error) {
+	if s == nil || s.Generators == nil {
+		return nil, fmt.Errorf("SBOM generator registry is not configured")
+	}
+	if req.Storage != "" && req.Storage != domain.SBOMStorageBlossom {
+		return nil, fmt.Errorf("generated SBOM storage must be blossom")
+	}
+	if len(req.Formats) == 0 {
+		req.Formats = []domain.SBOMFormat{domain.SBOMFormatSPDX}
+	}
+	return s.run(ctx, req.IDempotencyKey, req.Subject, domain.SBOMSourceGenerated, func(subject domain.SBOMSubject) ([]sbomadapter.GenerateResult, error) {
+		out := make([]sbomadapter.GenerateResult, 0, len(req.Formats))
+		for _, format := range req.Formats {
+			result, err := s.Generators.GenerateSBOM(ctx, sbomadapter.GenerateRequest{Subject: subject, Source: req.Source, Format: format, Generator: req.Generator})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, *result)
+		}
+		return out, nil
+	})
+}
+
+func (s *SBOMOrchestrator) Import(ctx context.Context, req SBOMImportRequest) (*SBOMRunResult, error) {
+	if req.Storage != "" && req.Storage != domain.SBOMStorageBlossom {
+		return nil, fmt.Errorf("imported SBOM storage must be blossom")
+	}
+	return s.run(ctx, req.IDempotencyKey, req.Subject, domain.SBOMSourceImported, func(subject domain.SBOMSubject) ([]sbomadapter.GenerateResult, error) {
+		payload := req.Payload
+		if len(payload) == 0 {
+			if req.Location == nil {
+				return nil, fmt.Errorf("import payload or location is required")
+			}
+			data, err := s.Storage.Resolve(ctx, sbomadapter.ResolveInput{Location: *req.Location})
+			if err != nil {
+				return nil, err
+			}
+			payload = data
+		}
+		format := req.Format
+		if format == "" {
+			parsed, err := sbomadapter.ParseManifest(payload, subject)
+			if err != nil {
+				return nil, err
+			}
+			format = parsed.Manifest.Format
+		}
+		generator := req.Generator
+		if generator.ID == "" {
+			generator = domain.SBOMGenerator{ID: "import"}
+		}
+		return []sbomadapter.GenerateResult{{Subject: subject, Format: format, MediaType: sbomadapter.MediaTypeForFormat(format), Payload: payload, Generator: generator}}, nil
+	})
+}
+
+func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.SBOMSubject, sourceKind domain.SBOMSourceKind, produce func(domain.SBOMSubject) ([]sbomadapter.GenerateResult, error)) (*SBOMRunResult, error) {
+	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Pubkey == "" {
+		return nil, fmt.Errorf("SBOM orchestrator is not fully configured")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, fmt.Errorf("idempotencyKey is required")
+	}
+	keyLock := s.lockForKey("idempotency", key)
+	keyLock.Lock()
+	defer keyLock.Unlock()
+	if cached, ok := s.cached(key); ok {
+		return &cached, nil
+	}
+	runID := key
+	statusD := "sbom:run:" + sanitizeDTag(runID)
+	if err := s.publishStatus(ctx, statusD, subject, "accepted", "accepted", ""); err != nil {
+		return nil, err
+	}
+	subject, err := s.Resolver.Resolve(ctx, subject)
+	if err != nil {
+		_ = s.publishStatus(ctx, statusD, subject, "failed", "resolving_subject", err.Error())
+		return nil, err
+	}
+	lock := s.lockFor(subject)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := s.publishStatus(ctx, statusD, subject, "running", "resolving_subject", ""); err != nil {
+		return nil, err
+	}
+	produced, err := produce(subject)
+	if err != nil {
+		_ = s.publishStatus(ctx, statusD, subject, "failed", "generating", err.Error())
+		return nil, err
+	}
+	result := SBOMRunResult{RunID: runID, Subject: subject, StatusDTag: statusD, PublishState: domain.SBOMPublishPublished}
+	var availabilityEntries []domain.SBOMIndexEntry
+	if existing, err := s.Repo.ListManifestsBySubject(ctx, subject, 500); err == nil {
+		for _, manifest := range existing {
+			if manifest.PublishState == domain.SBOMPublishPublished && manifest.ReferenceDTag != "" && manifest.StorageURI != "" && manifest.PayloadSHA256 != "" {
+				availabilityEntries = append(availabilityEntries, manifestEntry(manifest, s.Pubkey))
+			}
+		}
+	} else {
+		_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_available_list", "load existing SBOM availability projection: "+err.Error())
+		return nil, fmt.Errorf("load existing SBOM availability projection: %w", err)
+	}
+	type pendingProjection struct {
+		manifest *domain.SBOMManifest
+		packages []domain.SBOMManifestPackage
+	}
+	projected := make([]pendingProjection, 0, len(produced))
+	for _, item := range produced {
+		manifest, pkgs, entry, refID, err := s.processOne(ctx, statusD, item, sourceKind)
+		if err != nil {
+			_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_reference", err.Error())
+			return nil, err
+		}
+		availabilityEntries = append(availabilityEntries, entry)
+		projected = append(projected, pendingProjection{manifest: manifest, packages: pkgs})
+		result.ManifestIDs = append(result.ManifestIDs, manifest.ID)
+		result.ReferenceEventIDs = append(result.ReferenceEventIDs, refID)
+		result.AvailabilityID = ""
+	}
+	if err := s.publishStatus(ctx, statusD, subject, "running", "publishing_available_list", ""); err != nil {
+		return nil, err
+	}
+	listEvent, listD, err := sbomadapter.BuildSBOMAvailabilityListEvent(sbomadapter.BuildSBOMAvailabilityListEventInput{Subject: subject, Entries: availabilityEntries, PublisherPubkey: s.Pubkey})
+	if err != nil {
+		_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_available_list", err.Error())
+		return nil, err
+	}
+	listID, err := s.publishVerified(ctx, listEvent, "SBOM availability list")
+	if err != nil {
+		_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_available_list", err.Error())
+		return nil, err
+	}
+	result.AvailabilityID = listID
+	if err := s.publishStatus(ctx, statusD, subject, "running", "projecting", ""); err != nil {
+		s.Logger.Warn("publish SBOM projecting status failed after canonical events were accepted", zap.Error(err))
+	}
+	for _, projection := range projected {
+		projection.manifest.AvailabilityEventID = listID
+		projection.manifest.AvailabilityDTag = listD
+		if err := s.Repo.ProjectManifest(ctx, projection.manifest, projection.packages); err != nil {
+			_ = s.publishAudit(ctx, subject, "sbom.projection_failed", err.Error())
+			_ = s.publishStatus(ctx, statusD, subject, "failed", "projecting", err.Error())
+			return nil, err
+		}
+	}
+	if err := s.publishAudit(ctx, subject, auditAction(sourceKind), ""); err != nil {
+		s.Logger.Warn("publish SBOM audit failed after canonical events were accepted", zap.Error(err))
+	}
+	if err := s.publishStatus(ctx, statusD, subject, "completed", "completed", ""); err != nil {
+		s.Logger.Warn("publish SBOM completed status failed after canonical events were accepted", zap.Error(err))
+	}
+	s.remember(key, result)
+	return &result, nil
+}
+
+func (s *SBOMOrchestrator) processOne(ctx context.Context, statusD string, item sbomadapter.GenerateResult, sourceKind domain.SBOMSourceKind) (*domain.SBOMManifest, []domain.SBOMManifestPackage, domain.SBOMIndexEntry, string, error) {
+	if err := s.publishStatus(ctx, statusD, item.Subject, "running", "parsing", ""); err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	parsed, err := sbomadapter.ParseManifest(item.Payload, item.Subject)
+	if err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	if err := s.publishStatus(ctx, statusD, item.Subject, "running", "uploading_to_blossom", ""); err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	stored, err := s.Storage.Store(ctx, sbomadapter.StoreInput{Data: item.Payload, Format: parsed.Manifest.Format, BackendType: domain.SBOMStorageBlossom})
+	if err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	payloadSHA := sha256Hex(item.Payload)
+	if !strings.EqualFold(stored.Hash, payloadSHA) {
+		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("Blossom payload hash %s does not match local payload SHA-256 %s", stored.Hash, payloadSHA)
+	}
+	packages := manifestPackagesToLegacy(parsed.Packages)
+	att, err := sbomadapter.NewAttestationBuilder(item.Generator.ID, item.Generator.Version, item.Generator.Pubkey).BuildAttestation(sbomadapter.BuildAttestationInput{Subject: &item.Subject, SBOMData: item.Payload, Format: parsed.Manifest.Format, Location: stored.Location, Generator: &item.Generator, ParsedPackages: packages})
+	if err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	if !sbomadapter.VerifySBOMSubjectDigest(att, item.Subject) || !sbomadapter.VerifyPayloadDigest(att, item.Payload) {
+		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("SBOM attestation verification failed")
+	}
+	if err := s.publishStatus(ctx, statusD, item.Subject, "running", "publishing_reference", ""); err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	refEvent, refD, err := sbomadapter.BuildSBOMReferenceEvent(sbomadapter.BuildSBOMReferenceEventInput{Subject: item.Subject, Attestation: att})
+	if err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	refID, err := s.publishVerified(ctx, refEvent, "SBOM reference")
+	if err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", err
+	}
+	parsed.Manifest.StorageType = domain.SBOMStorageBlossom
+	parsed.Manifest.StorageURI = stored.Location.URI
+	parsed.Manifest.PayloadSHA256 = payloadSHA
+	parsed.Manifest.Generator = item.Generator
+	parsed.Manifest.NTIA = att.Predicate.NTIA
+	parsed.Manifest.NTIAStatus = ntiaStatus(att.Predicate.NTIA)
+	parsed.Manifest.ReferenceEventID = refID
+	parsed.Manifest.ReferenceDTag = refD
+	parsed.Manifest.PublishState = domain.SBOMPublishPublished
+	parsed.Manifest.SourceKind = sourceKind
+	now := time.Now().UTC()
+	parsed.Manifest.CreatedAt = now
+	parsed.Manifest.UpdatedAt = now
+	parsed.Manifest.PublishedAt = &now
+	entry := domain.SBOMIndexEntry{SubjectDigest: item.Subject.Digest, AttestationID: fmt.Sprintf("%d:%s:%s", sbomadapter.KindSBOMReference, s.Pubkey, refD), ReferenceDTag: refD, Format: parsed.Manifest.Format, LocationURI: stored.Location.URI, StorageType: domain.SBOMStorageBlossom, PayloadSHA256: payloadSHA, GeneratorID: item.Generator.ID, Timestamp: now}
+	return &parsed.Manifest, parsed.Packages, entry, refID, nil
+}
+
+func (s *SBOMOrchestrator) publishStatus(ctx context.Context, d string, subject domain.SBOMSubject, status, step, message string) error {
+	content, _ := json.Marshal(map[string]any{"status": status, "step": step, "subject": subject, "message": message, "updated_at": time.Now().UTC()})
+	ev := &nostr.Event{Kind: KindSBOMStatus, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "sbom"}, {"status", status}, {"step", step}, {"subject_type", string(subject.Type)}, {"subject", subject.Digest}}, Content: string(content)}
+	_, err := s.publishVerified(ctx, ev, "SBOM status")
+	return err
+}
+
+func (s *SBOMOrchestrator) publishAudit(ctx context.Context, subject domain.SBOMSubject, action, message string) error {
+	content, _ := json.Marshal(map[string]any{"action": action, "subject": subject, "message": message, "created_at": time.Now().UTC()})
+	ev := &nostr.Event{Kind: KindSBOMAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", "sbom"}, {"action", action}, {"subject_type", string(subject.Type)}, {"subject", subject.Digest}}, Content: string(content)}
+	_, err := s.publishVerified(ctx, ev, "SBOM audit")
+	return err
+}
+
+func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event, label string) (string, error) {
+	results, err := s.Publisher.PublishSignedEventWithResults(ctx, ev)
+	if err != nil {
+		return "", fmt.Errorf("publishing %s event: %w", label, err)
+	}
+	if len(results) == 0 {
+		return "", fmt.Errorf("publishing %s event: no relay OK results", label)
+	}
+	var rejections []string
+	for _, result := range results {
+		if result.Accepted {
+			if s.Pubkey != "" && !strings.EqualFold(ev.PubKey.Hex(), s.Pubkey) {
+				return "", fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", label, ev.PubKey.Hex(), s.Pubkey)
+			}
+			return nostrutil.EventIDHex(ev), nil
+		}
+		relay := result.RelayURL
+		if relay == "" {
+			relay = "unknown relay"
+		}
+		if result.Reason != "" {
+			rejections = append(rejections, relay+" rejected event: "+result.Reason)
+		} else if result.Error != nil {
+			rejections = append(rejections, fmt.Sprintf("%s publish error: %v", relay, result.Error))
+		} else {
+			rejections = append(rejections, relay+" returned OK accepted=false without reason")
+		}
+	}
+	return "", fmt.Errorf("publishing %s event: no relay accepted event: %s", label, strings.Join(rejections, "; "))
+}
+
+func (s *SBOMOrchestrator) cached(key string) (SBOMRunResult, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.results[key]
+	return r, ok
+}
+func (s *SBOMOrchestrator) remember(key string, r SBOMRunResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results[key] = r
+}
+func (s *SBOMOrchestrator) lockFor(subject domain.SBOMSubject) *sync.Mutex {
+	return s.lockForKey("subject", string(subject.Type)+"\x00"+subject.ID+"\x00"+subject.Digest)
+}
+func (s *SBOMOrchestrator) lockForKey(namespace, key string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := namespace + "\x00" + key
+	if s.locks[k] == nil {
+		s.locks[k] = &sync.Mutex{}
+	}
+	return s.locks[k]
+}
+
+func manifestEntry(m domain.SBOMManifest, publisherPubkey string) domain.SBOMIndexEntry {
+	return domain.SBOMIndexEntry{SubjectDigest: m.Subject.Digest, AttestationID: fmt.Sprintf("%d:%s:%s", sbomadapter.KindSBOMReference, publisherPubkey, m.ReferenceDTag), ReferenceDTag: m.ReferenceDTag, Format: m.Format, LocationURI: m.StorageURI, StorageType: m.StorageType, PayloadSHA256: m.PayloadSHA256, GeneratorID: m.Generator.ID, Timestamp: m.CreatedAt}
+}
+func manifestPackagesToLegacy(pkgs []domain.SBOMManifestPackage) []domain.SBOMPackage {
+	out := make([]domain.SBOMPackage, len(pkgs))
+	for i, p := range pkgs {
+		out[i] = domain.SBOMPackage{Name: p.Name, Version: p.Version, Ecosystem: p.Ecosystem, License: p.License, PURL: p.PURL, CPE: p.CPE}
+	}
+	return out
+}
+func sha256Hex(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+func sanitizeDTag(value string) string {
+	return strings.NewReplacer(" ", "-", "/", "-", "#", "-", "?", "-").Replace(value)
+}
+func ntiaStatus(ntia *domain.NTIACompliance) string {
+	if ntia == nil {
+		return "unknown"
+	}
+	if ntia.IsCompliant {
+		return "compliant"
+	}
+	return "partial"
+}
+func auditAction(kind domain.SBOMSourceKind) string {
+	if kind == domain.SBOMSourceImported {
+		return "sbom.imported"
+	}
+	return "sbom.generated"
+}

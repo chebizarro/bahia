@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-1qe9.2",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Domain exposes subject-neutral SBOM subjects, manifests, manifest packages, publish states, and source kinds while preserving existing ArtifactSBOM and SBOMPackage behavior."
+    },
+    {
+      "id": "AC2",
+      "description": "Database migrations create and roll back generalized sbom_manifests and sbom_manifest_packages projections with subject, storage, generator, Nostr publish state, package index, and dedupe constraints."
+    },
+    {
+      "id": "AC3",
+      "description": "Repository methods can insert/dedupe/list SBOM manifests, update publish state, search manifest packages, and preserve artifact compatibility projections for artifact subjects."
+    }
+  ]
+}

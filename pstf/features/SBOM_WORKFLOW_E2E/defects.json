@@ -15,9 +15,45 @@
     },
     {
       "id": "D3",
-      "status": "out_of_scope_existing_suite_drift",
-      "description": "The full Playwright suite has 59 existing failures outside the SBOM workflow area, largely stale REST-mocked or selector assumptions against current relay-backed UI behavior.",
-      "evidence": "`npx playwright test` completed with 62 passed and 59 failed; SBOM workflow tests passed in that run."
+      "status": "tracked",
+      "description": "Broad browser E2E coverage does not yet drive a signer-first SBOM generate/import UI/control surface through ContextVM and observe 30315/4903/30078/30004 relay outcomes end-to-end.",
+      "evidence": "Current deterministic coverage proves the service, event builders, REST compatibility, MCP compatibility, and artifact/event UI slices. Broader browser E2E is tracked in Bead bahia-wf2k with acceptance criteria for injected EVENT/EOSE/OK behavior and no sleep/polling completion."
+    },
+    {
+      "id": "D4",
+      "status": "fixed",
+      "description": "SBOM storage tests only asserted hash mismatch failure and did not prove successful Blossom store, resolve, and payload verification in one deterministic path.",
+      "evidence": "Added TestStorageResolver_ResolveAndVerify to store exact payload bytes on the mock Blossom client, resolve by returned location, verify the attestation hash, and reject a mutated hash."
+    },
+    {
+      "id": "D5",
+      "status": "fixed",
+      "description": "SBOM orchestration projected manifests before publishing the canonical 30004 availability list, which inverted the design flow where relay observables are canonical and the database is a projection.",
+      "evidence": "bahia-1qe9.9 moved ProjectManifest until after accepted 30078 and 30004 publication, persists availability_event_id/availability_d_tag, and added TestSBOMOrchestratorGeneratePublishesProjectsAndAudits ordering assertions."
+    },
+    {
+      "id": "D6",
+      "status": "fixed",
+      "description": "REST compatibility SBOM ingest used io.LimitReader in a way that could silently truncate payloads larger than 10 MiB and import the truncated bytes.",
+      "evidence": "bahia-1qe9.9 rejects payloads larger than 10 MiB with HTTP 413 and TestIngestSBOMRejectsOversizedPayloadWithoutImport proves the import service is not called."
+    },
+    {
+      "id": "D7",
+      "status": "tracked",
+      "description": "The optional cdxgen adapter exists but is not wired into runtime app configuration, so operators cannot enable cdxgen-backed CycloneDX repository generation in production wiring.",
+      "evidence": "Tracked as Bead bahia-qfod with acceptance criteria for config fields, app wiring, deterministic tests, and PSTF/docs updates."
+    },
+    {
+      "id": "D8",
+      "status": "tracked",
+      "description": "ContextVM sbom/generate and sbom/import handlers currently return after synchronous orchestration completion; architecture needs an explicit decision documenting whether this is acceptable or should become immediate acknowledgment plus event-driven background completion.",
+      "evidence": "Tracked as Bead bahia-ilio with acceptance criteria to record HITL decision and either implement asynchronous ack semantics or document/test retained synchronous behavior while preserving terminal truth in 30078/30004."
+    },
+    {
+      "id": "D9",
+      "status": "tracked",
+      "description": "SBOM 30004 availability-list replacement currently merges local projection entries under a process-local subject lock, but does not yet subscribe to relay canonical history and merge valid entries from other Bahia instances before replacing the complete list.",
+      "evidence": "Tracked as Bead bahia-ndmr with acceptance criteria for scoped REQ, EVENT/EOSE/CLOSED/AUTH handling, signature/content validation, merge/dedupe, OK-verified publish, and deterministic tests without sleeps."
     }
   ]
 }

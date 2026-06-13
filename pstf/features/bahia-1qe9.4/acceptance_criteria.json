@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-1qe9.4",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "SBOM adapter package exposes generator interfaces, generator selection IDs, subject-neutral generation requests, source request kinds, generated payload results, and an auto-selection registry with Syft as the required default."
+    },
+    {
+      "id": "AC2",
+      "description": "Syft-backed generator uses github.com/anchore/syft/syft library APIs to generate real SPDX JSON and CycloneDX JSON payloads from supported sources and validates emitted JSON format markers."
+    },
+    {
+      "id": "AC3",
+      "description": "Optional cdxgen executable adapter generates CycloneDX JSON for repository sources, reports explicit unavailable-binary/disabled errors when requested, and is used by auto selection only when enabled and available."
+    }
+  ]
+}

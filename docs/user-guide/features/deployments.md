@@ -61,6 +61,28 @@ Generated Compose env files may contain resolved secret values because Docker Co
 
 Kubernetes desired-state apply and Compose per-service fragments are deferred. Until those follow-up slices land, Kubernetes remains outside the Compose/Docker desired-state behavior and Compose uses the authoritative full-project output.
 
+## Deployment SBOMs
+
+Deployment subjects can be covered by SBOM manifests when the deployment intent has a stable desired-state hash. Bahia uses that desired hash as the deployment subject digest, then follows the same canonical SBOM flow as artifacts and packages: generate/import payload bytes, store them on Blossom, publish a `30078` SBOM reference, publish/replace the deployment-scoped `30004` availability list, and emit `30315` status plus `4903` audit observables.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sbom-deployment-intent-123",
+  "method": "sbom/generate",
+  "params": {
+    "idempotencyKey": "sbom-deployment-intent-123",
+    "subject": { "type": "deployment", "id": "intent-123" },
+    "source": { "kind": "directory", "locator": "<rendered-desired-state-dir>" },
+    "formats": ["spdx"],
+    "generator": "syft",
+    "storage": "blossom"
+  }
+}
+```
+
+If the deployment intent has no desired-state hash, provide an explicit `subject.digest` or resolve the deployment state first.
+
 ## Creating Deployments
 
 ### Web UI

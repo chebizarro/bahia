@@ -24,6 +24,7 @@ const (
 	CanonicalContextVMTemplates    = 11319
 	CanonicalContextVMPrompts      = 11320
 	CanonicalNIP51RelaySet         = 30002
+	CanonicalNIP51AvailabilityList = 30004
 	CanonicalNIP78AppData          = 30078
 )
 
@@ -193,6 +194,9 @@ var constantJustifications = map[string]KindJustification{
 	"ContextVMPromptsList":           omitted("ContextVMPromptsList", kinds.ContextVMPromptsList, "canonical-discovery", "canonical ContextVM prompts list; not a legacy Bahia event kind"),
 	"NIP65RelayList":                 omitted("NIP65RelayList", kinds.NIP65RelayList, "standard", "standard NIP-65 relay list consumed directly, not rewritten by Bahia migration"),
 	"NIP51DMRelayList":               omitted("NIP51DMRelayList", kinds.NIP51DMRelayList, "standard", "standard NIP-51 DM relay list consumed directly for configured receive relays, not rewritten by Bahia migration"),
+	"SBOMAvailabilityList":           omitted("SBOMAvailabilityList", kinds.SBOMAvailabilityList, "canonical-target", "canonical NIP-51 SBOM availability list output; legacy SBOM index events map to this kind"),
+	"SBOMAttestation":                omitted("SBOMAttestation", kinds.SBOMAttestation, "canonical-alias", "compatibility alias for SBOMReference; canonical schema is bahia.sbom.ref.v1"),
+	"SBOMIndex":                      omitted("SBOMIndex", kinds.SBOMIndex, "legacy-alias", "legacy SBOM index alias retained for read-only migration compatibility; production availability lists use SBOMAvailabilityList"),
 	"LongFormContent":                omitted("LongFormContent", kinds.LongFormContent, "standard", "standard NIP-23 long-form content event consumed directly; not a Bahia legacy control-plane/read-model kind to rewrite"),
 	"LongFormDraft":                  omitted("LongFormDraft", kinds.LongFormDraft, "standard", "standard NIP-23 long-form draft event consumed directly; not a Bahia legacy control-plane/read-model kind to rewrite"),
 	"NostrSignature":                 omitted("NostrSignature", kinds.NostrSignature, "custom-support", "signature support event is not part of the legacy control-plane/read-model migration inventory"),
@@ -343,8 +347,8 @@ func buildManifest() map[int]Disposition {
 
 	m[kinds.SystemDiscovery] = Disposition{LegacyKind: kinds.SystemDiscovery, CanonicalKind: CanonicalContextVMDiscovery, Layer: LayerDiscovery, Domain: "system", Operation: "discover", Schema: "bahia.system-discovery.v1", DTagPrefix: "bahia-system-v1"}
 	m[kinds.RelaySetDiscovery] = Disposition{LegacyKind: kinds.RelaySetDiscovery, CanonicalKind: CanonicalNIP51RelaySet, Layer: LayerCollection, Domain: "relay", Operation: "relay-set", Schema: "bahia.relay-set.v1", DTagPrefix: "relays"}
-	m[kinds.SBOMAttestation] = Disposition{LegacyKind: kinds.SBOMAttestation, CanonicalKind: CanonicalNIP78AppData, Layer: LayerAppData, Domain: "sbom", Operation: "app-data", Schema: "bahia.sbom.attestation.v1", DTagPrefix: "sbom"}
-	m[kinds.SBOMIndex] = Disposition{LegacyKind: kinds.SBOMIndex, CanonicalKind: CanonicalNIP78AppData, Layer: LayerAppData, Domain: "sbom", Operation: "app-data", Schema: "bahia.sbom.index.v1", DTagPrefix: "sbom"}
+	m[kinds.SBOMReference] = Disposition{LegacyKind: kinds.SBOMReference, CanonicalKind: CanonicalNIP78AppData, Layer: LayerAppData, Domain: "sbom", Operation: "reference", Schema: "bahia.sbom.ref.v1", DTagPrefix: "sbom:ref"}
+	m[kinds.LegacySBOMIndex] = Disposition{LegacyKind: kinds.LegacySBOMIndex, CanonicalKind: CanonicalNIP51AvailabilityList, Layer: LayerCollection, Domain: "sbom", Operation: "available-list", Schema: "bahia.sbom.available-list.v1", DTagPrefix: "sbom:available"}
 
 	for kind := kinds.AuditMin; kind <= kinds.DNSEndpointDeregisteredAudit; kind++ {
 		addAudit(kind, "audit", "bahia.audit.v1")

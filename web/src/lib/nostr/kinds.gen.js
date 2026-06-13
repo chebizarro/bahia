@@ -147,6 +147,9 @@ export const REPLICATION_POLICY = 31403;
 export const RECOVERY_WORKFLOW = 31404;
 export const FAILOVER_REQUEST = 38430;
 export const RECOVERY_REQUEST = 38431;
+export const SBOM_REFERENCE = 30078;
+export const SBOM_AVAILABILITY_LIST = 30004;
+export const LEGACY_SBOM_INDEX = 30079;
 export const SBOM_ATTESTATION = 30078;
 export const SBOM_INDEX = 30079;
 export const BAHIA_READINESS_STATUS = 30360;
@@ -367,7 +370,9 @@ export const DNS_STATE_SCHEMAS = Object.freeze({
 
 export const BAHIA_SYSTEM_DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
 export const BAHIA_RELAY_SET_SCHEMA = 'bahia.relay-set.v1';
-export const BAHIA_SBOM_ATTESTATION_SCHEMA = 'bahia.sbom.attestation.v1';
+export const BAHIA_SBOM_REFERENCE_SCHEMA = 'bahia.sbom.ref.v1';
+export const BAHIA_SBOM_AVAILABLE_LIST_SCHEMA = 'bahia.sbom.available-list.v1';
+export const BAHIA_SBOM_ATTESTATION_SCHEMA = BAHIA_SBOM_REFERENCE_SCHEMA;
 export const BAHIA_SBOM_INDEX_SCHEMA = 'bahia.sbom.index.v1';
 export const BAHIA_AUDIT_SCHEMA = 'bahia.audit.v1';
 
@@ -443,7 +448,7 @@ export const BAHIA_READ_MODEL_KINDS = [
 ];
 
 export const BAHIA_STATUS_KINDS = [NIP38_STATUS];
-export const BAHIA_SBOM_KINDS = [NIP78_APP_DATA];
+export const BAHIA_SBOM_KINDS = [NIP78_APP_DATA, SBOM_AVAILABILITY_LIST];
 export const BAHIA_AUDIT_KINDS = [CASCADIA_AUDIT];
 export const BAHIA_CONTROLPLANE_KINDS = [
   ...BAHIA_READ_MODEL_KINDS,

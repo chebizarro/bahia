@@ -1,12 +1,13 @@
 {
   "feature_id": "SBOM_WORKFLOW_E2E",
-  "beads_issue": "bahia-wvxy",
-  "title": "E2E coverage for full SBOM workflow",
+  "beads_issue": "bahia-1qe9.8",
+  "title": "Real SBOM support PSTF, deterministic tests, and user documentation",
   "observed_context": [
-    "Artifact detail page renders SBOMDetails only after switching to the SBOM tab.",
-    "Policy create flow defaults to the visual PolicyRuleBuilder and can sync visual rules to the JSON editor.",
-    "Events page provides an SBOM filter category for canonical SBOM attestation/index events."
+    "Completed SBOM implementation epics bahia-1qe9.1 through bahia-1qe9.7 introduced canonical SBOM event contracts, subject-neutral domain/projection storage, parser and attestation refactors, Syft/cdxgen generator adapters, Blossom storage, Nostr 30078/30004 publication with relay OK verification, orchestration service status/audit publication, ContextVM methods, REST compatibility import, and compatibility read projections.",
+    "docs/designs/sbom-real-support.md defines the intended canonical flow: ContextVM sbom/generate or sbom/import intent, status progression, real generation/import, Blossom upload and hash verification, 30078 SBOM reference publication, 30004 availability-list publication, projection, audit, and completed status.",
+    "Existing UI E2E coverage verifies artifact SBOM detail rendering, empty state behavior, SBOM policy builder behavior, and canonical SBOM event filtering.",
+    "Existing REST compatibility tests verify POST /artifacts/{id}/sbom delegates to the import service, requires that service, and preserves hash-idempotent compatibility reads."
   ],
-  "intended_behavior": "Users can view SBOM attestations on artifact pages, build SBOM policy rules visually, and filter live events to SBOM-specific activity.",
-  "scope": "Playwright E2E tests plus canonical SBOM event subscription coverage for the events read model."
+  "intended_behavior": "Bahia generates or imports real SPDX/CycloneDX SBOM payloads for artifact, deployment, package, and repository subjects; stores generated/imported payload bytes on Blossom; verifies payload hashes; publishes accepted 30078 SBOM reference events and complete accepted 30004 availability lists; emits event-driven 30315 status and 4903 audit facts; keeps REST and MCP surfaces as compatibility/read-model conveniences; and documents the workflow for users and operators.",
+  "scope": "PSTF artifacts, deterministic unit/integration/E2E test mapping, narrow missing tests, and user documentation for artifacts, packages, deployments, Nostr integration, and MCP SBOM tools."
 }

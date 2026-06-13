@@ -14,6 +14,7 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | Canonical state | `30900`, `30078` | outbound replaceable/addressable | Control-plane state projections and NIP-78 app-specific data |
 | Canonical audit/status | `4903`, `30315` | outbound | Immutable audit facts and NIP-38 operational statuses |
 | Relay sets | `30002` | outbound addressable | NIP-51 relay topology and bootstrap sets |
+| SBOM availability lists | `30004` | outbound addressable | NIP-51 complete availability lists for subject-scoped SBOM references |
 | Relay preferences | `10002` | outbound replaceable | Advisory NIP-65 service read/write hints; not Bahia bootstrap |
 | DM relay lists | `10050` | optional replaceable | NIP-51 DM receive routing only for explicitly configured DM-enabled features and identities |
 | Repository state | `30617`, `30618` | inbound/outbound by repository owner | NIP-34 repository announcements and state; repository relay hints are preferred for repository operations |
@@ -65,7 +66,7 @@ A successful ContextVM response is an acknowledgment that Bahia accepted or reje
 
 ```json
 {
-  "kinds": [30900, 30315, 4903],
+  "kinds": [30900, 30315, 4903, 30078, 30004],
   "authors": ["<bahia-service-pubkey>"],
   "#service": ["api"],
   "#environment": ["prod"]
@@ -78,7 +79,7 @@ Use these rules:
 2. Process stored events until `EOSE` for historical catch-up.
 3. Keep the subscription open for realtime convergence.
 4. Deduplicate by event id.
-5. Apply replaceable semantics for `(kind, pubkey, d)` on `30900`, `30078`, `11316`-`11320`, and `30002`.
+5. Apply replaceable semantics for `(kind, pubkey, d)` on `30900`, `30078`, `11316`-`11320`, `30002`, and `30004`.
 6. Treat relay `OK`, `CLOSED`, and `AUTH` messages as protocol outcomes, not log noise.
 
 ## Desired-State Runtime Metadata
@@ -110,6 +111,16 @@ Use tags for routing and correlation so subscribers do not need to parse content
 - `["status", "running" | "success" | "failed" | ...]`
 - `["step", "building_desired_state" | "locking_environment" | "rendering" | "applying" | "observing" | "projecting" | ...]`
 - `["desired_hash", "<sha256:...>"]`, `["renderer", "compose" | "docker" | ...]`, and `["target", "<stable-runtime-service-key>"]` when desired-state metadata is available
+
+## SBOM Observables
+
+SBOM generation and import intents are ContextVM methods such as `sbom/generate` and `sbom/import`. The JSON-RPC response is an acknowledgment only. Durable truth comes from:
+
+- `30078` SBOM reference app-data events with `domain=sbom`, `schema=bahia.sbom.ref.v1`, and `d=sbom:ref:<subject-key>:<format>:<payload-sha256>`.
+- `30004` NIP-51 availability lists with `domain=sbom`, `schema=bahia.sbom.available-list.v1`, and `d=sbom:available:<subject-type>:<subject-key>`.
+- `30315` status and `4903` audit events for progress and provenance.
+
+The legacy `30079` SBOM index kind is read-only compatibility data and is not a publication target.
 
 ## Discovery and Relay Sets
 
@@ -238,6 +249,7 @@ These families are retained only for migration manifests, historical conversion 
 | `6961`-`6997` excluding SoulFactory interop `6950` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003` | read models | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| `30079` | SBOM index | read-only compatibility; canonical SBOM availability uses NIP-51 `30004` |
 | worker cleanup lifecycle | Fleet Health cleanup status | `30900` with `schema=bahia.state.worker-cleanup.v1`; mutation remains encrypted ContextVM `worker/cleanup` |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |

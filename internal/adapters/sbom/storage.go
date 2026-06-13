@@ -174,12 +174,12 @@ func (r *StorageResolver) Store(ctx context.Context, input StoreInput) (*StoreRe
 		return r.storeToBlossom(ctx, input.Data, input.Format)
 
 	case domain.SBOMStorageOCI:
-		// OCI storage is typically handled by external tools (e.g., cosign, oras)
-		// that attach SBOMs as referrers. This is a placeholder for direct support.
-		return nil, fmt.Errorf("direct OCI storage not yet implemented; use cosign or oras to attach SBOMs")
+		// Real SBOM generation/import stores canonical payload bytes on Blossom.
+		// OCI referrer writes are intentionally outside this storage path.
+		return nil, fmt.Errorf("direct OCI SBOM storage is unsupported by this path; store generated/imported SBOM payloads on Blossom")
 
 	case domain.SBOMStoragePackage:
-		return nil, fmt.Errorf("direct package backend storage not yet implemented")
+		return nil, fmt.Errorf("direct package backend SBOM storage is unsupported by this path; store generated/imported SBOM payloads on Blossom")
 
 	default:
 		return nil, fmt.Errorf("unsupported storage backend: %s", input.BackendType)

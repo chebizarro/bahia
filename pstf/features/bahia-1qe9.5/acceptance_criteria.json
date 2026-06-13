@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-1qe9.5",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Build canonical kind 30078 NIP-78 SBOM reference events with subject-key d tags, SBOM domain/schema tags, subject type/digest tags, Blossom location, payload SHA-256, media type, generator, NTIA status, and resource tags."
+    },
+    {
+      "id": "AC2",
+      "description": "Build canonical kind 30004 NIP-51 complete SBOM availability lists for one subject version with subject-key d tags, a-tags to 30078 references, sbom summary tags containing payload SHA-256 and reference d tags, and deterministic entry dedupe."
+    },
+    {
+      "id": "AC3",
+      "description": "Publish SBOM reference and availability events only after at least one relay OK result has accepted=true, and surface rejected, auth-required, and closed/error paths without sleeps or timeout-based completion."
+    }
+  ]
+}

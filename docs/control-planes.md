@@ -140,10 +140,10 @@ Production runtime subscribes to ContextVM `25910` messages and canonical observ
 | Series | Kinds | Production role |
 |--------|-------|-----------------|
 | ContextVM CRU | `25910` inside `1059`/`21059` where supported | Browser/CLI/agent JSON-RPC mutation methods and correlated responses |
-| Canonical state | `30900`, `30078` | Control-plane state projections and NIP-78 app-specific data |
+| Canonical state | `30900`, `30078` | Control-plane state projections and NIP-78 app-specific data; SBOM references use `30078` with `schema=bahia.sbom.ref.v1` |
 | Canonical audit/status | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
 | ContextVM discovery | `11316`-`11320` | Server, tool, resource, prompt, and template announcements |
-| Relay sets | `30002` | NIP-51 relay topology and bootstrap sets |
+| Relay sets and curation sets | `30002`, `30004` | NIP-51 relay topology/bootstrap sets and complete SBOM availability lists |
 | Deletions | `5` | NIP-09 delete events where relay-level deletion semantics apply |
 
 Historical Bahia-specific request/status/result/read-model/encrypted ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are migration inventory only. Production clients must not publish or subscribe to those numbers as live runtime contracts; they may appear in startup migration manifests, historical conversion tests, and fail-closed fixtures.
@@ -172,7 +172,7 @@ Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecyc
 1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/restart`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, or `ml/recipe-run`.
 2. Publish the request as ContextVM kind `25910`, usually wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`) when encrypted transport is available.
 3. Require relay `OK` with `accepted=true` for the signed Nostr event. A JSON-RPC acknowledgment is only command receipt, not proof of long-running completion.
-4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, and discovery/relay updates (`11316`-`11320`, `30002`).
+4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
 5. Treat EOSE as historical catch-up only; keep subscriptions open for realtime convergence. Deduplicate by event id and use replaceable semantics for `(kind, pubkey, d-tag)` state events.
 6. Handle `CLOSED` and `AUTH` explicitly. Auth-related closures fail distinctly; non-auth closures fail only when all known result/observable relays close before a correlated terminal state/audit/status event.
 
@@ -198,7 +198,8 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 | `30315` | NIP-38 operational status | Scope by service author, `#d`, `#status`, resource tags, and correlation `#e` |
 | `11316`-`11320` | ContextVM server/tool/resource/prompt/template discovery | Scope by Bahia service pubkey; use for bootstrap before mutation or state subscriptions |
 | `30002` | NIP-51 relay set | Scope by Bahia service pubkey and relay-set `#d` tags |
-| `30078` | NIP-78 app data | Scope by Bahia service pubkey, `#d`, `#domain`, and `#schema` |
+| `30004` | NIP-51 Curation Set | Scope by Bahia service pubkey, `#d`, `#domain=sbom`, `#schema=bahia.sbom.available-list.v1`, and subject tags |
+| `30078` | NIP-78 app data | Scope by Bahia service pubkey, `#d`, `#domain`, and `#schema`; SBOM references use `#domain=sbom` and `#schema=bahia.sbom.ref.v1` |
 | `5` | NIP-09 delete | Scope by service author and `#e`/`#a` references |
 
 DNS state uses the same canonical observable stream rather than a custom Bahia read-model range. Deletions may be NIP-09 kind `5` events or canonical tombstone replacements with `deleted=true` when domain state requires durable tombstones.
@@ -210,7 +211,8 @@ AI/ML and backup operators use ContextVM mutation methods (`ml/model-import`, `m
 - `30900` for desired/observed state projections.
 - `4903` for immutable audit facts and provenance breadcrumbs.
 - `30315` for operational status and progress.
-- `30078` for app-specific registries and operator-visible projection details.
+- `30078` for app-specific registries, SBOM references, and operator-visible projection details.
+- `30004` for NIP-51 SBOM availability lists when a subject has one or more SBOM references.
 - `5` for NIP-09 deletion where relay-level deletion semantics apply.
 
 Historical AI/ML and backup custom ranges (`38390`-`38431`, `31980`-`31999`, `6981`-`6984`) are migration inventory only. They may appear in startup migration manifests, historical conversion reports, and fail-closed fixtures, but production docs must not instruct clients to publish or subscribe to them as live runtime contracts. Artifact signature attestation kind `31200` remains a historical artifact-signature reference and is not a replacement for canonical Bahia audit/status observability.

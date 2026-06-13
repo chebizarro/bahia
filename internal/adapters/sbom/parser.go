@@ -11,53 +11,126 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// ParseResult holds the result of parsing an SBOM document.
+// ParseResult holds the artifact-scoped result of parsing an SBOM document.
 type ParseResult struct {
 	SBOM     domain.ArtifactSBOM
 	Packages []domain.SBOMPackage
 }
 
+// ManifestParseResult holds the subject-neutral result of parsing an SBOM document.
+type ManifestParseResult struct {
+	Manifest domain.SBOMManifest
+	Packages []domain.SBOMManifestPackage
+}
+
+type parsedDocument struct {
+	Format             domain.SBOMFormat
+	PayloadSHA256      string
+	PackageCount       int
+	VulnerabilityCount int
+	CriticalCount      int
+	HighCount          int
+	Metadata           map[string]any
+	Packages           []domain.SBOMManifestPackage
+}
+
 // Parse detects the SBOM format and parses the document.
 // Returns the parsed SBOM metadata and package list.
 func Parse(data []byte, artifactID uuid.UUID) (*ParseResult, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("empty SBOM data")
-	}
-
-	// Detect format by checking for format-specific keys.
-	format := detectFormat(data)
-
-	var result *ParseResult
-	var err error
-
-	switch format {
-	case domain.SBOMFormatSPDX:
-		result, err = parseSPDX(data, artifactID)
-	case domain.SBOMFormatCycloneDX:
-		result, err = parseCycloneDX(data, artifactID)
-	default:
-		return nil, fmt.Errorf("unknown SBOM format")
-	}
-
+	parsed, err := parseDocument(data)
 	if err != nil {
 		return nil, err
 	}
 
-	// Set common fields.
-	result.SBOM.ID = uuid.New()
-	result.SBOM.ArtifactID = artifactID
-	result.SBOM.Format = format
-	result.SBOM.RawHash = hashData(data)
-	result.SBOM.PackageCount = len(result.Packages)
+	sbomID := uuid.New()
+	result := &ParseResult{
+		SBOM: domain.ArtifactSBOM{
+			ID:                 sbomID,
+			ArtifactID:         artifactID,
+			Format:             parsed.Format,
+			RawHash:            parsed.PayloadSHA256,
+			PackageCount:       parsed.PackageCount,
+			VulnerabilityCount: parsed.VulnerabilityCount,
+			CriticalCount:      parsed.CriticalCount,
+			HighCount:          parsed.HighCount,
+			Metadata:           parsed.Metadata,
+		},
+		Packages: make([]domain.SBOMPackage, len(parsed.Packages)),
+	}
 
-	// Set SBOM ID on all packages.
-	for i := range result.Packages {
-		result.Packages[i].SBOMID = result.SBOM.ID
-		if result.Packages[i].ID == uuid.Nil {
-			result.Packages[i].ID = uuid.New()
+	for i, pkg := range parsed.Packages {
+		result.Packages[i] = domain.SBOMPackage{
+			ID:        uuid.New(),
+			SBOMID:    sbomID,
+			Name:      pkg.Name,
+			Version:   pkg.Version,
+			Ecosystem: pkg.Ecosystem,
+			License:   pkg.License,
+			PURL:      pkg.PURL,
+			CPE:       pkg.CPE,
 		}
 	}
 
+	return result, nil
+}
+
+// ParseManifest detects the SBOM format and parses the document into a subject-neutral manifest projection.
+func ParseManifest(data []byte, subject domain.SBOMSubject) (*ManifestParseResult, error) {
+	parsed, err := parseDocument(data)
+	if err != nil {
+		return nil, err
+	}
+
+	manifestID := uuid.New()
+	result := &ManifestParseResult{
+		Manifest: domain.SBOMManifest{
+			ID:                 manifestID,
+			Subject:            subject,
+			Format:             parsed.Format,
+			MediaType:          MediaTypeForFormat(parsed.Format),
+			PayloadSHA256:      parsed.PayloadSHA256,
+			PackageCount:       parsed.PackageCount,
+			VulnerabilityCount: parsed.VulnerabilityCount,
+			CriticalCount:      parsed.CriticalCount,
+			HighCount:          parsed.HighCount,
+			Metadata:           parsed.Metadata,
+		},
+		Packages: make([]domain.SBOMManifestPackage, len(parsed.Packages)),
+	}
+
+	for i, pkg := range parsed.Packages {
+		pkg.ID = uuid.New()
+		pkg.ManifestID = manifestID
+		result.Packages[i] = pkg
+	}
+
+	return result, nil
+}
+
+func parseDocument(data []byte) (*parsedDocument, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty SBOM data")
+	}
+
+	format := detectFormat(data)
+
+	var result *parsedDocument
+	var err error
+	switch format {
+	case domain.SBOMFormatSPDX:
+		result, err = parseSPDX(data)
+	case domain.SBOMFormatCycloneDX:
+		result, err = parseCycloneDX(data)
+	default:
+		return nil, fmt.Errorf("unknown SBOM format")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	result.Format = format
+	result.PayloadSHA256 = hashData(data)
+	result.PackageCount = len(result.Packages)
 	return result, nil
 }
 
@@ -83,21 +156,21 @@ func detectFormat(data []byte) domain.SBOMFormat {
 // --- SPDX Parser ---
 
 type spdxDocument struct {
-	SPDXVersion    string        `json:"spdxVersion"`
-	DataLicense    string        `json:"dataLicense"`
-	SPDXID         string        `json:"SPDXID"`
-	Name           string        `json:"name"`
-	Packages       []spdxPackage `json:"packages"`
-	DocumentNamespace string     `json:"documentNamespace"`
+	SPDXVersion       string        `json:"spdxVersion"`
+	DataLicense       string        `json:"dataLicense"`
+	SPDXID            string        `json:"SPDXID"`
+	Name              string        `json:"name"`
+	Packages          []spdxPackage `json:"packages"`
+	DocumentNamespace string        `json:"documentNamespace"`
 }
 
 type spdxPackage struct {
-	Name               string `json:"name"`
-	VersionInfo        string `json:"versionInfo"`
-	PackageFileName    string `json:"packageFileName"`
-	ExternalRefs       []spdxExternalRef `json:"externalRefs"`
-	LicenseConcluded   string `json:"licenseConcluded"`
-	LicenseDeclared    string `json:"licenseDeclared"`
+	Name             string            `json:"name"`
+	VersionInfo      string            `json:"versionInfo"`
+	PackageFileName  string            `json:"packageFileName"`
+	ExternalRefs     []spdxExternalRef `json:"externalRefs"`
+	LicenseConcluded string            `json:"licenseConcluded"`
+	LicenseDeclared  string            `json:"licenseDeclared"`
 }
 
 type spdxExternalRef struct {
@@ -106,25 +179,23 @@ type spdxExternalRef struct {
 	ReferenceLocator  string `json:"referenceLocator"`
 }
 
-func parseSPDX(data []byte, artifactID uuid.UUID) (*ParseResult, error) {
+func parseSPDX(data []byte) (*parsedDocument, error) {
 	var doc spdxDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing SPDX JSON: %w", err)
 	}
 
-	result := &ParseResult{
-		SBOM: domain.ArtifactSBOM{
-			Metadata: map[string]any{
-				"spdx_version":       doc.SPDXVersion,
-				"data_license":       doc.DataLicense,
-				"document_name":      doc.Name,
-				"document_namespace": doc.DocumentNamespace,
-			},
+	result := &parsedDocument{
+		Metadata: map[string]any{
+			"spdx_version":       doc.SPDXVersion,
+			"data_license":       doc.DataLicense,
+			"document_name":      doc.Name,
+			"document_namespace": doc.DocumentNamespace,
 		},
 	}
 
 	for _, sp := range doc.Packages {
-		pkg := domain.SBOMPackage{
+		pkg := domain.SBOMManifestPackage{
 			Name:    sp.Name,
 			Version: sp.VersionInfo,
 		}
@@ -156,20 +227,20 @@ func parseSPDX(data []byte, artifactID uuid.UUID) (*ParseResult, error) {
 // --- CycloneDX Parser ---
 
 type cyclonedxBOM struct {
-	BOMFormat    string              `json:"bomFormat"`
-	SpecVersion  string              `json:"specVersion"`
-	Version      int                 `json:"version"`
-	Components   []cyclonedxComponent `json:"components"`
-	Vulnerabilities []cyclonedxVuln  `json:"vulnerabilities"`
+	BOMFormat       string               `json:"bomFormat"`
+	SpecVersion     string               `json:"specVersion"`
+	Version         int                  `json:"version"`
+	Components      []cyclonedxComponent `json:"components"`
+	Vulnerabilities []cyclonedxVuln      `json:"vulnerabilities"`
 }
 
 type cyclonedxComponent struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	PURL    string `json:"purl"`
-	CPE     string `json:"cpe"`
-	Group   string `json:"group"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	PURL     string `json:"purl"`
+	CPE      string `json:"cpe"`
+	Group    string `json:"group"`
 	Licenses []struct {
 		License struct {
 			ID   string `json:"id"`
@@ -179,13 +250,13 @@ type cyclonedxComponent struct {
 }
 
 type cyclonedxVuln struct {
-	ID       string `json:"id"`
-	Ratings  []struct {
+	ID      string `json:"id"`
+	Ratings []struct {
 		Severity string `json:"severity"`
 	} `json:"ratings"`
 }
 
-func parseCycloneDX(data []byte, artifactID uuid.UUID) (*ParseResult, error) {
+func parseCycloneDX(data []byte) (*parsedDocument, error) {
 	var bom cyclonedxBOM
 	if err := json.Unmarshal(data, &bom); err != nil {
 		return nil, fmt.Errorf("parsing CycloneDX JSON: %w", err)
@@ -205,20 +276,18 @@ func parseCycloneDX(data []byte, artifactID uuid.UUID) (*ParseResult, error) {
 		}
 	}
 
-	result := &ParseResult{
-		SBOM: domain.ArtifactSBOM{
-			VulnerabilityCount: vulnCount,
-			CriticalCount:      criticalCount,
-			HighCount:           highCount,
-			Metadata: map[string]any{
-				"spec_version": bom.SpecVersion,
-				"bom_version":  bom.Version,
-			},
+	result := &parsedDocument{
+		VulnerabilityCount: vulnCount,
+		CriticalCount:      criticalCount,
+		HighCount:          highCount,
+		Metadata: map[string]any{
+			"spec_version": bom.SpecVersion,
+			"bom_version":  bom.Version,
 		},
 	}
 
 	for _, comp := range bom.Components {
-		pkg := domain.SBOMPackage{
+		pkg := domain.SBOMManifestPackage{
 			Name:    comp.Name,
 			Version: comp.Version,
 			PURL:    comp.PURL,

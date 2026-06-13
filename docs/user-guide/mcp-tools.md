@@ -90,7 +90,10 @@ curl -X POST http://localhost:8080/mcp \
 | `bahia_list_artifacts` | List artifacts |
 | `bahia_get_artifact` | Get artifact details |
 | `bahia_register_artifact` | Publish signed kind `5985` ArtifactRegister event and return relay acceptance receipt |
-| `bahia_get_sbom` | Get artifact SBOM |
+| `bahia_get_sbom` | Get artifact SBOM compatibility projection backed by canonical SBOM manifests |
+| `bahia_get_sbom_packages` | List packages indexed from an artifact SBOM projection |
+| `bahia_search_sbom_packages` | Search indexed SBOM packages by name |
+| `bahia_ingest_sbom` | Compatibility SBOM ingest for artifacts; canonical generation/import uses ContextVM `sbom/generate` and `sbom/import` |
 | `bahia_verify_signatures` | Verify signatures |
 
 ### LLM Tools

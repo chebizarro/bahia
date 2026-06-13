@@ -437,7 +437,7 @@ Sensitive operations use ContextVM JSON-RPC kind `25910`, normally wrapped with 
 }
 ```
 
-The unwrapped inner response carries `e=<request-event-id>` with reply marker and `p=<requester-pubkey>`. Long-running completion is observed through canonical kinds `30900`, `4903`, `30315`, domain NIPs, and NIP-09 kind `5` deletions where applicable.
+The unwrapped inner response carries `e=<request-event-id>` with reply marker and `p=<requester-pubkey>`. Long-running completion is observed through canonical kinds `30900`, `4903`, `30315`, `30078`, `30004`, domain NIPs, and NIP-09 kind `5` deletions where applicable.
 
 ### Encrypted Operations
 
@@ -462,7 +462,23 @@ Bahia route/control-surface transport classification is tracked in PSTF at `pstf
 
 Signer-first route files must not import REST API clients for command submission. The unit guard `web/tests/unit/route-transport-matrix.test.js` fails when a pure `nostr_native` or `nostr_request_result_facade` route adds `$lib/api/*` route imports without an explicit non-signer-first matrix classification.
 
-Current route-level REST client exceptions are matrix-classified artifact Blossom/SBOM HTTP surfaces only. ML import/deploy and continuity status/topology/simulation now use Nostr-backed browser paths.
+Current route-level REST client exceptions are matrix-classified artifact Blossom/SBOM HTTP surfaces only. Canonical SBOM relay truth uses `30078` reference app-data and `30004` NIP-51 availability lists; legacy `30079` SBOM indexes are read-only compatibility data. ML import/deploy and continuity status/topology/simulation now use Nostr-backed browser paths.
+
+## SBOM Generation and Import Observables
+
+SBOM mutations are ContextVM intents (`sbom/generate` and `sbom/import`) carried as kind `25910` requests, optionally wrapped in `1059` or `21059`. The JSON-RPC response is only an acknowledgment. Durable truth is observed through scoped subscriptions:
+
+```json
+{
+  "kinds": [30315, 4903, 30078, 30004],
+  "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["sbom"],
+  "#subject_type": ["artifact"],
+  "#subject": ["sha256:<subject-digest>"]
+}
+```
+
+Process historical `EVENT`s, treat `EOSE` as catch-up completion, and keep the subscription open for realtime progress when needed. Generated or imported SBOM payload bytes are stored on Blossom; Nostr events carry references, hashes, status, and audit facts rather than full SBOM payloads. Relay `OK` acceptance is required for the `30078` reference and the `30004` availability list before Bahia marks a manifest published.
 
 ## Authentication
 

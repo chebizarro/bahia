@@ -45,6 +45,7 @@ type RouterDeps struct {
 	RuntimeResolver  runtimeadapter.RuntimeResolver
 	Payments         *service.PaymentService
 	SBOMs            repository.SBOMRepository
+	SBOMImporter     *service.SBOMOrchestrator
 	Artifacts        repository.ArtifactRepository
 	Signatures       repository.ArtifactSignatureRepository
 	SignVerifier     SignatureVerifier
@@ -300,7 +301,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// SBOM (read)
 			if deps.SBOMs != nil && deps.Artifacts != nil {
-				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts)
+				sbomH := handlers.NewSBOMReadHandler(deps.SBOMs, deps.Artifacts)
 				r.With(tier3Gate).Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
 				r.With(tier3Gate).Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
 				r.With(tier3Gate).Get("/sbom/search", sbomH.SearchPackages)
@@ -393,9 +394,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier2Gate).Post("/payments/estimate", payH.EstimateCost)
 			}
 
-			// SBOM (write)
-			if deps.SBOMs != nil && deps.Artifacts != nil {
-				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts)
+			// SBOM (write compatibility import)
+			if deps.SBOMs != nil && deps.Artifacts != nil && deps.SBOMImporter != nil {
+				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts, deps.SBOMImporter)
 				r.With(tier3Gate).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
 			}
 

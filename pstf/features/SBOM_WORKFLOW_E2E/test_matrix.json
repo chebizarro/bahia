@@ -2,24 +2,209 @@
   "feature_id": "SBOM_WORKFLOW_E2E",
   "tests": [
     {
+      "test": "internal/adapters/sbom :: TestSyftGeneratorGeneratesSPDXJSONFromRepositoryFixture",
+      "acceptance_criteria": [
+        "AC1"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestSyftGeneratorGeneratesCycloneDXJSONFromRepositoryFixture",
+      "acceptance_criteria": [
+        "AC1"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestGeneratorRegistryAutoFallsBackToSyftWhenCdxgenDisabled",
+      "acceptance_criteria": [
+        "AC1",
+        "AC12"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestGeneratorRegistryAutoUsesAvailableCdxgenForRepositoryCycloneDX",
+      "acceptance_criteria": [
+        "AC1",
+        "AC12"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestCdxgenUnavailableWhenDisabled / TestCdxgenUnavailableWhenBinaryMissing / TestCdxgenGeneratorInvokesExecutableAndReadsCycloneDX / TestCdxgenRejectsSPDX",
+      "acceptance_criteria": [
+        "AC1"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: parser and attestation tests (ParseManifest, BuildAttestation, VerifySBOMSubjectDigest, VerifyPayloadDigest)",
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestStorageResolver_StoreToBlossom",
+      "acceptance_criteria": [
+        "AC2"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestStorageResolver_ResolveAndVerify",
+      "acceptance_criteria": [
+        "AC2"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestStorageResolver_StoreRejectsNonCanonicalBackends",
+      "acceptance_criteria": [
+        "AC2"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestBuildSBOMReferenceEvent and reference digest rejection tests",
+      "acceptance_criteria": [
+        "AC3"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestIndexPublisher_PublishAttestationRequiresAcceptedOK / RejectsRelayOKFalse / RejectsAuthRequiredOKFalse / RejectsClosedPublishPath",
+      "acceptance_criteria": [
+        "AC3",
+        "AC5"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestBuildSBOMAvailabilityListEvent",
+      "acceptance_criteria": [
+        "AC4"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestIndexPublisher_PublishIndexRequiresAcceptedOK / RejectsRelayOKFalse",
+      "acceptance_criteria": [
+        "AC4",
+        "AC5"
+      ]
+    },
+    {
+      "test": "internal/adapters/sbom :: TestParseIndexFromEvent_ReadsLegacyKind",
+      "acceptance_criteria": [
+        "AC4"
+      ]
+    },
+    {
+      "test": "internal/service :: TestSBOMOrchestratorGeneratePublishesProjectsAndAudits",
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5"
+      ]
+    },
+    {
+      "test": "internal/service :: TestSBOMOrchestratorStopsOnRelayRejection / TestSBOMOrchestratorFailsOnClosedLikePublishError",
+      "acceptance_criteria": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ]
+    },
+    {
+      "test": "internal/service :: TestSBOMSubjectResolverArtifactAndDeployment",
+      "acceptance_criteria": [
+        "AC1",
+        "AC5"
+      ]
+    },
+    {
+      "test": "internal/repository :: TestPgSBOMRepository_CreateManifest_DedupesBySubjectFormatGeneratorPayload / ListManifestsBySubject / UpdateManifestPublishState / SearchManifestPackagesByName",
+      "acceptance_criteria": [
+        "AC4",
+        "AC7"
+      ]
+    },
+    {
+      "test": "internal/repository :: TestArtifactSBOMFromManifest_PreservesArtifactCompatibilityProjection",
+      "acceptance_criteria": [
+        "AC7"
+      ]
+    },
+    {
+      "test": "internal/api/handlers :: TestIngestSBOMDelegatesToImportServiceAndReturnsCompatibilityProjection",
+      "acceptance_criteria": [
+        "AC6",
+        "AC7"
+      ]
+    },
+    {
+      "test": "internal/api/handlers :: TestIngestSBOMRequiresImportService",
+      "acceptance_criteria": [
+        "AC6"
+      ]
+    },
+    {
+      "test": "internal/api/handlers :: TestIngestSBOMReturnsExistingProjectionWithoutReimport",
+      "acceptance_criteria": [
+        "AC7"
+      ]
+    },
+    {
+      "test": "internal/adapters/nostr :: TestControlPlaneAnnouncementIncludesContextVMMethods",
+      "acceptance_criteria": [
+        "AC5"
+      ]
+    },
+    {
+      "test": "internal/mcp :: TestGetTools_IncludesSBOMTools / TestCallTool_IngestGetListAndSearchSBOM / TestCallTool_SBOMValidationAndConfigurationErrors",
+      "acceptance_criteria": [
+        "AC7"
+      ]
+    },
+    {
       "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact page displays SBOM attestation details",
-      "acceptance_criteria": ["AC1"]
+      "acceptance_criteria": [
+        "AC8"
+      ]
     },
     {
       "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab shows an empty state when no attestation exists",
-      "acceptance_criteria": ["AC2"]
+      "acceptance_criteria": [
+        "AC9"
+      ]
     },
     {
-      "test": "web/tests/e2e/sbom-workflow.spec.js :: policy rule builder adds SBOM-related rules and syncs them to JSON",
-      "acceptance_criteria": ["AC3"]
-    },
-    {
-      "test": "web/tests/e2e/sbom-workflow.spec.js :: policy visual builder reports an error when submitted without rules",
-      "acceptance_criteria": ["AC4"]
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: policy rule builder adds SBOM-related rules and syncs them to JSON / policy visual builder reports an error when submitted without rules",
+      "acceptance_criteria": [
+        "AC10"
+      ]
     },
     {
       "test": "web/tests/e2e/sbom-workflow.spec.js :: events page filters canonical SBOM events",
-      "acceptance_criteria": ["AC5"]
+      "acceptance_criteria": [
+        "AC11"
+      ]
+    },
+    {
+      "test": "docs review: docs/user-guide/features/artifacts.md, packages.md, deployments.md, docs/user-guide/nostr-integration.md, docs/user-guide/mcp-tools.md",
+      "acceptance_criteria": [
+        "AC12"
+      ]
+    },
+    {
+      "test": "internal/service :: TestSBOMOrchestratorGeneratePublishesProjectsAndAudits asserts projection occurs after accepted 30004 availability-list publication and persists availability d-tag",
+      "acceptance_criteria": [
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5",
+        "AC7"
+      ]
+    },
+    {
+      "test": "internal/api/handlers :: TestIngestSBOMRejectsOversizedPayloadWithoutImport",
+      "acceptance_criteria": [
+        "AC6"
+      ]
     }
   ]
 }

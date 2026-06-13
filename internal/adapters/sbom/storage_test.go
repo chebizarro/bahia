@@ -86,40 +86,43 @@ func TestStorageResolver_StoreToBlossom(t *testing.T) {
 
 func TestStorageResolver_ResolveAndVerify(t *testing.T) {
 	sbomData := []byte(`{"spdxVersion": "SPDX-2.3"}`)
-	// Actual SHA256 of sbomData
-	actualHash := "f99b72f98a5c5d2a93e93c7e75c5e5b5c5a5d5e5f5a5b5c5d5e5f5a5b5c5d5e5f5" // This is illustrative
+	mockBlossom := &MockBlossomClient{Blobs: make(map[string][]byte)}
+	resolver := NewStorageResolver(mockBlossom, nil, nil, slog.Default())
 
-	// Use a 64-char hash for the blob key
-	blobKey := "abc123def456abc123def456abc123def456abc123def456abc123def456abcdef"
-
-	mockBlossom := &MockBlossomClient{
-		Blobs: map[string][]byte{
-			blobKey: sbomData,
-		},
-	}
-
-	logger := slog.Default()
-	resolver := NewStorageResolver(mockBlossom, nil, nil, logger)
-
-	// Create attestation with a mismatched hash (should fail verification).
-	att := &domain.SBOMAttestation{
-		Predicate: domain.SBOMPredicate{
-			Digest: map[string]string{"sha256": "wronghash123456789012345678901234567890123456789012345678901234"},
-		},
-	}
-
-	// This should fail verification since hash doesn't match.
-	_, err := resolver.ResolveAndVerify(context.Background(), att, ResolveInput{
-		Location: domain.SBOMLocation{
-			Type: domain.SBOMStorageBlossom,
-			URI:  "https://blossom.example.com/" + blobKey,
-		},
+	stored, err := resolver.Store(context.Background(), StoreInput{
+		Data:        sbomData,
+		Format:      domain.SBOMFormatSPDX,
+		BackendType: domain.SBOMStorageBlossom,
 	})
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	att := &domain.SBOMAttestation{Predicate: domain.SBOMPredicate{Digest: map[string]string{"sha256": stored.Hash}}}
+	verified, err := resolver.ResolveAndVerify(context.Background(), att, ResolveInput{Location: stored.Location})
+	if err != nil {
+		t.Fatalf("ResolveAndVerify failed: %v", err)
+	}
+	if string(verified) != string(sbomData) {
+		t.Fatalf("verified payload = %s, want %s", verified, sbomData)
+	}
+
+	att.Predicate.Digest["sha256"] = "wronghash123456789012345678901234567890123456789012345678901234"
+	_, err = resolver.ResolveAndVerify(context.Background(), att, ResolveInput{Location: stored.Location})
 	if err == nil {
 		t.Error("Expected hash verification to fail")
 	}
+}
 
-	_ = actualHash // Silence unused variable
+func TestStorageResolver_StoreRejectsNonCanonicalBackends(t *testing.T) {
+	resolver := NewStorageResolver(&MockBlossomClient{Blobs: make(map[string][]byte)}, nil, nil, slog.Default())
+
+	for _, backend := range []domain.SBOMStorageType{domain.SBOMStorageOCI, domain.SBOMStoragePackage} {
+		_, err := resolver.Store(context.Background(), StoreInput{Data: []byte(`{}`), Format: domain.SBOMFormatSPDX, BackendType: backend})
+		if err == nil {
+			t.Fatalf("Store(%s) succeeded, want unsupported backend error", backend)
+		}
+	}
 }
 
 func TestExtractBlossomHash(t *testing.T) {

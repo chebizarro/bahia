@@ -7,6 +7,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+const (
+	testSHA256A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testSHA256B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
 func TestAttestationBuilder_BuildAttestation(t *testing.T) {
 	builder := NewAttestationBuilder("syft", "0.95.0", "npub1test...")
 
@@ -32,7 +37,7 @@ func TestAttestationBuilder_BuildAttestation(t *testing.T) {
 
 	input := BuildAttestationInput{
 		SubjectName:   "ghcr.io/org/myapp:v1.0.0",
-		SubjectDigest: "sha256:abc123def456",
+		SubjectDigest: "sha256:" + testSHA256A,
 		SBOMData:      sampleSPDX,
 		Format:        domain.SBOMFormatSPDX,
 		Location: domain.SBOMLocation{
@@ -62,8 +67,8 @@ func TestAttestationBuilder_BuildAttestation(t *testing.T) {
 	if att.Subject[0].Name != input.SubjectName {
 		t.Errorf("Subject.Name = %q, want %q", att.Subject[0].Name, input.SubjectName)
 	}
-	if att.Subject[0].Digest["sha256"] != "abc123def456" {
-		t.Errorf("Subject.Digest[sha256] = %q, want %q", att.Subject[0].Digest["sha256"], "abc123def456")
+	if att.Subject[0].Digest["sha256"] != testSHA256A {
+		t.Errorf("Subject.Digest[sha256] = %q, want %q", att.Subject[0].Digest["sha256"], testSHA256A)
 	}
 
 	// Verify predicate type.
@@ -107,7 +112,7 @@ func TestAttestationBuilder_CycloneDX(t *testing.T) {
 
 	input := BuildAttestationInput{
 		SubjectName:   "docker.io/library/node:18",
-		SubjectDigest: "sha256:def789ghi012",
+		SubjectDigest: "sha256:" + testSHA256B,
 		SBOMData:      sampleCDX,
 		Format:        domain.SBOMFormatCycloneDX,
 		Location: domain.SBOMLocation{
@@ -135,7 +140,7 @@ func TestVerifySubjectDigest(t *testing.T) {
 		Subject: []domain.AttestationSubject{
 			{
 				Name:   "test-image",
-				Digest: map[string]string{"sha256": "abc123def456"},
+				Digest: map[string]string{"sha256": testSHA256A},
 			},
 		},
 	}
@@ -145,9 +150,9 @@ func TestVerifySubjectDigest(t *testing.T) {
 		digest   string
 		expected bool
 	}{
-		{"matching", "sha256:abc123def456", true},
-		{"non-matching", "sha256:different", false},
-		{"wrong algo", "sha512:abc123def456", false},
+		{"matching", "sha256:" + testSHA256A, true},
+		{"non-matching", "sha256:" + testSHA256B, false},
+		{"wrong algo", "sha512:" + testSHA256A, false},
 		{"invalid format", "notadigest", false},
 	}
 
@@ -158,6 +163,90 @@ func TestVerifySubjectDigest(t *testing.T) {
 				t.Errorf("VerifySubjectDigest(%q) = %v, want %v", tc.digest, result, tc.expected)
 			}
 		})
+	}
+}
+
+func TestAttestationBuilder_BuildAttestationWithSBOMSubject(t *testing.T) {
+	builder := NewAttestationBuilder("syft", "1.0.0", "generator-pubkey")
+	subject := domain.SBOMSubject{
+		Type:        domain.SBOMSubjectRepository,
+		ID:          "github.com/openagentsinc/bahia",
+		DisplayName: "Bahia repository",
+		Digest:      "git:1111111111111111111111111111111111111111",
+	}
+	sbomData := []byte(`{"spdxVersion":"SPDX-2.3","packages":[]}`)
+
+	att, err := builder.BuildAttestation(BuildAttestationInput{
+		Subject:  &subject,
+		SBOMData: sbomData,
+		Format:   domain.SBOMFormatSPDX,
+		Location: domain.SBOMLocation{
+			Type:      domain.SBOMStorageBlossom,
+			URI:       "https://blossom.example.com/sbom",
+			MediaType: MediaTypeSPDX,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildAttestation failed: %v", err)
+	}
+
+	if att.Subject[0].Name != subject.DisplayName {
+		t.Errorf("subject name = %q, want %q", att.Subject[0].Name, subject.DisplayName)
+	}
+	if att.Subject[0].Digest["git"] != "1111111111111111111111111111111111111111" {
+		t.Errorf("subject git digest mismatch: %#v", att.Subject[0].Digest)
+	}
+	if !VerifySBOMSubjectDigest(att, subject) {
+		t.Fatal("VerifySBOMSubjectDigest should accept matching subject")
+	}
+	if !VerifyPayloadDigest(att, sbomData) {
+		t.Fatal("VerifyPayloadDigest should accept original SBOM bytes")
+	}
+	if att.Predicate.Location.Type != domain.SBOMStorageBlossom || att.Predicate.Location.MediaType != MediaTypeSPDX {
+		t.Fatalf("unexpected location: %#v", att.Predicate.Location)
+	}
+	if att.Predicate.Generator.ID != "syft" || att.Predicate.Generator.Version != "1.0.0" {
+		t.Fatalf("unexpected generator: %#v", att.Predicate.Generator)
+	}
+	if att.Predicate.NTIA == nil {
+		t.Fatal("expected NTIA metadata")
+	}
+}
+
+func TestAttestationBuilder_RejectsInvalidSBOMSubjectDigest(t *testing.T) {
+	builder := NewAttestationBuilder("syft", "1.0.0", "")
+	subject := domain.SBOMSubject{
+		Type:   domain.SBOMSubjectDeployment,
+		ID:     "deployment-1",
+		Digest: "sha256:not-hex",
+	}
+
+	_, err := builder.BuildAttestation(BuildAttestationInput{
+		Subject:  &subject,
+		SBOMData: []byte(`{"bomFormat":"CycloneDX","components":[]}`),
+		Format:   domain.SBOMFormatCycloneDX,
+	})
+	if err == nil {
+		t.Fatal("expected invalid subject digest error")
+	}
+}
+
+func TestAttestationBuilder_RejectsMismatchedSubjectDigest(t *testing.T) {
+	builder := NewAttestationBuilder("syft", "1.0.0", "")
+	subject := domain.SBOMSubject{
+		Type:   domain.SBOMSubjectArtifact,
+		ID:     "artifact-1",
+		Digest: "sha256:" + testSHA256A,
+	}
+
+	_, err := builder.BuildAttestation(BuildAttestationInput{
+		Subject:       &subject,
+		SubjectDigest: "sha256:" + testSHA256B,
+		SBOMData:      []byte(`{"spdxVersion":"SPDX-2.3","packages":[]}`),
+		Format:        domain.SBOMFormatSPDX,
+	})
+	if err == nil {
+		t.Fatal("expected mismatched subject digest error")
 	}
 }
 
@@ -228,7 +317,7 @@ func TestSerializeAndParseAttestation(t *testing.T) {
 	original := &domain.SBOMAttestation{
 		Type: InTotoStatementType,
 		Subject: []domain.AttestationSubject{
-			{Name: "test", Digest: map[string]string{"sha256": "abc123"}},
+			{Name: "test", Digest: map[string]string{"sha256": testSHA256A}},
 		},
 		PredicateType: domain.AttestationTypeSPDX,
 		Predicate: domain.SBOMPredicate{
@@ -237,7 +326,7 @@ func TestSerializeAndParseAttestation(t *testing.T) {
 				Type: domain.SBOMStorageBlossom,
 				URI:  "https://example.com/abc123",
 			},
-			Digest:    map[string]string{"sha256": "def456"},
+			Digest:    map[string]string{"sha256": testSHA256B},
 			Timestamp: time.Now().UTC().Truncate(time.Second),
 		},
 	}

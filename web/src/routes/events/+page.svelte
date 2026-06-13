@@ -17,7 +17,7 @@
     { value: 'service', label: 'Services' },
     { value: 'llm', label: 'LLM Routes' },
     { value: 'policy', label: 'Policies' },
-    { value: 'sbom', label: 'SBOM Attestations' },
+    { value: 'sbom', label: 'SBOM' },
     { value: 'artifact', label: 'Artifacts' }
   ];
 
@@ -27,7 +27,7 @@
     const kind = event.kind;
     
     // SBOM events
-    if (kind === KINDS.SBOM_ATTESTATION || kind === KINDS.SBOM_INDEX) {
+    if (kind === KINDS.SBOM_REFERENCE || kind === KINDS.SBOM_AVAILABILITY_LIST) {
       return 'sbom';
     }
     if (type.includes('sbom')) {
@@ -64,11 +64,11 @@
 
   // Get human-readable event type label
   function getEventTypeLabel(event) {
-    if (event.kind === KINDS.SBOM_ATTESTATION) {
-      return 'SBOM Attestation';
+    if (event.kind === KINDS.SBOM_REFERENCE) {
+      return 'SBOM Reference';
     }
-    if (event.kind === KINDS.SBOM_INDEX) {
-      return 'SBOM Index';
+    if (event.kind === KINDS.SBOM_AVAILABILITY_LIST) {
+      return 'SBOM Availability List';
     }
     return event.type || 'Unknown';
   }
@@ -147,8 +147,8 @@
   // Count SBOM events for badge
   let sbomEventCount = $derived(
     events.filter(e =>
-      e.kind === KINDS.SBOM_ATTESTATION ||
-      e.kind === KINDS.SBOM_INDEX ||
+      e.kind === KINDS.SBOM_REFERENCE ||
+      e.kind === KINDS.SBOM_AVAILABILITY_LIST ||
       e.type?.toLowerCase().includes('sbom')
     ).length
   );

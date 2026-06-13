@@ -40,6 +40,8 @@ func NewAttestationBuilder(generatorID, generatorVersion, generatorPubkey string
 
 // BuildAttestationInput contains the input for building an SBOM attestation.
 type BuildAttestationInput struct {
+	// Subject identifies the Bahia resource described by the SBOM. When set, it supplies the attestation subject name and digest.
+	Subject *domain.SBOMSubject
 	// SubjectName is the name of the artifact (e.g., "ghcr.io/org/image:tag").
 	SubjectName string
 	// SubjectDigest is the artifact's content digest (e.g., "sha256:abc123...").
@@ -60,15 +62,16 @@ type BuildAttestationInput struct {
 
 // BuildAttestation creates an in-toto/SLSA-style attestation for an SBOM.
 func (b *AttestationBuilder) BuildAttestation(input BuildAttestationInput) (*domain.SBOMAttestation, error) {
-	if input.SubjectDigest == "" {
-		return nil, fmt.Errorf("subject digest is required")
+	subjectName, subjectDigest, err := attestationSubject(input)
+	if err != nil {
+		return nil, err
 	}
 	if len(input.SBOMData) == 0 {
 		return nil, fmt.Errorf("SBOM data is required")
 	}
 
 	// Parse subject digest into algorithm:hash format.
-	digestAlgo, digestHash, err := parseDigest(input.SubjectDigest)
+	digestAlgo, digestHash, err := parseDigest(subjectDigest)
 	if err != nil {
 		return nil, fmt.Errorf("invalid subject digest: %w", err)
 	}
@@ -107,7 +110,7 @@ func (b *AttestationBuilder) BuildAttestation(input BuildAttestationInput) (*dom
 		Type: InTotoStatementType,
 		Subject: []domain.AttestationSubject{
 			{
-				Name: input.SubjectName,
+				Name: subjectName,
 				Digest: map[string]string{
 					digestAlgo: digestHash,
 				},
@@ -167,6 +170,14 @@ func VerifySubjectDigest(att *domain.SBOMAttestation, expectedDigest string) boo
 	return false
 }
 
+// VerifySBOMSubjectDigest checks that the attestation's subject matches the expected Bahia SBOM subject digest.
+func VerifySBOMSubjectDigest(att *domain.SBOMAttestation, subject domain.SBOMSubject) bool {
+	if err := validateSBOMSubject(subject); err != nil {
+		return false
+	}
+	return VerifySubjectDigest(att, subject.Digest)
+}
+
 // VerifyPayloadDigest checks that the SBOM data matches the attestation's payload digest.
 func VerifyPayloadDigest(att *domain.SBOMAttestation, sbomData []byte) bool {
 	if att == nil || len(sbomData) == 0 {
@@ -184,13 +195,59 @@ func VerifyPayloadDigest(att *domain.SBOMAttestation, sbomData []byte) bool {
 	return strings.EqualFold(expectedHash, actualHashHex)
 }
 
-// parseDigest splits "algo:hash" into components.
+func attestationSubject(input BuildAttestationInput) (name, digest string, err error) {
+	name = input.SubjectName
+	digest = input.SubjectDigest
+	if input.Subject == nil {
+		if digest == "" {
+			return "", "", fmt.Errorf("subject digest is required")
+		}
+		return name, digest, nil
+	}
+
+	if err := validateSBOMSubject(*input.Subject); err != nil {
+		return "", "", err
+	}
+	if digest != "" && !strings.EqualFold(digest, input.Subject.Digest) {
+		return "", "", fmt.Errorf("subject digest %q does not match SBOM subject digest %q", digest, input.Subject.Digest)
+	}
+	if input.Subject.DisplayName != "" {
+		name = input.Subject.DisplayName
+	} else {
+		name = input.Subject.ID
+	}
+	digest = input.Subject.Digest
+	return name, digest, nil
+}
+
+// parseDigest splits and validates "algo:hash" into components.
 func parseDigest(digest string) (algo, hash string, err error) {
 	parts := strings.SplitN(digest, ":", 2)
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("digest must be in 'algo:hash' format")
 	}
-	return parts[0], parts[1], nil
+	algo = strings.TrimSpace(parts[0])
+	hash = strings.TrimSpace(parts[1])
+	if algo == "" || hash == "" {
+		return "", "", fmt.Errorf("digest algorithm and value are required")
+	}
+	switch algo {
+	case "sha256":
+		if len(hash) != sha256.Size*2 {
+			return "", "", fmt.Errorf("sha256 digest must be %d hex characters", sha256.Size*2)
+		}
+		if _, decodeErr := hex.DecodeString(hash); decodeErr != nil {
+			return "", "", fmt.Errorf("sha256 digest must be hex: %w", decodeErr)
+		}
+	case "git":
+		if len(hash) != 40 && len(hash) != sha256.Size*2 {
+			return "", "", fmt.Errorf("git digest must be a 40 or 64 character commit hash")
+		}
+		if _, decodeErr := hex.DecodeString(hash); decodeErr != nil {
+			return "", "", fmt.Errorf("git digest must be hex: %w", decodeErr)
+		}
+	}
+	return algo, hash, nil
 }
 
 // checkNTIACompliance evaluates NTIA minimum elements compliance.

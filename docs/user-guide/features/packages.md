@@ -193,6 +193,32 @@ bahia packages yank \
 }
 ```
 
+## Package SBOMs
+
+Package subjects can have generated or imported SBOM manifests just like artifacts. Use ContextVM `sbom/generate` or `sbom/import` with a package subject and a stable package digest:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sbom-package-utils-1.2.3",
+  "method": "sbom/generate",
+  "params": {
+    "idempotencyKey": "sbom-package-utils-1.2.3",
+    "subject": {
+      "type": "package",
+      "id": "pkg:npm/@company/utils@1.2.3",
+      "digest": "sha256:<package-archive-digest>"
+    },
+    "source": { "kind": "archive", "locator": "packages/internal-npm/@company/utils/-/utils-1.2.3.tgz" },
+    "formats": ["cyclonedx"],
+    "generator": "auto",
+    "storage": "blossom"
+  }
+}
+```
+
+Bahia stores the payload on Blossom and publishes a `30078` SBOM reference plus a subject-scoped `30004` availability list. Package subject digest resolution is not inferred from package names alone; include the content digest in the request.
+
 ## Viewing Packages
 
 ### Web UI

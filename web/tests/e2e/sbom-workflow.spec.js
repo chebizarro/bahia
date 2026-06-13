@@ -9,8 +9,8 @@ const SERVICE_ID = 'svc-sbom';
 const KINDS = {
   SERVICE_REGISTRY: 30900,
   ARTIFACT_REGISTRY: 30900,
-  SBOM_ATTESTATION: 30078,
-  SBOM_INDEX: 30078,
+  SBOM_REFERENCE: 30078,
+  SBOM_AVAILABILITY_LIST: 30004,
   AUDIT: 4903
 };
 
@@ -260,13 +260,13 @@ test.describe('SBOM workflow', () => {
     const nostrEvents = [
       nostrEvent({
         id: 'sbom-attestation-event',
-        kind: KINDS.SBOM_ATTESTATION,
+        kind: KINDS.SBOM_REFERENCE,
         created_at: now,
-        tags: [['domain', 'artifact'], ['schema', 'bahia.sbom.attestation.v1'], ['type', 'sbom.attestation'], ['op', 'sbom.attestation'], ['d', `${ARTIFACT_ID}:attestation`], ['artifact', ARTIFACT_ID]],
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', `sbom:ref:${ARTIFACT_ID}:spdx:abc123`], ['artifact', ARTIFACT_ID]],
         content: {
-          schema: 'bahia.sbom.attestation.v1',
-          domain: 'artifact',
-          event_type: 'sbom.attestation',
+          schema: 'bahia.sbom.ref.v1',
+          domain: 'sbom',
+          event_type: 'sbom.ref',
           artifact_id: ARTIFACT_ID,
           format: 'spdx',
           generator: 'syft'
@@ -274,13 +274,13 @@ test.describe('SBOM workflow', () => {
       }),
       nostrEvent({
         id: 'sbom-index-event',
-        kind: KINDS.SBOM_INDEX,
+        kind: KINDS.SBOM_AVAILABILITY_LIST,
         created_at: now - 1,
-        tags: [['domain', 'artifact'], ['schema', 'bahia.sbom.index.v1'], ['type', 'sbom.index'], ['op', 'sbom.index'], ['d', `${ARTIFACT_ID}:index`], ['artifact', ARTIFACT_ID]],
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${ARTIFACT_ID}`], ['artifact', ARTIFACT_ID]],
         content: {
-          schema: 'bahia.sbom.index.v1',
-          domain: 'artifact',
-          event_type: 'sbom.index',
+          schema: 'bahia.sbom.available-list.v1',
+          domain: 'sbom',
+          event_type: 'sbom.available-list',
           artifact_id: ARTIFACT_ID,
           package_count: 2
         }

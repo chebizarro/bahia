@@ -183,8 +183,11 @@ Common Bahia conventions:
 | Relay bootstrap set | kind `30002`, `d=bahia-browser-v1`, `relay` tags |
 | Watched repositories | kind `30001` or `30004`, stable `d`, `a`/`e`/URL tags as appropriate |
 | Artifact or package inventory | kind `30004`, stable `d`, `a`/`e`/`r` tags |
+| SBOM availability for one subject version | kind `30004`, `d=sbom:available:<subject-type>:<subject-key>`, `a` tags to SBOM reference events plus `sbom` summary tags |
 
 Collections are updated by replacing the whole list. Delete collections with NIP-09 kind `5` when the list itself is removed.
+
+SBOM availability lists are NIP-51 Curation Sets (`30004`), not Bahia-specific custom kinds. Each list is a complete replacement for one subject version and carries `domain=sbom`, `schema=bahia.sbom.available-list.v1`, `subject_type`, and `subject` tags. Each entry references the detailed `30078` SBOM reference app-data event with an `a` tag and includes an `sbom` tag containing subject digest, format, storage, location, payload hash, generator, and reference coordinate metadata.
 
 ### 8. Is this a permission, trust claim, certification, or capability grant?
 
@@ -216,8 +219,9 @@ These are the main event kinds production runtime code should publish or subscri
 | `4903` | Cascadia/Bahia audit | Immutable audit facts and attestations |
 | `11316`-`11320` | ContextVM discovery | Server/tool/resource/prompt/template discovery |
 | `30002` | NIP-51 relay set | Browser/ContextVM/service/operator relay topology |
+| `30004` | NIP-51 Curation Set | SBOM availability lists and other curated reference inventories |
 | `10002` | NIP-65 relay list | Advisory service relay preferences for wider Nostr routing |
-| `30078` | NIP-78 app data | App-specific data, settings, registries, detailed projections |
+| `30078` | NIP-78 app data | App-specific data, settings, registries, detailed projections; SBOM reference app-data uses `schema=bahia.sbom.ref.v1` |
 | `5` | NIP-09 deletion | Delete event references |
 
 Other standard NIPs may be used directly when their semantics fit. Examples include NIP-58 badges, NIP-65 relay lists, NIP-89 app handlers, NIP-98 HTTP auth, NIP-70 protected events, and NIP-40 expiration.
@@ -233,6 +237,7 @@ Production runtime code must not publish or newly subscribe to these legacy fami
 - old state/read-model ranges `30350`-`30353`, `31400`-`31411`, `31961`-`32003`
 - old audit ranges `31000`-`31024`, `31310`-`31311`
 - old discovery kind `31974`
+- legacy SBOM index kind `30079`; new SBOM availability publication uses NIP-51 kind `30004` and detailed SBOM references use NIP-78 kind `30078`
 
 If such a kind appears in production code, it must be one of these explicitly justified cases:
 
@@ -350,6 +355,10 @@ Desired-state runtime metadata is additive on existing service/deployment observ
   "content": "{\"protocolVersion\":\"2025-07-02\",\"serverInfo\":{\"name\":\"bahia\",\"version\":\"...\"},\"capabilities\":{\"tools\":{\"listChanged\":true}}}"
 }
 ```
+
+SBOM reference app-data uses NIP-78 `30078` with `domain=sbom`, `schema=bahia.sbom.ref.v1`, and a stable `d` coordinate of `sbom:ref:<subject-key>:<format>:<payload-sha256>`. The content is the in-toto-style SBOM attestation envelope, not the SBOM payload bytes. Required routing and validation tags include `subject_type`, `subject`, `format`, `storage`, `location`, `x=<payload-sha256>`, `media_type`, `generator`, and `ntia`; publishers must verify relay `OK` acceptance before treating the reference as published.
+
+SBOM availability uses NIP-51 `30004` with `domain=sbom`, `schema=bahia.sbom.available-list.v1`, and `d=sbom:available:<subject-type>:<subject-key>`. The event is a complete replacement list for one subject version. It includes `a` tags to the corresponding `30078` reference coordinates and `sbom` summary tags. Historical `30079` SBOM index events are read-only migration data and must not be used for new publication.
 
 Relay topology is separate and should be published as NIP-51 relay sets:
 
