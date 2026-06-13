@@ -116,6 +116,24 @@ async function addVisualRule(page, dialog, ruleName, configure) {
 }
 
 test.describe('SBOM workflow', () => {
+  test('artifact registry list maps name, version, and digest columns from projection fields', async ({ page }) => {
+    await installE2EMocks(page, {
+      authenticated: true,
+      extension: true,
+      systemInfo: relaySystemInfo,
+      nostrEvents: [serviceEvent(), artifactEvent()]
+    });
+
+    await page.goto('/artifacts');
+
+    await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible();
+    const row = page.locator('tbody tr', { hasText: 'registry.example.com/bahia/sbom-demo' }).first();
+    await expect(row.locator('td').nth(0)).toContainText('registry.example.com/bahia/sbom-demo');
+    await expect(row.locator('td').nth(1)).toContainText('sbom-service');
+    await expect(row.locator('td').nth(2)).toHaveText('1.2.3');
+    await expect(row.locator('td').nth(3)).toContainText('sha256:111122223333…ff0000');
+  });
+
   test('artifact page displays SBOM attestation details', async ({ page }) => {
     const sbomHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const subjectDigest = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';

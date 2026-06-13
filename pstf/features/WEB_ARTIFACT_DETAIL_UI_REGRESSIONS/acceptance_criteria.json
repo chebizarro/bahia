@@ -8,6 +8,7 @@
     { "id": "AC5", "description": "Artifact refresh can load the artifact detail from the artifact REST read model if the in-memory projection is empty." },
     { "id": "AC6", "description": "SBOM tab renders supported artifact-projection SBOM data and does not call unsupported SBOM detail endpoints." },
     { "id": "AC7", "description": "Signature verification button says Verify and raw ContextVM/method-not-found errors are converted to user-facing wording." },
-    { "id": "AC8", "description": "High-visibility auth and DNS copy avoids protocol numbers and ContextVM transport wording." }
+    { "id": "AC8", "description": "High-visibility auth and DNS copy avoids protocol numbers and ContextVM transport wording." },
+    { "id": "AC9", "description": "Artifact registry list columns render the relay-backed projection shape without shifting version or digest values into the wrong columns." }
   ]
 }

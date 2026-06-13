@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -24,6 +25,7 @@
   let artifacts = $state([]);
   let serviceList = [];
   let serviceMap = $state({});
+  let registryLoadStarted = false;
 
   // Blossom state
   let blossomLoading = $state(false);
@@ -41,19 +43,31 @@
   });
 
   $effect(() => {
-    void loadRegistryArtifacts();
+    if (registryLoadStarted) return;
+    registryLoadStarted = true;
+    void untrack(() => loadRegistryArtifacts());
   });
 
+  $effect(() => {
+    applyRegistryProjection();
+  });
+
+  function applyRegistryProjection() {
+    const loadedServices = Array.from(services);
+    const loadedArtifacts = Array.from(registryArtifacts);
+    serviceList = loadedServices;
+    serviceMap = loadedServices.reduce((map, service) => {
+      map[service.id] = service.name;
+      return map;
+    }, {});
+    artifacts = loadedArtifacts;
+    if (loadedArtifacts.length > 0 || loadedServices.length > 0) registryLoading = false;
+  }
+
   async function loadRegistryArtifacts() {
-    // Load registry artifacts
     try {
-      await Promise.all([loadServices(), loadArtifacts()]);
-      serviceList = services;
-      serviceMap = serviceList.reduce((map, service) => {
-        map[service.id] = service.name;
-        return map;
-      }, {});
-      artifacts = registryArtifacts;
+      await Promise.allSettled([loadServices(), loadArtifacts()]);
+      applyRegistryProjection();
     } catch (err) {
       console.error('Failed to load artifacts:', err);
     } finally {
@@ -119,17 +133,52 @@
   }
 
   function getSBOMBadge(artifact) {
-    if (artifact.sbom_url) {
-      return { variant: 'success', text: 'Verified' };
+    if (artifact.sbom || artifact.sbom_data || artifact.sbom_url || artifact.sbom_ref || artifact.sbom_hash || (Array.isArray(artifact.sbom_packages) && artifact.sbom_packages.length > 0)) {
+      return { variant: 'success', text: 'Available' };
     }
     return { variant: 'default', text: 'None' };
   }
 
   function getSignatureBadge(artifact) {
-    if (artifact.signature_ref) {
+    if (artifact.signature_ref || artifact.verified_signature || (Array.isArray(artifact.signatures) && artifact.signatures.length > 0)) {
       return { variant: 'success', text: 'Signed' };
     }
     return { variant: 'default', text: 'None' };
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function artifactNameLabel(artifact) {
+    return artifact?.name || artifact?.image_repo || artifact?.repository || artifact?.artifact_id || artifact?.id || '-';
+  }
+
+  function artifactVersionLabel(artifact) {
+    const name = String(artifactNameLabel(artifact)).trim();
+    const candidates = [artifact?.version, artifact?.image_tag, artifact?.tag, artifact?.metadata?.version];
+    for (const candidate of candidates) {
+      const value = String(candidate || '').trim();
+      if (value && value !== name) return value;
+    }
+    return '-';
+  }
+
+  function artifactDigestValue(artifact) {
+    return artifact?.digest || artifact?.image_digest || artifact?.sha256 || artifact?.metadata?.digest || '';
+  }
+
+  function shortDigest(value) {
+    const digest = String(value || '');
+    if (!digest) return '-';
+    const [algorithm, hash] = digest.includes(':') ? digest.split(':', 2) : ['', digest];
+    const compact = hash.length > 16 ? `${hash.slice(0, 12)}…${hash.slice(-6)}` : hash;
+    return algorithm ? `${algorithm}:${compact}` : compact;
   }
 
   function formatDate(dateStr) {
@@ -160,25 +209,33 @@
   let uniqueTypes = $derived([...new Set(blossomBlobs.map(b => b.type).filter(Boolean))].sort());
 
   let registryColumns = $derived([
-    { 
-      key: 'image_tag', 
+    {
+      key: 'name',
       label: 'Name',
       icon: ArtifactIcon,
-      text: (r) => r.image_tag || r.image_digest?.slice(0, 12) || '-'
+      text: artifactNameLabel
     },
-    { 
-      key: 'service_id', 
+    {
+      key: 'service_id',
       label: 'Service',
       icon: ServiceIcon,
       text: (r) => serviceMap[r.service_id] || r.service_id?.slice(0, 8) || '-'
     },
-    { 
-      key: 'image_digest', 
+    {
+      key: 'version',
       label: 'Version',
-      render: (r) => `<code>${r.image_digest?.slice(7, 19) || '-'}...</code>`
+      text: artifactVersionLabel
     },
-    { 
-      key: 'created_at', 
+    {
+      key: 'digest',
+      label: 'Digest',
+      render: (r) => {
+        const digest = artifactDigestValue(r);
+        return digest ? `<code title="${escapeHtml(digest)}">${escapeHtml(shortDigest(digest))}</code>` : '-';
+      }
+    },
+    {
+      key: 'created_at',
       label: 'Created',
       render: (r) => formatDate(r.created_at)
     },

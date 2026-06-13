@@ -1,6 +1,6 @@
 # Verification Report: WEB_ARTIFACT_DETAIL_UI_REGRESSIONS
 
-Beads issues: `bahia-zgvc`, `bahia-g5d3`
+Beads issues: `bahia-zgvc`, `bahia-g5d3`, `bahia-a0zf`
 
 ## Verification status
 
@@ -14,11 +14,14 @@ Verified for the touched artifact detail/SBOM scope. The artifact route renders 
 - Playwright SBOM workflow tests fail immediately if `/api/v1/artifacts/:id/sbom` or `/api/v1/artifacts/:id/sbom/attestation` is requested.
 - The SBOM fixture uses the repository's supported read-model transport shape: kind `30900` with `schema=bahia.registry.artifact.v1` and `legacy_kind=31966` metadata.
 - Artifact detail code does not add or restore any REST artifact detail/SBOM fallback.
+- Artifact registry list columns now map the actual relay-backed projection shape: `name`/`image_repo` for Name, `version`/`image_tag` for Version, and `digest`/`image_digest` for a dedicated Digest column. The list hydration reacts to collection updates from relay catch-up instead of freezing on the initial empty projection.
 
 ## Tests run
 
-- PASS: `npx playwright test tests/e2e/sbom-workflow.spec.js -g "artifact (page displays SBOM attestation details|SBOM tab shows an empty state)" --workers=1 --reporter=line`
-  - 2 passed.
+- PASS: `npx playwright test tests/e2e/sbom-workflow.spec.js -g "artifact registry list maps" --workers=1 --reporter=line`
+  - 1 passed.
+- PASS: `npx playwright test tests/e2e/sbom-workflow.spec.js -g "artifact (registry list maps|page displays SBOM attestation details|SBOM tab shows an empty state)" --workers=1 --reporter=line`
+  - 3 passed.
 - PASS: `npm run test:unit -- --run tests/unit/connection-status.test.js`
   - 1 file passed, 5 tests passed.
 - PASS: `npm run lint`

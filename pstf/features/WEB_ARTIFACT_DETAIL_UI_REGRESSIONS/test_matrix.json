@@ -2,6 +2,12 @@
   "feature_id": "WEB_ARTIFACT_DETAIL_UI_REGRESSIONS",
   "tests": [
     {
+      "test": "web/tests/e2e/sbom-workflow.spec.js::artifact registry list maps name, version, and digest columns from projection fields",
+      "criteria": ["AC9"],
+      "type": "Playwright e2e",
+      "notes": "Loads relay-backed service and artifact projection events and verifies Name, Service, Version, and Digest cells use the intended fields."
+    },
+    {
       "test": "web/tests/e2e/sbom-workflow.spec.js::artifact page displays SBOM attestation details",
       "criteria": ["AC6"],
       "type": "Playwright e2e",
