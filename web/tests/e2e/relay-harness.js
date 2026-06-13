@@ -1,11 +1,20 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TEST_PUBKEY } from './helpers.js';
+import { finalizeEvent, getPublicKey, nip44 } from 'nostr-tools';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 const defaultAddr = process.env.BAHIA_TEST_RELAY_ADDR || '127.0.0.1:48629';
+const OPERATOR_SECRET_HEX = '3333333333333333333333333333333333333333333333333333333333333333';
+const operatorSecretKey = hexToBytes(OPERATOR_SECRET_HEX);
+export const RELAY_OPERATOR_PUBKEY = getPublicKey(operatorSecretKey);
+
+function hexToBytes(hex) {
+  const normalized = String(hex || '').trim();
+  if (!/^[0-9a-f]{64}$/i.test(normalized)) throw new Error('Expected 32-byte hex secret key');
+  return Uint8Array.from(normalized.match(/.{1,2}/g).map((byte) => Number.parseInt(byte, 16)));
+}
 
 export async function startBahiaTestRelay({ addr = defaultAddr } = {}) {
   const healthUrl = `http://${addr}/healthz`;
@@ -64,6 +73,16 @@ async function readRelayHealth(url) {
 }
 
 export async function installRelayBackedBrowserContext(page, relay, { authenticated = true } = {}) {
+  await page.exposeFunction('__bahiaE2ESignEvent', async (event) => finalizeEvent(event, operatorSecretKey));
+  await page.exposeFunction('__bahiaE2EEncryptNip44', async (recipientPubkey, plaintext) => {
+    const conversationKey = nip44.v2.utils.getConversationKey(operatorSecretKey, recipientPubkey);
+    return nip44.v2.encrypt(String(plaintext || ''), conversationKey);
+  });
+  await page.exposeFunction('__bahiaE2EDecryptNip44', async (senderPubkey, ciphertext) => {
+    const conversationKey = nip44.v2.utils.getConversationKey(operatorSecretKey, senderPubkey);
+    return nip44.v2.decrypt(String(ciphertext || ''), conversationKey);
+  });
+
   await page.addInitScript(({ relayUrl, servicePubkey, authenticated, pubkey }) => {
     localStorage.clear();
     sessionStorage.clear();
@@ -72,6 +91,7 @@ export async function installRelayBackedBrowserContext(page, relay, { authentica
       relay_urls: [relayUrl],
       service_pubkeys: [servicePubkey]
     };
+    localStorage.setItem('bahia_nostr_relays', JSON.stringify([relayUrl]));
 
     if (authenticated) {
       localStorage.setItem('bahia_auth_session', JSON.stringify({
@@ -81,13 +101,18 @@ export async function installRelayBackedBrowserContext(page, relay, { authentica
       }));
       window.nostr = {
         getPublicKey: async () => pubkey,
-        getRelays: async () => ({ [relayUrl]: { read: true, write: true } })
+        getRelays: async () => ({ [relayUrl]: { read: true, write: true } }),
+        signEvent: async (event) => window.__bahiaE2ESignEvent(event),
+        nip44: {
+          encrypt: async (recipient, plaintext) => window.__bahiaE2EEncryptNip44(recipient, plaintext),
+          decrypt: async (sender, ciphertext) => window.__bahiaE2EDecryptNip44(sender, ciphertext)
+        }
       };
     } else {
       localStorage.removeItem('bahia_auth_session');
       delete window.nostr;
     }
-  }, { relayUrl: relay.wsUrl, servicePubkey: relay.servicePubkey, authenticated, pubkey: TEST_PUBKEY });
+  }, { relayUrl: relay.wsUrl, servicePubkey: relay.servicePubkey, authenticated, pubkey: RELAY_OPERATOR_PUBKEY });
 }
 
 export async function installEmptyRestFallbacks(page) {

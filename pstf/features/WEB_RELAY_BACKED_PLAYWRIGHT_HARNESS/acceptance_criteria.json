@@ -23,8 +23,28 @@
     },
     {
       "id": "AC5",
-      "description": "Relay-backed activity events appear on the Events route and the tested flows produce no page or console errors.",
+      "description": "Relay-backed activity events appear on the Events route and the tested flows produce no uncaught page errors.",
       "tests": ["events consume relay-backed audit events", "attachRuntimeErrorGuards assertions in each test"]
+    },
+    {
+      "id": "AC6",
+      "description": "Assistant session and status events are seeded on the relay and hydrate the Assistant UI transcript.",
+      "tests": ["assistant panel hydrates relay-backed session and status events"]
+    },
+    {
+      "id": "AC7",
+      "description": "Soul Factory template, soul, draft, and runtime capability events are seeded on the relay and visible in Soul Gallery.",
+      "tests": ["Soul Factory hydrates template, soul, draft, and runtime capability events"]
+    },
+    {
+      "id": "AC8",
+      "description": "An encrypted ContextVM mutation publishes a NIP-44 gift-wrap event to the relay, verifies relay OK acceptance, and observes an encrypted service-signed result event.",
+      "tests": ["encrypted ContextVM mutation publishes to relay, verifies OK, and observes encrypted result"]
+    },
+    {
+      "id": "AC9",
+      "description": "Relay-backed docs NIP-23 fetching bypasses stale cache deterministically by explicitly connecting the docs pool and calling fetchDoc with bypassCache.",
+      "tests": ["docs fetch bypasses stale cache and reads relay-backed NIP-23 topic deterministically"]
     }
   ]
 }

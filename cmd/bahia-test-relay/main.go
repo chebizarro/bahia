@@ -13,13 +13,16 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
 	"fiatjaf.com/nostr/khatru"
+	"fiatjaf.com/nostr/nip44"
 )
 
 const serviceSecretHex = "1111111111111111111111111111111111111111111111111111111111111111"
 const workerSecretHex = "2222222222222222222222222222222222222222222222222222222222222222"
+const operatorSecretHex = "3333333333333333333333333333333333333333333333333333333333333333"
 
 const (
 	kindAudit                   = 4903
+	kindNIP59GiftWrap           = 1059
 	kindContextVMMessage        = 25910
 	kindNIP38Status             = 30315
 	kindControlplaneState       = 30900
@@ -34,6 +37,11 @@ const (
 	kindSBOMAttestation         = 30078
 	kindLongFormContent         = 30023
 	kindLoomWorkerAdvertisement = 10100
+	kindSoulAction              = 1950
+	kindSoulTemplate            = 31950
+	kindAgentSoul               = 31951
+	kindSoulDraft               = 31952
+	kindRuntimeCapability       = 30317
 )
 
 type eventSpec struct {
@@ -75,6 +83,15 @@ func main() {
 
 	relay.OnEventSaved = func(ctx context.Context, event nostr.Event) {
 		log.Printf("accepted EVENT kind=%d id=%s pubkey=%s", event.Kind, event.ID, event.PubKey)
+		response, ok := contextVMResultForRequest(event, serviceKey)
+		if !ok {
+			return
+		}
+		if err := store.SaveEvent(response); err != nil {
+			log.Printf("failed to store ContextVM result for %s: %v", event.ID, err)
+			return
+		}
+		relay.BroadcastEvent(response)
 	}
 
 	router := relay.Router()
@@ -99,8 +116,10 @@ func envOr(key, fallback string) string {
 func seedCorpus(relayURL string) ([]nostr.Event, error) {
 	serviceKey := nostr.MustSecretKeyFromHex(serviceSecretHex)
 	workerKey := nostr.MustSecretKeyFromHex(workerSecretHex)
+	operatorKey := nostr.MustSecretKeyFromHex(operatorSecretHex)
 	servicePubkey := serviceKey.Public().Hex()
 	workerPubkey := workerKey.Public().Hex()
+	operatorPubkey := operatorKey.Public().Hex()
 	now := nostr.Now()
 	events := []nostr.Event{}
 	add := func(spec eventSpec) error {
@@ -150,6 +169,135 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 		return nil, err
 	}
 	if err := add(eventSpec{Kind: kindNIP51DMRelayList, Author: serviceKey, Tags: nostr.Tags{{"relay", relayURL}}, Content: ""}); err != nil {
+		return nil, err
+	}
+
+	if err := add(eventSpec{Kind: kindControlplaneState, Author: serviceKey, Tags: nostr.Tags{
+		{"domain", "assistant"},
+		{"schema", "bahia.assistant-session.v1"},
+		{"d", "assistant-session-1"},
+		{"session", "assistant-session-1"},
+		{"status", "completed"},
+		{"p", operatorPubkey, "", "operator"},
+		{"agent", "bahia-assistant"},
+	}, Content: map[string]any{
+		"schema":             "bahia.assistant-session.v1",
+		"session_id":         "assistant-session-1",
+		"state":              "completed",
+		"operator_pubkey":    operatorPubkey,
+		"participants":       []string{operatorPubkey},
+		"assistant_id":       "bahia-assistant",
+		"assistant_pubkey":   servicePubkey,
+		"transcript_summary": "Relay-backed assistant session",
+		"current_turn_id":    "turn-1",
+	}}); err != nil {
+		return nil, err
+	}
+	if err := add(eventSpec{Kind: kindNIP38Status, Author: serviceKey, Tags: nostr.Tags{
+		{"domain", "assistant"},
+		{"schema", "bahia.assistant-status.v1"},
+		{"session", "assistant-session-1"},
+		{"status", "completed"},
+		{"agent", "bahia-assistant"},
+	}, Content: map[string]any{
+		"schema":     "bahia.assistant-status.v1",
+		"session_id": "assistant-session-1",
+		"status":     "completed",
+		"message":    "Relay-backed assistant is ready.",
+		"summary":    "Assistant session hydrated from the local relay.",
+	}}); err != nil {
+		return nil, err
+	}
+
+	if err := add(eventSpec{Kind: kindSoulTemplate, Author: serviceKey, Tags: nostr.Tags{
+		{"d", "scout-template"},
+		{"name", "Scout Template"},
+		{"description", "Relay-backed Soul Factory template"},
+		{"tier", "standard"},
+		{"t", "bahia"},
+		{"default-kind", fmt.Sprintf("%d", kindSoulAction)},
+	}, Content: map[string]any{
+		"name":        "Scout Template",
+		"description": "Relay-backed Soul Factory template",
+		"tier":        "standard",
+		"brief":       "Create a relay-backed research assistant soul.",
+		"customization": map[string]any{
+			"tone": "direct",
+		},
+	}}); err != nil {
+		return nil, err
+	}
+	if err := add(eventSpec{Kind: kindAgentSoul, Author: serviceKey, Tags: nostr.Tags{
+		{"d", "scout"},
+		{"name", "Scout"},
+		{"purpose", "Relay-backed research assistant"},
+		{"tier", "standard"},
+		{"status", "active"},
+		{"deploy-status", "healthy"},
+		{"runtime", "local-runtime"},
+		{"runtime-state", "ready"},
+		{"capability", "local-runtime"},
+		{"p", servicePubkey, "", "agent"},
+	}, Content: map[string]any{
+		"name":          "Scout",
+		"purpose":       "Relay-backed research assistant",
+		"tier":          "standard",
+		"status":        "active",
+		"deploy_status": "healthy",
+		"runtime": map[string]any{
+			"target": "local-runtime",
+			"state":  "ready",
+		},
+		"permissions": map[string]any{
+			"allowed_kinds": []int{kindSoulAction, kindContextVMMessage},
+		},
+		"workspace": map[string]any{
+			"service_id": "svc-1",
+		},
+		"spec_hash": "relay-backed-scout-v1",
+	}}); err != nil {
+		return nil, err
+	}
+	if err := add(eventSpec{Kind: kindSoulDraft, Author: serviceKey, Tags: nostr.Tags{
+		{"d", "scout"},
+		{"name", "Scout"},
+		{"tier", "standard"},
+		{"template", "scout-template"},
+		{"spec-hash", "relay-backed-scout-v1"},
+	}, Content: map[string]any{
+		"schema":   "soulfactory-draft/v2",
+		"agent_id": "scout",
+		"identity": map[string]any{
+			"name":    "Scout",
+			"purpose": "Relay-backed research assistant",
+		},
+		"runtime": map[string]any{
+			"target": "local-runtime",
+		},
+		"persona": map[string]any{
+			"instructions": "Use relay-backed event state.",
+		},
+	}}); err != nil {
+		return nil, err
+	}
+	if err := add(eventSpec{Kind: kindRuntimeCapability, Author: serviceKey, Tags: nostr.Tags{
+		{"d", "local-runtime"},
+		{"runtime", "local-runtime"},
+		{"schema", "soulfactory-runtime-capability/v1"},
+		{"control-schema", "soulfactory-runtime-control/v1"},
+		{"method", "soulfactory.provision"},
+		{"method", "soulfactory.config.reload"},
+		{"controller", servicePubkey},
+		{"relay", relayURL},
+	}, Content: map[string]any{
+		"schema":         "soulfactory-runtime-capability/v1",
+		"control_schema": "soulfactory-runtime-control/v1",
+		"runtime":        "local-runtime",
+		"methods":        []string{"soulfactory.provision", "soulfactory.config.reload"},
+		"controllers":    []string{servicePubkey},
+		"relays":         []string{relayURL},
+		"status":         "ready",
+	}}); err != nil {
 		return nil, err
 	}
 
@@ -223,6 +371,111 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 		return nil, err
 	}
 	return events, nil
+}
+
+func contextVMResultForRequest(event nostr.Event, serviceKey nostr.SecretKey) (nostr.Event, bool) {
+	requestEvent := event
+	if event.Kind == kindNIP59GiftWrap {
+		conversationKey, err := nip44.GenerateConversationKey(event.PubKey, serviceKey)
+		if err != nil {
+			return nostr.Event{}, false
+		}
+		plaintext, err := nip44.Decrypt(event.Content, conversationKey)
+		if err != nil {
+			return nostr.Event{}, false
+		}
+		if err := json.Unmarshal([]byte(plaintext), &requestEvent); err != nil {
+			return nostr.Event{}, false
+		}
+		if requestEvent.Kind != kindContextVMMessage || !requestEvent.CheckID() || !requestEvent.VerifySignature() {
+			return nostr.Event{}, false
+		}
+	}
+
+	if requestEvent.Kind != kindContextVMMessage || requestEvent.PubKey == serviceKey.Public() {
+		return nostr.Event{}, false
+	}
+	servicePubkey := serviceKey.Public().Hex()
+	if !requestEvent.Tags.ContainsAny("p", []string{servicePubkey}) {
+		return nostr.Event{}, false
+	}
+
+	var request struct {
+		JSONRPC string         `json:"jsonrpc"`
+		ID      any            `json:"id"`
+		Method  string         `json:"method"`
+		Params  map[string]any `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(requestEvent.Content), &request); err != nil || request.JSONRPC != "2.0" || request.ID == nil {
+		return nostr.Event{}, false
+	}
+
+	payload := map[string]any{}
+	switch request.Method {
+	case "services/secrets-list":
+		payload["secrets"] = []map[string]any{{"id": "relay-secret-1", "service_id": request.Params["service_id"], "name": "RELAY_BACKED_SECRET", "version": 1}}
+	case "services/secrets-create":
+		payload["secret"] = map[string]any{"id": "relay-secret-created", "service_id": request.Params["service_id"], "name": request.Params["name"], "version": 1}
+	default:
+		payload["acknowledged"] = true
+		payload["method"] = request.Method
+	}
+
+	content, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      request.ID,
+		"result": map[string]any{
+			"status":  "success",
+			"payload": payload,
+		},
+	})
+	if err != nil {
+		return nostr.Event{}, false
+	}
+	response := nostr.Event{
+		Kind:      kindContextVMMessage,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"e", event.ID.Hex()},
+			{"p", requestEvent.PubKey.Hex()},
+			{"status", "success"},
+			{"method", request.Method},
+		},
+		Content: string(content),
+	}
+	if err := response.Sign(serviceKey); err != nil {
+		return nostr.Event{}, false
+	}
+	if event.Kind == kindNIP59GiftWrap {
+		wrapperContent, err := json.Marshal(response)
+		if err != nil {
+			return nostr.Event{}, false
+		}
+		conversationKey, err := nip44.GenerateConversationKey(requestEvent.PubKey, serviceKey)
+		if err != nil {
+			return nostr.Event{}, false
+		}
+		ciphertext, err := nip44.Encrypt(string(wrapperContent), conversationKey)
+		if err != nil {
+			return nostr.Event{}, false
+		}
+		wrapper := nostr.Event{
+			Kind:      kindNIP59GiftWrap,
+			CreatedAt: nostr.Now(),
+			Tags: nostr.Tags{
+				{"e", event.ID.Hex()},
+				{"p", requestEvent.PubKey.Hex()},
+				{"status", "success"},
+				{"method", request.Method},
+			},
+			Content: ciphertext,
+		}
+		if err := wrapper.Sign(serviceKey); err != nil {
+			return nostr.Event{}, false
+		}
+		return wrapper, true
+	}
+	return response, true
 }
 
 func domainForSchema(schema string) string {
