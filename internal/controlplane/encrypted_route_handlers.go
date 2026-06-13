@@ -22,6 +22,12 @@ const (
 	EncryptedOperationServiceSecretsDelete = "services.secrets.delete"
 	EncryptedOperationServiceSecretsReveal = "services.secrets.reveal"
 
+	ContextVMMethodServiceSecretsList   = "services/secrets-list"
+	ContextVMMethodServiceSecretsCreate = "services/secrets-create"
+	ContextVMMethodServiceSecretsUpdate = "services/secrets-update"
+	ContextVMMethodServiceSecretsDelete = "services/secrets-delete"
+	ContextVMMethodServiceSecretsReveal = "services/secrets-reveal"
+
 	EncryptedOperationDeploymentRunLogsGet = "deployments.run_logs.get"
 
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
@@ -92,22 +98,28 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	if h == nil || transport == nil {
 		return
 	}
-	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsList, h.ListSecrets)
-	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsCreate, h.CreateSecret)
-	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsUpdate, h.UpdateSecret)
-	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsDelete, h.DeleteSecret)
-	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsReveal, h.RevealSecret)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsList, h.ListSecrets, ContextVMMethodServiceSecretsList)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsCreate, h.CreateSecret, ContextVMMethodServiceSecretsCreate)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsUpdate, h.UpdateSecret, ContextVMMethodServiceSecretsUpdate)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsDelete, h.DeleteSecret, ContextVMMethodServiceSecretsDelete)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsReveal, h.RevealSecret, ContextVMMethodServiceSecretsReveal)
 	h.registerRouteHandler(transport, EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs)
 	h.registerRouteHandler(transport, EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
 }
 
 type encryptedRouteHandler = EncryptedRequestHandler
 
-func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedRequestTransport, operation string, handler encryptedRouteHandler) {
+func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedRequestTransport, operation string, handler encryptedRouteHandler, contextVMAliases ...string) {
 	transport.RegisterHandler(operation, handler)
-	transport.RegisterContextVMHandler(operation, func(ctx context.Context, request ContextVMRequest) (any, error) {
-		return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey.Hex(), Payload: request.RPC.Params}})
-	})
+	register := func(method string) {
+		transport.RegisterContextVMHandler(method, func(ctx context.Context, request ContextVMRequest) (any, error) {
+			return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey.Hex(), Payload: request.RPC.Params}})
+		})
+	}
+	register(operation)
+	for _, alias := range contextVMAliases {
+		register(alias)
+	}
 }
 
 type encryptedSecretPayload struct {

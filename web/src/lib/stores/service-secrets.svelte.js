@@ -29,7 +29,7 @@ function unwrapEncryptedResult(response, fallback = {}) {
   if (envelope?.status === 'error') {
     throw new Error(envelope?.error?.message || 'Encrypted service secret request failed');
   }
-  return envelope?.payload ?? fallback;
+  return envelope?.payload ?? envelope ?? fallback;
 }
 
 function normalizeSecretsPayload(payload) {

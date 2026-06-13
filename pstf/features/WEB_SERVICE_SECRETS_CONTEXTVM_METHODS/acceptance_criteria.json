@@ -1,0 +1,20 @@
+{
+  "feature_id": "WEB_SERVICE_SECRETS_CONTEXTVM_METHODS",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Backend service-secrets ContextVM handlers accept `services/secrets-list`, `services/secrets-create`, `services/secrets-update`, `services/secrets-delete`, and `services/secrets-reveal` aliases emitted by the web ContextVM request builder.",
+      "verification": ["internal/controlplane/encrypted_route_handlers_test.go"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The web service-secrets store returns direct JSON-RPC result payloads and legacy `{status,payload}` envelopes without losing secret metadata.",
+      "verification": ["web/tests/unit/encrypted-route-stores.test.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Service secrets remain ContextVM-only; no REST fallback, fake data, or placeholder production path is added.",
+      "verification": ["static inspection", "git diff review"]
+    }
+  ]
+}

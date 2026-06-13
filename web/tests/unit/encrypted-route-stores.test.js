@@ -25,7 +25,7 @@ describe('encrypted route stores', () => {
     const serviceId = 'svc-123';
     const secretId = 'secret-1';
     encryptedRequestsMock.requestEncryptedResult
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { secrets: [{ id: secretId, name: 'TOKEN', version: 1 }] } } })
+      .mockResolvedValueOnce({ result: { secrets: [{ id: secretId, name: 'TOKEN', version: 1 }] } })
       .mockResolvedValueOnce({ result: { status: 'ok', payload: { secret: { id: 'secret-2', name: 'API_KEY', version: 1 } } } })
       .mockResolvedValueOnce({ result: { status: 'ok', payload: { value: 'plaintext' } } })
       .mockResolvedValueOnce({ result: { status: 'ok', payload: { status: 'deleted' } } });
@@ -41,6 +41,16 @@ describe('encrypted route stores', () => {
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, expect.objectContaining({ operation: 'services.secrets.create', payload: { service_id: serviceId, name: 'API_KEY', value: 'super-secret' } }));
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(3, expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(4, expect.objectContaining({ operation: 'services.secrets.delete', payload: { service_id: serviceId, secret_id: secretId } }));
+  });
+
+  it('unwraps legacy encrypted route payload envelopes for service secrets', async () => {
+    const serviceId = 'svc-123';
+    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
+      result: { status: 'ok', payload: { secrets: [{ id: 'secret-legacy', name: 'TOKEN', version: 1 }] } }
+    });
+    const store = await import('../../src/lib/stores/service-secrets.svelte.js');
+
+    await expect(store.listServiceSecrets(serviceId)).resolves.toEqual([{ id: 'secret-legacy', name: 'TOKEN', version: 1 }]);
   });
 
   it('surfaces encrypted result errors for deployment run logs', async () => {

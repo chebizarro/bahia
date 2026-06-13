@@ -1,0 +1,21 @@
+{
+  "feature_id": "WEB_SERVICE_SECRETS_CONTEXTVM_METHODS",
+  "beads": ["bahia-9m1d"],
+  "title": "Align service secrets ContextVM methods between web client and backend handlers",
+  "observed_behavior": [
+    "The services detail route logged `Failed to load service secrets via ContextVM requests: Error: method not found`.",
+    "The web store requested `services.secrets.list`, but ContextVM request construction normalized dotted operation names into slash/hyphen methods such as `services/secrets-list`.",
+    "The backend service-secrets handlers registered only dotted method names, so slash/hyphen ContextVM requests returned JSON-RPC -32601."
+  ],
+  "intended_behavior": [
+    "Service secrets list/create/update/delete/reveal handlers accept the slash/hyphen ContextVM methods emitted by browser requests.",
+    "The web service-secrets store handles direct JSON-RPC result payloads and legacy encrypted route payload envelopes without dropping data.",
+    "No REST fallback or fake secret behavior is introduced."
+  ],
+  "scope": [
+    "internal/controlplane/encrypted_route_handlers.go",
+    "internal/controlplane/encrypted_route_handlers_test.go",
+    "web/src/lib/stores/service-secrets.svelte.js",
+    "web/tests/unit/encrypted-route-stores.test.js"
+  ]
+}

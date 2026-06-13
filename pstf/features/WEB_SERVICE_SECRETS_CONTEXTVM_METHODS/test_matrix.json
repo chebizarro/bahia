@@ -1,0 +1,20 @@
+{
+  "feature_id": "WEB_SERVICE_SECRETS_CONTEXTVM_METHODS",
+  "tests": [
+    {
+      "name": "backend encrypted route handlers accept normalized ContextVM aliases",
+      "command": "go test ./internal/controlplane",
+      "criteria": ["AC1", "AC3"]
+    },
+    {
+      "name": "web service-secrets store unwraps ContextVM result shapes",
+      "command": "cd web && pnpm exec vitest run --config vitest.config.js tests/unit/encrypted-route-stores.test.js",
+      "criteria": ["AC2", "AC3"]
+    },
+    {
+      "name": "web lint",
+      "command": "cd web && pnpm lint",
+      "criteria": ["AC2"]
+    }
+  ]
+}

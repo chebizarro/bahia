@@ -317,14 +317,14 @@ func TestEncryptedRouteHandlers_ServiceSecretsCreateListRevealEncrypted(t *testi
 	}
 
 	publisher.events = nil
-	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsList, map[string]any{"service_id": serviceID.String()}))
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceSecretsList, map[string]any{"service_id": serviceID.String()}))
 	listPayload := routeResultPayload(t, publisher.events[0])
 	if stringified, _ := json.Marshal(listPayload); string(stringified) == "postgres://secret" || containsJSONValue(stringified, "postgres://secret") {
 		t.Fatalf("list response leaked secret value: %s", stringified)
 	}
 
 	publisher.events = nil
-	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsReveal, map[string]any{"service_id": serviceID.String(), "secret_id": secretID}))
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceSecretsReveal, map[string]any{"service_id": serviceID.String(), "secret_id": secretID}))
 	revealed := routeResultPayload(t, publisher.events[0])
 	if value := revealed["value"]; value != "postgres://secret" {
 		t.Fatalf("reveal value = %#v", value)
