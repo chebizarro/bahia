@@ -34,7 +34,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -68,7 +68,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -101,7 +101,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -132,7 +132,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -163,7 +163,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -198,7 +198,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {

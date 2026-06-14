@@ -203,12 +203,12 @@ No new HITL decisions required. Existing `SECURITY-HITL-001` (OSV cache retentio
 
 ### Test matrix status update
 
-Epic 5 updates test matrix entries `SECURITY-T-010` (documentation/PSTF review) to `implemented_passed`. Tests `SECURITY-T-001` through `SECURITY-T-006` remain `planned` as they map to implementation-slice deterministic tests that were verified by their respective epic evidence (see Epic 2–4 evidence sections above); the `planned` status reflects the test matrix's original conservative status labels rather than missing coverage.
+Epic 5 updates test matrix entries `SECURITY-T-010` (documentation/PSTF review) to `implemented_passed`. Tests `SECURITY-T-001` through `SECURITY-T-006` were updated to `implemented_passed` during the final review epic (`bahia-65q8.6`) after confirming all underlying test files exist, pass, and map to their respective epic evidence (see Epic 2–4 evidence sections above).
 
 ### Coverage summary
 
 - 17/17 acceptance criteria have mapped tests
-- 7/11 test matrix entries marked `implemented_passed` (T-007, T-008, T-009, T-010, T-011 plus previously recorded)
+- 11/11 test matrix entries marked `implemented_passed` (T-001 through T-011; T-001–T-006 updated from `planned` during final review after confirming all underlying tests exist and pass)
 - All Go packages pass tests and vet
 - No fake/stub/hardcoded/placeholder behavior in touched Security scope
 - Documentation covers all required topics: SBOM-triggered scans, explicit package/PURL/commit scans, schedules, policy thresholds, breach notifications, Nostr observables, failure handling, troubleshooting, MCP/ContextVM surfaces, and migration/rollback
