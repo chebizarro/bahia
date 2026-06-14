@@ -1,0 +1,197 @@
+{
+  "feature_id": "SECURITY_OSV_SBOM",
+  "status": "contract_defined",
+  "criteria": [
+    {
+      "ac_id": "SECURITY-AC-001",
+      "title": "Security uses canonical Nostr kinds only",
+      "type": "protocol",
+      "priority": "must",
+      "assertion": "Security scan intent uses ContextVM kind 25910, usually encrypted with 1059 or 21059; durable Security truth uses 30315, 30900, 30078, and 4903, while SBOM availability remains 30004. No new Bahia-specific Security kind is allocated.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-002",
+      "title": "SBOM observables trigger non-blocking scans",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The Security service subscribes to accepted SBOM 30078 reference and 30004 availability events with narrow filters, processes historical events until EOSE, keeps realtime subscriptions open when enabled, and never blocks SBOM generation/import.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-003",
+      "title": "Explicit scan and rescan intents are acknowledgments only",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "ContextVM methods security/scan and security/rescan acknowledge accepted intent for SBOM, package, PURL, and commit targets; terminal progress and results are visible only through correlated Security observables.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-004",
+      "title": "Read surfaces do not imply scan completion",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Security read methods such as security/findings-list and security/schedules-list expose persisted projections and schedules without launching polling loops or claiming completion for in-flight scans.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-005",
+      "title": "Target identity is stable and deterministic",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "SBOM, package, PURL, and commit targets derive canonical target keys and hash forms suitable for dedupe, d tags, indexes, diagnostics, and breach fingerprints.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-006",
+      "title": "SBOM payload integrity is verified before scanning",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Security resolves the referenced SBOM payload through the documented storage backend and verifies the exact payload SHA-256 before parsing or querying OSV.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-007",
+      "title": "OSV lookup behavior is normalized",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The OSV adapter supports batch, PURL, package-coordinate, commit, and vulnerability hydration flows; preserves query order; deduplicates coordinates; handles invalid PURL/version combinations; and classifies retryable and non-retryable failures.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-008",
+      "title": "Security status events are scoped and machine-readable",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Each scan publishes 30315 status using d=security:scan:<run_id>, domain=security, schema=bahia.status.security-scan.v1, run, target_type, target_key_hash, status, and correlation tags.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-009",
+      "title": "Security summaries are canonical state projections",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Scan and latest-target summaries publish 30900 events with domain=security, explicit schemas, stable d coordinates, severity counts, freshness/status metadata, and replaceable-event semantics.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-010",
+      "title": "Finding details use NIP-78 app data",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Normalized finding details publish 30078 events with domain=security, schema=bahia.security.findings.v1, stable d coordinates, target/run tags, and public-safe content that omits raw sensitive OSV cache data.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-011",
+      "title": "Audit facts cover lifecycle and policy breaches",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Security emits 4903 audit facts for scan lifecycle, failures, publication retries, and policy breaches using schema=bahia.audit.security.v1 and correlation/resource tags.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-012",
+      "title": "Publishing verifies relay outcomes",
+      "type": "protocol",
+      "priority": "must",
+      "assertion": "Every Security observable publish checks relay OK accepted flags and messages, handles CLOSED/AUTH distinctly, and records retryable publication state for partial or zero accepted publishes.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-013",
+      "title": "Policies evaluate latest Security scan state without synchronous waiting",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Deployment gates use policy-scoped settings to evaluate latest completed/fresh Security results or explicit no-scan/stale/failed behavior; they do not launch a scan and wait by timeout.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-014",
+      "title": "Breach notifications are fingerprinted",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Policy breaches are persisted by policy and target key hash; new or materially changed fingerprints dispatch security.policy_breached through existing notification channels, while unchanged recurring breaches do not notify again.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-015",
+      "title": "Tests and verification are deterministic",
+      "type": "protocol",
+      "priority": "must",
+      "assertion": "Implementation tests inject EVENT, EOSE, OK, CLOSED, and AUTH outcomes directly, avoid sleep-based event waits, and map every acceptance criterion to passing or blocked verification evidence.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-016",
+      "title": "Scheduled rescans use repository due records and cadence timers only",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Policy-derived Security schedules select due enabled records, skip disabled policies and active duplicate scans, update next-due state, and use timers only for cadence rather than event delivery or completion detection.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SECURITY-AC-017",
+      "title": "Compatibility aggregate projections reflect latest successful Security scans",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Latest successful Security scan severity counts update SBOMManifest and ArtifactSBOM compatibility projections without mutating canonical SBOM events; consumers fall back to existing SBOM aggregate counts when no Security scan exists.",
+      "source_evidence": [
+        "docs/plans/security-osv-sbom-2026-06-14.md"
+      ],
+      "requires_human_approval": false
+    }
+  ],
+  "coverage_notes": [
+    "Epic 1 freezes the contract and planned verification only; implementation evidence is expected in subsequent Beads epics.",
+    "Criteria intentionally require existing canonical kinds unless a new Beads issue records an approved kind-allocation decision."
+  ]
+}

@@ -33,7 +33,7 @@ Bahia clients now separate private mutation intent from public observable truth.
 | **ContextVM discovery** | `11316`-`11320` | Server, tools, resources, templates, and prompts announcements |
 | **Canonical state** | `30900`, `30078` | Control-plane state projections and app-specific data |
 | **Canonical audit/status** | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
-| **Collections/relays** | `30002` | NIP-51 relay sets and topology |
+| **Collections/relays** | `30002`, `30004` | NIP-51 relay sets, topology, and SBOM availability lists |
 | **SoulFactory interop** | `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | Direct Nostr agent lifecycle events accepted by the Bahia sidecar as open interop data |
 | **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` excluding documented SoulFactory interop overlaps | Legacy custom kinds retained only for startup migration, historical conversion tests, and fail-closed fixtures |
 
@@ -447,6 +447,7 @@ The unwrapped inner response carries `e=<request-event-id>` with reply marker an
 - Secrets (create, reveal)
 - Run logs
 - Artifact verification
+- Security OSV/SBOM scans and finding reads
 
 ## Route Transport Classes
 
@@ -479,6 +480,35 @@ SBOM mutations are ContextVM intents (`sbom/generate` and `sbom/import`) carried
 ```
 
 Process historical `EVENT`s, treat `EOSE` as catch-up completion, and keep the subscription open for realtime progress when needed. Generated or imported SBOM payload bytes are stored on Blossom; Nostr events carry references, hashes, status, and audit facts rather than full SBOM payloads. Relay `OK` acceptance is required for the `30078` reference and the `30004` availability list before Bahia marks a manifest published.
+
+## Security OSV/SBOM Scan Observables
+
+Security scanning is an event-driven observer of canonical SBOM truth and an explicit ContextVM scan surface. SBOM generation/import still completes on SBOM `30078` references and `30004` availability lists; Security watches those events and publishes separate Security observables after it verifies the referenced payload hash and scans normalized targets.
+
+Security ContextVM methods are:
+
+| Method | Use | Completion signal |
+|--------|-----|-------------------|
+| `security/scan` | Request a scan for an SBOM reference, package coordinate, PURL, or Git commit. | Security `30315`/`30900`/`30078`/`4903` observables. |
+| `security/rescan` | Request another scan run for a known target. | New correlated scan status and summary events. |
+| `security/findings-list` | Read persisted finding projections. | Immediate read response only. |
+| `security/schedules-list` | Read policy-derived schedules and freshness state. | Immediate read response only. |
+
+Follow a scan with scoped filters:
+
+```json
+{
+  "kinds": [30315, 30900, 30078, 4903],
+  "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["security"],
+  "#target_key_hash": ["<target-key-hash>"],
+  "#e": ["<contextvm-request-event-id>"]
+}
+```
+
+Security status events use `schema=bahia.status.security-scan.v1`; summaries use `bahia.security.scan-summary.v1` or `bahia.security.target-summary.v1`; normalized finding app-data uses `bahia.security.findings.v1`; audit facts use `bahia.audit.security.v1`. Clients process historical events until `EOSE`, keep subscriptions open for realtime convergence, deduplicate by event id, handle `CLOSED` and `AUTH`, and never poll REST or MCP for scan completion. Relay `OK accepted=true` is required for every Security observable publication.
+
+Policy breach notifications use the existing notification dispatcher with event type `security.policy_breached`. Bahia sends that notification only when a persisted breach fingerprint is new or materially changed; unchanged recurring breaches do not generate duplicate notifications.
 
 ## Authentication
 
@@ -551,6 +581,8 @@ Authorization is based on the verified inner ContextVM event `pubkey` after unwr
 | 1059 / 21059 | CEP-4/NIP-59 gift-wrap envelopes for ContextVM messages |
 | 11316-11320 | ContextVM discovery and capability announcements |
 | 30002 | NIP-51 relay sets |
+| 30004 | NIP-51 SBOM availability lists |
+| 30078 | NIP-78 app data, including SBOM references and Security findings |
 | 30900 | Canonical control-plane state projection |
 | 4903 | Canonical audit fact |
 | 30315 | NIP-38 operational status |

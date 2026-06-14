@@ -1,0 +1,94 @@
+{
+  "feature_id": "SECURITY_OSV_SBOM",
+  "title": "OSV-backed SBOM Security scanning",
+  "status": "contract_defined",
+  "source_evidence": [
+    "docs/plans/security-osv-sbom-2026-06-14.md",
+    "docs/nostr-event-implementation-guide.md",
+    "docs/control-planes.md",
+    "docs/event-spec.md",
+    "docs/nostr-commands.md",
+    "docs/user-guide/nostr-integration.md",
+    "pstf/features/SBOM_WORKFLOW_E2E/acceptance_criteria.json",
+    "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/acceptance_criteria.json"
+  ],
+  "actors": [
+    "Bahia operator",
+    "Bahia Security service",
+    "Bahia policy evaluator",
+    "Notification dispatcher",
+    "Nostr relay",
+    "OSV API"
+  ],
+  "description": "Security observes canonical SBOM references and explicit scan intents, normalizes SBOM/package/PURL/commit targets, queries OSV, persists scan facts, publishes canonical Nostr observables, evaluates policy-scoped thresholds, and dispatches notifications only for new or materially changed policy breaches.",
+  "in_scope": [
+    "Event-driven SBOM-triggered OSV scans from accepted canonical SBOM reference and availability observables.",
+    "Explicit ContextVM scan/rescan intents for SBOM references, package coordinates, PURLs, and Git commits.",
+    "Security scan status, scan summary, target summary, finding detail, and audit event contracts using canonical kinds 30315, 30900, 30078, and 4903.",
+    "Policy-scoped Security settings, latest-scan freshness gates, scheduled rescans, breach fingerprinting, and notification dispatch semantics.",
+    "Deterministic test and verification expectations for subsequent implementation epics.",
+    "Compatibility aggregate projection updates from latest successful Security scans without mutating canonical SBOM events."
+  ],
+  "out_of_scope": [
+    "Implementing scanner orchestration, repositories, migrations, OSV adapter expansion, policy integration, notification integration, or application wiring in Epic 1.",
+    "Allocating a new Bahia-specific Nostr kind for Security events.",
+    "Mutating canonical SBOM events after a Security scan completes.",
+    "Synchronous deployment blocking that waits for a new OSV scan by timeout or polling."
+  ],
+  "preconditions": [
+    "SBOM generation/import publishes canonical 30078 SBOM reference events and 30004 availability lists with accepted relay OKs.",
+    "ContextVM kind 25910 is the canonical mutation intent transport, normally wrapped with 1059 or 21059 for sensitive payloads.",
+    "Bahia clients and services can subscribe to canonical observables with scoped filters and process EOSE/CLOSED/AUTH outcomes."
+  ],
+  "postconditions": [
+    "Every Security scan run has durable persisted state and corresponding Nostr status/audit/summary evidence or a tracked publish retry state.",
+    "Clients treat ContextVM responses as acknowledgments only and derive durable scan truth from Security observables.",
+    "Policy breaches are deduplicated by stable fingerprint and notification delivery is limited to new or materially changed breaches."
+  ],
+  "happy_paths": [
+    "An accepted SBOM reference event triggers a non-blocking Security scan; the scanner verifies the payload hash, queries OSV, publishes running/completed status, summaries, findings, and audit facts with relay OK verification.",
+    "An operator publishes security/scan for a package, PURL, commit, or SBOM reference; Bahia acknowledges accepted intent and the requester follows correlated Security observables until terminal scan state appears.",
+    "A latest completed Security scan breaches an environment-scoped policy threshold; Bahia records a breach fingerprint, publishes a security policy-breach audit fact, and dispatches security.policy_breached once."
+  ],
+  "failure_paths": [
+    "Relay OK rejection, CLOSED, or AUTH requirements prevent publication; the implementation records explicit publish failure/retry state rather than marking observables published.",
+    "OSV invalid-request responses are classified as non-retryable scan errors with operator-visible status/audit evidence.",
+    "Missing, malformed, or hash-mismatched SBOM payloads fail the scan without changing canonical SBOM events.",
+    "Policy requires a fresh completed scan but none exists; gate behavior follows explicit policy settings rather than launching a synchronous wait."
+  ],
+  "edge_cases": [
+    "Large SBOMs require deduplication and OSV batch chunking without losing query-result order.",
+    "CPE-only packages are persisted with an unsupported_coordinate reason rather than silently ignored.",
+    "PURLs that already include a version must not also send top-level version to OSV.",
+    "Recurring scans with unchanged breach fingerprints must not duplicate notifications.",
+    "Withdrawn OSV advisories remain historically visible as withdrawn findings instead of being deleted."
+  ],
+  "non_functional_requirements": [
+    "No polling, repeated peek subscriptions, sleeps, or timeout-based completion detection for Nostr event delivery.",
+    "Inbound Nostr events must be validated before trust and handlers must be idempotent by event id and target key.",
+    "Every Security publish must verify relay OK accepted flag and rejection message; batch publishes must handle partial failure.",
+    "Sensitive payloads, raw OSV hydrated records, credentials, private repository URLs where policy marks them sensitive, and notification secrets must not be exposed in public Nostr content.",
+    "Tests must be deterministic and inject EVENT, EOSE, OK, CLOSED, and AUTH outcomes directly."
+  ],
+  "dependencies": [
+    "SBOM_WORKFLOW_E2E canonical SBOM observables",
+    "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS encrypted notification surfaces",
+    "Existing deployment policy scope and vulnerability threshold rules",
+    "OSV API /v1/querybatch, /v1/query, and /v1/vulns/{id}"
+  ],
+  "ambiguities": [
+    {
+      "id": "SECURITY-HITL-001",
+      "description": "Raw hydrated OSV vulnerability cache retention is recommended as 30 days in the plan, but product/legal retention requirements are not yet approved.",
+      "tracked_in": "pstf/features/SECURITY_OSV_SBOM/hitl_decisions.md"
+    },
+    {
+      "id": "SECURITY-HITL-002",
+      "description": "Expected steady-state scan volume is unknown; partitioning and cache sizing may require operator input before high-volume deployment.",
+      "tracked_in": "pstf/features/SECURITY_OSV_SBOM/hitl_decisions.md"
+    }
+  ],
+  "human_decisions": [
+    "Use existing canonical kinds 25910, 30315, 30900, 30078, 4903, and existing SBOM 30004 availability lists for the Security contract; no new Bahia-specific kind is allocated in Epic 1."
+  ]
+}

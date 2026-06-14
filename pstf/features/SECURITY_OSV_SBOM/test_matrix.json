@@ -1,0 +1,372 @@
+{
+  "feature_id": "SECURITY_OSV_SBOM",
+  "status": "planned",
+  "tests": [
+    {
+      "test_id": "SECURITY-T-001",
+      "ac_ids": [
+        "SECURITY-AC-001",
+        "SECURITY-AC-008",
+        "SECURITY-AC-009",
+        "SECURITY-AC-010",
+        "SECURITY-AC-011"
+      ],
+      "title": "Event builder contract tests for Security status, summaries, findings, and audit facts",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/service or internal/nostrutil Security event tests",
+      "description": "Event builder contract tests for Security status, summaries, findings, and audit facts",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-002",
+      "ac_ids": [
+        "SECURITY-AC-002",
+        "SECURITY-AC-006",
+        "SECURITY-AC-012",
+        "SECURITY-AC-015"
+      ],
+      "title": "SBOM observable ingestion handles EVENT/EOSE/CLOSED/AUTH and payload hash verification",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/security_scanner_test.go",
+      "description": "SBOM observable ingestion handles EVENT/EOSE/CLOSED/AUTH and payload hash verification",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-003",
+      "ac_ids": [
+        "SECURITY-AC-003",
+        "SECURITY-AC-004",
+        "SECURITY-AC-012"
+      ],
+      "title": "ContextVM Security handlers acknowledge intent and expose read surfaces without terminal completion claims",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/security_handlers_test.go",
+      "description": "ContextVM Security handlers acknowledge intent and expose read surfaces without terminal completion claims",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-004",
+      "ac_ids": [
+        "SECURITY-AC-005"
+      ],
+      "title": "Target key derivation covers SBOM, package, PURL, and commit coordinates",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/domain/security_test.go",
+      "description": "Target key derivation covers SBOM, package, PURL, and commit coordinates",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-005",
+      "ac_ids": [
+        "SECURITY-AC-007"
+      ],
+      "title": "OSV adapter covers batch ordering, PURL/version rules, commit lookup, hydration, chunking, and error classification",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/adapters/security/osv_test.go",
+      "description": "OSV adapter covers batch ordering, PURL/version rules, commit lookup, hydration, chunking, and error classification",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-006",
+      "ac_ids": [
+        "SECURITY-AC-008",
+        "SECURITY-AC-009",
+        "SECURITY-AC-010",
+        "SECURITY-AC-011",
+        "SECURITY-AC-012"
+      ],
+      "title": "Scanner orchestration persists findings and publishes observables with OK verification and retry state",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/security_scanner_test.go",
+      "description": "Scanner orchestration persists findings and publishes observables with OK verification and retry state",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-007",
+      "ac_ids": [
+        "SECURITY-AC-013"
+      ],
+      "title": "Policy gates evaluate latest completed/fresh Security scan state without synchronous scan-and-wait",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/service/policy_test.go",
+      "description": "Policy gates evaluate latest completed/fresh Security scan state without synchronous scan-and-wait",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-008",
+      "ac_ids": [
+        "SECURITY-AC-014"
+      ],
+      "title": "Policy breach lifecycle fingerprints new, changed, unchanged, and resolved breaches and dispatches notifications only when actionable",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/security_scanner_test.go and internal/notifications tests",
+      "description": "Policy breach lifecycle fingerprints new, changed, unchanged, and resolved breaches and dispatches notifications only when actionable",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-009",
+      "ac_ids": [
+        "SECURITY-AC-016",
+        "SECURITY-AC-015"
+      ],
+      "title": "Scheduled rescans use due records, disabled-policy skips, duplicate suppression, next-due updates, and cadence-only timers",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/service/security_scheduler_test.go and internal/repository/pg_security_test.go",
+      "description": "Scheduled rescans use due records, disabled-policy skips, duplicate suppression, next-due updates, and cadence-only timers",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Seed due, not-due, disabled-policy, and active-duplicate schedule records.",
+        "Run the scheduler tick handler directly without sleeping.",
+        "Assert selected scans, skipped records, next-due updates, and absence of event-delivery timers."
+      ],
+      "expected_result": "Only due enabled non-duplicate schedules enqueue scans; next due timestamps are persisted; timers are used only for cadence.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-010",
+      "ac_ids": [
+        "SECURITY-AC-001",
+        "SECURITY-AC-015"
+      ],
+      "title": "Documentation and PSTF review confirms Security contract uses canonical Nostr kinds and maps criteria to planned deterministic tests",
+      "type": "docs",
+      "existing_or_new": "existing",
+      "target_path": "docs/* and pstf/features/SECURITY_OSV_SBOM/*",
+      "description": "Documentation and PSTF review confirms Security contract uses canonical Nostr kinds and maps criteria to planned deterministic tests",
+      "preconditions": [
+        "Security implementation epic for this slice is active."
+      ],
+      "steps": [
+        "Inject deterministic inputs and protocol outcomes.",
+        "Assert state transitions, persisted effects, and observable publications."
+      ],
+      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "fixtures": [],
+      "mocks": [
+        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
+      ],
+      "data_requirements": [
+        "Stable target keys, run ids, policy ids, and OSV fixtures"
+      ],
+      "determinism_notes": [
+        "No sleep-based waiting for Nostr delivery."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SECURITY-T-011",
+      "ac_ids": [
+        "SECURITY-AC-017"
+      ],
+      "title": "Compatibility aggregate projections update from latest successful Security scan and preserve SBOM canonical immutability",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/repository/pg_sbom_test.go and internal/service/security_scanner_test.go",
+      "description": "Verifies latest successful Security scan counts update SBOMManifest/ArtifactSBOM compatibility fields without publishing or mutating canonical SBOM events, and fallback behavior remains available when no Security scan exists.",
+      "preconditions": [
+        "Security persistence and SBOM compatibility projections are implemented."
+      ],
+      "steps": [
+        "Seed an SBOM manifest/projection with existing aggregate counts and no Security scan.",
+        "Assert policy/UI compatibility consumers can still read fallback counts.",
+        "Persist a successful Security scan with severity counts for the same target.",
+        "Project compatibility counts and assert canonical SBOM event references remain unchanged."
+      ],
+      "expected_result": "Compatibility projections reflect latest successful Security counts when present, fall back when absent, and never mutate canonical SBOM 30078/30004 events.",
+      "fixtures": [],
+      "mocks": [
+        "Repository fixtures for SBOM manifest and Security scan state"
+      ],
+      "data_requirements": [
+        "Stable SBOM subject, payload hash, run id, and severity counts"
+      ],
+      "determinism_notes": [
+        "Repository state is seeded directly; no relay or OSV network calls are required."
+      ],
+      "status": "planned",
+      "failure_reason": null
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 17,
+    "criteria_with_tests": 17,
+    "known_gaps": [
+      "Implementation evidence is pending subsequent Beads epics."
+    ]
+  }
+}

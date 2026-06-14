@@ -38,6 +38,7 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 | `adoption` | `scan`, `import` |
 | `assistant` | `prompt`, `approve`, `cancel` |
 | `ci` | `workflow-run`, `cancel`, `retry` |
+| `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 
 ## Example: Deploy Service
 
@@ -121,6 +122,35 @@ SBOM generation and import intents are ContextVM methods such as `sbom/generate`
 - `30315` status and `4903` audit events for progress and provenance.
 
 The legacy `30079` SBOM index kind is read-only compatibility data and is not a publication target.
+
+## Security OSV/SBOM Observables
+
+Security scans are requested with ContextVM methods and followed through canonical observables. Use `security/scan` for explicit SBOM/package/PURL/commit scans, `security/rescan` for another run of a known target, and `security/findings-list` or `security/schedules-list` only for persisted read surfaces. The JSON-RPC response acknowledges request handling; it is not scan completion.
+
+A Security scan target is identified by `target_type` plus a canonical target key hash. Implementations derive that hash from the target key rules in `pstf/features/SECURITY_OSV_SBOM/feature_spec.json` and the Security plan. Use the hash in tags where full target keys are too long.
+
+Durable Security events use:
+
+- `30315` status: `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`, `status`, optional `step`, and request correlation tags.
+- `30900` summaries: `schema=bahia.security.scan-summary.v1` for `d=security:scan-summary:<run_id>` and `schema=bahia.security.target-summary.v1` for `d=security:target:<target_key_hash>`.
+- `30078` findings: `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>`.
+- `4903` audit: `domain=security`, `schema=bahia.audit.security.v1`, with type values `security-scan`, `security-policy-breach`, and `security-publication`.
+
+Follow a scan with a scoped filter such as:
+
+```json
+{
+  "kinds": [30315, 30900, 30078, 4903],
+  "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["security"],
+  "#target_key_hash": ["<target-key-hash>"],
+  "#e": ["<contextvm-request-event-id>"]
+}
+```
+
+Security service ingestion of SBOM truth uses existing SBOM filters over `30078` and `30004`; it processes stored events until `EOSE`, keeps realtime subscriptions open when enabled, and handles `CLOSED`/`AUTH` without falling back to polling. Every Security observable publish must verify relay `OK accepted=true` and retain rejection messages for operator diagnostics and retry state.
+
+Policy breaches dispatch the internal notification event type `security.policy_breached` only for new or materially changed persisted fingerprints. The public Nostr evidence is a `4903` audit event; no new Nostr kind is created for notifications.
 
 ## Discovery and Relay Sets
 

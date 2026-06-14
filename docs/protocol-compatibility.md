@@ -12,7 +12,7 @@ Current production shape:
 - The **relay sidecar is the primary realtime/public boundary**.
 - Browser/operator identity is **signer-first**.
 - Mutation intent uses **ContextVM JSON-RPC over Nostr kind `25910`**, normally encrypted with CEP-4 / NIP-59 wrappers (`1059` or `21059`).
-- Long-running truth is observed through **canonical Nostr observables** (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, and relevant standard NIPs).
+- Long-running truth is observed through **canonical Nostr observables** (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30004`, `30078`, and relevant standard NIPs).
 - REST and HTTP MCP remain compatibility/tooling surfaces, but they must return Nostr correlation metadata for long-running work.
 
 For the canonical control-plane contract, prefer:
@@ -36,6 +36,7 @@ For the canonical control-plane contract, prefer:
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
 | NIP-51 / NIP-65 | Relay sets, SBOM availability lists, and relay list metadata | ✅ canonical bootstrap/routing and curated SBOM availability inputs |
+| Security OSV/SBOM | ContextVM scan intent plus canonical status, state, finding, and audit observables | 🟡 contract defined; implementation tracked under `bahia-65q8` |
 | NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
 | NIP-34 + NIP-22 comments | Repository announcements, repository relay hints, repository state, patches, PRs, issues, status, and replies | ✅ repository/ngit-specific routing input and sidecar open interop surface |
 | SoulFactory | Agent templates, drafts, provisioning/lifecycle requests, runtime capabilities, and correlated results | ✅ Nostr-native agent lifecycle interop and sidecar open interop surface |
@@ -55,7 +56,7 @@ For the canonical control-plane contract, prefer:
 
 ### 1. ContextVM over Nostr
 
-ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy`, `worker/cordon`, `dns/zone-create`, `backup/run`, `ml/recipe-run`, and `adoption/import`.
+ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy`, `worker/cordon`, `dns/zone-create`, `backup/run`, `ml/recipe-run`, `adoption/import`, and Security methods such as `security/scan` and `security/rescan`.
 
 Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`). The verified inner ContextVM event pubkey is the authorization subject after unwrap.
 
@@ -68,7 +69,7 @@ Desired-state runtime metadata is an additive observable contract, not a new pro
 | Kind(s) | Purpose |
 |---------|---------|
 | `30900` | Canonical control-plane state projection |
-| `30078` | NIP-78 app-specific configuration, registries, UI/operator projection data, and SBOM reference app-data (`schema=bahia.sbom.ref.v1`) |
+| `30078` | NIP-78 app-specific configuration, registries, UI/operator projection data, SBOM reference app-data (`schema=bahia.sbom.ref.v1`), and Security finding details (`schema=bahia.security.findings.v1`) |
 | `30004` | NIP-51 Curation Set for complete SBOM availability lists (`schema=bahia.sbom.available-list.v1`) |
 | `30315` | NIP-38 operational status |
 | `4903` | Immutable audit fact / attestation / provenance breadcrumb |

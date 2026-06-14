@@ -70,6 +70,9 @@ Examples:
 | Promote package | `package/promote` |
 | Scan adoption target | `adoption/scan` |
 | Import adoption target | `adoption/import` |
+| Request Security scan | `security/scan` |
+| Request Security rescan | `security/rescan` |
+| Read Security findings or schedules | `security/findings-list`, `security/schedules-list` |
 
 Do not create request/status/result kind triplets for new operations.
 
@@ -360,6 +363,16 @@ SBOM reference app-data uses NIP-78 `30078` with `domain=sbom`, `schema=bahia.sb
 
 SBOM availability uses NIP-51 `30004` with `domain=sbom`, `schema=bahia.sbom.available-list.v1`, and `d=sbom:available:<subject-type>:<subject-key>`. The event is a complete replacement list for one subject version. It includes `a` tags to the corresponding `30078` reference coordinates and `sbom` summary tags. Historical `30079` SBOM index events are read-only migration data and must not be used for new publication.
 
+Security uses the same decision tree without allocating a new kind:
+
+- Explicit scan/rescan and read intent: ContextVM `25910` methods `security/scan`, `security/rescan`, `security/findings-list`, and `security/schedules-list`, usually wrapped with `1059` or `21059` for sensitive target or policy data.
+- Progress: NIP-38 `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, and `d=security:scan:<run_id>`.
+- Current state: `30900` with `schema=bahia.security.scan-summary.v1` for per-run summaries and `schema=bahia.security.target-summary.v1` for latest target summaries.
+- App-specific details: NIP-78 `30078` with `schema=bahia.security.findings.v1` for normalized public-safe findings.
+- Audit and policy breach evidence: `4903` with `schema=bahia.audit.security.v1`.
+
+Security scans triggered by SBOM production subscribe to existing SBOM `30078` reference and `30004` availability events with exact `#domain=sbom`, `#schema`, subject, and service-author filters. The scanner treats `EOSE` as historical catch-up completion, keeps realtime subscriptions open when needed, handles `CLOSED` and `AUTH`, verifies inbound event signatures and hashes before trust, and verifies relay `OK` for every Security observable it publishes.
+
 Relay topology is separate and should be published as NIP-51 relay sets:
 
 ```json
@@ -393,7 +406,7 @@ Use these interop defaults:
 
 Common tags across fleet events:
 
-- `domain`: routing and ownership area (`service`, `dns`, `backup`, `worker`, `package`, `ml`, `adoption`, `policy`, `soul-factory`)
+- `domain`: routing and ownership area (`service`, `dns`, `backup`, `worker`, `package`, `ml`, `adoption`, `policy`, `security`, `soul-factory`)
 - `schema`: content schema identifier; consumers must check it before parsing
 - `d`: replaceable coordinate or idempotency/correlation key when applicable
 - `e`: source or parent event id

@@ -81,6 +81,7 @@ Methods follow `<domain>/<operation>`:
 | `adoption` | `scan`, `import` |
 | `assistant` | `prompt`, `approve`, `cancel` |
 | `ci` | `workflow-run`, `cancel`, `retry` |
+| `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 
 JSON-RPC responses acknowledge request handling. Long-running completion comes from canonical observable events.
 
@@ -180,6 +181,84 @@ SBOM payload bytes are stored outside Nostr, typically in Blossom. Nostr carries
 
 Relay `OK` acceptance is required before a publisher treats either the `30078` reference or `30004` availability list as published.
 
+## Security OSV/SBOM Events
+
+Security scanning uses existing canonical event families; Epic 1 does not allocate a new Security kind. ContextVM requests acknowledge scan intent or read persisted Security data, while durable scan truth is observed through scoped subscriptions.
+
+### ContextVM methods
+
+| Method | Purpose | Terminal truth |
+|--------|---------|----------------|
+| `security/scan` | Request a scan for an SBOM reference, package coordinate, PURL, or Git commit target. | `30315`, `30900`, `30078`, and `4903` Security observables. |
+| `security/rescan` | Request a new run for a previously known target or latest SBOM target. | New scan status and summary observables correlated to the request and target. |
+| `security/findings-list` | Read persisted normalized findings for a target, run, policy scope, or severity filter. | Immediate read response only; it does not imply scan completion. |
+| `security/schedules-list` | Read policy-derived scan schedules and freshness metadata. | Immediate read response only; schedule due work is observable through scan events. |
+
+A scan request uses a stable idempotency key in the ContextVM `d` tag and `_meta.progressToken` when available. Tags include `p=<bahia-service-pubkey>`, `method=security/scan`, `op=scan`, `domain=security`, `schema=bahia.intent.security-scan.v1`, `target_type`, optional `target_key_hash` when the client can precompute it, and resource tags such as `subject_type`, `subject`, `artifact`, `package`, `environment`, or `policy` when known. Sensitive target data should be wrapped in `1059` or `21059`.
+
+Example package scan intent:
+
+```json
+{
+  "kind": 25910,
+  "pubkey": "<operator-pubkey>",
+  "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "security/scan"],
+    ["op", "scan"],
+    ["domain", "security"],
+    ["schema", "bahia.intent.security-scan.v1"],
+    ["d", "security-scan-pypi-django-4-2-20260614"],
+    ["target_type", "package"],
+    ["package", "pypi/django"],
+    ["environment", "prod"]
+  ],
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"security-scan-pypi-django-4-2-20260614\",\"method\":\"security/scan\",\"params\":{\"target\":{\"type\":\"package\",\"ecosystem\":\"PyPI\",\"name\":\"django\",\"version\":\"4.2.0\"},\"policy_scope\":{\"environment_id\":\"prod\"},\"_meta\":{\"progressToken\":\"security-scan-pypi-django-4-2-20260614\"}}}"
+}
+```
+
+### Security status, summary, finding, and audit schemas
+
+- `30315` scan status uses `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run=<run_id>`, `target_type`, `target_key_hash`, `status`, optional `step`, and correlation `e`/`p` tags. Status values include `accepted`, `queued`, `running`, `completed`, `failed`, `cancelled`, and `degraded`.
+- `30900` scan summaries use `schema=bahia.security.scan-summary.v1` and `d=security:scan-summary:<run_id>`. Latest target summaries use `schema=bahia.security.target-summary.v1` and `d=security:target:<target_key_hash>`. Content includes target identity, run metadata, scan freshness, provider, severity counts, finding counts, policy status, and error/degraded metadata.
+- `30078` finding details use `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>`. Content contains normalized public-safe findings, affected coordinates, OSV IDs, severity/source metadata, withdrawn status, and target/run references. Raw hydrated OSV cache records and sensitive repository details are persisted privately rather than published as public Nostr content.
+- `4903` audit facts use `domain=security`, `schema=bahia.audit.security.v1`, and `type` values such as `security-scan`, `security-policy-breach`, and `security-publication`. Audit content records lifecycle actions including scan accepted/running/completed/failed, payload hash mismatch, OSV adapter failure, publish retry, and policy breach fingerprint changes.
+
+Security publishers must verify relay `OK` accepted flags and messages for every `30315`, `30900`, `30078`, and `4903` event. `CLOSED` and `AUTH` outcomes are explicit protocol states; auth-required relays require NIP-42 handling or deterministic failure, not silent fallback.
+
+### Subscription filters
+
+SBOM-triggered scanning subscribes narrowly to canonical SBOM facts, for example:
+
+```json
+{
+  "kinds": [30078, 30004],
+  "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["sbom"],
+  "#schema": ["bahia.sbom.ref.v1", "bahia.sbom.available-list.v1"],
+  "#subject_type": ["artifact"],
+  "#subject": ["sha256:<subject-digest>"]
+}
+```
+
+Operators following an explicit scan subscribe to correlated Security observables:
+
+```json
+{
+  "kinds": [30315, 30900, 30078, 4903],
+  "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["security"],
+  "#e": ["<contextvm-request-event-id>"],
+  "#target_key_hash": ["<security-target-hash>"]
+}
+```
+
+Process historical `EVENT`s until `EOSE`, then keep the subscription open for realtime updates when convergence is needed. Deduplicate by event id, apply replaceable semantics for `30900` and `30078` by `(kind, pubkey, d)`, and do not poll REST/MCP for completion.
+
+### Policy-breach notification convention
+
+The in-process event type `security.policy_breached` is the notification trigger for actionable Security policy breaches. It is not a Nostr kind. It is emitted only when the persisted breach fingerprint for `policy_id + target_key_hash` is new or materially changed. A clean scan marks prior breach records resolved without sending another breach notification unless a tracked implementation issue explicitly adds and documents a separate resolved notification type.
+
 ## Loom and Hive-CI External Protocol Events
 
 Bahia still interoperates with external protocols that define their own kinds. These are not Bahia legacy control-plane families:
@@ -213,6 +292,7 @@ Bahia also emits typed in-process audit events used by projectors, automation su
 | `llm_route.observation` | LLM backend/gateway observation recorded | `route_id`, `environment_id`, `release_id`, `run_id` |
 | `llm_route_state.changed` / `llm_route.drift_detected` | LLM route state projection changed | `route_id`, `environment_id`, `release_id`, `intent_id`, `run_id` |
 | `llm_gateway_route.synced` | Gateway model route synchronized | `route_id`, `environment_id` |
+| `security.policy_breached` | Security policy breach became new or materially changed | `policy_id`, `target_key_hash`, `fingerprint`, `severity_counts`, `violated_rules` |
 
 ## Startup Migration App
 

@@ -59,6 +59,7 @@ Client mutation publication should use ContextVM JSON-RPC methods rather than Ba
 | `dns` | `zone-create`, `zone-delete`, `record-set`, `policy-apply`, `drift-remediate` |
 | `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
 | `ml` | `model-import`, `recipe-run`, `inference-deploy`, `inference-rollback` |
+| `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 
 Example ContextVM request:
 
@@ -199,7 +200,7 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 | `11316`-`11320` | ContextVM server/tool/resource/prompt/template discovery | Scope by Bahia service pubkey; use for bootstrap before mutation or state subscriptions |
 | `30002` | NIP-51 relay set | Scope by Bahia service pubkey and relay-set `#d` tags |
 | `30004` | NIP-51 Curation Set | Scope by Bahia service pubkey, `#d`, `#domain=sbom`, `#schema=bahia.sbom.available-list.v1`, and subject tags |
-| `30078` | NIP-78 app data | Scope by Bahia service pubkey, `#d`, `#domain`, and `#schema`; SBOM references use `#domain=sbom` and `#schema=bahia.sbom.ref.v1` |
+| `30078` | NIP-78 app data | Scope by Bahia service pubkey, `#d`, `#domain`, and `#schema`; SBOM references use `#domain=sbom` and `#schema=bahia.sbom.ref.v1`; Security findings use `#domain=security` and `#schema=bahia.security.findings.v1` |
 | `5` | NIP-09 delete | Scope by service author and `#e`/`#a` references |
 
 DNS state uses the same canonical observable stream rather than a custom Bahia read-model range. Deletions may be NIP-09 kind `5` events or canonical tombstone replacements with `deleted=true` when domain state requires durable tombstones.
@@ -218,6 +219,30 @@ AI/ML and backup operators use ContextVM mutation methods (`ml/model-import`, `m
 Historical AI/ML and backup custom ranges (`38390`-`38431`, `31980`-`31999`, `6981`-`6984`) are migration inventory only. They may appear in startup migration manifests, historical conversion reports, and fail-closed fixtures, but production docs must not instruct clients to publish or subscribe to them as live runtime contracts. Artifact signature attestation kind `31200` remains a historical artifact-signature reference and is not a replacement for canonical Bahia audit/status observability.
 
 REST and MCP may initiate compatible AI/ML or backup tooling flows, but they must return ContextVM/Nostr correlation metadata instead of claiming completion for long-running work. A successful synchronous response includes the ContextVM request event id, method, relevant canonical observable kinds, requester pubkey, and scoped tags such as `endpoint`, `environment`, `model_version`, `recipe`, `run`, `backup_repository`, or `restore_id`. Clients subscribe with those tags, wait for EOSE for historical catch-up, process realtime observable events, and never poll REST/MCP for completion.
+
+### Security OSV/SBOM canonical observability
+
+Security OSV/SBOM scanning uses ContextVM mutation/read methods and canonical observables rather than request/status/result kind triplets. The initial Security method catalog is:
+
+| Method | Purpose | Notes |
+|--------|---------|-------|
+| `security/scan` | Explicit scan request for SBOM reference, package coordinate, PURL, or Git commit target. | Response acknowledges intent only. |
+| `security/rescan` | Request a new scan run for a known target or latest SBOM target. | Response acknowledges intent only. |
+| `security/findings-list` | Read persisted findings by target, run, policy scope, severity, or OSV id. | Read response does not imply in-flight scan completion. |
+| `security/schedules-list` | Read policy-derived scan schedules and freshness state. | Due execution is observable through scan events. |
+
+Durable Security truth is published by the Bahia service key as:
+
+- `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`, `status`, optional `step`, and `e`/`p` correlation tags.
+- `30900` with `schema=bahia.security.scan-summary.v1` and `d=security:scan-summary:<run_id>` for per-run summaries, or `schema=bahia.security.target-summary.v1` and `d=security:target:<target_key_hash>` for latest target state.
+- `30078` with `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>` for normalized public-safe finding details.
+- `4903` with `domain=security`, `schema=bahia.audit.security.v1`, and `type=security-scan`, `security-policy-breach`, or `security-publication` for lifecycle, failure, policy-breach, and publication-retry facts.
+
+SBOM-triggered scanning observes existing SBOM `30078` references and `30004` availability lists with `#domain=sbom` and exact schema/subject filters. Security does not mutate canonical SBOM events after scanning; compatibility aggregate updates are tracked as projection work under Beads.
+
+Clients following a Security request subscribe to `30315`, `30900`, `30078`, and `4903` with `#domain=security`, trusted service author, `#e=<contextvm-request-event-id>` when correlated, and `#target_key_hash` or `#run` when known. They process historical events until `EOSE`, keep subscriptions open for realtime convergence, handle `CLOSED` and `AUTH` explicitly, deduplicate by event id, and apply replaceable semantics for `30900`/`30078`. Every Security publish requires relay `OK accepted=true`; partial or rejected publishes must remain visible as failed or retryable publication state.
+
+The notification bridge uses the internal event type `security.policy_breached` for new or materially changed breach fingerprints. The Nostr evidence for that notification is the corresponding `4903` Security audit fact; `security.policy_breached` is not a new Nostr kind.
 
 ### ContextVM Operator Actions
 
