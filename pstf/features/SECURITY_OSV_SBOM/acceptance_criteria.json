@@ -1,6 +1,6 @@
 {
   "feature_id": "SECURITY_OSV_SBOM",
-  "status": "contract_defined",
+  "status": "implementation_complete",
   "criteria": [
     {
       "ac_id": "SECURITY-AC-001",

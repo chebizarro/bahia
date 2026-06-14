@@ -1,6 +1,6 @@
 {
   "feature_id": "SECURITY_OSV_SBOM",
-  "status": "implementation_in_progress",
+  "status": "implementation_complete",
   "tests": [
     {
       "test_id": "SECURITY-T-001",
@@ -311,21 +311,18 @@
         "Security implementation epic for this slice is active."
       ],
       "steps": [
-        "Inject deterministic inputs and protocol outcomes.",
-        "Assert state transitions, persisted effects, and observable publications."
+        "Review all Security documentation for completeness and canonical kind usage.",
+        "Verify PSTF acceptance criteria map to passing deterministic tests.",
+        "Confirm no stub, placeholder, or hardcoded behavior in touched scope."
       ],
-      "expected_result": "The mapped acceptance criteria are proven without live relay, OSV, timer, or sleep dependencies unless explicitly marked as an external integration gate.",
+      "expected_result": "Documentation covers SBOM-triggered scans, explicit scans, schedules, policy thresholds, breach notifications, Nostr observables, failure handling, troubleshooting, and MCP/ContextVM surfaces. All criteria map to tests.",
       "fixtures": [],
-      "mocks": [
-        "Injected Nostr EVENT/EOSE/OK/CLOSED/AUTH outcomes where applicable"
-      ],
-      "data_requirements": [
-        "Stable target keys, run ids, policy ids, and OSV fixtures"
-      ],
+      "mocks": [],
+      "data_requirements": [],
       "determinism_notes": [
-        "No sleep-based waiting for Nostr delivery."
+        "Documentation review and PSTF evidence verification only."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {

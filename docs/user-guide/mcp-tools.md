@@ -196,6 +196,19 @@ Tool provisioning status and denylist tools are not the same semantic mutation a
 | `bahia_tool_denylist_add` | Direct denylist administration, not approval semantics |
 | `bahia_tool_denylist_remove` | Direct denylist administration, not approval semantics |
 
+### Security Tools
+
+Security scan and read operations use encrypted ContextVM methods, not MCP HTTP tools. There are no `bahia_security_*` MCP tools. Use ContextVM kind `25910` (normally wrapped in `1059`/`21059`) to invoke the following methods:
+
+| ContextVM Method | Description |
+|------------------|-------------|
+| `security/scan` | Request an explicit OSV scan for an SBOM reference, package, PURL, or Git commit |
+| `security/rescan` | Request a new scan run for a known target |
+| `security/findings-list` | Read persisted findings by target, run, severity, or OSV ID |
+| `security/schedules-list` | Read policy-derived scan schedules and freshness state |
+
+Mutation responses acknowledge intent only. Follow Security observables (`30315`, `30900`, `30078`, `4903` with `#domain=security`) for durable scan progress and results. See [Security](features/security.md) for full documentation.
+
 ### Payment Tools
 
 | Tool | Description |

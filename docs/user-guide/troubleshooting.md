@@ -364,6 +364,81 @@ Common issues and solutions when using Bahia.
 
 4. Consider scaling horizontally.
 
+## Security OSV Scanning Issues
+
+### Scan Not Triggering After SBOM Import
+
+**Symptoms:**
+- SBOM imports successfully but no Security scan starts
+- No Security `30315` status events appear
+
+**Solutions:**
+1. Verify Security is enabled in the relevant policy:
+   ```json
+   { "type": "security_osv_scan", "params": { "enabled": true } }
+   ```
+
+2. Confirm SBOM import published `30078` and `30004` events with relay OK acceptance.
+
+3. Check Bahia service logs for Security SBOM subscription status and EOSE processing.
+
+4. Verify relay connectivity and that the Security service can subscribe to `#domain=sbom` filters.
+
+### Security Scan Failed
+
+**Symptoms:**
+- Scan status shows `failed` in `30315` events
+- `4903` audit fact includes error details
+
+**Solutions:**
+1. Check the scan error field for the root cause:
+   - **Payload hash mismatch** — SBOM payload in Blossom storage doesn't match the `30078` reference hash. Re-import or regenerate the SBOM.
+   - **OSV unreachable** — Network issues reaching `api.osv.dev`; retries exhausted. Check outbound HTTP connectivity.
+   - **Invalid request (400)** — Malformed PURL or invalid version combination rejected by OSV. Check SBOM package data quality.
+
+2. For transient failures, request a rescan:
+   ```json
+   { "method": "security/rescan", "params": { "target_key_hash": "<hash>", "force": true } }
+   ```
+
+3. Review `4903` audit facts with `#domain=security` and `type=security-scan` filters.
+
+### Breach Notifications Not Received
+
+**Symptoms:**
+- Policy breach expected but no notification dispatched
+- Notification logs show no `security.policy_breached` events
+
+**Solutions:**
+1. Verify notification channel includes `security.policy_breached` in its event filter.
+
+2. Confirm the breach is new or materially changed — unchanged recurring breaches are intentionally suppressed to avoid alert fatigue.
+
+3. Check notification delivery logs:
+   ```bash
+   bahia notifications log --status failed
+   ```
+
+4. Verify breach was detected by checking `4903` audit facts with `type=security-policy-breach`.
+
+### Policy Blocking Deployments Due to Missing Security Scan
+
+**Symptoms:**
+- Deployment blocked with policy violation
+- No Security scan exists for the artifact
+
+**Solutions:**
+1. Check the `no_scan` policy parameter — if set to `"block"`, deployments will be blocked when no scan exists.
+
+2. During initial rollout, consider using `"warn"` instead of `"block"`:
+   ```json
+   { "type": "security_osv_scan", "params": { "no_scan": "warn" } }
+   ```
+
+3. Trigger an explicit scan via `security/scan` for the artifact's SBOM target.
+
+4. Check `security/schedules-list` for scan freshness state.
+
 ## Getting Help
 
 ### Logs

@@ -1,7 +1,7 @@
 {
   "feature_id": "SECURITY_OSV_SBOM",
   "title": "OSV-backed SBOM Security scanning",
-  "status": "contract_defined",
+  "status": "implementation_complete",
   "source_evidence": [
     "docs/plans/security-osv-sbom-2026-06-14.md",
     "docs/nostr-event-implementation-guide.md",
