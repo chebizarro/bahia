@@ -126,6 +126,39 @@ type SBOMManifestRepository interface {
 	SearchManifestPackagesByName(ctx context.Context, name string, limit int) ([]domain.SBOMManifestPackage, error)
 }
 
+// SecurityRepository manages durable Security target, scan, finding, schedule, breach,
+// OSV cache, and observable-publication state. It does not execute scans.
+type SecurityRepository interface {
+	UpsertSecurityTarget(ctx context.Context, target *domain.SecurityTarget) (*domain.SecurityTarget, error)
+	GetSecurityTargetByHash(ctx context.Context, targetKeyHash string) (*domain.SecurityTarget, error)
+	ListSecurityTargets(ctx context.Context, targetType domain.SecurityTargetType, limit int) ([]domain.SecurityTarget, error)
+
+	CreateSecurityScanRun(ctx context.Context, run *domain.SecurityScanRun) error
+	GetSecurityScanRun(ctx context.Context, id uuid.UUID) (*domain.SecurityScanRun, error)
+	ListSecurityScanRuns(ctx context.Context, targetKeyHash string, limit int) ([]domain.SecurityScanRun, error)
+	UpdateSecurityScanRunStatus(ctx context.Context, id uuid.UUID, status domain.SecurityScanStatus, errorMessage string, finishedAt *time.Time) error
+	UpsertSecurityTargetLatest(ctx context.Context, latest *domain.SecurityTargetLatest) error
+
+	UpsertSecurityFindings(ctx context.Context, findings []domain.SecurityOSVFinding) error
+	ListSecurityFindings(ctx context.Context, runID uuid.UUID) ([]domain.SecurityOSVFinding, error)
+
+	UpsertSecurityScanSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
+	ClaimDueSecurityScanSchedules(ctx context.Context, now time.Time, limit int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error)
+	MarkSecurityScheduleDispatched(ctx context.Context, id uuid.UUID, runID uuid.UUID, dispatchedAt time.Time, nextDueAt time.Time) error
+
+	RecordSecurityPolicyBreach(ctx context.Context, breach *domain.SecurityPolicyBreach) (domain.SecurityBreachRecordResult, error)
+	ResolveSecurityPolicyBreach(ctx context.Context, policyID uuid.UUID, targetKeyHash string, resolvedAt time.Time) error
+	GetActiveSecurityPolicyBreach(ctx context.Context, policyID uuid.UUID, targetKeyHash string) (*domain.SecurityPolicyBreach, error)
+
+	UpsertOSVVulnerabilityCache(ctx context.Context, cache *domain.OSVVulnerabilityCache) error
+	GetOSVVulnerabilityCache(ctx context.Context, osvID string, now time.Time) (*domain.OSVVulnerabilityCache, error)
+	PruneExpiredOSVVulnerabilityCache(ctx context.Context, now time.Time) (int64, error)
+
+	UpsertSecurityPublication(ctx context.Context, publication *domain.SecurityObservablePublication) error
+	UpdateSecurityPublicationState(ctx context.Context, id uuid.UUID, state domain.SecurityPublicationState, eventID, lastError string, nextRetryAt *time.Time, publishedAt *time.Time) error
+	ListRetryableSecurityPublications(ctx context.Context, now time.Time, limit int) ([]domain.SecurityObservablePublication, error)
+}
+
 // PaymentRecordRepository manages Cashu payment records.
 type PaymentRecordRepository interface {
 	Create(ctx context.Context, rec *domain.PaymentRecord) error

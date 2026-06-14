@@ -46,6 +46,35 @@ Oracle review: completed for the uncommitted Epic 1 diff. Blocking findings were
 - Epic 4 must prove policy-scoped configuration, scheduled rescans, breach fingerprints, notifications, and compatibility aggregate updates.
 - Epic 5 must record full Go/web/integration quality gates, user/operator documentation, migration/rollback notes, and release evidence.
 
+## Epic 2 implementation evidence
+
+Epic 2 (`bahia-65q8.2`) implements the durable Security OSV foundation only: domain types, additive migration `000044_security_osv`, repository APIs, canonical target identity, and OSV adapter expansion. Scanner runtime, SBOM observable subscriptions, ContextVM handlers, policy gates, schedules runtime, notifications, compatibility aggregate updates, and user-facing documentation remain assigned to subsequent epics.
+
+Implemented evidence on 2026-06-14:
+
+- `internal/domain/security.go` defines Security scan targets, scan runs, latest target state, OSV findings, scan schedules, policy breaches, OSV cache records, observable publication retry records, severity counts, lifecycle enums, and terminal/success helpers.
+- Canonical target identity helpers derive deterministic keys and SHA-256 lower-hex hashes for SBOM, package, PURL, and commit targets, including package empty-version representation, PURL normalization via `github.com/anchore/packageurl-go`, and deterministic commit keys with `unknown` repository fallback.
+- `internal/db/migrations/000044_security_osv.up.sql` adds additive Security tables and indexes for targets, runs, latest state, findings, schedules, breach fingerprints, OSV hydrated vulnerability cache, and observable publication retry state. The paired down migration drops only these new tables.
+- `internal/repository/pg_security.go` and `internal/repository/interfaces.go` provide Security repository APIs for target upsert/list, run creation/status transition, target latest upsert, finding upsert/list, due schedule claiming/dispatch, breach lifecycle, OSV cache retention, and retryable publication queries. `TxRepos` includes the Security repository for subsequent transactional scanner writes.
+- `internal/adapters/security/osv.go` preserves `NewOSVClient()` and `QueryPackage(ctx, ecosystem, name, version)` compatibility while adding batch query ordering, PURL and commit queries, hydration, chunking, dedupe/cache behavior, typed retryable/non-retryable OSV errors, `Retry-After` parsing, and deterministic retry seams.
+
+Epic 2 deterministic checks:
+
+```bash
+go test ./internal/domain ./internal/adapters/security ./internal/repository
+go test ./internal/service
+go test ./internal/db
+```
+
+Result: PASS on 2026-06-14.
+
+Mapped Epic 2 coverage:
+
+- `SECURITY-T-004` / `SECURITY-AC-005`: PASS for target key/hash derivation in `internal/domain/security_test.go`.
+- `SECURITY-T-005` / `SECURITY-AC-007`: PASS for OSV adapter batch ordering, PURL version rules, commit lookup shape, hydration, 404/429/5xx handling, cache/dedupe behavior, chunking, and retry behavior in `internal/adapters/security/osv_test.go`.
+- Epic 2 persistence acceptance: PASS for repository create/update/list primitives, terminal scan-run transition refusal, finding uniqueness, due schedule lease claiming, breach lifecycle, expired OSV cache behavior, cache pruning, and retryable publication selection in `internal/repository/pg_security_test.go`.
+
+
 ## Remaining tracked work
 
 Remaining implementation and review work is tracked in Beads under parent epic `bahia-65q8`; no implementation work is hidden in this report.

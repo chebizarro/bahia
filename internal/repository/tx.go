@@ -24,6 +24,7 @@ type TxRepos struct {
 	Observations      RuntimeObservationRepository
 	Secrets           SecretRepository
 	AdoptedIdentities AdoptedRuntimeIdentityRepository
+	Security          SecurityRepository
 }
 
 type pgQueryer interface {
@@ -67,6 +68,7 @@ func (e *PgTxExecutor) WithinTx(ctx context.Context, fn func(repos TxRepos) erro
 		Observations:      newPgRuntimeObservationRepositoryWithDB(tx),
 		Secrets:           newPgSecretRepositoryWithDB(tx),
 		AdoptedIdentities: newPgAdoptedRuntimeIdentityRepositoryWithDB(tx),
+		Security:          newPgSecurityRepositoryWithDB(tx),
 	}
 	if err := fn(repos); err != nil {
 		return err
