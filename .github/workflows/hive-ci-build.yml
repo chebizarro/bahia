@@ -1,0 +1,178 @@
+name: Hive CI Build
+
+# This workflow is the Hive CI durable path counterpart to deploy-edge.yml.
+# It is executed by hive-ci-runner via nektos/act when grasp-gitea publishes
+# a kind 5401 event for pushes to master.  It builds images, pushes them to
+# Harbor, resolves the pushed manifest digest, and writes .hiveci-result.json
+# so hive-ci-runner can include image metadata in the kind 5402 result event.
+#
+# Bahia's pipeline bridge (internal/pipeline/bridge.go) reads image_repo,
+# image_tag, and image_digest from the 5402 event (tags or JSON body) and
+# registers a durable artifact.  Missing any of these three fields leaves the
+# result in artifact_pending state.
+#
+# The .hiveci-result.json schema uses camelCase to match the runner contract;
+# the subscriber also accepts snake_case Nostr tags as a fallback.
+#
+# Only the backend control-plane image is included in .hiveci-result.json.
+# The web image is also built and pushed so it is available in Harbor, but
+# multi-artifact Hive CI results are not yet defined.  See runbook §"Durable
+# Path" for the retirement conditions that let this replace deploy-edge.yml.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bahia-hive-ci-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      HARBOR_REGISTRY: harbor.sharegap.net
+      IMAGE_REPO: harbor.sharegap.net/cascadia/bahia
+      WEB_IMAGE_REPO: harbor.sharegap.net/cascadia/bahia-web
+      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Preflight
+        run: |
+          set -euo pipefail
+
+          : "${GITHUB_SHA:?GITHUB_SHA is required}"
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+          [[ "$GITHUB_REF" == "refs/heads/master" ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          command -v docker >/dev/null
+          docker version >/dev/null
+
+          test -f Dockerfile
+          test -f web/Dockerfile
+
+      - name: Log in to Harbor
+        run: |
+          set -euo pipefail
+          echo "$HARBOR_PASSWORD" \
+            | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Resolve image tag
+        id: meta
+        run: |
+          set -euo pipefail
+          sha="${GITHUB_SHA}"
+          short="${sha:0:7}"
+          tag="master-${short}"
+          echo "sha=${sha}"     >> "$GITHUB_OUTPUT"
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}"     >> "$GITHUB_OUTPUT"
+
+      - name: Build and push backend image
+        run: |
+          set -euo pipefail
+          sha="${{ steps.meta.outputs.sha }}"
+          tag="${{ steps.meta.outputs.tag }}"
+
+          docker build \
+            --build-arg VERSION_BASE=0.1.0 \
+            --build-arg GIT_COMMIT="${sha}" \
+            --build-arg VERSION="0.1.0-${sha}" \
+            -t "${IMAGE_REPO}:${tag}" .
+
+          docker push "${IMAGE_REPO}:${tag}"
+
+      - name: Resolve backend manifest digest
+        id: digest
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+
+          # Primary: read RepoDigests populated by docker push
+          raw=$(docker inspect \
+            --format='{{index .RepoDigests 0}}' \
+            "${IMAGE_REPO}:${tag}" 2>/dev/null || true)
+
+          # Fallback: crane digest (available in some Hive CI runner images)
+          if [[ -z "${raw}" ]] && command -v crane >/dev/null 2>&1; then
+            raw=$(crane digest "${IMAGE_REPO}:${tag}" 2>/dev/null || true)
+          fi
+
+          # Strip everything up to and including '@' to get the bare sha256:...
+          digest="${raw##*@}"
+
+          if [[ -z "${digest}" || "${digest}" == "${raw}" ]]; then
+            echo "ERROR: could not resolve manifest digest for ${IMAGE_REPO}:${tag}" >&2
+            exit 1
+          fi
+
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved digest: ${digest}"
+
+      - name: Build and push web image
+        run: |
+          set -euo pipefail
+          sha="${{ steps.meta.outputs.sha }}"
+          tag="${{ steps.meta.outputs.tag }}"
+
+          docker build \
+            -f web/Dockerfile \
+            --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="${PUBLIC_BAHIA_BOOTSTRAP_RELAYS}" \
+            --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="${PUBLIC_BAHIA_SERVICE_PUBKEYS}" \
+            --build-arg PUBLIC_BAHIA_GIT_COMMIT="${sha}" \
+            --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-${sha}" \
+            -t "${WEB_IMAGE_REPO}:${tag}" web
+
+          docker push "${WEB_IMAGE_REPO}:${tag}"
+
+      - name: Write .hiveci-result.json
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          sha="${{ steps.meta.outputs.sha }}"
+          digest="${{ steps.digest.outputs.digest }}"
+
+          # Prefer the Actions run URL; fall back to a local reference when
+          # running under act where GITHUB_RUN_ID may be absent.
+          run_id="${GITHUB_RUN_ID:-}"
+          if [[ -n "${run_id}" ]]; then
+            log_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          else
+            log_url="local://hive-ci/${sha}"
+          fi
+
+          cat > .hiveci-result.json <<JSON
+          {
+            "imageRepo": "${IMAGE_REPO}",
+            "imageTag": "${tag}",
+            "imageDigest": "${digest}",
+            "logURL": "${log_url}"
+          }
+          JSON
+
+          echo "=== .hiveci-result.json ===" && cat .hiveci-result.json
+
+          # Validate: all four fields must be non-empty strings
+          python3 - <<'PY'
+          import json, sys
+          with open(".hiveci-result.json") as f:
+              r = json.load(f)
+          required = ["imageRepo", "imageTag", "imageDigest", "logURL"]
+          missing = [k for k in required if not r.get(k)]
+          if missing:
+              print(f"ERROR: missing or empty fields in .hiveci-result.json: {missing}", file=sys.stderr)
+              sys.exit(1)
+          print("Validation passed:", {k: r[k] for k in required})
+          PY
