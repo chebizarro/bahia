@@ -247,14 +247,77 @@ The bridge already transitions successful `5402` results:
 - valid image metadata and manifest -> build and artifact records;
 - `auto_deploy_staging=true` metadata -> deployment intent.
 
+### Seeding the Pipeline Policy Row
+
+`scripts/seed_hiveci_pipeline_policy.py` inserts (or inspects) the
+`hiveci_pipeline_policies` row idempotently.
+
+**Step 1 — discover the NIP-34 repo coordinate.**
+The `repo_coordinate` value is whatever grasp-gitea puts in the `["a", ...]`
+tag of kind-5401 events.  If any 5401 events have already been ingested, use
+`--list` to see what grasp-gitea is emitting:
+
+```bash
+python3 scripts/seed_hiveci_pipeline_policy.py \
+  --db-url "$BAHIA_DATABASE_URL" \
+  --list
+```
+
+**Step 2 — dry-run to verify the resolved service and environment.**
+
+```bash
+python3 scripts/seed_hiveci_pipeline_policy.py \
+  --db-url "$BAHIA_DATABASE_URL" \
+  --repo-coordinate "30617:<grasp-gitea-pubkey>:chebizarro/bahia" \
+  --service-name bahia \
+  --environment-name edge-01 \
+  --dry-run
+```
+
+This prints the INSERT SQL without touching the database.  Pipe the output
+to `psql` directly if `psycopg2` is not available on the operator machine.
+
+**Step 3 — apply.**
+
+```bash
+python3 scripts/seed_hiveci_pipeline_policy.py \
+  --db-url "$BAHIA_DATABASE_URL" \
+  --repo-coordinate "30617:<grasp-gitea-pubkey>:chebizarro/bahia" \
+  --service-name bahia \
+  --environment-name edge-01
+```
+
+The script is idempotent (`ON CONFLICT DO NOTHING`); running it multiple
+times is safe.
+
+**Step 4 (later) — enable auto-deploy after artifact registration is stable.**
+
+Only run this after step 8 of the Implementation Order is verified:
+
+```bash
+python3 scripts/seed_hiveci_pipeline_policy.py \
+  --db-url "$BAHIA_DATABASE_URL" \
+  --repo-coordinate "30617:<grasp-gitea-pubkey>:chebizarro/bahia" \
+  --service-name bahia \
+  --environment-name edge-01 \
+  --auto-deploy-staging \
+  --staging-environment edge-01
+```
+
+Note: `--auto-deploy-staging` inserts a new policy row with updated metadata
+if the existing row has `auto_deploy_staging=false`.  The bridge matches the
+first enabled policy for the repo+workflow pair; remove or disable the old row
+if both remain.
+
 ### Implementation Order
 
-1. Land the immediate self-hosted deploy workflow.
+1. ✅ Land the immediate self-hosted deploy workflow.
 2. Confirm pushes to `master` rebuild and roll the live edge stack.
-3. Add the Hive workflow that writes `.hiveci-result.json`.
+3. ✅ Add the Hive workflow that writes `.hiveci-result.json`.
 4. Confirm `grasp-gitea` publishes `5401` for that workflow path.
 5. Confirm `hive-ci-runner` publishes `5402` with image metadata.
-6. Add or repair the matching `hiveci_pipeline_policies` row.
+6. ✅ Script for `hiveci_pipeline_policies` row available; run seeder once
+   repo coordinate is known (see §Seeding above).
 7. Verify Bahia creates the artifact instead of `artifact_pending`.
 8. Enable auto-deploy policy only after artifact registration is stable.
 
