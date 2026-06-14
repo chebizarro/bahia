@@ -75,6 +75,33 @@ Mapped Epic 2 coverage:
 - Epic 2 persistence acceptance: PASS for repository create/update/list primitives, terminal scan-run transition refusal, finding uniqueness, due schedule lease claiming, breach lifecycle, expired OSV cache behavior, cache pruning, and retryable publication selection in `internal/repository/pg_security_test.go`.
 
 
+## Epic 3 implementation evidence
+
+Epic 3 (`bahia-65q8.3`) implements scanner runtime and ContextVM surfaces only: Security scanner orchestration, canonical SBOM observable ingestion, app startup/shutdown wiring, and encrypted ContextVM scan/rescan/read methods. Policy-scoped gates, scheduled rescan runtime, breach notification dispatch, and SBOM compatibility aggregate updates remain assigned to later epics.
+
+Implemented evidence on 2026-06-14:
+
+- `internal/service/security_scanner.go` adds the Security OSV scanner service with durable scan submission, active-run dedupe, SBOM payload hash verification before OSV lookup, SBOM package/PURL normalization, OSV batch calls, finding persistence, latest target state updates, failure/cancellation terminal states, and Security observable publication for `30315`, `30900`, `30078`, and `4903` with relay OK verification plus publication retry state.
+- Scanner SBOM ingestion subscribes to canonical SBOM `30078` references and `30004` availability lists with `#domain=sbom` and exact schema filters, processes EOSE messages, handles CLOSED/AUTH via relay authentication, reconnects with backoff, and does not poll for event delivery or use timeout-based completion.
+- `internal/controlplane/security_handlers.go` registers encrypted ContextVM methods `security/scan`, `security/rescan`, `security/findings-list`, and `security/schedules-list`. Mutation responses acknowledge accepted intent only; persisted findings/schedules are exposed as read surfaces without implying scan completion.
+- `internal/app/app.go` wires `PgSecurityRepository`, the shared SBOM Blossom storage resolver, OSV client, verified Nostr publisher, relay subscriber adapter, Security scanner background runner, and Security ContextVM handlers into app startup.
+- `docs/nostr-commands.md` and `docs/control-planes.md` document the implemented `security:target-summary:<target_key_hash>` summary d-tag and the Epic 3 decision that Security scan/read surfaces are encrypted ContextVM only, with no REST compatibility endpoints added.
+
+Epic 3 deterministic checks:
+
+```bash
+go test ./internal/repository ./internal/service ./internal/controlplane ./internal/app
+```
+
+Result: PASS on 2026-06-14.
+
+Mapped Epic 3 coverage:
+
+- `SECURITY-T-008` / scanner lifecycle: PASS for SBOM target hash verification, PURL dedupe, OSV batch call, finding persistence, status/summary/finding/audit publication, latest target update, and unsupported-coordinate accounting in `internal/service/security_scanner_test.go`.
+- `SECURITY-T-009` / failure states: PASS for payload SHA-256 mismatch causing failed terminal state before any OSV query, relay rejection retaining `failed_retryable` publication state, and cancellation producing a cancelled terminal state in `internal/service/security_scanner_test.go`.
+- `SECURITY-T-010` / ingestion lifecycle: PASS for EOSE processing plus CLOSED/AUTH handling without polling in `internal/service/security_scanner_test.go`.
+- `SECURITY-T-011` / ContextVM ack-vs-observable semantics: PASS for `security/scan` acknowledgement-only response, invalid target rejection, read-surface validation, and schedules read-only behavior in `internal/controlplane/security_handlers_test.go`.
+
 ## Remaining tracked work
 
 Remaining implementation and review work is tracked in Beads under parent epic `bahia-65q8`; no implementation work is hidden in this report.

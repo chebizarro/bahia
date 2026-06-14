@@ -132,7 +132,7 @@ A Security scan target is identified by `target_type` plus a canonical target ke
 Durable Security events use:
 
 - `30315` status: `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`, `status`, optional `step`, and request correlation tags.
-- `30900` summaries: `schema=bahia.security.scan-summary.v1` for `d=security:scan-summary:<run_id>` and `schema=bahia.security.target-summary.v1` for `d=security:target:<target_key_hash>`.
+- `30900` summaries: `schema=bahia.security.scan-summary.v1` for `d=security:scan-summary:<run_id>` and `schema=bahia.security.target-summary.v1` for `d=security:target-summary:<target_key_hash>`.
 - `30078` findings: `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>`.
 - `4903` audit: `domain=security`, `schema=bahia.audit.security.v1`, with type values `security-scan`, `security-policy-breach`, and `security-publication`.
 
@@ -149,6 +149,8 @@ Follow a scan with a scoped filter such as:
 ```
 
 Security service ingestion of SBOM truth uses existing SBOM filters over `30078` and `30004`; it processes stored events until `EOSE`, keeps realtime subscriptions open when enabled, and handles `CLOSED`/`AUTH` without falling back to polling. Every Security observable publish must verify relay `OK accepted=true` and retain rejection messages for operator diagnostics and retry state.
+
+Security Epic 3 exposes these surfaces through encrypted ContextVM only. It does not add REST compatibility endpoints; REST callers must bridge through ContextVM and follow the canonical Security observables for progress and terminal truth.
 
 Policy breaches dispatch the internal notification event type `security.policy_breached` only for new or materially changed persisted fingerprints. The public Nostr evidence is a `4903` audit event; no new Nostr kind is created for notifications.
 

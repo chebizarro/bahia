@@ -159,6 +159,16 @@ func (r *PgSecurityRepository) GetSecurityScanRun(ctx context.Context, id uuid.U
 	return scanSecurityRun(r.pool.QueryRow(ctx, `SELECT `+securityRunColumns+` FROM security_scan_runs WHERE id = $1`, id))
 }
 
+func (r *PgSecurityRepository) GetActiveSecurityScanRunByTargetHash(ctx context.Context, targetKeyHash string) (*domain.SecurityScanRun, error) {
+	return scanSecurityRun(r.pool.QueryRow(ctx, `
+		SELECT `+securityRunColumns+`
+		FROM security_scan_runs
+		WHERE target_key_hash = $1 AND status IN ('accepted', 'running')
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, strings.TrimSpace(targetKeyHash)))
+}
+
 func (r *PgSecurityRepository) ListSecurityScanRuns(ctx context.Context, targetKeyHash string, limit int) ([]domain.SecurityScanRun, error) {
 	if limit <= 0 {
 		limit = 100
@@ -169,6 +179,110 @@ func (r *PgSecurityRepository) ListSecurityScanRuns(ctx context.Context, targetK
 	}
 	defer rows.Close()
 	return scanSecurityRunRows(rows)
+}
+
+func (r *PgSecurityRepository) ListSecurityScanRunsByStatus(ctx context.Context, statuses []domain.SecurityScanStatus, limit int) ([]domain.SecurityScanRun, error) {
+	if len(statuses) == 0 {
+		return nil, fmt.Errorf("security scan statuses are required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	placeholders := make([]string, 0, len(statuses))
+	args := make([]any, 0, len(statuses)+1)
+	for i, status := range statuses {
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
+		args = append(args, status)
+	}
+	args = append(args, limit)
+	rows, err := r.pool.Query(ctx, `SELECT `+securityRunColumns+` FROM security_scan_runs WHERE status IN (`+strings.Join(placeholders, ",")+`) ORDER BY created_at ASC LIMIT $`+fmt.Sprint(len(args)), args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing security scan runs by status: %w", err)
+	}
+	defer rows.Close()
+	return scanSecurityRunRows(rows)
+}
+
+func (r *PgSecurityRepository) MarkSecurityScanRunStarted(ctx context.Context, id uuid.UUID, startedAt time.Time) error {
+	cmd, err := r.pool.Exec(ctx, `
+		UPDATE security_scan_runs
+		SET status = 'running', started_at = COALESCE(started_at, $2), updated_at = $2
+		WHERE id = $1 AND status = 'accepted'
+	`, id, startedAt)
+	if err != nil {
+		return fmt.Errorf("marking security scan run started: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		existing, getErr := r.GetSecurityScanRun(ctx, id)
+		if getErr != nil {
+			return getErr
+		}
+		if existing.Status == domain.SecurityScanRunning {
+			return nil
+		}
+		if existing.Status.IsTerminal() {
+			return fmt.Errorf("security scan run %s is terminal with status %s", id, existing.Status)
+		}
+		return fmt.Errorf("marking security scan run %s started: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+func (r *PgSecurityRepository) CompleteSecurityScanRun(ctx context.Context, run *domain.SecurityScanRun) error {
+	if run == nil {
+		return fmt.Errorf("security scan run is required")
+	}
+	if !run.Status.IsTerminal() {
+		return fmt.Errorf("security scan run completion requires terminal status, got %s", run.Status)
+	}
+	unsupportedJSON, err := marshalJSON(run.UnsupportedReasons, "security scan run unsupported reasons")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalJSON(run.Metadata, "security scan run metadata")
+	if err != nil {
+		return err
+	}
+	finishedAt := run.FinishedAt
+	if finishedAt == nil {
+		now := time.Now().UTC()
+		finishedAt = &now
+	}
+	cmd, err := r.pool.Exec(ctx, `
+		UPDATE security_scan_runs
+		SET status = $2,
+		    osv_query_count = $3,
+		    finding_count = $4,
+		    critical_count = $5,
+		    high_count = $6,
+		    moderate_count = $7,
+		    low_count = $8,
+		    unknown_count = $9,
+		    unsupported_count = $10,
+		    unsupported_reasons = COALESCE($11, '{}'::jsonb),
+		    publish_state = $12,
+		    error = $13,
+		    metadata = COALESCE($14, '{}'::jsonb),
+		    finished_at = $15,
+		    updated_at = $15
+		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
+	`, run.ID, run.Status, run.OSVQueryCount, run.FindingCount, run.SeverityCounts.Critical, run.SeverityCounts.High,
+		run.SeverityCounts.Moderate, run.SeverityCounts.Low, run.SeverityCounts.Unknown, run.UnsupportedCount,
+		unsupportedJSON, run.PublishState, nilIfEmpty(run.Error), metadataJSON, finishedAt)
+	if err != nil {
+		return fmt.Errorf("completing security scan run: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		existing, getErr := r.GetSecurityScanRun(ctx, run.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if existing.Status.IsTerminal() {
+			return fmt.Errorf("security scan run %s is terminal with status %s", run.ID, existing.Status)
+		}
+		return fmt.Errorf("completing security scan run %s: %w", run.ID, ErrNotFound)
+	}
+	return nil
 }
 
 func (r *PgSecurityRepository) UpdateSecurityScanRunStatus(ctx context.Context, id uuid.UUID, status domain.SecurityScanStatus, errorMessage string, finishedAt *time.Time) error {
@@ -222,6 +336,10 @@ func (r *PgSecurityRepository) UpsertSecurityTargetLatest(ctx context.Context, l
 		return fmt.Errorf("upserting security target latest: %w", err)
 	}
 	return nil
+}
+
+func (r *PgSecurityRepository) GetSecurityTargetLatestByHash(ctx context.Context, targetKeyHash string) (*domain.SecurityTargetLatest, error) {
+	return scanSecurityLatest(r.pool.QueryRow(ctx, `SELECT `+securityLatestColumns+` FROM security_target_latest WHERE target_key_hash = $1`, strings.TrimSpace(targetKeyHash)))
 }
 
 func (r *PgSecurityRepository) UpsertSecurityFindings(ctx context.Context, findings []domain.SecurityOSVFinding) error {
@@ -286,6 +404,40 @@ func (r *PgSecurityRepository) ListSecurityFindings(ctx context.Context, runID u
 	return scanSecurityFindingRows(rows)
 }
 
+func (r *PgSecurityRepository) ListSecurityFindingsFiltered(ctx context.Context, filter SecurityFindingFilter) ([]domain.SecurityOSVFinding, error) {
+	limit := boundedSecurityLimit(filter.Limit)
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	clauses := []string{"1=1"}
+	args := make([]any, 0, 6)
+	if filter.RunID != nil && *filter.RunID != uuid.Nil {
+		args = append(args, *filter.RunID)
+		clauses = append(clauses, fmt.Sprintf("run_id = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.TargetKeyHash) != "" {
+		args = append(args, strings.TrimSpace(filter.TargetKeyHash))
+		clauses = append(clauses, fmt.Sprintf("target_key_hash = $%d", len(args)))
+	}
+	if filter.Severity != "" {
+		args = append(args, filter.Severity)
+		clauses = append(clauses, fmt.Sprintf("severity = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.OSVID) != "" {
+		args = append(args, strings.TrimSpace(filter.OSVID))
+		clauses = append(clauses, fmt.Sprintf("osv_id = $%d", len(args)))
+	}
+	args = append(args, limit, offset)
+	query := `SELECT ` + securityFindingColumns + ` FROM security_findings WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'moderate' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, osv_id LIMIT $` + fmt.Sprint(len(args)-1) + ` OFFSET $` + fmt.Sprint(len(args))
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing filtered security findings: %w", err)
+	}
+	defer rows.Close()
+	return scanSecurityFindingRows(rows)
+}
+
 func (r *PgSecurityRepository) UpsertSecurityScanSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error {
 	if schedule == nil {
 		return fmt.Errorf("security scan schedule is required")
@@ -323,6 +475,35 @@ func (r *PgSecurityRepository) UpsertSecurityScanSchedule(ctx context.Context, s
 		return fmt.Errorf("upserting security scan schedule: %w", err)
 	}
 	return nil
+}
+
+func (r *PgSecurityRepository) ListSecurityScanSchedulesFiltered(ctx context.Context, filter SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error) {
+	limit := boundedSecurityLimit(filter.Limit)
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	clauses := []string{"1=1"}
+	args := make([]any, 0, 5)
+	if filter.PolicyID != nil && *filter.PolicyID != uuid.Nil {
+		args = append(args, *filter.PolicyID)
+		clauses = append(clauses, fmt.Sprintf("policy_id = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.TargetKeyHash) != "" {
+		args = append(args, strings.TrimSpace(filter.TargetKeyHash))
+		clauses = append(clauses, fmt.Sprintf("target_key_hash = $%d", len(args)))
+	}
+	if filter.EnabledOnly {
+		clauses = append(clauses, "enabled = true")
+	}
+	args = append(args, limit, offset)
+	query := `SELECT ` + securityScheduleColumns + ` FROM security_scan_schedules WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY next_due_at ASC LIMIT $` + fmt.Sprint(len(args)-1) + ` OFFSET $` + fmt.Sprint(len(args))
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing filtered security scan schedules: %w", err)
+	}
+	defer rows.Close()
+	return scanSecurityScheduleRows(rows)
 }
 
 func (r *PgSecurityRepository) ClaimDueSecurityScanSchedules(ctx context.Context, now time.Time, limit int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error) {
@@ -669,6 +850,16 @@ func scanSecurityRunRows(rows pgx.Rows) ([]domain.SecurityScanRun, error) {
 	return out, rows.Err()
 }
 
+func scanSecurityLatest(row scanner) (*domain.SecurityTargetLatest, error) {
+	var latest domain.SecurityTargetLatest
+	if err := row.Scan(&latest.TargetKeyHash, &latest.TargetID, &latest.RunID, &latest.Status, &latest.FindingCount,
+		&latest.SeverityCounts.Critical, &latest.SeverityCounts.High, &latest.SeverityCounts.Moderate,
+		&latest.SeverityCounts.Low, &latest.SeverityCounts.Unknown, &latest.ScannedAt, &latest.UpdatedAt); err != nil {
+		return nil, mapNotFound(err)
+	}
+	return &latest, nil
+}
+
 func scanSecurityFinding(row scanner) (*domain.SecurityOSVFinding, error) {
 	var finding domain.SecurityOSVFinding
 	var packageJSON, aliasesJSON, refsJSON, metadataJSON []byte
@@ -826,6 +1017,16 @@ func mapNotFound(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+func boundedSecurityLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
 }
 
 func textValue(value pgtype.Text) string {

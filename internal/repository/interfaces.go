@@ -126,6 +126,25 @@ type SBOMManifestRepository interface {
 	SearchManifestPackagesByName(ctx context.Context, name string, limit int) ([]domain.SBOMManifestPackage, error)
 }
 
+// SecurityFindingFilter constrains Security finding read surfaces.
+type SecurityFindingFilter struct {
+	RunID         *uuid.UUID
+	TargetKeyHash string
+	Severity      domain.SecuritySeverity
+	OSVID         string
+	Limit         int
+	Offset        int
+}
+
+// SecurityScheduleFilter constrains Security schedule read surfaces.
+type SecurityScheduleFilter struct {
+	PolicyID      *uuid.UUID
+	TargetKeyHash string
+	EnabledOnly   bool
+	Limit         int
+	Offset        int
+}
+
 // SecurityRepository manages durable Security target, scan, finding, schedule, breach,
 // OSV cache, and observable-publication state. It does not execute scans.
 type SecurityRepository interface {
@@ -135,14 +154,21 @@ type SecurityRepository interface {
 
 	CreateSecurityScanRun(ctx context.Context, run *domain.SecurityScanRun) error
 	GetSecurityScanRun(ctx context.Context, id uuid.UUID) (*domain.SecurityScanRun, error)
+	GetActiveSecurityScanRunByTargetHash(ctx context.Context, targetKeyHash string) (*domain.SecurityScanRun, error)
 	ListSecurityScanRuns(ctx context.Context, targetKeyHash string, limit int) ([]domain.SecurityScanRun, error)
+	ListSecurityScanRunsByStatus(ctx context.Context, statuses []domain.SecurityScanStatus, limit int) ([]domain.SecurityScanRun, error)
+	MarkSecurityScanRunStarted(ctx context.Context, id uuid.UUID, startedAt time.Time) error
+	CompleteSecurityScanRun(ctx context.Context, run *domain.SecurityScanRun) error
 	UpdateSecurityScanRunStatus(ctx context.Context, id uuid.UUID, status domain.SecurityScanStatus, errorMessage string, finishedAt *time.Time) error
 	UpsertSecurityTargetLatest(ctx context.Context, latest *domain.SecurityTargetLatest) error
+	GetSecurityTargetLatestByHash(ctx context.Context, targetKeyHash string) (*domain.SecurityTargetLatest, error)
 
 	UpsertSecurityFindings(ctx context.Context, findings []domain.SecurityOSVFinding) error
 	ListSecurityFindings(ctx context.Context, runID uuid.UUID) ([]domain.SecurityOSVFinding, error)
+	ListSecurityFindingsFiltered(ctx context.Context, filter SecurityFindingFilter) ([]domain.SecurityOSVFinding, error)
 
 	UpsertSecurityScanSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
+	ListSecurityScanSchedulesFiltered(ctx context.Context, filter SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error)
 	ClaimDueSecurityScanSchedules(ctx context.Context, now time.Time, limit int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error)
 	MarkSecurityScheduleDispatched(ctx context.Context, id uuid.UUID, runID uuid.UUID, dispatchedAt time.Time, nextDueAt time.Time) error
 

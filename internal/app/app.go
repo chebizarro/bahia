@@ -33,6 +33,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	sbomAdapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
+	securityAdapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/adapters/signing"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
@@ -149,6 +150,7 @@ func New(cfg *config.Config) (*App, error) {
 	var paymentRepo repository.PaymentRecordRepository
 	var sbomRepo repository.SBOMRepository
 	var sbomManifestRepo repository.SBOMManifestRepository
+	var securityRepo repository.SecurityRepository
 	var sigRepo repository.ArtifactSignatureRepository
 	var policyRepo repository.DeploymentPolicyRepository
 	var secretRepo repository.SecretRepository
@@ -172,6 +174,7 @@ func New(cfg *config.Config) (*App, error) {
 		pgSBOMRepo := repository.NewPgSBOMRepository(pool)
 		sbomRepo = pgSBOMRepo
 		sbomManifestRepo = pgSBOMRepo
+		securityRepo = repository.NewPgSecurityRepository(pool)
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
 		policyRepo = repository.NewPgDeploymentPolicyRepository(pool)
 		secretRepo = repository.NewPgSecretRepository(pool)
@@ -654,15 +657,17 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	var runLogService *runtime.LogService
 	var sbomOrchestrator *service.SBOMOrchestrator
+	var sbomStorageResolver *sbomAdapter.StorageResolver
 	if blossomClient != nil {
 		runLogService = runtime.NewLogService(blossomClient, nil, logger)
 		generatorRegistry, err := sbomAdapter.NewGeneratorRegistry(sbomAdapter.NewSyftGenerator(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}
+		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
 		sbomOrchestrator = service.NewSBOMOrchestrator(service.SBOMOrchestratorConfig{
 			Generators: generatorRegistry,
-			Storage:    sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default()),
+			Storage:    sbomStorageResolver,
 			Repo:       sbomManifestRepo,
 			Publisher:  sbomPublishAdapter{publisher: nostrPub},
 			Resolver: service.SBOMSubjectResolver{
@@ -709,6 +714,21 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(hiveSub, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger), RunnerTier(Tier3))
 		logger.Info("hive-ci bridge enabled")
+	}
+
+	var securityScanner *service.SecurityScanner
+	if securityRepo != nil && sbomStorageResolver != nil && nostrPub != nil && relayPool != nil {
+		securityScanner = service.NewSecurityScanner(service.SecurityScannerConfig{
+			Repo:       securityRepo,
+			Storage:    sbomStorageResolver,
+			OSV:        securityAdapter.NewOSVClient(),
+			Publisher:  sbomPublishAdapter{publisher: nostrPub},
+			Subscriber: securityRelaySubscriber{pool: relayPool},
+			Pubkey:     servicePubkey,
+			Logger:     logger,
+		})
+		bgManager.RegisterWithOptions(securityScanner, RunnerTier(Tier3))
+		logger.Info("security OSV scanner registered")
 	}
 
 	// Payment service exposes payment record/history and cost-estimate APIs.
@@ -916,6 +936,7 @@ func New(cfg *config.Config) (*App, error) {
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
 		controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomOrchestrator)
+		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner)
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
 	}
@@ -2427,6 +2448,71 @@ type encryptedRequestTransportRunner struct {
 func (r *encryptedRequestTransportRunner) Name() string { return "encrypted-request-result-events" }
 func (r *encryptedRequestTransportRunner) Run(ctx context.Context) error {
 	return r.transport.Run(ctx)
+}
+
+type securityRelaySubscriber struct {
+	pool *nostrAdapter.RelayPool
+}
+
+func (s securityRelaySubscriber) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (service.SecuritySubscription, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("security relay pool is not configured")
+	}
+	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	return securityMergedSubscription{merged: merged}, nil
+}
+
+func (s securityRelaySubscriber) AuthenticateRelay(ctx context.Context, relayURL string) error {
+	if s.pool == nil {
+		return fmt.Errorf("security relay pool is not configured")
+	}
+	return s.pool.AuthenticateRelay(ctx, relayURL)
+}
+
+type securityMergedSubscription struct {
+	merged *nostrAdapter.MergedSubscription
+}
+
+func (s securityMergedSubscription) Close() {
+	if s.merged != nil {
+		s.merged.Close()
+	}
+}
+
+func (s securityMergedSubscription) Next(ctx context.Context) (service.SecuritySubscriptionMessage, bool, error) {
+	if s.merged == nil {
+		return service.SecuritySubscriptionMessage{}, false, nil
+	}
+	for s.merged.Events != nil || s.merged.EndOfStoredEvents != nil || s.merged.RelayEOSE != nil || s.merged.Closed != nil {
+		select {
+		case <-ctx.Done():
+			return service.SecuritySubscriptionMessage{}, false, ctx.Err()
+		case ev, ok := <-s.merged.Events:
+			if ok {
+				return service.SecuritySubscriptionMessage{Event: ev}, true, nil
+			}
+			s.merged.Events = nil
+		case _, ok := <-s.merged.EndOfStoredEvents:
+			if ok {
+				return service.SecuritySubscriptionMessage{EOSE: true}, true, nil
+			}
+			s.merged.EndOfStoredEvents = nil
+		case eose, ok := <-s.merged.RelayEOSE:
+			if ok {
+				return service.SecuritySubscriptionMessage{RelayEOSE: service.SecurityRelayEOSE{RelayURL: eose.RelayURL, SubscriptionID: eose.SubscriptionID}}, true, nil
+			}
+			s.merged.RelayEOSE = nil
+		case closed, ok := <-s.merged.Closed:
+			if ok {
+				return service.SecuritySubscriptionMessage{Closed: service.SecurityRelayClosed{RelayURL: closed.RelayURL, SubscriptionID: closed.SubscriptionID, Reason: closed.Reason}}, true, nil
+			}
+			s.merged.Closed = nil
+		}
+	}
+	return service.SecuritySubscriptionMessage{}, false, nil
 }
 
 type sbomPublishAdapter struct {

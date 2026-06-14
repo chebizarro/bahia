@@ -234,11 +234,11 @@ Security OSV/SBOM scanning uses ContextVM mutation/read methods and canonical ob
 Durable Security truth is published by the Bahia service key as:
 
 - `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`, `status`, optional `step`, and `e`/`p` correlation tags.
-- `30900` with `schema=bahia.security.scan-summary.v1` and `d=security:scan-summary:<run_id>` for per-run summaries, or `schema=bahia.security.target-summary.v1` and `d=security:target:<target_key_hash>` for latest target state.
+- `30900` with `schema=bahia.security.scan-summary.v1` and `d=security:scan-summary:<run_id>` for per-run summaries, or `schema=bahia.security.target-summary.v1` and `d=security:target-summary:<target_key_hash>` for latest target state.
 - `30078` with `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>` for normalized public-safe finding details.
 - `4903` with `domain=security`, `schema=bahia.audit.security.v1`, and `type=security-scan`, `security-policy-breach`, or `security-publication` for lifecycle, failure, policy-breach, and publication-retry facts.
 
-SBOM-triggered scanning observes existing SBOM `30078` references and `30004` availability lists with `#domain=sbom` and exact schema/subject filters. Security does not mutate canonical SBOM events after scanning; compatibility aggregate updates are tracked as projection work under Beads.
+SBOM-triggered scanning observes existing SBOM `30078` references and `30004` availability lists with `#domain=sbom` and exact schema/subject filters. Security does not mutate canonical SBOM events after scanning; compatibility aggregate updates are tracked as projection work under Beads. Epic 3 does not add REST compatibility endpoints for Security scans or reads; callers use encrypted ContextVM methods and canonical observables.
 
 Clients following a Security request subscribe to `30315`, `30900`, `30078`, and `4903` with `#domain=security`, trusted service author, `#e=<contextvm-request-event-id>` when correlated, and `#target_key_hash` or `#run` when known. They process historical events until `EOSE`, keep subscriptions open for realtime convergence, handle `CLOSED` and `AUTH` explicitly, deduplicate by event id, and apply replaceable semantics for `30900`/`30078`. Every Security publish requires relay `OK accepted=true`; partial or rejected publishes must remain visible as failed or retryable publication state.
 
