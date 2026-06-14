@@ -249,65 +249,52 @@ The bridge already transitions successful `5402` results:
 
 ### Seeding the Pipeline Policy Row
 
-`scripts/seed_hiveci_pipeline_policy.py` inserts (or inspects) the
-`hiveci_pipeline_policies` row idempotently.
+`scripts/seed_hiveci_pipeline_policy.sql` inserts the `hiveci_pipeline_policies`
+row idempotently.  Run it by piping into the `postgres` container via
+`docker compose exec`.
 
 **Step 1 — discover the NIP-34 repo coordinate.**
-The `repo_coordinate` value is whatever grasp-gitea puts in the `["a", ...]`
-tag of kind-5401 events.  If any 5401 events have already been ingested, use
-`--list` to see what grasp-gitea is emitting:
+The `repo_coordinate` is whatever grasp-gitea puts in the `["a", ...]` tag of
+kind-5401 events.  The discovery query at the top of the SQL file shows every
+coordinate already ingested:
 
 ```bash
-python3 scripts/seed_hiveci_pipeline_policy.py \
-  --db-url "$BAHIA_DATABASE_URL" \
-  --list
+docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
+  exec -T postgres psql -U bahia -d bahia \
+  -c "SELECT repo_coordinate, workflow_path, count(*), max(event_created_at)
+      FROM hiveci_workflow_runs
+      GROUP BY 1, 2 ORDER BY 4 DESC;"
 ```
 
-**Step 2 — dry-run to verify the resolved service and environment.**
+**Step 2 — seed (substitute the repo coordinate).**
 
 ```bash
-python3 scripts/seed_hiveci_pipeline_policy.py \
-  --db-url "$BAHIA_DATABASE_URL" \
-  --repo-coordinate "30617:<grasp-gitea-pubkey>:chebizarro/bahia" \
-  --service-name bahia \
-  --environment-name edge-01 \
-  --dry-run
+REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
+
+sed "s|:REPO_COORDINATE:|$REPO_COORD|g" \
+  scripts/seed_hiveci_pipeline_policy.sql \
+  | docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
+      exec -T postgres psql -U bahia -d bahia
 ```
 
-This prints the INSERT SQL without touching the database.  Pipe the output
-to `psql` directly if `psycopg2` is not available on the operator machine.
+The script resolves the `bahia` service and `edge-01` environment by name.
+`ON CONFLICT DO NOTHING` makes it safe to run multiple times.
 
-**Step 3 — apply.**
+**Step 3 (later) — enable auto-deploy after artifact registration is stable.**
+
+Only after step 8 of the Implementation Order is verified:
 
 ```bash
-python3 scripts/seed_hiveci_pipeline_policy.py \
-  --db-url "$BAHIA_DATABASE_URL" \
-  --repo-coordinate "30617:<grasp-gitea-pubkey>:chebizarro/bahia" \
-  --service-name bahia \
-  --environment-name edge-01
+REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
+
+docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
+  exec -T postgres psql -U bahia -d bahia -c "
+UPDATE hiveci_pipeline_policies
+SET    metadata   = '{\"auto_deploy_staging\": true, \"staging_environment\": \"edge-01\"}'::jsonb,
+       updated_at = now()
+WHERE  repo_coordinate = '${REPO_COORD}'
+  AND  workflow_path   = '.github/workflows/hive-ci-build.yml';"
 ```
-
-The script is idempotent (`ON CONFLICT DO NOTHING`); running it multiple
-times is safe.
-
-**Step 4 (later) — enable auto-deploy after artifact registration is stable.**
-
-Only run this after step 8 of the Implementation Order is verified:
-
-```bash
-python3 scripts/seed_hiveci_pipeline_policy.py \
-  --db-url "$BAHIA_DATABASE_URL" \
-  --repo-coordinate "30617:<grasp-gitea-pubkey>:chebizarro/bahia" \
-  --service-name bahia \
-  --environment-name edge-01 \
-  --auto-deploy-staging \
-  --staging-environment edge-01
-```
-
-Note: `--auto-deploy-staging` inserts a new policy row with updated metadata
-if the existing row has `auto_deploy_staging=false`.  The bridge matches the
-first enabled policy for the repo+workflow pair; remove or disable the old row
-if both remain.
 
 ### Implementation Order
 
