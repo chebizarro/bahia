@@ -342,6 +342,19 @@ func (r *PgSecurityRepository) GetSecurityTargetLatestByHash(ctx context.Context
 	return scanSecurityLatest(r.pool.QueryRow(ctx, `SELECT `+securityLatestColumns+` FROM security_target_latest WHERE target_key_hash = $1`, strings.TrimSpace(targetKeyHash)))
 }
 
+func (r *PgSecurityRepository) GetLatestSecurityTargetLatestForArtifact(ctx context.Context, artifactID uuid.UUID) (*domain.SecurityTargetLatest, error) {
+	return scanSecurityLatest(r.pool.QueryRow(ctx, `
+		SELECT l.`+strings.ReplaceAll(securityLatestColumns, ", ", ", l.")+`
+		FROM security_target_latest l
+		JOIN security_scan_targets t ON t.target_key_hash = l.target_key_hash
+		WHERE t.target_type = 'sbom'
+		  AND t.subject->>'type' = 'artifact'
+		  AND t.subject->>'id' = $1
+		ORDER BY l.scanned_at DESC
+		LIMIT 1
+	`, artifactID.String()))
+}
+
 func (r *PgSecurityRepository) UpsertSecurityFindings(ctx context.Context, findings []domain.SecurityOSVFinding) error {
 	for i := range findings {
 		finding := &findings[i]
@@ -461,11 +474,6 @@ func (r *PgSecurityRepository) UpsertSecurityScanSchedule(ctx context.Context, s
 			target_id = EXCLUDED.target_id,
 			enabled = EXCLUDED.enabled,
 			interval_seconds = EXCLUDED.interval_seconds,
-			next_due_at = EXCLUDED.next_due_at,
-			lease_until = EXCLUDED.lease_until,
-			leased_by = EXCLUDED.leased_by,
-			last_dispatched_at = EXCLUDED.last_dispatched_at,
-			last_run_id = EXCLUDED.last_run_id,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
 	`, schedule.ID, schedule.PolicyID, schedule.TargetID, schedule.TargetKeyHash, schedule.Enabled, schedule.IntervalSeconds,
@@ -541,6 +549,18 @@ func (r *PgSecurityRepository) MarkSecurityScheduleDispatched(ctx context.Contex
 	}
 	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("marking security schedule %s dispatched: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+func (r *PgSecurityRepository) DisableSecurityScanSchedulesForPolicy(ctx context.Context, policyID uuid.UUID, disabledAt time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE security_scan_schedules
+		SET enabled = false, lease_until = NULL, leased_by = NULL, updated_at = $2
+		WHERE policy_id = $1
+	`, policyID, disabledAt)
+	if err != nil {
+		return fmt.Errorf("disabling security schedules for policy: %w", err)
 	}
 	return nil
 }

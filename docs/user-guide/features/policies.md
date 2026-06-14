@@ -85,7 +85,7 @@ Read-only paths are distinct: listing and getting policies may read durable read
 
 ## Policy Rules
 
-### SBOM Rules
+### SBOM and Security OSV Rules
 
 ```yaml
 rules:
@@ -101,6 +101,34 @@ rules:
   banned_licenses:
     - "GPL-3.0"
 ```
+
+Security OSV scan policy settings use the `security_osv_scan` rule. Deployment gates read the latest completed Security scan projection; they do not trigger a scan and wait for completion during deployment evaluation.
+
+```json
+{
+  "rules": [
+    { "type": "require_sbom" },
+    {
+      "type": "security_osv_scan",
+      "params": {
+        "enabled": true,
+        "interval_seconds": 86400,
+        "freshness_seconds": 604800,
+        "no_scan": "block",
+        "stale": "block",
+        "failed": "block"
+      }
+    },
+    { "type": "max_critical_vulns", "params": { "max": 0 } },
+    { "type": "max_high_vulns", "params": { "max": 5 } }
+  ],
+  "enforcement": "block"
+}
+```
+
+`max_critical_vulns`, `max_high_vulns`, and `require_scan_status` prefer latest successful Security OSV counts when present. If no Security scan exists, existing SBOM aggregate counts remain the compatibility fallback. Use policy `enforcement: "warn"` for warn-only deployments; use `no_scan`, `stale`, or `failed` set to `"pass"` only when that state is explicitly acceptable.
+
+Scheduled rescans are repository-backed due records derived from enabled policy-scoped `security_osv_scan` rules. The scheduler runs once at startup and then on cadence ticks; it skips active duplicate scans and never waits on event delivery for completion.
 
 ### Approval Rules
 

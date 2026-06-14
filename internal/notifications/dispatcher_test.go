@@ -12,6 +12,9 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/openagentsinc/bahia/internal/events"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -143,6 +146,7 @@ type mockSender struct {
 	mu       sync.Mutex
 	sent     []sentNotification
 	failNext bool
+	notify   chan struct{}
 }
 
 type sentNotification struct {
@@ -163,6 +167,12 @@ func (s *mockSender) Send(_ context.Context, ch *domain.NotificationChannel, eve
 		EventType: eventType,
 		Payload:   payload,
 	})
+	if s.notify != nil {
+		select {
+		case s.notify <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -194,6 +204,27 @@ func TestDispatcher_Dispatch(t *testing.T) {
 	}
 	if sender.sent[0].Channel != "test-webhook" {
 		t.Errorf("expected test-webhook, got %s", sender.sent[0].Channel)
+	}
+}
+
+func TestDispatcher_SetupSubscriptionsDispatchesSecurityPolicyBreached(t *testing.T) {
+	repo := &mockNotificationRepo{}
+	sender := &mockSender{notify: make(chan struct{}, 1)}
+	repo.channels = append(repo.channels, domain.NotificationChannel{ID: uuid.New(), Name: "security", ChannelType: domain.ChannelTypeWebhook, EventFilter: map[string]any{"type": "security.policy_breached"}, Enabled: true})
+	d := NewDispatcher(repo, zap.NewNop())
+	d.RegisterSender(domain.ChannelTypeWebhook, sender)
+	pub := events.NewInProcessPublisher(zap.NewNop())
+	d.SetupSubscriptions(pub)
+	pub.Publish(context.Background(), events.Event{Type: events.EventSecurityPolicyBreached, EntityID: "breach-1", Data: map[string]any{"policy_id": "policy-1"}})
+	select {
+	case <-sender.notify:
+	case <-time.After(time.Second):
+		t.Fatal("security policy breach notification was not dispatched")
+	}
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if len(repo.logs) != 1 || repo.logs[0].EventType != "security.policy_breached" {
+		t.Fatalf("security breach log not recorded: %+v", repo.logs)
 	}
 }
 

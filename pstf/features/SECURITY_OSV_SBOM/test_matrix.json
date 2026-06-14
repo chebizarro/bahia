@@ -1,6 +1,6 @@
 {
   "feature_id": "SECURITY_OSV_SBOM",
-  "status": "planned",
+  "status": "implementation_in_progress",
   "tests": [
     {
       "test_id": "SECURITY-T-001",
@@ -229,7 +229,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -260,7 +260,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -272,7 +272,7 @@
       "title": "Scheduled rescans use due records, disabled-policy skips, duplicate suppression, next-due updates, and cadence-only timers",
       "type": "unit",
       "existing_or_new": "new",
-      "target_path": "internal/service/security_scheduler_test.go and internal/repository/pg_security_test.go",
+      "target_path": "internal/service/security_scanner_test.go and internal/repository/pg_security_test.go",
       "description": "Scheduled rescans use due records, disabled-policy skips, duplicate suppression, next-due updates, and cadence-only timers",
       "preconditions": [
         "Security implementation epic for this slice is active."
@@ -293,7 +293,7 @@
       "determinism_notes": [
         "No sleep-based waiting for Nostr delivery."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     },
     {
@@ -336,7 +336,7 @@
       "title": "Compatibility aggregate projections update from latest successful Security scan and preserve SBOM canonical immutability",
       "type": "integration",
       "existing_or_new": "new",
-      "target_path": "internal/repository/pg_sbom_test.go and internal/service/security_scanner_test.go",
+      "target_path": "internal/repository/pg_sbom_manifest_test.go and internal/service/security_scanner_test.go",
       "description": "Verifies latest successful Security scan counts update SBOMManifest/ArtifactSBOM compatibility fields without publishing or mutating canonical SBOM events, and fallback behavior remains available when no Security scan exists.",
       "preconditions": [
         "Security persistence and SBOM compatibility projections are implemented."
@@ -358,7 +358,7 @@
       "determinism_notes": [
         "Repository state is seeded directly; no relay or OSV network calls are required."
       ],
-      "status": "planned",
+      "status": "implemented_passed",
       "failure_reason": null
     }
   ],
@@ -366,7 +366,7 @@
     "criteria_total": 17,
     "criteria_with_tests": 17,
     "known_gaps": [
-      "Implementation evidence is pending subsequent Beads epics."
+      "Epic 5 owns full release quality gates and broad documentation; remaining implementation/review work is tracked in Beads."
     ]
   }
 }

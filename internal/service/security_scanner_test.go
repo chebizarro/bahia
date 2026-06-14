@@ -17,6 +17,7 @@ import (
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	securityadapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -116,6 +117,67 @@ func TestSecurityScannerCancelRunMarksTerminal(t *testing.T) {
 	require.Equal(t, "operator cancelled", repo.runs[run.ID].Error)
 }
 
+func TestSecurityScannerCompletionUpdatesCompatibilityAndDispatchesNewBreachOnly(t *testing.T) {
+	ctx := context.Background()
+	artifactID := uuid.New()
+	payload := []byte(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","name":"demo","packages":[{"name":"lodash","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]}]}`)
+	hash := sha256String(payload)
+	subject := domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: artifactID.String(), Digest: "sha256:artifact"}
+	target, err := domain.NewSBOMSecurityTarget(subject, domain.SBOMFormatSPDX, hash, "sbom:ref:test")
+	require.NoError(t, err)
+	target.ID = uuid.New()
+	target.Metadata = map[string]any{"reference_d_tag": "sbom:ref:test", "payload_sha256": hash, "format": string(domain.SBOMFormatSPDX), "storage": string(domain.SBOMStorageBlossom), "location_uri": "https://blossom.example/" + hash + ".json"}
+	run := &domain.SecurityScanRun{ID: uuid.New(), TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Status: domain.SecurityScanAccepted, Trigger: domain.SecurityTriggerManual, PublishState: domain.SecurityPublicationPending, UnsupportedReasons: map[string]int{}, Metadata: map[string]any{}}
+	repo := newMemorySecurityRepo(target, run)
+	publisher := &recordingSecurityPublisher{secret: "1111111111111111111111111111111111111111111111111111111111111111", results: []sbomadapter.PublishOKResult{{RelayURL: "wss://relay", Accepted: true}}}
+	eventPub := events.NewInProcessPublisher(zap.NewNop())
+	var dispatched []events.Event
+	dispatchedCh := make(chan events.Event, 2)
+	eventPub.Subscribe(events.EventSecurityPolicyBreached, func(_ context.Context, e events.Event) {
+		dispatched = append(dispatched, e)
+		dispatchedCh <- e
+	})
+	policy := domain.DeploymentPolicy{ID: uuid.New(), Name: "block-high", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, UpdatedAt: time.Now().UTC(), Rules: []domain.PolicyRule{{Type: domain.RuleMaxHighVulns, Params: map[string]any{"max": 0}}}}
+	compat := &recordingSBOMCompatibilityUpdater{}
+	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, SBOMs: compat, Policies: staticSecurityPolicyProvider{policies: []domain.DeploymentPolicy{policy}}, Events: eventPub, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{hash: payload}}, nil, nil, slog.Default()), OSV: &recordingOSVClient{results: []securityadapter.OSVQueryResult{{Vulnerabilities: []securityadapter.Vulnerability{{ID: "GHSA-1", Severity: "HIGH"}}}}}, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t)})
+
+	require.NoError(t, scanner.executeRun(ctx, run.ID))
+	<-dispatchedCh
+	require.Equal(t, artifactID, compat.artifactID)
+	require.Equal(t, hash, compat.payloadSHA256)
+	require.Equal(t, 1, compat.total)
+	require.Equal(t, 1, compat.counts.High)
+	require.Len(t, dispatched, 1)
+	firstFingerprint := repo.breaches[policy.ID.String()+":"+target.TargetKeyHash].Fingerprint
+
+	run2 := *run
+	run2.ID = uuid.New()
+	run2.Status = domain.SecurityScanAccepted
+	repo.runs[run2.ID] = &run2
+	require.NoError(t, scanner.executeRun(ctx, run2.ID))
+	require.Len(t, dispatched, 1, "unchanged breach fingerprint must not dispatch again")
+	require.Equal(t, firstFingerprint, repo.breaches[policy.ID.String()+":"+target.TargetKeyHash].Fingerprint)
+}
+
+func TestSecuritySchedulerClaimsDueAndSkipsActiveDuplicate(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	target, err := domain.NewPackageSecurityTarget("npm", "lodash", "4.17.21")
+	require.NoError(t, err)
+	target.ID = uuid.New()
+	active := &domain.SecurityScanRun{ID: uuid.New(), TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Status: domain.SecurityScanRunning, Trigger: domain.SecurityTriggerScheduled}
+	repo := newMemorySecurityRepo(target, active)
+	scheduleID := uuid.New()
+	repo.schedules[scheduleID] = &domain.SecurityScanSchedule{ID: scheduleID, PolicyID: uuid.New(), TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Enabled: true, IntervalSeconds: 3600, NextDueAt: now.Add(-time.Minute)}
+	scanner := &recordingScheduledScanner{}
+	scheduler := NewSecurityScheduler(SecuritySchedulerConfig{Repo: repo, Scanner: scanner, Now: func() time.Time { return now }, WorkerID: "test-scheduler"})
+
+	require.NoError(t, scheduler.Tick(context.Background()))
+	require.Empty(t, scanner.requests, "active duplicate run should suppress new scheduled scan")
+	require.Len(t, repo.dispatched, 1)
+	require.Equal(t, active.ID, *repo.dispatched[0].LastRunID)
+	require.Equal(t, now.Add(time.Hour), repo.dispatched[0].NextDueAt)
+}
+
 func TestSecurityScannerSubscriptionHandlesEOSEClosedAUTH(t *testing.T) {
 	sub := &scriptedSecuritySubscriber{sub: &scriptedSecuritySubscription{messages: []SecuritySubscriptionMessage{{EOSE: true}, {Closed: SecurityRelayClosed{RelayURL: "wss://relay", SubscriptionID: "sub", Reason: "auth-required: sign in"}}}}}
 	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: newMemorySecurityRepo(domain.SecurityTarget{}, nil), OSV: &recordingOSVClient{}, Publisher: &recordingSecurityPublisher{secret: "1111111111111111111111111111111111111111111111111111111111111111", results: []sbomadapter.PublishOKResult{{Accepted: true}}}, Subscriber: sub, Logger: zap.NewNop()})
@@ -134,10 +196,13 @@ type memorySecurityRepo struct {
 	findings     []domain.SecurityOSVFinding
 	latest       map[string]*domain.SecurityTargetLatest
 	publications map[uuid.UUID]*domain.SecurityObservablePublication
+	schedules    map[uuid.UUID]*domain.SecurityScanSchedule
+	breaches     map[string]*domain.SecurityPolicyBreach
+	dispatched   []domain.SecurityScanSchedule
 }
 
 func newMemorySecurityRepo(target domain.SecurityTarget, run *domain.SecurityScanRun) *memorySecurityRepo {
-	r := &memorySecurityRepo{targets: map[string]*domain.SecurityTarget{}, runs: map[uuid.UUID]*domain.SecurityScanRun{}, latest: map[string]*domain.SecurityTargetLatest{}, publications: map[uuid.UUID]*domain.SecurityObservablePublication{}}
+	r := &memorySecurityRepo{targets: map[string]*domain.SecurityTarget{}, runs: map[uuid.UUID]*domain.SecurityScanRun{}, latest: map[string]*domain.SecurityTargetLatest{}, publications: map[uuid.UUID]*domain.SecurityObservablePublication{}, schedules: map[uuid.UUID]*domain.SecurityScanSchedule{}, breaches: map[string]*domain.SecurityPolicyBreach{}}
 	if target.TargetKeyHash != "" {
 		copyTarget := target
 		r.targets[target.TargetKeyHash] = &copyTarget
@@ -265,6 +330,19 @@ func (r *memorySecurityRepo) GetSecurityTargetLatestByHash(_ context.Context, ta
 	}
 	return nil, repository.ErrNotFound
 }
+func (r *memorySecurityRepo) GetLatestSecurityTargetLatestForArtifact(_ context.Context, artifactID uuid.UUID) (*domain.SecurityTargetLatest, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for hash, target := range r.targets {
+		if target.Subject != nil && target.Subject.Type == domain.SBOMSubjectArtifact && target.Subject.ID == artifactID.String() {
+			if latest := r.latest[hash]; latest != nil {
+				c := *latest
+				return &c, nil
+			}
+		}
+	}
+	return nil, repository.ErrNotFound
+}
 func (r *memorySecurityRepo) UpsertSecurityFindings(_ context.Context, findings []domain.SecurityOSVFinding) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -277,25 +355,114 @@ func (r *memorySecurityRepo) ListSecurityFindings(context.Context, uuid.UUID) ([
 func (r *memorySecurityRepo) ListSecurityFindingsFiltered(context.Context, repository.SecurityFindingFilter) ([]domain.SecurityOSVFinding, error) {
 	return nil, nil
 }
-func (r *memorySecurityRepo) UpsertSecurityScanSchedule(context.Context, *domain.SecurityScanSchedule) error {
+func (r *memorySecurityRepo) UpsertSecurityScanSchedule(_ context.Context, schedule *domain.SecurityScanSchedule) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if schedule.ID == uuid.Nil {
+		schedule.ID = uuid.New()
+	}
+	if existing := r.schedules[schedule.ID]; existing != nil {
+		existing.TargetID = schedule.TargetID
+		existing.TargetKeyHash = schedule.TargetKeyHash
+		existing.Enabled = schedule.Enabled
+		existing.IntervalSeconds = schedule.IntervalSeconds
+		existing.Metadata = schedule.Metadata
+		return nil
+	}
+	for _, existing := range r.schedules {
+		if existing.PolicyID == schedule.PolicyID && existing.TargetKeyHash == schedule.TargetKeyHash {
+			existing.TargetID = schedule.TargetID
+			existing.Enabled = schedule.Enabled
+			existing.IntervalSeconds = schedule.IntervalSeconds
+			existing.Metadata = schedule.Metadata
+			return nil
+		}
+	}
+	c := *schedule
+	r.schedules[schedule.ID] = &c
 	return nil
 }
 func (r *memorySecurityRepo) ListSecurityScanSchedulesFiltered(context.Context, repository.SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error) {
 	return nil, nil
 }
-func (r *memorySecurityRepo) ClaimDueSecurityScanSchedules(context.Context, time.Time, int, string, time.Time) ([]domain.SecurityScanSchedule, error) {
-	return nil, nil
+func (r *memorySecurityRepo) ClaimDueSecurityScanSchedules(_ context.Context, now time.Time, _ int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []domain.SecurityScanSchedule{}
+	for _, schedule := range r.schedules {
+		if schedule.Enabled && !schedule.NextDueAt.After(now) && (schedule.LeaseUntil == nil || !schedule.LeaseUntil.After(now)) {
+			c := *schedule
+			c.LeasedBy = leasedBy
+			c.LeaseUntil = &leaseUntil
+			schedule.LeasedBy = leasedBy
+			schedule.LeaseUntil = &leaseUntil
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
-func (r *memorySecurityRepo) MarkSecurityScheduleDispatched(context.Context, uuid.UUID, uuid.UUID, time.Time, time.Time) error {
+func (r *memorySecurityRepo) MarkSecurityScheduleDispatched(_ context.Context, id uuid.UUID, runID uuid.UUID, dispatchedAt time.Time, nextDueAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if schedule := r.schedules[id]; schedule != nil {
+		schedule.LastRunID = &runID
+		schedule.LastDispatchedAt = &dispatchedAt
+		schedule.NextDueAt = nextDueAt
+		schedule.LeaseUntil = nil
+		schedule.LeasedBy = ""
+		r.dispatched = append(r.dispatched, *schedule)
+		return nil
+	}
+	return repository.ErrNotFound
+}
+func (r *memorySecurityRepo) DisableSecurityScanSchedulesForPolicy(_ context.Context, policyID uuid.UUID, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, schedule := range r.schedules {
+		if schedule.PolicyID == policyID {
+			schedule.Enabled = false
+		}
+	}
 	return nil
 }
-func (r *memorySecurityRepo) RecordSecurityPolicyBreach(context.Context, *domain.SecurityPolicyBreach) (domain.SecurityBreachRecordResult, error) {
+func (r *memorySecurityRepo) RecordSecurityPolicyBreach(_ context.Context, breach *domain.SecurityPolicyBreach) (domain.SecurityBreachRecordResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := breach.PolicyID.String() + ":" + breach.TargetKeyHash
+	if existing := r.breaches[key]; existing != nil {
+		result := domain.SecurityBreachRecordUnchanged
+		if existing.Fingerprint != breach.Fingerprint {
+			result = domain.SecurityBreachRecordChanged
+			breach.PreviousFingerprint = existing.Fingerprint
+		}
+		breach.ID = existing.ID
+		c := *breach
+		r.breaches[key] = &c
+		return result, nil
+	}
+	if breach.ID == uuid.Nil {
+		breach.ID = uuid.New()
+	}
+	c := *breach
+	r.breaches[key] = &c
 	return domain.SecurityBreachRecordNew, nil
 }
-func (r *memorySecurityRepo) ResolveSecurityPolicyBreach(context.Context, uuid.UUID, string, time.Time) error {
-	return nil
+func (r *memorySecurityRepo) ResolveSecurityPolicyBreach(_ context.Context, policyID uuid.UUID, targetKeyHash string, resolvedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if breach := r.breaches[policyID.String()+":"+targetKeyHash]; breach != nil {
+		breach.ResolvedAt = &resolvedAt
+		return nil
+	}
+	return repository.ErrNotFound
 }
-func (r *memorySecurityRepo) GetActiveSecurityPolicyBreach(context.Context, uuid.UUID, string) (*domain.SecurityPolicyBreach, error) {
+func (r *memorySecurityRepo) GetActiveSecurityPolicyBreach(_ context.Context, policyID uuid.UUID, targetKeyHash string) (*domain.SecurityPolicyBreach, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if breach := r.breaches[policyID.String()+":"+targetKeyHash]; breach != nil && breach.ResolvedAt == nil {
+		c := *breach
+		return &c, nil
+	}
 	return nil, repository.ErrNotFound
 }
 func (r *memorySecurityRepo) UpsertOSVVulnerabilityCache(context.Context, *domain.OSVVulnerabilityCache) error {
@@ -431,5 +598,57 @@ func (s *scriptedSecuritySubscription) Next(context.Context) (SecuritySubscripti
 	return msg, true, nil
 }
 func (s *scriptedSecuritySubscription) Close() { s.closed = true }
+
+type staticSecurityPolicyProvider struct{ policies []domain.DeploymentPolicy }
+
+func (p staticSecurityPolicyProvider) SecurityPoliciesForTarget(context.Context, *domain.SecurityTarget) ([]domain.DeploymentPolicy, error) {
+	return p.policies, nil
+}
+
+type recordingSBOMCompatibilityUpdater struct {
+	artifactID    uuid.UUID
+	payloadSHA256 string
+	counts        domain.SecuritySeverityCounts
+	total         int
+}
+
+func (r *recordingSBOMCompatibilityUpdater) CreateManifest(context.Context, *domain.SBOMManifest) error {
+	return nil
+}
+func (r *recordingSBOMCompatibilityUpdater) ProjectManifest(context.Context, *domain.SBOMManifest, []domain.SBOMManifestPackage) error {
+	return nil
+}
+func (r *recordingSBOMCompatibilityUpdater) UpdateCompatibilityVulnerabilityCounts(_ context.Context, artifactID uuid.UUID, payloadSHA256 string, counts domain.SecuritySeverityCounts, total int) error {
+	r.artifactID = artifactID
+	r.payloadSHA256 = payloadSHA256
+	r.counts = counts
+	r.total = total
+	return nil
+}
+func (r *recordingSBOMCompatibilityUpdater) GetManifestByID(context.Context, uuid.UUID) (*domain.SBOMManifest, error) {
+	return nil, repository.ErrNotFound
+}
+func (r *recordingSBOMCompatibilityUpdater) ListManifestsBySubject(context.Context, domain.SBOMSubject, int) ([]domain.SBOMManifest, error) {
+	return nil, nil
+}
+func (r *recordingSBOMCompatibilityUpdater) UpdateManifestPublishState(context.Context, uuid.UUID, domain.SBOMPublishState, string, string, string) error {
+	return nil
+}
+func (r *recordingSBOMCompatibilityUpdater) CreateManifestPackages(context.Context, []domain.SBOMManifestPackage) error {
+	return nil
+}
+func (r *recordingSBOMCompatibilityUpdater) ListPackagesByManifest(context.Context, uuid.UUID) ([]domain.SBOMManifestPackage, error) {
+	return nil, nil
+}
+func (r *recordingSBOMCompatibilityUpdater) SearchManifestPackagesByName(context.Context, string, int) ([]domain.SBOMManifestPackage, error) {
+	return nil, nil
+}
+
+type recordingScheduledScanner struct{ requests []SecurityScanRequest }
+
+func (s *recordingScheduledScanner) SubmitScan(_ context.Context, req SecurityScanRequest) (*SecurityScanAccepted, error) {
+	s.requests = append(s.requests, req)
+	return &SecurityScanAccepted{Status: "accepted", RunID: uuid.New(), TargetKeyHash: req.Target.Package.Name}, nil
+}
 
 func sha256String(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }

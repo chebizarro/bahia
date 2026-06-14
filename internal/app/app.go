@@ -555,7 +555,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Policy service.
-	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
+	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
 
 	// DNS persistence repositories are optional until concrete PostgreSQL adapters are available.
 	var dnsZoneRepo repository.DNSZoneRepository
@@ -720,6 +720,9 @@ func New(cfg *config.Config) (*App, error) {
 	if securityRepo != nil && sbomStorageResolver != nil && nostrPub != nil && relayPool != nil {
 		securityScanner = service.NewSecurityScanner(service.SecurityScannerConfig{
 			Repo:       securityRepo,
+			SBOMs:      sbomManifestRepo,
+			Policies:   policySvc,
+			Events:     publisher,
 			Storage:    sbomStorageResolver,
 			OSV:        securityAdapter.NewOSVClient(),
 			Publisher:  sbomPublishAdapter{publisher: nostrPub},
@@ -728,7 +731,8 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:     logger,
 		})
 		bgManager.RegisterWithOptions(securityScanner, RunnerTier(Tier3))
-		logger.Info("security OSV scanner registered")
+		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}), RunnerTier(Tier3))
+		logger.Info("security OSV scanner and scheduler registered")
 	}
 
 	// Payment service exposes payment record/history and cost-estimate APIs.

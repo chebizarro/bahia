@@ -102,6 +102,36 @@ Mapped Epic 3 coverage:
 - `SECURITY-T-010` / ingestion lifecycle: PASS for EOSE processing plus CLOSED/AUTH handling without polling in `internal/service/security_scanner_test.go`.
 - `SECURITY-T-011` / ContextVM ack-vs-observable semantics: PASS for `security/scan` acknowledgement-only response, invalid target rejection, read-surface validation, and schedules read-only behavior in `internal/controlplane/security_handlers_test.go`.
 
+## Epic 4 implementation evidence
+
+Epic 4 (`bahia-65q8.4`) implements policy-scoped Security configuration/gates, repository-backed scheduled rescans, breach lifecycle notification dispatch, and SBOM aggregate compatibility updates. Epic 5 still owns broad release documentation and full quality gates.
+
+Implemented evidence on 2026-06-14:
+
+- `internal/service/policy.go` validates the `security_osv_scan` rule surface, derives Security scan schedules from enabled global/environment policies, and evaluates deployment gates against latest Security scan state without synchronously triggering scans or waiting for completion.
+- `max_critical_vulns`, `max_high_vulns`, and `require_scan_status` prefer latest completed Security OSV state when available and preserve SBOM aggregate fallback behavior when no Security scan exists.
+- `internal/service/security_scheduler.go` runs an immediate startup tick plus cadence ticks, claims due repository schedules, suppresses active duplicate scans, submits scheduled scan intents, and records next-due state without using timers for event delivery or completion.
+- `internal/service/security_scanner.go` records deterministic breach fingerprints for breached policies, resolves active breaches when scans become clean, publishes `4903` policy-breach audit facts, and dispatches `security.policy_breached` through the existing event bus only for new or changed fingerprints.
+- `internal/events/events.go` and `internal/notifications/dispatcher.go` wire `security.policy_breached` through existing notification filters/logs.
+- `internal/repository/pg_sbom.go` updates `SBOMManifest` and `ArtifactSBOM` compatibility vulnerability counts from latest successful Security scans without mutating canonical SBOM events.
+- `docs/user-guide/features/policies.md`, `docs/user-guide/features/notifications.md`, and `docs/user-guide/features/artifacts.md` document the Epic 4 policy, notification, and compatibility behavior.
+
+Epic 4 deterministic checks:
+
+```bash
+go test ./internal/service ./internal/repository ./internal/notifications ./internal/events ./internal/app
+go test ./internal/controlplane ./internal/mcp ./internal/api/router
+```
+
+Result: PASS on 2026-06-14.
+
+Mapped Epic 4 coverage:
+
+- `SECURITY-T-007` / `SECURITY-AC-013`: PASS for latest Security scan count preference, no-scan pass/block behavior, stale warn behavior, policy validation, and schedule derivation in `internal/service/policy_test.go`.
+- `SECURITY-T-008` / `SECURITY-AC-014`: PASS for deterministic breach fingerprinting, duplicate suppression of unchanged breaches, `4903` policy-breach audit publication, and notification dispatcher subscription/logging in `internal/service/security_scanner_test.go`, `internal/repository/pg_security_test.go`, and `internal/notifications/dispatcher_test.go`.
+- `SECURITY-T-009` / `SECURITY-AC-016`: PASS for due schedule claiming, active duplicate suppression, next-due persistence, and direct tick execution without event-delivery sleeps in `internal/service/security_scanner_test.go` and `internal/repository/pg_security_test.go`.
+- `SECURITY-T-011` / `SECURITY-AC-017`: PASS for compatibility count updates from successful Security scans and SBOM aggregate fallback preservation in `internal/service/security_scanner_test.go`, `internal/repository/pg_sbom_manifest_test.go`, and `internal/service/policy_test.go`.
+
 ## Remaining tracked work
 
 Remaining implementation and review work is tracked in Beads under parent epic `bahia-65q8`; no implementation work is hidden in this report.

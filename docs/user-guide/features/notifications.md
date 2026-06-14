@@ -22,6 +22,7 @@ Bahia supports multiple notification channels:
 | `drift.resolved` | Drift was corrected |
 | `worker.offline` | Worker became unreachable |
 | `worker.online` | Worker reconnected |
+| `security.policy_breached` | A Security OSV policy breach is new or materially changed |
 
 ## Creating Notification Channels
 
@@ -145,6 +146,14 @@ events:
   - deployment.completed
   - deployment.failed
   - drift.detected
+```
+
+Security OSV notifications are breach-only. Configure channels for `security.policy_breached` to receive notifications when a policy breach fingerprint is new or materially changed; unchanged recurring breaches and clean scans do not dispatch notifications.
+
+```json
+{
+  "type": "security.policy_breached"
+}
 ```
 
 ### By Service

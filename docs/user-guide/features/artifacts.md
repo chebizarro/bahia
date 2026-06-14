@@ -152,6 +152,8 @@ That endpoint delegates to the SBOM import service, uploads/verifies the payload
 
 ### Viewing SBOM
 
+The artifact SBOM view is a compatibility projection. Canonical SBOM reference and availability events are not mutated after publication; when Security OSV completes a successful scan, Bahia refreshes the projection's `vulnerability_count`, `critical_count`, and `high_count` from the latest Security scan so existing policy/UI consumers continue to see current aggregate counts. If no Security scan exists, the original SBOM aggregate counts remain visible.
+
 ```bash
 # Get SBOM compatibility projection
 bahia artifacts sbom art-456

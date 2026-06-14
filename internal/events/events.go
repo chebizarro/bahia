@@ -58,6 +58,7 @@ const (
 	EventWorkerCleanupRequested         EventType = "worker.cleanup.requested"
 	EventWorkerCleanupCompleted         EventType = "worker.cleanup.completed"
 	EventWorkerCleanupFailed            EventType = "worker.cleanup.failed"
+	EventSecurityPolicyBreached         EventType = "security.policy_breached"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal

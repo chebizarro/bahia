@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	securityadapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -77,8 +79,15 @@ type SecurityOSVClient interface {
 	QueryBatch(ctx context.Context, queries []securityadapter.OSVQuery) ([]securityadapter.OSVQueryResult, error)
 }
 
+type SecurityPolicyProvider interface {
+	SecurityPoliciesForTarget(ctx context.Context, target *domain.SecurityTarget) ([]domain.DeploymentPolicy, error)
+}
+
 type SecurityScannerConfig struct {
 	Repo               repository.SecurityRepository
+	SBOMs              repository.SBOMManifestRepository
+	Policies           SecurityPolicyProvider
+	Events             events.Publisher
 	Storage            *sbomadapter.StorageResolver
 	OSV                SecurityOSVClient
 	Publisher          SecurityVerifiedPublisher
@@ -92,6 +101,9 @@ type SecurityScannerConfig struct {
 
 type SecurityScanner struct {
 	repo       repository.SecurityRepository
+	sboms      repository.SBOMManifestRepository
+	policies   SecurityPolicyProvider
+	events     events.Publisher
 	storage    *sbomadapter.StorageResolver
 	osv        SecurityOSVClient
 	publisher  SecurityVerifiedPublisher
@@ -230,6 +242,9 @@ func NewSecurityScanner(cfg SecurityScannerConfig) *SecurityScanner {
 	}
 	return &SecurityScanner{
 		repo:               cfg.Repo,
+		sboms:              cfg.SBOMs,
+		policies:           cfg.Policies,
+		events:             cfg.Events,
 		storage:            cfg.Storage,
 		osv:                cfg.OSV,
 		publisher:          cfg.Publisher,
@@ -449,6 +464,12 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	if err := s.repo.UpsertSecurityTargetLatest(ctx, latest); err != nil {
 		return err
 	}
+	if err := s.updateSBOMCompatibilityCounts(ctx, run, target); err != nil {
+		s.logger.Warn("security SBOM compatibility aggregate update failed", zap.String("target_key_hash", target.TargetKeyHash), zap.Error(err))
+	}
+	if err := s.evaluatePolicyBreaches(ctx, run, target, outcome.findings); err != nil {
+		s.logger.Warn("security policy breach evaluation failed", zap.String("target_key_hash", target.TargetKeyHash), zap.Error(err))
+	}
 	return nil
 }
 
@@ -467,6 +488,7 @@ func (s *SecurityScanner) failRun(ctx context.Context, run *domain.SecurityScanR
 	if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
 		return err
 	}
+	_ = s.repo.UpsertSecurityTargetLatest(ctx, &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: run.ID, Status: run.Status, SeverityCounts: run.SeverityCounts, FindingCount: run.FindingCount, ScannedAt: finished, UpdatedAt: finished})
 	return cause
 }
 
@@ -486,7 +508,13 @@ func (s *SecurityScanner) cancelRun(ctx context.Context, runID uuid.UUID, messag
 			run.PublishState = domain.SecurityPublicationPublished
 		}
 	}
-	return s.repo.CompleteSecurityScanRun(ctx, run)
+	if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
+		return err
+	}
+	if target != nil {
+		_ = s.repo.UpsertSecurityTargetLatest(ctx, &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: run.ID, Status: run.Status, SeverityCounts: run.SeverityCounts, FindingCount: run.FindingCount, ScannedAt: finished, UpdatedAt: finished})
+	}
+	return nil
 }
 
 func (s *SecurityScanner) scanTarget(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget) (scanOutcome, error) {
@@ -874,6 +902,114 @@ func (s *SecurityScanner) publishAudit(ctx context.Context, run *domain.Security
 
 	ev := &nostr.Event{Kind: KindSecurityAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityAuditSchema}, {"type", "security-scan"}, {"action", action}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}}, Content: string(content)}
 	return s.publishObservable(ctx, run, target, nil, "audit", SecurityAuditSchema, d, ev)
+}
+
+func (s *SecurityScanner) updateSBOMCompatibilityCounts(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget) error {
+	if s.sboms == nil || target == nil || target.Type != domain.SecurityTargetSBOM || target.Subject == nil || target.Subject.Type != domain.SBOMSubjectArtifact {
+		return nil
+	}
+	artifactID, err := uuid.Parse(target.Subject.ID)
+	if err != nil {
+		return nil
+	}
+	ref, err := sbomReferenceFromTarget(target)
+	if err != nil {
+		return err
+	}
+	return s.sboms.UpdateCompatibilityVulnerabilityCounts(ctx, artifactID, ref.PayloadSHA256, run.SeverityCounts, run.FindingCount)
+}
+
+func (s *SecurityScanner) evaluatePolicyBreaches(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, findings []domain.SecurityOSVFinding) error {
+	if s.policies == nil || s.repo == nil || target == nil {
+		return nil
+	}
+	policies, err := s.policies.SecurityPoliciesForTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+	for _, policy := range policies {
+		violated := breachedSecurityRules(policy, run)
+		if len(violated) == 0 {
+			if active, err := s.repo.GetActiveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash); err == nil && active != nil {
+				_ = s.repo.ResolveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash, time.Now().UTC())
+			}
+			continue
+		}
+		osvIDs := uniqueOSVIDs(findings)
+		breach := &domain.SecurityPolicyBreach{PolicyID: policy.ID, TargetKeyHash: target.TargetKeyHash, Enforcement: string(policy.Enforcement), ViolatedRules: violated, SeverityCounts: run.SeverityCounts, OSVIDs: osvIDs, LastSeenAt: time.Now().UTC(), Metadata: map[string]any{"policy_name": policy.Name, "run_id": run.ID.String(), "target_type": string(target.Type)}}
+		breach.Fingerprint = securityBreachFingerprint(policy, target.TargetKeyHash, breachedSecurityRules(policy, run), run.SeverityCounts, osvIDs)
+		result, err := s.repo.RecordSecurityPolicyBreach(ctx, breach)
+		if err != nil {
+			return err
+		}
+		if result == domain.SecurityBreachRecordNew || result == domain.SecurityBreachRecordChanged {
+			if err := s.publishPolicyBreachAudit(ctx, run, target, breach, result); err != nil {
+				s.logger.Warn("security policy breach audit publish failed", zap.Error(err))
+			}
+			if s.events != nil {
+				s.events.Publish(ctx, events.Event{Type: events.EventSecurityPolicyBreached, EntityID: breach.ID.String(), Data: map[string]any{"breach_id": breach.ID.String(), "policy_id": policy.ID.String(), "policy_name": policy.Name, "target_key_hash": target.TargetKeyHash, "fingerprint": breach.Fingerprint, "previous_fingerprint": breach.PreviousFingerprint, "enforcement": breach.Enforcement, "violated_rules": breach.ViolatedRules, "severity_counts": breach.SeverityCounts, "osv_ids": breach.OSVIDs, "record_result": string(result)}})
+			}
+		}
+	}
+	return nil
+}
+
+func breachedSecurityRules(policy domain.DeploymentPolicy, run *domain.SecurityScanRun) []string {
+	out := []string{}
+	for _, rule := range policy.Rules {
+		switch rule.Type {
+		case domain.RuleMaxCriticalVulns:
+			if run.SeverityCounts.Critical > getIntParam(rule.Params, "max", 0) {
+				out = append(out, string(rule.Type))
+			}
+		case domain.RuleMaxHighVulns:
+			if run.SeverityCounts.High > getIntParam(rule.Params, "max", 0) {
+				out = append(out, string(rule.Type))
+			}
+		case domain.RuleRequireScanStatus:
+			if strings.ToLower(getStringParam(rule.Params, "status", "clean")) == "clean" && run.FindingCount > 0 {
+				out = append(out, string(rule.Type))
+			}
+		case domain.RuleSecurityOSVScan:
+			if !getBoolParam(rule.Params, "enabled", true) {
+				continue
+			}
+			freshness := getIntParam(rule.Params, "freshness_seconds", 0)
+			if run.Status != domain.SecurityScanCompleted || (freshness > 0 && run.FinishedAt != nil && time.Since(*run.FinishedAt) > time.Duration(freshness)*time.Second) {
+				out = append(out, string(rule.Type))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func securityBreachFingerprint(policy domain.DeploymentPolicy, targetHash string, violated []string, counts domain.SecuritySeverityCounts, osvIDs []string) string {
+	parts := []string{policy.ID.String(), targetHash, policy.UpdatedAt.UTC().Format(time.RFC3339Nano), string(policy.Enforcement), strings.Join(violated, ","), fmt.Sprintf("c=%d,h=%d,m=%d,l=%d,u=%d", counts.Critical, counts.High, counts.Moderate, counts.Low, counts.Unknown), strings.Join(osvIDs, ",")}
+	return domain.CanonicalTargetHash(strings.Join(parts, "|"))
+}
+
+func uniqueOSVIDs(findings []domain.SecurityOSVFinding) []string {
+	seen := map[string]struct{}{}
+	for _, finding := range findings {
+		if finding.OSVID == "" {
+			continue
+		}
+		seen[finding.OSVID] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *SecurityScanner) publishPolicyBreachAudit(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, breach *domain.SecurityPolicyBreach, result domain.SecurityBreachRecordResult) error {
+	content, _ := json.Marshal(map[string]any{"action": "security.policy_breached", "run_id": run.ID, "target_key_hash": target.TargetKeyHash, "target_type": target.Type, "policy_id": breach.PolicyID, "breach_id": breach.ID, "fingerprint": breach.Fingerprint, "record_result": result, "violated_rules": breach.ViolatedRules, "severity_counts": breach.SeverityCounts, "osv_ids": breach.OSVIDs, "created_at": time.Now().UTC()})
+	d := "security:audit:" + run.ID.String() + ":policy-breached:" + breach.PolicyID.String()
+	ev := &nostr.Event{Kind: KindSecurityAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityAuditSchema}, {"type", "security-policy"}, {"action", "security.policy_breached"}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"policy_id", breach.PolicyID.String()}, {"breach_id", breach.ID.String()}}, Content: string(content)}
+	return s.publishObservable(ctx, run, target, nil, "policy_breach_audit", SecurityAuditSchema, d, ev)
 }
 
 func (s *SecurityScanner) publishObservable(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, findingID *uuid.UUID, observableType, schema, d string, ev *nostr.Event) error {

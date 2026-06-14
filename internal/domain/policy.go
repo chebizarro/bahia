@@ -23,6 +23,7 @@ const (
 	RuleMaxCriticalVulns    PolicyRuleType = "max_critical_vulns"
 	RuleMaxHighVulns        PolicyRuleType = "max_high_vulns"
 	RuleRequireScanStatus   PolicyRuleType = "require_scan_status"
+	RuleSecurityOSVScan     PolicyRuleType = "security_osv_scan"
 	RuleBlockPackage        PolicyRuleType = "block_package"
 	RuleRequireApproval     PolicyRuleType = "require_approval"
 	RulePackageMinAge       PolicyRuleType = "package_min_age"
@@ -63,25 +64,26 @@ type DeploymentPolicy struct {
 
 // PolicyResult records the outcome of evaluating a policy against an artifact.
 type PolicyResult struct {
-	PolicyID   uuid.UUID         `json:"policy_id"`
-	PolicyName string            `json:"policy_name"`
-	Passed     bool              `json:"passed"`
+	PolicyID    uuid.UUID         `json:"policy_id"`
+	PolicyName  string            `json:"policy_name"`
+	Passed      bool              `json:"passed"`
 	Enforcement PolicyEnforcement `json:"enforcement"`
-	Violations []PolicyViolation `json:"violations,omitempty"`
+	Violations  []PolicyViolation `json:"violations,omitempty"`
 }
 
 // PolicyViolation records a single rule failure.
 type PolicyViolation struct {
-	Rule    PolicyRuleType `json:"rule"`
-	Message string         `json:"message"`
+	Rule        PolicyRuleType    `json:"rule"`
+	Message     string            `json:"message"`
+	Enforcement PolicyEnforcement `json:"enforcement,omitempty"`
 }
 
 // PolicyEvaluation is the aggregate result of evaluating all applicable policies.
 type PolicyEvaluation struct {
-	Allowed    bool           `json:"allowed"`
-	Results    []PolicyResult `json:"results"`
-	Warnings   int            `json:"warnings"`
-	Blockers   int            `json:"blockers"`
+	Allowed  bool           `json:"allowed"`
+	Results  []PolicyResult `json:"results"`
+	Warnings int            `json:"warnings"`
+	Blockers int            `json:"blockers"`
 }
 
 // IsBlocked returns true if any blocking policy failed.

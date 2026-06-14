@@ -294,6 +294,31 @@ func TestPgSecurityRepositoryUpsertAndUpdatePublicationState(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgSecurityRepositoryLatestForArtifactAndDisableSchedules(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgSecurityRepositoryWithDB(mock)
+	artifactID := uuid.New()
+	now := time.Now().UTC().Truncate(time.Second)
+	targetID := uuid.New()
+	runID := uuid.New()
+	mock.ExpectQuery("SELECT l\\.target_key_hash").
+		WithArgs(artifactID.String()).
+		WillReturnRows(pgxmock.NewRows(splitColumns(securityLatestColumns)).
+			AddRow("target-hash", targetID, runID, domain.SecurityScanCompleted, 2, 1, 1, 0, 0, 0, now, now))
+	latest, err := repo.GetLatestSecurityTargetLatestForArtifact(ctx, artifactID)
+	require.NoError(t, err)
+	require.Equal(t, 2, latest.FindingCount)
+
+	mock.ExpectExec("UPDATE security_scan_schedules").
+		WithArgs(uuid.Nil, now).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	require.NoError(t, repo.DisableSecurityScanSchedulesForPolicy(ctx, uuid.Nil, now))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgSecurityRepositoryCacheRetentionAndPublicationRetry(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

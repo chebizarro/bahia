@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -441,6 +442,112 @@ func TestPolicyService_Evaluate_MaxCriticalVulns(t *testing.T) {
 	}
 	if eval.Allowed {
 		t.Error("expected blocked: 3 critical vulns > max 0")
+	}
+}
+
+func TestPolicyService_Evaluate_UsesLatestSecurityCountsBeforeSBOMFallback(t *testing.T) {
+	artifactID := uuid.New()
+	svc, policyRepo, _, sbomRepo := newTestPolicyService()
+	sbomRepo.sbom = &domain.ArtifactSBOM{ID: uuid.New(), ArtifactID: artifactID, HighCount: 0}
+	target, err := domain.NewSBOMSecurityTarget(domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: artifactID.String(), Digest: "sha256:artifact"}, domain.SBOMFormatSPDX, strings.Repeat("a", 64), "sbom:ref:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.ID = uuid.New()
+	securityRepo := newMemorySecurityRepo(target, nil)
+	securityRepo.latest[target.TargetKeyHash] = &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: uuid.New(), Status: domain.SecurityScanCompleted, FindingCount: 2, SeverityCounts: domain.SecuritySeverityCounts{High: 2}, ScannedAt: time.Now().UTC()}
+	svc.security = securityRepo
+	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "max-high", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleMaxHighVulns, Params: map[string]any{"max": 0}}}})
+
+	eval, err := svc.Evaluate(context.Background(), artifactID, uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	requireBlocked(t, eval, domain.RuleMaxHighVulns, "latest Security OSV scan")
+}
+
+func TestPolicyService_Evaluate_SecurityOSVScanStates(t *testing.T) {
+	t.Run("no scan blocks by default", func(t *testing.T) {
+		svc, policyRepo, _, _ := newTestPolicyService()
+		svc.security = newMemorySecurityRepo(domain.SecurityTarget{}, nil)
+		policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan}}})
+		eval, err := svc.Evaluate(context.Background(), uuid.New(), uuid.New())
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireBlocked(t, eval, domain.RuleSecurityOSVScan, "no completed")
+	})
+	t.Run("no scan can pass explicitly", func(t *testing.T) {
+		svc, policyRepo, _, _ := newTestPolicyService()
+		svc.security = newMemorySecurityRepo(domain.SecurityTarget{}, nil)
+		policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"no_scan": "pass"}}}})
+		eval, err := svc.Evaluate(context.Background(), uuid.New(), uuid.New())
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAllowed(t, eval)
+	})
+	t.Run("stale scan warns when policy enforcement warns", func(t *testing.T) {
+		artifactID := uuid.New()
+		svc, policyRepo, _, _ := newTestPolicyService()
+		target, err := domain.NewSBOMSecurityTarget(domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: artifactID.String(), Digest: "sha256:artifact"}, domain.SBOMFormatSPDX, strings.Repeat("a", 64), "sbom:ref:test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		target.ID = uuid.New()
+		securityRepo := newMemorySecurityRepo(target, nil)
+		securityRepo.latest[target.TargetKeyHash] = &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: uuid.New(), Status: domain.SecurityScanCompleted, ScannedAt: time.Now().UTC().Add(-2 * time.Hour)}
+		svc.security = securityRepo
+		policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"freshness_seconds": 60, "stale": "warn"}}}})
+		eval, err := svc.Evaluate(context.Background(), artifactID, uuid.New())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !eval.Allowed || eval.Warnings != 1 {
+			t.Fatalf("expected warn-only stale scan, got %+v", eval)
+		}
+	})
+}
+
+func TestPolicyService_CreatePolicyValidatesAndDerivesSecuritySchedules(t *testing.T) {
+	svc, _, _, _ := newTestPolicyService()
+	target, err := domain.NewPackageSecurityTarget("npm", "lodash", "4.17.21")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.ID = uuid.New()
+	securityRepo := newMemorySecurityRepo(target, nil)
+	svc.security = securityRepo
+	policy := &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"interval_seconds": 3600, "target_key_hash": target.TargetKeyHash}}}}
+	if err := svc.CreatePolicy(context.Background(), policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	if len(securityRepo.schedules) != 1 {
+		t.Fatalf("expected one derived schedule, got %d", len(securityRepo.schedules))
+	}
+	var scheduleID uuid.UUID
+	var preservedDue time.Time
+	for id, schedule := range securityRepo.schedules {
+		scheduleID = id
+		preservedDue = time.Now().UTC().Add(6 * time.Hour)
+		schedule.NextDueAt = preservedDue
+	}
+	if err := svc.DeriveSecurityScanSchedules(context.Background()); err != nil {
+		t.Fatalf("derive schedules: %v", err)
+	}
+	if !securityRepo.schedules[scheduleID].NextDueAt.Equal(preservedDue) {
+		t.Fatalf("schedule derivation reset next_due_at: got %s want %s", securityRepo.schedules[scheduleID].NextDueAt, preservedDue)
+	}
+	policy.Rules[0].Params["enabled"] = false
+	if err := svc.UpdatePolicy(context.Background(), policy); err != nil {
+		t.Fatalf("disable security policy rule: %v", err)
+	}
+	if securityRepo.schedules[scheduleID].Enabled {
+		t.Fatal("disabled security_osv_scan rule left schedule enabled")
+	}
+	bad := &domain.DeploymentPolicy{Name: "bad", Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"stale": "maybe"}}}}
+	if err := svc.CreatePolicy(context.Background(), bad); err == nil {
+		t.Fatal("expected invalid stale behavior to be rejected")
 	}
 }
 

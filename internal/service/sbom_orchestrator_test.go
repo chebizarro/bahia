@@ -186,6 +186,9 @@ func (r *fakeSBOMManifestRepo) ProjectManifest(_ context.Context, manifest *doma
 	r.packages = append(r.packages, packages...)
 	return nil
 }
+func (r *fakeSBOMManifestRepo) UpdateCompatibilityVulnerabilityCounts(context.Context, uuid.UUID, string, domain.SecuritySeverityCounts, int) error {
+	return nil
+}
 func (r *fakeSBOMManifestRepo) GetManifestByID(_ context.Context, id uuid.UUID) (*domain.SBOMManifest, error) {
 	return nil, nil
 }

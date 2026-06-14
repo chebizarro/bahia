@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,24 @@ func TestPgSBOMRepository_UpdateManifestPublishState(t *testing.T) {
 
 	err = repo.UpdateManifestPublishState(context.Background(), id, domain.SBOMPublishPublished, "ref-event", "list-event", "")
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSBOMRepository_UpdateCompatibilityVulnerabilityCounts(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := &PgSBOMRepository{pool: mock}
+	artifactID := uuid.New()
+	payload := strings.Repeat("a", 64)
+	counts := domain.SecuritySeverityCounts{Critical: 1, High: 2, Moderate: 3}
+	mock.ExpectExec("UPDATE artifact_sboms").
+		WithArgs(artifactID, payload, 6, 1, 2).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("UPDATE sbom_manifests").
+		WithArgs(artifactID.String(), payload, 6, 1, 2, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	require.NoError(t, repo.UpdateCompatibilityVulnerabilityCounts(context.Background(), artifactID, payload, counts, 6))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

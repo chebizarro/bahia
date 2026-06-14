@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -24,6 +27,7 @@ type PolicyService struct {
 	policies     repository.DeploymentPolicyRepository
 	signatures   repository.ArtifactSignatureRepository
 	sboms        repository.SBOMRepository
+	security     repository.SecurityRepository
 	attestations SBOMAttestationProvider
 	trustedGens  map[string]bool // map of trusted generator IDs
 	logger       *zap.Logger
@@ -35,6 +39,11 @@ type PolicyServiceOption func(*PolicyService)
 // WithAttestationProvider sets the SBOM attestation provider.
 func WithAttestationProvider(provider SBOMAttestationProvider) PolicyServiceOption {
 	return func(s *PolicyService) { s.attestations = provider }
+}
+
+// WithSecurityRepository sets the Security repository used for latest-scan gates and policy-derived schedules.
+func WithSecurityRepository(repo repository.SecurityRepository) PolicyServiceOption {
+	return func(s *PolicyService) { s.security = repo }
 }
 
 // WithTrustedGenerators sets the list of trusted SBOM generator IDs.
@@ -94,12 +103,11 @@ func (s *PolicyService) Evaluate(ctx context.Context, artifactID, environmentID 
 		eval.Results = append(eval.Results, result)
 
 		if !result.Passed {
-			switch result.Enforcement {
-			case domain.PolicyEnforcementBlock:
-				eval.Blockers++
+			blockers, warnings := policyResultViolationCounts(result)
+			eval.Blockers += blockers
+			eval.Warnings += warnings
+			if blockers > 0 {
 				eval.Allowed = false
-			case domain.PolicyEnforcementWarn:
-				eval.Warnings++
 			}
 		}
 	}
@@ -148,6 +156,8 @@ func (s *PolicyService) evaluateRule(ctx context.Context, rule domain.PolicyRule
 		return s.checkMaxVulns(ctx, artifactID, "high", rule.Params)
 	case domain.RuleRequireScanStatus:
 		return s.checkRequireScanStatus(ctx, artifactID, rule.Params)
+	case domain.RuleSecurityOSVScan:
+		return s.checkSecurityOSVScan(ctx, artifactID, rule.Params)
 	case domain.RuleBlockPackage:
 		return s.checkBlockPackage(ctx, artifactID, rule.Params)
 	// --- SBOM Attestation Rules ---
@@ -203,51 +213,71 @@ func (s *PolicyService) checkRequireSBOM(ctx context.Context, artifactID uuid.UU
 }
 
 func (s *PolicyService) checkMaxVulns(ctx context.Context, artifactID uuid.UUID, severity string, params map[string]any) *domain.PolicyViolation {
-	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return nil // no SBOM = no vuln data = pass (use require_sbom to enforce)
-		}
+	maxAllowed := getIntParam(params, "max", 0)
+	actual, source, ok := s.securityOrSBOMSeverityCount(ctx, artifactID, severity)
+	if !ok {
 		return nil
 	}
 
-	maxAllowed := getIntParam(params, "max", 0)
-	var actual int
 	var ruleType domain.PolicyRuleType
-
 	switch severity {
 	case "critical":
-		actual = sbom.CriticalCount
 		ruleType = domain.RuleMaxCriticalVulns
 	case "high":
-		actual = sbom.HighCount
 		ruleType = domain.RuleMaxHighVulns
 	}
 
 	if actual > maxAllowed {
 		return &domain.PolicyViolation{
 			Rule:    ruleType,
-			Message: fmt.Sprintf("%d %s vulnerabilities found (max allowed: %d)", actual, severity, maxAllowed),
+			Message: fmt.Sprintf("%d %s vulnerabilities found from %s (max allowed: %d)", actual, severity, source, maxAllowed),
 		}
 	}
 	return nil
 }
 
 func (s *PolicyService) checkRequireScanStatus(ctx context.Context, artifactID uuid.UUID, params map[string]any) *domain.PolicyViolation {
-	// This rule checks the artifact's scan_status field, but we don't have
-	// direct access to the artifact here. For now, check via SBOM vulnerability counts.
-	// If there's no SBOM, we can't verify scan status.
-	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
-	if err != nil {
-		return nil // no SBOM = no data = pass
-	}
-
-	requiredStatus := getStringParam(params, "status", "clean")
-	if requiredStatus == "clean" && sbom.HasVulnerabilities() {
-		return &domain.PolicyViolation{
-			Rule:    domain.RuleRequireScanStatus,
-			Message: fmt.Sprintf("scan status not clean: %d vulnerabilities found", sbom.VulnerabilityCount),
+	requiredStatus := strings.ToLower(getStringParam(params, "status", "clean"))
+	latest, err := s.latestSecurityForArtifact(ctx, artifactID)
+	if err == nil {
+		if !latest.Status.IsSuccessful() {
+			return &domain.PolicyViolation{Rule: domain.RuleRequireScanStatus, Message: fmt.Sprintf("security scan status is %s", latest.Status)}
 		}
+		if requiredStatus == "clean" && latest.FindingCount > 0 {
+			return &domain.PolicyViolation{Rule: domain.RuleRequireScanStatus, Message: fmt.Sprintf("security scan is not clean: %d vulnerabilities found", latest.FindingCount)}
+		}
+		return nil
+	}
+	if err != nil && !errorsIsNotFound(err) {
+		return &domain.PolicyViolation{Rule: domain.RuleRequireScanStatus, Message: "failed to read security scan status: " + err.Error()}
+	}
+	sbom, sbomErr := s.sboms.GetSBOMByArtifact(ctx, artifactID)
+	if sbomErr != nil {
+		return nil
+	}
+	if requiredStatus == "clean" && sbom.HasVulnerabilities() {
+		return &domain.PolicyViolation{Rule: domain.RuleRequireScanStatus, Message: fmt.Sprintf("scan status not clean from SBOM aggregate: %d vulnerabilities found", sbom.VulnerabilityCount)}
+	}
+	return nil
+}
+
+func (s *PolicyService) checkSecurityOSVScan(ctx context.Context, artifactID uuid.UUID, params map[string]any) *domain.PolicyViolation {
+	if !getBoolParam(params, "enabled", true) {
+		return nil
+	}
+	latest, err := s.latestSecurityForArtifact(ctx, artifactID)
+	if err != nil {
+		if errorsIsNotFound(err) {
+			return securityPolicyBehaviorViolation(domain.RuleSecurityOSVScan, params, "no_scan", "block", "no completed Security OSV scan exists for artifact")
+		}
+		return &domain.PolicyViolation{Rule: domain.RuleSecurityOSVScan, Message: "failed to read latest Security OSV scan: " + err.Error()}
+	}
+	if latest.Status != domain.SecurityScanCompleted {
+		return securityPolicyBehaviorViolation(domain.RuleSecurityOSVScan, params, "failed", "block", fmt.Sprintf("latest Security OSV scan status is %s", latest.Status))
+	}
+	freshnessSeconds := getIntParam(params, "freshness_seconds", 0)
+	if freshnessSeconds > 0 && time.Since(latest.ScannedAt) > time.Duration(freshnessSeconds)*time.Second {
+		return securityPolicyBehaviorViolation(domain.RuleSecurityOSVScan, params, "stale", "block", fmt.Sprintf("latest Security OSV scan is stale: scanned_at=%s freshness_seconds=%d", latest.ScannedAt.Format(time.RFC3339), freshnessSeconds))
 	}
 	return nil
 }
@@ -539,11 +569,83 @@ func parseSBOMForValidation(data []byte) (domain.SBOMFormat, error) {
 	return "", fmt.Errorf("unknown SBOM format")
 }
 
+func (s *PolicyService) latestSecurityForArtifact(ctx context.Context, artifactID uuid.UUID) (*domain.SecurityTargetLatest, error) {
+	if s.security == nil {
+		return nil, repository.ErrNotFound
+	}
+	return s.security.GetLatestSecurityTargetLatestForArtifact(ctx, artifactID)
+}
+
+func (s *PolicyService) securityOrSBOMSeverityCount(ctx context.Context, artifactID uuid.UUID, severity string) (int, string, bool) {
+	if latest, err := s.latestSecurityForArtifact(ctx, artifactID); err == nil {
+		if latest.Status == domain.SecurityScanCompleted {
+			switch severity {
+			case "critical":
+				return latest.SeverityCounts.Critical, "latest Security OSV scan", true
+			case "high":
+				return latest.SeverityCounts.High, "latest Security OSV scan", true
+			}
+		}
+	} else if err != nil && !errorsIsNotFound(err) {
+		s.logger.Warn("failed to read latest Security OSV scan for vulnerability policy", zap.String("artifact_id", artifactID.String()), zap.Error(err))
+	}
+	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
+	if err != nil {
+		return 0, "", false
+	}
+	switch severity {
+	case "critical":
+		return sbom.CriticalCount, "SBOM aggregate fallback", true
+	case "high":
+		return sbom.HighCount, "SBOM aggregate fallback", true
+	default:
+		return 0, "", false
+	}
+}
+
+func policyResultViolationCounts(result domain.PolicyResult) (blockers int, warnings int) {
+	for _, violation := range result.Violations {
+		enforcement := violation.Enforcement
+		if enforcement == "" {
+			enforcement = result.Enforcement
+		}
+		switch enforcement {
+		case domain.PolicyEnforcementWarn:
+			warnings++
+		case domain.PolicyEnforcementBlock:
+			blockers++
+		}
+	}
+	return blockers, warnings
+}
+
+func securityPolicyBehaviorViolation(rule domain.PolicyRuleType, params map[string]any, key, defaultBehavior, message string) *domain.PolicyViolation {
+	behavior := strings.ToLower(getStringParam(params, key, defaultBehavior))
+	if behavior == "pass" {
+		return nil
+	}
+	violation := &domain.PolicyViolation{Rule: rule, Message: fmt.Sprintf("%s behavior=%s", message, behavior)}
+	if behavior == "warn" {
+		violation.Enforcement = domain.PolicyEnforcementWarn
+	}
+	return violation
+}
+
+func errorsIsNotFound(err error) bool {
+	return errors.Is(err, repository.ErrNotFound) || err == repository.ErrNotFound
+}
+
 // --- CRUD ---
 
 // CreatePolicy creates a new deployment policy.
 func (s *PolicyService) CreatePolicy(ctx context.Context, p *domain.DeploymentPolicy) error {
-	return s.policies.Create(ctx, p)
+	if err := validateSecurityPolicyRules(p); err != nil {
+		return err
+	}
+	if err := s.policies.Create(ctx, p); err != nil {
+		return err
+	}
+	return s.syncSecuritySchedulesForPolicy(ctx, p)
 }
 
 // GetPolicy retrieves a policy by ID.
@@ -558,12 +660,158 @@ func (s *PolicyService) ListPolicies(ctx context.Context, enabledOnly bool) ([]d
 
 // UpdatePolicy updates an existing policy.
 func (s *PolicyService) UpdatePolicy(ctx context.Context, p *domain.DeploymentPolicy) error {
-	return s.policies.Update(ctx, p)
+	if err := validateSecurityPolicyRules(p); err != nil {
+		return err
+	}
+	if err := s.policies.Update(ctx, p); err != nil {
+		return err
+	}
+	return s.syncSecuritySchedulesForPolicy(ctx, p)
 }
 
 // DeletePolicy removes a policy.
 func (s *PolicyService) DeletePolicy(ctx context.Context, id uuid.UUID) error {
+	if s.security != nil {
+		_ = s.security.DisableSecurityScanSchedulesForPolicy(ctx, id, time.Now().UTC())
+	}
 	return s.policies.Delete(ctx, id)
+}
+
+func (s *PolicyService) DeriveSecurityScanSchedules(ctx context.Context) error {
+	if s.security == nil || s.policies == nil {
+		return nil
+	}
+	policies, err := s.policies.List(ctx, true)
+	if err != nil {
+		return fmt.Errorf("listing policies for Security schedule derivation: %w", err)
+	}
+	for i := range policies {
+		if err := s.syncSecuritySchedulesForPolicy(ctx, &policies[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *PolicyService) SecurityPoliciesForTarget(ctx context.Context, target *domain.SecurityTarget) ([]domain.DeploymentPolicy, error) {
+	if s == nil || s.policies == nil {
+		return nil, nil
+	}
+	policies, err := s.policies.ListGlobal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if envID := environmentIDFromSecurityTarget(target); envID != nil {
+		envPolicies, err := s.policies.ListByEnvironment(ctx, *envID)
+		if err != nil {
+			return nil, err
+		}
+		policies = append(policies, envPolicies...)
+	}
+	return policies, nil
+}
+
+func (s *PolicyService) syncSecuritySchedulesForPolicy(ctx context.Context, p *domain.DeploymentPolicy) error {
+	if s.security == nil || p == nil || p.ID == uuid.Nil {
+		return nil
+	}
+	rules := enabledSecurityOSVScanRules(p)
+	if !p.Enabled || len(rules) == 0 {
+		return s.security.DisableSecurityScanSchedulesForPolicy(ctx, p.ID, time.Now().UTC())
+	}
+	if err := s.security.DisableSecurityScanSchedulesForPolicy(ctx, p.ID, time.Now().UTC()); err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		interval := getIntParam(rule.Params, "interval_seconds", getIntParam(rule.Params, "schedule_seconds", 86400))
+		if interval <= 0 {
+			continue
+		}
+		targets, err := s.securityTargetsForScheduleRule(ctx, rule)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		for _, target := range targets {
+			schedule := &domain.SecurityScanSchedule{PolicyID: p.ID, TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Enabled: true, IntervalSeconds: interval, NextDueAt: now, Metadata: map[string]any{"source": "policy", "policy_name": p.Name, "rule_type": string(rule.Type)}}
+			if err := s.security.UpsertSecurityScanSchedule(ctx, schedule); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *PolicyService) securityTargetsForScheduleRule(ctx context.Context, rule domain.PolicyRule) ([]domain.SecurityTarget, error) {
+	hashes := getStringSliceParam(rule.Params, "target_key_hashes")
+	if single := getStringParam(rule.Params, "target_key_hash", ""); single != "" {
+		hashes = append(hashes, single)
+	}
+	if len(hashes) > 0 {
+		out := make([]domain.SecurityTarget, 0, len(hashes))
+		for _, hash := range hashes {
+			target, err := s.security.GetSecurityTargetByHash(ctx, hash)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, *target)
+		}
+		return out, nil
+	}
+	targetType := domain.SecurityTargetSBOM
+	if types := getStringSliceParam(rule.Params, "source_types"); len(types) == 1 {
+		targetType = domain.SecurityTargetType(types[0])
+	}
+	return s.security.ListSecurityTargets(ctx, targetType, 1000)
+}
+
+func enabledSecurityOSVScanRules(p *domain.DeploymentPolicy) []domain.PolicyRule {
+	out := []domain.PolicyRule{}
+	if p == nil {
+		return out
+	}
+	for _, rule := range p.Rules {
+		if rule.Type == domain.RuleSecurityOSVScan && getBoolParam(rule.Params, "enabled", true) {
+			out = append(out, rule)
+		}
+	}
+	return out
+}
+
+func validateSecurityPolicyRules(p *domain.DeploymentPolicy) error {
+	if p == nil {
+		return fmt.Errorf("deployment policy is required")
+	}
+	for _, rule := range p.Rules {
+		if rule.Type != domain.RuleSecurityOSVScan {
+			continue
+		}
+		if interval := getIntParam(rule.Params, "interval_seconds", getIntParam(rule.Params, "schedule_seconds", 0)); interval < 0 {
+			return fmt.Errorf("security_osv_scan interval_seconds must be non-negative")
+		}
+		if freshness := getIntParam(rule.Params, "freshness_seconds", 0); freshness < 0 {
+			return fmt.Errorf("security_osv_scan freshness_seconds must be non-negative")
+		}
+		for _, key := range []string{"no_scan", "stale", "failed"} {
+			behavior := strings.ToLower(getStringParam(rule.Params, key, "block"))
+			if behavior != "block" && behavior != "warn" && behavior != "pass" {
+				return fmt.Errorf("security_osv_scan %s must be block, warn, or pass", key)
+			}
+		}
+	}
+	return nil
+}
+
+func environmentIDFromSecurityTarget(target *domain.SecurityTarget) *uuid.UUID {
+	if target == nil || target.Metadata == nil {
+		return nil
+	}
+	if raw, ok := target.Metadata["environment_id"].(string); ok && raw != "" {
+		if parsed, err := uuid.Parse(raw); err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }
 
 // Helper functions for rule params.
@@ -586,6 +834,21 @@ func getIntParam(params map[string]any, key string, defaultVal int) int {
 	default:
 		return defaultVal
 	}
+}
+
+func getBoolParam(params map[string]any, key string, defaultVal bool) bool {
+	if params == nil {
+		return defaultVal
+	}
+	v, ok := params[key]
+	if !ok {
+		return defaultVal
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return defaultVal
+	}
+	return b
 }
 
 func getStringParam(params map[string]any, key, defaultVal string) string {

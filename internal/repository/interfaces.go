@@ -118,6 +118,7 @@ type SBOMRepository interface {
 type SBOMManifestRepository interface {
 	CreateManifest(ctx context.Context, manifest *domain.SBOMManifest) error
 	ProjectManifest(ctx context.Context, manifest *domain.SBOMManifest, packages []domain.SBOMManifestPackage) error
+	UpdateCompatibilityVulnerabilityCounts(ctx context.Context, artifactID uuid.UUID, payloadSHA256 string, counts domain.SecuritySeverityCounts, total int) error
 	GetManifestByID(ctx context.Context, id uuid.UUID) (*domain.SBOMManifest, error)
 	ListManifestsBySubject(ctx context.Context, subject domain.SBOMSubject, limit int) ([]domain.SBOMManifest, error)
 	UpdateManifestPublishState(ctx context.Context, id uuid.UUID, state domain.SBOMPublishState, referenceEventID, availabilityEventID, publishError string) error
@@ -162,6 +163,7 @@ type SecurityRepository interface {
 	UpdateSecurityScanRunStatus(ctx context.Context, id uuid.UUID, status domain.SecurityScanStatus, errorMessage string, finishedAt *time.Time) error
 	UpsertSecurityTargetLatest(ctx context.Context, latest *domain.SecurityTargetLatest) error
 	GetSecurityTargetLatestByHash(ctx context.Context, targetKeyHash string) (*domain.SecurityTargetLatest, error)
+	GetLatestSecurityTargetLatestForArtifact(ctx context.Context, artifactID uuid.UUID) (*domain.SecurityTargetLatest, error)
 
 	UpsertSecurityFindings(ctx context.Context, findings []domain.SecurityOSVFinding) error
 	ListSecurityFindings(ctx context.Context, runID uuid.UUID) ([]domain.SecurityOSVFinding, error)
@@ -171,6 +173,7 @@ type SecurityRepository interface {
 	ListSecurityScanSchedulesFiltered(ctx context.Context, filter SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error)
 	ClaimDueSecurityScanSchedules(ctx context.Context, now time.Time, limit int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error)
 	MarkSecurityScheduleDispatched(ctx context.Context, id uuid.UUID, runID uuid.UUID, dispatchedAt time.Time, nextDueAt time.Time) error
+	DisableSecurityScanSchedulesForPolicy(ctx context.Context, policyID uuid.UUID, disabledAt time.Time) error
 
 	RecordSecurityPolicyBreach(ctx context.Context, breach *domain.SecurityPolicyBreach) (domain.SecurityBreachRecordResult, error)
 	ResolveSecurityPolicyBreach(ctx context.Context, policyID uuid.UUID, targetKeyHash string, resolvedAt time.Time) error
