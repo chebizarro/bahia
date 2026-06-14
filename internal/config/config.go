@@ -514,14 +514,28 @@ type OCIServiceAccountConfig struct {
 	RepoPrefixes []string `koanf:"repo_prefixes"` // e.g. cascadia/
 }
 
+// HiveCIPolicyConfig declares a pipeline policy to ensure exists at startup.
+// Policies are matched by (repo_coordinate, workflow_path, service_name,
+// environment_name); if a matching row already exists it is left untouched.
+type HiveCIPolicyConfig struct {
+	RepoCoordinate  string         `koanf:"repo_coordinate" yaml:"repo_coordinate"`
+	WorkflowPath    string         `koanf:"workflow_path" yaml:"workflow_path"`
+	BranchPattern   string         `koanf:"branch_pattern" yaml:"branch_pattern"`
+	ServiceName     string         `koanf:"service_name" yaml:"service_name"`
+	EnvironmentName string         `koanf:"environment_name" yaml:"environment_name"`
+	Enabled         *bool          `koanf:"enabled" yaml:"enabled"`
+	Metadata        map[string]any `koanf:"metadata" yaml:"metadata"`
+}
+
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
-	Enabled                      bool          `koanf:"enabled"`
-	TrustedCIPubkeys             []string      `koanf:"trusted_ci_pubkeys"`
-	AutoRegisterBuilds           bool          `koanf:"auto_register_builds"`
-	AutoDeployStagingEnvironment string        `koanf:"auto_deploy_staging_environment"`
-	RetryInterval                time.Duration `koanf:"retry_interval"`
-	MaxRetries                   int           `koanf:"max_retries"`
+	Enabled                      bool                  `koanf:"enabled"`
+	TrustedCIPubkeys             []string              `koanf:"trusted_ci_pubkeys"`
+	AutoRegisterBuilds           bool                  `koanf:"auto_register_builds"`
+	AutoDeployStagingEnvironment string                `koanf:"auto_deploy_staging_environment"`
+	RetryInterval                time.Duration         `koanf:"retry_interval"`
+	MaxRetries                   int                   `koanf:"max_retries"`
+	Policies                     []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.

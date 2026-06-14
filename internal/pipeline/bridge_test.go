@@ -60,6 +60,9 @@ func (m *mockHiveRepo) ListPolicies(_ context.Context) ([]domain.HiveCIPipelineP
 func (m *mockHiveRepo) GetPolicyByRepoAndWorkflow(_ context.Context, _, _ string) (*domain.HiveCIPipelinePolicy, error) {
 	return m.policy, nil
 }
+func (m *mockHiveRepo) EnsurePipelinePolicy(_ context.Context, _ domain.HiveCIPipelinePolicy) error {
+	return nil
+}
 func (m *mockHiveRepo) LookupRepositoryCI(_ context.Context, _ []string, _ bool) ([]domain.RepositoryCILookup, error) {
 	return nil, nil
 }

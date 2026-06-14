@@ -703,6 +703,38 @@ func addRepositoryCILinkedService(
 	lookup.LinkedServices[idx].EnvironmentNames = append(lookup.LinkedServices[idx].EnvironmentNames, row.EnvironmentName)
 }
 
+func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
+	// Idempotent insert: only creates the policy if no row with the same
+	// (repo_coordinate, workflow_path, service_id, environment_id) exists.
+	// We COALESCE branch_pattern to handle NULL equality in the WHERE check.
+	metadata := policy.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataJSON, err := marshalJSON(metadata, "metadata")
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, `
+		INSERT INTO hiveci_pipeline_policies
+			(repo_coordinate, workflow_path, branch_pattern, service_id, environment_id, enabled, metadata)
+		SELECT $1, $2, NULLIF($3, ''), $4, $5, $6, $7
+		WHERE NOT EXISTS (
+			SELECT 1 FROM hiveci_pipeline_policies
+			WHERE repo_coordinate = $1
+			AND workflow_path = $2
+			AND COALESCE(branch_pattern, '') = COALESCE(NULLIF($3, ''), '')
+			AND service_id = $4
+			AND environment_id = $5
+		)
+	`, policy.RepoCoordinate, policy.WorkflowPath, policy.BranchPattern,
+		policy.ServiceID, policy.EnvironmentID, policy.Enabled, metadataJSON)
+	if err != nil {
+		return fmt.Errorf("ensuring hiveci pipeline policy: %w", err)
+	}
+	return nil
+}
+
 func isValidHiveCIResultTransition(ctx context.Context, pool hiveCIDB, eventID string, newState domain.HiveCIProcessingState) bool {
 	if newState == "" {
 		return false

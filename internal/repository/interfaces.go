@@ -451,6 +451,7 @@ type HiveCIRepository interface {
 	MarkResultFailed(ctx context.Context, eventID, reason string) error
 	ListPolicies(ctx context.Context) ([]domain.HiveCIPipelinePolicy, error)
 	GetPolicyByRepoAndWorkflow(ctx context.Context, repo, workflow string) (*domain.HiveCIPipelinePolicy, error)
+	EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error
 	// LookupRepositoryCI returns CI status for the given repo coordinates.
 	// Returns one result per unique requested coordinate, preserving request order.
 	// Coordinates with no CI data get empty result entries (not errors).

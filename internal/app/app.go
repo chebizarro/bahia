@@ -713,6 +713,60 @@ func New(cfg *config.Config) (*App, error) {
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
 		bgManager.RegisterWithOptions(hiveSub, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger), RunnerTier(Tier3))
+
+		// Seed configured pipeline policies idempotently.
+		for i, pc := range cfg.HiveCI.Policies {
+			if pc.RepoCoordinate == "" || pc.WorkflowPath == "" || pc.ServiceName == "" || pc.EnvironmentName == "" {
+				logger.Warn("skipping incomplete hiveci policy config",
+					zap.Int("index", i),
+					zap.String("repo_coordinate", pc.RepoCoordinate),
+					zap.String("workflow_path", pc.WorkflowPath),
+					zap.String("service_name", pc.ServiceName),
+					zap.String("environment_name", pc.EnvironmentName),
+				)
+				continue
+			}
+			svc, err := serviceRepo.GetByName(ctx, pc.ServiceName)
+			if err != nil || svc == nil {
+				logger.Warn("hiveci policy: service not found, skipping",
+					zap.String("service_name", pc.ServiceName), zap.Error(err))
+				continue
+			}
+			env, err := envRepo.GetByName(ctx, pc.EnvironmentName)
+			if err != nil || env == nil {
+				logger.Warn("hiveci policy: environment not found, skipping",
+					zap.String("environment_name", pc.EnvironmentName), zap.Error(err))
+				continue
+			}
+			enabled := true
+			if pc.Enabled != nil {
+				enabled = *pc.Enabled
+			}
+			policy := domain.HiveCIPipelinePolicy{
+				RepoCoordinate: pc.RepoCoordinate,
+				WorkflowPath:   pc.WorkflowPath,
+				BranchPattern:  pc.BranchPattern,
+				ServiceID:      svc.ID,
+				EnvironmentID:  env.ID,
+				Enabled:        enabled,
+				Metadata:       pc.Metadata,
+			}
+			if err := hiveRepo.EnsurePipelinePolicy(ctx, policy); err != nil {
+				logger.Error("failed to ensure hiveci pipeline policy",
+					zap.String("repo_coordinate", pc.RepoCoordinate),
+					zap.String("workflow_path", pc.WorkflowPath),
+					zap.Error(err),
+				)
+			} else {
+				logger.Info("hiveci pipeline policy ensured",
+					zap.String("repo_coordinate", pc.RepoCoordinate),
+					zap.String("workflow_path", pc.WorkflowPath),
+					zap.String("service", pc.ServiceName),
+					zap.String("environment", pc.EnvironmentName),
+				)
+			}
+		}
+
 		logger.Info("hive-ci bridge enabled")
 	}
 

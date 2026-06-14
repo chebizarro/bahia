@@ -249,14 +249,31 @@ The bridge already transitions successful `5402` results:
 
 ### Seeding the Pipeline Policy Row
 
-`scripts/seed_hiveci_pipeline_policy.sql` inserts the `hiveci_pipeline_policies`
-row idempotently.  Run it by piping into the `postgres` container via
-`docker compose exec`.
+Pipeline policies can be seeded in two ways: via config (preferred) or via the
+operator SQL script.
 
-**Step 1 — discover the NIP-34 repo coordinate.**
+#### Config-driven seeding (preferred)
+
+Add the policy to `bahia.yml` under `hiveci.policies`.  Bahia resolves
+service and environment by name and idempotently ensures the row exists on
+every startup:
+
+```yaml
+hiveci:
+  enabled: true
+  trusted_ci_pubkeys:
+    - "<hive-ci-runner-pubkey>"
+  policies:
+    - repo_coordinate: "30617:<grasp-gitea-pubkey>:chebizarro/bahia"
+      workflow_path: ".github/workflows/hive-ci-build.yml"
+      service_name: bahia
+      environment_name: edge-01
+      metadata: {}
+```
+
 The `repo_coordinate` is whatever grasp-gitea puts in the `["a", ...]` tag of
-kind-5401 events.  The discovery query at the top of the SQL file shows every
-coordinate already ingested:
+kind-5401 events.  Use the discovery query below to find it once 5401 events
+have been ingested:
 
 ```bash
 docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
@@ -266,21 +283,32 @@ docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
       GROUP BY 1, 2 ORDER BY 4 DESC;"
 ```
 
-**Step 2 — seed (substitute the repo coordinate).**
+After adding the config, restart Bahia.  The startup log will show
+`hiveci pipeline policy ensured` for each configured policy.
+
+#### Operator SQL script (ad-hoc / pre-config)
+
+`scripts/seed_hiveci_pipeline_policy.sql` provides a standalone operator path
+for creating the policy row without restarting Bahia.  It uses the same
+idempotent insert pattern:
 
 ```bash
 REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
+SERVICE_NAME="bahia"
+ENV_NAME="edge-01"
 
-sed "s|:REPO_COORDINATE:|$REPO_COORD|g" \
+sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
+    -e "s|:SERVICE_NAME:|$SERVICE_NAME|g" \
+    -e "s|:ENV_NAME:|$ENV_NAME|g" \
   scripts/seed_hiveci_pipeline_policy.sql \
   | docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
       exec -T postgres psql -U bahia -d bahia
 ```
 
-The script resolves the `bahia` service and `edge-01` environment by name.
-`ON CONFLICT DO NOTHING` makes it safe to run multiple times.
+The script also includes discovery queries for repo coordinates, services,
+environments, and existing policies.
 
-**Step 3 (later) — enable auto-deploy after artifact registration is stable.**
+#### Enabling auto-deploy (later)
 
 Only after step 8 of the Implementation Order is verified:
 
@@ -295,6 +323,8 @@ SET    metadata   = '{\"auto_deploy_staging\": true, \"staging_environment\": \"
 WHERE  repo_coordinate = '${REPO_COORD}'
   AND  workflow_path   = '.github/workflows/hive-ci-build.yml';"
 ```
+
+Or update the config `metadata` field and restart.
 
 ### Implementation Order
 
