@@ -147,6 +147,20 @@
     artifact = loadedArtifact;
     clearSBOMEventCache();
     resetSBOMFromArtifact(loadedArtifact);
+
+    // Eagerly populate SBOM from the centralized store so data is
+    // available immediately without waiting for a relay query.
+    const id = String(loadedArtifact?.id || '').trim();
+    if (id) {
+      const cachedRefs = getSBOMRefsForArtifact(id);
+      if (cachedRefs.length > 0) {
+        const storeEvents = cachedRefs.filter((r) => r.nostr_event).map((r) => r.nostr_event);
+        if (storeEvents.length > 0 && applySBOMReferenceEvents(storeEvents) > 0) {
+          sbomLoaded = true;
+        }
+      }
+    }
+
     signatures = Array.isArray(loadedArtifact.signatures) ? loadedArtifact.signatures : [];
     hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(loadedArtifact.signature_ref || loadedArtifact.verified_signature);
     error = null;
@@ -157,7 +171,6 @@
     sbomReferenceEvents = new Map();
     sbomAvailabilityEvents = new Map();
     sbomReferenceCount = 0;
-    sbomLoaded = false;
   }
 
   function resetSBOMFromArtifact(source) {
@@ -193,22 +206,7 @@
   async function loadSBOMDetails() {
     if (!artifact || sbomLoading) return;
     resetSBOMFromArtifact(artifact);
-
-    // First, check the centralized SBOM store (populated during bootstrap).
-    const id = String(artifact?.id || '').trim();
-    if (id) {
-      const cachedRefs = getSBOMRefsForArtifact(id);
-      if (cachedRefs.length > 0) {
-        const syntheticEvents = cachedRefs
-          .filter((ref) => ref.nostr_event)
-          .map((ref) => ref.nostr_event);
-        if (syntheticEvents.length > 0) {
-          applySBOMReferenceEvents(syntheticEvents);
-        }
-      }
-    }
-
-    // Then do a fresh relay query to pick up anything newer.
+    // Query the relay for the latest SBOM events.
     await refreshSBOMReferenceEvents();
   }
 
@@ -362,15 +360,10 @@
     }
   }
 
-  // Load SBOM details when switching to SBOM tab (or when artifact changes)
+  // Load SBOM details when switching to SBOM tab
   $effect(() => {
-    if (activeTab === 'sbom' && artifactId && !sbomLoading) {
-      // Re-load every time the tab is selected or the artifact ID changes.
-      // loadSBOMDetails reads from the centralized store first (instant),
-      // then does a relay query for anything newer.
-      if (!sbomLoaded) {
-        void loadSBOMDetails();
-      }
+    if (activeTab === 'sbom' && artifactId && !sbomLoaded && !sbomLoading) {
+      void loadSBOMDetails();
     }
   });
 
