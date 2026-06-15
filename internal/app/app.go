@@ -665,11 +665,12 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}
 		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
+		sbomControlPlanePublisher := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
 		sbomOrchestrator = service.NewSBOMOrchestrator(service.SBOMOrchestratorConfig{
 			Generators: generatorRegistry,
 			Storage:    sbomStorageResolver,
 			Repo:       sbomManifestRepo,
-			Publisher:  sbomPublishAdapter{publisher: nostrPub},
+			Publisher:  sbomPublishAdapter{publisher: sbomControlPlanePublisher},
 			Resolver: service.SBOMSubjectResolver{
 				Artifacts:   artifactRepo,
 				Deployments: intentRepo,

@@ -229,6 +229,7 @@ func BuildSBOMAvailabilityListEvent(input BuildSBOMAvailabilityListEventInput) (
 		{TagSubjectType, string(input.Subject.Type)},
 		{TagSubjectDigest, input.Subject.Digest},
 	}
+	tags = append(tags, resourceTag(input.Subject))
 	for _, entry := range entries {
 		if err := validateSBOMIndexEntry(input.Subject, entry); err != nil {
 			return nil, "", err

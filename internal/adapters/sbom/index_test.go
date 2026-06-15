@@ -285,6 +285,11 @@ func TestBuildSBOMAvailabilityListEvent(t *testing.T) {
 		t.Errorf("subject tag = %q, want %q", subjectTag, subject.Digest)
 	}
 
+	// Verify the resource tag is present so browser #artifact filters match.
+	if artifactTag := testTagValue(ev.Tags, "artifact"); artifactTag != subject.ID {
+		t.Errorf("artifact resource tag = %q, want %q", artifactTag, subject.ID)
+	}
+
 	aTags := testTagsByName(ev.Tags, TagAReference)
 	if len(aTags) != 1 {
 		t.Fatalf("Expected 1 deduped a tag, got %d", len(aTags))

@@ -196,13 +196,21 @@
   async function refreshSBOMReferenceEvents() {
     const id = String(artifact?.id || '').trim();
     if (!id) return 0;
+    const digest = artifactSBOMDigest(artifact);
     sbomLoading = true;
     try {
       await ensureRelayConnection();
-      const result = await queryOrPartial([
-        { kinds: [SBOM_REFERENCE], '#artifact': [id], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
-        { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
-      ], { scope: 'artifact-sbom' });
+      const filters = [
+        { kinds: [SBOM_REFERENCE], '#artifact': [id], limit: 20 },
+        { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], limit: 5 }
+      ];
+      if (digest) {
+        filters.push(
+          { kinds: [SBOM_REFERENCE], '#subject': [digest], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
+          { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+        );
+      }
+      const result = await queryOrPartial(filters, { scope: 'artifact-sbom' });
       return applySBOMReferenceEvents(readModelEvents(result));
     } finally {
       sbomLoading = false;
@@ -213,9 +221,16 @@
   function applySBOMReferenceEvents(events) {
     const refs = [];
     const availability = [];
+    const expectedArtifactId = String(artifact?.id || '');
+    const expectedDigest = artifactSBOMDigest(artifact);
     for (const event of Array.isArray(events) ? events : []) {
       if (!event || !Array.isArray(event.tags)) continue;
-      if (String(getTagValue(event, 'artifact') || '') !== String(artifact?.id || '')) continue;
+      // Match by artifact tag (30078 + 30004) or by subject/digest tag (fallback)
+      const eventArtifact = String(getTagValue(event, 'artifact') || '');
+      const eventSubject = String(getTagValue(event, 'subject') || '');
+      const matchesArtifact = eventArtifact && eventArtifact === expectedArtifactId;
+      const matchesSubject = expectedDigest && eventSubject && eventSubject === expectedDigest;
+      if (!matchesArtifact && !matchesSubject) continue;
       if (!event.id) continue;
       const content = parseJsonContent(event, {});
       if (Number(event.kind) === SBOM_REFERENCE) sbomReferenceEvents.set(event.id, { event, content });
@@ -285,17 +300,28 @@
   function subscribeGeneratedSBOMReferences() {
     const id = String(artifact?.id || '').trim();
     if (!id) return;
+    const digest = artifactSBOMDigest(artifact);
     closeSBOMReferenceSubscription();
-    sbomReferenceUnsubscribe = nostr.subscribe([
-      { kinds: [SBOM_REFERENCE], '#artifact': [id], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
-      { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
-    ], {
+    // Subscribe by artifact ID (primary) and by subject digest (fallback).
+    // Both 30078 and 30004 events carry an artifact resource tag and a subject
+    // digest tag; querying both paths ensures resilience if one tag is missing.
+    const filters = [
+      { kinds: [SBOM_REFERENCE], '#artifact': [id], limit: 20 },
+      { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], limit: 5 }
+    ];
+    if (digest) {
+      filters.push(
+        { kinds: [SBOM_REFERENCE], '#subject': [digest], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
+        { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+      );
+    }
+    sbomReferenceUnsubscribe = nostr.subscribe(filters, {
       onEvent: (event) => {
         if (applySBOMReferenceEvents([event]) > 0) {
           sbomGenerationStatus = 'completed';
         }
       },
-      onClosed: (_relay, reason) => {
+      onClosed: (reason, _relay) => {
         if (sbomGenerationStatus === 'publishing' || sbomGenerationStatus === 'waiting') {
           sbomGenerateError = `SBOM request is still pending, but a relay closed the SBOM event subscription${reason ? `: ${reason}` : ''}`;
         }
