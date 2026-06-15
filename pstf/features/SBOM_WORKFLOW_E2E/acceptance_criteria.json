@@ -51,7 +51,7 @@
     },
     {
       "id": "AC13",
-      "description": "Artifact UI exposes discoverable Generate SBOM and Regenerate SBOM actions from the artifact registry list, artifact detail header, and SBOM tab. Actions route to or publish signer-backed encrypted ContextVM sbom/generate requests with artifact subject, immutable digest, OCI image source, SPDX and CycloneDX formats, Syft generator, and Blossom storage, without calling REST generation endpoints."
+      "description": "Artifact UI exposes discoverable Generate SBOM and Regenerate SBOM actions from the artifact registry list, artifact detail header, and SBOM tab. Actions route to or publish signer-backed encrypted ContextVM sbom/generate requests with artifact subject, immutable digest, explicit OCI image ref/repository, SPDX and CycloneDX formats, Syft generator, and Blossom storage, without calling REST generation endpoints or treating display names as pullable image repositories."
     }
   ]
 }

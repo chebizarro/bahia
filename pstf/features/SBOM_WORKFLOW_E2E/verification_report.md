@@ -50,7 +50,7 @@ cd web && pnpm test:e2e --reporter=line tests/e2e/environments-crud-smoke.spec.j
 
 ## Web artifact generate/regenerate slice — 2026-06-13
 
-- `web/src/lib/stores/public-controlplane.svelte.js` now builds encrypted ContextVM `sbom/generate` requests for artifact subjects with immutable digest, OCI image source locator, SPDX/CycloneDX formats, Syft generator, Blossom storage, scoped tags, and deterministic idempotency keys.
+- `web/src/lib/stores/public-controlplane.svelte.js` now builds encrypted ContextVM `sbom/generate` requests for artifact subjects with immutable digest, explicit OCI image source locator, SPDX/CycloneDX formats, Syft generator, Blossom storage, scoped tags, and deterministic idempotency keys. It rejects display-name-only artifacts instead of treating names such as `nostrodomo` as Docker Hub image repositories.
 - `web/src/routes/artifacts/[id]/+page.svelte` now exposes **Generate SBOM** and **Regenerate SBOM** from the artifact detail header and SBOM tab, publishes through the Nostr ContextVM helper, does not call REST generation endpoints, and tells users that durable completion is reflected by SBOM reference and availability-list events.
 - `web/src/routes/artifacts/+page.svelte` now exposes a per-row **Generate SBOM** or **Regenerate SBOM** link from the registry list, routing directly to the artifact SBOM tab with `?tab=sbom`.
 - `web/tests/e2e/helpers.js` can now deterministically observe gift-wrapped SBOM generate requests and inject `30315`, `4903`, `30078`, and `30004` mock relay outcomes for browser verification without sleeps.

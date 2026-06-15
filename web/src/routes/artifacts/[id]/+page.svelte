@@ -184,7 +184,7 @@
     sbomGenerateError = null;
     sbomRequestEventId = null;
     try {
-      const event = await generateArtifactSBOM(artifact);
+      const event = await generateArtifactSBOM({ ...artifact, service_artifact_repo: service?.artifact_repo || '' });
       sbomRequestEventId = event?.requestEventId || event?.id || null;
       toast.success('SBOM generation request published through Nostr ContextVM');
     } catch (err) {
@@ -281,12 +281,28 @@
     return String(artifact?.digest || artifact?.image_digest || artifact?.metadata?.digest || '').trim();
   }
 
+  function artifactRepository(artifact) {
+    const candidates = [
+      artifact?.image_repo,
+      artifact?.image_repository,
+      artifact?.oci_repository,
+      artifact?.repository,
+      artifact?.artifact_repo,
+      service?.artifact_repo,
+      artifact?.metadata?.image_repo,
+      artifact?.metadata?.image_repository,
+      artifact?.metadata?.oci_repository,
+      artifact?.metadata?.repository
+    ];
+    return String(candidates.find((candidate) => String(candidate || '').trim()) || '').trim();
+  }
+
   function artifactImageLocator(artifact) {
-    const explicit = String(artifact?.image_ref || artifact?.oci_ref || artifact?.source_ref || '').trim();
+    const explicit = String(artifact?.image_ref || artifact?.oci_ref || artifact?.source_ref || artifact?.metadata?.image_ref || artifact?.metadata?.oci_ref || artifact?.metadata?.source_ref || '').trim();
     if (explicit) return explicit;
-    const repo = String(artifact?.image_repo || artifact?.repository || artifact?.name || '').trim();
+    const repo = artifactRepository(artifact);
     const digest = artifactSBOMDigest(artifact);
-    const tag = String(artifact?.image_tag || artifact?.tag || artifact?.version || '').trim();
+    const tag = String(artifact?.image_tag || artifact?.tag || artifact?.version || artifact?.metadata?.image_tag || artifact?.metadata?.tag || artifact?.metadata?.version || '').trim();
     if (repo && digest) return `${repo}@${digest}`;
     if (repo && tag) return `${repo}:${tag}`;
     return '';
@@ -478,7 +494,7 @@
             <p class="error-message">{sbomGenerateError}</p>
           {/if}
           {#if !canGenerateSBOM}
-            <p class="warning-message">This artifact needs an immutable digest and image locator before Bahia can generate an SBOM.</p>
+            <p class="warning-message">This artifact needs an immutable digest plus a configured image repository or OCI image ref before Bahia can generate an SBOM.</p>
           {/if}
           {#if sbomRequestEventId}
             <p class="info-message">Request event <code>{formatDigestMiddle(sbomRequestEventId)}</code> was published. Completion is reflected by SBOM reference and availability-list events.</p>

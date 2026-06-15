@@ -178,11 +178,27 @@ function artifactDigest(artifact) {
   return String(artifact?.digest || artifact?.image_digest || artifact?.metadata?.digest || '').trim();
 }
 
+function artifactRepository(artifact) {
+  const candidates = [
+    artifact?.image_repo,
+    artifact?.image_repository,
+    artifact?.oci_repository,
+    artifact?.repository,
+    artifact?.artifact_repo,
+    artifact?.service_artifact_repo,
+    artifact?.metadata?.image_repo,
+    artifact?.metadata?.image_repository,
+    artifact?.metadata?.oci_repository,
+    artifact?.metadata?.repository
+  ];
+  return String(candidates.find((candidate) => String(candidate || '').trim()) || '').trim();
+}
+
 function artifactImageLocator(artifact, digest = artifactDigest(artifact)) {
-  const explicit = String(artifact?.image_ref || artifact?.oci_ref || artifact?.source_ref || '').trim();
+  const explicit = String(artifact?.image_ref || artifact?.oci_ref || artifact?.source_ref || artifact?.metadata?.image_ref || artifact?.metadata?.oci_ref || artifact?.metadata?.source_ref || '').trim();
   if (explicit) return explicit;
-  const repo = String(artifact?.image_repo || artifact?.repository || artifact?.name || '').trim();
-  const tag = String(artifact?.image_tag || artifact?.tag || artifact?.version || '').trim();
+  const repo = artifactRepository(artifact);
+  const tag = String(artifact?.image_tag || artifact?.tag || artifact?.version || artifact?.metadata?.image_tag || artifact?.metadata?.tag || artifact?.metadata?.version || '').trim();
   if (repo && digest) return `${repo}@${digest}`;
   if (repo && tag) return `${repo}:${tag}`;
   return '';
@@ -198,7 +214,7 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
   const digest = artifactDigest(artifact);
   if (!digest) throw new Error('artifact digest is required');
   const locator = artifactImageLocator(artifact, digest);
-  if (!locator) throw new Error('artifact image locator is required');
+  if (!locator) throw new Error('artifact image repository or OCI image ref is required');
   const normalizedFormats = Array.from(new Set((Array.isArray(formats) ? formats : [formats]).map((format) => String(format || '').trim()).filter(Boolean)));
   if (normalizedFormats.length === 0) throw new Error('at least one SBOM format is required');
   const generatorId = String(generator || 'syft').trim() || 'syft';

@@ -218,6 +218,32 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
+  it('does not use artifact display names as OCI image locators', () => {
+    expect(() => api.generateArtifactSBOM({
+      id: 'artifact-1',
+      name: 'nostrodomo',
+      digest: 'sha256:abc123'
+    })).toThrow('artifact image repository or OCI image ref is required');
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
+  });
+
+  it('uses service artifact repositories when artifact projections omit image_repo', async () => {
+    await api.generateArtifactSBOM({
+      id: 'artifact-1',
+      name: 'nostrodomo',
+      service_artifact_repo: 'ghcr.io/example/nostrodomo',
+      image_tag: '2026.06.14',
+      digest: 'sha256:abc123'
+    });
+
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'sbom/generate',
+      payload: expect.objectContaining({
+        source: { kind: 'oci-image', locator: 'ghcr.io/example/nostrodomo@sha256:abc123' }
+      })
+    }));
+  });
+
   it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
     requestEncryptedResultMock.mockResolvedValueOnce({
       requestEventId: 'req-1',
