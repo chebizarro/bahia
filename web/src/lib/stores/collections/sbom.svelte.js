@@ -9,36 +9,41 @@ const MAX_SBOM_REFS = 200;
  * Events are indexed by artifact ID so the artifact detail page can look up
  * references without issuing its own Nostr queries.
  *
- * Shape of sbomRefs: Array<{ id, kind, artifactId, subject, format, generator,
- *   location, payloadHash, storageType, mediaType, subjectType, created_at, nostr_event }>
+ * Shape of sbomRefs entries: { id, kind, artifactId, subject, format, generator,
+ *   location, payloadHash, storageType, mediaType, subjectType, created_at, nostr_event }
  *
- * sbomRefsByArtifact: Map<artifactId, Array<ref>>  (derived on refresh)
+ * sbomRefsByArtifact is rebuilt on every refresh() from the reactive arrays.
  */
 
 export const sbomRefs = $state([]);
+export const sbomAvailability = $state([]);
 export const sbomRefsByArtifact = new Map();
 
-const sbomRefMap = new Map();
-const sbomAvailMap = new Map();
+// Dedup sets — prevent double-processing of the same event ID.
+const seenRefIds = new Set();
+const seenAvailIds = new Set();
 
 // ── Reset / Refresh ──────────────────────────────────────────────────────────
 
 export function resetSBOM() {
-  sbomRefMap.clear();
-  sbomAvailMap.clear();
+  seenRefIds.clear();
+  seenAvailIds.clear();
   sbomRefsByArtifact.clear();
   sbomRefs.length = 0;
+  sbomAvailability.length = 0;
 }
 
+/**
+ * Rebuild the per-artifact lookup index from the reactive arrays.
+ * Called after hydration, after event application, and during refreshCollections().
+ */
 export function refreshSBOM() {
-  const allRefs = Array.from(sbomRefMap.values())
-    .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0))
-    .slice(0, MAX_SBOM_REFS);
-  replaceArray(sbomRefs, allRefs);
-
-  // Rebuild per-artifact index
   sbomRefsByArtifact.clear();
-  for (const ref of allRefs) {
+
+  // Re-seed dedup sets from the arrays (needed after hydration).
+  seenRefIds.clear();
+  for (const ref of sbomRefs) {
+    if (ref.id) seenRefIds.add(ref.id);
     const key = ref.artifactId;
     if (!key) continue;
     let bucket = sbomRefsByArtifact.get(key);
@@ -49,8 +54,9 @@ export function refreshSBOM() {
     bucket.push(ref);
   }
 
-  // Also index availability list entries
-  for (const avail of sbomAvailMap.values()) {
+  seenAvailIds.clear();
+  for (const avail of sbomAvailability) {
+    if (avail.id) seenAvailIds.add(avail.id);
     const key = avail.artifactId;
     if (!key) continue;
     let bucket = sbomRefsByArtifact.get(key);
@@ -58,7 +64,6 @@ export function refreshSBOM() {
       bucket = [];
       sbomRefsByArtifact.set(key, bucket);
     }
-    // Only add if not already present (refs take priority)
     if (!bucket.some((r) => r.id === avail.id)) {
       bucket.push(avail);
     }
@@ -135,10 +140,17 @@ function parseSBOMAvailabilityEvent(event) {
  */
 export function applySBOMReferenceEvent(event) {
   if (!event?.id || event.kind !== SBOM_REFERENCE) return false;
-  if (sbomRefMap.has(event.id)) return false;
+  if (seenRefIds.has(event.id)) return false;
+  seenRefIds.add(event.id);
 
   const parsed = parseSBOMReferenceEvent(event);
-  sbomRefMap.set(event.id, parsed);
+  sbomRefs.push(parsed);
+
+  // Keep the array bounded.
+  if (sbomRefs.length > MAX_SBOM_REFS * 2) {
+    sbomRefs.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+    sbomRefs.length = MAX_SBOM_REFS;
+  }
   return true;
 }
 
@@ -148,9 +160,10 @@ export function applySBOMReferenceEvent(event) {
  */
 export function applySBOMAvailabilityEvent(event) {
   if (!event?.id || event.kind !== SBOM_AVAILABILITY_LIST) return false;
-  if (sbomAvailMap.has(event.id)) return false;
+  if (seenAvailIds.has(event.id)) return false;
+  seenAvailIds.add(event.id);
 
   const parsed = parseSBOMAvailabilityEvent(event);
-  sbomAvailMap.set(event.id, parsed);
+  sbomAvailability.push(parsed);
   return true;
 }

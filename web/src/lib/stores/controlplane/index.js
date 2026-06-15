@@ -35,6 +35,7 @@ export {
   workerCleanupExecutions,
   events,
   sbomRefs,
+  sbomAvailability,
   sbomRefsByArtifact,
   getSBOMRefsForArtifact,
   hasSBOMForArtifact,
