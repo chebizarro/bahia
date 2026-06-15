@@ -10,6 +10,7 @@
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
+  import { api } from '$lib/api/client.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
@@ -147,20 +148,6 @@
     artifact = loadedArtifact;
     clearSBOMEventCache();
     resetSBOMFromArtifact(loadedArtifact);
-
-    // Eagerly populate SBOM from the centralized store so data is
-    // available immediately without waiting for a relay query.
-    const id = String(loadedArtifact?.id || '').trim();
-    if (id) {
-      const cachedRefs = getSBOMRefsForArtifact(id);
-      if (cachedRefs.length > 0) {
-        const storeEvents = cachedRefs.filter((r) => r.nostr_event).map((r) => r.nostr_event);
-        if (storeEvents.length > 0 && applySBOMReferenceEvents(storeEvents) > 0) {
-          sbomLoaded = true;
-        }
-      }
-    }
-
     signatures = Array.isArray(loadedArtifact.signatures) ? loadedArtifact.signatures : [];
     hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(loadedArtifact.signature_ref || loadedArtifact.verified_signature);
     error = null;
@@ -183,9 +170,8 @@
       : Array.isArray(embeddedSBOM?.packages)
         ? embeddedSBOM.packages
         : [];
-    // Don't set sbomLoaded here — let loadSBOMDetails handle it so the
-    // store-backed load always runs when switching to the SBOM tab.
-    sbomLoading = false;
+    // Don't set sbomLoaded or sbomLoading here — let loadSBOMDetails
+    // manage both so the loading lifecycle is consistent.
   }
 
   function artifactSBOMSummary(source) {
@@ -205,16 +191,49 @@
 
   async function loadSBOMDetails() {
     if (!artifact || sbomLoading) return;
+    sbomLoading = true;
     resetSBOMFromArtifact(artifact);
-    // Query the relay for the latest SBOM events.
-    await refreshSBOMReferenceEvents();
+    try {
+      // Primary path: fetch from the persistent REST API (survives server restarts).
+      const id = String(artifact?.id || '').trim();
+      if (id && api) {
+        try {
+          const [sbomResult, packagesResult] = await Promise.allSettled([
+            api.getSBOM(id),
+            api.getSBOMPackages(id)
+          ]);
+          const sbomFromAPI = sbomResult.status === 'fulfilled' ? sbomResult.value : null;
+          const packagesFromAPI = packagesResult.status === 'fulfilled' ? packagesResult.value : null;
+          if (sbomFromAPI) {
+            sbomData = {
+              format: sbomFromAPI.format || sbomData?.format || null,
+              generator: sbomFromAPI.generator ? { id: sbomFromAPI.generator } : sbomData?.generator || null,
+              source_url: sbomFromAPI.blossom_url || sbomFromAPI.source_url || sbomData?.source_url || null,
+              raw_hash: sbomFromAPI.raw_hash || sbomFromAPI.payload_sha256 || sbomData?.raw_hash || null,
+              package_count: sbomFromAPI.package_count || sbomData?.package_count || null,
+              created_at: sbomFromAPI.created_at || sbomData?.created_at || null,
+              ntia: sbomFromAPI.ntia || sbomData?.ntia || null
+            };
+            sbomReferenceCount = 1;
+          }
+          if (Array.isArray(packagesFromAPI) && packagesFromAPI.length > 0) {
+            sbomPackages = packagesFromAPI;
+          }
+        } catch { /* REST API unavailable, fall through to relay */ }
+      }
+
+      // Supplement with relay events (picks up real-time data and Nostr metadata).
+      await refreshSBOMReferenceEvents();
+    } finally {
+      sbomLoading = false;
+      sbomLoaded = true;
+    }
   }
 
   async function refreshSBOMReferenceEvents() {
     const id = String(artifact?.id || '').trim();
     if (!id) return 0;
     const digest = artifactSBOMDigest(artifact);
-    sbomLoading = true;
     try {
       await ensureRelayConnection();
       const filters = [
@@ -229,9 +248,9 @@
       }
       const result = await queryOrPartial(filters, { scope: 'artifact-sbom' });
       return applySBOMReferenceEvents(readModelEvents(result));
-    } finally {
-      sbomLoading = false;
-      sbomLoaded = true;
+    } catch (err) {
+      console.warn('[sbom] relay query failed:', err);
+      return 0;
     }
   }
 
