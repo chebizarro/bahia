@@ -157,6 +157,7 @@
     sbomReferenceEvents = new Map();
     sbomAvailabilityEvents = new Map();
     sbomReferenceCount = 0;
+    sbomLoaded = false;
   }
 
   function resetSBOMFromArtifact(source) {
@@ -169,7 +170,8 @@
       : Array.isArray(embeddedSBOM?.packages)
         ? embeddedSBOM.packages
         : [];
-    sbomLoaded = true;
+    // Don't set sbomLoaded here — let loadSBOMDetails handle it so the
+    // store-backed load always runs when switching to the SBOM tab.
     sbomLoading = false;
   }
 
@@ -360,10 +362,15 @@
     }
   }
 
-  // Load SBOM details when switching to SBOM tab
+  // Load SBOM details when switching to SBOM tab (or when artifact changes)
   $effect(() => {
-    if (activeTab === 'sbom' && artifactId && !sbomLoaded && !sbomLoading) {
-      void loadSBOMDetails();
+    if (activeTab === 'sbom' && artifactId && !sbomLoading) {
+      // Re-load every time the tab is selected or the artifact ID changes.
+      // loadSBOMDetails reads from the centralized store first (instant),
+      // then does a relay query for anything newer.
+      if (!sbomLoaded) {
+        void loadSBOMDetails();
+      }
     }
   });
 

@@ -132,6 +132,17 @@ export class BahiaClient {
   async getBlossomStats() {
     return this.fetch('/blossom/stats').then((r) => r ?? {});
   }
+
+  /**
+   * Download a Blossom blob by SHA-256 hash, proxied through the backend API.
+   * Returns the raw Response so callers can read text/json/blob as needed.
+   */
+  async fetchBlossomBlob(sha256Hash) {
+    const url = `${BASE_URL}/blossom/blob/${encodeURIComponent(sha256Hash)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    return resp;
+  }
 }
 
 export const api = typeof window !== 'undefined' ? new BahiaClient() : null;

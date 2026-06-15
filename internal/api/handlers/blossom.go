@@ -103,6 +103,34 @@ func (h *BlossomHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	writeData(w, status, statusMap)
 }
 
+// DownloadBlob proxies a Blossom blob download by SHA-256 hash.
+// The backend fetches from configured Blossom servers (which may use internal
+// HTTP addresses) and streams the content back over the HTTPS API, avoiding
+// mixed-content browser errors.
+// GET /blossom/blob/{hash}
+func (h *BlossomHandler) DownloadBlob(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	if hash == "" || len(hash) != 64 {
+		writeError(w, http.StatusBadRequest, "invalid SHA-256 hash")
+		return
+	}
+
+	data, err := h.client.DownloadByHash(r.Context(), hash)
+	if err != nil {
+		if strings.Contains(err.Error(), "failed to download") {
+			writeError(w, http.StatusNotFound, "blob not found")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "failed to fetch blob from Blossom server")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
 // GetStats returns upload/download statistics for all servers.
 // GET /blossom/stats
 func (h *BlossomHandler) GetStats(w http.ResponseWriter, r *http.Request) {

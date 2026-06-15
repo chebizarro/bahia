@@ -15,6 +15,7 @@
     UnknownIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
+  import { api } from '$lib/api/client.js';
 
   let { 
     sbom = null,
@@ -96,14 +97,50 @@
     return `${hash.slice(0, len)}...${hash.slice(-8)}`;
   }
 
+  /**
+   * Extract the SHA-256 hash from a Blossom URI (last path segment).
+   * e.g. "http://192.168.40.104:3030/406b437d..." → "406b437d..."
+   */
+  function extractBlossomHash(uri) {
+    if (!uri) return null;
+    try {
+      const path = new URL(uri).pathname;
+      const segment = path.split('/').filter(Boolean).pop() || '';
+      return /^[0-9a-f]{64}$/i.test(segment) ? segment : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Determine whether a direct fetch to the URI would be blocked by mixed
+   * content policy (HTTPS page fetching HTTP resource).
+   */
+  function wouldHitMixedContent(uri) {
+    if (typeof window === 'undefined' || !uri) return false;
+    try {
+      return window.location.protocol === 'https:' && new URL(uri).protocol === 'http:';
+    } catch {
+      return false;
+    }
+  }
+
   async function fetchSBOMContents() {
     if (!blossomURI || rawSBOMLoading) return;
     rawSBOMLoading = true;
     rawSBOMError = null;
     rawSBOM = null;
     try {
-      const resp = await fetch(blossomURI);
-      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      let resp;
+      const hash = extractBlossomHash(blossomURI);
+      if (hash && (wouldHitMixedContent(blossomURI) || api)) {
+        // Use the backend proxy to avoid mixed-content errors and benefit
+        // from server-side auth headers the browser can't provide.
+        resp = await api.fetchBlossomBlob(hash);
+      } else {
+        resp = await fetch(blossomURI);
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      }
       const text = await resp.text();
       const parsed = JSON.parse(text);
       rawSBOM = parsed;
