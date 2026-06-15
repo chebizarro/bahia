@@ -187,6 +187,13 @@ export async function installE2EMocks(
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(events));
     }
 
+    function publishMockNostrEvent(event) {
+      persistMockNostrEvent(event);
+      for (const socket of window.__BAHIA_E2E_WS_CONNECTIONS || []) {
+        setTimeout(() => socket.emitEvent?.(event), 0);
+      }
+    }
+
     function readMockServiceSecrets() {
       try { return JSON.parse(localStorage.getItem('__bahia_e2e_service_secrets') || '{}'); } catch { return {}; }
     }
@@ -307,7 +314,7 @@ export async function installE2EMocks(
         content: JSON.stringify({ schema: 'bahia.sbom.status.v1', run_id: runId, artifact_id: artifactId, status: 'completed' }),
         sig: '0'.repeat(128)
       };
-      persistMockNostrEvent(statusEvent);
+      publishMockNostrEvent(statusEvent);
 
       for (const format of formats) {
         const referenceDTag = `sbom:ref:${artifactId}:${format}:${payloadSha.slice(0, 12)}`;
@@ -321,7 +328,7 @@ export async function installE2EMocks(
           sig: '0'.repeat(128)
         };
         referenceEventIds.push(referenceEvent.id);
-        persistMockNostrEvent(referenceEvent);
+        publishMockNostrEvent(referenceEvent);
       }
 
       const availabilityEvent = {
@@ -333,7 +340,7 @@ export async function installE2EMocks(
         content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://mock/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator })) }),
         sig: '0'.repeat(128)
       };
-      persistMockNostrEvent(availabilityEvent);
+      publishMockNostrEvent(availabilityEvent);
 
       const auditEvent = {
         id: `mock-sbom-audit-${event.id}`,
@@ -344,7 +351,7 @@ export async function installE2EMocks(
         content: JSON.stringify({ schema: 'bahia.audit.v1', type: 'sbom.generated', event_type: 'sbom.generated', entity_id: artifactId, data: { formats, generator } }),
         sig: '0'.repeat(128)
       };
-      persistMockNostrEvent(auditEvent);
+      publishMockNostrEvent(auditEvent);
       window.dispatchEvent(new CustomEvent('__bahia_e2e_sbom_generated', {
         detail: { artifactId, formats, generator, requestEventId: event.id }
       }));

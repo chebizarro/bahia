@@ -54,6 +54,12 @@
       "status": "tracked",
       "description": "SBOM 30004 availability-list replacement currently merges local projection entries under a process-local subject lock, but does not yet subscribe to relay canonical history and merge valid entries from other Bahia instances before replacing the complete list.",
       "evidence": "Tracked as Bead bahia-ndmr with acceptance criteria for scoped REQ, EVENT/EOSE/CLOSED/AUTH handling, signature/content validation, merge/dedupe, OK-verified publish, and deterministic tests without sleeps."
+    },
+    {
+      "id": "D10",
+      "status": "fixed",
+      "description": "Artifact Generate SBOM UI rendered only the ContextVM request acknowledgment and did not surface canonical SBOM reference/availability event completion or generated Blossom details after clicking the action.",
+      "evidence": "Fixed in web/src/routes/artifacts/[id]/+page.svelte by switching to the SBOM tab, subscribing to artifact-scoped 30078/30004 events before publishing sbom/generate, merging received events into the SBOM detail view, and keeping the ContextVM ACK as pending-only status. Covered by web/tests/e2e/sbom-workflow.spec.js."
     }
   ]
 }

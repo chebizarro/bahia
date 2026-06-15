@@ -213,10 +213,13 @@
       ]
     },
     {
-      "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab publishes signer-backed ContextVM generation request and exposes detail header action",
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab publishes signer-backed ContextVM generation request, subscribes to canonical SBOM events, and renders generated Blossom reference details",
       "acceptance_criteria": [
+        "AC13",
+        "AC3",
+        "AC4",
         "AC5",
-        "AC13"
+        "AC8"
       ]
     },
     {

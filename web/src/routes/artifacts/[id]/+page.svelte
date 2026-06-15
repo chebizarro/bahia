@@ -1,7 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { tick, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -12,6 +12,8 @@
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
+  import { ensureRelayConnection, getTagValue, nostr, parseJsonContent, queryOrPartial, readModelEvents } from '$lib/nostr/client.js';
+  import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE } from '$lib/nostr/kinds.gen.js';
   import {
     ArtifactIcon,
     CopyIcon,
@@ -33,12 +35,17 @@
   let sbomGenerating = $state(false);
   let sbomGenerateError = $state(null);
   let sbomRequestEventId = $state(null);
+  let sbomGenerationStatus = $state('idle');
+  let sbomReferenceCount = $state(0);
   let signatures = $state([]);
   let hasVerifiedSig = $state(false);
   let loading = $state(true);
   let error = $state(null);
   let loadSequence = 0;
   let lastArtifactRequestId = null;
+  let sbomReferenceEvents = new Map();
+  let sbomAvailabilityEvents = new Map();
+  let sbomReferenceUnsubscribe = null;
   
   // Tab state
   let activeTab = $state('overview'); // overview, sbom, signatures
@@ -137,11 +144,18 @@
 
   function applyLoadedArtifact(loadedArtifact) {
     artifact = loadedArtifact;
+    clearSBOMEventCache();
     resetSBOMFromArtifact(loadedArtifact);
     signatures = Array.isArray(loadedArtifact.signatures) ? loadedArtifact.signatures : [];
     hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(loadedArtifact.signature_ref || loadedArtifact.verified_signature);
     error = null;
     loading = false;
+  }
+
+  function clearSBOMEventCache() {
+    sbomReferenceEvents = new Map();
+    sbomAvailabilityEvents = new Map();
+    sbomReferenceCount = 0;
   }
 
   function resetSBOMFromArtifact(source) {
@@ -173,24 +187,133 @@
     return Object.values(summary).some((value) => value !== null && value !== undefined && value !== '') ? summary : null;
   }
 
-  function loadSBOMDetails() {
+  async function loadSBOMDetails() {
     if (!artifact || sbomLoading) return;
     resetSBOMFromArtifact(artifact);
+    await refreshSBOMReferenceEvents();
+  }
+
+  async function refreshSBOMReferenceEvents() {
+    const id = String(artifact?.id || '').trim();
+    if (!id) return 0;
+    sbomLoading = true;
+    try {
+      await ensureRelayConnection();
+      const result = await queryOrPartial([
+        { kinds: [SBOM_REFERENCE], '#artifact': [id], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
+        { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+      ], { scope: 'artifact-sbom' });
+      return applySBOMReferenceEvents(readModelEvents(result));
+    } finally {
+      sbomLoading = false;
+      sbomLoaded = true;
+    }
+  }
+
+  function applySBOMReferenceEvents(events) {
+    const refs = [];
+    const availability = [];
+    for (const event of Array.isArray(events) ? events : []) {
+      if (!event || !Array.isArray(event.tags)) continue;
+      if (String(getTagValue(event, 'artifact') || '') !== String(artifact?.id || '')) continue;
+      if (!event.id) continue;
+      const content = parseJsonContent(event, {});
+      if (Number(event.kind) === SBOM_REFERENCE) sbomReferenceEvents.set(event.id, { event, content });
+      if (Number(event.kind) === SBOM_AVAILABILITY_LIST) sbomAvailabilityEvents.set(event.id, { event, content });
+    }
+    refs.push(...sbomReferenceEvents.values());
+    availability.push(...sbomAvailabilityEvents.values());
+    refs.sort((left, right) => Number(right.event?.created_at || 0) - Number(left.event?.created_at || 0));
+    availability.sort((left, right) => Number(right.event?.created_at || 0) - Number(left.event?.created_at || 0));
+    if (refs.length === 0 && availability.length === 0) return 0;
+
+    const primary = preferredSBOMReference(refs) || null;
+    const available = availability[0] || null;
+    const entries = Array.isArray(available?.content?.entries) ? available.content.entries : [];
+    const storage = primary?.content?.storage || entries[0] || {};
+    const generator = primary?.content?.generator || storage.generatorId || getTagValue(primary?.event, 'generator') || null;
+    const packages = Array.isArray(primary?.content?.packages) ? primary.content.packages : [];
+
+    sbomData = {
+      format: primary?.content?.format || getTagValue(primary?.event, 'format') || entries[0]?.format || null,
+      generator: typeof generator === 'object' ? generator : (generator ? { id: generator } : null),
+      source_url: storage.uri || storage.locationUri || primary?.content?.location || null,
+      raw_hash: primary?.content?.payload_sha256 || storage.payloadSha256 || null,
+      package_count: packages.length || primary?.content?.package_count || primary?.content?.packageCount || null,
+      created_at: primary?.event?.created_at ? new Date(Number(primary.event.created_at) * 1000).toISOString() : null
+    };
+    sbomAttestation = primary?.content?.attestation || sbomAttestation;
+    sbomPackages = packages;
+    sbomReferenceCount = refs.length || entries.length;
+    return refs.length + availability.length;
+  }
+
+  function preferredSBOMReference(refs) {
+    const spdx = refs.find((entry) => String(entry?.content?.format || getTagValue(entry?.event, 'format') || '').toLowerCase() === 'spdx');
+    return spdx || refs[0] || null;
   }
 
   async function handleGenerateSBOM() {
     if (!artifact || sbomGenerating) return;
+    activeTab = 'sbom';
     sbomGenerating = true;
     sbomGenerateError = null;
     sbomRequestEventId = null;
+    sbomGenerationStatus = 'publishing';
+    clearSBOMEventCache();
+    subscribeGeneratedSBOMReferences();
     try {
       const event = await generateArtifactSBOM({ ...artifact, service_artifact_repo: service?.artifact_repo || '' });
       sbomRequestEventId = event?.requestEventId || event?.id || null;
-      toast.success('SBOM generation request published through Nostr ContextVM');
+      if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
+      toast.success('SBOM generation request published; waiting for SBOM reference events');
+      void observeGeneratedSBOMReferences();
     } catch (err) {
       sbomGenerateError = userFacingSBOMError(err);
     } finally {
       sbomGenerating = false;
+    }
+  }
+
+  function closeSBOMReferenceSubscription() {
+    if (typeof sbomReferenceUnsubscribe === 'function') {
+      sbomReferenceUnsubscribe();
+    }
+    sbomReferenceUnsubscribe = null;
+  }
+
+  function subscribeGeneratedSBOMReferences() {
+    const id = String(artifact?.id || '').trim();
+    if (!id) return;
+    closeSBOMReferenceSubscription();
+    sbomReferenceUnsubscribe = nostr.subscribe([
+      { kinds: [SBOM_REFERENCE], '#artifact': [id], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
+      { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+    ], {
+      onEvent: (event) => {
+        if (applySBOMReferenceEvents([event]) > 0) {
+          sbomGenerationStatus = 'completed';
+        }
+      },
+      onClosed: (_relay, reason) => {
+        if (sbomGenerationStatus === 'publishing' || sbomGenerationStatus === 'waiting') {
+          sbomGenerateError = `SBOM request is still pending, but a relay closed the SBOM event subscription${reason ? `: ${reason}` : ''}`;
+        }
+      }
+    });
+  }
+
+  async function observeGeneratedSBOMReferences() {
+    try {
+      const observed = await refreshSBOMReferenceEvents();
+      if (observed > 0) {
+        sbomGenerationStatus = 'completed';
+        toast.success('SBOM reference events published and loaded');
+      }
+    } catch (err) {
+      if (sbomRequestEventId) {
+        sbomGenerateError = `SBOM request was published, but Bahia could not read the resulting SBOM events: ${userFacingSBOMError(err)}`;
+      }
     }
   }
 
@@ -199,6 +322,10 @@
     if (activeTab === 'sbom' && artifactId && !sbomLoaded && !sbomLoading) {
       void loadSBOMDetails();
     }
+  });
+
+  onDestroy(() => {
+    closeSBOMReferenceSubscription();
   });
 
   async function handleVerifySignatures() {
@@ -496,8 +623,12 @@
           {#if !canGenerateSBOM}
             <p class="warning-message">This artifact needs an immutable digest plus a configured image repository or OCI image ref before Bahia can generate an SBOM.</p>
           {/if}
-          {#if sbomRequestEventId}
-            <p class="info-message">Request event <code>{formatDigestMiddle(sbomRequestEventId)}</code> was published. Completion is reflected by SBOM reference and availability-list events.</p>
+          {#if sbomGenerationStatus === 'completed'}
+            <p class="success-message">SBOM generation completed. Loaded {sbomReferenceCount} SBOM reference event{sbomReferenceCount === 1 ? '' : 's'}{sbomRequestEventId ? ' for request ' : ''}{#if sbomRequestEventId}<code>{formatDigestMiddle(sbomRequestEventId)}</code>{/if}.</p>
+          {:else if sbomGenerationStatus === 'publishing'}
+            <p class="info-message">Publishing SBOM generation request and listening for canonical SBOM reference events.</p>
+          {:else if sbomRequestEventId}
+            <p class="info-message">SBOM request <code>{formatDigestMiddle(sbomRequestEventId)}</code> was accepted. Waiting for canonical SBOM reference and availability-list events.</p>
           {/if}
 
           <SBOMDetails
@@ -869,6 +1000,7 @@
 
   .error-message,
   .warning-message,
+  .success-message,
   .info-message {
     font-size: 0.875rem;
     margin: 0 0 1rem;
@@ -886,6 +1018,12 @@
     color: var(--warning, #f59e0b);
     background: rgba(245, 158, 11, 0.1);
     border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+
+  .success-message {
+    color: var(--success, #10b981);
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.2);
   }
 
   .info-message {

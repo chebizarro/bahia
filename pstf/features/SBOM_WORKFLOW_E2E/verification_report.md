@@ -98,3 +98,18 @@ GOCACHE=/tmp/bahia-go-cache go test ./internal/...
 ```
 
 Result: PASS.
+
+## Web artifact SBOM completion feedback — 2026-06-14
+
+- Fixed Bead `bahia-1puw`: artifact **Generate SBOM** now switches to the SBOM tab, opens a scoped Nostr subscription for artifact `30078` SBOM reference events and `30004` availability-list events before publishing `sbom/generate`, and renders generated format, generator, Blossom URI, and payload hash when canonical events arrive.
+- The ContextVM response is now presented only as request/pending state. Durable completion is driven by canonical SBOM events, not by the encrypted ContextVM acknowledgment.
+- `web/tests/e2e/helpers.js` now emits mock service-published SBOM events to active relay subscriptions so browser E2E covers EVENT-driven completion rather than localStorage-only inspection.
+
+Verification:
+
+```bash
+cd web && npm run test:e2e -- --reporter=line tests/e2e/sbom-workflow.spec.js
+cd web && npm run lint
+```
+
+Result: PASS on 2026-06-14.
