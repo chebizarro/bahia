@@ -30,6 +30,16 @@
       "command": "python3 -m json.tool pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json && npm --prefix web run test:unit -- --run tests/unit/route-transport-matrix.test.js",
       "result": "passed",
       "evidence": "Bead bahia-4rwk classified web/src/routes/settings/relays/+page.svelte as the relay settings ContextVM/canonical 30900 surface; the guard also required PSTF-only classification for the concurrently added web/src/routes/settings/profile/+page.svelte route. JSON validation and the focused Vitest route matrix guard passed on 2026-06-07."
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/kinds ./internal/relaysidecar",
+      "result": "passed",
+      "evidence": "Bead bahia-eqku verified continuity fabric kinds 30350-30353 and 31400-31404 are canonical readable projection kinds and that the relay sidecar accepts continuity REQ filters instead of closing kind 30351 subscriptions."
+    },
+    {
+      "command": "npm --prefix web run test:unit -- --run tests/unit/route-transport-matrix.test.js",
+      "result": "passed",
+      "evidence": "Bead bahia-eqku route matrix evidence passed after removing a stale REST import allowlist entry for web/src/routes/artifacts/[id]/+page.svelte; only web/src/routes/artifacts/+page.svelte still imports $lib/api/client.js for Blossom HTTP surfaces."
     }
   ]
 }

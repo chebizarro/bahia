@@ -128,13 +128,24 @@ func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testin
 		t.Fatalf("New() error: %v", err)
 	}
 
-	canonicalFilter := nostr.Filter{Kinds: []nostr.Kind{30315, 30900, 4903}}
+	canonicalFilter := nostr.Filter{Kinds: []nostr.Kind{
+		30315, 30900, 4903,
+		nostr.Kind(kinds.HeartbeatObservation),
+		nostr.Kind(kinds.ContinuityStatus),
+		nostr.Kind(kinds.DegradedModeActivation),
+		nostr.Kind(kinds.RecoveryProgress),
+		nostr.Kind(kinds.ContinuityProfile),
+		nostr.Kind(kinds.FailoverPolicy),
+		nostr.Kind(kinds.StandbyNodeDefinition),
+		nostr.Kind(kinds.ReplicationPolicy),
+		nostr.Kind(kinds.RecoveryWorkflow),
+	}}
 	reject, msg := server.Relay().OnRequest(context.Background(), canonicalFilter)
 	if reject {
-		t.Fatalf("expected canonical status/state/audit kinds to be readable, got rejection %q", msg)
+		t.Fatalf("expected canonical status/state/audit/continuity kinds to be readable, got rejection %q", msg)
 	}
 
-	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 30350, 30353, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
+	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
 	reject, msg = server.Relay().OnRequest(context.Background(), legacyFilter)
 	if !reject {
 		t.Fatalf("expected legacy signer-first operator status/result/read-model kinds to be rejected after migration boundary")

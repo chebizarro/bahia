@@ -21,6 +21,8 @@ func IsCanonicalObservableKind(kind int) bool {
 		ContextVMServerAnnouncement, ContextVMToolsList, ContextVMResourcesList,
 		ContextVMResourceTemplatesList, ContextVMPromptsList,
 		RelaySetDiscovery, NIP65RelayList, NIP51DMRelayList, SBOMReference, SBOMAvailabilityList,
+		HeartbeatObservation, ContinuityStatus, DegradedModeActivation, RecoveryProgress,
+		ContinuityProfile, FailoverPolicy, StandbyNodeDefinition, ReplicationPolicy, RecoveryWorkflow,
 		BahiaIdentityDefinition, BahiaReplayCheckpoint, BahiaReadinessStatus,
 		LongFormContent, LongFormDraft:
 		return true
@@ -167,6 +169,15 @@ func AllReadModelKinds() []int {
 		NIP51DMRelayList,
 		SBOMReference,
 		SBOMAvailabilityList,
+		HeartbeatObservation,
+		ContinuityStatus,
+		DegradedModeActivation,
+		RecoveryProgress,
+		ContinuityProfile,
+		FailoverPolicy,
+		StandbyNodeDefinition,
+		ReplicationPolicy,
+		RecoveryWorkflow,
 	}
 }
 

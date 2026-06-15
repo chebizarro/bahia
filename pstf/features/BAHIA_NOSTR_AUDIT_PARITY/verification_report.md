@@ -131,3 +131,26 @@ No remaining work is known for `bahia-4rwk` in the PSTF route transport matrix s
 - `bahia-jicv` tracks real production HF/vLLM/artifact/gateway/live-relay verification for `AI_FABRIC_HF_VLLM_DEPLOYMENT`.
 - `bahia-vn8o` tracks executable signer-first AI/ML protocol verification for `AI_FABRIC_SIGNER_FIRST_PROTOCOL`.
 - `bahia-sv0j` and `bahia-jxm3` retain ownership of org/ML ingress semantics; this cleanup did not decide product policy for those surfaces.
+
+## Bead bahia-eqku — Continuity sidecar readable-kind policy
+
+### Observed behavior
+
+- Browser console logs showed `/continuity` subscriptions closing with `blocked: event kind 30351 is not readable from the Bahia sidecar`.
+- Repository evidence showed `web/src/lib/nostr/continuity.ts` requests continuity status `30351`, recovery progress `30353`, and continuity definitions `31400`-`31404`, while `internal/service/continuity_status_projector.go` publishes `30351`-`30353` continuity projections.
+- `internal/kinds/policy.go` did not classify continuity fabric kinds as canonical readable observables, so `internal/relaysidecar/policy.go` rejected otherwise scoped continuity REQ filters.
+
+### Intended behavior
+
+Continuity fabric observables `30350`-`30353` and definitions `31400`-`31404` are production-readable Nostr-native route inputs. The sidecar must admit kind-scoped REQ filters for those kinds while continuing to reject legacy signer-first status/result/read-model families.
+
+### Verification
+
+- `GOCACHE=/tmp/bahia-go-cache go test ./internal/kinds ./internal/relaysidecar` — passed.
+- `internal/kinds/policy_test.go` covers continuity fabric kinds as canonical projection/readable kinds.
+- `internal/relaysidecar/server_test.go` covers sidecar REQ admission for continuity fabric kinds and continued rejection of legacy signer-first status/result/read-model kinds.
+- `npm --prefix web run test:unit -- --run tests/unit/route-transport-matrix.test.js` — passed after removing stale REST import allowlist evidence for `web/src/routes/artifacts/[id]/+page.svelte`; the route no longer imports `$lib/api/client.js`.
+
+### Remaining issue scope
+
+No remaining work is known for Bead `bahia-eqku`. A separate discovered heartbeat constant mismatch is tracked by Bead `bahia-i89o`.

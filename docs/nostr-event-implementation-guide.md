@@ -225,6 +225,8 @@ These are the main event kinds production runtime code should publish or subscri
 | `30004` | NIP-51 Curation Set | SBOM availability lists and other curated reference inventories |
 | `10002` | NIP-65 relay list | Advisory service relay preferences for wider Nostr routing |
 | `30078` | NIP-78 app data | App-specific data, settings, registries, detailed projections; SBOM reference app-data uses `schema=bahia.sbom.ref.v1` |
+| `30350`-`30353` | Continuity fabric observables | Heartbeat observations, continuity status, degraded-mode activation, and recovery progress |
+| `31400`-`31404` | Continuity fabric definitions | Continuity profiles, failover policies, standby nodes, replication policies, and recovery workflows |
 | `5` | NIP-09 deletion | Delete event references |
 
 Other standard NIPs may be used directly when their semantics fit. Examples include NIP-58 badges, NIP-65 relay lists, NIP-89 app handlers, NIP-98 HTTP auth, NIP-70 protected events, and NIP-40 expiration.
@@ -237,7 +239,7 @@ Production runtime code must not publish or newly subscribe to these legacy fami
 
 - request kinds `5941`-`6006`, `38390`-`38399`, `38400`-`38431`, and older encrypted request/result kinds `5980`/`7980`
 - status/result ranges `6941`, `6961`-`6997`, `7941`-`7997`
-- old state/read-model ranges `30350`-`30353`, `31400`-`31411`, `31961`-`32003`
+- old state/read-model ranges `31410`-`31411`, `31961`-`32003`; continuity fabric kinds `30350`-`30353` and `31400`-`31404` are canonical runtime observables
 - old audit ranges `31000`-`31024`, `31310`-`31311`
 - old discovery kind `31974`
 - legacy SBOM index kind `30079`; new SBOM availability publication uses NIP-51 kind `30004` and detailed SBOM references use NIP-78 kind `30078`

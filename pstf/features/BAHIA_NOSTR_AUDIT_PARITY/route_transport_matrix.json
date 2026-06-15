@@ -1,9 +1,9 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk", "bahia-eqku"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
-  "updated_at": "2026-06-07",
+  "updated_at": "2026-06-14",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
@@ -12,12 +12,6 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "Blossom server health/list/blob HTTP surfaces only; registry artifacts remain Nostr read-model backed."
-    },
-    {
-      "file": "web/src/routes/artifacts/[id]/+page.svelte",
-      "permitted_transport_classes": ["http_native"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "SBOM and attestation HTTP surfaces only; artifact read model and signature verification remain separate Nostr/encrypted flows."
     }
   ],
   "entries": [
@@ -209,11 +203,11 @@
       "surface": "`/continuity` status, topology, and simulation",
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/continuity/+page.svelte", "web/src/routes/continuity/+page.ts", "web/src/routes/continuity/SimulationPanel.svelte"],
-      "control_files": ["web/src/lib/nostr/continuity.ts", "internal/service/continuity_status_projector.go", "internal/adapters/nostr/catalog.go"],
-      "evidence": ["Continuity load calls loadContinuityDashboardFromNostr() and consumes scoped relay filters for kind 30351/30353 status plus 31400-31404 definitions and 30315 continuity heartbeat events.", "SimulationPanel derives worker-failure impact locally from the same Nostr event set instead of POSTing to a REST simulation endpoint.", "internal/api/router/router.go no longer mounts /api/continuity/status, /api/continuity/topology, or /api/continuity/simulate."],
+      "control_files": ["web/src/lib/nostr/continuity.ts", "internal/service/continuity_status_projector.go", "internal/adapters/nostr/catalog.go", "internal/kinds/policy.go", "internal/relaysidecar/policy.go"],
+      "evidence": ["Continuity load calls loadContinuityDashboardFromNostr() and consumes scoped relay filters for kind 30351/30353 status plus 31400-31404 definitions and continuity heartbeat events.", "internal/kinds/policy.go classifies continuity fabric observables 30350-30353 and definitions 31400-31404 as canonical readable projection kinds; internal/relaysidecar/policy.go consumes that shared policy for sidecar REQ admission.", "SimulationPanel derives worker-failure impact locally from the same Nostr event set instead of POSTing to a REST simulation endpoint.", "internal/api/router/router.go no longer mounts /api/continuity/status, /api/continuity/topology, or /api/continuity/simulate."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
-      "pstf_status": "resolved_by_bahia-giw6",
-      "resolved_by_beads": ["bahia-giw6"]
+      "pstf_status": "current_audit_evidence",
+      "resolved_by_beads": ["bahia-giw6", "bahia-eqku"]
     },
     {
       "id": "souls-nostr-with-eose-caveats",
