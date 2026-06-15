@@ -9,6 +9,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
@@ -190,6 +191,22 @@
   async function loadSBOMDetails() {
     if (!artifact || sbomLoading) return;
     resetSBOMFromArtifact(artifact);
+
+    // First, check the centralized SBOM store (populated during bootstrap).
+    const id = String(artifact?.id || '').trim();
+    if (id) {
+      const cachedRefs = getSBOMRefsForArtifact(id);
+      if (cachedRefs.length > 0) {
+        const syntheticEvents = cachedRefs
+          .filter((ref) => ref.nostr_event)
+          .map((ref) => ref.nostr_event);
+        if (syntheticEvents.length > 0) {
+          applySBOMReferenceEvents(syntheticEvents);
+        }
+      }
+    }
+
+    // Then do a fresh relay query to pick up anything newer.
     await refreshSBOMReferenceEvents();
   }
 

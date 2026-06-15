@@ -33,6 +33,7 @@ import {
 } from './backup.svelte.js';
 import { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
 import { events } from './activity.svelte.js';
+import { sbomRefs, sbomRefsByArtifact, getSBOMRefsForArtifact, hasSBOMForArtifact } from './sbom.svelte.js';
 import { browser } from '$app/environment';
 
 export { services, upsertServiceProjection } from './services.svelte.js';
@@ -70,6 +71,7 @@ export {
 } from './backup.svelte.js';
 export { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
 export { events } from './activity.svelte.js';
+export { sbomRefs, sbomRefsByArtifact, getSBOMRefsForArtifact, hasSBOMForArtifact } from './sbom.svelte.js';
 
 import { resetServices, refreshServices } from './services.svelte.js';
 import { resetEnvironments, refreshEnvironments } from './environments.svelte.js';
@@ -78,6 +80,7 @@ import { resetWorkers, refreshWorkers } from './workers.svelte.js';
 import { resetBackup, refreshBackup } from './backup.svelte.js';
 import { resetML, refreshML } from './ml.svelte.js';
 import { resetActivity, refreshActivity } from './activity.svelte.js';
+import { resetSBOM, refreshSBOM } from './sbom.svelte.js';
 
 const CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
 const CONTROLPLANE_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
@@ -110,6 +113,7 @@ export function resetCollections() {
   resetBackup();
   resetML();
   resetActivity();
+  resetSBOM();
   setAllLoading(false);
 }
 
@@ -121,6 +125,7 @@ export function refreshCollections() {
   refreshBackup();
   refreshML();
   refreshActivity();
+  refreshSBOM();
 }
 
 function replaceSnapshotArray(target, values) {
@@ -152,6 +157,7 @@ export function controlplaneSnapshot() {
       workerEligibilityPreviews: Array.from(workerEligibilityPreviews),
       workerCleanupExecutions: Array.from(workerCleanupExecutions),
       events: Array.from(events),
+      sbomRefs: Array.from(sbomRefs),
       backupRepositories: Array.from(backupRepositories),
       backupPolicies: Array.from(backupPolicies),
       backupRecipes: Array.from(backupRecipes),
@@ -200,6 +206,7 @@ export function hydrateCachedCollections() {
     replaceSnapshotArray(workerEligibilityPreviews, cached.workerEligibilityPreviews);
     replaceSnapshotArray(workerCleanupExecutions, cached.workerCleanupExecutions);
     replaceSnapshotArray(events, cached.events);
+    replaceSnapshotArray(sbomRefs, cached.sbomRefs);
     replaceSnapshotArray(backupRepositories, cached.backupRepositories);
     replaceSnapshotArray(backupPolicies, cached.backupPolicies);
     replaceSnapshotArray(backupRecipes, cached.backupRecipes);

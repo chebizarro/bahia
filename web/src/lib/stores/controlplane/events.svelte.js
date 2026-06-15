@@ -20,6 +20,7 @@ import {
 import { backupApplicators } from '../collections/backup.svelte.js';
 import { mlApplicators } from '../collections/ml.svelte.js';
 import { applyActivityEvent } from '../collections/activity.svelte.js';
+import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
 import { refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
 
 const ACTIVITY_BACKFILL_LIMIT = 100;
@@ -170,7 +171,17 @@ const handlers = new Map([
   [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, mlApplicators.model],
   [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, mlApplicators.modelVersion],
   [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, mlApplicators.endpoint],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_STATE, mlApplicators.endpointState]
+  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_STATE, mlApplicators.endpointState],
+  [30078, (event, replaceableEvents) => {
+    const sbomChanged = applySBOMReferenceEvent(event);
+    const activityChanged = applyActivityEvent(event);
+    return sbomChanged || activityChanged;
+  }],
+  [30004, (event, replaceableEvents) => {
+    const sbomChanged = applySBOMAvailabilityEvent(event);
+    const activityChanged = applyActivityEvent(event);
+    return sbomChanged || activityChanged;
+  }]
 ]);
 
 export function applyControlplaneEvent(event) {
