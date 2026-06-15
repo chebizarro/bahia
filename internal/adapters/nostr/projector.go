@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -77,6 +78,11 @@ type MLProjectionSource interface {
 
 type WorkerProjectionSource interface {
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
+}
+
+// SBOMProjectionSource provides published SBOM manifests for projector snapshot republishing.
+type SBOMProjectionSource interface {
+	ListPublishedManifests(ctx context.Context, limit int) ([]domain.SBOMManifest, error)
 }
 
 type WorkerReadModelProjectionSource interface {
@@ -178,6 +184,7 @@ type Projector struct {
 	dnsZoneSource         DNSZoneProjectionSource
 	dnsBackendSource      DNSBackendProjectionSource
 	dnsPolicySource       DNSPolicyProjectionSource
+	sbomSource            SBOMProjectionSource
 	publisher             ProjectionPublisher
 	eventRepo             repository.NostrEventRepository
 	privateKey            string
@@ -255,6 +262,10 @@ func WithDNSBackendProjectionSource(source DNSBackendProjectionSource) Projector
 
 func WithDNSPolicyProjectionSource(source DNSPolicyProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsPolicySource = source }
+}
+
+func WithSBOMProjectionSource(source SBOMProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.sbomSource = source }
 }
 
 func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) ProjectorOption {
@@ -513,7 +524,8 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			dnsPolicyTombstones = tombstones
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones))
+	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -1831,6 +1843,161 @@ func (p *Projector) publishDNSPolicySnapshot(ctx context.Context) (int, int, err
 		return published, tombstones, fmt.Errorf("DNS policy projection completed with %d failure(s): %s", len(failures), strings.Join(failures, "; "))
 	}
 	return published, tombstones, nil
+}
+
+// publishSBOMSnapshots rebuilds canonical SBOM Nostr events (30078 references and
+// 30004 availability lists) from published manifests in the persistent repository.
+// This ensures SBOM events survive relay sidecar restarts.
+func (p *Projector) publishSBOMSnapshots(ctx context.Context) (int, int) {
+	if !p.Enabled() || p.sbomSource == nil {
+		return 0, 0
+	}
+	manifests, err := p.sbomSource.ListPublishedManifests(ctx, 1000)
+	if err != nil {
+		p.logger.Warn("list published SBOM manifests for projection failed", zap.Error(err))
+		return 0, 0
+	}
+	if len(manifests) == 0 {
+		return 0, 0
+	}
+
+	pubkey, err := publicKeyHexFromPrivateKeyHex(p.privateKey)
+	if err != nil {
+		p.logger.Warn("derive SBOM projection pubkey failed", zap.Error(err))
+		return 0, 0
+	}
+
+	// Publish 30078 reference events and collect entries grouped by subject for availability lists.
+	type subjectKey struct {
+		Type   domain.SBOMSubjectType
+		ID     string
+		Digest string
+	}
+	type subjectGroup struct {
+		subject domain.SBOMSubject
+		entries []domain.SBOMIndexEntry
+	}
+	groups := map[subjectKey]*subjectGroup{}
+	refsPublished := 0
+
+	for i := range manifests {
+		m := &manifests[i]
+		// Parse subject digest into algo:hash for the attestation.
+		digestParts := strings.SplitN(m.Subject.Digest, ":", 2)
+		if len(digestParts) != 2 || digestParts[1] == "" {
+			p.logger.Warn("skip SBOM manifest with invalid subject digest",
+				zap.String("manifest_id", m.ID.String()),
+				zap.String("digest", m.Subject.Digest))
+			continue
+		}
+		digestAlgo, digestHash := digestParts[0], digestParts[1]
+
+		att := &domain.SBOMAttestation{
+			Type: "https://in-toto.io/Statement/v1",
+			Subject: []domain.AttestationSubject{{
+				Name:   m.Subject.DisplayName,
+				Digest: map[string]string{digestAlgo: digestHash},
+			}},
+			PredicateType: predicateTypeForSBOMFormat(m.Format),
+			Predicate: domain.SBOMPredicate{
+				Format: m.Format,
+				Location: domain.SBOMLocation{
+					Type:      m.StorageType,
+					URI:       m.StorageURI,
+					MediaType: m.MediaType,
+				},
+				Digest:    map[string]string{"sha256": m.PayloadSHA256},
+				Generator: m.Generator,
+				Timestamp: m.CreatedAt,
+				NTIA:      m.NTIA,
+			},
+		}
+
+		createdAt := m.CreatedAt
+		ev, _, err := sbom.BuildSBOMReferenceEvent(sbom.BuildSBOMReferenceEventInput{
+			Subject:     m.Subject,
+			Attestation: att,
+			CreatedAt:   &createdAt,
+		})
+		if err != nil {
+			p.logger.Warn("build SBOM reference event for projection failed",
+				zap.String("manifest_id", m.ID.String()), zap.Error(err))
+			continue
+		}
+
+		if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
+			p.logger.Warn("sign SBOM reference event failed",
+				zap.String("manifest_id", m.ID.String()), zap.Error(err))
+			continue
+		}
+		if _, err := p.publisher.Publish(ctx, *ev); err != nil {
+			p.logger.Warn("publish SBOM reference event failed",
+				zap.String("manifest_id", m.ID.String()), zap.Error(err))
+			continue
+		}
+		refsPublished++
+
+		// Collect entry for the availability list.
+		sk := subjectKey{Type: m.Subject.Type, ID: m.Subject.ID, Digest: m.Subject.Digest}
+		g, ok := groups[sk]
+		if !ok {
+			g = &subjectGroup{subject: m.Subject}
+			groups[sk] = g
+		}
+		g.entries = append(g.entries, domain.SBOMIndexEntry{
+			SubjectDigest: m.Subject.Digest,
+			AttestationID: fmt.Sprintf("%d:%s:%s", sbom.KindSBOMReference, pubkey, m.ReferenceDTag),
+			ReferenceDTag: m.ReferenceDTag,
+			Format:        m.Format,
+			LocationURI:   m.StorageURI,
+			StorageType:   m.StorageType,
+			PayloadSHA256: m.PayloadSHA256,
+			GeneratorID:   m.Generator.ID,
+			Timestamp:     m.CreatedAt,
+		})
+	}
+
+	// Publish 30004 availability lists, one per subject.
+	availPublished := 0
+	for _, g := range groups {
+		createdAt := time.Now().UTC()
+		ev, _, err := sbom.BuildSBOMAvailabilityListEvent(sbom.BuildSBOMAvailabilityListEventInput{
+			Subject:         g.subject,
+			Entries:         g.entries,
+			PublisherPubkey: pubkey,
+			CreatedAt:       &createdAt,
+		})
+		if err != nil {
+			p.logger.Warn("build SBOM availability list for projection failed",
+				zap.String("subject_id", g.subject.ID), zap.Error(err))
+			continue
+		}
+		if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
+			p.logger.Warn("sign SBOM availability list failed",
+				zap.String("subject_id", g.subject.ID), zap.Error(err))
+			continue
+		}
+		if _, err := p.publisher.Publish(ctx, *ev); err != nil {
+			p.logger.Warn("publish SBOM availability list failed",
+				zap.String("subject_id", g.subject.ID), zap.Error(err))
+			continue
+		}
+		availPublished++
+	}
+
+	return refsPublished, availPublished
+}
+
+// predicateTypeForSBOMFormat returns the in-toto predicate type for an SBOM format.
+func predicateTypeForSBOMFormat(format domain.SBOMFormat) domain.SBOMAttestationType {
+	switch format {
+	case domain.SBOMFormatSPDX:
+		return domain.AttestationTypeSPDX
+	case domain.SBOMFormatCycloneDX:
+		return domain.AttestationTypeCycloneDX
+	default:
+		return domain.SBOMAttestationType("https://sbom.dev/" + string(format))
+	}
 }
 
 func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolicy, deleted bool) error {

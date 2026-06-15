@@ -125,6 +125,7 @@ type SBOMManifestRepository interface {
 	CreateManifestPackages(ctx context.Context, packages []domain.SBOMManifestPackage) error
 	ListPackagesByManifest(ctx context.Context, manifestID uuid.UUID) ([]domain.SBOMManifestPackage, error)
 	SearchManifestPackagesByName(ctx context.Context, name string, limit int) ([]domain.SBOMManifestPackage, error)
+	ListPublishedManifests(ctx context.Context, limit int) ([]domain.SBOMManifest, error)
 }
 
 // SecurityFindingFilter constrains Security finding read surfaces.

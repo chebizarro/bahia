@@ -12,12 +12,6 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "Blossom server health/list/blob HTTP surfaces only; registry artifacts remain Nostr read-model backed."
-    },
-    {
-      "file": "web/src/routes/artifacts/[id]/+page.svelte",
-      "permitted_transport_classes": ["rest_compatibility"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "SBOM detail tab fetches persistent SBOM data from the REST API because the in-memory relay sidecar loses events on restart. Relay events supplement but do not replace the REST source."
     }
   ],
   "entries": [

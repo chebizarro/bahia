@@ -244,6 +244,33 @@ func (r *PgSBOMRepository) UpdateManifestPublishState(ctx context.Context, id uu
 	return nil
 }
 
+// ListPublishedManifests returns all manifests with publish_state = 'published',
+// ordered by created_at descending. Used by the projector to republish SBOM events
+// into the in-memory relay sidecar on startup.
+func (r *PgSBOMRepository) ListPublishedManifests(ctx context.Context, limit int) ([]domain.SBOMManifest, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := r.pool.Query(ctx,
+		fmt.Sprintf(`SELECT %s FROM sbom_manifests
+			WHERE publish_state = 'published'
+			ORDER BY created_at DESC LIMIT $1`, sbomManifestColumns),
+		limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing published SBOM manifests: %w", err)
+	}
+	defer rows.Close()
+	var manifests []domain.SBOMManifest
+	for rows.Next() {
+		manifest, err := r.scanManifest(rows)
+		if err != nil {
+			return nil, err
+		}
+		manifests = append(manifests, *manifest)
+	}
+	return manifests, rows.Err()
+}
+
 // CreateManifestPackages batch-inserts subject-neutral package records.
 func (r *PgSBOMRepository) CreateManifestPackages(ctx context.Context, packages []domain.SBOMManifestPackage) error {
 	return createManifestPackages(ctx, r.pool, packages)

@@ -624,6 +624,9 @@ func New(cfg *config.Config) (*App, error) {
 			nostrAdapter.WithDNSBackendProjectionSource(configDNSBackendProjectionSource{backends: cfg.DNS.Backends, zones: dnsZones, resolver: dnsResolver}),
 		)
 	}
+	if sbomManifestRepo != nil {
+		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
+	}
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger, projectorOpts...)
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {

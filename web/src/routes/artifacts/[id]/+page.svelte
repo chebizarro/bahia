@@ -10,7 +10,6 @@
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
-  import { api } from '$lib/api/client.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
@@ -194,35 +193,9 @@
     sbomLoading = true;
     resetSBOMFromArtifact(artifact);
     try {
-      // Primary path: fetch from the persistent REST API (survives server restarts).
-      const id = String(artifact?.id || '').trim();
-      if (id && api) {
-        try {
-          const [sbomResult, packagesResult] = await Promise.allSettled([
-            api.getSBOM(id),
-            api.getSBOMPackages(id)
-          ]);
-          const sbomFromAPI = sbomResult.status === 'fulfilled' ? sbomResult.value : null;
-          const packagesFromAPI = packagesResult.status === 'fulfilled' ? packagesResult.value : null;
-          if (sbomFromAPI) {
-            sbomData = {
-              format: sbomFromAPI.format || sbomData?.format || null,
-              generator: sbomFromAPI.generator ? { id: sbomFromAPI.generator } : sbomData?.generator || null,
-              source_url: sbomFromAPI.blossom_url || sbomFromAPI.source_url || sbomData?.source_url || null,
-              raw_hash: sbomFromAPI.raw_hash || sbomFromAPI.payload_sha256 || sbomData?.raw_hash || null,
-              package_count: sbomFromAPI.package_count || sbomData?.package_count || null,
-              created_at: sbomFromAPI.created_at || sbomData?.created_at || null,
-              ntia: sbomFromAPI.ntia || sbomData?.ntia || null
-            };
-            sbomReferenceCount = 1;
-          }
-          if (Array.isArray(packagesFromAPI) && packagesFromAPI.length > 0) {
-            sbomPackages = packagesFromAPI;
-          }
-        } catch { /* REST API unavailable, fall through to relay */ }
-      }
-
-      // Supplement with relay events (picks up real-time data and Nostr metadata).
+      // Query SBOM events from the relay (Nostr-native path).
+      // The projector republishes published SBOM manifests into the sidecar relay
+      // on startup, so events survive server restarts.
       await refreshSBOMReferenceEvents();
     } finally {
       sbomLoading = false;
