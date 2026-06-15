@@ -1,4 +1,3 @@
-export { NostrIncompleteEOSEError } from './pool.js';
 export { ensureRelayConnection } from './connection-guard.js';
 export * from './validation.js';
 export * from './content.js';

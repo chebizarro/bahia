@@ -40,15 +40,23 @@ vi.mock('../../src/lib/nostr/nip46.js', () => ({
 const nostrClientMock = vi.hoisted(() => ({
   nostr: {
     connected: { subscribe: vi.fn((run) => { run(true); return vi.fn(); }) },
-    queryUntilEose: vi.fn(async () => [])
+    subscribe: vi.fn((_filters, handlers) => {
+      Promise.resolve().then(() => handlers?.onEose?.());
+      return vi.fn();
+    })
   }
 }));
 
 const poolClientMock = vi.hoisted(() => ({
   connect: vi.fn(async (relays) => ({ total: Array.isArray(relays) ? relays.length : 0, connected: Array.isArray(relays) ? relays.length : 0 })),
-  queryUntilEose: vi.fn(async (filters) => {
+  subscribe: vi.fn((filters, handlers) => {
     const kinds = Array.isArray(filters?.[0]?.kinds) ? filters[0].kinds : [];
-    return kinds.flatMap((kind) => poolClientMock.eventsByKind[kind] || []);
+    const events = kinds.flatMap((kind) => poolClientMock.eventsByKind[kind] || []);
+    Promise.resolve().then(() => {
+      for (const event of events) handlers?.onEvent?.(event);
+      handlers?.onEose?.();
+    });
+    return vi.fn();
   }),
   disconnect: vi.fn(),
   eventsByKind: {}
@@ -66,8 +74,8 @@ vi.mock('../../src/lib/nostr/pool-client.js', () => ({
       return poolClientMock.connect(relays);
     }
 
-    async queryUntilEose(filters, options) {
-      return poolClientMock.queryUntilEose(filters, options);
+    subscribe(filters, handlers) {
+      return poolClientMock.subscribe(filters, handlers);
     }
 
     disconnect() {

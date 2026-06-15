@@ -2,16 +2,10 @@
 import { SvelteMap } from 'svelte/reactivity';
 import {
   nostr,
-  fetchSouls,
-  fetchTemplates,
-  fetchSoulDrafts,
-  fetchRuntimeCapabilities,
   parseSoulEvent,
   parseSoulDraftEvent,
   parseTemplateEvent,
   parseRuntimeCapabilityEvent,
-  queryOrPartial,
-  readModelEvents,
   normalizeSoulDraftContent,
   upsertReplaceableEvent,
   isReplaceableTombstone,
@@ -392,149 +386,72 @@ export function diffDraftContent(before = {}, after = {}, prefix = '') {
 
 // --- Actions ---
 
-// Load all souls from relays
-export async function loadSouls(authorPubkey = null) {
+let soulFactorySubscription = null;
+
+function applySoulFactoryEvent(event) {
+  if (event.kind === KINDS.AGENT_SOUL) {
+    applyReplaceableUpdate(soulEvents, event, souls, parseSoulEvent, newestFirst);
+  } else if (event.kind === KINDS.SOUL_TEMPLATE) {
+    applyReplaceableUpdate(templateEvents, event, templates, parseTemplateEvent, templateSort);
+  } else if (event.kind === KINDS.SOUL_DRAFT) {
+    applyReplaceableUpdate(draftEvents, event, drafts, parseSoulDraftEvent, newestFirst);
+  } else if (event.kind === KINDS.RUNTIME_CAPABILITY) {
+    applyReplaceableUpdate(capabilityEvents, event, runtimeCapabilities, parseRuntimeCapabilityEvent, capabilitySort);
+  }
+}
+
+// Single persistent subscription for all soul factory read models.
+// Receives stored events, marks ready on EOSE, keeps listening for live updates.
+export async function subscribeToSoulFactoryUpdates(authorPubkey = null) {
+  if (soulFactorySubscription) return;
+
   loading.souls = true;
-  error.value = null;
-
-  try {
-    await ensureRelayConnection();
-    const events = await fetchSouls(authorPubkey);
-    rememberReadModelMeta('souls', events);
-    resetReplaceableState(soulEvents, events, souls, parseSoulEvent, newestFirst);
-  } catch (err) {
-    console.error('[souls] Failed to load souls:', err);
-    error.value = err.message;
-  } finally {
-    loading.souls = false;
-  }
-}
-
-// Load all templates from relays
-export async function loadTemplates(authorPubkey = null) {
   loading.templates = true;
-  error.value = null;
-
-  try {
-    await ensureRelayConnection();
-    const events = await fetchTemplates(authorPubkey);
-    rememberReadModelMeta('templates', events);
-    resetReplaceableState(templateEvents, events, templates, parseTemplateEvent, templateSort);
-  } catch (err) {
-    console.error('[souls] Failed to load templates:', err);
-    error.value = err.message;
-  } finally {
-    loading.templates = false;
-  }
-}
-
-export async function loadDrafts(authorPubkey = null) {
   loading.drafts = true;
-  error.value = null;
-
-  try {
-    await ensureRelayConnection();
-    const events = await fetchSoulDrafts(authorPubkey);
-    rememberReadModelMeta('drafts', events);
-    resetReplaceableState(draftEvents, events, drafts, parseSoulDraftEvent, newestFirst);
-  } catch (err) {
-    console.error('[souls] Failed to load drafts:', err);
-    error.value = err.message;
-  } finally {
-    loading.drafts = false;
-  }
-}
-
-export async function loadRuntimeCapabilities(options = {}) {
   loading.capabilities = true;
   error.value = null;
 
   try {
     await ensureRelayConnection();
-    const capabilities = await fetchRuntimeCapabilities(options);
-    rememberReadModelMeta('capabilities', capabilities);
-    const events = capabilities.map((capability) => capability?.event || capability).filter((event) => event?.kind === KINDS.RUNTIME_CAPABILITY);
-
-    if (events.length === capabilities.length) {
-      resetReplaceableState(capabilityEvents, events, runtimeCapabilities, parseRuntimeCapabilityEvent, capabilitySort);
-    } else {
-      replaceStateArray(runtimeCapabilities, [...capabilities].sort(capabilitySort));
-    }
   } catch (err) {
-    console.error('[souls] Failed to load runtime capabilities:', err);
+    console.error('[souls] Failed to connect:', err);
     error.value = err.message;
-  } finally {
+    loading.souls = false;
+    loading.templates = false;
+    loading.drafts = false;
     loading.capabilities = false;
-  }
-}
-
-// Load everything
-export async function loadAll(authorPubkey = null) {
-  await Promise.all([
-    loadSouls(authorPubkey),
-    loadTemplates(authorPubkey),
-    loadDrafts(authorPubkey),
-    loadRuntimeCapabilities()
-  ]);
-}
-
-// Subscribe to real-time soul updates
-let soulSubscription = null;
-
-export function subscribeToSoulUpdates(authorPubkey = null) {
-  if (soulSubscription) {
-    soulSubscription();
+    return;
   }
 
-  const filter = { kinds: [KINDS.AGENT_SOUL], since: Math.floor(Date.now() / 1000) };
-  if (authorPubkey) {
-    filter.authors = [authorPubkey];
-  }
-
-  soulSubscription = nostr.subscribe([filter], {
-    onEvent: (event) => {
-      applyReplaceableUpdate(soulEvents, event, souls, parseSoulEvent, newestFirst);
-    }
-  });
-
-  return soulSubscription;
-}
-
-let soulFactorySubscription = null;
-
-export function subscribeToSoulFactoryUpdates(authorPubkey = null) {
-  if (soulFactorySubscription) {
-    soulFactorySubscription();
-  }
-
-  const soulFilter = { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT], since: Math.floor(Date.now() / 1000) };
+  const soulFilter = { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT] };
   if (authorPubkey) soulFilter.authors = [authorPubkey];
 
   soulFactorySubscription = nostr.subscribe([
     soulFilter,
-    { kinds: [KINDS.RUNTIME_CAPABILITY], since: Math.floor(Date.now() / 1000) }
+    { kinds: [KINDS.RUNTIME_CAPABILITY] }
   ], {
-    onEvent: (event) => {
-      if (event.kind === KINDS.AGENT_SOUL) {
-        applyReplaceableUpdate(soulEvents, event, souls, parseSoulEvent, newestFirst);
-      } else if (event.kind === KINDS.SOUL_TEMPLATE) {
-        applyReplaceableUpdate(templateEvents, event, templates, parseTemplateEvent, templateSort);
-      } else if (event.kind === KINDS.SOUL_DRAFT) {
-        applyReplaceableUpdate(draftEvents, event, drafts, parseSoulDraftEvent, newestFirst);
-      } else if (event.kind === KINDS.RUNTIME_CAPABILITY) {
-        applyReplaceableUpdate(capabilityEvents, event, runtimeCapabilities, parseRuntimeCapabilityEvent, capabilitySort);
-      }
+    onEvent: (event) => applySoulFactoryEvent(event),
+    onEose: () => {
+      loading.souls = false;
+      loading.templates = false;
+      loading.drafts = false;
+      loading.capabilities = false;
+    },
+    onClosed: (reason, relay) => {
+      console.warn(`[souls] Subscription closed by ${relay}: ${reason}`);
     }
   });
-
-  return soulFactorySubscription;
 }
 
+// Backward-compatible aliases
+export const loadSouls = subscribeToSoulFactoryUpdates;
+export const loadTemplates = subscribeToSoulFactoryUpdates;
+export const loadDrafts = subscribeToSoulFactoryUpdates;
+export const loadRuntimeCapabilities = subscribeToSoulFactoryUpdates;
+export const loadAll = subscribeToSoulFactoryUpdates;
+export const subscribeToSoulUpdates = subscribeToSoulFactoryUpdates;
+
 export function unsubscribeFromSoulUpdates() {
-  if (soulSubscription) {
-    soulSubscription();
-    soulSubscription = null;
-  }
   if (soulFactorySubscription) {
     soulFactorySubscription();
     soulFactorySubscription = null;
@@ -1086,14 +1003,31 @@ export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
     { kinds: lifecycleKinds, limit }
   ];
 
-  const result = await queryOrPartial(filters, { scope: 'soul-history' });
-  rememberReadModelMeta('history', result);
-  const deduped = new Map();
-  for (const event of readModelEvents(result)) {
-    if (deduped.has(event.id)) continue;
-    if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
-    deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
-  }
+  return new Promise((resolve) => {
+    const events = [];
 
-  return Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt);
+    nostr.subscribe(filters, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+      onEose: () => {
+        const deduped = new Map();
+        for (const event of events) {
+          if (deduped.has(event.id)) continue;
+          if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
+          deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
+        }
+        resolve(Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt));
+      },
+      onClosed: () => {
+        const deduped = new Map();
+        for (const event of events) {
+          if (deduped.has(event.id)) continue;
+          if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
+          deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
+        }
+        resolve(Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt));
+      }
+    });
+  });
 }

@@ -74,13 +74,12 @@ function authorFilter() {
   return fipsMeshState.servicePubkey ? { authors: [fipsMeshState.servicePubkey] } : {};
 }
 
-export function fipsMeshReadModelFilters({ since = null } = {}) {
-  const temporal = since ? { since } : { limit: READ_MODEL_LIMIT };
+export function fipsMeshReadModelFilters() {
   const scopedAuthor = authorFilter();
   return [
-    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['mesh'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
-    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['worker'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
-    { kinds: [CAS_STATE_KIND], '#domain': ['worker'], '#schema': [WORKER_STATE_SCHEMA], ...temporal, ...scopedAuthor }
+    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['mesh'], '#mesh': ['fips'], limit: READ_MODEL_LIMIT, ...scopedAuthor },
+    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['worker'], '#mesh': ['fips'], limit: READ_MODEL_LIMIT, ...scopedAuthor },
+    { kinds: [CAS_STATE_KIND], '#domain': ['worker'], '#schema': [WORKER_STATE_SCHEMA], limit: READ_MODEL_LIMIT, ...scopedAuthor }
   ];
 }
 
@@ -380,9 +379,9 @@ function subscribeToConnectionState() {
   });
 }
 
-function startLiveSubscription(since) {
+function startSubscription() {
   if (liveUnsubscribe) liveUnsubscribe();
-  liveUnsubscribe = nostr.subscribe(fipsMeshReadModelFilters({ since }), {
+  liveUnsubscribe = nostr.subscribe(fipsMeshReadModelFilters(), {
     onEvent: (event) => applyFipsMeshEvent(event),
     onEose: () => {
       fipsMeshState.lastEoseAt = Date.now();
@@ -445,18 +444,7 @@ export async function bootstrapFipsMesh({ relays = null, servicePubkey = null, s
       await nostr.connect(resolvedRelays, { force: true });
 
       fipsMeshState.status = 'bootstrapping';
-      const events = await nostr.queryUntilEose(fipsMeshReadModelFilters());
-      let latestCreatedAt = 0;
-      for (const event of events) {
-        latestCreatedAt = Math.max(latestCreatedAt, Number(event.created_at || 0));
-        applyFipsMeshEvent(event);
-      }
-
-      fipsMeshState.bootstrapComplete = true;
-      fipsMeshState.ready = true;
-      fipsMeshState.lastEoseAt = Date.now();
-      fipsMeshState.status = 'live';
-      startLiveSubscription(latestCreatedAt || Math.floor(Date.now() / 1000));
+      startSubscription();
       return { ok: true, nodes: meshNodes, endpoints: meshEndpoints };
     } catch (error) {
       fipsMeshState.status = 'error';

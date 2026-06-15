@@ -280,18 +280,11 @@ function applyAssistantEvent(event, options = {}) {
   return changed;
 }
 
-function bootstrapFilters(operatorPubkey, servicePubkey) {
+function subscriptionFilters(operatorPubkey, servicePubkey) {
   const since = nowSeconds() - RECENT_TRANSCRIPT_SECONDS;
   return [
     { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-session.v1'], limit: SESSION_LIMIT },
     { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#schema': ['bahia.assistant-status.v1'], since, limit: TRANSCRIPT_LIMIT }
-  ];
-}
-
-function liveFilters(operatorPubkey, servicePubkey, since) {
-  return [
-    { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-session.v1'], since },
-    { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#schema': ['bahia.assistant-status.v1'], since }
   ];
 }
 
@@ -304,10 +297,16 @@ function subscribeToConnectionState() {
   });
 }
 
-function startLiveSubscription({ operatorPubkey, servicePubkey, since }) {
+function startSubscription(operatorPubkey, servicePubkey) {
   if (liveUnsubscribe) liveUnsubscribe();
-  liveUnsubscribe = nostr.subscribe(liveFilters(operatorPubkey, servicePubkey, since), {
+  liveUnsubscribe = nostr.subscribe(subscriptionFilters(operatorPubkey, servicePubkey), {
     onEvent: (event) => applyAssistantEvent(event),
+    onEose: () => {
+      assistantConnection.ready = true;
+      assistantConnection.status = 'live';
+      assistantConnection.lastEoseAt = new Date().toISOString();
+      refreshSessions();
+    },
     onClosed: (reason, relay) => {
       assistantConnection.lastError = reason || `assistant subscription closed by ${relay}`;
       if (assistantConnection.status === 'live') assistantConnection.status = 'disconnected';
@@ -348,7 +347,6 @@ export async function bootstrapAssistant({ force = false } = {}) {
 
   loadAssistantUiState();
   bootstrapPromise = (async () => {
-    const liveSince = nowSeconds();
     assistantConnection.status = 'waiting_auth';
     assistantConnection.lastError = null;
 
@@ -369,14 +367,7 @@ export async function bootstrapAssistant({ force = false } = {}) {
       assistantConnection.servicePubkey = servicePubkey;
       subscribeToConnectionState();
 
-      const events = await nostr.queryUntilEose(bootstrapFilters(operatorPubkey, servicePubkey));
-      for (const event of events) applyAssistantEvent(event, { allowStreaming: false });
-
-      assistantConnection.ready = true;
-      assistantConnection.status = 'live';
-      assistantConnection.lastEoseAt = new Date().toISOString();
-      startLiveSubscription({ operatorPubkey, servicePubkey, since: liveSince });
-      refreshSessions();
+      startSubscription(operatorPubkey, servicePubkey);
       return { ok: true };
     } catch (err) {
       assistantConnection.status = 'error';

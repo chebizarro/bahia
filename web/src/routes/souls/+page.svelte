@@ -19,7 +19,6 @@
     soulCounts,
     loading,
     error,
-    loadAll,
     runtimeCapabilities,
     subscribeToSoulFactoryUpdates,
     unsubscribeFromSoulUpdates
@@ -31,18 +30,9 @@
   let filteredSouls = $derived(filterSouls(souls, filter, search));
   
   $effect(() => {
-    let cancelled = false;
-
-    async function initializeSouls() {
-      await loadAll();
-      if (cancelled) return;
-      subscribeToSoulFactoryUpdates();
-    }
-
-    void initializeSouls();
+    subscribeToSoulFactoryUpdates();
 
     return () => {
-      cancelled = true;
       unsubscribeFromSoulUpdates();
     };
   });

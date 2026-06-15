@@ -165,7 +165,14 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
       const { fetchDoc, fetchDocsCatalog } = await import('/src/lib/docs/nostr.js');
       const { nostr } = await import('/src/lib/nostr/subscriptions.js');
       await nostr.connect([relayUrl], { force: true });
-      const rawEvents = await nostr.queryUntilEose([{ kinds: [30023], limit: 10 }]);
+      const rawEvents = await new Promise((resolve) => {
+        const events = [];
+        nostr.subscribe([{ kinds: [30023], limit: 10 }], {
+          onEvent: (event) => events.push(event),
+          onEose: () => resolve(events),
+          onClosed: () => resolve(events)
+        });
+      });
       const catalog = await fetchDocsCatalog({ bypassCache: true, timeoutMs: 10_000 });
       const doc = await fetchDoc('features-services', {
         bypassCache: true,

@@ -28,7 +28,6 @@ const nostrMock = vi.hoisted(() => {
 
   return {
     connected: store(true),
-    queryUntilEose: vi.fn(),
     subscribe: vi.fn()
   };
 });
@@ -64,9 +63,10 @@ describe('assistant store', () => {
     authMock.authState.pubkey = 'a'.repeat(64);
     controlplaneMock.controlplaneConnection.servicePubkey = 'b'.repeat(64);
     controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true });
-    nostrMock.queryUntilEose.mockResolvedValue([]);
     nostrMock.subscribe.mockImplementation((_filters, handlers) => {
       liveHandlers = handlers;
+      // Simulate empty bootstrap: deliver EOSE immediately
+      Promise.resolve().then(() => handlers?.onEose?.());
       return vi.fn();
     });
 
@@ -89,7 +89,7 @@ describe('assistant store', () => {
       ]
     };
 
-    nostrMock.queryUntilEose.mockResolvedValueOnce([
+    const bootstrapEvents = [
       event({
         id: 'session-event',
         kind: ASSISTANT_KINDS.SESSION,
@@ -122,7 +122,15 @@ describe('assistant store', () => {
         tags: [['d', `bahia.assistant-status.v1:${sessionId}:blocked`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'blocked'], ['downstream-request', 'downstream-1']],
         content: { session_id: sessionId, status: 'blocked', message: 'relay closed' }
       })
-    ]);
+    ];
+    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+      liveHandlers = handlers;
+      Promise.resolve().then(() => {
+        for (const evt of bootstrapEvents) handlers?.onEvent?.(evt);
+        handlers?.onEose?.();
+      });
+      return vi.fn();
+    });
 
     const result = await store.bootstrapAssistant({ force: true });
 
@@ -142,16 +150,21 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-live-session';
 
-    nostrMock.queryUntilEose.mockResolvedValueOnce([
-      event({
-        id: 'session-event',
-        kind: ASSISTANT_KINDS.SESSION,
-        pubkey: service,
-        created_at: 100,
-        tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
-        content: { state: 'executing', operator_pubkey: operator, transcript_summary: 'Live session' }
-      })
-    ]);
+    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+      liveHandlers = handlers;
+      Promise.resolve().then(() => {
+        handlers?.onEvent?.(event({
+          id: 'session-event',
+          kind: ASSISTANT_KINDS.SESSION,
+          pubkey: service,
+          created_at: 100,
+          tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
+          content: { state: 'executing', operator_pubkey: operator, transcript_summary: 'Live session' }
+        }));
+        handlers?.onEose?.();
+      });
+      return vi.fn();
+    });
 
     await store.bootstrapAssistant({ force: true });
     expect(store.assistantSessions[0].transcript).toHaveLength(0);
@@ -189,32 +202,37 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-stale-stream-session';
 
-    nostrMock.queryUntilEose.mockResolvedValueOnce([
-      event({
-        id: 'session-event',
-        kind: ASSISTANT_KINDS.SESSION,
-        pubkey: service,
-        created_at: 100,
-        tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'idle']],
-        content: { state: 'idle', operator_pubkey: operator, transcript_summary: 'Stale stream session' }
-      }),
-      event({
-        id: 'historical-stream-1',
-        kind: ASSISTANT_KINDS.STATUS,
-        pubkey: service,
-        created_at: 110,
-        tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-1`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-1', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
-        content: { session_id: sessionId, status: 'planning', streaming: true, chunk: '{\"summary\":' }
-      }),
-      event({
-        id: 'historical-stream-2',
-        kind: ASSISTANT_KINDS.STATUS,
-        pubkey: service,
-        created_at: 111,
-        tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-2`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-1', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
-        content: { session_id: sessionId, status: 'planning', streaming: true, chunk: '\"partial\"}' }
-      })
-    ]);
+    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+      liveHandlers = handlers;
+      Promise.resolve().then(() => {
+        handlers?.onEvent?.(event({
+          id: 'session-event',
+          kind: ASSISTANT_KINDS.SESSION,
+          pubkey: service,
+          created_at: 100,
+          tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'idle']],
+          content: { state: 'idle', operator_pubkey: operator, transcript_summary: 'Stale stream session' }
+        }));
+        handlers?.onEvent?.(event({
+          id: 'historical-stream-1',
+          kind: ASSISTANT_KINDS.STATUS,
+          pubkey: service,
+          created_at: 110,
+          tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-1`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-1', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
+          content: { session_id: sessionId, status: 'planning', streaming: true, chunk: '{"summary":' }
+        }));
+        handlers?.onEvent?.(event({
+          id: 'historical-stream-2',
+          kind: ASSISTANT_KINDS.STATUS,
+          pubkey: service,
+          created_at: 111,
+          tags: [['d', `bahia.assistant-status.v1:${sessionId}:stream-2`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['e', 'request-1', '', 'reply'], ['status', 'planning'], ['streaming', 'true']],
+          content: { session_id: sessionId, status: 'planning', streaming: true, chunk: '"partial"}' }
+        }));
+        handlers?.onEose?.();
+      });
+      return vi.fn();
+    });
 
     await store.bootstrapAssistant({ force: true });
 

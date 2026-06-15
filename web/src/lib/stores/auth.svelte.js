@@ -286,26 +286,59 @@ function collectBootstrapRelayCandidates(userRelays = {}) {
   ]).filter((relay) => normalizeRelayUrl(relay) !== LEGACY_BAHIA_RELAY).slice(0, 10);
 }
 
+function cleanupAuthMetadataClient() {
+  if (authMetadataUnsubscribe) authMetadataUnsubscribe();
+  authMetadataUnsubscribe = null;
+  if (authMetadataClient) authMetadataClient.disconnect();
+  authMetadataClient = null;
+}
+
 async function queryAuthEventsOnRelays(pubkey, relays = [], kinds = [], limit = 5) {
   if (!isValidHexPubkey(pubkey) || !Array.isArray(kinds) || kinds.length === 0) return [];
   if (relays.length === 0) return [];
 
-  const client = new PoolBackedClient({
+  cleanupAuthMetadataClient();
+  authMetadataClient = new PoolBackedClient({
     relays,
     saveRelayConfig: () => {}
   });
 
   try {
-    const summary = await client.connect(relays, { force: true });
-    if (!summary?.connected) return [];
-    return await client.queryUntilEose([
-      { kinds, authors: [pubkey], limit }
-    ], { timeoutMs: AUTH_QUERY_TIMEOUT_MS });
+    const summary = await authMetadataClient.connect(relays, { force: true });
+    if (!summary?.connected) {
+      cleanupAuthMetadataClient();
+      return [];
+    }
+
+    return await new Promise((resolve, reject) => {
+      const events = [];
+      const seenIds = new Set();
+      const timer = setTimeout(() => {
+        resolve(events);
+      }, AUTH_QUERY_TIMEOUT_MS);
+
+      authMetadataUnsubscribe = authMetadataClient.subscribe([
+        { kinds, authors: [pubkey], limit }
+      ], {
+        onEvent: (event) => {
+          if (event?.id && seenIds.has(event.id)) return;
+          if (event?.id) seenIds.add(event.id);
+          events.push(event);
+        },
+        onEose: () => {
+          clearTimeout(timer);
+          resolve(events);
+        },
+        onClosed: () => {
+          clearTimeout(timer);
+          resolve(events);
+        }
+      });
+    });
   } catch (error) {
     console.warn('Failed auth metadata relay query:', error);
+    cleanupAuthMetadataClient();
     return [];
-  } finally {
-    client.disconnect();
   }
 }
 
@@ -426,6 +459,8 @@ let loginInProgress = null;
 let missingSignerToastId = null;
 let stopWatchingNip07Availability = null;
 let signerLifecycleWatcherInstalled = false;
+let authMetadataClient = null;
+let authMetadataUnsubscribe = null;
 
 function dismissMissingSignerToast() {
   if (missingSignerToastId == null) return;
@@ -722,6 +757,7 @@ export async function connectNostrConnectSessionFromStorage() {
 }
 
 export function logout() {
+  cleanupAuthMetadataClient();
   clearPersistedSession();
   void disconnectNip46().catch((err) => console.warn('Failed to disconnect NIP-46 session:', err));
   if (browser) {

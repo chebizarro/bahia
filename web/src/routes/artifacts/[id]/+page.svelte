@@ -13,7 +13,7 @@
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
-  import { ensureRelayConnection, getTagValue, nostr, parseJsonContent, queryOrPartial, readModelEvents } from '$lib/nostr/client.js';
+  import { ensureRelayConnection, getTagValue, nostr, parseJsonContent } from '$lib/nostr/client.js';
   import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE } from '$lib/nostr/kinds.gen.js';
   import {
     ArtifactIcon,
@@ -219,8 +219,15 @@
           { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
         );
       }
-      const result = await queryOrPartial(filters, { scope: 'artifact-sbom' });
-      return applySBOMReferenceEvents(readModelEvents(result));
+      const events = await new Promise((resolve) => {
+        const collected = [];
+        nostr.subscribe(filters, {
+          onEvent: (event) => collected.push(event),
+          onEose: () => resolve(collected),
+          onClosed: () => resolve(collected)
+        });
+      });
+      return applySBOMReferenceEvents(events);
     } catch (err) {
       console.warn('[sbom] relay query failed:', err);
       return 0;

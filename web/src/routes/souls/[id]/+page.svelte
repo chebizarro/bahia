@@ -18,8 +18,8 @@
     WarningIcon,
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
-  import { nostr, fetchSoul, parseSoulEvent, KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
-  import { buildSoulRef, fetchSoulHistory, loadSouls, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
+  import { nostr, parseSoulEvent, KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
+  import { buildSoulRef, fetchSoulHistory, subscribeToSoulFactoryUpdates, unsubscribeFromSoulUpdates, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);
@@ -205,22 +205,13 @@
     copyAction();
   }
   
-  async function loadSoul(id = agentId) {
-    loading = true;
-    error = null;
-    
-    try {
-      const event = await fetchSoul(id);
-      if (event) {
-        soul = parseSoulEvent(event);
-      } else {
-        error = 'Soul not found';
-      }
-    } catch (err) {
-      error = err.message;
-    } finally {
+  function lookupSoul(id = agentId) {
+    const found = souls.find((s) => s.agentId === id);
+    if (found) {
+      soul = found;
       loading = false;
     }
+    return found;
   }
   
   function tagValue(event, name) {
@@ -330,8 +321,13 @@
     }
 
     async function initializeSoul() {
-      await Promise.all([loadSoul(id), loadSouls()]);
+      await subscribeToSoulFactoryUpdates();
       if (cancelled) return;
+      if (!lookupSoul(id)) {
+        loading = false;
+        error = 'Soul not found';
+        return;
+      }
       await loadHistory();
       if (cancelled) return;
       subscribeToUpdates(id);

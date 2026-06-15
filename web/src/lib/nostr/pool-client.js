@@ -1,6 +1,5 @@
 import { writable, get } from 'svelte/store';
 import { SimplePool } from 'nostr-tools';
-import { queryUntilEose } from './pool-query.js';
 import { publishFromPool } from './pool-publish.js';
 import { subscribeOnRelays } from './pool-subscriptions.js';
 import { summarizeRelayConnections, uniqueRelays, normalizeRelayUrl, messageFromError } from './pool-utils.js';
@@ -163,15 +162,6 @@ export class PoolBackedClient {
 
   subscribeOnRelays(relays, filters, handlers = {}) {
     return subscribeOnRelays(this, relays, filters, handlers);
-  }
-
-  async queryUntilEose(filters, options = {}) {
-    return queryUntilEose(this, filters, options);
-  }
-
-  async query(filters, timeout = 5000) {
-    const options = typeof timeout === 'number' ? { timeoutMs: timeout } : (timeout || {});
-    return this.queryUntilEose(filters, options);
   }
 
   async publish(event, options = {}) {

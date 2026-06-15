@@ -3,7 +3,7 @@
  * Fetches repo state events (NIP-34 kind 30618) to extract branch information
  */
 
-import { KINDS, NostrIncompleteEOSEError, nostr, partialEventsFromIncompleteEose } from './client.js';
+import { KINDS, nostr } from './client.js';
 import { uniqueRelays } from './pool-utils.js';
 
 const REPO_STATE_KIND = KINDS.REPOSITORY_STATE;
@@ -128,81 +128,69 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
     ? { timeoutMs: timeout, relays: repositoryRelays }
     : { timeoutMs: timeout };
 
-  try {
-    // Query for repo state events (kind 30618) with matching author and d-tag.
-    const events = await nostr.queryUntilEose([{
+  const degraded = missingRepositoryRelayFallback;
+
+  return new Promise((resolve) => {
+    const events = [];
+    const subscribeOptions = repositoryRelays?.length > 0
+      ? { relays: repositoryRelays }
+      : {};
+    let timer = null;
+    let settled = false;
+
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+
+    if (timeout > 0) {
+      timer = setTimeout(() => {
+        // Resolve with whatever we have on timeout
+        const latestEvent = events.reduce((latest, event) => {
+          if (!latest || event.created_at > latest.created_at) return event;
+          return latest;
+        }, null);
+        const result = latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
+        settle({ ...result, error: events.length === 0 ? 'Timed out waiting for repo state' : null, degraded });
+      }, timeout);
+    }
+
+    const filters = [{
       kinds: [REPO_STATE_KIND],
       authors: [pubkey],
       '#d': [identifier]
-    }], queryOptions);
-    const degraded = missingRepositoryRelayFallback;
+    }];
 
-    if (!events || events.length === 0) {
-      // No state event found - repo may not have state published yet
-      return {
-        branches: [],
-        defaultBranch: null,
-        error: null,
-        degraded
-      };
-    }
-
-    // Use the most recent state event
-    const latestEvent = events.reduce((latest, event) => {
-      if (!latest || event.created_at > latest.created_at) {
-        return event;
+    const subscribeArgs = [filters, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+      onEose: () => {
+        const latestEvent = events.reduce((latest, event) => {
+          if (!latest || event.created_at > latest.created_at) return event;
+          return latest;
+        }, null);
+        const result = latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
+        settle({ ...result, error: null, degraded });
+      },
+      onClosed: (reason) => {
+        const latestEvent = events.reduce((latest, event) => {
+          if (!latest || event.created_at > latest.created_at) return event;
+          return latest;
+        }, null);
+        const result = latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
+        settle({ ...result, error: events.length === 0 ? (reason || 'Subscription closed') : null, degraded });
       }
-      return latest;
-    }, null);
+    }];
 
-    const { branches, defaultBranch } = parseRepoStateBranches(latestEvent);
-
-    return {
-      branches,
-      defaultBranch,
-      error: null,
-      degraded
-    };
-  } catch (err) {
-    if (err instanceof NostrIncompleteEOSEError) {
-      const events = partialEventsFromIncompleteEose(err);
-      const degraded = {
-        incomplete: true,
-        reason: err.reason || 'unknown',
-        message: err.message,
-        relaySummary: Array.isArray(err.relaySummary) ? err.relaySummary : [],
-        partialEventCount: events.length,
-        fallback: missingRepositoryRelayFallback
-      };
-      if (events.length === 0) {
-        return {
-          branches: [],
-          defaultBranch: null,
-          error: degraded.message,
-          degraded
-        };
-      }
-      const latestEvent = events.reduce((latest, event) => {
-        if (!latest || event.created_at > latest.created_at) return event;
-        return latest;
-      }, null);
-      const { branches, defaultBranch } = parseRepoStateBranches(latestEvent);
-      return {
-        branches,
-        defaultBranch,
-        error: degraded.message,
-        degraded
-      };
+    if (repositoryRelays?.length > 0) {
+      nostr.subscribeOnRelays(repositoryRelays, ...subscribeArgs);
+    } else {
+      nostr.subscribe(...subscribeArgs);
     }
-
-    console.error('[branches] Failed to fetch repo state:', err);
-    return {
-      branches: [],
-      defaultBranch: null,
-      error: err?.message || 'Failed to fetch branches',
-      degraded: null
-    };
-  }
+  });
 }
 
 /**

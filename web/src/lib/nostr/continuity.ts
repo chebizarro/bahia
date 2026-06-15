@@ -9,15 +9,13 @@ import {
   RECOVERY_WORKFLOW,
   REPLICATION_POLICY,
   STANDBY_NODE_DEFINITION,
-  attachReadModelMetadata,
   dedupeReplaceableEvents,
   ensureRelayConnection,
   getDTag,
   getTagValue,
   getTagValues,
-  parseJsonContent,
-  queryOrPartial,
-  readModelEvents
+  nostr,
+  parseJsonContent
 } from '$lib/nostr/client.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
@@ -121,9 +119,27 @@ export function continuityNostrFilters() {
 
 export async function fetchContinuityEvents(): Promise<ContinuityNostrEvent[]> {
   await ensureRelayConnection();
-  const result = await queryOrPartial(continuityNostrFilters(), { scope: 'continuity' });
-  const events = readModelEvents(result) as ContinuityNostrEvent[];
-  return attachReadModelMetadata(events, result) as ContinuityNostrEvent[];
+
+  return new Promise((resolve, reject) => {
+    const events: ContinuityNostrEvent[] = [];
+
+    nostr.subscribe(continuityNostrFilters(), {
+      onEvent: (event: ContinuityNostrEvent) => {
+        events.push(event);
+      },
+      onEose: () => {
+        resolve(events);
+      },
+      onClosed: (reason: string) => {
+        // Resolve with whatever we have if subscription closes
+        if (events.length > 0) {
+          resolve(events);
+        } else {
+          reject(new Error(`Continuity subscription closed: ${reason}`));
+        }
+      }
+    });
+  });
 }
 
 export async function loadContinuityDashboardFromNostr(): Promise<{

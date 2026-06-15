@@ -7,7 +7,7 @@
  */
 import { browser } from '$app/environment';
 import { KINDS } from '$lib/nostr/kinds.js';
-import { queryOrPartial, readModelEvents } from '$lib/nostr/subscriptions.js';
+import { nostr } from '$lib/nostr/subscriptions.js';
 import { dedupeReplaceableEvents } from '$lib/nostr/replaceable.js';
 import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
 
@@ -82,14 +82,27 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
     filter.authors = [servicePubkey];
   }
 
-  const result = await queryOrPartial([filter], {
-    scope: 'docs-catalog',
-    timeoutMs
+  const events = await new Promise((resolve, reject) => {
+    const collected = [];
+    const timer = setTimeout(() => resolve(collected), timeoutMs);
+
+    nostr.subscribe([filter], {
+      onEvent: (event) => collected.push(event),
+      onEose: () => {
+        clearTimeout(timer);
+        resolve(collected);
+      },
+      onClosed: (reason) => {
+        clearTimeout(timer);
+        if (collected.length > 0) resolve(collected);
+        else reject(new Error(`Docs subscription closed: ${reason}`));
+      }
+    });
   });
 
-  const events = dedupeReplaceableEvents(readModelEvents(result));
-  writeCache(events);
-  return events;
+  const deduped = dedupeReplaceableEvents(events);
+  writeCache(deduped);
+  return deduped;
 }
 
 /**

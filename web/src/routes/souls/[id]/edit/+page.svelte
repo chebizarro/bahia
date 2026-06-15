@@ -1,9 +1,11 @@
 <script>
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { KINDS, SOUL_RUNTIME_METHODS, fetchSoul, fetchSoulDraft, parseSoulDraftEvent, parseSoulEvent } from '$lib/nostr/client.js';
+  import { KINDS, SOUL_RUNTIME_METHODS, parseSoulDraftEvent, parseSoulEvent } from '$lib/nostr/client.js';
   import {
-    loadRuntimeCapabilities,
+    subscribeToSoulFactoryUpdates,
+    drafts,
+    souls,
     publishSoulDraft,
     publishSoulUpdateAction,
     runtimeCapabilities
@@ -90,19 +92,18 @@
     error = '';
 
     try {
-      const [event] = await Promise.all([
-        fetchSoul(id),
-        loadRuntimeCapabilities({ method: SOUL_RUNTIME_METHODS.UPDATE })
-      ]);
-      if (!event) throw new Error('Soul not found');
+      await subscribeToSoulFactoryUpdates();
 
-      soul = parseSoulEvent(event);
+      const found = souls.find((s) => s.agentId === id);
+      if (!found) throw new Error('Soul not found');
+
+      soul = found;
       const draftCoordinate = soul.draftRef || '';
       const coordinateParts = draftCoordinate.match(/^31952:([^:]+):(.+)$/);
       const draftAgentId = coordinateParts?.[2] || soul.agentId;
       const draftAuthor = coordinateParts?.[1] || undefined;
-      const draftEvent = await fetchSoulDraft(draftAgentId, draftAuthor).catch(() => null);
-      existingDraft = draftEvent ? parseSoulDraftEvent(draftEvent) : null;
+      const draftEntry = drafts.find((d) => d.agentId === draftAgentId && (!draftAuthor || d.pubkey === draftAuthor));
+      existingDraft = draftEntry || null;
       hydrateForm(soul, existingDraft);
     } catch (err) {
       error = err.message || 'Failed to load soul';

@@ -21,6 +21,8 @@ export const discoveryState = $state({
 });
 
 let discoveryPromise = null;
+let bootstrapClient = null;
+let discoveryUnsubscribe = null;
 
 function splitList(value) {
   if (!value || typeof value !== 'string') return [];
@@ -149,6 +151,10 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
 }
 
 export function resetDiscoveryStore() {
+  if (discoveryUnsubscribe) discoveryUnsubscribe();
+  discoveryUnsubscribe = null;
+  if (bootstrapClient) bootstrapClient.disconnect();
+  bootstrapClient = null;
   discoveryPromise = null;
   discoveryState.seed = null;
   discoveryState.events = [];
@@ -225,33 +231,50 @@ export async function discoverSystemInfo({ force = false } = {}) {
       }
 
       const relays = Array.from(new Set(seed.relay_urls.map(normalizeRelayUrl).filter(Boolean)));
-      const bootstrapClient = new PoolBackedClient({
+      if (discoveryUnsubscribe) discoveryUnsubscribe();
+      discoveryUnsubscribe = null;
+      if (bootstrapClient) bootstrapClient.disconnect();
+      bootstrapClient = new PoolBackedClient({
         relays,
         saveRelayConfig: () => {}
       });
-      let events;
-      try {
-        const summary = await bootstrapClient.connect(relays, { force: true });
-        if (summary.connected === 0) {
-          throw new Error('Unable to connect to any bootstrap relay');
-        }
 
-        events = await bootstrapClient.queryUntilEose([
+      const summary = await bootstrapClient.connect(relays, { force: true });
+      if (summary.connected === 0) {
+        bootstrapClient.disconnect();
+        bootstrapClient = null;
+        throw new Error('Unable to connect to any bootstrap relay');
+      }
+
+      const collectedEvents = [];
+      const normalized = await new Promise((resolve, reject) => {
+        discoveryUnsubscribe = bootstrapClient.subscribe([
           {
             kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
             authors: seed.service_pubkeys,
             '#d': [SYSTEM_DISCOVERY_DTAG, BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG]
           }
-        ]);
-      } finally {
-        bootstrapClient.disconnect();
-      }
+        ], {
+          onEvent: (event) => {
+            collectedEvents.push(event);
+          },
+          onEose: () => {
+            try {
+              resolve(normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys));
+            } catch (err) {
+              reject(err);
+            }
+          },
+          onClosed: (reason) => {
+            reject(new Error(`Discovery subscription closed: ${reason}`));
+          }
+        });
+      });
 
-      const normalized = normalizeDiscoveryEvents(events, seed.service_pubkeys);
-      discoveryState.events = events;
+      discoveryState.events = collectedEvents;
       discoveryState.relaySets = normalized._discovery.relay_sets;
       discoveryState.loadedAt = new Date().toISOString();
-      persistDiscoveryCache(seed, normalized, events);
+      persistDiscoveryCache(seed, normalized, collectedEvents);
       return normalized;
     } catch (error) {
       discoveryState.error = error?.message || String(error);

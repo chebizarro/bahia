@@ -1,6 +1,6 @@
 import { KINDS } from './kinds.js';
 import { uniqueRelays } from './pool-utils.js';
-import { attachReadModelMetadata, queryOrPartial, readModelEvents } from './subscriptions.js';
+import { nostr } from './subscriptions.js';
 
 export function parseRepositoryEvent(event) {
   if (!event || !event.id || !event.pubkey || !Array.isArray(event.tags)) {
@@ -89,21 +89,42 @@ export async function fetchRepositories({ authors = null, limit = 200, since = n
   }
 
   const repositoryRelays = Array.isArray(relayUrls) ? uniqueRelays(relayUrls) : [];
-  const queryOptions = repositoryRelays.length > 0
-    ? { scope: 'repositories', relays: repositoryRelays }
-    : { scope: 'repositories' };
-  const result = await queryOrPartial([filter], queryOptions);
-  const deduped = new Map();
 
-  for (const event of readModelEvents(result)) {
-    const parsed = parseRepositoryEvent(event);
-    if (!parsed) continue;
+  return new Promise((resolve) => {
+    const events = [];
 
-    const existing = deduped.get(parsed.repoCoordinate);
-    if (!existing || parsed.created_at >= existing.created_at) {
-      deduped.set(parsed.repoCoordinate, parsed);
+    const handlers = {
+      onEvent: (event) => events.push(event),
+      onEose: () => {
+        const deduped = new Map();
+        for (const event of events) {
+          const parsed = parseRepositoryEvent(event);
+          if (!parsed) continue;
+          const existing = deduped.get(parsed.repoCoordinate);
+          if (!existing || parsed.created_at >= existing.created_at) {
+            deduped.set(parsed.repoCoordinate, parsed);
+          }
+        }
+        resolve(Array.from(deduped.values()));
+      },
+      onClosed: () => {
+        const deduped = new Map();
+        for (const event of events) {
+          const parsed = parseRepositoryEvent(event);
+          if (!parsed) continue;
+          const existing = deduped.get(parsed.repoCoordinate);
+          if (!existing || parsed.created_at >= existing.created_at) {
+            deduped.set(parsed.repoCoordinate, parsed);
+          }
+        }
+        resolve(Array.from(deduped.values()));
+      }
+    };
+
+    if (repositoryRelays.length > 0) {
+      nostr.subscribeOnRelays(repositoryRelays, [filter], handlers);
+    } else {
+      nostr.subscribe([filter], handlers);
     }
-  }
-
-  return attachReadModelMetadata(Array.from(deduped.values()), result);
+  });
 }
