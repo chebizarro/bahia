@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS security_findings (
     severity         TEXT NOT NULL CHECK (severity IN ('unknown', 'low', 'moderate', 'high', 'critical')),
     package          JSONB NOT NULL DEFAULT '{}',
     aliases          JSONB NOT NULL DEFAULT '[]',
-    references       JSONB NOT NULL DEFAULT '[]',
+    "references"     JSONB NOT NULL DEFAULT '[]',
     withdrawn_at     TIMESTAMPTZ,
     raw_modified     TEXT,
     metadata         JSONB NOT NULL DEFAULT '{}',

@@ -36,7 +36,7 @@ func newPgSecurityRepositoryWithDB(db securityDB) *PgSecurityRepository {
 const securityTargetColumns = `id, target_type, target_key, target_key_hash, display, subject, package, purl, repository_url, commit_hash, metadata, created_at, updated_at`
 const securityRunColumns = `id, target_id, target_key_hash, status, trigger_kind, requested_by, request_event_id, request_d_tag, osv_query_count, finding_count, critical_count, high_count, moderate_count, low_count, unknown_count, unsupported_count, unsupported_reasons, publish_state, error, metadata, started_at, finished_at, created_at, updated_at`
 const securityLatestColumns = `target_key_hash, target_id, run_id, status, finding_count, critical_count, high_count, moderate_count, low_count, unknown_count, scanned_at, updated_at`
-const securityFindingColumns = `id, run_id, target_key_hash, finding_key, finding_key_hash, osv_id, cve, summary, details, severity, package, aliases, references, withdrawn_at, raw_modified, metadata, created_at, updated_at`
+const securityFindingColumns = `id, run_id, target_key_hash, finding_key, finding_key_hash, osv_id, cve, summary, details, severity, package, aliases, "references", withdrawn_at, raw_modified, metadata, created_at, updated_at`
 const securityScheduleColumns = `id, policy_id, target_id, target_key_hash, enabled, interval_seconds, next_due_at, lease_until, leased_by, last_dispatched_at, last_run_id, metadata, created_at, updated_at`
 const securityBreachColumns = `id, policy_id, target_key_hash, fingerprint, previous_fingerprint, enforcement, violated_rules, critical_count, high_count, moderate_count, low_count, unknown_count, osv_ids, notification_status, first_seen_at, last_seen_at, resolved_at, metadata, created_at, updated_at`
 const securityCacheColumns = `osv_id, summary, severity, aliases, raw, cached_at, expires_at, withdrawn_at`
@@ -393,7 +393,7 @@ func (r *PgSecurityRepository) UpsertSecurityFindings(ctx context.Context, findi
 				severity = EXCLUDED.severity,
 				package = EXCLUDED.package,
 				aliases = EXCLUDED.aliases,
-				references = EXCLUDED.references,
+				"references" = EXCLUDED."references",
 				withdrawn_at = EXCLUDED.withdrawn_at,
 				raw_modified = EXCLUDED.raw_modified,
 				metadata = EXCLUDED.metadata,
