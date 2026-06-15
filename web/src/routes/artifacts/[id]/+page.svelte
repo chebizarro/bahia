@@ -281,7 +281,7 @@
       const event = await generateArtifactSBOM({ ...artifact, service_artifact_repo: service?.artifact_repo || '' });
       sbomRequestEventId = event?.requestEventId || event?.id || null;
       if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
-      toast.success('SBOM generation request published; waiting for SBOM reference events');
+      toast.success('SBOM generation started');
       void observeGeneratedSBOMReferences();
     } catch (err) {
       sbomGenerateError = userFacingSBOMError(err);
@@ -334,7 +334,7 @@
       const observed = await refreshSBOMReferenceEvents();
       if (observed > 0) {
         sbomGenerationStatus = 'completed';
-        toast.success('SBOM reference events published and loaded');
+        toast.success('SBOM generated successfully');
       }
     } catch (err) {
       if (sbomRequestEventId) {
@@ -650,11 +650,11 @@
             <p class="warning-message">This artifact needs an immutable digest plus a configured image repository or OCI image ref before Bahia can generate an SBOM.</p>
           {/if}
           {#if sbomGenerationStatus === 'completed'}
-            <p class="success-message">SBOM generation completed. Loaded {sbomReferenceCount} SBOM reference event{sbomReferenceCount === 1 ? '' : 's'}{sbomRequestEventId ? ' for request ' : ''}{#if sbomRequestEventId}<code>{formatDigestMiddle(sbomRequestEventId)}</code>{/if}.</p>
+            <p class="success-message">SBOM generated successfully.</p>
           {:else if sbomGenerationStatus === 'publishing'}
-            <p class="info-message">Publishing SBOM generation request and listening for canonical SBOM reference events.</p>
+            <p class="info-message">Generating SBOM… this may take a moment.</p>
           {:else if sbomRequestEventId}
-            <p class="info-message">SBOM request <code>{formatDigestMiddle(sbomRequestEventId)}</code> was accepted. Waiting for canonical SBOM reference and availability-list events.</p>
+            <p class="info-message">SBOM generation in progress. Results will appear here automatically.</p>
           {/if}
 
           <SBOMDetails
