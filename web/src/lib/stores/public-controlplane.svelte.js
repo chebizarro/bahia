@@ -1,6 +1,6 @@
 import { goto } from '$app/navigation';
 import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
-import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
 function operationResultEvent({ requestEventId, resultEvent, result }) {
@@ -62,6 +62,29 @@ export async function publishCommand({ operation, tags = [], content = {}, paylo
     timeoutMs
   });
   return throwIfErrorResult(operationResultEvent(response));
+}
+
+/**
+ * Publish a ContextVM command and return immediately after relay acceptance.
+ * Does NOT wait for a result event — the caller must subscribe to canonical
+ * observables for durable progress and terminal truth (per AGENTS.md).
+ * Use this for long-running operations (e.g. sbom/generate) where completion
+ * is detected via scoped subscriptions, not timeout-based result waiting.
+ */
+export async function publishCommandOnly({ operation, tags = [], content = {}, payload, signal } = {}) {
+  if (typeof operation !== 'string' || !operation.trim()) {
+    throw new Error('ContextVM operation is required for Nostr control-plane commands');
+  }
+  const bootstrap = await bootstrapControlplane();
+  if (!bootstrap?.ok) {
+    throw new Error(bootstrap?.reason || 'Failed to bootstrap relay-backed control plane');
+  }
+  return publishEncryptedRequest({
+    operation,
+    payload: payload ?? content,
+    tags,
+    signal
+  });
 }
 
 export function createService(payload) {
@@ -208,7 +231,7 @@ function artifactDisplayName(artifact) {
   return String(artifact?.name || artifact?.image_repo || artifact?.image_tag || artifact?.id || '').trim();
 }
 
-export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft', signal, timeoutMs } = {}) {
+export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft', signal } = {}) {
   const artifactId = String(artifact?.id || '').trim();
   if (!artifactId) throw new Error('artifact id is required');
   const digest = artifactDigest(artifact);
@@ -219,7 +242,10 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
   if (normalizedFormats.length === 0) throw new Error('at least one SBOM format is required');
   const generatorId = String(generator || 'syft').trim() || 'syft';
   const idempotencyKey = `web.sbom.generate:artifact:${artifactId}:${digest}:${normalizedFormats.join(',')}:${generatorId}`;
-  return publishCommand({
+  // Publish-only: do NOT wait for a ContextVM result with a timeout.
+  // SBOM generation is a long-running operation; terminal truth arrives as
+  // canonical 30078/30004 observable events via the caller's scoped subscription.
+  return publishCommandOnly({
     operation: 'sbom/generate',
     tags: [
       ['domain', 'sbom'],
@@ -245,8 +271,7 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
       generator: generatorId,
       storage: 'blossom'
     },
-    signal,
-    timeoutMs
+    signal
   });
 }
 
