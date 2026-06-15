@@ -252,7 +252,7 @@ test.describe('SBOM workflow', () => {
     expect(generatedEvents.availability).toBeTruthy();
     expect(generatedEvents.audit).toBeTruthy();
 
-    await expect(page.getByText(/SBOM generation completed\. Loaded 2 SBOM reference events/)).toBeVisible();
+    await expect(page.getByText('SBOM generated successfully.')).toBeVisible();
     await expect(page.locator('.attestation-item').filter({ hasText: 'Format' }).getByText('SPDX', { exact: true })).toBeVisible();
     await expect(page.getByText('syft')).toBeVisible();
     await expect(page.getByText(`blossom://mock/${NO_SBOM_ARTIFACT_ID}.spdx.json`)).toBeVisible();
