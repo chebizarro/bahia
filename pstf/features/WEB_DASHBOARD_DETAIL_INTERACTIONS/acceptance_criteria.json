@@ -9,7 +9,7 @@
     },
     {
       "id": "AC2",
-      "text": "Environment States shows service and environment names instead of ID hashes, exposes the underlying IDs on hover, and opens the requested service/environment dialogs when those names are clicked.",
+      "text": "Environment States shows service and environment names instead of ID hashes, exposes the underlying IDs on hover, and links directly to the requested service/environment detail routes when those names are clicked.",
       "status": "passed"
     },
     {

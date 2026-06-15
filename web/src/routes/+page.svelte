@@ -31,10 +31,6 @@
   let costSummaryLoadSequence = 0;
   let lastCostSummaryWorkerKey = null;
   let timeColumnLabel = $state('Time (local)');
-  let selectedService = $state(null);
-  let serviceDialogOpen = $state(false);
-  let selectedEnvironment = $state(null);
-  let environmentDialogOpen = $state(false);
   let selectedActivityEvent = $state(null);
   let activityEventDialogOpen = $state(false);
 
@@ -196,22 +192,23 @@
     return id ? `${label}: ${displayName} (${id})` : `${label}: ${displayName}`;
   }
 
-  function renderDashboardEntityTrigger(action, id, label, title) {
+  function renderDashboardEntityLink(basePath, id, label, title) {
     if (!id) return '-';
 
-    return `<button type="button" class="dashboard-entity-button" data-dashboard-action="${escapeHtml(action)}" data-entity-id="${escapeHtml(id)}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+    const href = `${basePath}/${encodeURIComponent(id)}`;
+    return `<a class="dashboard-entity-link" href="${href}" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`;
   }
 
   function dashboardStateServiceCell(row) {
     const serviceId = firstPresentString(row?.service_id);
     const serviceName = serviceDisplayNameById(serviceId);
-    return renderDashboardEntityTrigger('service', serviceId, truncateLabel(serviceName), entityTooltip('Service', serviceName, serviceId));
+    return renderDashboardEntityLink('/services', serviceId, truncateLabel(serviceName), entityTooltip('Service', serviceName, serviceId));
   }
 
   function dashboardStateEnvironmentCell(row) {
     const environmentId = firstPresentString(row?.environment_id);
     const environmentName = environmentDisplayNameById(environmentId);
-    return renderDashboardEntityTrigger('environment', environmentId, truncateLabel(environmentName), entityTooltip('Environment', environmentName, environmentId));
+    return renderDashboardEntityLink('/environments', environmentId, truncateLabel(environmentName), entityTooltip('Environment', environmentName, environmentId));
   }
 
   function resolveActivityReferences(row) {
@@ -319,41 +316,10 @@
     return refs.entityId ? `<code>${escapeHtml(fallbackIdLabel(refs.entityId))}</code>` : '-';
   }
 
-  function openServiceDialogById(serviceId) {
-    const id = firstPresentString(serviceId);
-    if (!id) return;
-    selectedService = lookupService(id) || { id, name: id };
-    serviceDialogOpen = true;
-  }
-
-  function openEnvironmentDialogById(environmentId) {
-    const id = firstPresentString(environmentId);
-    if (!id) return;
-    selectedEnvironment = lookupEnvironment(id) || { id, name: id };
-    environmentDialogOpen = true;
-  }
-
   function openActivityEventDialog(row) {
     if (!row) return;
     selectedActivityEvent = row;
     activityEventDialogOpen = true;
-  }
-
-  function handleEnvironmentStatesRowClick(row, event) {
-    const trigger = event.target?.closest?.('[data-dashboard-action]');
-    if (!trigger || event.target?.closest?.('a')) return;
-
-    const action = trigger.getAttribute('data-dashboard-action');
-    const entityId = trigger.getAttribute('data-entity-id') || '';
-
-    if (action === 'service') {
-      openServiceDialogById(entityId || row?.service_id);
-      return;
-    }
-
-    if (action === 'environment') {
-      openEnvironmentDialogById(entityId || row?.environment_id);
-    }
   }
 
   function handleRecentActivityRowClick(row, event) {
@@ -691,7 +657,7 @@
         <WarningIcon size={20} strokeWidth={1.75} ariaHidden="true" />
         Environment States
       </h2>
-      <Table columns={stateColumns} data={states.slice(0, 10)} onRowClick={handleEnvironmentStatesRowClick} rowClickable={false} />
+      <Table columns={stateColumns} data={states.slice(0, 10)} rowClickable={false} />
       {#if dashboardSyncing}
         <p class="section-streaming-hint">Snapshot still streaming from relays. Additional states will appear as they arrive.</p>
       {/if}
@@ -712,82 +678,6 @@
     </section>
   </div>
 </div>
-
-<Modal
-  bind:open={serviceDialogOpen}
-  title={selectedService ? `${firstPresentString(selectedService.name, selectedService.id)} · Service` : 'Service details'}
-  titleIcon={ServiceIcon}
-  onClose={() => {
-    serviceDialogOpen = false;
-    selectedService = null;
-  }}
->
-  {#if selectedService}
-    <div class="dashboard-detail-dialog">
-      <dl>
-        <div>
-          <dt>Name</dt>
-          <dd>{firstPresentString(selectedService.name, selectedService.id)}</dd>
-        </div>
-        <div>
-          <dt>ID</dt>
-          <dd><code>{selectedService.id}</code></dd>
-        </div>
-        <div>
-          <dt>Runtime</dt>
-          <dd>{firstPresentString(selectedService.runtime_type, '—')}</dd>
-        </div>
-        <div>
-          <dt>Artifact Repo</dt>
-          <dd>{firstPresentString(selectedService.artifact_repo, '—')}</dd>
-        </div>
-        <div>
-          <dt>Default Branch</dt>
-          <dd>{firstPresentString(selectedService.default_branch, '—')}</dd>
-        </div>
-      </dl>
-      <a class="dashboard-detail-link" href={selectedService.id ? `/services/${encodeURIComponent(selectedService.id)}` : '/services'}>
-        Open service page
-      </a>
-    </div>
-  {/if}
-</Modal>
-
-<Modal
-  bind:open={environmentDialogOpen}
-  title={selectedEnvironment ? `${firstPresentString(selectedEnvironment.name, selectedEnvironment.id)} · Environment` : 'Environment details'}
-  titleIcon={EnvironmentIcon}
-  onClose={() => {
-    environmentDialogOpen = false;
-    selectedEnvironment = null;
-  }}
->
-  {#if selectedEnvironment}
-    <div class="dashboard-detail-dialog">
-      <dl>
-        <div>
-          <dt>Name</dt>
-          <dd>{firstPresentString(selectedEnvironment.name, selectedEnvironment.id)}</dd>
-        </div>
-        <div>
-          <dt>ID</dt>
-          <dd><code>{selectedEnvironment.id}</code></dd>
-        </div>
-        <div>
-          <dt>Worker Selector</dt>
-          <dd>{firstPresentString(selectedEnvironment.loom_worker_selector, '—')}</dd>
-        </div>
-        <div>
-          <dt>Protected</dt>
-          <dd>{selectedEnvironment.protected ? 'Yes' : 'No'}</dd>
-        </div>
-      </dl>
-      <a class="dashboard-detail-link" href={selectedEnvironment.id ? `/environments/${encodeURIComponent(selectedEnvironment.id)}` : '/environments'}>
-        Open environment page
-      </a>
-    </div>
-  {/if}
-</Modal>
 
 <Modal
   bind:open={activityEventDialogOpen}
@@ -1005,19 +895,15 @@
     color: var(--primary);
     font-weight: 600;
   }
-  :global(.dashboard-entity-button) {
-    background: none;
-    border: none;
-    padding: 0;
+  :global(.dashboard-entity-link) {
     color: var(--primary);
-    cursor: pointer;
-    font: inherit;
     font-size: 0.85rem;
     font-weight: 600;
     text-align: left;
+    text-decoration: none;
   }
-  :global(.dashboard-entity-button:hover),
-  :global(.dashboard-entity-button:focus-visible) {
+  :global(.dashboard-entity-link:hover),
+  :global(.dashboard-entity-link:focus-visible) {
     text-decoration: underline;
   }
   :global(.activity-time) {
@@ -1059,15 +945,6 @@
     color: var(--text-primary);
     font-size: 0.9rem;
     word-break: break-word;
-  }
-  .dashboard-detail-link {
-    color: var(--primary);
-    font-weight: 600;
-    text-decoration: none;
-  }
-  .dashboard-detail-link:hover,
-  .dashboard-detail-link:focus-visible {
-    text-decoration: underline;
   }
   .dashboard-event-json {
     margin: 0;

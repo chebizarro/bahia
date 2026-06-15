@@ -669,27 +669,27 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(activitySection.locator('a[href="/environments/env-2"]').first()).toBeVisible();
   });
 
-  test('should show named environment state entities with id tooltips and detail dialogs', async ({ page }) => {
+  test('should deep-link named environment state service and environment entities', async ({ page }) => {
     await page.goto('/');
 
     const environmentStates = page.locator('section#environment-states');
     const firstRow = environmentStates.locator('tbody tr').first();
-    const serviceButton = firstRow.getByRole('button', { name: 'web-app' });
-    const environmentButton = firstRow.getByRole('button', { name: 'production' });
+    const serviceLink = firstRow.getByRole('link', { name: 'web-app' });
+    const environmentLink = firstRow.getByRole('link', { name: 'production' });
 
-    await expect(serviceButton).toBeVisible();
-    await expect(environmentButton).toBeVisible();
-    await expect(serviceButton).toHaveAttribute('title', /service-1/);
-    await expect(environmentButton).toHaveAttribute('title', /env-1/);
+    await expect(serviceLink).toBeVisible();
+    await expect(environmentLink).toBeVisible();
+    await expect(serviceLink).toHaveAttribute('title', /service-1/);
+    await expect(environmentLink).toHaveAttribute('title', /env-1/);
+    await expect(serviceLink).toHaveAttribute('href', '/services/service-1');
+    await expect(environmentLink).toHaveAttribute('href', '/environments/env-1');
 
-    await serviceButton.click();
-    await expect(page.getByRole('dialog', { name: 'web-app · Service' })).toBeVisible();
-    await expect(page.getByRole('dialog', { name: 'web-app · Service' })).toContainText('ghcr.io/test/web-app');
-    await page.getByRole('dialog', { name: 'web-app · Service' }).getByRole('button', { name: 'Close' }).click();
+    await serviceLink.click();
+    await expect(page).toHaveURL(/\/services\/service-1$/);
 
-    await environmentButton.click();
-    await expect(page.getByRole('dialog', { name: 'production · Environment' })).toBeVisible();
-    await expect(page.getByRole('dialog', { name: 'production · Environment' })).toContainText('role=prod');
+    await page.goto('/');
+    await page.locator('section#environment-states').locator('tbody tr').first().getByRole('link', { name: 'production' }).click();
+    await expect(page).toHaveURL(/\/environments\/env-1$/);
   });
 
   test('should show timezone-aware recent activity details and event dialog', async ({ page }) => {

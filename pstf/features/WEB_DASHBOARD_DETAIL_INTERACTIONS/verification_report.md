@@ -2,7 +2,7 @@
 
 ## Summary
 
-Implemented the requested Bahia web refinements: enlarged the top-bar logo, removed the Pending Approvals nav badge, made dashboard state and activity entities human-readable and interactive, added timezone-aware recent-activity affordances, and corrected service-secret unavailability copy to describe encrypted Nostr events.
+Implemented the requested Bahia web refinements: enlarged the top-bar logo, removed the Pending Approvals nav badge, made dashboard state and activity entities human-readable and interactive, added timezone-aware recent-activity affordances, and corrected service-secret unavailability copy to describe encrypted Nostr events. Updated Environment States service/environment names to be direct detail-route links after the delegated dialog click path regressed.
 
 ## Commands Run
 
@@ -29,7 +29,7 @@ All mapped verification commands for this slice passed. A separate legacy smoke 
 
 ## Ambiguities / Human Decisions Needed
 
-Resolved during implementation: clicking Environment States service names opens a service dialog; clicking environment names opens an environment dialog.
+Resolved during implementation: Environment States service and environment names should navigate directly to `/services/:id` and `/environments/:id`; delegated dashboard service/environment dialogs were removed from this path.
 
 ## Confidence Assessment
 

@@ -32,7 +32,7 @@
     ]
   },
   "implementation_notes": [
-    "Dashboard smoke coverage now asserts named entity buttons, ID tooltips, timezone labeling, event hover detail, and dashboard detail dialogs.",
+    "Dashboard smoke coverage now asserts named Environment States entity links, ID tooltips, navigation to service/environment detail routes, timezone labeling, event hover detail, and event detail dialogs.",
     "Service-secret wording is verified through the encrypted-route-stores unit coverage and a clean production build."
   ]
 }
