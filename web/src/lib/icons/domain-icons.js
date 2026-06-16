@@ -46,7 +46,6 @@ import IconServer from './tabler/IconServer.svelte';
 import IconSettings from './tabler/IconSettings.svelte';
 import IconShieldCheck from './tabler/IconShieldCheck.svelte';
 import IconShieldLock from './tabler/IconShieldLock.svelte';
-import IconShieldLock from './tabler/IconShieldLock.svelte';
 import IconSignature from './tabler/IconSignature.svelte';
 import IconSparkles from './tabler/IconSparkles.svelte';
 import IconSun from './tabler/IconSun.svelte';

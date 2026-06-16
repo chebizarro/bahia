@@ -15,11 +15,11 @@ import {
 } from './encrypted-controlplane-utils.js';
 import { ensureHexPubkey } from './nostr-hex.js';
 
-function isContextVMWrapperKind(kind) {
+export function isContextVMWrapperKind(kind) {
   return kind === CONTEXTVM_GIFT_WRAP_KIND || kind === CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND;
 }
 
-async function parseContextVMResultPayload(event, servicePubkey) {
+export async function parseContextVMResultPayload(event, servicePubkey) {
   if (isContextVMWrapperKind(event.kind)) {
     const payload = parseJson(await decryptWithAuth(event.pubkey, event.content || ''));
     if (payload?.kind === CONTEXTVM_MESSAGE_KIND && typeof payload.content === 'string') {

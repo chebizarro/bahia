@@ -758,6 +758,9 @@ export async function connectNostrConnectSessionFromStorage() {
 
 export function logout() {
   cleanupAuthMetadataClient();
+  import('$lib/nostr/encrypted-controlplane.js').then(({ disconnectEncryptedControlplane }) => {
+    disconnectEncryptedControlplane();
+  }).catch(() => {});
   clearPersistedSession();
   void disconnectNip46().catch((err) => console.warn('Failed to disconnect NIP-46 session:', err));
   if (browser) {

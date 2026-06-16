@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
+const publishEncryptedRequestMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
 
@@ -9,7 +10,8 @@ vi.mock('$app/navigation', () => ({
 }));
 
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
-  requestEncryptedResult: requestEncryptedResultMock
+  requestEncryptedResult: requestEncryptedResultMock,
+  publishEncryptedRequest: publishEncryptedRequestMock
 }));
 
 vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({
@@ -23,6 +25,13 @@ describe('public controlplane command helpers', () => {
     vi.resetModules();
     vi.clearAllMocks();
     bootstrapMock.mockResolvedValue({ ok: true });
+    publishEncryptedRequestMock.mockResolvedValue({
+      requestEventId: 'req-1',
+      event: { id: 'req-1' },
+      ok: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
+      acceptedRelays: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
+      rejectedRelays: []
+    });
     requestEncryptedResultMock.mockResolvedValue({
       requestEventId: 'req-1',
       result: { status: 'ok' }
@@ -182,7 +191,7 @@ describe('public controlplane command helpers', () => {
       digest: 'sha256:abc123'
     });
 
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+    expect(publishEncryptedRequestMock).toHaveBeenCalledWith({
       operation: 'sbom/generate',
       tags: [
         ['domain', 'sbom'],
@@ -208,8 +217,7 @@ describe('public controlplane command helpers', () => {
         generator: 'syft',
         storage: 'blossom'
       },
-      signal: undefined,
-      timeoutMs: undefined
+      signal: undefined
     });
   });
 
@@ -236,7 +244,7 @@ describe('public controlplane command helpers', () => {
       digest: 'sha256:abc123'
     });
 
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith(expect.objectContaining({
+    expect(publishEncryptedRequestMock).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'sbom/generate',
       payload: expect.objectContaining({
         source: { kind: 'oci-image', locator: 'ghcr.io/example/nostrodomo@sha256:abc123' }
