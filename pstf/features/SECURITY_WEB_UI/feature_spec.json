@@ -1,0 +1,27 @@
+{
+  "feature_id": "SECURITY_WEB_UI",
+  "title": "Security Web UI: Surface OSV scanning in the web app",
+  "description": "Add a Security dashboard and detail view to the Bahia SvelteKit web app so operators can view vulnerability scan results, trigger manual scans, inspect findings by severity, and monitor scan schedules — all backed by encrypted ContextVM methods and Nostr event subscriptions.",
+  "parent_feature": "SECURITY_OSV_SBOM",
+  "status": "complete",
+  "created": "2026-06-15",
+  "scope": [
+    "Security Svelte store wired to ContextVM encrypted operations (security/scan, security/rescan, security/findings-list, security/schedules-list)",
+    "Dashboard route /security with severity summary, findings table, scan controls, and schedule list",
+    "Detail route /security/[id] showing scan run results with full findings",
+    "Nav link under Operations section",
+    "Unit tests for store operations and component rendering",
+    "User-guide documentation for the Security web UI"
+  ],
+  "out_of_scope": [
+    "Backend scanner changes — already implemented in SECURITY_OSV_SBOM",
+    "REST API endpoints — Security uses encrypted ContextVM only",
+    "MCP tool surface — explicitly out of scope per existing design",
+    "Policy configuration UI — uses existing /policies route"
+  ],
+  "nostr_semantics": {
+    "mutation_transport": "ContextVM kind 25910 via CEP-4/NIP-59 gift-wrap (1059/21059)",
+    "observable_kinds": ["NIP-38 30315 for scan status", "30900 for security state projections"],
+    "pattern": "requestEncryptedResult for ContextVM calls; subscribe to NIP-38 status events for live scan progress"
+  }
+}

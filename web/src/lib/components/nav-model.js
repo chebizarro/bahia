@@ -19,6 +19,7 @@ const OPERATIONS_LINKS = [
   { href: '/backup', label: 'Backup', docTopic: 'features-backup' },
   { href: '/continuity', label: 'Continuity' },
   { href: '/dns', label: 'DNS', docTopic: 'features-dns' },
+  { href: '/security', label: 'Security', docTopic: 'features-security' },
   { href: '/notifications', label: 'Notifications', docTopic: 'features-notifications' },
   { href: '/events', label: 'Events' }
 ];

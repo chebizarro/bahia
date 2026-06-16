@@ -1,0 +1,85 @@
+{
+  "feature_id": "SECURITY_WEB_UI",
+  "tests": [
+    {
+      "id": "T-1",
+      "title": "listSecurityFindings calls ContextVM and populates state",
+      "type": "unit",
+      "criteria": ["AC-1"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-2",
+      "title": "listSecuritySchedules calls ContextVM and populates state",
+      "type": "unit",
+      "criteria": ["AC-2"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-3",
+      "title": "submitSecurityScan calls ContextVM with correct operation",
+      "type": "unit",
+      "criteria": ["AC-3"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-4",
+      "title": "rescanSecurityTarget calls ContextVM with target_key_hash",
+      "type": "unit",
+      "criteria": ["AC-4"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-5",
+      "title": "Severity summary computes counts from findings",
+      "type": "unit",
+      "criteria": ["AC-5"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-6",
+      "title": "Findings table columns render expected data",
+      "type": "unit",
+      "criteria": ["AC-6"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-7",
+      "title": "Empty findings state returns zero counts",
+      "type": "unit",
+      "criteria": ["AC-7"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-8",
+      "title": "listSecurityFindings with run_id filters to specific run",
+      "type": "unit",
+      "criteria": ["AC-8"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    },
+    {
+      "id": "T-9",
+      "title": "Nav model includes Security link under Operations",
+      "type": "unit",
+      "criteria": ["AC-9"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-nav.test.js"
+    },
+    {
+      "id": "T-10",
+      "title": "Store error handling sets error state without silent fallback",
+      "type": "unit",
+      "criteria": ["AC-10"],
+      "status": "passed",
+      "file": "web/tests/unit/security/security-store.test.js"
+    }
+  ]
+}

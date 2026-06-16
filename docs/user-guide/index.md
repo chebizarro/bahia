@@ -60,6 +60,7 @@ All three paths read from `docs/user-guide/**/*.md`; do not duplicate user-facin
 | [DNS](features/dns.md) | DNS zone and endpoint management |
 | [Packages](features/packages.md) | Package repository management |
 | [Policies](features/policies.md) | Deployment approval and SBOM policies |
+| [Security](features/security.md) | OSV vulnerability scanning dashboard |
 | [Payments](features/payments.md) | Cost estimation and payment history |
 
 ### Integration & Reference

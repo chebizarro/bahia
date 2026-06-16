@@ -1,0 +1,65 @@
+{
+  "feature_id": "SECURITY_WEB_UI",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "title": "Security store loads findings via ContextVM",
+      "description": "The security store calls requestEncryptedResult with operation 'security/findings-list' and populates reactive state with the response payload.",
+      "test_ids": ["T-1"]
+    },
+    {
+      "id": "AC-2",
+      "title": "Security store loads schedules via ContextVM",
+      "description": "The security store calls requestEncryptedResult with operation 'security/schedules-list' and populates reactive state.",
+      "test_ids": ["T-2"]
+    },
+    {
+      "id": "AC-3",
+      "title": "Security store triggers scan via ContextVM",
+      "description": "The security store calls requestEncryptedResult with operation 'security/scan' and returns the accepted response with run_id.",
+      "test_ids": ["T-3"]
+    },
+    {
+      "id": "AC-4",
+      "title": "Security store triggers rescan via ContextVM",
+      "description": "The security store calls requestEncryptedResult with operation 'security/rescan' and returns the accepted response.",
+      "test_ids": ["T-4"]
+    },
+    {
+      "id": "AC-5",
+      "title": "Dashboard route renders severity summary",
+      "description": "The /security page shows aggregate severity counts (critical, high, moderate, low) derived from the loaded findings.",
+      "test_ids": ["T-5"]
+    },
+    {
+      "id": "AC-6",
+      "title": "Dashboard route renders findings table",
+      "description": "The /security page shows a table of findings with columns: OSV ID, CVE, package, severity, summary.",
+      "test_ids": ["T-6"]
+    },
+    {
+      "id": "AC-7",
+      "title": "Dashboard route renders empty state",
+      "description": "When no findings exist, the /security page shows an EmptyState component with appropriate messaging.",
+      "test_ids": ["T-7"]
+    },
+    {
+      "id": "AC-8",
+      "title": "Detail route renders scan run findings",
+      "description": "The /security/[id] page loads findings for a specific scan run and displays full details including references and aliases.",
+      "test_ids": ["T-8"]
+    },
+    {
+      "id": "AC-9",
+      "title": "Nav link appears under Operations",
+      "description": "The Security nav link appears in the Operations section of the navigation sidebar with the correct icon and href.",
+      "test_ids": ["T-9"]
+    },
+    {
+      "id": "AC-10",
+      "title": "Loading and error states are handled",
+      "description": "The security store and routes handle loading and error states without silent fallbacks.",
+      "test_ids": ["T-10"]
+    }
+  ]
+}
