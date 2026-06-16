@@ -347,7 +347,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier3Gate).Get("/blossom/servers", blossomH.GetServers)
 				r.With(tier3Gate).Get("/blossom/health", blossomH.HealthCheck)
 				r.With(tier3Gate).Get("/blossom/stats", blossomH.GetStats)
-				r.With(tier3Gate).Get("/blossom/blob/{hash}", blossomH.DownloadBlob)
+				// Blob download is unauthenticated: content-addressable blobs are
+				// publicly verifiable by SHA-256 hash and the Blossom server itself
+				// may be HTTP-only, requiring this HTTPS proxy to avoid mixed-content.
+				r.Get("/blossom/blob/{hash}", blossomH.DownloadBlob)
 			}
 		})
 

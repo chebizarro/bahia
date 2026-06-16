@@ -133,10 +133,9 @@
     try {
       let resp;
       const hash = extractBlossomHash(blossomURI);
-      if (hash && wouldHitMixedContent(blossomURI) && api) {
-        // Use the backend proxy only when the browser would block a
-        // mixed-content fetch (HTTPS page → HTTP Blossom server).
-        // Blossom blobs are content-addressable and publicly fetchable.
+      if (hash && api) {
+        // Route through the backend proxy — the Blossom server is typically
+        // HTTP-only and not directly reachable from the HTTPS browser page.
         resp = await api.fetchBlossomBlob(hash);
       } else {
         resp = await fetch(blossomURI);
