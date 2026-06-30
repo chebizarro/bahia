@@ -195,15 +195,14 @@ func BuildSBOMReferenceEvent(input BuildSBOMReferenceEventInput) (*nostr.Event, 
 
 // BuildSBOMAvailabilityListEvent builds a NIP-51 30004 complete availability list for one subject version.
 func BuildSBOMAvailabilityListEvent(input BuildSBOMAvailabilityListEventInput) (*nostr.Event, string, error) {
-	if err := validateSBOMSubject(input.Subject); err != nil {
+	dTag, err := AvailabilityListDTag(input.Subject)
+	if err != nil {
 		return nil, "", err
 	}
 	if input.PublisherPubkey == "" {
 		return nil, "", fmt.Errorf("publisher pubkey is required")
 	}
 
-	subjectKey := SubjectKey(input.Subject)
-	dTag := fmt.Sprintf("sbom:available:%s:%s", input.Subject.Type, subjectKey)
 	titleSubject := input.Subject.DisplayName
 	if titleSubject == "" {
 		titleSubject = input.Subject.ID
@@ -241,7 +240,11 @@ func BuildSBOMAvailabilityListEvent(input BuildSBOMAvailabilityListEventInput) (
 		if refDTag == "" {
 			return nil, "", fmt.Errorf("SBOM availability entry reference d tag is required")
 		}
-		coordinate := fmt.Sprintf("%d:%s:%s", KindSBOMReference, input.PublisherPubkey, refDTag)
+		referencePubkey := strings.TrimSpace(entry.ReferencePubkey)
+		if referencePubkey == "" {
+			referencePubkey = input.PublisherPubkey
+		}
+		coordinate := fmt.Sprintf("%d:%s:%s", KindSBOMReference, referencePubkey, refDTag)
 		tags = append(tags, nostr.Tag{TagAReference, coordinate})
 		tags = append(tags, nostr.Tag{
 			TagSBOMRef,
@@ -262,6 +265,14 @@ func BuildSBOMAvailabilityListEvent(input BuildSBOMAvailabilityListEventInput) (
 		Tags:      tags,
 	}
 	return ev, dTag, nil
+}
+
+// AvailabilityListDTag returns the canonical d tag for a subject-scoped 30004 SBOM availability list.
+func AvailabilityListDTag(subject domain.SBOMSubject) (string, error) {
+	if err := validateSBOMSubject(subject); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sbom:available:%s:%s", subject.Type, SubjectKey(subject)), nil
 }
 
 // PublishAttestation publishes an SBOM reference as a NIP-78 app-data event after relay OK acceptance.

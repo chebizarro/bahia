@@ -241,6 +241,8 @@ type SBOMIndexEntry struct {
 	AttestationID string `json:"attestationId,omitempty"`
 	// ReferenceDTag is the d tag of the canonical 30078 reference event.
 	ReferenceDTag string `json:"referenceDTag,omitempty"`
+	// ReferencePubkey is the pubkey that published the referenced 30078 addressable event.
+	ReferencePubkey string `json:"referencePubkey,omitempty"`
 	// Format is the SBOM format.
 	Format SBOMFormat `json:"format"`
 	// LocationURI is where to fetch the SBOM.

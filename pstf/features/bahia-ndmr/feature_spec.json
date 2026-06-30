@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-ndmr",
+  "title": "Relay-backed SBOM availability-list merge",
+  "status": "implemented_pending_user_verification",
+  "observed_behavior": "Before this slice, the SBOM orchestrator rebuilt canonical 30004 availability lists from local projection entries only, so valid relay-published references could be dropped when replacing the complete list.",
+  "intended_behavior": "Before replacing a subject-scoped kind 30004 SBOM availability list, Bahia subscribes to the current canonical list with an exact filter, validates relay events, waits for EOSE historical catch-up, merges/dedupes relay and local entries, then publishes the complete replacement only after relay OK acceptance.",
+  "scope": [
+    "internal/service/sbom_orchestrator.go",
+    "internal/app/app.go",
+    "internal/adapters/sbom/index.go",
+    "internal/domain/sbom.go"
+  ],
+  "out_of_scope": [
+    "bahia-qfod cdxgen runtime config",
+    "bahia-wqj5",
+    "bahia-ilio"
+  ]
+}

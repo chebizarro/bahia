@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-ndmr",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Before replacing a canonical 30004 SBOM availability list, Bahia subscribes to the current list using a scoped REQ for kind 30004 with #d, #subject, and #subject_type.",
+      "verification": "TestSBOMOrchestratorMergesRelayAvailabilityBeforeReplacement asserts kind, d, subject, and subject_type filter scope."
+    },
+    {
+      "id": "AC2",
+      "description": "Relay EVENT content is trusted only after event ID, signature, required tags, and SBOM availability entries validate.",
+      "verification": "TestSBOMOrchestratorRejectsInvalidRelayAvailabilityContent rejects invalid relay list content before publication."
+    },
+    {
+      "id": "AC3",
+      "description": "Historical catch-up waits for EOSE before publishing the replacement list and fails closed on CLOSED before EOSE.",
+      "verification": "TestSBOMOrchestratorFailsClosedWhenAvailabilitySubscriptionClosesBeforeEOSE ensures no 30004 publish or projection occurs after CLOSED before EOSE."
+    },
+    {
+      "id": "AC4",
+      "description": "Relay entries and local projection entries are merged without dropping valid existing references.",
+      "verification": "TestSBOMOrchestratorMergesRelayAvailabilityBeforeReplacement asserts the replacement list contains both local and relay entries."
+    },
+    {
+      "id": "AC5",
+      "description": "AUTH, EVENT, RelayEOSE, EOSE, CLOSED, and OK paths are deterministic and tested without sleeps.",
+      "verification": "Scripted fake subscription injects AUTH, RelayEOSE, EVENT, EOSE, and CLOSED messages; fake publisher injects OK results."
+    }
+  ]
+}

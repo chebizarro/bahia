@@ -674,6 +674,7 @@ func New(cfg *config.Config) (*App, error) {
 			Storage:    sbomStorageResolver,
 			Repo:       sbomManifestRepo,
 			Publisher:  sbomPublishAdapter{publisher: sbomControlPlanePublisher},
+			Subscriber: sbomAvailabilityRelaySubscriber{pool: controlPlanePool},
 			Resolver: service.SBOMSubjectResolver{
 				Artifacts:   artifactRepo,
 				Deployments: intentRepo,
@@ -2575,6 +2576,71 @@ func (s securityMergedSubscription) Next(ctx context.Context) (service.SecurityS
 		}
 	}
 	return service.SecuritySubscriptionMessage{}, false, nil
+}
+
+type sbomAvailabilityRelaySubscriber struct {
+	pool *nostrAdapter.RelayPool
+}
+
+func (s sbomAvailabilityRelaySubscriber) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (service.SBOMAvailabilitySubscription, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("SBOM availability relay pool is not configured")
+	}
+	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	return sbomAvailabilityMergedSubscription{merged: merged}, nil
+}
+
+func (s sbomAvailabilityRelaySubscriber) AuthenticateRelay(ctx context.Context, relayURL string) error {
+	if s.pool == nil {
+		return fmt.Errorf("SBOM availability relay pool is not configured")
+	}
+	return s.pool.AuthenticateRelay(ctx, relayURL)
+}
+
+type sbomAvailabilityMergedSubscription struct {
+	merged *nostrAdapter.MergedSubscription
+}
+
+func (s sbomAvailabilityMergedSubscription) Close() {
+	if s.merged != nil {
+		s.merged.Close()
+	}
+}
+
+func (s sbomAvailabilityMergedSubscription) Next(ctx context.Context) (service.SBOMAvailabilitySubscriptionMessage, bool, error) {
+	if s.merged == nil {
+		return service.SBOMAvailabilitySubscriptionMessage{}, false, nil
+	}
+	for s.merged.Events != nil || s.merged.EndOfStoredEvents != nil || s.merged.RelayEOSE != nil || s.merged.Closed != nil {
+		select {
+		case <-ctx.Done():
+			return service.SBOMAvailabilitySubscriptionMessage{}, false, ctx.Err()
+		case ev, ok := <-s.merged.Events:
+			if ok {
+				return service.SBOMAvailabilitySubscriptionMessage{Event: ev}, true, nil
+			}
+			s.merged.Events = nil
+		case _, ok := <-s.merged.EndOfStoredEvents:
+			if ok {
+				return service.SBOMAvailabilitySubscriptionMessage{EOSE: true}, true, nil
+			}
+			s.merged.EndOfStoredEvents = nil
+		case eose, ok := <-s.merged.RelayEOSE:
+			if ok {
+				return service.SBOMAvailabilitySubscriptionMessage{RelayEOSE: service.SBOMAvailabilityRelayEOSE{RelayURL: eose.RelayURL, SubscriptionID: eose.SubscriptionID}}, true, nil
+			}
+			s.merged.RelayEOSE = nil
+		case closed, ok := <-s.merged.Closed:
+			if ok {
+				return service.SBOMAvailabilitySubscriptionMessage{Closed: service.SBOMAvailabilityRelayClosed{RelayURL: closed.RelayURL, SubscriptionID: closed.SubscriptionID, Reason: closed.Reason}}, true, nil
+			}
+			s.merged.Closed = nil
+		}
+	}
+	return service.SBOMAvailabilitySubscriptionMessage{}, false, nil
 }
 
 type sbomPublishAdapter struct {

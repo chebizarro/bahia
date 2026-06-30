@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-ndmr",
+  "tests": [
+    {
+      "name": "TestSBOMOrchestratorMergesRelayAvailabilityBeforeReplacement",
+      "package": "./internal/service",
+      "acceptance": ["AC1", "AC2", "AC4", "AC5"],
+      "notes": "Injects AUTH, RelayEOSE, EVENT, and EOSE; verifies scoped filter and merged replacement content."
+    },
+    {
+      "name": "TestSBOMOrchestratorFailsClosedWhenAvailabilitySubscriptionClosesBeforeEOSE",
+      "package": "./internal/service",
+      "acceptance": ["AC3", "AC5"],
+      "notes": "Injects CLOSED before EOSE and verifies fail-closed behavior without replacement publish or projection."
+    },
+    {
+      "name": "TestSBOMOrchestratorRejectsInvalidRelayAvailabilityContent",
+      "package": "./internal/service",
+      "acceptance": ["AC2"],
+      "notes": "Injects a signed 30004 event with invalid SBOM availability content and verifies rejection."
+    },
+    {
+      "name": "TestBuildSBOMAvailabilityListEvent",
+      "package": "./internal/adapters/sbom",
+      "acceptance": ["AC4"],
+      "notes": "Verifies canonical 30004 list building and entry dedupe."
+    },
+    {
+      "name": "TestIndexPublisher_PublishIndexRequiresAcceptedOK",
+      "package": "./internal/adapters/sbom",
+      "acceptance": ["AC5"],
+      "notes": "Verifies availability publication requires relay OK acceptance."
+    }
+  ]
+}

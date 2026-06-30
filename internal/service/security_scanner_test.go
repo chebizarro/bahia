@@ -631,6 +631,9 @@ func (r *recordingSBOMCompatibilityUpdater) GetManifestByID(context.Context, uui
 func (r *recordingSBOMCompatibilityUpdater) ListManifestsBySubject(context.Context, domain.SBOMSubject, int) ([]domain.SBOMManifest, error) {
 	return nil, nil
 }
+func (r *recordingSBOMCompatibilityUpdater) ListPublishedManifests(context.Context, int) ([]domain.SBOMManifest, error) {
+	return nil, nil
+}
 func (r *recordingSBOMCompatibilityUpdater) UpdateManifestPublishState(context.Context, uuid.UUID, domain.SBOMPublishState, string, string, string) error {
 	return nil
 }

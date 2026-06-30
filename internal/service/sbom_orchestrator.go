@@ -28,6 +28,41 @@ type SBOMVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
 }
 
+type SBOMAvailabilitySubscriber interface {
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (SBOMAvailabilitySubscription, error)
+	AuthenticateRelay(context.Context, string) error
+}
+
+type SBOMAvailabilitySubscription interface {
+	Next(context.Context) (SBOMAvailabilitySubscriptionMessage, bool, error)
+	Close()
+}
+
+type SBOMAvailabilitySubscriptionMessage struct {
+	Event     *nostr.Event
+	EOSE      bool
+	RelayEOSE SBOMAvailabilityRelayEOSE
+	Closed    SBOMAvailabilityRelayClosed
+	Auth      SBOMAvailabilityRelayAuth
+}
+
+type SBOMAvailabilityRelayEOSE struct {
+	RelayURL       string
+	SubscriptionID string
+}
+
+type SBOMAvailabilityRelayClosed struct {
+	RelayURL       string
+	SubscriptionID string
+	Reason         string
+}
+
+type SBOMAvailabilityRelayAuth struct {
+	RelayURL   string
+	Challenge  string
+	ReasonHint string
+}
+
 type SBOMGenerateRequest struct {
 	IDempotencyKey string                    `json:"idempotencyKey"`
 	Subject        domain.SBOMSubject        `json:"subject"`
@@ -116,6 +151,7 @@ type SBOMOrchestrator struct {
 	Storage    *sbomadapter.StorageResolver
 	Repo       repository.SBOMManifestRepository
 	Publisher  SBOMVerifiedPublisher
+	Subscriber SBOMAvailabilitySubscriber
 	Resolver   SBOMSubjectResolver
 	Pubkey     string
 	Logger     *zap.Logger
@@ -130,6 +166,7 @@ type SBOMOrchestratorConfig struct {
 	Storage    *sbomadapter.StorageResolver
 	Repo       repository.SBOMManifestRepository
 	Publisher  SBOMVerifiedPublisher
+	Subscriber SBOMAvailabilitySubscriber
 	Resolver   SBOMSubjectResolver
 	Pubkey     string
 	Logger     *zap.Logger
@@ -140,7 +177,7 @@ func NewSBOMOrchestrator(cfg SBOMOrchestratorConfig) *SBOMOrchestrator {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &SBOMOrchestrator{Generators: cfg.Generators, Storage: cfg.Storage, Repo: cfg.Repo, Publisher: cfg.Publisher, Resolver: cfg.Resolver, Pubkey: strings.TrimSpace(cfg.Pubkey), Logger: logger.Named("sbom-orchestrator"), results: map[string]SBOMRunResult{}, locks: map[string]*sync.Mutex{}}
+	return &SBOMOrchestrator{Generators: cfg.Generators, Storage: cfg.Storage, Repo: cfg.Repo, Publisher: cfg.Publisher, Subscriber: cfg.Subscriber, Resolver: cfg.Resolver, Pubkey: strings.TrimSpace(cfg.Pubkey), Logger: logger.Named("sbom-orchestrator"), results: map[string]SBOMRunResult{}, locks: map[string]*sync.Mutex{}}
 }
 
 func (s *SBOMOrchestrator) Generate(ctx context.Context, req SBOMGenerateRequest) (*SBOMRunResult, error) {
@@ -199,7 +236,7 @@ func (s *SBOMOrchestrator) Import(ctx context.Context, req SBOMImportRequest) (*
 }
 
 func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.SBOMSubject, sourceKind domain.SBOMSourceKind, produce func(domain.SBOMSubject) ([]sbomadapter.GenerateResult, error)) (*SBOMRunResult, error) {
-	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Pubkey == "" {
+	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Subscriber == nil || s.Pubkey == "" {
 		return nil, fmt.Errorf("SBOM orchestrator is not fully configured")
 	}
 	key = strings.TrimSpace(key)
@@ -265,6 +302,11 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 	if err := s.publishStatus(ctx, statusD, subject, "running", "publishing_available_list", ""); err != nil {
 		return nil, err
 	}
+	availabilityEntries, err = s.mergeRelayAvailabilityEntries(ctx, subject, availabilityEntries)
+	if err != nil {
+		_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_available_list", err.Error())
+		return nil, err
+	}
 	listEvent, listD, err := sbomadapter.BuildSBOMAvailabilityListEvent(sbomadapter.BuildSBOMAvailabilityListEventInput{Subject: subject, Entries: availabilityEntries, PublisherPubkey: s.Pubkey})
 	if err != nil {
 		_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_available_list", err.Error())
@@ -296,6 +338,105 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 	}
 	s.remember(key, result)
 	return &result, nil
+}
+
+func (s *SBOMOrchestrator) mergeRelayAvailabilityEntries(ctx context.Context, subject domain.SBOMSubject, local []domain.SBOMIndexEntry) ([]domain.SBOMIndexEntry, error) {
+	filter, err := s.availabilityListFilter(subject)
+	if err != nil {
+		return nil, err
+	}
+	sub, err := s.Subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return nil, fmt.Errorf("subscribe current SBOM availability list: %w", err)
+	}
+	defer sub.Close()
+
+	merged := append([]domain.SBOMIndexEntry(nil), local...)
+	seenEvents := map[string]struct{}{}
+	for {
+		msg, ok, err := sub.Next(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read current SBOM availability list subscription: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("SBOM availability list subscription ended before EOSE")
+		}
+		switch {
+		case msg.Event != nil:
+			eventID := nostrutil.EventIDHex(msg.Event)
+			if _, exists := seenEvents[eventID]; exists {
+				continue
+			}
+			seenEvents[eventID] = struct{}{}
+			entries, err := s.entriesFromRelayAvailabilityEvent(subject, msg.Event)
+			if err != nil {
+				return nil, fmt.Errorf("validate current SBOM availability event %s: %w", eventID, err)
+			}
+			merged = append(merged, entries...)
+		case msg.EOSE:
+			return merged, nil
+		case msg.Auth.RelayURL != "" || msg.Auth.Challenge != "" || msg.Auth.ReasonHint != "":
+			if msg.Auth.RelayURL == "" {
+				return nil, fmt.Errorf("SBOM availability subscription AUTH challenge missing relay URL")
+			}
+			if err := s.Subscriber.AuthenticateRelay(ctx, msg.Auth.RelayURL); err != nil {
+				return nil, fmt.Errorf("authenticate SBOM availability relay %s: %w", msg.Auth.RelayURL, err)
+			}
+		case msg.Closed.RelayURL != "" || msg.Closed.SubscriptionID != "" || msg.Closed.Reason != "":
+			if sbomAvailabilityAuthRequiredReason(msg.Closed.Reason) && msg.Closed.RelayURL != "" {
+				_ = s.Subscriber.AuthenticateRelay(ctx, msg.Closed.RelayURL)
+			}
+			return nil, fmt.Errorf("relay closed SBOM availability subscription before EOSE: relay=%s subscription=%s reason=%s", msg.Closed.RelayURL, msg.Closed.SubscriptionID, msg.Closed.Reason)
+		case msg.RelayEOSE.RelayURL != "" || msg.RelayEOSE.SubscriptionID != "":
+			continue
+		}
+	}
+}
+
+func (s *SBOMOrchestrator) availabilityListFilter(subject domain.SBOMSubject) (nostr.Filter, error) {
+	dTag, err := sbomadapter.AvailabilityListDTag(subject)
+	if err != nil {
+		return nostr.Filter{}, err
+	}
+	pubkey, err := nostr.PubKeyFromHex(s.Pubkey)
+	if err != nil {
+		return nostr.Filter{}, fmt.Errorf("parse SBOM availability publisher pubkey: %w", err)
+	}
+	return nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.Kind(sbomadapter.KindSBOMAvailabilityList)},
+		Authors: []nostr.PubKey{pubkey},
+		Tags: nostr.TagMap{
+			"d":            []string{dTag},
+			"domain":       []string{"sbom"},
+			"schema":       []string{"bahia.sbom.available-list.v1"},
+			"subject_type": []string{string(subject.Type)},
+			"subject":      []string{subject.Digest},
+		},
+		Limit: 20,
+	}, nil
+}
+
+func (s *SBOMOrchestrator) entriesFromRelayAvailabilityEvent(subject domain.SBOMSubject, ev *nostr.Event) ([]domain.SBOMIndexEntry, error) {
+	if err := validateSBOMAvailabilityInboundEvent(subject, ev, time.Now().UTC(), 10*time.Minute); err != nil {
+		return nil, err
+	}
+	idx, err := sbomadapter.ParseIndexFromEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	entries := append([]domain.SBOMIndexEntry(nil), idx.Entries...)
+	for i := range entries {
+		if entries[i].ReferencePubkey == "" {
+			entries[i].ReferencePubkey = nostrutil.EventPubKeyHex(ev)
+		}
+	}
+	entries = append(entries, sbomTagEntries(subject, ev)...)
+	for _, entry := range entries {
+		if err := validateAvailabilityEntry(subject, entry); err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
 }
 
 func (s *SBOMOrchestrator) processOne(ctx context.Context, statusD string, item sbomadapter.GenerateResult, sourceKind domain.SBOMSourceKind) (*domain.SBOMManifest, []domain.SBOMManifestPackage, domain.SBOMIndexEntry, string, error) {
@@ -424,8 +565,139 @@ func (s *SBOMOrchestrator) lockForKey(namespace, key string) *sync.Mutex {
 }
 
 func manifestEntry(m domain.SBOMManifest, publisherPubkey string) domain.SBOMIndexEntry {
-	return domain.SBOMIndexEntry{SubjectDigest: m.Subject.Digest, AttestationID: fmt.Sprintf("%d:%s:%s", sbomadapter.KindSBOMReference, publisherPubkey, m.ReferenceDTag), ReferenceDTag: m.ReferenceDTag, Format: m.Format, LocationURI: m.StorageURI, StorageType: m.StorageType, PayloadSHA256: m.PayloadSHA256, GeneratorID: m.Generator.ID, Timestamp: m.CreatedAt}
+	return domain.SBOMIndexEntry{SubjectDigest: m.Subject.Digest, AttestationID: fmt.Sprintf("%d:%s:%s", sbomadapter.KindSBOMReference, publisherPubkey, m.ReferenceDTag), ReferenceDTag: m.ReferenceDTag, ReferencePubkey: publisherPubkey, Format: m.Format, LocationURI: m.StorageURI, StorageType: m.StorageType, PayloadSHA256: m.PayloadSHA256, GeneratorID: m.Generator.ID, Timestamp: m.CreatedAt}
 }
+
+func validateSBOMAvailabilityInboundEvent(subject domain.SBOMSubject, ev *nostr.Event, now time.Time, maxFutureSkew time.Duration) error {
+	if ev == nil {
+		return fmt.Errorf("nil event")
+	}
+	if int(ev.Kind) != sbomadapter.KindSBOMAvailabilityList {
+		return fmt.Errorf("unexpected event kind %d", ev.Kind)
+	}
+	if !ev.CheckID() {
+		return fmt.Errorf("event id does not match serialized event")
+	}
+	if !ev.VerifySignature() {
+		return fmt.Errorf("invalid signature")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if maxFutureSkew <= 0 {
+		maxFutureSkew = 10 * time.Minute
+	}
+	createdAt := time.Unix(int64(ev.CreatedAt), 0).UTC()
+	if createdAt.After(now.Add(maxFutureSkew)) {
+		return fmt.Errorf("event timestamp %s exceeds future skew", createdAt.Format(time.RFC3339))
+	}
+	dTag, err := sbomadapter.AvailabilityListDTag(subject)
+	if err != nil {
+		return err
+	}
+	if got := sbomAvailabilityTagValue(ev, "d"); got != dTag {
+		return fmt.Errorf("d tag %q does not match subject availability list %q", got, dTag)
+	}
+	if got := sbomAvailabilityTagValue(ev, "domain"); got != "sbom" {
+		return fmt.Errorf("domain tag %q is not sbom", got)
+	}
+	if got := sbomAvailabilityTagValue(ev, "schema"); got != "bahia.sbom.available-list.v1" {
+		return fmt.Errorf("schema tag %q is not bahia.sbom.available-list.v1", got)
+	}
+	if got := sbomAvailabilityTagValue(ev, "subject_type"); got != string(subject.Type) {
+		return fmt.Errorf("subject_type tag %q does not match %q", got, subject.Type)
+	}
+	if got := sbomAvailabilityTagValue(ev, "subject"); !strings.EqualFold(got, subject.Digest) {
+		return fmt.Errorf("subject tag %q does not match %q", got, subject.Digest)
+	}
+	return nil
+}
+
+func sbomTagEntries(subject domain.SBOMSubject, ev *nostr.Event) []domain.SBOMIndexEntry {
+	aPubkeysByRefD := map[string]string{}
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 || tag[0] != "a" {
+			continue
+		}
+		parts := strings.SplitN(tag[1], ":", 3)
+		if len(parts) == 3 && parts[0] == fmt.Sprintf("%d", sbomadapter.KindSBOMReference) {
+			aPubkeysByRefD[parts[2]] = parts[1]
+		}
+	}
+	entries := make([]domain.SBOMIndexEntry, 0)
+	for _, tag := range ev.Tags {
+		if len(tag) < 8 || tag[0] != sbomadapter.TagSBOMRef {
+			continue
+		}
+		if !strings.EqualFold(tag[1], subject.Digest) {
+			continue
+		}
+		refD := tag[7]
+		referencePubkey := aPubkeysByRefD[refD]
+		if referencePubkey == "" {
+			referencePubkey = nostrutil.EventPubKeyHex(ev)
+		}
+		entries = append(entries, domain.SBOMIndexEntry{
+			SubjectDigest:   tag[1],
+			AttestationID:   fmt.Sprintf("%d:%s:%s", sbomadapter.KindSBOMReference, referencePubkey, refD),
+			ReferenceDTag:   refD,
+			ReferencePubkey: referencePubkey,
+			Format:          domain.SBOMFormat(tag[2]),
+			StorageType:     domain.SBOMStorageType(tag[3]),
+			LocationURI:     tag[4],
+			PayloadSHA256:   tag[5],
+			GeneratorID:     tag[6],
+			Timestamp:       time.Unix(int64(ev.CreatedAt), 0).UTC(),
+		})
+	}
+	return entries
+}
+
+func validateAvailabilityEntry(subject domain.SBOMSubject, entry domain.SBOMIndexEntry) error {
+	if !strings.EqualFold(entry.SubjectDigest, subject.Digest) {
+		return fmt.Errorf("availability entry subject digest %q does not match %q", entry.SubjectDigest, subject.Digest)
+	}
+	if entry.ReferenceDTag == "" {
+		return fmt.Errorf("availability entry reference d tag is required")
+	}
+	if entry.Format != domain.SBOMFormatSPDX && entry.Format != domain.SBOMFormatCycloneDX {
+		return fmt.Errorf("unsupported availability entry format %q", entry.Format)
+	}
+	if entry.StorageType != domain.SBOMStorageBlossom {
+		return fmt.Errorf("availability entry storage %q is not blossom", entry.StorageType)
+	}
+	if entry.LocationURI == "" {
+		return fmt.Errorf("availability entry location is required")
+	}
+	if len(entry.PayloadSHA256) != 64 {
+		return fmt.Errorf("availability entry payload SHA-256 must be 64 hex characters")
+	}
+	if _, err := hex.DecodeString(entry.PayloadSHA256); err != nil {
+		return fmt.Errorf("availability entry payload SHA-256 must be hex: %w", err)
+	}
+	if entry.GeneratorID == "" {
+		return fmt.Errorf("availability entry generator ID is required")
+	}
+	return nil
+}
+
+func sbomAvailabilityTagValue(ev *nostr.Event, key string) string {
+	if ev == nil {
+		return ""
+	}
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+func sbomAvailabilityAuthRequiredReason(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(reason, "auth-required") || strings.Contains(reason, "auth required") || strings.Contains(reason, "authentication required")
+}
+
 func manifestPackagesToLegacy(pkgs []domain.SBOMManifestPackage) []domain.SBOMPackage {
 	out := make([]domain.SBOMPackage, len(pkgs))
 	for i, p := range pkgs {
