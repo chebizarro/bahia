@@ -299,9 +299,11 @@ function subscribeToConnectionState() {
 
 function startSubscription(operatorPubkey, servicePubkey) {
   if (liveUnsubscribe) liveUnsubscribe();
+  let historicalCatchupComplete = false;
   liveUnsubscribe = nostr.subscribe(subscriptionFilters(operatorPubkey, servicePubkey), {
-    onEvent: (event) => applyAssistantEvent(event),
+    onEvent: (event) => applyAssistantEvent(event, { allowStreaming: historicalCatchupComplete }),
     onEose: () => {
+      historicalCatchupComplete = true;
       assistantConnection.ready = true;
       assistantConnection.status = 'live';
       assistantConnection.lastEoseAt = new Date().toISOString();

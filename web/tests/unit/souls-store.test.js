@@ -9,7 +9,7 @@ vi.mock('../../src/lib/nostr/connection-guard.js', () => ({
 }));
 
 // Mock the nostr client module
-vi.mock('../../src/lib/nostr/client.js', () => {
+const nostrClientMockFactory = vi.hoisted(() => () => {
   const KINDS = {
     SOUL_TEMPLATE: 31950,
     AGENT_SOUL: 31951,
@@ -104,11 +104,17 @@ vi.mock('../../src/lib/nostr/client.js', () => {
   };
 });
 
-vi.mock('../../src/lib/stores/auth.js', () => ({
+vi.mock('../../src/lib/nostr/client.js', nostrClientMockFactory);
+vi.mock('$lib/nostr/client.js', nostrClientMockFactory);
+
+const authStoreMock = vi.hoisted(() => () => ({
   authState: { status: 'authenticated', pubkey: 'author-pubkey' },
   login: vi.fn(async () => {}),
   signWithAuth: vi.fn(async (event) => ({ ...event, id: 'signed-action-id' }))
 }));
+
+vi.mock('../../src/lib/stores/auth.js', authStoreMock);
+vi.mock('$lib/stores/auth.js', authStoreMock);
 
 describe('Souls Store', () => {
   let soulsModule;
@@ -128,7 +134,7 @@ describe('Souls Store', () => {
     vi.clearAllMocks();
 
     // Import mocked nostr client
-    const nostrModule = await import('../../src/lib/nostr/client.js');
+    const nostrModule = await import('$lib/nostr/client.js');
     mockNostr = nostrModule.nostr;
     fetchSouls = nostrModule.fetchSouls;
     fetchTemplates = nostrModule.fetchTemplates;
@@ -137,7 +143,7 @@ describe('Souls Store', () => {
     parseSoulEvent = nostrModule.parseSoulEvent;
     queryOrPartial = nostrModule.queryOrPartial;
     parseTemplateEvent = nostrModule.parseTemplateEvent;
-    authModule = await import('../../src/lib/stores/auth.js');
+    authModule = await import('$lib/stores/auth.js');
 
     // Set default mock implementations
     fetchSouls.mockResolvedValue([
@@ -193,357 +199,227 @@ describe('Souls Store', () => {
     }
   });
 
-  describe('loadSouls', () => {
-    it('should load souls and update store', async () => {
-      await soulsModule.loadSouls();
+  async function startSoulFactorySubscription(authorPubkey = null, entrypoint = 'subscribeToSoulUpdates') {
+    const cleanup = vi.fn();
+    mockNostr.subscribe.mockReturnValue(cleanup);
 
-      expect(fetchSouls).toHaveBeenCalledWith(null);
-      expect(parseSoulEvent).toHaveBeenCalledTimes(2);
+    await soulsModule[entrypoint](authorPubkey);
 
-      const souls = soulsModule.souls;
-      expect(souls).toHaveLength(2);
-      expect(souls[0].agentId).toBe('agent-id-2'); // Sorted newest first
-      expect(souls[1].agentId).toBe('agent-id-1');
-    });
+    expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
+    const [filters, handlers] = mockNostr.subscribe.mock.calls.at(-1);
+    return { filters, handlers, cleanup };
+  }
 
-    it('should filter by author pubkey when provided', async () => {
-      const authorPubkey = 'author-pubkey-123';
+  function applyBackfill(handlers, events) {
+    for (const event of events) {
+      handlers.onEvent(event);
+    }
+    handlers.onEose('wss://relay.example');
+  }
 
-      await soulsModule.loadSouls(authorPubkey);
+  describe('soul factory subscription read models', () => {
+    it('subscribes once to current soul factory read-model kinds without an author filter', async () => {
+      const { filters, handlers } = await startSoulFactorySubscription();
 
-      expect(fetchSouls).toHaveBeenCalledWith(authorPubkey);
-    });
-
-    it('should set loading state during load', async () => {
-      let loadingDuringFetch = null;
-
-      fetchSouls.mockImplementation(async () => {
-        loadingDuringFetch = { ...soulsModule.loading };
-        return [{
-          id: 'soul-1',
-          pubkey: 'pk-1',
-          created_at: 1714392000,
-          tags: [['d', 'agent-1'], ['name', 'Agent']]
-        }];
+      expect(filters).toEqual([
+        { kinds: [31951, 31950, 31952] },
+        { kinds: [30317] }
+      ]);
+      expect(handlers).toEqual(expect.objectContaining({
+        onEvent: expect.any(Function),
+        onEose: expect.any(Function),
+        onClosed: expect.any(Function)
+      }));
+      expect(soulsModule.loading).toMatchObject({
+        souls: true,
+        templates: true,
+        drafts: true,
+        capabilities: true
       });
 
-      await soulsModule.loadSouls();
+      handlers.onEose('wss://relay.example');
 
-      expect(loadingDuringFetch.souls).toBe(true);
-
-      const loadingAfter = soulsModule.loading;
-      expect(loadingAfter.souls).toBe(false);
+      expect(soulsModule.loading).toMatchObject({
+        souls: false,
+        templates: false,
+        drafts: false,
+        capabilities: false
+      });
     });
 
-    it('should handle load error and set error state', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
-      fetchSouls.mockRejectedValue(new Error('Relay connection failed'));
+    it('applies the author filter to replaceable soul/template/draft events only', async () => {
+      const authorPubkey = 'author-all-789';
 
-      await soulsModule.loadSouls();
+      const { filters } = await startSoulFactorySubscription(authorPubkey, 'loadAll');
 
-      expect(consoleError).toHaveBeenCalledWith(
-        '[souls] Failed to load souls:',
-        expect.any(Error)
-      );
-
-      const error = soulsModule.error.value;
-      expect(error).toBe('Relay connection failed');
-
-      const loading = soulsModule.loading;
-      expect(loading.souls).toBe(false);
-
-      consoleError.mockRestore();
+      expect(filters).toEqual([
+        { kinds: [31951, 31950, 31952], authors: [authorPubkey] },
+        { kinds: [30317] }
+      ]);
     });
 
-    it('should clear error state on successful load', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
-      // First load fails
-      fetchSouls.mockRejectedValueOnce(new Error('Network error'));
-      await soulsModule.loadSouls();
+    it('applies stored EVENT callbacks, dedupes replaceable records, sorts read models, and marks ready on EOSE', async () => {
+      const { handlers } = await startSoulFactorySubscription();
 
-      let error = soulsModule.error.value;
-      expect(error).toBe('Network error');
-
-      // Second load succeeds
-      fetchSouls.mockResolvedValueOnce([{
-        id: 'soul-1',
-        pubkey: 'pk-1',
-        created_at: 1714392000,
-        tags: [['d', 'agent-1']]
-      }]);
-      await soulsModule.loadSouls();
-
-      error = soulsModule.error.value;
-      expect(error).toBeNull();
-
-      consoleError.mockRestore();
-    });
-  });
-
-  describe('loadTemplates', () => {
-    it('should load templates and update store', async () => {
-      await soulsModule.loadTemplates();
-
-      expect(fetchTemplates).toHaveBeenCalledWith(null);
-      expect(parseTemplateEvent).toHaveBeenCalledTimes(1);
-
-      const templates = soulsModule.templates;
-      expect(templates).toHaveLength(1);
-      expect(templates[0].identifier).toBe('template-standard');
-    });
-
-    it('should filter by author pubkey when provided', async () => {
-      const authorPubkey = 'template-author-456';
-
-      await soulsModule.loadTemplates(authorPubkey);
-
-      expect(fetchTemplates).toHaveBeenCalledWith(authorPubkey);
-    });
-
-    it('should sort templates by name', async () => {
-      fetchTemplates.mockResolvedValue([
+      applyBackfill(handlers, [
         {
-          id: 't1',
-          pubkey: 'pk',
-          created_at: 1714390000,
+          id: 'old-soul',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 100,
+          tags: [['d', 'scout'], ['name', 'Old Scout'], ['status', 'active']]
+        },
+        {
+          id: 'new-soul',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 200,
+          tags: [['d', 'scout'], ['name', 'New Scout'], ['status', 'suspended']]
+        },
+        {
+          id: 'agent-beta',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 300,
+          tags: [['d', 'agent-beta'], ['name', 'Agent Beta'], ['status', 'provisioning']]
+        },
+        {
+          id: 'template-z',
+          kind: 31950,
+          pubkey: 'factory',
+          created_at: 50,
           tags: [['d', 'z-template'], ['name', 'Zebra']]
         },
         {
-          id: 't2',
-          pubkey: 'pk',
-          created_at: 1714390100,
+          id: 'template-a',
+          kind: 31950,
+          pubkey: 'factory',
+          created_at: 60,
           tags: [['d', 'a-template'], ['name', 'Alpha']]
         },
         {
-          id: 't3',
-          pubkey: 'pk',
-          created_at: 1714390200,
-          tags: [['d', 'm-template'], ['name', 'Middle']]
+          id: 'draft-1',
+          kind: 31952,
+          pubkey: 'author-pubkey',
+          created_at: 120,
+          tags: [['d', 'scout']],
+          content: JSON.stringify({ identity: { name: 'Scout' } })
+        },
+        {
+          id: 'cap-1',
+          kind: 30317,
+          pubkey: 'runtime',
+          created_at: 140,
+          tags: [['runtime', 'openclaw']],
+          content: '{}'
         }
       ]);
 
-      await soulsModule.loadTemplates();
-
-      const templates = soulsModule.templates;
-      expect(templates).toHaveLength(3);
-      expect(templates[0].name).toBe('Alpha');
-      expect(templates[1].name).toBe('Middle');
-      expect(templates[2].name).toBe('Zebra');
-    });
-
-    it('should set loading state during load', async () => {
-      let loadingDuringFetch = null;
-
-      fetchTemplates.mockImplementation(async () => {
-        loadingDuringFetch = { ...soulsModule.loading };
-        return [{
-          id: 't1',
-          pubkey: 'pk',
-          created_at: 1714390000,
-          tags: [['d', 'template-1']]
-        }];
+      expect(parseSoulEvent).toHaveBeenCalled();
+      expect(parseTemplateEvent).toHaveBeenCalled();
+      expect(soulsModule.souls.map((soul) => soul.agentId)).toEqual(['agent-beta', 'scout']);
+      expect(soulsModule.souls.find((soul) => soul.agentId === 'scout')).toMatchObject({
+        id: 'new-soul',
+        name: 'New Scout',
+        status: 'suspended'
       });
-
-      await soulsModule.loadTemplates();
-
-      expect(loadingDuringFetch.templates).toBe(true);
-
-      const loadingAfter = soulsModule.loading;
-      expect(loadingAfter.templates).toBe(false);
+      expect(soulsModule.templates.map((template) => template.name)).toEqual(['Alpha', 'Zebra']);
+      expect(soulsModule.drafts).toHaveLength(1);
+      expect(soulsModule.drafts[0]).toMatchObject({ agentId: 'scout' });
+      expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+      expect(soulsModule.supportedRuntimeTargets()).toEqual(['openclaw']);
+      expect(soulsModule.loading.souls).toBe(false);
     });
 
-    it('should handle load error and set error state', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
-      fetchTemplates.mockRejectedValue(new Error('Templates fetch error'));
+    it('keeps the persistent subscription open and applies live updates after EOSE', async () => {
+      const { handlers } = await startSoulFactorySubscription();
 
-      await soulsModule.loadTemplates();
+      applyBackfill(handlers, [
+        {
+          id: 'soul-1',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 100,
+          tags: [['d', 'agent-id-1'], ['name', 'Agent Alpha'], ['status', 'active']]
+        }
+      ]);
 
-      expect(consoleError).toHaveBeenCalledWith(
-        '[souls] Failed to load templates:',
-        expect.any(Error)
-      );
-
-      const error = soulsModule.error.value;
-      expect(error).toBe('Templates fetch error');
-
-      consoleError.mockRestore();
-    });
-  });
-
-  describe('loadAll', () => {
-    it('should load both souls and templates in parallel', async () => {
-      await soulsModule.loadAll();
-
-      expect(fetchSouls).toHaveBeenCalledWith(null);
-      expect(fetchTemplates).toHaveBeenCalledWith(null);
-      expect(fetchSoulDrafts).toHaveBeenCalledWith(null);
-      expect(fetchRuntimeCapabilities).toHaveBeenCalledWith({});
-
-      const souls = soulsModule.souls;
-      const templates = soulsModule.templates;
-
-      expect(souls).toHaveLength(2);
-      expect(templates).toHaveLength(1);
-    });
-
-    it('should pass author pubkey to both loaders', async () => {
-      const authorPubkey = 'author-all-789';
-
-      await soulsModule.loadAll(authorPubkey);
-
-      expect(fetchSouls).toHaveBeenCalledWith(authorPubkey);
-      expect(fetchTemplates).toHaveBeenCalledWith(authorPubkey);
-      expect(fetchSoulDrafts).toHaveBeenCalledWith(authorPubkey);
-    });
-
-    it('should complete even if one loader fails', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
-      fetchSouls.mockRejectedValue(new Error('Souls error'));
-      fetchTemplates.mockResolvedValue([{
-        id: 't1',
-        pubkey: 'pk',
-        created_at: 1714390000,
-        tags: [['d', 'template-1'], ['name', 'Template']]
-      }]);
-      fetchSoulDrafts.mockResolvedValue([]);
-      fetchRuntimeCapabilities.mockResolvedValue([]);
-
-      await soulsModule.loadAll();
-
-      expect(fetchSouls).toHaveBeenCalled();
-      expect(fetchTemplates).toHaveBeenCalled();
-
-      const templates = soulsModule.templates;
-      expect(templates).toHaveLength(1);
-
-      consoleError.mockRestore();
-    });
-  });
-
-  describe('subscribeToSoulUpdates', () => {
-    it('should subscribe to soul events without author filter', () => {
-      const { KINDS } = require('../../src/lib/nostr/client.js');
-
-      soulsModule.subscribeToSoulUpdates();
-
-      expect(mockNostr.subscribe).toHaveBeenCalledWith(
-        [expect.objectContaining({
-          kinds: [KINDS.AGENT_SOUL]
-        })],
-        expect.objectContaining({
-          onEvent: expect.any(Function)
-        })
-      );
-
-      const callArgs = mockNostr.subscribe.mock.calls[0];
-      const filter = callArgs[0][0];
-      expect(filter.authors).toBeUndefined();
-      expect(filter.since).toBeGreaterThan(0);
-    });
-
-    it('should subscribe to soul events with author filter', () => {
-      const authorPubkey = 'author-subscribe-abc';
-      const { KINDS } = require('../../src/lib/nostr/client.js');
-
-      soulsModule.subscribeToSoulUpdates(authorPubkey);
-
-      expect(mockNostr.subscribe).toHaveBeenCalledWith(
-        [expect.objectContaining({
-          kinds: [KINDS.AGENT_SOUL],
-          authors: [authorPubkey]
-        })],
-        expect.any(Object)
-      );
-    });
-
-    it('should update existing soul when event is received', async () => {
-      // First load initial souls
-      await soulsModule.loadSouls();
-
-      let onEventCallback = null;
-      mockNostr.subscribe.mockImplementation((filters, handlers) => {
-        onEventCallback = handlers.onEvent;
-        return () => {};
-      });
-
-      soulsModule.subscribeToSoulUpdates();
-
-      // Receive update for existing soul
-      const updatedEvent = {
+      handlers.onEvent({
         id: 'soul-1-updated',
-        pubkey: 'pubkey-1',
-        created_at: 1714392200,
-        tags: [
-          ['d', 'agent-id-1'],
-          ['name', 'Agent Alpha Updated'],
-          ['status', 'suspended']
-        ]
-      };
-
-      onEventCallback(updatedEvent);
-
-      const souls = soulsModule.souls;
-      expect(souls).toHaveLength(2);
-      
-      const updatedSoul = souls.find(s => s.agentId === 'agent-id-1');
-      expect(updatedSoul.name).toBe('Agent Alpha Updated');
-      expect(updatedSoul.status).toBe('suspended');
-    });
-
-    it('should add new soul when event is received', async () => {
-      await soulsModule.loadSouls();
-
-      let onEventCallback = null;
-      mockNostr.subscribe.mockImplementation((filters, handlers) => {
-        onEventCallback = handlers.onEvent;
-        return () => {};
+        kind: 31951,
+        pubkey: 'factory',
+        created_at: 220,
+        tags: [['d', 'agent-id-1'], ['name', 'Agent Alpha Updated'], ['status', 'suspended']]
+      });
+      handlers.onEvent({
+        id: 'soul-2',
+        kind: 31951,
+        pubkey: 'factory',
+        created_at: 230,
+        tags: [['d', 'agent-id-2'], ['name', 'Agent Beta'], ['status', 'active']]
       });
 
-      soulsModule.subscribeToSoulUpdates();
-
-      // Receive new soul
-      const newEvent = {
-        id: 'soul-3',
-        pubkey: 'pubkey-2',
-        created_at: 1714392300,
-        tags: [
-          ['d', 'agent-id-3'],
-          ['name', 'Agent Gamma'],
-          ['status', 'active']
-        ]
-      };
-
-      onEventCallback(newEvent);
-
-      const souls = soulsModule.souls;
-      expect(souls).toHaveLength(3);
-      expect(souls[0].agentId).toBe('agent-id-3'); // Added at front
+      expect(soulsModule.souls.map((soul) => soul.agentId)).toEqual(['agent-id-2', 'agent-id-1']);
+      expect(soulsModule.souls.find((soul) => soul.agentId === 'agent-id-1')).toMatchObject({
+        name: 'Agent Alpha Updated',
+        status: 'suspended'
+      });
     });
 
-    it('should close previous subscription when called again', () => {
-      const cleanup1 = vi.fn();
-      const cleanup2 = vi.fn();
+    it('records relay connection failures without opening a subscription', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const nostrModule = await import('$lib/nostr/client.js');
+      nostrModule.ensureRelayConnection.mockRejectedValueOnce(new Error('Relay connection failed'));
 
-      mockNostr.subscribe.mockReturnValueOnce(cleanup1).mockReturnValueOnce(cleanup2);
+      await soulsModule.loadSouls();
 
-      soulsModule.subscribeToSoulUpdates();
-      soulsModule.subscribeToSoulUpdates();
+      expect(consoleError).toHaveBeenCalledWith('[souls] Failed to connect:', expect.any(Error));
+      expect(mockNostr.subscribe).not.toHaveBeenCalled();
+      expect(soulsModule.error.value).toBe('Relay connection failed');
+      expect(soulsModule.loading).toMatchObject({
+        souls: false,
+        templates: false,
+        drafts: false,
+        capabilities: false
+      });
 
-      expect(cleanup1).toHaveBeenCalledTimes(1);
-      expect(mockNostr.subscribe).toHaveBeenCalledTimes(2);
+      consoleError.mockRestore();
+    });
+
+    it('clears a previous connection error on a successful subscription', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const nostrModule = await import('$lib/nostr/client.js');
+      nostrModule.ensureRelayConnection.mockRejectedValueOnce(new Error('Network error'));
+
+      await soulsModule.loadSouls();
+      expect(soulsModule.error.value).toBe('Network error');
+
+      await soulsModule.loadSouls();
+
+      expect(soulsModule.error.value).toBeNull();
+      expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
+
+      consoleError.mockRestore();
+    });
+
+    it('does not create duplicate subscriptions while the persistent reader is live', async () => {
+      const cleanup = vi.fn();
+      mockNostr.subscribe.mockReturnValue(cleanup);
+
+      await soulsModule.subscribeToSoulUpdates();
+      await soulsModule.subscribeToSoulUpdates();
+
+      expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
+      expect(cleanup).not.toHaveBeenCalled();
     });
   });
 
   describe('unsubscribeFromSoulUpdates', () => {
-    it('should call cleanup function when unsubscribing', () => {
+    it('should call cleanup function when unsubscribing', async () => {
       const cleanup = vi.fn();
       mockNostr.subscribe.mockReturnValue(cleanup);
 
-      soulsModule.subscribeToSoulUpdates();
+      await soulsModule.subscribeToSoulUpdates();
       soulsModule.unsubscribeFromSoulUpdates();
 
       expect(cleanup).toHaveBeenCalledTimes(1);
@@ -779,94 +655,22 @@ describe('Souls Store', () => {
   });
 
   describe('drafts and capabilities', () => {
-    it('loadSouls dedupes replaceable souls and keeps the newest event', async () => {
-      fetchSouls.mockResolvedValue([
-        {
-          id: 'old-soul',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 100,
-          tags: [['d', 'scout'], ['name', 'Old Scout']]
-        },
-        {
-          id: 'new-soul',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 200,
-          tags: [['d', 'scout'], ['name', 'New Scout']]
-        }
-      ]);
+    it('subscription read model exposes compatible runtime targets from capability events', async () => {
+      const { handlers } = await startSoulFactorySubscription();
 
-      await soulsModule.loadSouls();
-
-      expect(soulsModule.souls).toHaveLength(1);
-      expect(soulsModule.souls[0]).toMatchObject({ id: 'new-soul', name: 'New Scout' });
-    });
-
-    it('loadSouls records degraded EOSE metadata from partial read models', async () => {
-      const events = [
-        {
-          id: 'partial-soul',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 100,
-          tags: [['d', 'scout'], ['name', 'Partial Scout']]
-        }
-      ];
-      Object.defineProperty(events, 'eose', {
-        value: {
-          complete: false,
-          degraded: { incomplete: true, reason: 'timeout', partialEventCount: 1 },
-          relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
-        }
-      });
-      fetchSouls.mockResolvedValue(events);
-
-      await soulsModule.loadSouls();
-
-      expect(soulsModule.souls).toHaveLength(1);
-      expect(soulsModule.readModelMeta.souls).toMatchObject({
-        complete: false,
-        degraded: { incomplete: true, reason: 'timeout', partialEventCount: 1 },
-        relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
-      });
-    });
-
-    it('loadDrafts loads deduped editable 31952 drafts', async () => {
-      fetchSoulDrafts.mockResolvedValue([
-        {
-          id: 'draft-1',
-          kind: 31952,
-          pubkey: 'author-pubkey',
-          created_at: 100,
-          tags: [['d', 'scout']],
-          content: JSON.stringify({ identity: { name: 'Scout' } })
-        }
-      ]);
-
-      await soulsModule.loadDrafts('author-pubkey');
-
-      expect(fetchSoulDrafts).toHaveBeenCalledWith('author-pubkey');
-      expect(soulsModule.drafts).toHaveLength(1);
-      expect(soulsModule.drafts[0]).toMatchObject({ agentId: 'scout' });
-    });
-
-    it('loadRuntimeCapabilities exposes compatible runtime targets', async () => {
-      fetchRuntimeCapabilities.mockResolvedValue([
+      applyBackfill(handlers, [
         {
           id: 'cap-1',
-          runtime: 'openclaw',
-          methods: ['soulfactory.provision'],
-          controllerPubkeys: [],
-          compatible: true
+          kind: 30317,
+          pubkey: 'runtime',
+          created_at: 100,
+          tags: [['runtime', 'openclaw']],
+          content: '{}'
         }
       ]);
 
-      await soulsModule.loadRuntimeCapabilities({ method: 'soulfactory.provision' });
-
-      expect(fetchRuntimeCapabilities).toHaveBeenCalledWith({ method: 'soulfactory.provision' });
       expect(soulsModule.runtimeCapabilities).toHaveLength(1);
-      expect(soulsModule.supportedRuntimeTargets()).toEqual(['openclaw']);
+      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['openclaw']);
     });
 
     it('publishSoulDraft signs, publishes, and stores a 31952 draft', async () => {
@@ -1000,31 +804,49 @@ describe('Souls Store', () => {
     });
 
     it('fetchSoulHistory includes soul updates and actions sorted newest-first', async () => {
-      queryOrPartial.mockResolvedValue({ events: [
-        {
-          id: 'evt-action',
-          kind: 1950,
-          created_at: 200,
-          pubkey: 'author2',
-          tags: [['soul', '31951:factory:scout'], ['action', 'suspend'], ['reason', 'maintenance']]
-        },
-        {
-          id: 'evt-soul',
-          kind: 31951,
-          created_at: 100,
-          pubkey: 'factory',
-          tags: [['status', 'active']]
-        }
-      ], complete: true, degraded: null, relaySummary: [] });
+      let handlers = null;
+      mockNostr.subscribe.mockImplementationOnce((filters, incomingHandlers) => {
+        handlers = incomingHandlers;
+        return () => {};
+      });
 
-      const history = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
+      const historyPromise = soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
 
-      expect(queryOrPartial).toHaveBeenCalledWith([
+      expect(mockNostr.subscribe).toHaveBeenCalledWith([
         { kinds: [31951], '#d': ['scout'], limit: 10 },
         { kinds: [1950], limit: 10 },
         { kinds: [6950, 7950, 1951], limit: 10 }
-      ], { scope: 'soul-history' });
-      expect(soulsModule.readModelMeta.history).toEqual({ complete: true, degraded: null, relaySummary: [] });
+      ], expect.objectContaining({
+        onEvent: expect.any(Function),
+        onEose: expect.any(Function),
+        onClosed: expect.any(Function)
+      }));
+
+      handlers.onEvent({
+        id: 'evt-action',
+        kind: 1950,
+        created_at: 200,
+        pubkey: 'author2',
+        tags: [['soul', '31951:factory:scout'], ['action', 'suspend'], ['reason', 'maintenance']]
+      });
+      handlers.onEvent({
+        id: 'evt-other-soul',
+        kind: 1950,
+        created_at: 300,
+        pubkey: 'author2',
+        tags: [['soul', '31951:factory:other'], ['action', 'suspend']]
+      });
+      handlers.onEvent({
+        id: 'evt-soul',
+        kind: 31951,
+        created_at: 100,
+        pubkey: 'factory',
+        tags: [['d', 'scout'], ['status', 'active']]
+      });
+      handlers.onEose('wss://relay.example');
+
+      const history = await historyPromise;
+
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
       expect(history[0].summary).toBe('suspend: maintenance');
     });

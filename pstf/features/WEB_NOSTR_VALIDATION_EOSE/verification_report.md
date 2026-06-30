@@ -1,15 +1,15 @@
 # WEB_NOSTR_VALIDATION_EOSE Verification Report
 
 ## Scope
-Bucket 2 only: browser/web Nostr inbound validation, EOSE-authoritative query completion, branch/control-plane caller behavior, and replacement of weak web tests.
+Browser/web Nostr inbound validation, EOSE-authoritative subscription completion, CLOSED/AUTH handling, branch/control-plane caller behavior, and replacement of weak web tests.
 
 ## Evidence
 - Added browser inbound EVENT validation before subscription callbacks.
-- `queryUntilEose` and `query` now reject timeout/abort/relay-CLOSED-incomplete states with `NostrIncompleteEOSEError` instead of resolving partial history.
-- Relay transport disconnects before EOSE keep active historical queries subscribed so reconnect reissues the scoped REQ and waits for EOSE instead of abandoning dashboard bootstrap.
-- Branch lookup uses EOSE-backed querying and returns explicit degraded metadata/errors for incomplete history, including partial and empty partial cases.
-- Partial/degraded read-model helpers return `{ events, complete, degraded, relaySummary }` so incomplete EOSE cannot be mistaken for complete history.
-- Soul Factory and repository read models retain `.eose` metadata on returned arrays and store-level metadata for UI surfacing.
+- Pool-backed browser subscriptions expose `onEvent`, `onEose`, `onClosed`, and AUTH/CLOSED classification paths; tests now target those callbacks instead of removed one-shot query helpers.
+- Relay transport disconnects before EOSE keep active historical subscriptions live so reconnect can reissue scoped REQs and wait for EOSE instead of abandoning dashboard bootstrap.
+- Branch lookup uses scoped subscriptions and returns explicit errors when CLOSED occurs before/after partial branch events.
+- Soul Factory, docs, repositories, FIPS mesh, and discovery unit tests were migrated in `bahia-y32g` from the removed `queryUntilEose`/`queryOrPartial`/`fetchRuntimeCapabilities` API surface to the current pool subscription API while preserving EOSE/CLOSED/AUTH intent.
+- The old explicit degraded metadata contract (`{ complete, degraded, relaySummary }`) is not consistently exposed by current pool-backed read models. That behavior was not hidden in tests; it is tracked as follow-up bead `bahia-qc5c`.
 - Control-plane result waits aggregate CLOSED reasons and distinguish auth-related closures.
 
 ## Verification
@@ -37,5 +37,13 @@ pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.
 
 Result: 5 files, 104 tests passed.
 
+Passed on 2026-06-30 for `bahia-y32g` after pool API test migration:
+
+```bash
+cd web && pnpm test:unit
+```
+
+Result: 70 files, 525 tests passed.
+
 ## Notes
-A mistaken invocation through `pnpm --dir web test:unit -- ...` ran the broader suite instead of the intended file list and failed in tests outside the Bucket 2 gate. The focused commands above are the targeted verification for these patches.
+`bahia-y32g` confirmed that `web/src/lib/nostr/pool-query.js`, `queryUntilEose`, `queryOrPartial`, `NostrIncompleteEOSEError`, and `fetchRuntimeCapabilities` are no longer part of the browser Nostr API. Tests that referenced those symbols were rewritten to the current public API rather than shimmed back into production. Behavioral coverage for event validation, EOSE-authoritative catch-up, CLOSED/AUTH handling, and persistent store subscriptions remains active. The retired degraded-metadata helper assertions are captured by `bahia-qc5c` so the pool-era contract can be specified and implemented deliberately.

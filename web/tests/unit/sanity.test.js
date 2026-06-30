@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { get } from 'svelte/store';
 import { finalizeEvent } from 'nostr-tools';
 
 const TEST_SECRET_KEY = Uint8Array.from(Array.from({ length: 32 }, (_, index) => index + 1));
@@ -25,7 +26,6 @@ function validEvent(overrides = {}) {
     ...(Object.hasOwn(overrides, 'id') ? { id: overrides.id } : {})
   };
 }
-
 
 function createRelay(url, { connected = true } = {}) {
   const relay = {
@@ -58,11 +58,12 @@ function createPool(relays = []) {
 async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
-describe('browser Nostr trust boundary and query completion', () => {
+describe('browser Nostr trust boundary and subscription completion', () => {
   let createNostrPoolClient;
-  let NostrIncompleteEOSEError;
   let validateInboundNostrEvent;
   let originalWebSocket;
 
@@ -72,12 +73,10 @@ describe('browser Nostr trust boundary and query completion', () => {
     global.WebSocket = { OPEN: 1, CONNECTING: 0 };
     const module = await import('../../src/lib/nostr/client.js');
     createNostrPoolClient = module.createNostrPoolClient;
-    NostrIncompleteEOSEError = module.NostrIncompleteEOSEError;
     validateInboundNostrEvent = module.validateInboundNostrEvent;
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
     global.WebSocket = originalWebSocket;
   });
@@ -119,116 +118,130 @@ describe('browser Nostr trust boundary and query completion', () => {
     const relay = createRelay('wss://relay.example');
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
+    const frames = [];
+    let resolveEose;
+    const eoseSeen = new Promise((resolve) => { resolveEose = resolve; });
 
-    const query = client.queryUntilEose([{ kinds: [30900] }]);
+    client.subscribe([{ kinds: [30900] }], {
+      onEvent: (evt, relayUrl) => frames.push(['event', relayUrl, evt.id]),
+      onEose: (relayUrl) => {
+        frames.push(['eose', relayUrl]);
+        resolveEose();
+      }
+    });
     await flushPromises();
     relay.subscriptions[0].params.onevent(event);
     relay.subscriptions[0].params.oneose();
-    await flushPromises();
+    await eoseSeen;
 
-    await expect(query).resolves.toEqual([event]);
+    expect(frames).toEqual([
+      ['event', 'wss://relay.example', event.id],
+      ['eose', 'wss://relay.example']
+    ]);
   });
 
-  it('resolves historical queries only after every connected relay sends EOSE', async () => {
+  it('reports EOSE per connected relay so callers can make catch-up authoritative', async () => {
     const relayA = createRelay('wss://relay-a.example');
     const relayB = createRelay('wss://relay-b.example');
     const client = createNostrPoolClient({ relays: ['wss://relay-a.example', 'wss://relay-b.example'], pool: createPool([relayA, relayB]) });
-    const event = validEvent();
+    const onEose = vi.fn();
 
-    const query = client.queryUntilEose([{ kinds: [30900] }]);
+    client.subscribe([{ kinds: [30900] }], { onEose });
     await flushPromises();
-    relayA.subscriptions[0].params.onevent(event);
     relayA.subscriptions[0].params.oneose();
     await flushPromises();
 
-    let settled = false;
-    query.then(() => { settled = true; }, () => { settled = true; });
-    await flushPromises();
-    expect(settled).toBe(false);
+    expect(onEose).toHaveBeenCalledTimes(1);
+    expect(onEose).toHaveBeenCalledWith('wss://relay-a.example');
 
     relayB.subscriptions[0].params.oneose();
     await flushPromises();
-    await expect(query).resolves.toEqual([event]);
+    expect(onEose).toHaveBeenCalledTimes(2);
+    expect(onEose).toHaveBeenLastCalledWith('wss://relay-b.example');
   });
 
-  it('treats query timeouts as incomplete history instead of successful partial results', async () => {
-    vi.useFakeTimers();
-    const relay = createRelay('wss://relay.example');
-    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
-
-    const query = client.query([{ kinds: [30900] }], 1000);
-    const assertion = expect(query).rejects.toMatchObject({
-      name: 'NostrIncompleteEOSEError',
-      reason: 'timeout',
-      partialEvents: []
-    });
-
-    await vi.advanceTimersByTimeAsync(1000);
-    await assertion;
-  });
-
-  it('treats aborts as incomplete history with typed reason metadata', async () => {
-    const relay = createRelay('wss://relay.example');
-    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
-    const controller = new AbortController();
-
-    const query = client.queryUntilEose([{ kinds: [30900] }], { signal: controller.signal });
-    const assertion = expect(query).rejects.toMatchObject({
-      name: 'NostrIncompleteEOSEError',
-      reason: 'aborted',
-      relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
-    });
-
-    controller.abort(new Error('user cancelled'));
-    await assertion;
-  });
-
-  it('keeps EOSE queries active across transient transport reconnect and resolves after EOSE', async () => {
+  it('keeps subscriptions active across transient transport reconnect and delivers EOSE later', async () => {
     const relay = createRelay('wss://relay.example');
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
+    let resolveEvent;
+    let resolveEose;
+    const eventSeen = new Promise((resolve) => { resolveEvent = resolve; });
+    const eoseSeen = new Promise((resolve) => { resolveEose = resolve; });
+    const onEvent = vi.fn((...args) => resolveEvent(args));
+    const onEose = vi.fn((...args) => resolveEose(args));
 
-    const query = client.queryUntilEose([{ kinds: [30900] }]);
+    client.subscribe([{ kinds: [30900] }], { onEvent, onEose });
     await flushPromises();
     relay.subscriptions[0].params.onevent(event);
-
-    let settled = false;
-    query.then(() => { settled = true; }, () => { settled = true; });
-    await flushPromises();
-    expect(settled).toBe(false);
+    await eventSeen;
+    expect(onEose).not.toHaveBeenCalled();
 
     relay.subscriptions[0].params.oneose();
-    await flushPromises();
-    await expect(query).resolves.toEqual([event]);
+    await eoseSeen;
+    expect(onEvent).toHaveBeenCalledWith(event, 'wss://relay.example');
+    expect(onEose).toHaveBeenCalledWith('wss://relay.example');
   });
 
-  it('rejects relay CLOSED-incomplete queries and preserves partial events for callers', async () => {
+  it('surfaces relay CLOSED before EOSE with terminal metadata while preserving partial events already delivered', async () => {
     const relay = createRelay('wss://relay.example');
     const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
+    let resolveEvent;
+    let resolveClosed;
+    const eventSeen = new Promise((resolve) => { resolveEvent = resolve; });
+    const closedSeen = new Promise((resolve) => { resolveClosed = resolve; });
+    const onEvent = vi.fn((...args) => resolveEvent(args));
+    const onClosed = vi.fn((...args) => resolveClosed(args));
 
-    const query = client.queryUntilEose([{ kinds: [30900] }]);
+    client.subscribe([{ kinds: [30900] }], { onEvent, onClosed });
     await flushPromises();
     relay.subscriptions[0].params.onevent(event);
+    await eventSeen;
     relay.subscriptions[0].params.onclose('closed: relay shutdown');
-    await flushPromises();
+    await closedSeen;
 
-    await expect(query).rejects.toMatchObject({
-      name: 'NostrIncompleteEOSEError',
-      reason: 'all_relays_closed',
-      partialEvents: [event],
-      relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'closed: relay shutdown' }]
+    expect(onEvent).toHaveBeenCalledWith(event, 'wss://relay.example');
+    expect(onClosed).toHaveBeenCalledWith('closed: relay shutdown', 'wss://relay.example', {
+      terminal: true,
+      source: 'closed',
+      authRequired: false
     });
   });
 
-  it('exposes a typed incomplete-query error for fail-closed callers', () => {
-    const error = new NostrIncompleteEOSEError('aborted', {
-      partialEvents: [{ id: 'partial' }],
-      relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
-    });
+  it('classifies NIP-42 AUTH-required closures and marks relay status', async () => {
+    const relay = createRelay('wss://auth.example');
+    const client = createNostrPoolClient({ relays: ['wss://auth.example'], pool: createPool([relay]) });
+    const onClosed = vi.fn();
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error.reason).toBe('aborted');
-    expect(error.partialEvents).toEqual([{ id: 'partial' }]);
+    client.subscribe([{ kinds: [30900] }], { onClosed });
+    await flushPromises();
+    relay.subscriptions[0].params.onclose('auth-required: sign in first');
+    await flushPromises();
+
+    expect(onClosed).toHaveBeenCalledWith('auth-required: sign in first', 'wss://auth.example', {
+      terminal: true,
+      source: 'auth',
+      authRequired: true
+    });
+    expect(get(client.connectionStatus)['wss://auth.example']).toBe('auth-required');
+  });
+
+  it('does not classify non-prefix auth-required text as NIP-42 AUTH', async () => {
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
+    const onClosed = vi.fn();
+
+    client.subscribe([{ kinds: [30900] }], { onClosed });
+    await flushPromises();
+    relay.subscriptions[0].params.onclose('closed: not auth-required; maintenance');
+    await flushPromises();
+
+    expect(onClosed).toHaveBeenCalledWith('closed: not auth-required; maintenance', 'wss://relay.example', {
+      terminal: true,
+      source: 'closed',
+      authRequired: false
+    });
+    expect(get(client.connectionStatus)['wss://relay.example']).toBe('connected');
   });
 });

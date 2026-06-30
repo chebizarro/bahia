@@ -25,7 +25,6 @@ const nostrMock = vi.hoisted(() => {
     connected: store(false),
     setRelays: vi.fn(),
     connect: vi.fn(),
-    queryUntilEose: vi.fn(),
     subscribe: vi.fn()
   };
 });
@@ -83,7 +82,6 @@ describe('FIPS mesh store', () => {
     nostrMock.connect.mockImplementation(async () => {
       nostrMock.connected.set(true);
     });
-    nostrMock.queryUntilEose.mockResolvedValue([]);
     nostrMock.subscribe.mockReturnValue(vi.fn());
     systemInfoMock.loadSystemInfo.mockResolvedValue({
       nostr: {
@@ -105,19 +103,20 @@ describe('FIPS mesh store', () => {
     ]);
   });
 
-  it('bootstraps via EOSE query and keeps a live subscription open', async () => {
+  it('bootstraps through a persistent subscription and marks ready on EOSE', async () => {
     const initial = meshEndpoint();
-    nostrMock.queryUntilEose.mockResolvedValue([initial]);
 
     const result = await store.bootstrapFipsMesh();
+    const callbacks = nostrMock.subscribe.mock.calls[0][1];
+    callbacks.onEvent(initial, 'relay-a');
+    callbacks.onEose('relay-a');
 
     expect(result.ok).toBe(true);
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
+    expect(nostrMock.subscribe).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['mesh'], '#mesh': ['fips'] })
-    ]));
-    expect(nostrMock.subscribe).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
+    ]), expect.objectContaining({
       onEvent: expect.any(Function),
       onEose: expect.any(Function),
       onClosed: expect.any(Function)

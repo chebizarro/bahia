@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const subscriptionsMock = vi.hoisted(() => ({
-  queryOrPartial: vi.fn(),
-  readModelEvents: vi.fn((result) => Array.isArray(result) ? result : (result?.events || []))
+  relayEvents: [],
+  nostr: {
+    subscribe: vi.fn((_filters, handlers = {}) => {
+      for (const event of subscriptionsMock.relayEvents) handlers.onEvent?.(event, 'wss://docs.example');
+      handlers.onEose?.('wss://docs.example');
+      return vi.fn();
+    })
+  }
 }));
 
 vi.mock('$app/environment', () => ({
@@ -37,8 +43,8 @@ function docEvent(topic, title, category = 'guide', content = '# Document') {
 describe('Nostr documentation client', () => {
   beforeEach(() => {
     localStorage.clear();
-    subscriptionsMock.queryOrPartial.mockReset();
-    subscriptionsMock.readModelEvents.mockClear();
+    subscriptionsMock.relayEvents = [];
+    subscriptionsMock.nostr.subscribe.mockClear();
   });
 
   it('ignores an empty docs cache and queries relay-backed NIP-23 events', async () => {
@@ -46,15 +52,17 @@ describe('Nostr documentation client', () => {
       cachedAt: Date.now(),
       events: []
     }));
-    subscriptionsMock.queryOrPartial.mockResolvedValueOnce({
-      events: [docEvent('features-services', 'Services', 'feature', '# Services')]
-    });
+    subscriptionsMock.relayEvents = [docEvent('features-services', 'Services', 'feature', '# Services')];
 
     const catalog = await fetchDocsCatalog({ timeoutMs: 2500 });
 
-    expect(subscriptionsMock.queryOrPartial).toHaveBeenCalledWith([
+    expect(subscriptionsMock.nostr.subscribe).toHaveBeenCalledWith([
       { kinds: [30023], '#t': ['bahia-docs'] }
-    ], { scope: 'docs-catalog', timeoutMs: 2500 });
+    ], expect.objectContaining({
+      onEvent: expect.any(Function),
+      onEose: expect.any(Function),
+      onClosed: expect.any(Function)
+    }));
     expect(catalog.count).toBe(1);
     expect(catalog.topics[0]).toMatchObject({
       topic: 'features-services',
@@ -65,7 +73,7 @@ describe('Nostr documentation client', () => {
   });
 
   it('does not cache empty relay snapshots as documentation truth', async () => {
-    subscriptionsMock.queryOrPartial.mockResolvedValueOnce({ events: [] });
+    subscriptionsMock.relayEvents = [];
 
     const catalog = await fetchDocsCatalog({ timeoutMs: 2500 });
 
@@ -74,12 +82,10 @@ describe('Nostr documentation client', () => {
   });
 
   it('resolves a single topic from the relay event catalog', async () => {
-    subscriptionsMock.queryOrPartial.mockResolvedValueOnce({
-      events: [
-        docEvent('features-services', 'Services', 'feature', '# Services\n\n[Deployments](features/deployments.md)'),
-        docEvent('features-deployments', 'Deployments', 'feature', '# Deployments')
-      ]
-    });
+    subscriptionsMock.relayEvents = [
+      docEvent('features-services', 'Services', 'feature', '# Services\n\n[Deployments](features/deployments.md)'),
+      docEvent('features-deployments', 'Deployments', 'feature', '# Deployments')
+    ];
 
     const doc = await fetchDoc('features-services', { bypassCache: true, timeoutMs: 2500 });
 

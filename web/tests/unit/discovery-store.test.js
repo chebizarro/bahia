@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { queryUntilEose } from '../../src/lib/nostr/pool-query.js';
 
 const poolClientHarness = vi.hoisted(() => ({
   events: [],
@@ -14,6 +13,7 @@ const poolClientHarness = vi.hoisted(() => ({
         return { connected: relays.length, total: relays.length, failed: 0, connecting: 0, relays: relays.map((url) => ({ url, status: 'connected' })) };
       }),
       getConnectedRelays: vi.fn(() => [...poolClientHarness.connectedRelays]),
+      subscribe: vi.fn((filters, handlers = {}) => client.subscribeOnRelays(client.getConnectedRelays(), filters, handlers)),
       subscribeOnRelays: vi.fn((relays, filters, handlers = {}) => {
         poolClientHarness.lastSubscription = { relays, filters, handlers };
         for (const event of poolClientHarness.events) {
@@ -29,7 +29,6 @@ const poolClientHarness = vi.hoisted(() => ({
         }
         return poolClientHarness.unsubscribe;
       }),
-      queryUntilEose: vi.fn((filters, options = {}) => queryUntilEose(client, filters, options)),
       disconnect: vi.fn()
     };
     poolClientHarness.instance = client;
@@ -127,7 +126,14 @@ describe('Nostr system discovery store', () => {
     const info = await store.discoverSystemInfo();
 
     expect(poolClientHarness.instance.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(poolClientHarness.instance.queryUntilEose).toHaveBeenCalledWith([discoveryFilter]);
+    expect(poolClientHarness.instance.subscribe).toHaveBeenCalledWith(
+      [discoveryFilter],
+      expect.objectContaining({
+        onEvent: expect.any(Function),
+        onEose: expect.any(Function),
+        onClosed: expect.any(Function)
+      })
+    );
     expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
       ['ws://localhost:10547/relay'],
       [discoveryFilter],
@@ -137,7 +143,7 @@ describe('Nostr system discovery store', () => {
         onClosed: expect.any(Function)
       })
     );
-    expect(poolClientHarness.instance.disconnect).toHaveBeenCalledTimes(1);
+    expect(poolClientHarness.instance.disconnect).not.toHaveBeenCalled();
     expect(info.features.relay_read_models).toBe(true);
     expect(info.nostr.service_pubkey).toBe(trustedPubkey);
     expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
@@ -226,7 +232,7 @@ describe('Nostr system discovery store', () => {
   it('fails closed when an auth-required CLOSED arrives before EOSE', async () => {
     poolClientHarness.closedRelays = [{ relay: 'ws://localhost:10547/relay', reason: 'auth-required: restricted discovery', meta: { terminal: true, source: 'auth', authRequired: true } }];
 
-    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('All Nostr query relays require AUTH');
+    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('Discovery subscription closed: auth-required: restricted discovery');
     expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
       ['ws://localhost:10547/relay'],
       [discoveryFilter],

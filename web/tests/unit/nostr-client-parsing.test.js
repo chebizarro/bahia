@@ -58,9 +58,6 @@ describe('Nostr Client - Parsing Functions', () => {
   let dedupeReplaceableEvents;
   let parseRuntimeCapabilityEvent;
   let runtimeCapabilitySupports;
-  let fetchRuntimeCapabilities;
-  let queryOrPartial;
-  let NostrIncompleteEOSEError;
   let normalizeSoulDraftContent;
   let createNostrPoolClient;
 
@@ -84,9 +81,6 @@ describe('Nostr Client - Parsing Functions', () => {
     dedupeReplaceableEvents = module.dedupeReplaceableEvents;
     parseRuntimeCapabilityEvent = module.parseRuntimeCapabilityEvent;
     runtimeCapabilitySupports = module.runtimeCapabilitySupports;
-    fetchRuntimeCapabilities = module.fetchRuntimeCapabilities;
-    queryOrPartial = module.queryOrPartial;
-    NostrIncompleteEOSEError = module.NostrIncompleteEOSEError;
     normalizeSoulDraftContent = module.normalizeSoulDraftContent;
     createNostrPoolClient = module.createNostrPoolClient;
     global.WebSocket.OPEN = 1;
@@ -263,7 +257,7 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(runtimeCapabilitySupports(capability, { runtime: 'metiq' })).toBe(false);
     });
 
-    it('fetchRuntimeCapabilities queries until EOSE and filters compatible methods', async () => {
+    it('dedupes runtime capability announcements with replaceable latest-wins semantics', () => {
       const old = {
         id: 'old-cap',
         kind: 30317,
@@ -279,199 +273,88 @@ describe('Nostr Client - Parsing Functions', () => {
         content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.update'] })
       };
 
-      const module = await import('../../src/lib/nostr/client.js');
-      vi.spyOn(module.nostr, 'queryUntilEose').mockResolvedValue([old, latest]);
-
-      const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
-
-      expect(module.nostr.queryUntilEose).toHaveBeenCalledWith([{ kinds: [30317], limit: 200 }], {});
-      expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
-      expect(capabilities.eose).toEqual({ complete: true, degraded: null, relaySummary: [] });
-    });
-
-    it('fetchRuntimeCapabilities returns partial capabilities with degraded EOSE metadata when CLOSED incomplete', async () => {
-      const old = {
-        id: 'old-cap',
-        kind: 30317,
-        pubkey: 'runtime-pubkey',
-        created_at: 100,
-        tags: [['d', 'openclaw'], ['runtime', 'openclaw']],
-        content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.provision'] })
-      };
-      const latest = {
-        ...old,
-        id: 'new-cap',
-        created_at: 200,
-        content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.update'] })
-      };
-
-      const module = await import('../../src/lib/nostr/client.js');
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
-      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('all_relays_closed', {
-        partialEvents: [old, latest],
-        relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
-      }));
-
-      const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
+      const capabilities = dedupeReplaceableEvents([old, latest]).map(parseRuntimeCapabilityEvent).filter(Boolean);
 
       expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
-      expect(capabilities.eose).toMatchObject({
-        complete: false,
-        degraded: {
-          incomplete: true,
-          reason: 'all_relays_closed',
-          partialEventCount: 2,
-          relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
-        }
-      });
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 2 partial Nostr event(s) after incomplete EOSE'));
-    });
-
-    it('fetchRuntimeCapabilities returns empty capabilities with degraded EOSE metadata when timeout has no partial events', async () => {
-      const module = await import('../../src/lib/nostr/client.js');
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
-      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
-        partialEvents: [],
-        relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
-      }));
-
-      const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
-
-      expect(capabilities).toEqual([]);
-      expect(capabilities.eose).toMatchObject({
-        complete: false,
-        degraded: {
-          incomplete: true,
-          reason: 'timeout',
-          partialEventCount: 0,
-          relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
-        }
-      });
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 0 empty partial Nostr event(s) after incomplete EOSE'));
+      expect(capabilities.filter((capability) => runtimeCapabilitySupports(capability, { method: 'soulfactory.update' }))).toHaveLength(1);
     });
   });
 
-  describe('partial read results', () => {
-    it('queryOrPartial returns explicit degraded metadata for aborted incomplete history', async () => {
-      const partial = { id: 'partial', kind: 31951, pubkey: 'factory', created_at: 100, tags: [['d', 'scout']] };
-      const module = await import('../../src/lib/nostr/client.js');
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
-      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('aborted', {
-        partialEvents: [partial],
-        relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: 'user cancelled' }],
-        message: 'Nostr query aborted before EOSE completion'
-      }));
-
-      const result = await queryOrPartial([{ kinds: [31951] }], { scope: 'souls' });
-
-      expect(result).toMatchObject({
-        events: [partial],
-        complete: false,
-        degraded: {
-          incomplete: true,
-          reason: 'aborted',
-          message: 'Nostr query aborted before EOSE completion',
-          partialEventCount: 1,
-          relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: 'user cancelled' }]
-        }
-      });
-    });
-  });
-
-  describe('queryUntilEose', () => {
-    it('keeps pending bootstrap queries subscribed across transient relay reconnects', async () => {
+  describe('pool subscriptions', () => {
+    it('keeps subscriptions active until relay EOSE callbacks arrive', async () => {
       const relay = createRelay('ws://relay.example');
       const pool = createPool([relay]);
       const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
+      const onEose = vi.fn();
 
-      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      client.subscribe([{ kinds: [30900] }], { onEose });
       await flushPromises();
 
       expect(pool.ensureRelay).toHaveBeenCalledWith('ws://relay.example');
       expect(relay.subscribe).toHaveBeenCalledWith([{ kinds: [30900] }], expect.objectContaining({ id: 'sub_1' }));
-
-      let settled = false;
-      query.then(() => { settled = true; }, () => { settled = true; });
-      await flushPromises();
-      expect(settled).toBe(false);
+      expect(onEose).not.toHaveBeenCalled();
 
       relay.subscriptions[0].params.oneose();
       await flushPromises();
-      await expect(query).resolves.toEqual([]);
+      expect(onEose).toHaveBeenCalledWith('ws://relay.example');
     });
 
-    it('rejects pending bootstrap queries when a relay subscription closes before EOSE', async () => {
+    it('surfaces relay CLOSED before EOSE through onClosed metadata', async () => {
       const relay = createRelay('ws://relay.example');
       const pool = createPool([relay]);
       const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
+      const onClosed = vi.fn();
 
-      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      client.subscribe([{ kinds: [30900] }], { onClosed });
       await flushPromises();
       relay.subscriptions[0].params.onclose('relay reconnect attempts exhausted before EOSE');
       await flushPromises();
 
-      await expect(query).rejects.toMatchObject({
-        name: 'NostrIncompleteEOSEError',
-        reason: 'all_relays_closed',
-        relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'relay reconnect attempts exhausted before EOSE' }]
+      expect(onClosed).toHaveBeenCalledWith('relay reconnect attempts exhausted before EOSE', 'ws://relay.example', {
+        terminal: true,
+        source: 'closed',
+        authRequired: false
       });
     });
 
-    it('excludes AUTH-required relays and completes when remaining relays reach EOSE', async () => {
+    it('marks AUTH-required relays and lets remaining relays reach EOSE', async () => {
       const authRelay = createRelay('ws://auth.example');
       const openRelay = createRelay('ws://open.example');
       const pool = createPool([authRelay, openRelay]);
       const client = createNostrPoolClient({ relays: ['ws://auth.example', 'ws://open.example'], pool });
+      const onClosed = vi.fn();
+      const onEose = vi.fn();
 
-      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      client.subscribe([{ kinds: [30900] }], { onClosed, onEose });
       await flushPromises();
       authRelay.subscriptions[0].params.onclose('auth-required: sign in first');
       openRelay.subscriptions[0].params.oneose();
       await flushPromises();
 
-      const events = await query;
-      expect(events).toEqual([]);
-      expect(events.eose).toMatchObject({
-        complete: true,
-        degraded: { reason: 'auth_required_relays_excluded' },
-        relaySummary: [
-          { relay: 'ws://auth.example', status: 'excluded', reason: 'auth-required: sign in first' },
-          { relay: 'ws://open.example', status: 'eose', reason: '' }
-        ]
+      expect(onClosed).toHaveBeenCalledWith('auth-required: sign in first', 'ws://auth.example', {
+        terminal: true,
+        source: 'auth',
+        authRequired: true
       });
+      expect(onEose).toHaveBeenCalledWith('ws://open.example');
       expect(get(client.connectionStatus)['ws://auth.example']).toBe('auth-required');
-    });
-
-    it('fails when every query relay is excluded for unavailable AUTH', async () => {
-      const relay = createRelay('ws://auth.example');
-      const pool = createPool([relay]);
-      const client = createNostrPoolClient({ relays: ['ws://auth.example'], pool });
-
-      const query = client.queryUntilEose([{ kinds: [30900] }]);
-      await flushPromises();
-      relay.subscriptions[0].params.onclose('auth-required');
-      await flushPromises();
-
-      await expect(query).rejects.toMatchObject({
-        name: 'NostrIncompleteEOSEError',
-        reason: 'all_relays_excluded',
-        relaySummary: [{ relay: 'ws://auth.example', status: 'excluded', reason: 'auth-required' }]
-      });
     });
 
     it('does not classify non-prefix auth-required text as NIP-42 AUTH', async () => {
       const relay = createRelay('ws://relay.example');
       const pool = createPool([relay]);
       const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
+      const onClosed = vi.fn();
 
-      const query = client.queryUntilEose([{ kinds: [30900] }]);
+      client.subscribe([{ kinds: [30900] }], { onClosed });
       await flushPromises();
       relay.subscriptions[0].params.onclose('closed: not auth-required; maintenance');
       await flushPromises();
 
-      await expect(query).rejects.toMatchObject({
-        reason: 'all_relays_closed',
-        relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'closed: not auth-required; maintenance' }]
+      expect(onClosed).toHaveBeenCalledWith('closed: not auth-required; maintenance', 'ws://relay.example', {
+        terminal: true,
+        source: 'closed',
+        authRequired: false
       });
       expect(get(client.connectionStatus)['ws://relay.example']).toBe('connected');
     });

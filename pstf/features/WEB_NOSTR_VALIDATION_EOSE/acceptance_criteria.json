@@ -1,36 +1,70 @@
 {
   "feature_id": "WEB_NOSTR_VALIDATION_EOSE",
-  "beads": ["bahia-0zzk", "bahia-f1mu", "bahia-o93z:web", "bahia-il2j:web", "bahia-zui7"],
+  "beads": [
+    "bahia-0zzk",
+    "bahia-f1mu",
+    "bahia-o93z:web",
+    "bahia-il2j:web",
+    "bahia-zui7",
+    "bahia-y32g",
+    "bahia-qc5c"
+  ],
   "criteria": [
     {
       "id": "AC1",
       "statement": "Browser relay EVENT frames are validated before subscription callbacks receive them.",
-      "tests": ["web/tests/unit/sanity.test.js: validates NIP-01 event hashes before browser consumers receive relay EVENT frames", "web/tests/unit/sanity.test.js: rejects malformed signatures, timestamps, and non-string tags at the inbound validator"]
+      "tests": [
+        "web/tests/unit/sanity.test.js: validates NIP-01 event hashes before browser consumers receive relay EVENT frames",
+        "web/tests/unit/sanity.test.js: rejects malformed signatures, timestamps, and non-string tags at the inbound validator"
+      ]
     },
     {
       "id": "AC2",
-      "statement": "Browser historical queries resolve only after all connected relays in the subscription snapshot emit EOSE.",
-      "tests": ["web/tests/unit/sanity.test.js: preserves relay frame order when EVENT validation is followed immediately by EOSE", "web/tests/unit/sanity.test.js: resolves historical queries only after every connected relay sends EOSE"]
+      "statement": "Pool-backed subscriptions preserve EVENT-before-EOSE ordering and expose EOSE callbacks so historical catch-up completion remains relay-authoritative.",
+      "tests": [
+        "web/tests/unit/sanity.test.js: preserves relay frame order when EVENT validation is followed immediately by EOSE",
+        "web/tests/unit/sanity.test.js: exposes per-relay EOSE callbacks so callers can make historical catch-up authoritative",
+        "web/tests/unit/souls-store.test.js: subscribes once to current soul factory read-model kinds without an author filter"
+      ]
     },
     {
       "id": "AC3",
-      "statement": "Timeout, abort, and relay CLOSED-incomplete paths reject with a distinct incomplete-history error and preserve partial events/relay state.",
-      "tests": ["web/tests/unit/sanity.test.js: treats query timeouts as incomplete history instead of successful partial results", "web/tests/unit/sanity.test.js: treats aborts as incomplete history with typed reason metadata", "web/tests/unit/sanity.test.js: rejects relay CLOSED-incomplete queries and preserves partial events for callers", "web/tests/unit/nostr-client-parsing.test.js: rejects pending bootstrap queries when reconnect attempts are exhausted before EOSE"]
-    },
-    {
-      "id": "AC5",
-      "statement": "Browser historical queries keep scoped REQ subscriptions active across relay transport reconnects and complete only after the reissued subscription receives EOSE.",
-      "tests": ["web/tests/unit/sanity.test.js: keeps EOSE queries active across transport reconnect and resolves after reissued REQ EOSE", "web/tests/unit/nostr-client-parsing.test.js: keeps pending bootstrap queries subscribed when relay transport closes before EOSE"]
+      "statement": "Pool-backed subscriptions surface CLOSED and AUTH-required closure metadata without converting closures into successful historical completion.",
+      "tests": [
+        "web/tests/unit/sanity.test.js: reports CLOSED metadata to subscription handlers",
+        "web/tests/unit/sanity.test.js: classifies auth-required CLOSED reasons without trusting generic auth text",
+        "web/tests/unit/nostr-client-parsing.test.js: reports CLOSED metadata through pool subscription handlers",
+        "web/tests/unit/discovery-store.test.js: fails discovery bootstrap on AUTH-required CLOSED before EOSE"
+      ]
     },
     {
       "id": "AC4",
-      "statement": "Branch and control-plane callers surface incomplete history/relay closure explicitly instead of treating it as empty success.",
-      "tests": ["web/tests/unit/test-utils-and-fixtures.test.js: returns degraded metadata with partial repo state when branch history is incomplete before EOSE", "web/tests/unit/test-utils-and-fixtures.test.js: returns degraded metadata for incomplete branch history with no partial events", "web/tests/unit/controlplane-requests.test.js: awaitResult reports auth-related subscription closures distinctly", "web/tests/unit/controlplane-requests.test.js: awaitResult aggregates relay close reasons when all result subscriptions close incomplete"]
+      "statement": "Branch and control-plane callers surface relay closure explicitly instead of treating it as empty success.",
+      "tests": [
+        "web/tests/unit/test-utils-and-fixtures.test.js: returns partial branch events with relay closure error metadata when CLOSED occurs after events",
+        "web/tests/unit/test-utils-and-fixtures.test.js: returns empty branch state with relay closure error metadata when CLOSED occurs before events",
+        "web/tests/unit/controlplane-requests.test.js: awaitResult reports auth-related subscription closures distinctly",
+        "web/tests/unit/controlplane-requests.test.js: awaitResult aggregates relay close reasons when all result subscriptions close incomplete"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Store read models use persistent scoped subscriptions for backfill plus realtime updates instead of removed one-shot query helpers.",
+      "tests": [
+        "web/tests/unit/souls-store.test.js: applies stored EVENT callbacks, dedupes replaceable records, sorts read models, and marks ready on EOSE",
+        "web/tests/unit/souls-store.test.js: keeps the persistent subscription open and applies live updates after EOSE",
+        "web/tests/unit/fips-mesh-store.test.js: bootstraps mesh state through current nostr.subscribe callbacks",
+        "web/tests/unit/docs-nostr.test.js: loads docs through a scoped kind 30023 subscription and EOSE callback",
+        "web/tests/unit/repositories-nip34.test.js: routes NIP-34 branch reads through current subscribe/subscribeOnRelays APIs"
+      ]
     },
     {
       "id": "AC6",
-      "statement": "Partial/degraded historical reads return explicit result metadata so empty or partial data cannot be mistaken for complete EOSE history.",
-      "tests": ["web/tests/unit/nostr-client-parsing.test.js: queryOrPartial returns explicit degraded metadata for aborted incomplete history", "web/tests/unit/nostr-client-parsing.test.js: fetchRuntimeCapabilities returns partial capabilities with degraded EOSE metadata when CLOSED incomplete", "web/tests/unit/nostr-client-parsing.test.js: fetchRuntimeCapabilities returns empty capabilities with degraded EOSE metadata when timeout has no partial events", "web/tests/unit/repositories-store.test.js: records degraded EOSE metadata for partial repository read models", "web/tests/unit/souls-store.test.js: loadSouls records degraded EOSE metadata from partial read models"]
+      "statement": "Explicit degraded read-model metadata for partial historical reads remains an open pool-era contract gap tracked outside this bead.",
+      "tests": [
+        "Retired stale queryUntilEose/queryOrPartial/fetchRuntimeCapabilities assertions in bahia-y32g because those symbols are no longer exported by web/src/lib/nostr.",
+        "Follow-up bead bahia-qc5c tracks defining and restoring explicit {complete,degraded,relaySummary} metadata for current pool-backed read models without reintroducing timeout-based query wrappers."
+      ]
     }
   ]
 }

@@ -3,7 +3,7 @@
   "source_beads": ["bahia-a84g"],
   "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk", "bahia-eqku"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
-  "updated_at": "2026-06-14",
+  "updated_at": "2026-06-30",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
@@ -231,6 +231,17 @@
       "pstf_status": "current_audit_evidence"
     },
     {
+      "id": "security-http-native-sbom-osv",
+      "surface": "`/security` and `/security/[id]` SBOM/OSV scan findings and schedules",
+      "transport_class": "http_native",
+      "route_files": ["web/src/routes/security/+page.svelte", "web/src/routes/security/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/security.svelte.js", "internal/api/handlers/security.go"],
+      "evidence": ["Security pages import the security store for finding/schedule list and rescan operations.", "The security store currently uses HTTP-native API client calls for OSV/SBOM security surfaces rather than browser Nostr command ingress."],
+      "rest_import_policy": "allowed_http_native_only",
+      "pstf_status": "current_audit_evidence",
+      "related_beads": ["bahia-4stc", "bahia-wh56", "bahia-y32g"]
+    },
+    {
       "id": "settings-discovery-and-relay-config",
       "surface": "`/settings` discovery and local relay/signer configuration",
       "transport_class": "http_native",
@@ -268,7 +279,7 @@
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/docs/+page.svelte", "web/src/routes/docs/[topic]/+page.svelte"],
       "control_files": ["web/src/lib/docs/nostr.js", "web/src/lib/nostr/subscriptions.js", "internal/docs/nostr_publisher.go", "internal/docs/catalog.go"],
-      "evidence": ["Docs pages query kind 30023 (NIP-23 long-form content) events tagged with bahia-docs from the relay via queryOrPartial().", "Backend NostrDocsPublisher syncs docs/user-guide/ Markdown to relay as addressable NIP-23 events on startup with content-hash change detection.", "No REST API import or /api/v1/docs fetch remains in the docs route files."],
+      "evidence": ["Docs pages subscribe to kind 30023 (NIP-23 long-form content) events tagged with bahia-docs from the relay and treat EOSE as historical catch-up completion.", "Backend NostrDocsPublisher syncs docs/user-guide/ Markdown to relay as addressable NIP-23 events on startup with content-hash change detection.", "No REST API import or /api/v1/docs fetch remains in the docs route files."],
       "rest_import_policy": "forbidden_for_command_ingress",
       "pstf_status": "resolved_by_bahia-vr8v",
       "resolved_by_beads": ["bahia-vr8v"]
