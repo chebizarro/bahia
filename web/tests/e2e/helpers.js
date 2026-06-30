@@ -174,7 +174,7 @@ export async function installE2EMocks(
       if (socket.readyState !== MockWebSocket.OPEN) return;
       void normalizeMockEventForDelivery(event).then((normalized) => {
         if (socket.readyState !== MockWebSocket.OPEN) return;
-        socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, normalized]) });
+        socket.emitMessage?.(JSON.stringify(['EVENT', subId, normalized]));
       });
     }
 
@@ -281,50 +281,57 @@ export async function installE2EMocks(
 
     function handleEncryptedSBOMRequest(event) {
       let envelope = decodeEncryptedContextVMEnvelope(event);
-      if (!envelope && event?.kind === 1059 && window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION?.operation === 'sbom/generate') {
+      const nextOperation = window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION;
+      if (!envelope && event?.kind === 1059 && (nextOperation?.operation === 'sbom/generate' || nextOperation?.operation === 'sbom/import')) {
         envelope = {
           id: event.id,
-          method: 'sbom/generate',
-          params: window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION.payload || {}
+          method: nextOperation.operation,
+          params: nextOperation.payload || {}
         };
         delete window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION;
       }
       if (!envelope) return null;
       const operation = String(envelope.method || envelope.operation || '');
-      if (operation !== 'sbom/generate') return null;
+      if (operation !== 'sbom/generate' && operation !== 'sbom/import') return null;
       const params = { ...(envelope.params || envelope.payload || {}) };
       delete params._meta;
       const subject = params.subject || {};
       const artifactId = String(subject.id || 'artifact-sbom-e2e');
       const digest = String(subject.digest || 'sha256:mock-sbom-digest');
-      const formats = Array.isArray(params.formats) && params.formats.length > 0 ? params.formats.map(String) : ['spdx'];
-      const generator = String(params.generator || 'syft');
+      const formats = operation === 'sbom/import'
+        ? [String(params.format || 'spdx')]
+        : (Array.isArray(params.formats) && params.formats.length > 0 ? params.formats.map(String) : ['spdx']);
+      const generatorParam = params.generator;
+      const generator = typeof generatorParam === 'object' && generatorParam !== null ? String(generatorParam.id || 'import') : String(generatorParam || (operation === 'sbom/import' ? 'import' : 'syft'));
       const now = Math.floor(Date.now() / 1000);
-      const payloadSha = 'a'.repeat(64);
+      const payloadSha = operation === 'sbom/import' ? 'b'.repeat(64) : 'a'.repeat(64);
       const statusDTag = `sbom:run:${artifactId}:${now}`;
       const runId = `run-${artifactId}-${now}`;
       const referenceEventIds = [];
+      const sourcePath = operation === 'sbom/import' ? 'mock-import' : 'mock';
+      const auditType = operation === 'sbom/import' ? 'sbom.imported' : 'sbom.generated';
 
       const statusEvent = {
         id: `mock-sbom-status-${event.id}`,
         kind: 30315,
         pubkey: servicePubkey,
         created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.status.v1'], ['d', statusDTag], ['artifact', artifactId], ['status', 'completed']],
-        content: JSON.stringify({ schema: 'bahia.sbom.status.v1', run_id: runId, artifact_id: artifactId, status: 'completed' }),
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.status.v1'], ['d', statusDTag], ['artifact', artifactId], ['subject', digest], ['status', 'completed']],
+        content: JSON.stringify({ schema: 'bahia.sbom.status.v1', run_id: runId, artifact_id: artifactId, subject_digest: digest, status: 'completed' }),
         sig: '0'.repeat(128)
       };
       publishMockNostrEvent(statusEvent);
 
       for (const format of formats) {
         const referenceDTag = `sbom:ref:${artifactId}:${format}:${payloadSha.slice(0, 12)}`;
+        const locationUri = `blossom://${sourcePath}/${artifactId}.${format}.json`;
         const referenceEvent = {
           id: `mock-sbom-ref-${format}-${event.id}`,
           kind: 30078,
           pubkey: servicePubkey,
           created_at: now,
-          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['format', format], ['generator', generator]],
-          content: JSON.stringify({ schema: 'bahia.sbom.ref.v1', domain: 'sbom', event_type: 'sbom.ref', artifact_id: artifactId, subject: { type: 'artifact', id: artifactId, digest }, format, storage: { type: 'blossom', uri: `blossom://mock/${artifactId}.${format}.json` }, payload_sha256: payloadSha, generator }),
+          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact'], ['format', format], ['storage', 'blossom'], ['location', locationUri], ['x', payloadSha], ['generator', generator]],
+          content: JSON.stringify({ schema: 'bahia.sbom.ref.v1', domain: 'sbom', event_type: 'sbom.ref', artifact_id: artifactId, subject: { type: 'artifact', id: artifactId, digest }, format, storage: { type: 'blossom', uri: locationUri }, payload_sha256: payloadSha, generator, packages: [{ name: `${format}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }] }),
           sig: '0'.repeat(128)
         };
         referenceEventIds.push(referenceEvent.id);
@@ -336,8 +343,8 @@ export async function installE2EMocks(
         kind: 30004,
         pubkey: servicePubkey,
         created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId]],
-        content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://mock/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator })) }),
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact']],
+        content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://${sourcePath}/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator, referenceEventId: referenceEventIds[formats.indexOf(format)] })) }),
         sig: '0'.repeat(128)
       };
       publishMockNostrEvent(availabilityEvent);
@@ -347,24 +354,36 @@ export async function installE2EMocks(
         kind: 4903,
         pubkey: servicePubkey,
         created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.audit.v1'], ['type', 'sbom.generated'], ['event_type', 'sbom.generated'], ['artifact', artifactId]],
-        content: JSON.stringify({ schema: 'bahia.audit.v1', type: 'sbom.generated', event_type: 'sbom.generated', entity_id: artifactId, data: { formats, generator } }),
+        tags: [['domain', 'sbom'], ['schema', 'bahia.audit.v1'], ['type', auditType], ['event_type', auditType], ['artifact', artifactId]],
+        content: JSON.stringify({ schema: 'bahia.audit.v1', type: auditType, event_type: auditType, entity_id: artifactId, data: { formats, generator } }),
         sig: '0'.repeat(128)
       };
       publishMockNostrEvent(auditEvent);
-      window.dispatchEvent(new CustomEvent('__bahia_e2e_sbom_generated', {
-        detail: { artifactId, formats, generator, requestEventId: event.id }
+
+      if (operation === 'sbom/import') {
+        publishMockNostrEvent({
+          id: `mock-sbom-compat-artifact-${event.id}`,
+          kind: 30900,
+          pubkey: servicePubkey,
+          created_at: now,
+          tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['legacy_kind', '31966'], ['d', artifactId], ['artifact', artifactId], ['deleted', 'false']],
+          content: JSON.stringify({ schema: 'bahia.registry.artifact.v1', id: artifactId, name: artifactId, artifact_type: 'container_image', digest, sbom: { artifact_id: artifactId, format: formats[0], generator: { id: generator }, source_url: `blossom://${sourcePath}/${artifactId}.${formats[0]}.json`, raw_hash: payloadSha, package_count: 1 }, sbom_packages: [{ name: `${formats[0]}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }], deleted: false }),
+          sig: '0'.repeat(128)
+        });
+      }
+
+      window.dispatchEvent(new CustomEvent(operation === 'sbom/import' ? '__bahia_e2e_sbom_imported' : '__bahia_e2e_sbom_generated', {
+        detail: { artifactId, formats, format: formats[0], generator, requestEventId: event.id, statusDTag }
       }));
 
       return encryptedContextVMResponse(event, envelope, {
+        accepted: true,
+        status: 'accepted',
         run_id: runId,
-        subject,
-        manifest_ids: formats.map((format) => `manifest-${artifactId}-${format}`),
-        reference_event_ids: referenceEventIds,
-        availability_event_id: availabilityEvent.id,
         status_d_tag: statusDTag,
-        publish_state: 'published'
-      }, [['domain', 'sbom'], ['operation', 'sbom/generate']]);
+        idempotencyKey: params.idempotencyKey || runId,
+        observable_kinds: [30315, 4903, 30078, 30004]
+      }, [['domain', 'sbom'], ['operation', operation]]);
     }
 
     class MockWebSocket {
@@ -375,14 +394,43 @@ export async function installE2EMocks(
 
       constructor(url) {
         this.url = url;
-        this.readyState = MockWebSocket.OPEN;
+        this.readyState = MockWebSocket.CONNECTING;
         this.onopen = null;
         this.onmessage = null;
         this.onerror = null;
         this.onclose = null;
         this.subscriptions = new Map();
+        this.listeners = new Map();
         window.__BAHIA_E2E_WS_CONNECTIONS.push(this);
-        setTimeout(() => this.onopen?.({ type: 'open', target: this }), 0);
+        setTimeout(() => this.emitOpen(), 0);
+      }
+
+      addEventListener(type, listener) {
+        if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+        this.listeners.get(type).add(listener);
+      }
+
+      removeEventListener(type, listener) {
+        this.listeners.get(type)?.delete(listener);
+      }
+
+      dispatchEvent(event) {
+        this.listeners.get(event.type)?.forEach((listener) => listener.call(this, event));
+      }
+
+      emitOpen() {
+        if (this.readyState === MockWebSocket.CLOSED) return;
+        this.readyState = MockWebSocket.OPEN;
+        const event = { type: 'open', target: this };
+        this.onopen?.(event);
+        this.dispatchEvent(event);
+      }
+
+      emitMessage(data) {
+        if (this.readyState !== MockWebSocket.OPEN) return;
+        const event = { type: 'message', data, target: this };
+        this.onmessage?.(event);
+        this.dispatchEvent(event);
       }
 
       emitEvent(event) {
@@ -409,9 +457,9 @@ export async function installE2EMocks(
           void Promise.all(events.map((event) => normalizeMockEventForDelivery(event))).then(async (normalizedEvents) => {
             if (this.readyState !== MockWebSocket.OPEN) return;
             for (const event of normalizedEvents) {
-              await this.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
+              this.emitMessage(JSON.stringify(['EVENT', subId, event]));
             }
-            await this.onmessage?.({ data: JSON.stringify(['EOSE', subId]) });
+            this.emitMessage(JSON.stringify(['EOSE', subId]));
           });
         } else if (Array.isArray(message) && message[0] === 'CLOSE') {
           this.subscriptions.delete(message[1]);
@@ -424,7 +472,7 @@ export async function installE2EMocks(
             setTimeout(() => this.emitEvent(encryptedResult), 0);
           }
           setTimeout(() => {
-            this.onmessage?.({ data: JSON.stringify(['OK', event?.id, true, '']) });
+            this.emitMessage(JSON.stringify(['OK', event?.id, true, '']));
           }, 0);
         }
       }
@@ -432,7 +480,9 @@ export async function installE2EMocks(
       close() {
         this.readyState = MockWebSocket.CLOSED;
         window.__BAHIA_E2E_WS_CONNECTIONS = (window.__BAHIA_E2E_WS_CONNECTIONS || []).filter((socket) => socket !== this);
-        this.onclose?.({ type: 'close', target: this });
+        const event = { type: 'close', target: this };
+        this.onclose?.(event);
+        this.dispatchEvent(event);
       }
     }
 

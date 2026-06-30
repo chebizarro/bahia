@@ -260,6 +260,24 @@
       "acceptance_criteria": [
         "AC13"
       ]
+    },
+    {
+      "test": "web/tests/unit/public-controlplane.test.js :: imports artifact SBOMs through publish-only ContextVM encrypted requests / rejects oversized inline artifact SBOM imports before publishing",
+      "acceptance_criteria": [
+        "AC2",
+        "AC5"
+      ]
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab publishes signer-backed ContextVM import request and completes from canonical SBOM events",
+      "acceptance_criteria": [
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5",
+        "AC7",
+        "AC8"
+      ]
     }
   ]
 }

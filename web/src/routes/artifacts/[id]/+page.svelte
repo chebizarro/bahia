@@ -12,7 +12,7 @@
   import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
-  import { generateArtifactSBOM } from '$lib/stores/public-controlplane.svelte.js';
+  import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_CONTEXTVM_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
   import { ensureRelayConnection, getTagValue, nostr, parseJsonContent } from '$lib/nostr/client.js';
   import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE } from '$lib/nostr/kinds.gen.js';
   import {
@@ -34,9 +34,14 @@
   let sbomLoading = $state(false);
   let sbomLoaded = $state(false);
   let sbomGenerating = $state(false);
+  let sbomImporting = $state(false);
   let sbomGenerateError = $state(null);
+  let sbomImportError = $state(null);
+  let sbomImportFile = $state(null);
+  let sbomImportFormat = $state('spdx');
   let sbomRequestEventId = $state(null);
   let sbomGenerationStatus = $state('idle');
+  let sbomOperation = $state('generate');
   let sbomReferenceCount = $state(0);
   let signatures = $state([]);
   let hasVerifiedSig = $state(false);
@@ -60,7 +65,11 @@
   let displayName = $derived(artifact?.name || artifact?.image_repo || artifact?.image_tag || 'Artifact Details');
   let displayVersion = $derived(artifactVersionLabel(artifact));
   let canGenerateSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && artifactImageLocator(artifact)));
+  let canImportSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && sbomImportFile && !isSBOMImportFileOversized(sbomImportFile)));
   let sbomActionLabel = $derived(sbomData || sbomAttestation || sbomPackages.length > 0 ? 'Regenerate SBOM' : 'Generate SBOM');
+  let sbomCompletedMessage = $derived(sbomOperation === 'import' ? 'SBOM imported successfully.' : 'SBOM generated successfully.');
+  let sbomPendingMessage = $derived(sbomOperation === 'import' ? 'SBOM import in progress. Results will appear here automatically.' : 'SBOM generation in progress. Results will appear here automatically.');
+  let sbomPublishingMessage = $derived(sbomOperation === 'import' ? 'Importing SBOM… this may take a moment.' : 'Generating SBOM… this may take a moment.');
 
   // SBOM table columns
   let sbomColumns = $derived([
@@ -287,8 +296,10 @@
   async function handleGenerateSBOM() {
     if (!artifact || sbomGenerating) return;
     activeTab = 'sbom';
+    sbomOperation = 'generate';
     sbomGenerating = true;
     sbomGenerateError = null;
+    sbomImportError = null;
     sbomRequestEventId = null;
     sbomGenerationStatus = 'publishing';
     clearSBOMEventCache();
@@ -303,6 +314,80 @@
       sbomGenerateError = userFacingSBOMError(err);
     } finally {
       sbomGenerating = false;
+    }
+  }
+
+  function isSBOMImportFileOversized(file) {
+    return Number(file?.size || 0) > MAX_CONTEXTVM_INLINE_SBOM_BYTES;
+  }
+
+  function detectSBOMImportFormat(file) {
+    const name = String(file?.name || '').toLowerCase();
+    if (name.includes('cyclonedx') || name.includes('cdx')) return 'cyclonedx';
+    if (name.includes('spdx')) return 'spdx';
+    return sbomImportFormat || 'spdx';
+  }
+
+  function handleSBOMImportFileChange(event) {
+    const file = event?.currentTarget?.files?.[0] || null;
+    sbomImportFile = file;
+    sbomImportError = null;
+    if (!file) return;
+    sbomImportFormat = detectSBOMImportFormat(file);
+    if (isSBOMImportFileOversized(file)) {
+      sbomImportError = inlineSBOMLimitMessage();
+    }
+  }
+
+  async function fileToBase64(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  async function handleImportSBOM() {
+    if (!artifact || sbomImporting) return;
+    sbomOperation = 'import';
+    sbomImportError = null;
+    sbomGenerateError = null;
+    if (!artifactSBOMDigest(artifact)) {
+      sbomImportError = 'This artifact needs an immutable digest before Bahia can import an SBOM.';
+      return;
+    }
+    if (!sbomImportFile) {
+      sbomImportError = 'Choose an SPDX or CycloneDX JSON file to import.';
+      return;
+    }
+    if (isSBOMImportFileOversized(sbomImportFile)) {
+      sbomImportError = inlineSBOMLimitMessage();
+      return;
+    }
+
+    activeTab = 'sbom';
+    sbomImporting = true;
+    sbomRequestEventId = null;
+    sbomGenerationStatus = 'publishing';
+    clearSBOMEventCache();
+    subscribeGeneratedSBOMReferences();
+    try {
+      const payloadBase64 = await fileToBase64(sbomImportFile);
+      const event = await importArtifactSBOM(artifact, {
+        format: sbomImportFormat,
+        payloadBase64,
+        generator: { id: 'web-import' }
+      });
+      sbomRequestEventId = event?.requestEventId || event?.id || null;
+      if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
+      toast.success('SBOM import started');
+      void observeGeneratedSBOMReferences();
+    } catch (err) {
+      sbomImportError = userFacingSBOMError(err);
+    } finally {
+      sbomImporting = false;
     }
   }
 
@@ -339,7 +424,9 @@
       },
       onClosed: (reason, _relay) => {
         if (sbomGenerationStatus === 'publishing' || sbomGenerationStatus === 'waiting') {
-          sbomGenerateError = `SBOM request is still pending, but a relay closed the SBOM event subscription${reason ? `: ${reason}` : ''}`;
+          const targetError = `SBOM request is still pending, but a relay closed the SBOM event subscription${reason ? `: ${reason}` : ''}`;
+          if (sbomOperation === 'import') sbomImportError = targetError;
+          else sbomGenerateError = targetError;
         }
       }
     });
@@ -350,11 +437,13 @@
       const observed = await refreshSBOMReferenceEvents();
       if (observed > 0) {
         sbomGenerationStatus = 'completed';
-        toast.success('SBOM generated successfully');
+        toast.success(sbomOperation === 'import' ? 'SBOM imported successfully' : 'SBOM generated successfully');
       }
     } catch (err) {
       if (sbomRequestEventId) {
-        sbomGenerateError = `SBOM request was published, but Bahia could not read the resulting SBOM events: ${userFacingSBOMError(err)}`;
+        const targetError = `SBOM request was published, but Bahia could not read the resulting SBOM events: ${userFacingSBOMError(err)}`;
+        if (sbomOperation === 'import') sbomImportError = targetError;
+        else sbomGenerateError = targetError;
       }
     }
   }
@@ -645,7 +734,7 @@
           <div class="section-header">
             <div>
               <h2 class="section-title"><SbomIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>SBOM</span></h2>
-              <p class="section-subtitle">Generate SPDX and CycloneDX manifests by publishing a signer-backed Nostr ContextVM <code>sbom/generate</code> request.</p>
+              <p class="section-subtitle">Generate or import SPDX and CycloneDX manifests by publishing signer-backed Nostr ContextVM requests. Completion is shown only after canonical <code>30078</code>/<code>30004</code> SBOM events arrive.</p>
             </div>
             <div class="header-actions">
               <LoadingButton
@@ -662,16 +751,52 @@
           {#if sbomGenerateError}
             <p class="error-message">{sbomGenerateError}</p>
           {/if}
+          {#if sbomImportError}
+            <p class="error-message">{sbomImportError}</p>
+          {/if}
           {#if !canGenerateSBOM}
             <p class="warning-message">This artifact needs an immutable digest plus a configured image repository or OCI image ref before Bahia can generate an SBOM.</p>
           {/if}
           {#if sbomGenerationStatus === 'completed'}
-            <p class="success-message">SBOM generated successfully.</p>
+            <p class="success-message">{sbomCompletedMessage}</p>
           {:else if sbomGenerationStatus === 'publishing'}
-            <p class="info-message">Generating SBOM… this may take a moment.</p>
+            <p class="info-message">{sbomPublishingMessage}</p>
           {:else if sbomRequestEventId}
-            <p class="info-message">SBOM generation in progress. Results will appear here automatically.</p>
+            <p class="info-message">{sbomPendingMessage}</p>
           {/if}
+
+          <form class="sbom-import-panel" onsubmit={(event) => { event.preventDefault(); void handleImportSBOM(); }}>
+            <div>
+              <h3 class="import-title">Import SBOM</h3>
+              <p class="section-subtitle">Inline imports accept SPDX or CycloneDX JSON up to 512 KiB. Larger files should be imported by Blossom or REST compatibility reference.</p>
+            </div>
+            <div class="import-controls">
+              <label class="import-field">
+                <span>SBOM file</span>
+                <input
+                  type="file"
+                  accept="application/json,.json,.spdx.json,.cdx.json,.cyclonedx.json"
+                  onchange={handleSBOMImportFileChange}
+                  disabled={sbomImporting}
+                />
+              </label>
+              <label class="import-field format-field">
+                <span>Format</span>
+                <select bind:value={sbomImportFormat} disabled={sbomImporting}>
+                  <option value="spdx">SPDX JSON</option>
+                  <option value="cyclonedx">CycloneDX JSON</option>
+                </select>
+              </label>
+              <LoadingButton
+                variant="secondary"
+                loading={sbomImporting}
+                disabled={!canImportSBOM || sbomGenerating}
+                type="submit"
+              >
+                Import SBOM
+              </LoadingButton>
+            </div>
+          </form>
 
           <SBOMDetails
             sbom={sbomData}
@@ -1072,5 +1197,63 @@
     color: var(--text-primary);
     background: rgba(59, 130, 246, 0.1);
     border: 1px solid rgba(59, 130, 246, 0.2);
+  }
+
+  .sbom-import-panel {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 1.5rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .import-title {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+  }
+
+  .import-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .import-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .import-field input,
+  .import-field select {
+    min-height: 2.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--input-bg, var(--card-bg));
+    color: var(--text-primary);
+    padding: 0.375rem 0.5rem;
+    text-transform: none;
+    font-weight: 400;
+  }
+
+  .format-field select {
+    min-width: 9rem;
+  }
+
+  @media (max-width: 720px) {
+    .sbom-import-panel {
+      align-items: stretch;
+      flex-direction: column;
+    }
   }
 </style>

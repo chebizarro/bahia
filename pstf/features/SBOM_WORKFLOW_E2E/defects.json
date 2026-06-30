@@ -15,9 +15,9 @@
     },
     {
       "id": "D3",
-      "status": "partially_fixed",
-      "description": "Broad browser E2E coverage for signer-first SBOM workflows was missing. The artifact generate/regenerate UI slice now publishes sbom/generate through encrypted ContextVM and verifies 30315/4903/30078/30004 mock relay outcomes; browser import workflow coverage remains outside the artifact generate/regenerate UI slice.",
-      "evidence": "Generate/regenerate slice covered by web/tests/unit/public-controlplane.test.js and web/tests/e2e/sbom-workflow.spec.js. Import-specific browser workflow coverage remains tracked by Bead bahia-wf2k if a user-facing import control is added."
+      "status": "fixed_pending_user_verification",
+      "description": "Broad browser E2E coverage for signer-first SBOM workflows was missing. The artifact generate/regenerate UI slice publishes sbom/generate through encrypted ContextVM and verifies 30315/4903/30078/30004 mock relay outcomes; the artifact SBOM tab now also exposes an import control and browser coverage for signer-first sbom/import.",
+      "evidence": "Generate/regenerate remains covered by web/tests/unit/public-controlplane.test.js and web/tests/e2e/sbom-workflow.spec.js. Bead bahia-wf2k adds importArtifactSBOM unit coverage plus web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab publishes signer-backed ContextVM import request and completes from canonical SBOM events, asserting async ACK-only semantics, 30315 status, 4903 audit, 30078 reference, 30004 availability list, Blossom reference, and artifact compatibility projection."
     },
     {
       "id": "D4",

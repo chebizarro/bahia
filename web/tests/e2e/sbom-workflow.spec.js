@@ -259,6 +259,100 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByText('aaaaaaaaaaaaaaaa...aaaaaaaa')).toBeVisible();
   });
 
+  test('artifact SBOM tab publishes signer-backed ContextVM import request and completes from canonical SBOM events', async ({ page }) => {
+    const digest = artifactPayload({ id: NO_SBOM_ARTIFACT_ID }).digest;
+    await installE2EMocks(page, {
+      authenticated: true,
+      extension: true,
+      systemInfo: relaySystemInfo,
+      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
+    });
+    await failOnUnsupportedSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
+
+    await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}?tab=sbom`);
+    await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Import SBOM' })).toBeVisible();
+
+    const sbomPayload = JSON.stringify({ spdxVersion: 'SPDX-2.3', packages: [{ name: 'imported-package', versionInfo: '1.0.0' }] });
+    await page.evaluate(({ artifactId, digest, payloadBase64 }) => {
+      window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION = {
+        operation: 'sbom/import',
+        payload: {
+          idempotencyKey: `web.sbom.import.e2e:${artifactId}`,
+          subject: { type: 'artifact', id: artifactId, digest },
+          format: 'spdx',
+          payloadBase64,
+          storage: 'blossom',
+          generator: { id: 'web-import' }
+        }
+      };
+    }, { artifactId: NO_SBOM_ARTIFACT_ID, digest, payloadBase64: Buffer.from(sbomPayload).toString('base64') });
+
+    const imported = page.evaluate(() => new Promise((resolve) => {
+      window.addEventListener('__bahia_e2e_sbom_imported', (event) => resolve(event.detail), { once: true });
+    }));
+    await page.getByLabel('SBOM file').setInputFiles({
+      name: 'artifact.import.spdx.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(sbomPayload)
+    });
+    await page.getByRole('button', { name: 'Import SBOM' }).click();
+    const importedDetail = await imported;
+    expect(importedDetail).toMatchObject({ artifactId: NO_SBOM_ARTIFACT_ID, format: 'spdx', generator: 'web-import' });
+
+    const importedEvents = await page.evaluate(({ artifactId, statusDTag }) => {
+      const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
+      const hasTag = (event, name, value) => Array.isArray(event.tags) && event.tags.some((tag) => Array.isArray(tag) && tag[0] === name && (value === undefined || tag[1] === value));
+      const parseContent = (event) => {
+        try { return JSON.parse(event?.content || '{}'); } catch { return {}; }
+      };
+      const ackEvent = events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/import')) || null;
+      const ackPayload = parseContent(ackEvent).payload || {};
+      const compatibilityProjection = events
+        .filter((event) => event.kind === 30900 && hasTag(event, 'artifact', artifactId))
+        .map((event) => ({ event, content: parseContent(event) }))
+        .find((entry) => entry.content?.sbom?.source_url?.includes('mock-import')) || null;
+      const reference = events.find((event) => event.kind === 30078 && hasTag(event, 'artifact', artifactId) && hasTag(event, 'format', 'spdx')) || null;
+      const availability = events.find((event) => event.kind === 30004 && hasTag(event, 'artifact', artifactId)) || null;
+      return {
+        request: events.find((event) => event.kind === 1059 && hasTag(event, 'p')) || null,
+        ackPayload,
+        status: events.find((event) => event.kind === 30315 && hasTag(event, 'artifact', artifactId) && hasTag(event, 'd', statusDTag)) || null,
+        reference: reference ? { tags: reference.tags, content: parseContent(reference) } : null,
+        availability: availability ? { tags: availability.tags, content: parseContent(availability) } : null,
+        audit: events.find((event) => event.kind === 4903 && hasTag(event, 'event_type', 'sbom.imported')) || null,
+        compatibilityProjection
+      };
+    }, { artifactId: NO_SBOM_ARTIFACT_ID, statusDTag: importedDetail.statusDTag });
+
+    expect(importedEvents.request).toBeTruthy();
+    expect(importedEvents.request.id).toBe(importedDetail.requestEventId);
+    expect(importedEvents.ackPayload).toMatchObject({ accepted: true, status: 'accepted', observable_kinds: [30315, 4903, 30078, 30004] });
+    expect(importedEvents.ackPayload.reference_event_ids).toBeUndefined();
+    expect(importedEvents.ackPayload.availability_event_id).toBeUndefined();
+    expect(importedEvents.status).toBeTruthy();
+    expect(importedEvents.audit).toBeTruthy();
+    expect(importedEvents.reference).toBeTruthy();
+    expect(importedEvents.reference.tags).toEqual(expect.arrayContaining([
+      ['storage', 'blossom'],
+      ['location', `blossom://mock-import/${NO_SBOM_ARTIFACT_ID}.spdx.json`],
+      ['x', 'b'.repeat(64)]
+    ]));
+    expect(importedEvents.reference.content.storage).toMatchObject({ type: 'blossom', uri: `blossom://mock-import/${NO_SBOM_ARTIFACT_ID}.spdx.json` });
+    expect(importedEvents.availability).toBeTruthy();
+    expect(importedEvents.availability.content.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ format: 'spdx', storageType: 'blossom', locationUri: `blossom://mock-import/${NO_SBOM_ARTIFACT_ID}.spdx.json`, payloadSha256: 'b'.repeat(64), generatorId: 'web-import' })
+    ]));
+    expect(importedEvents.compatibilityProjection).toBeTruthy();
+    expect(importedEvents.compatibilityProjection.content.sbom).toMatchObject({ format: 'spdx', source_url: `blossom://mock-import/${NO_SBOM_ARTIFACT_ID}.spdx.json`, raw_hash: 'b'.repeat(64) });
+
+    await expect(page.getByText('SBOM imported successfully.')).toBeVisible();
+    await expect(page.locator('.attestation-item').filter({ hasText: 'Format' }).getByText('SPDX', { exact: true })).toBeVisible();
+    await expect(page.getByText('web-import')).toBeVisible();
+    await expect(page.getByText(`blossom://mock-import/${NO_SBOM_ARTIFACT_ID}.spdx.json`)).toBeVisible();
+    await expect(page.getByText('bbbbbbbbbbbbbbbb...bbbbbbbb')).toBeVisible();
+  });
+
   test('artifact registry SBOM action opens detail page on SBOM tab', async ({ page }) => {
     await installE2EMocks(page, {
       authenticated: true,

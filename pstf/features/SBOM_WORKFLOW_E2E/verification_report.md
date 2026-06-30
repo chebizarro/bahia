@@ -136,9 +136,38 @@ GOCACHE=/tmp/bahia-go-cache go test ./internal/...
 
 Result: PASS on 2026-06-30.
 
+## bahia-wf2k artifact SBOM import browser workflow — 2026-06-30
+
+- `web/src/lib/stores/public-controlplane.svelte.js` now exposes `importArtifactSBOM(...)` for signer-backed ContextVM `sbom/import` intents. It uses `publishCommandOnly`, tags the artifact subject/format/generator, sends the backend `sbomImportParams` payload shape (`idempotencyKey`, `subject`, `format`, inline `payloadBase64` or `location`, `storage`, `generator`), and rejects inline payloads over the 512 KiB ContextVM limit before publishing.
+- `web/src/routes/artifacts/[id]/+page.svelte` now exposes an **Import SBOM** control on the SBOM tab with JSON file picker, SPDX/CycloneDX format selection/detection, client-side 512 KiB validation, base64 inline import, and operation-specific errors/status. Import reuses the same artifact-scoped `30078`/`30004` subscription and refresh path as generate; the ContextVM ACK remains pending-only and terminal UI success comes from canonical observable events.
+- `web/tests/e2e/helpers.js` now handles deterministic `sbom/import` browser intents and injects OK-published `30315`, `4903`, `30078`, `30004`, Blossom reference data, and artifact compatibility projection events without sleeps in the spec. The mock WebSocket now performs a realistic CONNECTING→OPEN transition and supports `addEventListener` so initial relay bootstrap is deterministic.
+- `web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab publishes signer-backed ContextVM import request and completes from canonical SBOM events` drives the file picker and asserts: Blossom reference, 30078 reference, 30004 availability-list entry, 30315 status, 4903 audit, compatibility projection, and async ACK-only semantics (`reference_event_ids`/`availability_event_id` absent from ACK).
+- PSTF defect `D3` is cleared to `fixed_pending_user_verification`; test matrix now maps the import unit/E2E coverage to AC2, AC3, AC4, AC5, AC7, and AC8.
+
+Targeted gates:
+
+```bash
+cd web && pnpm exec vitest run --config vitest.config.js tests/unit/public-controlplane.test.js
+cd web && pnpm lint
+cd web && pnpm exec playwright test --reporter=line tests/e2e/sbom-workflow.spec.js -g "ContextVM import request" --workers=1
+cd web && pnpm exec playwright test --reporter=line tests/e2e/sbom-workflow.spec.js --workers=1
+cd web && CI=true pnpm install --frozen-lockfile
+```
+
+Results: PASS on 2026-06-30. Playwright required unsandboxed browser launch on macOS after the sandboxed run failed before assertions with `MachPortRendezvousServer ... Permission denied`. The first frozen install attempt without `CI=true` aborted because pnpm required non-interactive confirmation to recreate `node_modules`; the `CI=true` frozen install passed.
+
+Full unit-suite status:
+
+```bash
+cd web && pnpm test:unit
+```
+
+Result: FAIL on 2026-06-30 due to unrelated existing unit-suite failures outside the SBOM import slice (for example missing `../../src/lib/nostr/pool-query.js`, route matrix entries for `web/src/routes/security/*`, and stale mocks lacking `nostr`/`queryUntilEose` exports). The focused public-controlplane unit file passed with the direct Vitest command above.
+
 ## Remaining tracked work
 
-- `bahia-wf2k`: Add live browser E2E coverage for signer-first `sbom/generate`/`sbom/import` UI/control flows with injected EVENT/EOSE/OK outcomes and terminal truth from `30078` plus `30004`.
+- `bahia-ndmr`: Relay-backed merge of existing canonical 30004 availability-list entries across Bahia instances remains tracked.
+
 
 ## Nostr/PSTF notes
 

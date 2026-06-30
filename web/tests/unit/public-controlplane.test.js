@@ -221,6 +221,52 @@ describe('public controlplane command helpers', () => {
     });
   });
 
+  it('imports artifact SBOMs through publish-only ContextVM encrypted requests', async () => {
+    await api.importArtifactSBOM({
+      id: 'artifact-1',
+      name: 'registry.example.com/acme/api',
+      digest: 'sha256:abc123'
+    }, {
+      format: 'cyclonedx',
+      payloadBase64: 'eyJib21Gb3JtYXQiOiAiQ3ljbG9uZURYIn0=',
+      generator: { id: 'external-tool', version: '1.0.0' }
+    });
+
+    expect(publishEncryptedRequestMock).toHaveBeenCalledWith({
+      operation: 'sbom/import',
+      tags: [
+        ['domain', 'sbom'],
+        ['operation', 'sbom/import'],
+        ['subject_type', 'artifact'],
+        ['artifact', 'artifact-1'],
+        ['subject', 'sha256:abc123'],
+        ['format', 'cyclonedx'],
+        ['generator', 'external-tool']
+      ],
+      payload: {
+        idempotencyKey: 'web.sbom.import:artifact:artifact-1:sha256:abc123:cyclonedx:inline:26:eyJib21Gb3JtYXQiOiAiQ3lj:YXQiOiAiQ3ljbG9uZURYIn0=:external-tool',
+        subject: {
+          type: 'artifact',
+          id: 'artifact-1',
+          display_name: 'registry.example.com/acme/api',
+          digest: 'sha256:abc123'
+        },
+        format: 'cyclonedx',
+        payloadBase64: 'eyJib21Gb3JtYXQiOiAiQ3ljbG9uZURYIn0=',
+        storage: 'blossom',
+        generator: { id: 'external-tool', version: '1.0.0' }
+      },
+      signal: undefined
+    });
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized inline artifact SBOM imports before publishing', () => {
+    const oversized = 'a'.repeat(Math.ceil(((api.MAX_CONTEXTVM_INLINE_SBOM_BYTES + 1) * 4) / 3));
+    expect(() => api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized })).toThrow('use a Blossom or REST compatibility import reference');
+    expect(publishEncryptedRequestMock).not.toHaveBeenCalled();
+  });
+
   it('rejects artifact SBOM generation without an immutable digest', () => {
     expect(() => api.generateArtifactSBOM({ id: 'artifact-1', image_repo: 'registry.example.com/acme/api' })).toThrow('artifact digest is required');
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();

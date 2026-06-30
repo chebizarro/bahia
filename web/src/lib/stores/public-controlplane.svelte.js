@@ -231,6 +231,42 @@ function artifactDisplayName(artifact) {
   return String(artifact?.name || artifact?.image_repo || artifact?.image_tag || artifact?.id || '').trim();
 }
 
+export const MAX_CONTEXTVM_INLINE_SBOM_BYTES = 512 * 1024;
+
+function normalizeSBOMFormat(format) {
+  const normalized = String(format || '').trim().toLowerCase();
+  if (normalized === 'spdx' || normalized === 'cyclonedx') return normalized;
+  throw new Error('SBOM format must be SPDX or CycloneDX');
+}
+
+function normalizeSBOMGenerator(generator, fallback = 'import') {
+  if (generator && typeof generator === 'object' && !Array.isArray(generator)) {
+    const id = String(generator.id || fallback).trim() || fallback;
+    return {
+      id,
+      ...(generator.version ? { version: String(generator.version) } : {}),
+      ...(generator.pubkey ? { pubkey: String(generator.pubkey) } : {})
+    };
+  }
+  return { id: String(generator || fallback).trim() || fallback };
+}
+
+function decodedBase64Length(payloadBase64) {
+  const normalized = String(payloadBase64 || '').replace(/\s/g, '');
+  if (!normalized) return 0;
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return Math.floor((normalized.length * 3) / 4) - padding;
+}
+
+function inlineSBOMSourceKey(payloadBase64) {
+  const normalized = String(payloadBase64 || '').replace(/\s/g, '');
+  return `inline:${decodedBase64Length(normalized)}:${normalized.slice(0, 24)}:${normalized.slice(-24)}`;
+}
+
+export function inlineSBOMLimitMessage() {
+  return `Inline SBOM imports are limited to ${MAX_CONTEXTVM_INLINE_SBOM_BYTES} bytes; use a Blossom or REST compatibility import reference for larger SBOM files.`;
+}
+
 export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft', signal } = {}) {
   const artifactId = String(artifact?.id || '').trim();
   if (!artifactId) throw new Error('artifact id is required');
@@ -270,6 +306,60 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
       formats: normalizedFormats,
       generator: generatorId,
       storage: 'blossom'
+    },
+    signal
+  });
+}
+
+export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = '', location = null, storage = '', generator = { id: 'import' }, idempotencyKey = '', signal } = {}) {
+  const artifactId = String(artifact?.id || '').trim();
+  if (!artifactId) throw new Error('artifact id is required');
+  const digest = artifactDigest(artifact);
+  if (!digest) throw new Error('artifact digest is required');
+  const normalizedFormat = normalizeSBOMFormat(format);
+  const inlinePayload = String(payloadBase64 || '').replace(/\s/g, '');
+  const hasInlinePayload = inlinePayload.length > 0;
+  const normalizedLocation = location && typeof location === 'object'
+    ? {
+        type: String(location.type || storage || 'blossom').trim() || 'blossom',
+        uri: String(location.uri || '').trim(),
+        ...(location.mediaType ? { mediaType: String(location.mediaType) } : {})
+      }
+    : null;
+  const hasLocation = Boolean(normalizedLocation?.uri);
+  if (hasInlinePayload && hasLocation) throw new Error('provide either inline payloadBase64 or location, not both');
+  if (!hasInlinePayload && !hasLocation) throw new Error('SBOM import requires an inline payload or a Blossom/REST compatibility import reference');
+  if (hasInlinePayload && decodedBase64Length(inlinePayload) > MAX_CONTEXTVM_INLINE_SBOM_BYTES) {
+    throw new Error(inlineSBOMLimitMessage());
+  }
+  const generatorInfo = normalizeSBOMGenerator(generator, 'import');
+  const storageType = String(storage || normalizedLocation?.type || 'blossom').trim() || 'blossom';
+  const sourceKey = hasLocation ? `location:${normalizedLocation.type}:${normalizedLocation.uri}` : inlineSBOMSourceKey(inlinePayload);
+  const finalIdempotencyKey = String(idempotencyKey || '').trim() || `web.sbom.import:artifact:${artifactId}:${digest}:${normalizedFormat}:${sourceKey}:${generatorInfo.id}`;
+
+  return publishCommandOnly({
+    operation: 'sbom/import',
+    tags: [
+      ['domain', 'sbom'],
+      ['operation', 'sbom/import'],
+      ['subject_type', 'artifact'],
+      ['artifact', artifactId],
+      ['subject', digest],
+      ['format', normalizedFormat],
+      ['generator', generatorInfo.id]
+    ],
+    content: {
+      idempotencyKey: finalIdempotencyKey,
+      subject: {
+        type: 'artifact',
+        id: artifactId,
+        display_name: artifactDisplayName(artifact),
+        digest
+      },
+      format: normalizedFormat,
+      ...(hasInlinePayload ? { payloadBase64: inlinePayload } : { location: normalizedLocation }),
+      storage: storageType,
+      generator: generatorInfo
     },
     signal
   });
