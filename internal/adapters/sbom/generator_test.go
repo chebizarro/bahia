@@ -26,6 +26,58 @@ type unavailableRecordingGenerator struct {
 
 func (g *unavailableRecordingGenerator) Available(context.Context) error { return g.err }
 
+func TestGeneratorRegistryExplicitCdxgenFailsWhenAdapterDisabled(t *testing.T) {
+	syft := &recordingGenerator{id: GeneratorSyft}
+	registry, err := NewGeneratorRegistry(syft, nil)
+	if err != nil {
+		t.Fatalf("NewGeneratorRegistry returned error: %v", err)
+	}
+
+	_, err = registry.GenerateSBOM(context.Background(), GenerateRequest{
+		Source:    SourceRequest{Kind: SourceKindRepository, Locator: "fixture"},
+		Format:    domain.SBOMFormatCycloneDX,
+		Generator: GeneratorCdxgen,
+	})
+	var unavailable ErrCdxgenUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("GenerateSBOM error = %v, want ErrCdxgenUnavailable", err)
+	}
+	if unavailable.Binary != "cdxgen" || unavailable.Cause == nil || unavailable.Cause.Error() != "adapter is disabled" {
+		t.Fatalf("unavailable error = %#v, want disabled cdxgen", unavailable)
+	}
+	if syft.calls != 0 {
+		t.Fatalf("syft calls = %d, want 0 for explicit cdxgen failure", syft.calls)
+	}
+}
+
+func TestGeneratorRegistryExplicitCdxgenFailsWhenBinaryMissing(t *testing.T) {
+	syft := &recordingGenerator{id: GeneratorSyft}
+	cdxgen := &unavailableRecordingGenerator{
+		recordingGenerator: recordingGenerator{id: GeneratorCdxgen},
+		err:                ErrCdxgenUnavailable{Binary: "/missing/cdxgen", Cause: errors.New("executable file not found")},
+	}
+	registry, err := NewGeneratorRegistry(syft, cdxgen)
+	if err != nil {
+		t.Fatalf("NewGeneratorRegistry returned error: %v", err)
+	}
+
+	_, err = registry.GenerateSBOM(context.Background(), GenerateRequest{
+		Source:    SourceRequest{Kind: SourceKindRepository, Locator: "fixture"},
+		Format:    domain.SBOMFormatCycloneDX,
+		Generator: GeneratorCdxgen,
+	})
+	var unavailable ErrCdxgenUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("GenerateSBOM error = %v, want ErrCdxgenUnavailable", err)
+	}
+	if unavailable.Binary != "/missing/cdxgen" {
+		t.Fatalf("unavailable binary = %q, want missing binary path", unavailable.Binary)
+	}
+	if syft.calls != 0 || cdxgen.calls != 0 {
+		t.Fatalf("calls syft=%d cdxgen=%d, want no generation calls", syft.calls, cdxgen.calls)
+	}
+}
+
 func TestGeneratorRegistryAutoFallsBackToSyftWhenCdxgenDisabled(t *testing.T) {
 	syft := &recordingGenerator{id: GeneratorSyft}
 	cdxgen := &unavailableRecordingGenerator{

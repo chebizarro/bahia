@@ -9,7 +9,7 @@ Bead `bahia-1qe9.9` verified completed SBOM epics `bahia-1qe9.1` through `bahia-
 - `bahia-1qe9.1` — Verified. Protocol/docs canonicalize SBOM reference events as kind `30078`, availability lists as kind `30004`, and legacy `30079` as read-only compatibility.
 - `bahia-1qe9.2` — Verified. Subject-neutral domain, migration, repository projection, package index, and artifact compatibility projection are implemented. Earlier `bahia-bl58` migration-manifest concern is resolved by current `go test ./internal/...` passing.
 - `bahia-1qe9.3` — Verified. Parser and attestation helpers produce subject-neutral manifest/package results while preserving artifact compatibility; attestation subject/payload digest verification is covered.
-- `bahia-1qe9.4` — Verified with tracked follow-up. Syft is a real in-process generator and cdxgen is an optional executable adapter with deterministic tests. Runtime operator wiring for cdxgen enablement remains tracked as `bahia-qfod`.
+- `bahia-1qe9.4` — Verified. Syft is a real in-process generator, cdxgen is an optional executable adapter with deterministic tests, and `bahia-qfod` wires runtime operator configuration for cdxgen enablement.
 - `bahia-1qe9.5` — Verified. Event builders produce required `30078` reference and `30004` availability-list tags; publishing requires relay OK results and rejects auth/closed/OK false outcomes. Exact payload hash verification is performed in the orchestration/storage path before reference publication.
 - `bahia-1qe9.6` — Verified with tracked follow-ups. The orchestrator enforces Blossom storage, verifies payload hash and attestation digests, publishes status/audit/reference/list observables with OK verification, serializes per-subject work, and avoids `30079`. Package/repository subject locator ambiguity remains tracked as `bahia-wqj5`; ContextVM ack-vs-completion semantics are tracked as `bahia-ilio`.
 - `bahia-1qe9.7` — Verified after fix. REST `POST /artifacts/{id}/sbom` delegates to the import service and no longer bypasses Blossom/Nostr. Verification fixed oversized payload handling so bodies over 10 MiB return `413` instead of being truncated and imported.
@@ -64,11 +64,33 @@ cd web && npm run test:e2e -- --reporter=line tests/e2e/sbom-workflow.spec.js
 
 Results: PASS on 2026-06-13. A focused Oracle review flagged two fixes before final gates: the UI now keeps the explicit ContextVM request event ID instead of displaying the result event ID, and the production SBOM path remains on the default encrypted result kind rather than accepting raw `25910` results for test convenience.
 
+## bahia-qfod cdxgen runtime config — 2026-06-30
+
+- `internal/config/config.go` now exposes `sbom.cdxgen.enabled` and `sbom.cdxgen.binary_path`, defaults cdxgen to disabled, and maps `BAHIA_SBOM_CDXGEN_ENABLED` / `BAHIA_SBOM_CDXGEN_BINARY_PATH` into the nested config.
+- `internal/app/app.go` now constructs the production SBOM generator registry with `NewCdxgenGenerator` when cdxgen is enabled; disabled config preserves Syft fallback.
+- `internal/adapters/sbom/generator_test.go`, `internal/app/sbom_generator_registry_test.go`, and `internal/config/config_test.go` cover disabled, missing-binary, explicit cdxgen request, and auto fallback/selection behavior deterministically.
+- `docs/user-guide/getting-started.md` and `docs/user-guide/features/artifacts.md` document the new YAML and environment variable fields.
+
+Targeted gate:
+
+```bash
+GOCACHE=/tmp/bahia-go-cache go test ./internal/config ./internal/adapters/sbom ./internal/app
+```
+
+Result: PASS on 2026-06-30.
+
+Broad gate:
+
+```bash
+GOCACHE=/tmp/bahia-go-cache go test ./internal/...
+```
+
+Result: PASS on 2026-06-30.
+
 ## Remaining tracked work
 
 - `bahia-wqj5`: Define canonical package and repository ContextVM subject locators before enabling automatic digest lookup for ambiguous package/repository subjects.
 - `bahia-wf2k`: Add live browser E2E coverage for signer-first `sbom/generate`/`sbom/import` UI/control flows with injected EVENT/EOSE/OK outcomes and terminal truth from `30078` plus `30004`.
-- `bahia-qfod`: Wire optional cdxgen runtime configuration into app construction so operators can enable the executable adapter.
 - `bahia-ilio`: Record and implement/document the intended ContextVM acknowledgment versus synchronous completion semantics for SBOM generate/import.
 
 ## Nostr/PSTF notes

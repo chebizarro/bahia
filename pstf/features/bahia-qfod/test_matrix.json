@@ -1,0 +1,47 @@
+{
+  "feature_id": "bahia-qfod",
+  "tests": [
+    {
+      "name": "TestDefaults / TestLoadFromEnvVars / TestLoadSBOMCdxgenConfigFromYAML",
+      "package": "./internal/config",
+      "acceptance": ["AC1"],
+      "notes": "Verifies default disabled cdxgen config, single-underscore environment loading, and YAML loading for enabled plus binary_path."
+    },
+    {
+      "name": "TestNewSBOMGeneratorRegistryDisablesCdxgenByDefault",
+      "package": "./internal/app",
+      "acceptance": ["AC2", "AC3"],
+      "notes": "Verifies production registry helper omits cdxgen when config is disabled and explicit cdxgen fails clearly."
+    },
+    {
+      "name": "TestNewSBOMGeneratorRegistryAutoUsesEnabledCdxgen",
+      "package": "./internal/app",
+      "acceptance": ["AC2", "AC5"],
+      "notes": "Verifies production registry helper wires an enabled cdxgen adapter that auto-selects for repository CycloneDX using a deterministic fixture executable."
+    },
+    {
+      "name": "TestNewSBOMGeneratorRegistryUsesConfiguredCdxgenBinary",
+      "package": "./internal/app",
+      "acceptance": ["AC2", "AC4"],
+      "notes": "Verifies production registry helper passes the configured binary path into the optional cdxgen adapter."
+    },
+    {
+      "name": "TestGeneratorRegistryExplicitCdxgenFailsWhenAdapterDisabled / TestGeneratorRegistryExplicitCdxgenFailsWhenBinaryMissing",
+      "package": "./internal/adapters/sbom",
+      "acceptance": ["AC3", "AC4"],
+      "notes": "Verifies explicit generator=cdxgen does not fall back to Syft and returns deterministic ErrCdxgenUnavailable errors."
+    },
+    {
+      "name": "TestGeneratorRegistryAutoFallsBackToSyftWhenCdxgenDisabled / TestGeneratorRegistryAutoUsesAvailableCdxgenForRepositoryCycloneDX",
+      "package": "./internal/adapters/sbom",
+      "acceptance": ["AC5"],
+      "notes": "Verifies auto fallback and auto cdxgen selection using injected fake generators, not sleeps or external binaries."
+    },
+    {
+      "name": "TestCdxgenUnavailableWhenDisabled / TestCdxgenUnavailableWhenBinaryMissing / TestCdxgenGeneratorInvokesExecutableAndReadsCycloneDX",
+      "package": "./internal/adapters/sbom",
+      "acceptance": ["AC4", "AC5"],
+      "notes": "Existing adapter tests verify disabled/missing executable errors and deterministic fixture executable invocation."
+    }
+  ]
+}

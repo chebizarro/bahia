@@ -34,6 +34,25 @@
       ]
     },
     {
+      "test": "internal/adapters/sbom :: TestGeneratorRegistryExplicitCdxgenFailsWhenAdapterDisabled / TestGeneratorRegistryExplicitCdxgenFailsWhenBinaryMissing",
+      "acceptance_criteria": [
+        "AC1",
+        "AC12"
+      ]
+    },
+    {
+      "test": "internal/config :: TestDefaults / TestLoadFromEnvVars / TestLoadSBOMCdxgenConfigFromYAML",
+      "acceptance_criteria": [
+        "AC12"
+      ]
+    },
+    {
+      "test": "internal/app :: TestNewSBOMGeneratorRegistryDisablesCdxgenByDefault / TestNewSBOMGeneratorRegistryAutoUsesEnabledCdxgen / TestNewSBOMGeneratorRegistryUsesConfiguredCdxgenBinary",
+      "acceptance_criteria": [
+        "AC12"
+      ]
+    },
+    {
       "test": "internal/adapters/sbom :: parser and attestation tests (ParseManifest, BuildAttestation, VerifySBOMSubjectDigest, VerifyPayloadDigest)",
       "acceptance_criteria": [
         "AC1",

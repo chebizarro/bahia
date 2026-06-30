@@ -39,9 +39,9 @@
     },
     {
       "id": "D7",
-      "status": "tracked",
-      "description": "The optional cdxgen adapter exists but is not wired into runtime app configuration, so operators cannot enable cdxgen-backed CycloneDX repository generation in production wiring.",
-      "evidence": "Tracked as Bead bahia-qfod with acceptance criteria for config fields, app wiring, deterministic tests, and PSTF/docs updates."
+      "status": "fixed_pending_user_verification",
+      "description": "The optional cdxgen adapter exists but was not wired into runtime app configuration, so operators could not enable cdxgen-backed CycloneDX repository generation in production wiring.",
+      "evidence": "bahia-qfod adds sbom.cdxgen.enabled and sbom.cdxgen.binary_path config, wires app construction to pass NewCdxgenGenerator when enabled, documents YAML/env fields, and covers disabled, missing-binary, explicit-request, and auto fallback/selection paths with deterministic Go tests."
     },
     {
       "id": "D8",

@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-qfod",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "description": "Runtime config exposes cdxgen enabled and binary path fields with documented YAML and environment-variable names."
+    },
+    {
+      "id": "AC2",
+      "description": "Production app construction wires NewCdxgenGenerator into the SBOM generator registry only when cdxgen is enabled."
+    },
+    {
+      "id": "AC3",
+      "description": "When cdxgen is disabled, Syft remains the default fallback and explicit generator=cdxgen fails clearly instead of silently falling back."
+    },
+    {
+      "id": "AC4",
+      "description": "When cdxgen is enabled but the configured binary is unavailable, explicit generator=cdxgen fails with a clear unavailable-binary error containing the configured path."
+    },
+    {
+      "id": "AC5",
+      "description": "Auto selection chooses available cdxgen for repository CycloneDX generation and falls back to Syft when cdxgen is disabled or unavailable."
+    }
+  ]
+}

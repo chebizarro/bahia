@@ -89,6 +89,17 @@ var (
 	dbMigrate = db.Migrate
 )
 
+func newSBOMGeneratorRegistry(cfg config.SBOMConfig) (*sbomAdapter.GeneratorRegistry, error) {
+	var cdxgen sbomAdapter.Generator
+	if cfg.Cdxgen.Enabled {
+		cdxgen = sbomAdapter.NewCdxgenGenerator(sbomAdapter.CdxgenConfig{
+			Enabled:    true,
+			BinaryPath: cfg.Cdxgen.BinaryPath,
+		})
+	}
+	return sbomAdapter.NewGeneratorRegistry(sbomAdapter.NewSyftGenerator(), cdxgen)
+}
+
 // New creates and wires together all application components.
 func New(cfg *config.Config) (*App, error) {
 	// Logger.
@@ -663,7 +674,7 @@ func New(cfg *config.Config) (*App, error) {
 	var sbomStorageResolver *sbomAdapter.StorageResolver
 	if blossomClient != nil {
 		runLogService = runtime.NewLogService(blossomClient, nil, logger)
-		generatorRegistry, err := sbomAdapter.NewGeneratorRegistry(sbomAdapter.NewSyftGenerator(), nil)
+		generatorRegistry, err := newSBOMGeneratorRegistry(cfg.SBOM)
 		if err != nil {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}

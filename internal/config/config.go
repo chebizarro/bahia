@@ -30,6 +30,7 @@ type Config struct {
 	DirectRuntime  DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
 	CORS           CORSConfig                `koanf:"cors"`
 	Blossom        BlossomConfig             `koanf:"blossom"`
+	SBOM           SBOMConfig                `koanf:"sbom" yaml:"sbom"`
 	OCI            OCIServerConfig           `koanf:"oci"`
 	HiveCI         HiveCIConfig              `koanf:"hiveci"`
 	Cashu          CashuConfig               `koanf:"cashu"`
@@ -45,6 +46,17 @@ type Config struct {
 	DNS            DNSConfig                 `koanf:"dns"`
 	FIPS           FIPSConfig                `koanf:"fips"`
 	SoulFactory    SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
+}
+
+// SBOMConfig controls SBOM generation adapters.
+type SBOMConfig struct {
+	Cdxgen SBOMCdxgenConfig `koanf:"cdxgen" yaml:"cdxgen"`
+}
+
+// SBOMCdxgenConfig controls the optional external cdxgen generator.
+type SBOMCdxgenConfig struct {
+	Enabled    bool   `koanf:"enabled" yaml:"enabled"`
+	BinaryPath string `koanf:"binary_path" yaml:"binary_path"`
 }
 
 // WorkerPressureConfig controls Bahia-owned worker pressure and dynamic admission thresholds.
@@ -529,13 +541,13 @@ type HiveCIPolicyConfig struct {
 
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
-	Enabled                      bool                  `koanf:"enabled"`
-	TrustedCIPubkeys             []string              `koanf:"trusted_ci_pubkeys"`
-	AutoRegisterBuilds           bool                  `koanf:"auto_register_builds"`
-	AutoDeployStagingEnvironment string                `koanf:"auto_deploy_staging_environment"`
-	RetryInterval                time.Duration         `koanf:"retry_interval"`
-	MaxRetries                   int                   `koanf:"max_retries"`
-	Policies                     []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
+	Enabled                      bool                 `koanf:"enabled"`
+	TrustedCIPubkeys             []string             `koanf:"trusted_ci_pubkeys"`
+	AutoRegisterBuilds           bool                 `koanf:"auto_register_builds"`
+	AutoDeployStagingEnvironment string               `koanf:"auto_deploy_staging_environment"`
+	RetryInterval                time.Duration        `koanf:"retry_interval"`
+	MaxRetries                   int                  `koanf:"max_retries"`
+	Policies                     []HiveCIPolicyConfig `koanf:"policies" yaml:"policies"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -724,6 +736,12 @@ func Defaults() *Config {
 			MaxRetries: 3,
 			RetryDelay: 1 * time.Second,
 		},
+		SBOM: SBOMConfig{
+			Cdxgen: SBOMCdxgenConfig{
+				Enabled:    false,
+				BinaryPath: "cdxgen",
+			},
+		},
 		OCI: OCIServerConfig{
 			Enabled:                 false,
 			SpoolDir:                "/tmp/bahia-oci-spool",
@@ -799,6 +817,9 @@ func Load(configPath string) (*Config, error) {
 		}
 		if strings.HasPrefix(key, "soul_factory_") {
 			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
+		}
+		if strings.HasPrefix(key, "sbom_cdxgen_") {
+			return "sbom.cdxgen." + strings.TrimPrefix(key, "sbom_cdxgen_")
 		}
 		switch key {
 		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key":

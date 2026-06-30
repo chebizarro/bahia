@@ -138,7 +138,25 @@ Signer-first generation and import use ContextVM methods over kind `25910`:
 }
 ```
 
-`generator: "auto"` chooses cdxgen for repository CycloneDX generation only when the operator enabled a cdxgen binary; otherwise Syft is the default generator. Generated/imported payloads must use Blossom storage. Direct OCI or package-backend SBOM writes are intentionally outside this path.
+`generator: "auto"` chooses cdxgen for repository CycloneDX generation only when the operator enabled a cdxgen binary; otherwise Syft is the default generator. An explicit `generator: "cdxgen"` request fails with a clear unavailable-binary/disabled error when cdxgen is not configured or cannot be executed.
+
+Enable cdxgen in runtime config only when the executable is installed on the Bahia server:
+
+```yaml
+sbom:
+  cdxgen:
+    enabled: true
+    binary_path: "/usr/local/bin/cdxgen"
+```
+
+Equivalent environment variables:
+
+```bash
+BAHIA_SBOM_CDXGEN_ENABLED=true
+BAHIA_SBOM_CDXGEN_BINARY_PATH=/usr/local/bin/cdxgen
+```
+
+Generated/imported payloads must use Blossom storage. Direct OCI or package-backend SBOM writes are intentionally outside this path.
 
 The existing REST endpoint remains a compatibility import path for non-Nostr clients:
 

@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-qfod",
+  "title": "Optional cdxgen SBOM generator runtime configuration",
+  "status": "implemented_pending_user_verification",
+  "observed_behavior": "internal/adapters/sbom/cdxgen.go already provided an optional executable adapter, but production app wiring constructed NewGeneratorRegistry(NewSyftGenerator(), nil), so operators could not enable cdxgen-backed CycloneDX repository generation.",
+  "intended_behavior": "Bahia exposes runtime config for cdxgen enablement and binary path, wires NewCdxgenGenerator into production SBOM generator registry only when enabled, preserves Syft as the disabled/default fallback, and fails clearly when generator=cdxgen is explicitly requested but unavailable.",
+  "scope": [
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "internal/adapters/sbom/generator.go",
+    "docs/user-guide/getting-started.md",
+    "docs/user-guide/features/artifacts.md"
+  ],
+  "out_of_scope": [
+    "bahia-wqj5 package/repository subject locator work",
+    "bahia-ilio ContextVM acknowledgment semantics",
+    "bundling cdxgen into runtime images"
+  ]
+}

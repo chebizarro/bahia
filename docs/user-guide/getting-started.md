@@ -69,6 +69,8 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_BROWSER_RELAYS` | Browser-safe bootstrap/read relays | (discovery) |
 | `BAHIA_NOSTR_CONTEXTVM_RELAYS` | ContextVM request/reply relays; falls back to browser relays when absent | browser relays |
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
+| `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
+| `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
 
 ### Config File (bahia.yaml)
 
@@ -95,6 +97,12 @@ nostr:
   relay_auth_unavailable: "exclude_and_fail"
   sidecar:
     public_url: "wss://sidecar.example.com"
+
+sbom:
+  cdxgen:
+    # Disabled by default; Syft remains the fallback/default generator.
+    enabled: false
+    binary_path: "cdxgen"
 ```
 
 ## Your First Deployment

@@ -64,6 +64,12 @@ func TestDefaults(t *testing.T) {
 	if cfg.SoulFactory.Enabled {
 		t.Error("expected SoulFactory disabled by default")
 	}
+	if cfg.SBOM.Cdxgen.Enabled {
+		t.Error("expected cdxgen SBOM generator disabled by default")
+	}
+	if cfg.SBOM.Cdxgen.BinaryPath != "cdxgen" {
+		t.Errorf("expected default cdxgen binary path cdxgen, got %q", cfg.SBOM.Cdxgen.BinaryPath)
+	}
 	if len(cfg.SoulFactory.Relays) != 0 || len(cfg.SoulFactory.AdditionalRelays) != 0 {
 		t.Errorf("expected default SoulFactory relays to be empty, got relays=%v additional=%v", cfg.SoulFactory.Relays, cfg.SoulFactory.AdditionalRelays)
 	}
@@ -217,6 +223,8 @@ func TestLoadFromEnvVars(t *testing.T) {
 		"BAHIA_RUNTIME_DOCKER_HOST":                   "tcp://remote:2375",
 		"BAHIA_LOG_LEVEL":                             "debug",
 		"BAHIA_RECONCILE_ENABLED":                     "false",
+		"BAHIA_SBOM_CDXGEN_ENABLED":                   "true",
+		"BAHIA_SBOM_CDXGEN_BINARY_PATH":               "/opt/cdxgen/bin/cdxgen",
 		"BAHIA_WORKER_PRESSURE_MEMORY_WARNING_MIN_GB": "8",
 	}
 	for k, v := range envs {
@@ -257,6 +265,35 @@ func TestLoadFromEnvVars(t *testing.T) {
 	}
 	if cfg.WorkerPressure.MemoryWarningMinGB != 8 {
 		t.Errorf("WorkerPressure.MemoryWarningMinGB = %d, want 8", cfg.WorkerPressure.MemoryWarningMinGB)
+	}
+	if !cfg.SBOM.Cdxgen.Enabled {
+		t.Error("SBOM.Cdxgen.Enabled should be true")
+	}
+	if cfg.SBOM.Cdxgen.BinaryPath != "/opt/cdxgen/bin/cdxgen" {
+		t.Errorf("SBOM.Cdxgen.BinaryPath = %q, want /opt/cdxgen/bin/cdxgen", cfg.SBOM.Cdxgen.BinaryPath)
+	}
+}
+
+func TestLoadSBOMCdxgenConfigFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`sbom:
+  cdxgen:
+    enabled: true
+    binary_path: "/usr/local/bin/cdxgen"
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.SBOM.Cdxgen.Enabled {
+		t.Fatal("SBOM.Cdxgen.Enabled = false, want true")
+	}
+	if cfg.SBOM.Cdxgen.BinaryPath != "/usr/local/bin/cdxgen" {
+		t.Fatalf("SBOM.Cdxgen.BinaryPath = %q, want /usr/local/bin/cdxgen", cfg.SBOM.Cdxgen.BinaryPath)
 	}
 }
 
