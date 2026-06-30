@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-wqj5",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "description": "ContextVM SBOM generate/import request types expose subjectLocator for package and repository immutable subject resolution."
+    },
+    {
+      "id": "AC2",
+      "description": "Package subject resolution requires repository_id, package_name, version, filename, and sha256; it looks up the package artifact projection and rejects missing, deleted, invalid, or SHA-mismatched artifacts."
+    },
+    {
+      "id": "AC3",
+      "description": "Repository subject resolution requires either a 40/64-hex git commit or a sha256:<64-hex> content_digest, rejects ambiguous commit+content_digest requests, and never infers digest from mutable repository names alone."
+    },
+    {
+      "id": "AC4",
+      "description": "SBOM orchestration uses subjectLocator for both generate and import resolution paths while preserving explicit subject.digest behavior."
+    },
+    {
+      "id": "AC5",
+      "description": "Design, user, and PSTF documentation define the canonical package and repository request field shapes and immutable-locator decision."
+    }
+  ]
+}

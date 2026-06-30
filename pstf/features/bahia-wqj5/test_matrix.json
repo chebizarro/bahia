@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-wqj5",
+  "tests": [
+    {
+      "name": "TestSBOMSubjectResolverPackageLocator",
+      "package": "./internal/service",
+      "acceptance": ["AC2"],
+      "notes": "Verifies package artifact locator resolves a package subject digest only after package projection SHA-256 matches."
+    },
+    {
+      "name": "TestSBOMSubjectResolverPackageLocatorRejectsSHA256Mismatch / TestSBOMSubjectResolverPackageLocatorRejectsNonCanonicalSubjectID / TestSBOMSubjectResolverPackageLocatorRejectsUnavailableArtifact",
+      "package": "./internal/service",
+      "acceptance": ["AC2"],
+      "notes": "Verifies mismatched mutable package coordinates cannot silently select a different immutable package artifact."
+    },
+    {
+      "name": "TestSBOMSubjectResolverRepositoryLocators",
+      "package": "./internal/service",
+      "acceptance": ["AC3"],
+      "notes": "Verifies git commit and sha256 content_digest repository locators plus invalid commit and non-SHA content-digest rejection."
+    },
+    {
+      "name": "TestSBOMOrchestratorGenerateResolvesPackageSubjectLocator",
+      "package": "./internal/service",
+      "acceptance": ["AC1", "AC2", "AC4"],
+      "notes": "Verifies sbom/generate carries subjectLocator through orchestration into the published/projected package subject."
+    },
+    {
+      "name": "GOCACHE=/tmp/bahia-go-cache go test ./internal/domain ./internal/service ./internal/controlplane",
+      "package": "targeted touched packages",
+      "acceptance": ["AC1", "AC2", "AC3", "AC4"],
+      "notes": "Compile/test coverage for domain request shapes, controlplane import forwarding, and service resolution."
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,7 @@ type SBOMAvailabilityRelayAuth struct {
 type SBOMGenerateRequest struct {
 	IDempotencyKey string                    `json:"idempotencyKey"`
 	Subject        domain.SBOMSubject        `json:"subject"`
+	SubjectLocator domain.SBOMSubjectLocator `json:"subjectLocator,omitempty"`
 	Source         sbomadapter.SourceRequest `json:"source"`
 	Formats        []domain.SBOMFormat       `json:"formats"`
 	Generator      sbomadapter.GeneratorID   `json:"generator"`
@@ -73,13 +75,14 @@ type SBOMGenerateRequest struct {
 }
 
 type SBOMImportRequest struct {
-	IDempotencyKey string                 `json:"idempotencyKey"`
-	Subject        domain.SBOMSubject     `json:"subject"`
-	Format         domain.SBOMFormat      `json:"format,omitempty"`
-	Payload        []byte                 `json:"-"`
-	Location       *domain.SBOMLocation   `json:"location,omitempty"`
-	Storage        domain.SBOMStorageType `json:"storage"`
-	Generator      domain.SBOMGenerator   `json:"generator,omitempty"`
+	IDempotencyKey string                    `json:"idempotencyKey"`
+	Subject        domain.SBOMSubject        `json:"subject"`
+	SubjectLocator domain.SBOMSubjectLocator `json:"subjectLocator,omitempty"`
+	Format         domain.SBOMFormat         `json:"format,omitempty"`
+	Payload        []byte                    `json:"-"`
+	Location       *domain.SBOMLocation      `json:"location,omitempty"`
+	Storage        domain.SBOMStorageType    `json:"storage"`
+	Generator      domain.SBOMGenerator      `json:"generator,omitempty"`
 }
 
 type SBOMRunResult struct {
@@ -100,18 +103,26 @@ type SBOMSubjectResolver struct {
 }
 
 func (r SBOMSubjectResolver) Resolve(ctx context.Context, subject domain.SBOMSubject) (domain.SBOMSubject, error) {
+	return r.ResolveWithLocator(ctx, subject, domain.SBOMSubjectLocator{})
+}
+
+func (r SBOMSubjectResolver) ResolveWithLocator(ctx context.Context, subject domain.SBOMSubject, locator domain.SBOMSubjectLocator) (domain.SBOMSubject, error) {
 	subject.ID = strings.TrimSpace(subject.ID)
+	subject.DisplayName = strings.TrimSpace(subject.DisplayName)
 	subject.Digest = strings.TrimSpace(subject.Digest)
-	if subject.Type == "" || subject.ID == "" {
-		return subject, fmt.Errorf("SBOM subject type and id are required")
+	if subject.Type == "" {
+		return subject, fmt.Errorf("SBOM subject type is required")
 	}
 	if subject.Digest != "" {
+		if subject.ID == "" {
+			return subject, fmt.Errorf("SBOM subject id is required")
+		}
 		return subject, nil
 	}
 	id, idErr := uuid.Parse(subject.ID)
 	switch subject.Type {
 	case domain.SBOMSubjectArtifact:
-		if r.Artifacts == nil || idErr != nil {
+		if subject.ID == "" || r.Artifacts == nil || idErr != nil {
 			return subject, fmt.Errorf("artifact subject digest is required when artifact repository/id resolution is unavailable")
 		}
 		artifact, err := r.Artifacts.GetByID(ctx, id)
@@ -121,7 +132,7 @@ func (r SBOMSubjectResolver) Resolve(ctx context.Context, subject domain.SBOMSub
 		subject.Digest = artifact.ImageDigest
 		subject.DisplayName = strings.TrimSpace(artifact.ImageRepo + ":" + artifact.ImageTag)
 	case domain.SBOMSubjectDeployment:
-		if r.Deployments == nil || idErr != nil {
+		if subject.ID == "" || r.Deployments == nil || idErr != nil {
 			return subject, fmt.Errorf("deployment subject digest is required when deployment repository/id resolution is unavailable")
 		}
 		intent, err := r.Deployments.GetByID(ctx, id)
@@ -134,9 +145,9 @@ func (r SBOMSubjectResolver) Resolve(ctx context.Context, subject domain.SBOMSub
 		subject.Digest = intent.DesiredHash
 		subject.DisplayName = subject.ID
 	case domain.SBOMSubjectPackage:
-		return subject, fmt.Errorf("package subject digest resolution requires package artifact coordinates; provide subject.digest")
+		return r.resolvePackageSubject(ctx, subject, locator.Package)
 	case domain.SBOMSubjectRepository:
-		return subject, fmt.Errorf("repository subject digest resolution requires a git commit digest; provide subject.digest")
+		return resolveRepositorySubject(subject, locator.Repository)
 	default:
 		return subject, fmt.Errorf("unsupported SBOM subject type %q", subject.Type)
 	}
@@ -144,6 +155,153 @@ func (r SBOMSubjectResolver) Resolve(ctx context.Context, subject domain.SBOMSub
 		return subject, fmt.Errorf("resolved %s subject %s has no digest", subject.Type, subject.ID)
 	}
 	return subject, nil
+}
+
+var gitCommitPattern = regexp.MustCompile(`^[A-Fa-f0-9]{40}([A-Fa-f0-9]{24})?$`)
+
+func (r SBOMSubjectResolver) resolvePackageSubject(ctx context.Context, subject domain.SBOMSubject, locator *domain.SBOMPackageArtifactLocator) (domain.SBOMSubject, error) {
+	if locator == nil {
+		return subject, fmt.Errorf("package subject digest resolution requires subjectLocator.package with repository_id, package_name, version, filename, and sha256")
+	}
+	if r.Packages == nil {
+		return subject, fmt.Errorf("package subject digest resolution requires package projection repository")
+	}
+	repositoryID, err := uuid.Parse(strings.TrimSpace(locator.RepositoryID))
+	if err != nil {
+		return subject, fmt.Errorf("subjectLocator.package.repository_id must be a UUID")
+	}
+	packageName := strings.TrimSpace(locator.PackageName)
+	version := strings.TrimSpace(locator.Version)
+	filename := strings.TrimSpace(locator.Filename)
+	if packageName == "" || version == "" || filename == "" {
+		return subject, fmt.Errorf("subjectLocator.package package_name, version, and filename are required")
+	}
+	wantSHA, err := canonicalSHA256(locator.SHA256)
+	if err != nil {
+		return subject, fmt.Errorf("subjectLocator.package.sha256: %w", err)
+	}
+	artifact, err := r.Packages.GetArtifact(ctx, repositoryID, strings.TrimSpace(locator.Namespace), packageName, version, filename)
+	if err != nil {
+		return subject, fmt.Errorf("resolve package artifact subject: %w", err)
+	}
+	if artifact == nil || artifact.Deleted || artifact.Status == domain.PackageArtifactStatusDeleted {
+		return subject, fmt.Errorf("package artifact %s/%s@%s %s not found", repositoryID, packageName, version, filename)
+	}
+	if artifact.Status != domain.PackageArtifactStatusAvailable {
+		return subject, fmt.Errorf("package artifact %s/%s@%s %s is not available", repositoryID, packageName, version, filename)
+	}
+	artifactSHA, err := canonicalSHA256(artifact.SHA256)
+	if err != nil {
+		return subject, fmt.Errorf("resolved package artifact has invalid sha256: %w", err)
+	}
+	if artifactSHA != wantSHA {
+		return subject, fmt.Errorf("package artifact sha256 mismatch: locator %s projection %s", wantSHA, artifactSHA)
+	}
+	canonicalID := packageSubjectID(*artifact)
+	if subject.ID == "" {
+		subject.ID = canonicalID
+	} else if subject.ID != canonicalID {
+		return subject, fmt.Errorf("package subject id %q does not match canonical package artifact id %q", subject.ID, canonicalID)
+	}
+	if subject.DisplayName == "" {
+		subject.DisplayName = packageSubjectDisplayName(*artifact)
+	}
+	subject.Digest = "sha256:" + wantSHA
+	return subject, nil
+}
+
+func resolveRepositorySubject(subject domain.SBOMSubject, locator *domain.SBOMRepositoryLocator) (domain.SBOMSubject, error) {
+	if locator == nil {
+		return subject, fmt.Errorf("repository subject digest resolution requires subjectLocator.repository with commit or content_digest")
+	}
+	commit := strings.TrimSpace(locator.Commit)
+	contentDigest := strings.TrimSpace(locator.ContentDigest)
+	if commit == "" && contentDigest == "" {
+		return subject, fmt.Errorf("subjectLocator.repository commit or content_digest is required")
+	}
+	if commit != "" && contentDigest != "" {
+		return subject, fmt.Errorf("subjectLocator.repository must provide either commit or content_digest, not both")
+	}
+	identity := firstNonEmptySBOMLocator(strings.TrimSpace(locator.RepositoryURL), strings.TrimSpace(locator.Repository), subject.ID)
+	if identity == "" {
+		return subject, fmt.Errorf("repository subject id or subjectLocator.repository repository_url/repository is required")
+	}
+	if subject.ID == "" {
+		subject.ID = identity
+	}
+	if subject.DisplayName == "" {
+		subject.DisplayName = identity
+	}
+	if commit != "" {
+		if !gitCommitPattern.MatchString(commit) {
+			return subject, fmt.Errorf("subjectLocator.repository.commit must be a 40- or 64-character hex git object id")
+		}
+		subject.Digest = "git:" + strings.ToLower(commit)
+		return subject, nil
+	}
+	digest, err := canonicalDigest(contentDigest)
+	if err != nil {
+		return subject, fmt.Errorf("subjectLocator.repository.content_digest: %w", err)
+	}
+	subject.Digest = digest
+	return subject, nil
+}
+
+func canonicalSHA256(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "sha256:")
+	if len(value) != 64 {
+		return "", fmt.Errorf("must be a 64-character SHA-256 hex digest")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", fmt.Errorf("must be lowercase or uppercase hex: %w", err)
+	}
+	return strings.ToLower(value), nil
+}
+
+func canonicalDigest(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", fmt.Errorf("must use sha256:<64-hex> form")
+	}
+	algo := strings.ToLower(strings.TrimSpace(parts[0]))
+	if algo != "sha256" {
+		return "", fmt.Errorf("must use sha256:<64-hex> form")
+	}
+	sha, err := canonicalSHA256(parts[1])
+	if err != nil {
+		return "", err
+	}
+	return "sha256:" + sha, nil
+}
+
+func packageSubjectID(artifact domain.PackageArtifact) string {
+	parts := []string{"pkg", string(artifact.Format), artifact.RepositoryID.String(), strings.TrimSpace(artifact.Namespace), strings.TrimSpace(artifact.PackageName), strings.TrimSpace(artifact.Version), strings.TrimSpace(artifact.Filename)}
+	return strings.Join(parts, ":")
+}
+
+func packageSubjectDisplayName(artifact domain.PackageArtifact) string {
+	name := strings.TrimSpace(artifact.PackageName)
+	if ns := strings.TrimSpace(artifact.Namespace); ns != "" {
+		name = ns + "/" + name
+	}
+	if artifact.Version != "" {
+		name += "@" + strings.TrimSpace(artifact.Version)
+	}
+	if artifact.Filename != "" {
+		name += " (" + strings.TrimSpace(artifact.Filename) + ")"
+	}
+	return name
+}
+
+func firstNonEmptySBOMLocator(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 type SBOMOrchestrator struct {
@@ -190,7 +348,7 @@ func (s *SBOMOrchestrator) Generate(ctx context.Context, req SBOMGenerateRequest
 	if len(req.Formats) == 0 {
 		req.Formats = []domain.SBOMFormat{domain.SBOMFormatSPDX}
 	}
-	return s.run(ctx, req.IDempotencyKey, req.Subject, domain.SBOMSourceGenerated, func(subject domain.SBOMSubject) ([]sbomadapter.GenerateResult, error) {
+	return s.run(ctx, req.IDempotencyKey, req.Subject, req.SubjectLocator, domain.SBOMSourceGenerated, func(subject domain.SBOMSubject) ([]sbomadapter.GenerateResult, error) {
 		out := make([]sbomadapter.GenerateResult, 0, len(req.Formats))
 		for _, format := range req.Formats {
 			result, err := s.Generators.GenerateSBOM(ctx, sbomadapter.GenerateRequest{Subject: subject, Source: req.Source, Format: format, Generator: req.Generator})
@@ -207,7 +365,7 @@ func (s *SBOMOrchestrator) Import(ctx context.Context, req SBOMImportRequest) (*
 	if req.Storage != "" && req.Storage != domain.SBOMStorageBlossom {
 		return nil, fmt.Errorf("imported SBOM storage must be blossom")
 	}
-	return s.run(ctx, req.IDempotencyKey, req.Subject, domain.SBOMSourceImported, func(subject domain.SBOMSubject) ([]sbomadapter.GenerateResult, error) {
+	return s.run(ctx, req.IDempotencyKey, req.Subject, req.SubjectLocator, domain.SBOMSourceImported, func(subject domain.SBOMSubject) ([]sbomadapter.GenerateResult, error) {
 		payload := req.Payload
 		if len(payload) == 0 {
 			if req.Location == nil {
@@ -235,7 +393,7 @@ func (s *SBOMOrchestrator) Import(ctx context.Context, req SBOMImportRequest) (*
 	})
 }
 
-func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.SBOMSubject, sourceKind domain.SBOMSourceKind, produce func(domain.SBOMSubject) ([]sbomadapter.GenerateResult, error)) (*SBOMRunResult, error) {
+func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.SBOMSubject, locator domain.SBOMSubjectLocator, sourceKind domain.SBOMSourceKind, produce func(domain.SBOMSubject) ([]sbomadapter.GenerateResult, error)) (*SBOMRunResult, error) {
 	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Subscriber == nil || s.Pubkey == "" {
 		return nil, fmt.Errorf("SBOM orchestrator is not fully configured")
 	}
@@ -254,7 +412,7 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 	if err := s.publishStatus(ctx, statusD, subject, "accepted", "accepted", ""); err != nil {
 		return nil, err
 	}
-	subject, err := s.Resolver.Resolve(ctx, subject)
+	subject, err := s.Resolver.ResolveWithLocator(ctx, subject, locator)
 	if err != nil {
 		_ = s.publishStatus(ctx, statusD, subject, "failed", "resolving_subject", err.Error())
 		return nil, err

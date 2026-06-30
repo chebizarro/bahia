@@ -38,13 +38,14 @@ func (h sbomContextVMHandler) generate(ctx context.Context, req ContextVMRequest
 }
 
 type sbomImportParams struct {
-	IDempotencyKey string                 `json:"idempotencyKey"`
-	Subject        domain.SBOMSubject     `json:"subject"`
-	Format         domain.SBOMFormat      `json:"format,omitempty"`
-	PayloadBase64  string                 `json:"payloadBase64,omitempty"`
-	Location       *domain.SBOMLocation   `json:"location,omitempty"`
-	Storage        domain.SBOMStorageType `json:"storage"`
-	Generator      domain.SBOMGenerator   `json:"generator,omitempty"`
+	IDempotencyKey string                    `json:"idempotencyKey"`
+	Subject        domain.SBOMSubject        `json:"subject"`
+	SubjectLocator domain.SBOMSubjectLocator `json:"subjectLocator,omitempty"`
+	Format         domain.SBOMFormat         `json:"format,omitempty"`
+	PayloadBase64  string                    `json:"payloadBase64,omitempty"`
+	Location       *domain.SBOMLocation      `json:"location,omitempty"`
+	Storage        domain.SBOMStorageType    `json:"storage"`
+	Generator      domain.SBOMGenerator      `json:"generator,omitempty"`
 }
 
 func (h sbomContextVMHandler) importSBOM(ctx context.Context, req ContextVMRequest) (any, error) {
@@ -63,5 +64,5 @@ func (h sbomContextVMHandler) importSBOM(ctx context.Context, req ContextVMReque
 		}
 		bytes = decoded
 	}
-	return h.orchestrator.Import(ctx, service.SBOMImportRequest{IDempotencyKey: payload.IDempotencyKey, Subject: payload.Subject, Format: payload.Format, Payload: bytes, Location: payload.Location, Storage: payload.Storage, Generator: payload.Generator})
+	return h.orchestrator.Import(ctx, service.SBOMImportRequest{IDempotencyKey: payload.IDempotencyKey, Subject: payload.Subject, SubjectLocator: payload.SubjectLocator, Format: payload.Format, Payload: bytes, Location: payload.Location, Storage: payload.Storage, Generator: payload.Generator})
 }

@@ -240,10 +240,48 @@ Inputs:
 
 - `idempotencyKey`;
 - `subject`;
+- optional `subjectLocator` for immutable package/repository subject digest resolution when `subject.digest` is not supplied;
 - `source` locator/kind;
 - requested `formats`;
 - `generator`: `auto`, `syft`, or `cdxgen`;
 - `storage`: must be `blossom` for generated SBOMs.
+
+Package subjects that omit `subject.digest` must use package artifact coordinates and SHA-256:
+
+```json
+"subject": { "type": "package" },
+"subjectLocator": {
+  "package": {
+    "repository_id": "<package-repository-uuid>",
+    "namespace": "@company",
+    "package_name": "utils",
+    "version": "1.2.3",
+    "filename": "utils-1.2.3.tgz",
+    "sha256": "<package-archive-sha256>"
+  }
+}
+```
+
+Repository subjects that omit `subject.digest` must use either an immutable git commit or an immutable SHA-256 content digest:
+
+```json
+"subject": { "type": "repository" },
+"subjectLocator": {
+  "repository": {
+    "repository_url": "https://git.example/company/api.git",
+    "commit": "<40-or-64-hex-git-object-id>"
+  }
+}
+```
+
+or:
+
+```json
+"subject": { "type": "repository", "id": "company/api" },
+"subjectLocator": {
+  "repository": { "content_digest": "sha256:<repository-archive-digest>" }
+}
+```
 
 Large payloads do not belong inside ContextVM content.
 

@@ -11,7 +11,7 @@ Bead `bahia-1qe9.9` verified completed SBOM epics `bahia-1qe9.1` through `bahia-
 - `bahia-1qe9.3` — Verified. Parser and attestation helpers produce subject-neutral manifest/package results while preserving artifact compatibility; attestation subject/payload digest verification is covered.
 - `bahia-1qe9.4` — Verified. Syft is a real in-process generator, cdxgen is an optional executable adapter with deterministic tests, and `bahia-qfod` wires runtime operator configuration for cdxgen enablement.
 - `bahia-1qe9.5` — Verified. Event builders produce required `30078` reference and `30004` availability-list tags; publishing requires relay OK results and rejects auth/closed/OK false outcomes. Exact payload hash verification is performed in the orchestration/storage path before reference publication.
-- `bahia-1qe9.6` — Verified with tracked follow-ups. The orchestrator enforces Blossom storage, verifies payload hash and attestation digests, publishes status/audit/reference/list observables with OK verification, serializes per-subject work, and avoids `30079`. Package/repository subject locator ambiguity remains tracked as `bahia-wqj5`; ContextVM ack-vs-completion semantics are tracked as `bahia-ilio`.
+- `bahia-1qe9.6` — Verified with tracked follow-up. The orchestrator enforces Blossom storage, verifies payload hash and attestation digests, publishes status/audit/reference/list observables with OK verification, serializes per-subject work, and avoids `30079`. Package/repository subject locator ambiguity is resolved by `bahia-wqj5`; ContextVM ack-vs-completion semantics remain tracked as `bahia-ilio`.
 - `bahia-1qe9.7` — Verified after fix. REST `POST /artifacts/{id}/sbom` delegates to the import service and no longer bypasses Blossom/Nostr. Verification fixed oversized payload handling so bodies over 10 MiB return `413` instead of being truncated and imported.
 - `bahia-1qe9.8` — Verified. PSTF acceptance criteria, test matrix, defects, and user docs cover the real SBOM flow. Browser E2E for signer-first generate/import UI/control flows remains tracked as `bahia-wf2k`.
 
@@ -87,9 +87,32 @@ GOCACHE=/tmp/bahia-go-cache go test ./internal/...
 
 Result: PASS on 2026-06-30.
 
+## bahia-wqj5 package/repository subject locators — 2026-06-30
+
+- `internal/domain/sbom.go` now defines `SBOMSubjectLocator`, `SBOMPackageArtifactLocator`, and `SBOMRepositoryLocator`.
+- `internal/service/sbom_orchestrator.go` now resolves package subjects from package artifact coordinates plus SHA-256, and repository subjects from either validated git commit object IDs or immutable `sha256:<64-hex>` content digests.
+- `internal/controlplane/sbom_handlers.go` forwards `subjectLocator` for `sbom/import`; `sbom/generate` unmarshals the same field through the service request.
+- `docs/designs/sbom-real-support.md`, `docs/user-guide/features/packages.md`, and `docs/user-guide/nostr-integration.md` document the canonical request fields.
+- `pstf/features/bahia-wqj5/hitl_decisions.md` records the immutable-locator HITL decision.
+
+Targeted gate:
+
+```bash
+GOCACHE=/tmp/bahia-go-cache go test ./internal/domain ./internal/service ./internal/controlplane
+```
+
+Result: PASS on 2026-06-30.
+
+Broad gate:
+
+```bash
+GOCACHE=/tmp/bahia-go-cache go test ./internal/...
+```
+
+Result: PASS on 2026-06-30.
+
 ## Remaining tracked work
 
-- `bahia-wqj5`: Define canonical package and repository ContextVM subject locators before enabling automatic digest lookup for ambiguous package/repository subjects.
 - `bahia-wf2k`: Add live browser E2E coverage for signer-first `sbom/generate`/`sbom/import` UI/control flows with injected EVENT/EOSE/OK outcomes and terminal truth from `30078` plus `30004`.
 - `bahia-ilio`: Record and implement/document the intended ContextVM acknowledgment versus synchronous completion semantics for SBOM generate/import.
 

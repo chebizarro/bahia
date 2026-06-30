@@ -189,8 +189,134 @@ func TestSBOMSubjectResolverArtifactAndDeployment(t *testing.T) {
 		t.Fatalf("deployment Resolve() = %#v, %v", deployment, err)
 	}
 	_, err = resolver.Resolve(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectRepository, ID: "repo"})
-	if err == nil || !strings.Contains(err.Error(), "provide subject.digest") {
+	if err == nil || !strings.Contains(err.Error(), "subjectLocator.repository") {
 		t.Fatalf("repository ambiguity error = %v", err)
+	}
+}
+
+func TestSBOMSubjectResolverPackageLocator(t *testing.T) {
+	repositoryID := uuid.New()
+	artifact := &domain.PackageArtifact{
+		ID:             uuid.New(),
+		RepositoryID:   repositoryID,
+		RepositoryName: "internal-npm",
+		Format:         domain.PackageRepositoryFormatNPM,
+		Namespace:      "@acme",
+		PackageName:    "utils",
+		Version:        "1.2.3",
+		Filename:       "utils-1.2.3.tgz",
+		SHA256:         strings.TrimPrefix(testSubjectDigest, "sha256:"),
+		Status:         domain.PackageArtifactStatusAvailable,
+	}
+	resolver := SBOMSubjectResolver{Packages: fakePackageRepo{artifact: artifact}}
+
+	resolved, err := resolver.ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectPackage}, domain.SBOMSubjectLocator{Package: &domain.SBOMPackageArtifactLocator{
+		RepositoryID: repositoryID.String(),
+		Namespace:    "@acme",
+		PackageName:  "utils",
+		Version:      "1.2.3",
+		Filename:     "utils-1.2.3.tgz",
+		SHA256:       testSubjectDigest,
+	}})
+	if err != nil {
+		t.Fatalf("ResolveWithLocator() error = %v", err)
+	}
+	if resolved.Digest != testSubjectDigest {
+		t.Fatalf("package digest = %q, want %q", resolved.Digest, testSubjectDigest)
+	}
+	if resolved.ID == "" || !strings.Contains(resolved.ID, repositoryID.String()) {
+		t.Fatalf("package subject ID was not derived from immutable coordinates: %#v", resolved)
+	}
+	if resolved.DisplayName != "@acme/utils@1.2.3 (utils-1.2.3.tgz)" {
+		t.Fatalf("package display name = %q", resolved.DisplayName)
+	}
+}
+
+func TestSBOMSubjectResolverPackageLocatorRejectsSHA256Mismatch(t *testing.T) {
+	repositoryID := uuid.New()
+	artifact := &domain.PackageArtifact{RepositoryID: repositoryID, PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: strings.TrimPrefix(testSubjectDigest, "sha256:"), Status: domain.PackageArtifactStatusAvailable}
+	resolver := SBOMSubjectResolver{Packages: fakePackageRepo{artifact: artifact}}
+
+	_, err := resolver.ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectPackage}, domain.SBOMSubjectLocator{Package: &domain.SBOMPackageArtifactLocator{RepositoryID: repositoryID.String(), PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}})
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("ResolveWithLocator() error = %v, want sha256 mismatch", err)
+	}
+}
+
+func TestSBOMSubjectResolverPackageLocatorRejectsNonCanonicalSubjectID(t *testing.T) {
+	repositoryID := uuid.New()
+	artifact := &domain.PackageArtifact{RepositoryID: repositoryID, Format: domain.PackageRepositoryFormatNPM, PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: strings.TrimPrefix(testSubjectDigest, "sha256:"), Status: domain.PackageArtifactStatusAvailable}
+	resolver := SBOMSubjectResolver{Packages: fakePackageRepo{artifact: artifact}}
+
+	_, err := resolver.ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectPackage, ID: "pkg:npm/mutable-name@1.2.3"}, domain.SBOMSubjectLocator{Package: &domain.SBOMPackageArtifactLocator{RepositoryID: repositoryID.String(), PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: testSubjectDigest}})
+	if err == nil || !strings.Contains(err.Error(), "does not match canonical") {
+		t.Fatalf("ResolveWithLocator() error = %v, want non-canonical subject id rejection", err)
+	}
+}
+
+func TestSBOMSubjectResolverPackageLocatorRejectsUnavailableArtifact(t *testing.T) {
+	repositoryID := uuid.New()
+	artifact := &domain.PackageArtifact{RepositoryID: repositoryID, PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: strings.TrimPrefix(testSubjectDigest, "sha256:"), Status: domain.PackageArtifactStatusPending}
+	resolver := SBOMSubjectResolver{Packages: fakePackageRepo{artifact: artifact}}
+
+	_, err := resolver.ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectPackage}, domain.SBOMSubjectLocator{Package: &domain.SBOMPackageArtifactLocator{RepositoryID: repositoryID.String(), PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: testSubjectDigest}})
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("ResolveWithLocator() error = %v, want unavailable artifact rejection", err)
+	}
+}
+
+func TestSBOMSubjectResolverRepositoryLocators(t *testing.T) {
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	resolved, err := (SBOMSubjectResolver{}).ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectRepository}, domain.SBOMSubjectLocator{Repository: &domain.SBOMRepositoryLocator{RepositoryURL: "https://git.example/acme/api.git", Commit: commit}})
+	if err != nil {
+		t.Fatalf("ResolveWithLocator(commit) error = %v", err)
+	}
+	if resolved.ID != "https://git.example/acme/api.git" || resolved.Digest != "git:"+commit {
+		t.Fatalf("repository commit resolution = %#v", resolved)
+	}
+
+	resolved, err = (SBOMSubjectResolver{}).ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectRepository, ID: "acme/api"}, domain.SBOMSubjectLocator{Repository: &domain.SBOMRepositoryLocator{ContentDigest: testSubjectDigest}})
+	if err != nil {
+		t.Fatalf("ResolveWithLocator(content_digest) error = %v", err)
+	}
+	if resolved.ID != "acme/api" || resolved.Digest != testSubjectDigest {
+		t.Fatalf("repository content digest resolution = %#v", resolved)
+	}
+
+	_, err = (SBOMSubjectResolver{}).ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectRepository, ID: "acme/api"}, domain.SBOMSubjectLocator{Repository: &domain.SBOMRepositoryLocator{Commit: "not-a-commit"}})
+	if err == nil || !strings.Contains(err.Error(), "40- or 64-character") {
+		t.Fatalf("ResolveWithLocator(invalid commit) error = %v", err)
+	}
+
+	_, err = (SBOMSubjectResolver{}).ResolveWithLocator(context.Background(), domain.SBOMSubject{Type: domain.SBOMSubjectRepository, ID: "acme/api"}, domain.SBOMSubjectLocator{Repository: &domain.SBOMRepositoryLocator{ContentDigest: "tag:v1"}})
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("ResolveWithLocator(non-sha content digest) error = %v", err)
+	}
+}
+
+func TestSBOMOrchestratorGenerateResolvesPackageSubjectLocator(t *testing.T) {
+	ctx := context.Background()
+	publisher := &fakeSBOMPublisher{results: []sbomadapter.PublishOKResult{{RelayURL: "wss://relay.example", Accepted: true, Reason: "stored"}}}
+	repo := newFakeSBOMManifestRepo()
+	subscriber := &fakeSBOMAvailabilitySubscriber{messages: []SBOMAvailabilitySubscriptionMessage{{EOSE: true}}}
+	orchestrator := newTestSBOMOrchestrator(t, publisher, subscriber, repo, fakeGenerator{payload: testSPDXPayload(t), generatorID: sbomadapter.GeneratorSyft})
+	repositoryID := uuid.New()
+	orchestrator.Resolver = SBOMSubjectResolver{Packages: fakePackageRepo{artifact: &domain.PackageArtifact{RepositoryID: repositoryID, Format: domain.PackageRepositoryFormatNPM, Namespace: "@acme", PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: strings.TrimPrefix(testSubjectDigest, "sha256:"), Status: domain.PackageArtifactStatusAvailable}}}
+
+	_, err := orchestrator.Generate(ctx, SBOMGenerateRequest{
+		IDempotencyKey: "run-package-locator",
+		Subject:        domain.SBOMSubject{Type: domain.SBOMSubjectPackage},
+		SubjectLocator: domain.SBOMSubjectLocator{Package: &domain.SBOMPackageArtifactLocator{RepositoryID: repositoryID.String(), Namespace: "@acme", PackageName: "utils", Version: "1.2.3", Filename: "utils.tgz", SHA256: testSubjectDigest}},
+		Source:         sbomadapter.SourceRequest{Kind: sbomadapter.SourceKindArchive, Locator: "packages/internal-npm/@acme/utils/-/utils.tgz"},
+		Formats:        []domain.SBOMFormat{domain.SBOMFormatSPDX},
+		Generator:      sbomadapter.GeneratorSyft,
+		Storage:        domain.SBOMStorageBlossom,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(repo.projected) != 1 || repo.projected[0].Subject.Type != domain.SBOMSubjectPackage || repo.projected[0].Subject.Digest != testSubjectDigest {
+		t.Fatalf("projected package subject = %#v", repo.projected)
 	}
 }
 
@@ -444,6 +570,53 @@ func (r fakeDeploymentRepo) UpdateApproval(context.Context, uuid.UUID, domain.Ap
 }
 func (r fakeDeploymentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.DesiredServiceSpec, string) error {
 	return nil
+}
+
+type fakePackageRepo struct{ artifact *domain.PackageArtifact }
+
+func (r fakePackageRepo) UpsertRepository(context.Context, *domain.PackageRepository) error {
+	return nil
+}
+func (r fakePackageRepo) GetRepository(context.Context, uuid.UUID) (*domain.PackageRepository, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) GetRepositoryByName(context.Context, string) (*domain.PackageRepository, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) ListRepositories(context.Context, bool) ([]domain.PackageRepository, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) UpsertArtifact(context.Context, *domain.PackageArtifact) error { return nil }
+func (r fakePackageRepo) GetArtifact(_ context.Context, repositoryID uuid.UUID, namespace, packageName, version, filename string) (*domain.PackageArtifact, error) {
+	if r.artifact == nil || r.artifact.RepositoryID != repositoryID || r.artifact.Namespace != namespace || r.artifact.PackageName != packageName || r.artifact.Version != version || r.artifact.Filename != filename {
+		return nil, nil
+	}
+	return r.artifact, nil
+}
+func (r fakePackageRepo) ListArtifacts(context.Context, uuid.UUID, int, int) ([]domain.PackageArtifact, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) UpsertPublication(context.Context, *domain.PackagePublication) error {
+	return nil
+}
+func (r fakePackageRepo) GetPublication(context.Context, uuid.UUID) (*domain.PackagePublication, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) ListPublicationsByArtifact(context.Context, uuid.UUID) ([]domain.PackagePublication, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) ListPublicationsByRepository(context.Context, uuid.UUID, bool) ([]domain.PackagePublication, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) UpsertIntent(context.Context, *domain.PackageIntent) error { return nil }
+func (r fakePackageRepo) GetIntent(context.Context, uuid.UUID) (*domain.PackageIntent, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) GetIntentByRequestEventID(context.Context, string) (*domain.PackageIntent, error) {
+	return nil, nil
+}
+func (r fakePackageRepo) ListNonTerminalIntents(context.Context, int) ([]domain.PackageIntent, error) {
+	return nil, nil
 }
 
 func testSPDXPayload(t *testing.T) []byte {

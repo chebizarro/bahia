@@ -195,7 +195,7 @@ bahia packages yank \
 
 ## Package SBOMs
 
-Package subjects can have generated or imported SBOM manifests just like artifacts. Use ContextVM `sbom/generate` or `sbom/import` with a package subject and a stable package digest:
+Package subjects can have generated or imported SBOM manifests just like artifacts. Use ContextVM `sbom/generate` or `sbom/import` with either an explicit package subject digest or the canonical immutable package artifact locator. The locator resolves the subject digest from Bahia's package projection only when the projected artifact SHA-256 matches the request:
 
 ```json
 {
@@ -204,10 +204,16 @@ Package subjects can have generated or imported SBOM manifests just like artifac
   "method": "sbom/generate",
   "params": {
     "idempotencyKey": "sbom-package-utils-1.2.3",
-    "subject": {
-      "type": "package",
-      "id": "pkg:npm/@company/utils@1.2.3",
-      "digest": "sha256:<package-archive-digest>"
+    "subject": { "type": "package" },
+    "subjectLocator": {
+      "package": {
+        "repository_id": "<package-repository-uuid>",
+        "namespace": "@company",
+        "package_name": "utils",
+        "version": "1.2.3",
+        "filename": "utils-1.2.3.tgz",
+        "sha256": "<package-archive-sha256>"
+      }
     },
     "source": { "kind": "archive", "locator": "packages/internal-npm/@company/utils/-/utils-1.2.3.tgz" },
     "formats": ["cyclonedx"],
@@ -217,7 +223,7 @@ Package subjects can have generated or imported SBOM manifests just like artifac
 }
 ```
 
-Bahia stores the payload on Blossom and publishes a `30078` SBOM reference plus a subject-scoped `30004` availability list. Package subject digest resolution is not inferred from package names alone; include the content digest in the request.
+Bahia stores the payload on Blossom and publishes a `30078` SBOM reference plus a subject-scoped `30004` availability list. Package subject digest resolution is never inferred from package names alone; include `repository_id`, `package_name`, `version`, `filename`, and `sha256` in `subjectLocator.package`, or provide `subject.digest` directly.
 
 ## Viewing Packages
 

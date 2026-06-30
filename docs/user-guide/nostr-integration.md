@@ -481,6 +481,38 @@ SBOM mutations are ContextVM intents (`sbom/generate` and `sbom/import`) carried
 
 Process historical `EVENT`s, treat `EOSE` as catch-up completion, and keep the subscription open for realtime progress when needed. Generated or imported SBOM payload bytes are stored on Blossom; Nostr events carry references, hashes, status, and audit facts rather than full SBOM payloads. Relay `OK` acceptance is required for the `30078` reference and the `30004` availability list before Bahia marks a manifest published.
 
+Package and repository SBOM requests must identify immutable subjects. If `subject.digest` is omitted, use `subjectLocator`:
+
+```json
+{
+  "subject": { "type": "package" },
+  "subjectLocator": {
+    "package": {
+      "repository_id": "<package-repository-uuid>",
+      "namespace": "@company",
+      "package_name": "utils",
+      "version": "1.2.3",
+      "filename": "utils-1.2.3.tgz",
+      "sha256": "<package-archive-sha256>"
+    }
+  }
+}
+```
+
+```json
+{
+  "subject": { "type": "repository" },
+  "subjectLocator": {
+    "repository": {
+      "repository_url": "https://git.example/company/api.git",
+      "commit": "<40-or-64-hex-git-object-id>"
+    }
+  }
+}
+```
+
+For repository archive snapshots, use `subjectLocator.repository.content_digest` as `sha256:<repository-archive-digest>`. Do not identify package or repository SBOM subjects by mutable names alone.
+
 ## Security OSV/SBOM Scan Observables
 
 Security scanning is an event-driven observer of canonical SBOM truth and an explicit ContextVM scan surface. SBOM generation/import still completes on SBOM `30078` references and `30004` availability lists; Security watches those events and publishes separate Security observables after it verifies the referenced payload hash and scans normalized targets.

@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-wqj5",
+  "title": "Canonical immutable SBOM package and repository subject locators",
+  "status": "implemented_pending_user_verification",
+  "observed_behavior": "SBOM ContextVM generate/import requests could resolve artifact subjects from Artifact.ImageDigest and deployment subjects from DeploymentIntent.DesiredHash, but package and repository subjects without subject.digest were rejected because only generic SBOMSubject fields were available.",
+  "intended_behavior": "ContextVM sbom/generate and sbom/import requests can carry canonical immutable subjectLocator fields for package artifacts and repositories. Package locators identify a package artifact by repository UUID, namespace, package name, version, filename, and SHA-256. Repository locators identify either a git commit object id or an immutable content digest. Bahia resolves and validates these before generating/importing, without inferring mutable names as durable subject identity.",
+  "scope": [
+    "internal/domain/sbom.go",
+    "internal/service/sbom_orchestrator.go",
+    "internal/controlplane/sbom_handlers.go",
+    "docs/designs/sbom-real-support.md",
+    "docs/user-guide/features/packages.md",
+    "docs/user-guide/nostr-integration.md"
+  ],
+  "out_of_scope": [
+    "bahia-ilio asynchronous ContextVM acknowledgment conversion",
+    "automatic repository cloning or package artifact fetching beyond existing source locator handling",
+    "new REST generation endpoints"
+  ],
+  "human_decisions": ["HITL-SBOM-WQJ5-001"]
+}

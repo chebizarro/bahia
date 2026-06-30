@@ -136,6 +136,14 @@
       ]
     },
     {
+      "test": "internal/service :: TestSBOMSubjectResolverPackageLocator / TestSBOMSubjectResolverPackageLocatorRejectsSHA256Mismatch / TestSBOMSubjectResolverPackageLocatorRejectsNonCanonicalSubjectID / TestSBOMSubjectResolverPackageLocatorRejectsUnavailableArtifact / TestSBOMSubjectResolverRepositoryLocators / TestSBOMOrchestratorGenerateResolvesPackageSubjectLocator",
+      "acceptance_criteria": [
+        "AC1",
+        "AC5",
+        "AC12"
+      ]
+    },
+    {
       "test": "internal/repository :: TestPgSBOMRepository_CreateManifest_DedupesBySubjectFormatGeneratorPayload / ListManifestsBySubject / UpdateManifestPublishState / SearchManifestPackagesByName",
       "acceptance_criteria": [
         "AC4",

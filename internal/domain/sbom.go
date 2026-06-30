@@ -32,6 +32,31 @@ type SBOMSubject struct {
 	Digest      string          `json:"digest"`
 }
 
+// SBOMSubjectLocator carries canonical immutable lookup fields for ContextVM SBOM requests
+// when subject.digest is intentionally derived from Bahia projections or repository revision data.
+type SBOMSubjectLocator struct {
+	Package    *SBOMPackageArtifactLocator `json:"package,omitempty"`
+	Repository *SBOMRepositoryLocator      `json:"repository,omitempty"`
+}
+
+// SBOMPackageArtifactLocator identifies one immutable package artifact projection.
+type SBOMPackageArtifactLocator struct {
+	RepositoryID string `json:"repository_id"`
+	Namespace    string `json:"namespace,omitempty"`
+	PackageName  string `json:"package_name"`
+	Version      string `json:"version"`
+	Filename     string `json:"filename"`
+	SHA256       string `json:"sha256"`
+}
+
+// SBOMRepositoryLocator identifies one immutable repository revision or content snapshot.
+type SBOMRepositoryLocator struct {
+	RepositoryURL string `json:"repository_url,omitempty"`
+	Repository    string `json:"repository,omitempty"`
+	Commit        string `json:"commit,omitempty"`
+	ContentDigest string `json:"content_digest,omitempty"`
+}
+
 // SBOMPublishState tracks whether canonical Nostr observables were published.
 type SBOMPublishState string
 
