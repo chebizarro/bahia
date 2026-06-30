@@ -2,10 +2,10 @@
 
 ## Evidence
 
-- Added continuity kind constants for 31400-31404, 30350-30353, 38430, and 38431 in `internal/adapters/nostr/publisher.go`.
+- Added continuity kind constants for 31400-31404, 30315 continuity heartbeat status, 30351-30353, 38430, and 38431 in `internal/adapters/nostr/publisher.go`.
 - Added deterministic continuity serialization tests for profile tag blocks, JSON-backed failover/recovery recipes, standby node tags, replication policy content, heartbeat observation tags, and failover/recovery command tags.
 - Wired the control-plane reactor to dispatch continuity definition and command kinds through new handler files that emit typed internal events.
-- Kept heartbeat subscription kind-scoped and non-author-scoped so worker-originated heartbeat events are not filtered by operator allowlists.
+- Kept heartbeat subscription kind-scoped and non-author-scoped so worker-originated NIP-38 status heartbeat events are not filtered by operator allowlists.
 
 ## Tests Run
 

@@ -250,11 +250,12 @@ func TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags(t *t
 	event, err := EncodeHeartbeatObservationEvent(observation)
 	require.NoError(t, err)
 	require.Equal(t, canonicalKind(KindNIP38Status), event.Kind)
+	require.Equal(t, canonicalKind(KindHeartbeatObservation), event.Kind)
 	require.Equal(t, "continuity:heartbeat:workerpubkey", continuityTagValue(event.Tags, "d"))
 	require.Equal(t, "continuity", continuityTagValue(event.Tags, "domain"))
 	require.Equal(t, heartbeatObservationStatusSchema, continuityTagValue(event.Tags, "schema"))
 	require.Equal(t, "online", continuityTagValue(event.Tags, "status"))
-	require.Equal(t, "30350", continuityTagValue(event.Tags, "legacy_kind"))
+	require.Empty(t, continuityTagValue(event.Tags, "legacy_kind"))
 	require.Equal(t, "workerpubkey", continuityTagValue(event.Tags, "worker"))
 	require.Equal(t, "42", continuityTagValue(event.Tags, "sequence"))
 	require.Equal(t, "15000", continuityTagValue(event.Tags, "interval_ms"))
@@ -266,6 +267,26 @@ func TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags(t *t
 	require.Equal(t, 15*time.Second, decoded.Interval)
 	require.Equal(t, 45*time.Second, decoded.ExpiresAfter)
 	require.Equal(t, observedAt, decoded.ObservedAt)
+}
+
+func TestHeartbeatObservationDecodeRequiresContinuityDomain(t *testing.T) {
+	event, err := EncodeHeartbeatObservationEvent(domain.HeartbeatObservation{
+		WorkerPubKey: "workerpubkey",
+		ObservedAt:   time.Unix(1710000000, 0).UTC(),
+		Sequence:     42,
+		Interval:     15 * time.Second,
+	})
+	require.NoError(t, err)
+
+	for i, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "domain" {
+			event.Tags[i][1] = "security"
+		}
+	}
+
+	_, err = DecodeHeartbeatObservationEvent(&event)
+	require.ErrorContains(t, err, "domain must be continuity")
+	require.False(t, isContinuityHeartbeatStatusEvent(&event))
 }
 
 func TestContinuityCommandSerializationRequiresServiceTargetAndDTag(t *testing.T) {

@@ -16,6 +16,7 @@ const (
 	CanonicalNIP09Delete           = 5
 	CanonicalNIP38OperationalState = 30315
 	CanonicalNIP90Feedback         = 7000
+	legacyHeartbeatObservation     = 30350
 	CanonicalCASCPState            = 30900
 	CanonicalCASAudit              = 4903
 	CanonicalContextVMDiscovery    = 11316
@@ -154,6 +155,7 @@ func LegacyKinds() []int {
 var constantJustifications = map[string]KindJustification{
 	"CASAudit":                       omitted("CASAudit", kinds.CASAudit, "canonical-target", "canonical CAS audit output; migration never treats already-canonical audit events as legacy input"),
 	"NIP38Status":                    omitted("NIP38Status", kinds.NIP38Status, "canonical-target", "canonical NIP-38 operational status output; legacy status kinds map to this kind"),
+	"HeartbeatObservation":           omitted("HeartbeatObservation", kinds.HeartbeatObservation, "canonical-alias", "semantic alias for NIP-38 status kind 30315; continuity heartbeats are identified by #domain=continuity and heartbeat schema/d/worker tags"),
 	"CASControlState":                omitted("CASControlState", kinds.CASControlState, "canonical-target", "canonical CAS control-plane state output; legacy read models map to this kind"),
 	"LoomWorkerAdvertisement":        omitted("LoomWorkerAdvertisement", kinds.LoomWorkerAdvertisement, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
 	"LoomJobStatusUpdate":            omitted("LoomJobStatusUpdate", kinds.LoomJobStatusUpdate, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
@@ -326,7 +328,7 @@ func buildManifest() map[int]Disposition {
 	}
 	addOperational(kinds.ServiceStatus, "service")
 	addOperational(kinds.WorkerStatus, "worker")
-	addOperational(kinds.HeartbeatObservation, "continuity")
+	m[legacyHeartbeatObservation] = Disposition{LegacyKind: legacyHeartbeatObservation, CanonicalKind: CanonicalNIP38OperationalState, Layer: LayerObservable, Domain: "continuity", Operation: "status", Schema: "bahia.status.continuity-heartbeat.v1", DTagPrefix: "continuity:heartbeat"}
 	addOperational(kinds.ContinuityStatus, "continuity")
 	addOperational(kinds.DegradedModeActivation, "continuity")
 	addOperational(kinds.BahiaReadinessStatus, "system")

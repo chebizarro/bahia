@@ -492,7 +492,7 @@ func (c *KindCatalog) registerProjectionDecoders() {
 	c.decoders[KindRecoveryWorkflow] = decodeRecoveryWorkflowProjection
 	c.decoders[KindStandbyNodeDefinition] = decodeStandbyNodeProjection
 	c.decoders[KindReplicationPolicy] = decodeReplicationPolicyProjection
-	c.decoders[KindHeartbeatObservation] = decodeHeartbeatProjection
+	c.decoders[KindHeartbeatObservation] = decodeNIP38StatusProjection
 	c.decoders[KindFailoverRequest] = decodeContinuityCommandProjection
 	c.decoders[KindRecoveryRequest] = decodeContinuityCommandProjection
 	c.decoders[KindContinuityStatus] = decodeContinuityStatusProjection
@@ -698,6 +698,13 @@ func decodeReplicationPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEve
 		return nil, err
 	}
 	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), policy.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{ReplicationPolicy: policy} }), nil
+}
+
+func decodeNIP38StatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	if isContinuityHeartbeatStatusEvent(ev) {
+		return decodeHeartbeatProjection(ev)
+	}
+	return decodeNoopProjection("status_live", 1, FamilyControlPlane)(ev)
 }
 
 func decodeHeartbeatProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {

@@ -35,7 +35,6 @@ func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 }
 
 var frontendCanonicalKindOverrides = map[string]int{
-	"HEARTBEAT_OBSERVATION":      30315,
 	"WORKER_STATE":               30900,
 	"WORKER_ASSIGNMENT_STATE":    30900,
 	"WORKER_DRAIN_STATUS":        30900,

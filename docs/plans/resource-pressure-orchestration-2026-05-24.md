@@ -14,7 +14,7 @@ The worker management plan (`docs/plans/bahia-worker-management-nostr-native-202
 
 - **Kind 10100 Worker Advertisement** (replaceable): loom-worker publishes every 60s with content JSON (`name`, `description`, `max_concurrent_jobs`, `current_queue_depth`) and tags (`S`, `A`, `default_shell`, `price`, `metric`, `min_duration`, `max_duration`, optional `g`). Ref: `loom-worker/src/nostr/service.ts:261-297`
 - **Bahia parser** already accepts extended content fields beyond the Loom spec: `resources` (CPUCores/MemoryGB/DiskGB), `accelerators`, `runtime_target`, `ml_capabilities`. Unknown fields are silently ignored. Ref: `internal/adapters/nostr/processor.go:281-309`
-- **Kind 30350 Heartbeat Observation** (parameterized replaceable): `d=heartbeat:<worker_pubkey>`, used for continuity liveness. Ref: `internal/domain/heartbeat.go:6-12`, `internal/adapters/nostr/continuity_serialization.go:348-407`
+- **Kind 30315 Heartbeat Observation** (NIP-38 operational status): `domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, `d=continuity:heartbeat:<worker_pubkey>`, used for continuity liveness. Ref: `internal/domain/heartbeat.go:6-12`, `internal/adapters/nostr/continuity_serialization.go:348-407`
 - **Advertisement publish timer**: `setInterval(advertise, 60_000)` in `loom-worker/main.ts:574-575`. No event-driven trigger for queue depth changes.
 
 ### Existing resource fields on Worker domain

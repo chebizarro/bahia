@@ -362,7 +362,6 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 		{"domain", "continuity"},
 		{"schema", heartbeatObservationStatusSchema},
 		{"status", "online"},
-		{"legacy_kind", strconv.Itoa(KindHeartbeatObservation)},
 		{"worker", obs.WorkerPubKey},
 		{"p", obs.WorkerPubKey},
 		{"sequence", strconv.FormatUint(obs.Sequence, 10)},
@@ -379,19 +378,18 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 }
 
 // DecodeHeartbeatObservationEvent deserializes a canonical NIP-38 heartbeat status.
-// Legacy kind 30350 is accepted only for local historical decode/migration paths;
-// runtime subscriptions and new publishes must use KindNIP38Status.
 func DecodeHeartbeatObservationEvent(event *gonostr.Event) (*domain.HeartbeatObservation, error) {
 	if event == nil {
 		return nil, fmt.Errorf("heartbeat observation event is nil")
 	}
-	if !eventKindMatches(event, KindNIP38Status) && !eventKindMatches(event, KindHeartbeatObservation) {
+	if !eventKindMatches(event, KindNIP38Status) {
 		return nil, fmt.Errorf("unexpected heartbeat observation kind %d", event.Kind)
 	}
-	if eventKindMatches(event, KindNIP38Status) {
-		if schema := continuityTagValue(event.Tags, "schema"); schema != "" && schema != heartbeatObservationStatusSchema {
-			return nil, fmt.Errorf("unexpected heartbeat observation schema %q", schema)
-		}
+	if domain := continuityTagValue(event.Tags, "domain"); domain != "continuity" {
+		return nil, fmt.Errorf("heartbeat observation domain must be continuity, got %q", domain)
+	}
+	if schema := continuityTagValue(event.Tags, "schema"); schema != "" && schema != heartbeatObservationStatusSchema {
+		return nil, fmt.Errorf("unexpected heartbeat observation schema %q", schema)
 	}
 	if continuityTagValue(event.Tags, "d") == "" {
 		return nil, fmt.Errorf("heartbeat observation d tag is required")
@@ -674,6 +672,21 @@ func validateReplicationPolicy(policy *domain.ReplicationPolicy) error {
 		}
 	}
 	return nil
+}
+
+func isContinuityHeartbeatStatusEvent(event *gonostr.Event) bool {
+	if event == nil || !eventKindMatches(event, KindNIP38Status) {
+		return false
+	}
+	if continuityTagValue(event.Tags, "domain") != "continuity" {
+		return false
+	}
+	schema := continuityTagValue(event.Tags, "schema")
+	dTag := continuityTagValue(event.Tags, "d")
+	if schema == heartbeatObservationStatusSchema || strings.HasPrefix(dTag, "continuity:heartbeat:") || strings.HasPrefix(dTag, "heartbeat:") {
+		return true
+	}
+	return continuityTagValue(event.Tags, "worker") != "" && continuityTagValue(event.Tags, "sequence") != "" && continuityTagValue(event.Tags, "interval_ms") != ""
 }
 
 func validateHeartbeatObservation(obs *domain.HeartbeatObservation) error {

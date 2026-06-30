@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-i89o",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "description": "Go and generated web heartbeat-observation constants agree on kind 30315 without a heartbeat-specific frontend drift override.",
+      "tests": ["TestGeneratedFrontendKindsMatchCanonicalGoKinds", "TestContinuityPublisherKindConstantsUnique"]
+    },
+    {
+      "id": "AC-002",
+      "description": "Backend heartbeat serialization emits NIP-38 status kind 30315 with #domain=continuity, heartbeat schema/d/worker tags, and no legacy 30350 production tag.",
+      "tests": ["TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags", "TestHeartbeatObservationDecodeRequiresContinuityDomain"]
+    },
+    {
+      "id": "AC-003",
+      "description": "The Go catalog projects only continuity-domain heartbeat-shaped 30315 events as heartbeat observations and leaves other 30315 status domains generic.",
+      "tests": ["TestCatalogDecodesOnlyContinuityDomainNIP38StatusAsHeartbeat"]
+    },
+    {
+      "id": "AC-004",
+      "description": "The web continuity route source subscribes to heartbeat observations using kind 30315 with #domain=continuity and never kind 30350, and ignores unrelated 30315 domains as heartbeats.",
+      "tests": ["continuity-nostr.test.ts: uses scoped filters for continuity status, definitions, heartbeat, and worker state events", "continuity-nostr.test.ts: ignores shared kind 30315 statuses outside the continuity heartbeat domain"]
+    },
+    {
+      "id": "AC-005",
+      "description": "Architecture/control-plane/event-kind docs and PSTF evidence document 30315/#domain=continuity as the heartbeat contract.",
+      "tests": ["documentation review", "PSTF artifact review"]
+    }
+  ]
+}

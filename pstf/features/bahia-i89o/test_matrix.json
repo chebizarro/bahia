@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-i89o",
+  "tests": [
+    {"name": "TestGeneratedFrontendKindsMatchCanonicalGoKinds", "acceptance": ["AC-001"], "command": "go test ./internal/kinds", "type": "unit"},
+    {"name": "TestContinuityPublisherKindConstantsUnique", "acceptance": ["AC-001"], "command": "go test ./internal/adapters/nostr", "type": "unit"},
+    {"name": "TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags", "acceptance": ["AC-002"], "command": "go test ./internal/adapters/nostr", "type": "unit"},
+    {"name": "TestHeartbeatObservationDecodeRequiresContinuityDomain", "acceptance": ["AC-002"], "command": "go test ./internal/adapters/nostr", "type": "unit"},
+    {"name": "TestCatalogDecodesOnlyContinuityDomainNIP38StatusAsHeartbeat", "acceptance": ["AC-003"], "command": "go test ./internal/adapters/nostr", "type": "unit"},
+    {"name": "web continuity heartbeat filters", "acceptance": ["AC-004"], "command": "npm --prefix web run test:unit -- --run tests/unit/continuity-nostr.test.ts", "type": "unit"}
+  ]
+}

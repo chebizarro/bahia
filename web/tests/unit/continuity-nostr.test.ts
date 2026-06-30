@@ -31,6 +31,9 @@ describe('continuity Nostr read models', () => {
       expect.objectContaining({ kinds: [30315], '#domain': ['continuity'] }),
       expect.objectContaining({ kinds: [30900], '#domain': ['worker'], '#schema': ['bahia.state.worker.v1'] })
     ]));
+    expect(continuityNostrFilters()).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kinds: [30350] })
+    ]));
   });
 
   it('decodes kind 30351 continuity status read models from content and tags', () => {
@@ -66,6 +69,25 @@ describe('continuity Nostr read models', () => {
       changed_at: '2026-06-03T12:00:00Z',
       current_run: { id: 'run-1', step_index: 2, step_count: 4, step_action: 'restore_backup' }
     });
+  });
+
+  it('ignores shared kind 30315 statuses outside the continuity heartbeat domain', () => {
+    const events = [
+      event({ id: 'status', kind: 30351, tags: [['d', `continuity-status:${SERVICE}`], ['service', SERVICE], ['t', 'continuity'], ['t', 'continuity-status']], content: { service_key: SERVICE, active_profile: 'full', operation_state: 'steady', primary_worker_pubkey: 'primary-a', active_worker_pubkey: 'primary-a' } }),
+      event({ id: 'profile', kind: 31400, tags: [['d', `continuity-profile:${SERVICE}`], ['service', SERVICE], ['primary', 'primary-a'], ['profile', 'full']] }),
+      event({ id: 'standby-a', kind: 31402, tags: [['d', `standby-node:${SERVICE}:standby-a`], ['service', SERVICE], ['worker', 'standby-a'], ['profile', 'full']] }),
+      event({ id: 'security-status', kind: 30315, tags: [['d', 'security:scan:run-1'], ['domain', 'security'], ['worker', 'standby-a'], ['status', 'online']] })
+    ];
+
+    expect(deriveContinuityAssessments(events)).toEqual([{
+      service_key: SERVICE,
+      survivability: 'unsatisfied',
+      has_failover_recipe: false,
+      has_recovery_recipe: false,
+      standby_count: 1,
+      replication_configured: false,
+      heartbeat_active: false
+    }]);
   });
 
   it('dedupes latest continuity statuses and derives topology from Nostr events', () => {

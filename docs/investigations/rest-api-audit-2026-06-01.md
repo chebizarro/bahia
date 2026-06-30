@@ -18,7 +18,7 @@ From `internal/kinds/kinds.go` and `policy.go`:
 - **Read-model kinds**: 31961-32003 (service state, registries, LLM routes, workers, policies)
 - **Backup kinds**: 38400-38419
 - **Assistant kinds**: 38420-38423
-- **Continuity kinds**: 38430-38431, 30350-30353, 31400-31404
+- **Continuity kinds**: 38430-38431, 30315 heartbeat status (`#domain=continuity`), 30351-30353, 31400-31404
 - **DNS kinds**: 5941-5945, 7941-7945, 31975-31978
 - **Package kinds**: 5991-5996, 7991-7992, 31971-31973
 - **Audit kinds**: 31000-31005, 31200 (artifact attestation), 31310-31311

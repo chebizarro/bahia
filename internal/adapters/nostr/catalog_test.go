@@ -134,6 +134,33 @@ func TestProjectorSubscriberCanonicalKindsAreRepresented(t *testing.T) {
 	assertCatalogHasKinds(t, catalog, append(projectorKindCoverage(), subscriberKindCoverage()...))
 }
 
+func TestCatalogDecodesOnlyContinuityDomainNIP38StatusAsHeartbeat(t *testing.T) {
+	catalog := NewKindCatalog()
+	decoder, ok := catalog.Decoder(KindNIP38Status)
+	if !ok {
+		t.Fatal("missing NIP-38 status decoder")
+	}
+
+	heartbeat := requiredDecoderFixture(KindHeartbeatObservation)
+	decoded, err := decoder(heartbeat)
+	if err != nil {
+		t.Fatalf("decode continuity heartbeat status: %v", err)
+	}
+	if decoded.Family != FamilyContinuity || decoded.Continuity == nil || decoded.Continuity.Heartbeat == nil {
+		t.Fatalf("decoded continuity heartbeat as %#v", decoded)
+	}
+
+	status := requiredDecoderFixture(KindNIP38Status)
+	status.Tags = gonostr.Tags{{"d", "security:scan:run-1"}, {"domain", "security"}, {"status", "completed"}}
+	decoded, err = decoder(status)
+	if err != nil {
+		t.Fatalf("decode non-continuity NIP-38 status: %v", err)
+	}
+	if decoded.Family != FamilyControlPlane || decoded.Continuity != nil {
+		t.Fatalf("decoded non-continuity status as %#v", decoded)
+	}
+}
+
 func TestCatalogGroupsExcludeLegacyRuntimeKinds(t *testing.T) {
 	catalog := NewKindCatalog()
 	for _, group := range catalog.Groups {
@@ -342,7 +369,7 @@ func requiredDecoderFixture(kind int) *gonostr.Event {
 		ev.Tags = gonostr.Tags{{"d", "replication-policy:svc.api"}, {"service", "svc.api"}}
 		ev.Content = mustJSON(map[string]any{"service_key": "svc.api", "targets": []map[string]any{{"worker_pubkey": "worker-pubkey", "strategy": "event_mirror", "max_staleness": 1000000000, "required_for_modes": []string{"full"}}}})
 	case KindHeartbeatObservation:
-		ev.Tags = gonostr.Tags{{"d", "heartbeat:worker-pubkey"}, {"worker", "worker-pubkey"}, {"sequence", "1"}, {"interval_ms", "1000"}}
+		ev.Tags = gonostr.Tags{{"d", "continuity:heartbeat:worker-pubkey"}, {"domain", "continuity"}, {"schema", heartbeatObservationStatusSchema}, {"worker", "worker-pubkey"}, {"sequence", "1"}, {"interval_ms", "1000"}}
 		ev.Content = ""
 	case KindFailoverRequest, KindRecoveryRequest:
 		ev.Tags = gonostr.Tags{{"d", "request-key"}, {"service", "svc.api"}, {"target", "worker-pubkey"}, {"profile", "full"}}

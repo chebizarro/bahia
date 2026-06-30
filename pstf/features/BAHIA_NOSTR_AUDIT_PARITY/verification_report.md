@@ -142,7 +142,7 @@ No remaining work is known for `bahia-4rwk` in the PSTF route transport matrix s
 
 ### Intended behavior
 
-Continuity fabric observables `30350`-`30353` and definitions `31400`-`31404` are production-readable Nostr-native route inputs. The sidecar must admit kind-scoped REQ filters for those kinds while continuing to reject legacy signer-first status/result/read-model families.
+Continuity heartbeat observations are production-readable NIP-38 status events on kind `30315` scoped by `#domain=continuity`; continuity observables `30351`-`30353` and definitions `31400`-`31404` are production-readable Nostr-native route inputs. The sidecar must admit kind-scoped REQ filters for those kinds while continuing to reject legacy signer-first status/result/read-model families.
 
 ### Verification
 

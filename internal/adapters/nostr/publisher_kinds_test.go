@@ -61,7 +61,7 @@ func TestContinuityPublisherKindConstantsUnique(t *testing.T) {
 		"KindStandbyNodeDefinition":  31402,
 		"KindReplicationPolicy":      31403,
 		"KindRecoveryWorkflow":       31404,
-		"KindHeartbeatObservation":   30350,
+		"KindHeartbeatObservation":   30315,
 		"KindContinuityStatus":       30351,
 		"KindDegradedModeActivation": 30352,
 		"KindRecoveryProgress":       30353,

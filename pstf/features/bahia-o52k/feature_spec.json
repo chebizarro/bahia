@@ -3,7 +3,7 @@
   "title": "Wire continuity Nostr serialization and reactor handlers",
   "intent": "Expose the continuity domain contracts through Nostr-native event serialization and thin control-plane reactor dispatch without introducing runtime engine behavior.",
   "observed_behavior": "Continuity domain types existed, but continuity Nostr kinds were not encoded, decoded, subscribed, or converted into internal in-process events.",
-  "intended_behavior": "Kinds 31400-31404, 30350, 38430, and 38431 have deterministic serialization/validation helpers. The reactor subscribes to those kinds, validates inbound Nostr events through the existing reactor path, deduplicates them, decodes kind-specific tags/content, and emits typed internal events for downstream continuity engines.",
+  "intended_behavior": "Kinds 31400-31404, 30315 continuity heartbeat status, 38430, and 38431 have deterministic serialization/validation helpers. The reactor subscribes to those kinds, validates inbound Nostr events through the existing reactor path, deduplicates them, decodes kind-specific tags/content, and emits typed internal events for downstream continuity engines.",
   "scope": [
     "internal/adapters/nostr continuity codec and kind constants",
     "internal/controlplane continuity handler dispatch",

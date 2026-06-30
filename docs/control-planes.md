@@ -196,7 +196,7 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 |------|----------|--------------------|
 | `30900` | Canonical control-plane state projection | Scope by service author, `#d`, `#domain`, `#schema`, resource tags (`#service`, `#environment`, `#artifact`, `#dns`, `#worker`, etc.) |
 | `4903` | Canonical audit fact | Scope by service author, requester `#p`, resource tags, and correlation `#e` where present |
-| `30315` | NIP-38 operational status | Scope by service author, `#d`, `#status`, resource tags, and correlation `#e` |
+| `30315` | NIP-38 operational status | Scope by service author, `#d`, `#domain`, `#status`, resource tags, and correlation `#e`; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, and heartbeat `d`/`worker` tags rather than a separate `30350` kind |
 | `11316`-`11320` | ContextVM server/tool/resource/prompt/template discovery | Scope by Bahia service pubkey; use for bootstrap before mutation or state subscriptions |
 | `30002` | NIP-51 relay set | Scope by Bahia service pubkey and relay-set `#d` tags |
 | `30004` | NIP-51 Curation Set | Scope by Bahia service pubkey, `#d`, `#domain=sbom`, `#schema=bahia.sbom.available-list.v1`, and subject tags |
@@ -211,7 +211,7 @@ AI/ML and backup operators use ContextVM mutation methods (`ml/model-import`, `m
 
 - `30900` for desired/observed state projections.
 - `4903` for immutable audit facts and provenance breadcrumbs.
-- `30315` for operational status and progress.
+- `30315` for operational status and progress; continuity heartbeat observations are NIP-38 statuses with `#domain=continuity` and heartbeat schema/d/worker tags, not a dedicated `30350` kind.
 - `30078` for app-specific registries, SBOM references, and operator-visible projection details.
 - `30004` for NIP-51 SBOM availability lists when a subject has one or more SBOM references.
 - `5` for NIP-09 deletion where relay-level deletion semantics apply.

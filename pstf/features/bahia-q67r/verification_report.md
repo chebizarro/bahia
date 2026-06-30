@@ -12,4 +12,4 @@
 
 ## Known boundaries
 
-- Nostr kind 30350 serialization, relay ingestion, and trigger-engine wiring are outside this file-owned task and remain assigned to other continuity agents.
+- NIP-38 kind 30315 (`#domain=continuity`) heartbeat serialization, relay ingestion, and trigger-engine wiring are outside this file-owned task and remain assigned to other continuity agents.

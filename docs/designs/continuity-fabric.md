@@ -79,7 +79,7 @@ Replaceable event defining how a service degrades:
 | 31402 | Standby node definition    |
 | 31403 | Replication policy         |
 | 31404 | Recovery workflow          |
-| 30350 | Heartbeat observation      |
+| 30315 | Heartbeat observation (NIP-38 status, `#domain=continuity`) |
 | 30351 | Continuity status          |
 | 30352 | Degraded mode activation   |
 | 30353 | Recovery progress          |
@@ -371,7 +371,7 @@ The design proposed kinds that conflict with existing allocations:
 | 31402 | Standby node definition    | 🆕 New |
 | 31403 | Replication policy         | 🆕 New |
 | 31404 | Recovery workflow          | 🆕 New |
-| 30350 | Heartbeat observation      | 🆕 New |
+| 30315 | Heartbeat observation (NIP-38 status, `#domain=continuity`) | Reuses NIP-38 |
 | 30351 | Continuity status          | 🆕 New |
 | 30352 | Degraded mode activation   | 🆕 New |
 | 30353 | Recovery progress          | 🆕 New |

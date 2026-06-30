@@ -217,7 +217,7 @@ These are the main event kinds production runtime code should publish or subscri
 | `25910` | ContextVM message | JSON-RPC mutation intent and direct ContextVM responses |
 | `1059` | NIP-59 gift wrap | Stored encrypted ContextVM envelope |
 | `21059` | ephemeral gift wrap | Ephemeral encrypted ContextVM envelope when supported |
-| `30315` | NIP-38 status | Operational status/progress |
+| `30315` | NIP-38 status | Operational status/progress; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, and heartbeat `d`/`worker` tags |
 | `30900` | Cascadia/Bahia control state | Durable state/read-model projection |
 | `4903` | Cascadia/Bahia audit | Immutable audit facts and attestations |
 | `11316`-`11320` | ContextVM discovery | Server/tool/resource/prompt/template discovery |
@@ -225,7 +225,7 @@ These are the main event kinds production runtime code should publish or subscri
 | `30004` | NIP-51 Curation Set | SBOM availability lists and other curated reference inventories |
 | `10002` | NIP-65 relay list | Advisory service relay preferences for wider Nostr routing |
 | `30078` | NIP-78 app data | App-specific data, settings, registries, detailed projections; SBOM reference app-data uses `schema=bahia.sbom.ref.v1` |
-| `30350`-`30353` | Continuity fabric observables | Heartbeat observations, continuity status, degraded-mode activation, and recovery progress |
+| `30351`-`30353` | Continuity fabric observables | Continuity status, degraded-mode activation, and recovery progress; heartbeat observations are NIP-38 status kind `30315` with `#domain=continuity` |
 | `31400`-`31404` | Continuity fabric definitions | Continuity profiles, failover policies, standby nodes, replication policies, and recovery workflows |
 | `5` | NIP-09 deletion | Delete event references |
 
@@ -239,7 +239,7 @@ Production runtime code must not publish or newly subscribe to these legacy fami
 
 - request kinds `5941`-`6006`, `38390`-`38399`, `38400`-`38431`, and older encrypted request/result kinds `5980`/`7980`
 - status/result ranges `6941`, `6961`-`6997`, `7941`-`7997`
-- old state/read-model ranges `31410`-`31411`, `31961`-`32003`; continuity fabric kinds `30350`-`30353` and `31400`-`31404` are canonical runtime observables
+- old state/read-model ranges `31410`-`31411`, `31961`-`32003`, and old heartbeat kind `30350`; continuity fabric kinds `30351`-`30353` and `31400`-`31404` plus NIP-38 heartbeat status kind `30315` are canonical runtime observables
 - old audit ranges `31000`-`31024`, `31310`-`31311`
 - old discovery kind `31974`
 - legacy SBOM index kind `30079`; new SBOM availability publication uses NIP-51 kind `30004` and detailed SBOM references use NIP-78 kind `30078`

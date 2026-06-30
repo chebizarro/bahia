@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-i89o",
+  "title": "Continuity heartbeat observations use NIP-38 status kind 30315",
+  "intent": "Resolve the backend/frontend mismatch for continuity heartbeat observations by aligning the heartbeat-observation symbol and all runtime behavior on NIP-38 operational status kind 30315.",
+  "observed_behavior": "internal/kinds defined HeartbeatObservation as 30350 while generated frontend constants and web continuity filters used HEARTBEAT_OBSERVATION=30315. Backend serializer/catalog paths therefore risked treating heartbeat observations as a unique 30350 kind instead of NIP-38 status events scoped by tags.",
+  "intended_behavior": "Heartbeat observations are NIP-38 operational status events on kind 30315. The heartbeat-observation symbol is a semantic alias for 30315 and heartbeat events are disambiguated by #domain=continuity plus heartbeat schema/d/worker tags, not by a unique 30350 kind.",
+  "scope": [
+    "internal/kinds heartbeat kind constant and drift test",
+    "internal/adapters/nostr continuity heartbeat serialization and catalog projection",
+    "web continuity Nostr filters and unit coverage",
+    "Nostr/control-plane documentation and PSTF evidence"
+  ],
+  "out_of_scope": [
+    "SBOM backend orchestration files owned by another concurrent agent",
+    "web/package.json and web/pnpm-lock.yaml owned by another concurrent agent",
+    "closing bead bahia-i89o before human verification"
+  ]
+}

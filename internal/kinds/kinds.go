@@ -223,11 +223,14 @@ const (
 )
 
 // =============================================================================
-// Continuity Fabric Kinds (30350-30353, 31400-31404, 38430-38431)
+// Continuity Fabric Kinds (30315, 30351-30353, 31400-31404, 38430-38431)
 // =============================================================================
 
 const (
-	HeartbeatObservation   = 30350
+	// HeartbeatObservation is a semantic alias for NIP-38 operational status kind 30315.
+	// Continuity heartbeat observations are disambiguated with #domain=continuity
+	// plus heartbeat schema/d/worker tags; 30350 is not a production heartbeat kind.
+	HeartbeatObservation   = 30315
 	ContinuityStatus       = 30351
 	DegradedModeActivation = 30352
 	RecoveryProgress       = 30353

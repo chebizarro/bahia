@@ -41,6 +41,7 @@ Production examples:
 - ContextVM mutation/request-response: `25910`
 - canonical state/app data: `30900`, `30078`
 - canonical audit/status: `4903`, `30315`
+- continuity heartbeat observations: NIP-38 status `30315` with `#domain=continuity` and heartbeat schema/d/worker tags (not a separate `30350` kind)
 - ContextVM discovery: `11316`-`11320`
 - relay sets and deletes: `30002`, `5`
 

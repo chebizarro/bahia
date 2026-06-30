@@ -204,10 +204,10 @@
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/continuity/+page.svelte", "web/src/routes/continuity/+page.ts", "web/src/routes/continuity/SimulationPanel.svelte"],
       "control_files": ["web/src/lib/nostr/continuity.ts", "internal/service/continuity_status_projector.go", "internal/adapters/nostr/catalog.go", "internal/kinds/policy.go", "internal/relaysidecar/policy.go"],
-      "evidence": ["Continuity load calls loadContinuityDashboardFromNostr() and consumes scoped relay filters for kind 30351/30353 status plus 31400-31404 definitions and continuity heartbeat events.", "internal/kinds/policy.go classifies continuity fabric observables 30350-30353 and definitions 31400-31404 as canonical readable projection kinds; internal/relaysidecar/policy.go consumes that shared policy for sidecar REQ admission.", "SimulationPanel derives worker-failure impact locally from the same Nostr event set instead of POSTing to a REST simulation endpoint.", "internal/api/router/router.go no longer mounts /api/continuity/status, /api/continuity/topology, or /api/continuity/simulate."],
+      "evidence": ["Continuity load calls loadContinuityDashboardFromNostr() and consumes scoped relay filters for kind 30351/30353 status plus 31400-31404 definitions and NIP-38 kind 30315 continuity heartbeat events scoped by #domain=continuity.", "internal/kinds/policy.go classifies continuity heartbeat status 30315, continuity observables 30351-30353, and definitions 31400-31404 as canonical readable projection kinds; internal/relaysidecar/policy.go consumes that shared policy for sidecar REQ admission.", "SimulationPanel derives worker-failure impact locally from the same Nostr event set instead of POSTing to a REST simulation endpoint.", "internal/api/router/router.go no longer mounts /api/continuity/status, /api/continuity/topology, or /api/continuity/simulate."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
       "pstf_status": "current_audit_evidence",
-      "resolved_by_beads": ["bahia-giw6", "bahia-eqku"]
+      "resolved_by_beads": ["bahia-giw6", "bahia-eqku", "bahia-i89o"]
     },
     {
       "id": "souls-nostr-with-eose-caveats",
