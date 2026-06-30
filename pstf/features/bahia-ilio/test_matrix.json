@@ -1,0 +1,47 @@
+{
+  "feature_id": "bahia-ilio",
+  "tests": [
+    {
+      "name": "TestSBOMContextVMGenerateReturnsAcceptedAckAndEnqueues",
+      "package": "./internal/controlplane",
+      "acceptance": ["AC1", "AC3"],
+      "notes": "Verifies sbom/generate returns service.SBOMAcceptedAck, not SBOMRunResult, and forwards subjectLocator into the enqueue request."
+    },
+    {
+      "name": "TestSBOMContextVMImportReturnsAcceptedAckAndEnqueues",
+      "package": "./internal/controlplane",
+      "acceptance": ["AC1", "AC3"],
+      "notes": "Verifies sbom/import returns the accepted coordinate, decodes inline payload deterministically, and forwards package subjectLocator into the enqueue request."
+    },
+    {
+      "name": "TestSBOMAsyncRunnerAcceptedAckThenWorkerPublishesAfterAUTHAndOK",
+      "package": "./internal/service",
+      "acceptance": ["AC2", "AC3", "AC4"],
+      "notes": "Starts the managed channel runner, enqueues generation, injects AUTH then EOSE and OK accepted relay outcomes, and waits on the runner result channel without sleeps."
+    },
+    {
+      "name": "TestSBOMAsyncRunnerImportAckThenWorkerPublishesAfterOK",
+      "package": "./internal/service",
+      "acceptance": ["AC1", "AC2", "AC3", "AC4"],
+      "notes": "Exercises the real EnqueueImport worker branch with deterministic OK/EOSE outcomes and verifies 30078/30004 publication and imported projection source kind."
+    },
+    {
+      "name": "TestSBOMAsyncRunnerSurfacesClosedBeforeEOSEWithoutAvailabilityPublication",
+      "package": "./internal/service",
+      "acceptance": ["AC2", "AC4"],
+      "notes": "Injects CLOSED before EOSE and verifies the worker returns a deterministic error without publishing 30004 or projecting a manifest."
+    },
+    {
+      "name": "TestSBOMAsyncRunnerSurfacesOKRejectionWithoutProjection",
+      "package": "./internal/service",
+      "acceptance": ["AC2", "AC4"],
+      "notes": "Injects OK accepted=false auth-required and verifies worker error propagation without projection."
+    },
+    {
+      "name": "TestSBOMAsyncRunnerRejectsFullQueueWithoutPolling",
+      "package": "./internal/service",
+      "acceptance": ["AC2"],
+      "notes": "Verifies immediate queue-backpressure failure rather than sleeping, polling, or blocking on completion."
+    }
+  ]
+}

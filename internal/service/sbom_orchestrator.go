@@ -394,8 +394,8 @@ func (s *SBOMOrchestrator) Import(ctx context.Context, req SBOMImportRequest) (*
 }
 
 func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.SBOMSubject, locator domain.SBOMSubjectLocator, sourceKind domain.SBOMSourceKind, produce func(domain.SBOMSubject) ([]sbomadapter.GenerateResult, error)) (*SBOMRunResult, error) {
-	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Subscriber == nil || s.Pubkey == "" {
-		return nil, fmt.Errorf("SBOM orchestrator is not fully configured")
+	if err := s.validateRuntimeConfigured(); err != nil {
+		return nil, err
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -408,11 +408,14 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 		return &cached, nil
 	}
 	runID := key
-	statusD := "sbom:run:" + sanitizeDTag(runID)
+	statusD, err := SBOMStatusDTag(runID)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.publishStatus(ctx, statusD, subject, "accepted", "accepted", ""); err != nil {
 		return nil, err
 	}
-	subject, err := s.Resolver.ResolveWithLocator(ctx, subject, locator)
+	subject, err = s.Resolver.ResolveWithLocator(ctx, subject, locator)
 	if err != nil {
 		_ = s.publishStatus(ctx, statusD, subject, "failed", "resolving_subject", err.Error())
 		return nil, err
@@ -698,6 +701,13 @@ func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event,
 	return "", fmt.Errorf("publishing %s event: no relay accepted event: %s", label, strings.Join(rejections, "; "))
 }
 
+func (s *SBOMOrchestrator) validateRuntimeConfigured() error {
+	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Subscriber == nil || s.Pubkey == "" {
+		return fmt.Errorf("SBOM orchestrator is not fully configured")
+	}
+	return nil
+}
+
 func (s *SBOMOrchestrator) cached(key string) (SBOMRunResult, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -864,6 +874,15 @@ func manifestPackagesToLegacy(pkgs []domain.SBOMManifestPackage) []domain.SBOMPa
 	return out
 }
 func sha256Hex(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+
+func SBOMStatusDTag(idempotencyKey string) (string, error) {
+	key := strings.TrimSpace(idempotencyKey)
+	if key == "" {
+		return "", fmt.Errorf("idempotencyKey is required")
+	}
+	return "sbom:run:" + sanitizeDTag(key), nil
+}
+
 func sanitizeDTag(value string) string {
 	return strings.NewReplacer(" ", "-", "/", "-", "#", "-", "?", "-").Replace(value)
 }

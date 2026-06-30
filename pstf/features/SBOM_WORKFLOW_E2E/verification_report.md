@@ -11,7 +11,7 @@ Bead `bahia-1qe9.9` verified completed SBOM epics `bahia-1qe9.1` through `bahia-
 - `bahia-1qe9.3` — Verified. Parser and attestation helpers produce subject-neutral manifest/package results while preserving artifact compatibility; attestation subject/payload digest verification is covered.
 - `bahia-1qe9.4` — Verified. Syft is a real in-process generator, cdxgen is an optional executable adapter with deterministic tests, and `bahia-qfod` wires runtime operator configuration for cdxgen enablement.
 - `bahia-1qe9.5` — Verified. Event builders produce required `30078` reference and `30004` availability-list tags; publishing requires relay OK results and rejects auth/closed/OK false outcomes. Exact payload hash verification is performed in the orchestration/storage path before reference publication.
-- `bahia-1qe9.6` — Verified with tracked follow-up. The orchestrator enforces Blossom storage, verifies payload hash and attestation digests, publishes status/audit/reference/list observables with OK verification, serializes per-subject work, and avoids `30079`. Package/repository subject locator ambiguity is resolved by `bahia-wqj5`; ContextVM ack-vs-completion semantics remain tracked as `bahia-ilio`.
+- `bahia-1qe9.6` — Verified. The orchestrator enforces Blossom storage, verifies payload hash and attestation digests, publishes status/audit/reference/list observables with OK verification, serializes per-subject work, and avoids `30079`. Package/repository subject locator ambiguity is resolved by `bahia-wqj5`; ContextVM ack-vs-completion semantics are resolved by `bahia-ilio`.
 - `bahia-1qe9.7` — Verified after fix. REST `POST /artifacts/{id}/sbom` delegates to the import service and no longer bypasses Blossom/Nostr. Verification fixed oversized payload handling so bodies over 10 MiB return `413` instead of being truncated and imported.
 - `bahia-1qe9.8` — Verified. PSTF acceptance criteria, test matrix, defects, and user docs cover the real SBOM flow. Browser E2E for signer-first generate/import UI/control flows remains tracked as `bahia-wf2k`.
 
@@ -111,10 +111,34 @@ GOCACHE=/tmp/bahia-go-cache go test ./internal/...
 
 Result: PASS on 2026-06-30.
 
+## bahia-ilio asynchronous ContextVM SBOM acknowledgments — 2026-06-30
+
+- `internal/service/sbom_async_runner.go` adds a managed, channel-driven SBOM async runner. It computes deterministic `sbom:run:<sanitized-idempotencyKey>` status d-tags, returns `service.SBOMAcceptedAck`, and performs Generate/Import work off the ContextVM request path without polling, sleeps, or timeout-based completion.
+- `internal/controlplane/sbom_handlers.go` now enqueues `sbom/generate` and `sbom/import` requests and returns accepted idempotency/status coordinates instead of synchronous `SBOMRunResult` completion payloads. The import path still decodes inline payloads and forwards `subjectLocator`.
+- `internal/app/app.go` registers the SBOM async runner with `BackgroundManager` and wires ContextVM handlers to that runner.
+- `internal/service/sbom_async_runner_test.go` injects OK accepted, OK rejected, CLOSED before EOSE, and AUTH outcomes deterministically through existing orchestrator fakes and waits on runner result channels rather than sleeps.
+- `docs/control-planes.md`, `docs/designs/sbom-real-support.md`, and `docs/user-guide/nostr-integration.md` document the HITL Option A acknowledgment contract.
+- `pstf/features/bahia-ilio/hitl_decisions.md` records the explicit asynchronous-ack decision.
+
+Targeted gate:
+
+```bash
+GOCACHE=/tmp/bahia-go-cache go test ./internal/service ./internal/controlplane ./internal/app
+```
+
+Result: PASS on 2026-06-30.
+
+Broad gate:
+
+```bash
+GOCACHE=/tmp/bahia-go-cache go test ./internal/...
+```
+
+Result: PASS on 2026-06-30.
+
 ## Remaining tracked work
 
 - `bahia-wf2k`: Add live browser E2E coverage for signer-first `sbom/generate`/`sbom/import` UI/control flows with injected EVENT/EOSE/OK outcomes and terminal truth from `30078` plus `30004`.
-- `bahia-ilio`: Record and implement/document the intended ContextVM acknowledgment versus synchronous completion semantics for SBOM generate/import.
 
 ## Nostr/PSTF notes
 

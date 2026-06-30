@@ -16,15 +16,20 @@ const (
 	maxContextVMInlineSBOMBytes = 512 * 1024
 )
 
-type sbomContextVMHandler struct {
-	orchestrator *service.SBOMOrchestrator
+type sbomRequestRunner interface {
+	EnqueueGenerate(context.Context, service.SBOMGenerateRequest) (service.SBOMAcceptedAck, error)
+	EnqueueImport(context.Context, service.SBOMImportRequest) (service.SBOMAcceptedAck, error)
 }
 
-func RegisterSBOMContextVMHandlers(transport *EncryptedRequestTransport, orchestrator *service.SBOMOrchestrator) {
-	if transport == nil || orchestrator == nil {
+type sbomContextVMHandler struct {
+	runner sbomRequestRunner
+}
+
+func RegisterSBOMContextVMHandlers(transport *EncryptedRequestTransport, runner sbomRequestRunner) {
+	if transport == nil || runner == nil {
 		return
 	}
-	h := sbomContextVMHandler{orchestrator: orchestrator}
+	h := sbomContextVMHandler{runner: runner}
 	transport.RegisterContextVMHandler(ContextVMMethodSBOMGenerate, h.generate)
 	transport.RegisterContextVMHandler(ContextVMMethodSBOMImport, h.importSBOM)
 }
@@ -34,7 +39,7 @@ func (h sbomContextVMHandler) generate(ctx context.Context, req ContextVMRequest
 	if err := json.Unmarshal(req.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("decode sbom/generate params: %w", err)
 	}
-	return h.orchestrator.Generate(ctx, payload)
+	return h.runner.EnqueueGenerate(ctx, payload)
 }
 
 type sbomImportParams struct {
@@ -64,5 +69,5 @@ func (h sbomContextVMHandler) importSBOM(ctx context.Context, req ContextVMReque
 		}
 		bytes = decoded
 	}
-	return h.orchestrator.Import(ctx, service.SBOMImportRequest{IDempotencyKey: payload.IDempotencyKey, Subject: payload.Subject, SubjectLocator: payload.SubjectLocator, Format: payload.Format, Payload: bytes, Location: payload.Location, Storage: payload.Storage, Generator: payload.Generator})
+	return h.runner.EnqueueImport(ctx, service.SBOMImportRequest{IDempotencyKey: payload.IDempotencyKey, Subject: payload.Subject, SubjectLocator: payload.SubjectLocator, Format: payload.Format, Payload: bytes, Location: payload.Location, Storage: payload.Storage, Generator: payload.Generator})
 }

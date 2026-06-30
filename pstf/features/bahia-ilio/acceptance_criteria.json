@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-ilio",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "description": "ContextVM sbom/generate and sbom/import handlers enqueue orchestration and return an accepted acknowledgment containing idempotencyKey, run_id, status=accepted, status_d_tag, and observable kinds instead of returning SBOMRunResult completion payloads."
+    },
+    {
+      "id": "AC2",
+      "description": "A managed background runner performs SBOM Generate/Import off the request path using channel-driven work delivery, with no polling loops, sleeps, or timeout-based completion detection."
+    },
+    {
+      "id": "AC3",
+      "description": "Existing idempotency semantics are preserved: the idempotency key deterministically maps to the sbom:run:<sanitized-key> 30315 d-tag and the orchestrator remains the side-effect/idempotency authority."
+    },
+    {
+      "id": "AC4",
+      "description": "Worker-driven orchestration still handles relay OK acceptance, CLOSED before EOSE, and AUTH challenges deterministically and surfaces failures through worker result/status behavior while clients observe terminal truth through 30078/30004."
+    },
+    {
+      "id": "AC5",
+      "description": "Docs and PSTF record the HITL Option A asynchronous-ack decision and instruct clients to subscribe to status/reference/availability observables for completion."
+    }
+  ]
+}

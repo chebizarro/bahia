@@ -60,6 +60,7 @@ Client mutation publication should use ContextVM JSON-RPC methods rather than Ba
 | `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
 | `ml` | `model-import`, `recipe-run`, `inference-deploy`, `inference-rollback` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
+| `sbom` | `generate`, `import` |
 
 Example ContextVM request:
 
@@ -176,6 +177,21 @@ Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecyc
 4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
 5. Treat EOSE as historical catch-up only; keep subscriptions open for realtime convergence. Deduplicate by event id and use replaceable semantics for `(kind, pubkey, d-tag)` state events.
 6. Handle `CLOSED` and `AUTH` explicitly. Auth-related closures fail distinctly; non-auth closures fail only when all known result/observable relays close before a correlated terminal state/audit/status event.
+
+SBOM methods (`sbom/generate` and `sbom/import`) are explicit asynchronous-ack methods. Their ContextVM JSON-RPC result is an acceptance coordinate, not a run result:
+
+```json
+{
+  "accepted": true,
+  "status": "accepted",
+  "run_id": "<idempotencyKey>",
+  "status_d_tag": "sbom:run:<sanitized-idempotencyKey>",
+  "idempotencyKey": "<idempotencyKey>",
+  "observable_kinds": [30315, 4903, 30078, 30004]
+}
+```
+
+After receiving this acknowledgment, clients subscribe to `30315` with `#d=<status_d_tag>` for progress and to subject-scoped `30078` SBOM reference plus `30004` availability-list events for terminal truth. The service-side SBOM async runner handles orchestration off the request path and still requires relay `OK` acceptance for every published observable; `AUTH`, `CLOSED`, and rejected `OK` outcomes become failed status/error evidence rather than synchronous ContextVM completion payloads.
 
 ### DNS/FIPS operator UX
 

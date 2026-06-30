@@ -91,8 +91,9 @@ Digest conventions:
 
 ```text
 ContextVM 25910 intent (`sbom/generate` or `sbom/import`)
-  -> validate subject, source, formats, idempotency key
-  -> publish 30315 accepted/running status
+  -> validate request shape and idempotency key
+  -> enqueue SBOM orchestration and return an accepted acknowledgment with the status d-tag
+  -> background runner publishes 30315 accepted/running status
   -> generate or resolve SBOM bytes
   -> parse SBOM bytes into package metadata
   -> upload exact bytes to Blossom
@@ -106,6 +107,7 @@ ContextVM 25910 intent (`sbom/generate` or `sbom/import`)
 
 Failure behavior:
 
+- ContextVM handler failure means the intent was not accepted or enqueued;
 - generation/import resolution failure publishes failed status and no completion;
 - Blossom upload failure publishes failed status and no SBOM reference/list;
 - Nostr publish rejection leaves the projection draft/failed and does not publish completed status;
@@ -214,7 +216,7 @@ Expected steps:
 - `projecting`
 - `completed`
 
-Completion truth remains the `30078` and `30004` events, not status alone.
+Completion truth remains the `30078` and `30004` events, not status alone. The ContextVM JSON-RPC response for `sbom/generate` and `sbom/import` is an acknowledgment only; it is not completion proof.
 
 ### Audit events
 
@@ -285,6 +287,21 @@ or:
 
 Large payloads do not belong inside ContextVM content.
 
+Response:
+
+```json
+{
+  "accepted": true,
+  "status": "accepted",
+  "run_id": "<idempotencyKey>",
+  "status_d_tag": "sbom:run:<sanitized-idempotencyKey>",
+  "idempotencyKey": "<idempotencyKey>",
+  "observable_kinds": [30315, 4903, 30078, 30004]
+}
+```
+
+The response means Bahia accepted the idempotent intent into the SBOM async runner. Clients must subscribe to `30315` by `#d=<status_d_tag>` for progress and to subject-scoped `30078`/`30004` for terminal canonical truth.
+
 ### `sbom/import`
 
 Mutation intent for importing an existing SBOM from a source reference.
@@ -297,8 +314,7 @@ Inputs:
 - source reference, existing Blossom URL, package artifact source, or REST compatibility upload reference;
 - `storage`: `blossom` unless already verified on Blossom.
 
-Imported SBOMs still produce the same `30078` reference and `30004` availability list.
-
+Imported SBOMs still produce the same `30078` reference and `30004` availability list. `sbom/import` returns the same accepted acknowledgment shape as `sbom/generate`; clients must not block on or infer completion from the ContextVM response.
 ## REST API stance
 
 Keep existing REST read/search endpoints for UI and non-Nostr read-model interoperability.

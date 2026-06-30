@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-ilio",
+  "title": "Asynchronous SBOM ContextVM acknowledgments",
+  "status": "implemented_pending_user_verification",
+  "observed_behavior": "internal/controlplane/sbom_handlers.go synchronously called SBOMOrchestrator.Generate and Import, so ContextVM sbom/generate and sbom/import responses were full run results after 30315/4903/30078/30004 publication.",
+  "intended_behavior": "sbom/generate and sbom/import ContextVM handlers return an accepted idempotency/status coordinate immediately after enqueueing orchestration. A managed event-driven worker performs generation/import and publishes progress/terminal observables off the request path; terminal truth remains 30078 and 30004.",
+  "scope": [
+    "internal/controlplane/sbom_handlers.go",
+    "internal/service/sbom_async_runner.go",
+    "internal/app/app.go",
+    "docs/control-planes.md",
+    "docs/designs/sbom-real-support.md",
+    "docs/user-guide/nostr-integration.md"
+  ],
+  "out_of_scope": [
+    "bahia-wqj5 subject locator semantics already merged",
+    "bahia-ndmr relay-backed availability-list merge already merged",
+    "browser E2E import workflow coverage tracked separately by bahia-wf2k"
+  ]
+}

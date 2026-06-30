@@ -45,9 +45,9 @@
     },
     {
       "id": "D8",
-      "status": "tracked",
-      "description": "ContextVM sbom/generate and sbom/import handlers currently return after synchronous orchestration completion; architecture needs an explicit decision documenting whether this is acceptable or should become immediate acknowledgment plus event-driven background completion.",
-      "evidence": "Tracked as Bead bahia-ilio with acceptance criteria to record HITL decision and either implement asynchronous ack semantics or document/test retained synchronous behavior while preserving terminal truth in 30078/30004."
+      "status": "fixed_pending_user_verification",
+      "description": "ContextVM sbom/generate and sbom/import handlers returned after synchronous orchestration completion instead of acting as acknowledgments for durable Nostr-observed work.",
+      "evidence": "bahia-ilio implements HITL Option A asynchronous ack semantics: handlers enqueue work and return service.SBOMAcceptedAck with status_d_tag/idempotencyKey, service.SBOMAsyncRunner drives orchestration off the request path, and deterministic tests cover ACK, OK rejection, CLOSED before EOSE, and AUTH handling without sleeps."
     },
     {
       "id": "D9",

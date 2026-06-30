@@ -467,7 +467,20 @@ Current route-level REST client exceptions are matrix-classified artifact Blosso
 
 ## SBOM Generation and Import Observables
 
-SBOM mutations are ContextVM intents (`sbom/generate` and `sbom/import`) carried as kind `25910` requests, optionally wrapped in `1059` or `21059`. The JSON-RPC response is only an acknowledgment. Durable truth is observed through scoped subscriptions:
+SBOM mutations are ContextVM intents (`sbom/generate` and `sbom/import`) carried as kind `25910` requests, optionally wrapped in `1059` or `21059`. The JSON-RPC response is only an asynchronous acceptance acknowledgment and includes the idempotency/status coordinate:
+
+```json
+{
+  "accepted": true,
+  "status": "accepted",
+  "run_id": "<idempotencyKey>",
+  "status_d_tag": "sbom:run:<sanitized-idempotencyKey>",
+  "idempotencyKey": "<idempotencyKey>",
+  "observable_kinds": [30315, 4903, 30078, 30004]
+}
+```
+
+Durable truth is observed through scoped subscriptions:
 
 ```json
 {
