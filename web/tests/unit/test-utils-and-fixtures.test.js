@@ -77,9 +77,10 @@ describe('Nostr branch behavior coverage', () => {
   it('fetches repository branches from explicit NIP-34 relay URLs and selects the latest state event on EOSE', async () => {
     const pubkey = 'a'.repeat(64);
     nostrMock.subscribeOnRelays.mockImplementation((_relays, _filters, handlers) => {
-      handlers.onEvent(repoStateEvent({ id: 'old', pubkey, created_at: 10, tags: [['d', 'bahia'], ['refs/heads/old', 'old']] }));
-      handlers.onEvent(repoStateEvent({ id: 'new', pubkey, created_at: 20 }));
+      handlers.onEvent(repoStateEvent({ id: 'old', pubkey, created_at: 10, tags: [['d', 'bahia'], ['refs/heads/old', 'old']] }), 'wss://repo-a.example');
+      handlers.onEvent(repoStateEvent({ id: 'new', pubkey, created_at: 20 }), 'wss://repo-b.example');
       handlers.onEose('wss://repo-a.example');
+      handlers.onEose('wss://repo-b.example');
       return vi.fn();
     });
 
@@ -97,11 +98,16 @@ describe('Nostr branch behavior coverage', () => {
         onClosed: expect.any(Function)
       })
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       branches: ['main', 'feature/auth'],
       defaultBranch: 'main',
       error: null,
-      degraded: null
+      complete: true,
+      degraded: null,
+      relaySummary: expect.arrayContaining([
+        expect.objectContaining({ relay: 'wss://repo-a.example', status: 'eose' }),
+        expect.objectContaining({ relay: 'wss://repo-b.example', status: 'eose' })
+      ])
     });
   });
 
@@ -123,10 +129,12 @@ describe('Nostr branch behavior coverage', () => {
       })
     );
     expect(result.branches).toEqual(['main', 'feature/auth']);
+    expect(result.complete).toBe(true);
     expect(result.degraded).toMatchObject({
       incomplete: false,
       reason: 'missing_repository_relays',
-      partialEventCount: 0
+      partialEventCount: 0,
+      relaySummary: expect.arrayContaining([expect.objectContaining({ relay: 'wss://global.example', status: 'eose' })])
     });
   });
 
@@ -142,7 +150,13 @@ describe('Nostr branch behavior coverage', () => {
     expect(result.branches).toEqual(['main', 'feature/auth']);
     expect(result.defaultBranch).toBe('main');
     expect(result.error).toBeNull();
-    expect(result.degraded).toBeNull();
+    expect(result.complete).toBe(false);
+    expect(result.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'closed',
+      partialEventCount: 1,
+      relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed before EOSE' })]
+    });
   });
 
   it('returns a closed-subscription error when branch history closes with no partial events', async () => {
@@ -156,7 +170,34 @@ describe('Nostr branch behavior coverage', () => {
     expect(result.branches).toEqual([]);
     expect(result.defaultBranch).toBeNull();
     expect(result.error).toBe('relay closed before EOSE');
-    expect(result.degraded).toBeNull();
+    expect(result.complete).toBe(false);
+    expect(result.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'closed',
+      partialEventCount: 0,
+      relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed before EOSE' })]
+    });
+  });
+
+  it('returns AUTH-required branch closure metadata without treating it as complete history', async () => {
+    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+      handlers.onClosed('auth-required: sign in first', 'wss://auth.example', { terminal: true, source: 'auth', authRequired: true });
+      return vi.fn();
+    });
+
+    const result = await fetchRepoBranches(repoCoordinate(), { timeout: 100 });
+
+    expect(result.branches).toEqual([]);
+    expect(result.defaultBranch).toBeNull();
+    expect(result.error).toBe('auth-required: sign in first');
+    expect(result.complete).toBe(false);
+    expect(result.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'auth-required',
+      authRequired: true,
+      partialEventCount: 0,
+      relaySummary: [expect.objectContaining({ relay: 'wss://auth.example', status: 'auth-required' })]
+    });
   });
 
   it('keeps non-Nostr repository selections out of NIP-34 branch lookup', () => {

@@ -15,6 +15,7 @@ import {
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
 import { ensureRelayConnection } from '$lib/nostr/client.js';
+import { createReadModelMetadataTracker } from '$lib/nostr/pool-utils.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
 /** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2 */
@@ -98,6 +99,27 @@ function rememberReadModelMeta(key, result) {
     degraded: result?.degraded || null,
     relaySummary: Array.isArray(result?.relaySummary) ? result.relaySummary : []
   };
+}
+
+function rememberSoulFactoryReadModelMeta(metadata) {
+  for (const key of ['souls', 'templates', 'drafts', 'capabilities']) {
+    rememberReadModelMeta(key, metadata);
+  }
+}
+
+function knownPoolRelays() {
+  if (typeof nostr.getConnectedRelays === 'function') return nostr.getConnectedRelays();
+  if (typeof nostr.getRelays === 'function') return nostr.getRelays();
+  return [];
+}
+
+function attachHistoryMetadata(history, metadata) {
+  Object.defineProperties(history, {
+    complete: { value: metadata.complete, enumerable: false },
+    degraded: { value: metadata.degraded, enumerable: false },
+    relaySummary: { value: metadata.relaySummary, enumerable: false }
+  });
+  return history;
 }
 
 const soulEvents = new Map();
@@ -426,19 +448,35 @@ export async function subscribeToSoulFactoryUpdates(authorPubkey = null) {
   const soulFilter = { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT] };
   if (authorPubkey) soulFilter.authors = [authorPubkey];
 
+  const tracker = createReadModelMetadataTracker({ relays: knownPoolRelays() });
+  const finishHistoricalCatchup = () => {
+    const metadata = tracker.metadata();
+    rememberSoulFactoryReadModelMeta(metadata);
+    loading.souls = false;
+    loading.templates = false;
+    loading.drafts = false;
+    loading.capabilities = false;
+  };
+
   soulFactorySubscription = nostr.subscribe([
     soulFilter,
     { kinds: [KINDS.RUNTIME_CAPABILITY] }
   ], {
-    onEvent: (event) => applySoulFactoryEvent(event),
-    onEose: () => {
-      loading.souls = false;
-      loading.templates = false;
-      loading.drafts = false;
-      loading.capabilities = false;
+    onEvent: (event, relay) => {
+      tracker.markEvent(event, relay);
+      applySoulFactoryEvent(event);
     },
-    onClosed: (reason, relay) => {
+    onEose: (relay) => {
+      tracker.markEose(relay);
+      if (tracker.isComplete()) finishHistoricalCatchup();
+    },
+    onClosed: (reason, relay, meta) => {
+      tracker.markClosed(reason, relay, meta);
       console.warn(`[souls] Subscription closed by ${relay}: ${reason}`);
+      if (tracker.isTerminal()) finishHistoricalCatchup();
+    },
+    onAuth: (challenge, relay) => {
+      tracker.markAuth(challenge, relay);
     }
   });
 }
@@ -1005,29 +1043,52 @@ export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
 
   return new Promise((resolve) => {
     const events = [];
+    const tracker = createReadModelMetadataTracker({
+      relays: knownPoolRelays(),
+      partialEventCount: () => events.length
+    });
+    let settled = false;
+    let unsubscribe = null;
+    let unsubscribeAfterAssign = false;
 
-    nostr.subscribe(filters, {
-      onEvent: (event) => {
+    const buildHistory = () => {
+      const deduped = new Map();
+      for (const event of events) {
+        if (deduped.has(event.id)) continue;
+        if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
+        deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
+      }
+      return Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt);
+    };
+
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      const metadata = tracker.metadata();
+      const history = attachHistoryMetadata(buildHistory(), metadata);
+      rememberReadModelMeta('history', history);
+      resolve(history);
+      if (unsubscribe) unsubscribe();
+      else unsubscribeAfterAssign = true;
+    };
+
+    unsubscribe = nostr.subscribe(filters, {
+      onEvent: (event, relay) => {
+        tracker.markEvent(event, relay);
         events.push(event);
       },
-      onEose: () => {
-        const deduped = new Map();
-        for (const event of events) {
-          if (deduped.has(event.id)) continue;
-          if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
-          deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
-        }
-        resolve(Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt));
+      onEose: (relay) => {
+        tracker.markEose(relay);
+        if (tracker.isComplete()) settle();
       },
-      onClosed: () => {
-        const deduped = new Map();
-        for (const event of events) {
-          if (deduped.has(event.id)) continue;
-          if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
-          deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
-        }
-        resolve(Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt));
+      onClosed: (reason, relay, meta) => {
+        tracker.markClosed(reason, relay, meta);
+        if (tracker.isTerminal()) settle();
+      },
+      onAuth: (challenge, relay) => {
+        tracker.markAuth(challenge, relay);
       }
     });
+    if (unsubscribeAfterAssign) unsubscribe?.();
   });
 }

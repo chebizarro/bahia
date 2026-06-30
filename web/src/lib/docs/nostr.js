@@ -10,6 +10,7 @@ import { KINDS } from '$lib/nostr/kinds.js';
 import { nostr } from '$lib/nostr/subscriptions.js';
 import { dedupeReplaceableEvents } from '$lib/nostr/replaceable.js';
 import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
+import { createReadModelMetadataTracker } from '$lib/nostr/pool-utils.js';
 
 // --- Cache configuration ---
 
@@ -66,12 +67,12 @@ function writeCache(events) {
  * @param {string} [options.servicePubkey]
  * @param {number} [options.timeoutMs=10000]
  * @param {boolean} [options.bypassCache=false]
- * @returns {Promise<Array>} Deduplicated events
+ * @returns {Promise<{events: Array, complete: boolean, degraded: Object|null, relaySummary: Array}>} Deduplicated events with EOSE metadata.
  */
 async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
   if (!bypassCache) {
     const cached = readCache();
-    if (cached) return cached.events;
+    if (cached) return { events: cached.events, complete: true, degraded: null, relaySummary: [] };
   }
 
   const filter = {
@@ -82,27 +83,62 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
     filter.authors = [servicePubkey];
   }
 
-  const events = await new Promise((resolve, reject) => {
+  const result = await new Promise((resolve) => {
     const collected = [];
-    const timer = setTimeout(() => resolve(collected), timeoutMs);
+    const expectedRelays = typeof nostr.getConnectedRelays === 'function'
+      ? nostr.getConnectedRelays()
+      : (typeof nostr.getRelays === 'function' ? nostr.getRelays() : []);
+    const tracker = createReadModelMetadataTracker({
+      relays: expectedRelays,
+      partialEventCount: () => collected.length
+    });
+    let timer = null;
+    let settled = false;
+    let unsubscribe = null;
+    let unsubscribeAfterAssign = false;
 
-    nostr.subscribe([filter], {
-      onEvent: (event) => collected.push(event),
-      onEose: () => {
-        clearTimeout(timer);
-        resolve(collected);
+    const settle = (metadataOptions = {}) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      const deduped = dedupeReplaceableEvents(collected);
+      resolve({ events: deduped, ...tracker.metadata(metadataOptions) });
+      if (unsubscribe) unsubscribe();
+      else unsubscribeAfterAssign = true;
+    };
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        settle({
+          forceIncomplete: true,
+          reason: 'timeout-before-eose',
+          message: 'Timed out before every expected relay reached EOSE; returning degraded docs history.'
+        });
+      }, timeoutMs);
+    }
+
+    unsubscribe = nostr.subscribe([filter], {
+      onEvent: (event, relay) => {
+        tracker.markEvent(event, relay);
+        collected.push(event);
       },
-      onClosed: (reason) => {
-        clearTimeout(timer);
-        if (collected.length > 0) resolve(collected);
-        else reject(new Error(`Docs subscription closed: ${reason}`));
+      onEose: (relay) => {
+        tracker.markEose(relay);
+        if (tracker.isComplete()) settle();
+      },
+      onClosed: (reason, relay, meta) => {
+        tracker.markClosed(reason, relay, meta);
+        if (tracker.isTerminal()) settle();
+      },
+      onAuth: (challenge, relay) => {
+        tracker.markAuth(challenge, relay);
       }
     });
+    if (unsubscribeAfterAssign) unsubscribe?.();
   });
 
-  const deduped = dedupeReplaceableEvents(events);
-  writeCache(deduped);
-  return deduped;
+  if (result.complete) writeCache(result.events);
+  return result;
 }
 
 /**
@@ -118,8 +154,8 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
  * @returns {Promise<{topics: Array, groups: Array, count: number}>}
  */
 export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
-  const events = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
-  const topics = events.map(parseDocTopic).filter(Boolean);
+  const result = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
+  const topics = result.events.map(parseDocTopic).filter(Boolean);
 
   // Sort deterministically by topic slug.
   topics.sort((a, b) => a.topic.localeCompare(b.topic));
@@ -127,7 +163,10 @@ export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000
   return {
     topics,
     groups: groupDocsCatalog(topics),
-    count: topics.length
+    count: topics.length,
+    complete: result.complete,
+    degraded: result.degraded,
+    relaySummary: result.relaySummary
   };
 }
 
@@ -146,7 +185,8 @@ export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000
  */
 export async function fetchDoc(topic, { servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
   // Fetch all docs events (leverages cache) so we have the catalog for link resolution.
-  const allEvents = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
+  const result = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
+  const allEvents = result.events;
 
   const event = allEvents.find((e) => getDTag(e) === topic);
   if (!event) return null;
@@ -161,7 +201,10 @@ export async function fetchDoc(topic, { servicePubkey = null, timeoutMs = 10000,
   return {
     metadata,
     markdown: event.content || '',
-    links
+    links,
+    complete: result.complete,
+    degraded: result.degraded,
+    relaySummary: result.relaySummary
   };
 }
 

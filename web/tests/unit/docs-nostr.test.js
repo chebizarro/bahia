@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const subscriptionsMock = vi.hoisted(() => ({
   relayEvents: [],
+  closedRelays: [],
+  emitEose: true,
   nostr: {
     subscribe: vi.fn((_filters, handlers = {}) => {
       for (const event of subscriptionsMock.relayEvents) handlers.onEvent?.(event, 'wss://docs.example');
-      handlers.onEose?.('wss://docs.example');
+      for (const closure of subscriptionsMock.closedRelays) handlers.onClosed?.(closure.reason, closure.relay, closure.meta);
+      if (subscriptionsMock.emitEose) handlers.onEose?.('wss://docs.example');
       return vi.fn();
     })
   }
@@ -44,6 +47,8 @@ describe('Nostr documentation client', () => {
   beforeEach(() => {
     localStorage.clear();
     subscriptionsMock.relayEvents = [];
+    subscriptionsMock.closedRelays = [];
+    subscriptionsMock.emitEose = true;
     subscriptionsMock.nostr.subscribe.mockClear();
   });
 
@@ -64,6 +69,8 @@ describe('Nostr documentation client', () => {
       onClosed: expect.any(Function)
     }));
     expect(catalog.count).toBe(1);
+    expect(catalog.complete).toBe(true);
+    expect(catalog.degraded).toBeNull();
     expect(catalog.topics[0]).toMatchObject({
       topic: 'features-services',
       title: 'Services',
@@ -78,7 +85,44 @@ describe('Nostr documentation client', () => {
     const catalog = await fetchDocsCatalog({ timeoutMs: 2500 });
 
     expect(catalog.count).toBe(0);
+    expect(catalog.complete).toBe(true);
+    expect(catalog.degraded).toBeNull();
     expect(localStorage.getItem('bahia_docs_cache')).toBeNull();
+  });
+
+  it('returns partial docs catalog with degraded metadata when CLOSED occurs before EOSE', async () => {
+    subscriptionsMock.emitEose = false;
+    subscriptionsMock.relayEvents = [docEvent('features-services', 'Services', 'feature', '# Services')];
+    subscriptionsMock.closedRelays = [{ reason: 'relay closed before EOSE', relay: 'wss://docs.example', meta: { terminal: true, source: 'closed' } }];
+
+    const catalog = await fetchDocsCatalog({ bypassCache: true, timeoutMs: 2500 });
+
+    expect(catalog.count).toBe(1);
+    expect(catalog.complete).toBe(false);
+    expect(catalog.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'closed',
+      partialEventCount: 1,
+      relaySummary: [expect.objectContaining({ relay: 'wss://docs.example', status: 'closed', reason: 'relay closed before EOSE' })]
+    });
+    expect(localStorage.getItem('bahia_docs_cache')).toBeNull();
+  });
+
+  it('returns empty docs catalog with AUTH-required degraded metadata', async () => {
+    subscriptionsMock.emitEose = false;
+    subscriptionsMock.closedRelays = [{ reason: 'auth-required: sign in', relay: 'wss://docs-auth.example', meta: { terminal: true, source: 'auth', authRequired: true } }];
+
+    const catalog = await fetchDocsCatalog({ bypassCache: true, timeoutMs: 2500 });
+
+    expect(catalog.count).toBe(0);
+    expect(catalog.complete).toBe(false);
+    expect(catalog.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'auth-required',
+      authRequired: true,
+      partialEventCount: 0,
+      relaySummary: [expect.objectContaining({ relay: 'wss://docs-auth.example', status: 'auth-required' })]
+    });
   });
 
   it('resolves a single topic from the relay event catalog', async () => {
@@ -97,5 +141,7 @@ describe('Nostr documentation client', () => {
       topic: 'features-deployments',
       status: 'resolved'
     }));
+    expect(doc?.complete).toBe(true);
+    expect(doc?.degraded).toBeNull();
   });
 });

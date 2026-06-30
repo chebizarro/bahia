@@ -4,7 +4,7 @@
  */
 
 import { KINDS, nostr } from './client.js';
-import { uniqueRelays } from './pool-utils.js';
+import { createReadModelMetadataTracker, uniqueRelays } from './pool-utils.js';
 
 const REPO_STATE_KIND = KINDS.REPOSITORY_STATE;
 
@@ -100,7 +100,7 @@ function parseRepoCoordinate(repoCoordinate) {
  * @param {Object} options
  * @param {number} options.timeout - Incomplete-query timeout in ms (default: 5000)
  * @param {string[]} options.relayUrls - Repository relay hints from the NIP-34 30617 relays tag
- * @returns {Promise<{ branches: string[], defaultBranch: string | null, error: string | null, degraded: Object | null }>}
+ * @returns {Promise<{ branches: string[], defaultBranch: string | null, error: string | null, complete: boolean, degraded: Object | null, relaySummary: Array }>}
  */
 export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayUrls = null } = {}) {
   const parsed = parseRepoCoordinate(repoCoordinate);
@@ -109,12 +109,18 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
       branches: [],
       defaultBranch: null,
       error: 'Invalid repository coordinate',
-      degraded: null
+      complete: false,
+      degraded: null,
+      relaySummary: []
     };
   }
 
   const { pubkey, identifier } = parsed;
   const repositoryRelays = Array.isArray(relayUrls) ? uniqueRelays(relayUrls) : null;
+  const fallbackRelays = typeof nostr.getConnectedRelays === 'function'
+    ? nostr.getConnectedRelays()
+    : (typeof nostr.getRelays === 'function' ? nostr.getRelays() : []);
+  const expectedRelays = repositoryRelays?.length > 0 ? repositoryRelays : fallbackRelays;
   const missingRepositoryRelayFallback = Array.isArray(relayUrls) && repositoryRelays.length === 0
     ? {
         incomplete: false,
@@ -124,36 +130,44 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
         partialEventCount: 0
       }
     : null;
-  const queryOptions = repositoryRelays?.length > 0
-    ? { timeoutMs: timeout, relays: repositoryRelays }
-    : { timeoutMs: timeout };
-
-  const degraded = missingRepositoryRelayFallback;
 
   return new Promise((resolve) => {
     const events = [];
-    const subscribeOptions = repositoryRelays?.length > 0
-      ? { relays: repositoryRelays }
-      : {};
+    const tracker = createReadModelMetadataTracker({
+      relays: expectedRelays,
+      partialEventCount: () => events.length
+    });
     let timer = null;
     let settled = false;
+    let unsubscribe = null;
+    let unsubscribeAfterAssign = false;
 
-    const settle = (result) => {
+    const latestBranches = () => {
+      const latestEvent = events.reduce((latest, event) => {
+        if (!latest || event.created_at > latest.created_at) return event;
+        return latest;
+      }, null);
+      return latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
+    };
+
+    const settle = (metadataOptions = {}, error = null) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve(result);
+      const metadata = tracker.metadata({ degraded: missingRepositoryRelayFallback, ...metadataOptions });
+      resolve({ ...latestBranches(), error, ...metadata });
+      if (unsubscribe) unsubscribe();
+      else unsubscribeAfterAssign = true;
     };
 
     if (timeout > 0) {
       timer = setTimeout(() => {
-        // Resolve with whatever we have on timeout
-        const latestEvent = events.reduce((latest, event) => {
-          if (!latest || event.created_at > latest.created_at) return event;
-          return latest;
-        }, null);
-        const result = latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
-        settle({ ...result, error: events.length === 0 ? 'Timed out waiting for repo state' : null, degraded });
+        const timeoutError = events.length === 0 ? 'Timed out waiting for repo state EOSE' : null;
+        settle({
+          forceIncomplete: true,
+          reason: 'timeout-before-eose',
+          message: 'Timed out before every expected relay reached EOSE; returning degraded branch history.'
+        }, timeoutError);
       }, timeout);
     }
 
@@ -164,32 +178,31 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
     }];
 
     const subscribeArgs = [filters, {
-      onEvent: (event) => {
+      onEvent: (event, relay) => {
+        tracker.markEvent(event, relay);
         events.push(event);
       },
-      onEose: () => {
-        const latestEvent = events.reduce((latest, event) => {
-          if (!latest || event.created_at > latest.created_at) return event;
-          return latest;
-        }, null);
-        const result = latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
-        settle({ ...result, error: null, degraded });
+      onEose: (relay) => {
+        tracker.markEose(relay);
+        if (tracker.isComplete()) settle();
       },
-      onClosed: (reason) => {
-        const latestEvent = events.reduce((latest, event) => {
-          if (!latest || event.created_at > latest.created_at) return event;
-          return latest;
-        }, null);
-        const result = latestEvent ? parseRepoStateBranches(latestEvent) : { branches: [], defaultBranch: null };
-        settle({ ...result, error: events.length === 0 ? (reason || 'Subscription closed') : null, degraded });
+      onClosed: (reason, relay, meta) => {
+        tracker.markClosed(reason, relay, meta);
+        if (tracker.isTerminal()) {
+          settle({}, events.length === 0 ? (reason || 'Subscription closed before EOSE') : null);
+        }
+      },
+      onAuth: (challenge, relay) => {
+        tracker.markAuth(challenge, relay);
       }
     }];
 
     if (repositoryRelays?.length > 0) {
-      nostr.subscribeOnRelays(repositoryRelays, ...subscribeArgs);
+      unsubscribe = nostr.subscribeOnRelays(repositoryRelays, ...subscribeArgs);
     } else {
-      nostr.subscribe(...subscribeArgs);
+      unsubscribe = nostr.subscribe(...subscribeArgs);
     }
+    if (unsubscribeAfterAssign) unsubscribe?.();
   });
 }
 

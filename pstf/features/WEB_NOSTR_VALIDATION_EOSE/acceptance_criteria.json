@@ -60,10 +60,21 @@
     },
     {
       "id": "AC6",
-      "statement": "Explicit degraded read-model metadata for partial historical reads remains an open pool-era contract gap tracked outside this bead.",
+      "statement": "Pool-era browser read models expose a consistent {complete,degraded,relaySummary} metadata contract for complete EOSE, partial CLOSED-before-EOSE, empty CLOSED-before-EOSE, and AUTH-required CLOSED reads without reintroducing request/response query wrappers or timeout-based success.",
       "tests": [
-        "Retired stale queryUntilEose/queryOrPartial/fetchRuntimeCapabilities assertions in bahia-y32g because those symbols are no longer exported by web/src/lib/nostr.",
-        "Follow-up bead bahia-qc5c tracks defining and restoring explicit {complete,degraded,relaySummary} metadata for current pool-backed read models without reintroducing timeout-based query wrappers."
+        "web/tests/unit/pool-read-model-metadata.test.js: marks partial events followed by incomplete relay closure as degraded",
+        "web/tests/unit/pool-read-model-metadata.test.js: marks an empty CLOSED-before-EOSE read as degraded incomplete history",
+        "web/tests/unit/pool-read-model-metadata.test.js: marks AUTH-required CLOSED as degraded auth-incomplete history",
+        "web/tests/unit/pool-read-model-metadata.test.js: reports complete EOSE only after every expected relay reaches EOSE",
+        "web/tests/unit/pool-read-model-metadata.test.js: treats AUTH challenge followed by EOSE as complete history",
+        "web/tests/unit/test-utils-and-fixtures.test.js: returns partial repo state when the branch subscription closes before EOSE",
+        "web/tests/unit/test-utils-and-fixtures.test.js: returns a closed-subscription error when branch history closes with no partial events",
+        "web/tests/unit/test-utils-and-fixtures.test.js: returns AUTH-required branch closure metadata without treating it as complete history",
+        "web/tests/unit/docs-nostr.test.js: returns partial docs catalog with degraded metadata when CLOSED occurs before EOSE",
+        "web/tests/unit/docs-nostr.test.js: returns empty docs catalog with AUTH-required degraded metadata",
+        "web/tests/unit/souls-store.test.js: records degraded read-model metadata when CLOSED occurs before EOSE after partial events",
+        "web/tests/unit/souls-store.test.js: records AUTH-required closure metadata for soul factory read models",
+        "web/tests/unit/souls-store.test.js: fetchSoulHistory returns partial activity with degraded metadata on CLOSED-before-EOSE"
       ]
     }
   ]

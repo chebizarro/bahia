@@ -239,6 +239,14 @@ describe('Souls Store', () => {
 
       handlers.onEose('wss://relay.example');
 
+      expect(soulsModule.readModelMeta.souls).toMatchObject({
+        complete: true,
+        degraded: null,
+        relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'eose' })]
+      });
+      expect(soulsModule.readModelMeta.templates.complete).toBe(true);
+      expect(soulsModule.readModelMeta.drafts.complete).toBe(true);
+      expect(soulsModule.readModelMeta.capabilities.complete).toBe(true);
       expect(soulsModule.loading).toMatchObject({
         souls: false,
         templates: false,
@@ -364,6 +372,53 @@ describe('Souls Store', () => {
         name: 'Agent Alpha Updated',
         status: 'suspended'
       });
+    });
+
+    it('records degraded read-model metadata when CLOSED occurs before EOSE after partial events', async () => {
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { handlers } = await startSoulFactorySubscription();
+
+      handlers.onEvent({
+        id: 'partial-soul',
+        kind: 31951,
+        pubkey: 'factory',
+        created_at: 100,
+        tags: [['d', 'partial'], ['name', 'Partial Soul'], ['status', 'active']]
+      }, 'wss://relay.example');
+      handlers.onClosed('relay closed before EOSE', 'wss://relay.example', { terminal: true, source: 'closed' });
+
+      expect(soulsModule.loading.souls).toBe(false);
+      expect(soulsModule.readModelMeta.souls).toMatchObject({
+        complete: false,
+        degraded: {
+          incomplete: true,
+          reason: 'closed',
+          partialEventCount: 1,
+          relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'closed' })]
+        }
+      });
+      expect(soulsModule.souls.map((soul) => soul.agentId)).toContain('partial');
+      consoleWarn.mockRestore();
+    });
+
+    it('records AUTH-required closure metadata for soul factory read models', async () => {
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { handlers } = await startSoulFactorySubscription();
+
+      handlers.onClosed('auth-required: sign in', 'wss://auth.example', { terminal: true, source: 'auth', authRequired: true });
+
+      expect(soulsModule.loading.souls).toBe(false);
+      expect(soulsModule.readModelMeta.souls).toMatchObject({
+        complete: false,
+        degraded: {
+          incomplete: true,
+          reason: 'auth-required',
+          authRequired: true,
+          partialEventCount: 0,
+          relaySummary: [expect.objectContaining({ relay: 'wss://auth.example', status: 'auth-required' })]
+        }
+      });
+      consoleWarn.mockRestore();
     });
 
     it('records relay connection failures without opening a subscription', async () => {
@@ -849,6 +904,47 @@ describe('Souls Store', () => {
 
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
       expect(history[0].summary).toBe('suspend: maintenance');
+      expect(history.complete).toBe(true);
+      expect(history.degraded).toBeNull();
+      expect(soulsModule.readModelMeta.history).toMatchObject({
+        complete: true,
+        degraded: null,
+        relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'eose' })]
+      });
+    });
+
+    it('fetchSoulHistory returns partial activity with degraded metadata on CLOSED-before-EOSE', async () => {
+      let handlers = null;
+      mockNostr.subscribe.mockImplementationOnce((_filters, incomingHandlers) => {
+        handlers = incomingHandlers;
+        return () => {};
+      });
+
+      const historyPromise = soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
+
+      handlers.onEvent({
+        id: 'evt-action',
+        kind: 1950,
+        created_at: 200,
+        pubkey: 'author2',
+        tags: [['soul', '31951:factory:scout'], ['action', 'suspend']]
+      }, 'wss://relay.example');
+      handlers.onClosed('relay closed before EOSE', 'wss://relay.example', { terminal: true, source: 'closed' });
+
+      const history = await historyPromise;
+
+      expect(history.map((item) => item.id)).toEqual(['evt-action']);
+      expect(history.complete).toBe(false);
+      expect(history.degraded).toMatchObject({
+        incomplete: true,
+        reason: 'closed',
+        partialEventCount: 1,
+        relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'closed' })]
+      });
+      expect(soulsModule.readModelMeta.history).toMatchObject({
+        complete: false,
+        degraded: expect.objectContaining({ incomplete: true, reason: 'closed' })
+      });
     });
   });
 });
