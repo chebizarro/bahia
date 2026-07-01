@@ -988,6 +988,10 @@ func New(cfg *config.Config) (*App, error) {
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(encryptedRequestTransport)
+		registryMutations := controlplane.RegistryMutationBackend(registry)
+		if relayFirstRegistry != nil {
+			registryMutations = relayFirstRegistry
+		}
 		controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
 			Secrets:      secretRepo,
 			Encryptor:    secretEncryptor,
@@ -998,6 +1002,7 @@ func New(cfg *config.Config) (*App, error) {
 			SignVerifier: signVerifier,
 			Services:     serviceRepo,
 			Intents:      intentRepo,
+			Registry:     registryMutations,
 			RBAC:         auth.NewRBAC(orgMemberRepo),
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)

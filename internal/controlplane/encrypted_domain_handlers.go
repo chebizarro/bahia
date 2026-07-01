@@ -83,16 +83,29 @@ func (h *EncryptedDomainHandlers) Register(transport *EncryptedRequestTransport)
 		return
 	}
 	transport.RegisterHandler(EncryptedOperationPaymentsHistory, h.PaymentHistory)
-	transport.RegisterHandler(EncryptedOperationOrgsList, h.ListOrgs)
-	transport.RegisterHandler(EncryptedOperationOrgsDetail, h.OrgDetail)
-	transport.RegisterHandler(EncryptedOperationOrgsCreate, h.CreateOrg)
-	transport.RegisterHandler(EncryptedOperationOrgsDelete, h.DeleteOrg)
-	transport.RegisterHandler(EncryptedOperationOrgsMyInvites, h.MyInvites)
-	transport.RegisterHandler(EncryptedOperationOrgsAcceptInvite, h.AcceptInvite)
-	transport.RegisterHandler(EncryptedOperationOrgsCreateInvite, h.CreateInvite)
-	transport.RegisterHandler(EncryptedOperationOrgsRevokeInvite, h.RevokeInvite)
-	transport.RegisterHandler(EncryptedOperationOrgsUpdateRole, h.UpdateMemberRole)
-	transport.RegisterHandler(EncryptedOperationOrgsRemoveMember, h.RemoveMember)
+	h.registerDomainHandler(transport, EncryptedOperationOrgsList, h.ListOrgs, "orgs/list")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsDetail, h.OrgDetail, "orgs/detail")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsCreate, h.CreateOrg, "orgs/create")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsDelete, h.DeleteOrg, "orgs/delete")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsMyInvites, h.MyInvites, "orgs/my_invites")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsAcceptInvite, h.AcceptInvite, "orgs/accept_invite")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsCreateInvite, h.CreateInvite, "orgs/create_invite")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsRevokeInvite, h.RevokeInvite, "orgs/revoke_invite")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsUpdateRole, h.UpdateMemberRole, "orgs/update_member_role")
+	h.registerDomainHandler(transport, EncryptedOperationOrgsRemoveMember, h.RemoveMember, "orgs/remove_member")
+}
+
+func (h *EncryptedDomainHandlers) registerDomainHandler(transport *EncryptedRequestTransport, operation string, handler EncryptedRequestHandler, contextVMAliases ...string) {
+	transport.RegisterHandler(operation, handler)
+	register := func(method string) {
+		transport.RegisterContextVMHandler(method, func(ctx context.Context, request ContextVMRequest) (any, error) {
+			return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey.Hex(), Payload: request.RPC.Params}})
+		})
+	}
+	register(operation)
+	for _, alias := range contextVMAliases {
+		register(alias)
+	}
 }
 
 func (h *EncryptedDomainHandlers) PaymentHistory(ctx context.Context, request EncryptedRequest) (any, error) {

@@ -217,6 +217,32 @@ func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *
 	}
 }
 
+func TestEncryptedDomainHandlers_RegisterContextVMOrgListAlias(t *testing.T) {
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	orgID := uuid.New()
+	orgs := newEncryptedOrgRepo()
+	_ = orgs.Create(context.Background(), &domain.Organization{ID: orgID, Name: "demo", DisplayName: "Demo", OwnerPubkey: requesterPubkey})
+	members := &encryptedMemberRepo{members: []domain.OrgMember{{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleOwner}}}
+	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{Orgs: orgs, Members: members, Invites: &encryptedInviteRepo{}, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	handlers.Register(transport)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, "orgs/list", map[string]any{}))
+
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error != nil {
+		t.Fatalf("unexpected orgs/list error: %+v", response.Error)
+	}
+	orgList, ok := response.Result.([]any)
+	if !ok || len(orgList) != 1 {
+		t.Fatalf("unexpected orgs/list result: %#v", response.Result)
+	}
+}
+
 func TestEncryptedDomainHandlers_CreateOrgHonorsBootstrapOwnerAndAddsOwner(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	orgs := newEncryptedOrgRepo()

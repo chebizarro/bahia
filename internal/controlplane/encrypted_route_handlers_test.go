@@ -168,6 +168,32 @@ func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID,
 	return nil
 }
 
+type fakeEncryptedRegistryMutations struct {
+	createdServices []*domain.Service
+	environments    map[uuid.UUID]*domain.Environment
+}
+
+func (r *fakeEncryptedRegistryMutations) CreateService(_ context.Context, svc *domain.Service) error {
+	copy := *svc
+	r.createdServices = append(r.createdServices, &copy)
+	return nil
+}
+func (r *fakeEncryptedRegistryMutations) GetEnvironment(_ context.Context, id uuid.UUID) (*domain.Environment, error) {
+	if env := r.environments[id]; env != nil {
+		copy := *env
+		return &copy, nil
+	}
+	return nil, repository.ErrNotFound
+}
+func (r *fakeEncryptedRegistryMutations) UpdateEnvironment(_ context.Context, env *domain.Environment) error {
+	copy := *env
+	if r.environments == nil {
+		r.environments = map[uuid.UUID]*domain.Environment{}
+	}
+	r.environments[env.ID] = &copy
+	return nil
+}
+
 func encryptedAuthDeps(t *testing.T, serviceID, orgID uuid.UUID, role domain.Role) (*fakeEncryptedServiceRepo, *auth.RBAC) {
 	t.Helper()
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
@@ -287,6 +313,53 @@ func routeResultPayload(t *testing.T, ev nostr.Event) map[string]any {
 	return payload
 }
 
+func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryService(t *testing.T) {
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceCreate, map[string]any{
+		"name": "payments-api", "artifact_repo": "registry.example/payments", "repo_url": "https://git.example/payments", "runtime_type": "compose",
+	}))
+
+	if len(registry.createdServices) != 1 {
+		t.Fatalf("created services = %d, want 1", len(registry.createdServices))
+	}
+	created := registry.createdServices[0]
+	if created.Name != "payments-api" || created.ArtifactRepo != "registry.example/payments" || created.RuntimeType != domain.RuntimeTypeCompose || created.DefaultBranch != "main" {
+		t.Fatalf("unexpected created service: %#v", created)
+	}
+	payload := routeResultPayload(t, publisher.events[0])
+	if payload["service_id"] == "" || payload["status"] != "created" {
+		t.Fatalf("unexpected create response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSelector(t *testing.T) {
+	envID := uuid.New()
+	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
+		envID: {ID: envID, Name: "prod", DeployStrategy: domain.DeployStrategyReplace, Protected: true},
+	}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentUpdate, map[string]any{
+		"id": envID.String(), "name": "production", "loom_worker_selector": "region=us-west,pubkey=worker-1", "runtime_config": map[string]any{"type": "docker"}, "deploy_strategy": "canary", "protected": false,
+	}))
+
+	updated := registry.environments[envID]
+	if updated.Name != "production" || updated.DeployStrategy != domain.DeployStrategyCanary || updated.Protected {
+		t.Fatalf("unexpected updated environment: %#v", updated)
+	}
+	if updated.LoomWorkerSelector["region"] != "us-west" || updated.LoomWorkerSelector["pubkey"] != "worker-1" {
+		t.Fatalf("unexpected selector: %#v", updated.LoomWorkerSelector)
+	}
+	payload := routeResultPayload(t, publisher.events[0])
+	if payload["environment_id"] != envID.String() || payload["status"] != "updated" {
+		t.Fatalf("unexpected update response: %#v", payload)
+	}
+}
+
 func TestEncryptedRouteHandlers_ServiceSecretsCreateListRevealEncrypted(t *testing.T) {
 	repo := newFakeEncryptedSecretRepo()
 	serviceID := uuid.New()
@@ -367,7 +440,7 @@ func TestEncryptedRouteHandlers_GetRunLogsSuccessAndInProgressError(t *testing.T
 	})
 	transport, publisher := encryptedRouteTransport(t, h)
 
-	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationDeploymentRunLogsGet, map[string]any{"run_id": runID.String(), "tail": 2, "stream": "stdout"}))
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": runID.String(), "tail": 2, "stream": "stdout"}))
 	payload := routeResultPayload(t, publisher.events[0])
 	logs := payload["logs"].(map[string]any)
 	if logs["stdout"] != "two\nthree" || logs["stderr"] != nil {

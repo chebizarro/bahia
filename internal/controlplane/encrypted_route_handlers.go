@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -29,6 +30,8 @@ const (
 	ContextVMMethodServiceSecretsReveal = "services/secrets-reveal"
 
 	EncryptedOperationDeploymentRunLogsGet = "deployments.run_logs.get"
+	ContextVMMethodDeploymentRunLogsGet    = "deployments/run-logs-get"
+	ContextVMMethodEnvironmentUpdate       = "environment/update"
 
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
 )
@@ -43,6 +46,16 @@ type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
+// RegistryMutationBackend is the ContextVM contract for dashboard registry
+// mutations. service.RegistryService and service.RelayFirstRegistry satisfy this
+// interface; in relay-first mode the latter preserves publish-OK-before-DB-write
+// semantics for service/environment writes.
+type RegistryMutationBackend interface {
+	CreateService(ctx context.Context, svc *domain.Service) error
+	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
+	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
+}
+
 type EncryptedRouteHandlersConfig struct {
 	Secrets      repository.SecretRepository
 	Encryptor    *secrets.Encryptor
@@ -53,6 +66,7 @@ type EncryptedRouteHandlersConfig struct {
 	SignVerifier SignatureVerifier
 	Services     repository.ServiceRepository
 	Intents      repository.DeploymentIntentRepository
+	Registry     RegistryMutationBackend
 	RBAC         *auth.RBAC
 	Logger       *zap.Logger
 }
@@ -67,6 +81,7 @@ type EncryptedRouteHandlers struct {
 	signVerifier SignatureVerifier
 	services     repository.ServiceRepository
 	intents      repository.DeploymentIntentRepository
+	registry     RegistryMutationBackend
 	rbac         *auth.RBAC
 	logger       *zap.Logger
 }
@@ -89,6 +104,7 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		signVerifier: cfg.SignVerifier,
 		services:     cfg.Services,
 		intents:      cfg.Intents,
+		registry:     cfg.Registry,
 		rbac:         cfg.RBAC,
 		logger:       logger.Named("encrypted-route-handlers"),
 	}
@@ -103,8 +119,10 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsUpdate, h.UpdateSecret, ContextVMMethodServiceSecretsUpdate)
 	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsDelete, h.DeleteSecret, ContextVMMethodServiceSecretsDelete)
 	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsReveal, h.RevealSecret, ContextVMMethodServiceSecretsReveal)
-	h.registerRouteHandler(transport, EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs)
+	h.registerRouteHandler(transport, EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs, ContextVMMethodDeploymentRunLogsGet)
 	h.registerRouteHandler(transport, EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
+	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, h.CreateService)
+	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 }
 
 type encryptedRouteHandler = EncryptedRequestHandler
@@ -120,6 +138,154 @@ func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedReques
 	for _, alias := range contextVMAliases {
 		register(alias)
 	}
+}
+
+type encryptedServiceCreatePayload struct {
+	Name          string `json:"name"`
+	RepoURL       string `json:"repo_url,omitempty"`
+	ArtifactRepo  string `json:"artifact_repo"`
+	DefaultBranch string `json:"default_branch,omitempty"`
+	RuntimeType   string `json:"runtime_type,omitempty"`
+}
+
+type encryptedEnvironmentUpdatePayload struct {
+	ID                 string          `json:"id"`
+	Name               string          `json:"name,omitempty"`
+	LoomWorkerSelector json.RawMessage `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any  `json:"runtime_config,omitempty"`
+	DeployStrategy     string          `json:"deploy_strategy,omitempty"`
+	Protected          *bool           `json:"protected,omitempty"`
+}
+
+func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("service registry mutation handling is not configured")
+	}
+	var payload encryptedServiceCreatePayload
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(payload.Name)
+	artifactRepo := strings.TrimSpace(payload.ArtifactRepo)
+	if name == "" || artifactRepo == "" {
+		return nil, fmt.Errorf("name and artifact_repo are required")
+	}
+	runtimeType := domain.RuntimeTypeDocker
+	if strings.TrimSpace(payload.RuntimeType) != "" {
+		runtimeType = domain.RuntimeType(strings.TrimSpace(payload.RuntimeType))
+		if err := domain.ValidateRuntimeType(runtimeType); err != nil {
+			return nil, fmt.Errorf("invalid runtime_type: %w", err)
+		}
+	}
+	defaultBranch := strings.TrimSpace(payload.DefaultBranch)
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	svc := &domain.Service{
+		ID:            uuid.New(),
+		Name:          name,
+		RepoURL:       strings.TrimSpace(payload.RepoURL),
+		ArtifactRepo:  artifactRepo,
+		DefaultBranch: defaultBranch,
+		RuntimeType:   runtimeType,
+	}
+	if err := h.registry.CreateService(ctx, svc); err != nil {
+		return nil, fmt.Errorf("failed to create service: %w", err)
+	}
+	return map[string]any{"status": "created", "service": svc, "service_id": svc.ID.String()}, nil
+}
+
+func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("environment registry mutation handling is not configured")
+	}
+	var payload encryptedEnvironmentUpdatePayload
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	id, err := parseEncryptedUUID(payload.ID, "environment ID")
+	if err != nil {
+		return nil, err
+	}
+	env, err := h.registry.GetEnvironment(ctx, id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return nil, fmt.Errorf("environment not found")
+		}
+		return nil, fmt.Errorf("failed to fetch environment")
+	}
+	if env == nil {
+		return nil, fmt.Errorf("environment not found")
+	}
+	if strings.TrimSpace(payload.Name) != "" {
+		env.Name = strings.TrimSpace(payload.Name)
+	}
+	if payload.LoomWorkerSelector != nil {
+		selector, err := parseLoomWorkerSelector(payload.LoomWorkerSelector)
+		if err != nil {
+			return nil, err
+		}
+		env.LoomWorkerSelector = selector
+	}
+	if payload.RuntimeConfig != nil {
+		env.RuntimeConfig = payload.RuntimeConfig
+	}
+	if strings.TrimSpace(payload.DeployStrategy) != "" {
+		strategy := domain.DeployStrategy(strings.TrimSpace(payload.DeployStrategy))
+		if err := domain.ValidateDeployStrategy(strategy); err != nil {
+			return nil, fmt.Errorf("invalid deploy_strategy: %w", err)
+		}
+		env.DeployStrategy = strategy
+	}
+	if payload.Protected != nil {
+		env.Protected = *payload.Protected
+	}
+	if err := h.registry.UpdateEnvironment(ctx, env); err != nil {
+		return nil, fmt.Errorf("failed to update environment: %w", err)
+	}
+	return map[string]any{"status": "updated", "environment": env, "environment_id": env.ID.String()}, nil
+}
+
+func parseLoomWorkerSelector(raw json.RawMessage) (map[string]any, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var selector map[string]any
+		if err := json.Unmarshal(raw, &selector); err != nil {
+			return nil, fmt.Errorf("invalid loom_worker_selector object: %w", err)
+		}
+		return selector, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return nil, fmt.Errorf("loom_worker_selector must be an object or string")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return map[string]any{}, nil
+	}
+	selector := map[string]any{}
+	parts := strings.FieldsFunc(text, func(r rune) bool { return r == ',' || r == '\n' })
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			selector["pubkey"] = part
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			return nil, fmt.Errorf("loom_worker_selector contains an empty key")
+		}
+		selector[key] = value
+	}
+	return selector, nil
 }
 
 type encryptedSecretPayload struct {
