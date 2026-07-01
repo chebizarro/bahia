@@ -3,6 +3,7 @@ import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const serviceSecretsState = $state({
   secretsByService: {},
+  envVarsByService: {},
   loadingByService: {},
   errorByService: {}
 });
@@ -39,10 +40,49 @@ function normalizeSecretsPayload(payload) {
   return [];
 }
 
+/**
+ * Detect entries that are plain (non-sensitive) environment variables rather
+ * than encrypted secrets. Real secrets are never reclassified: an entry is only
+ * treated as a plain env var when it explicitly declares itself non-secret (via a
+ * type/kind marker, a secret/is_secret/sensitive/encrypted flag set to false, or a
+ * non-encrypted encryption method). This keeps the Secrets section limited to
+ * actual secrets even when the backend returns a combined list.
+ */
+function isPlainEnvVar(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const kind = String(entry.type ?? entry.kind ?? entry.category ?? '').trim().toLowerCase();
+  if (['env', 'env_var', 'environment', 'environment_variable', 'plain', 'plaintext', 'config', 'variable'].includes(kind)) {
+    return true;
+  }
+  if (entry.secret === false || entry.is_secret === false || entry.sensitive === false || entry.encrypted === false) {
+    return true;
+  }
+  const method = String(entry.encryption_method ?? '').trim().toLowerCase();
+  if (['none', 'plain', 'plaintext', 'cleartext'].includes(method)) return true;
+  return false;
+}
+
+function partitionSecretEntries(entries) {
+  const secrets = [];
+  const envVars = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (isPlainEnvVar(entry)) envVars.push(entry);
+    else secrets.push(entry);
+  }
+  return { secrets, envVars };
+}
+
 function setServiceSecrets(serviceId, secrets) {
   serviceSecretsState.secretsByService = {
     ...serviceSecretsState.secretsByService,
     [serviceId]: secrets
+  };
+}
+
+function setServiceEnvVars(serviceId, envVars) {
+  serviceSecretsState.envVarsByService = {
+    ...serviceSecretsState.envVarsByService,
+    [serviceId]: envVars
   };
 }
 
@@ -78,6 +118,15 @@ export function getServiceSecrets(serviceId) {
   return serviceSecretsState.secretsByService[serviceId] || [];
 }
 
+/**
+ * Plain (non-secret) environment variables separated out of the combined list
+ * returned by services.secrets.list. Kept distinct so the Secrets UI does not
+ * present configuration env vars as encrypted secrets.
+ */
+export function getServiceEnvVars(serviceId) {
+  return serviceSecretsState.envVarsByService[serviceId] || [];
+}
+
 export async function listServiceSecrets(serviceId) {
   const id = String(serviceId || '').trim();
   if (!id) return [];
@@ -85,11 +134,13 @@ export async function listServiceSecrets(serviceId) {
   setServiceError(id, null);
   try {
     const payload = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.list, { service_id: id });
-    const secrets = normalizeSecretsPayload(payload);
+    const { secrets, envVars } = partitionSecretEntries(normalizeSecretsPayload(payload));
     setServiceSecrets(id, secrets);
+    setServiceEnvVars(id, envVars);
     return secrets;
   } catch (error) {
     setServiceSecrets(id, []);
+    setServiceEnvVars(id, []);
     setServiceError(id, error?.message || 'Failed to load service secrets');
     throw error;
   } finally {
@@ -130,12 +181,14 @@ export async function revealServiceSecret(serviceId, secretId) {
 export function resetServiceSecrets(serviceId = null) {
   if (!serviceId) {
     serviceSecretsState.secretsByService = {};
+    serviceSecretsState.envVarsByService = {};
     serviceSecretsState.loadingByService = {};
     serviceSecretsState.errorByService = {};
     return;
   }
   const id = String(serviceId);
   setServiceSecrets(id, []);
+  setServiceEnvVars(id, []);
   setServiceLoading(id, false);
   setServiceError(id, null);
 }

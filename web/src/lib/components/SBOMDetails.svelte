@@ -3,6 +3,7 @@
   import Table from './Table.svelte';
   import LoadingButton from './LoadingButton.svelte';
   import EmptyState from './EmptyState.svelte';
+  import { api } from '$lib/api/client.js';
   import {
     ArtifactIcon,
     BlossomIcon,
@@ -97,15 +98,64 @@
   }
 
 
+  function blossomHashFromURI(uri) {
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+      const parsed = new URL(uri, origin);
+      const last = parsed.pathname.split('/').filter(Boolean).pop() || '';
+      const match = last.match(/[0-9a-f]{64}/i);
+      return match ? match[0].toLowerCase() : '';
+    } catch {
+      const match = String(uri || '').match(/[0-9a-f]{64}/i);
+      return match ? match[0].toLowerCase() : '';
+    }
+  }
+
+  function sbomBlobHash() {
+    const explicit = String(attestation?.predicate?.digest?.sha256 || sbom?.raw_hash || '').replace(/^sha256:/i, '').trim();
+    if (/^[0-9a-f]{64}$/i.test(explicit)) return explicit.toLowerCase();
+    return blossomHashFromURI(blossomURI);
+  }
+
+  function isMixedContentURL(uri) {
+    try {
+      if (typeof window === 'undefined' || window.location?.protocol !== 'https:') return false;
+      return new URL(uri, window.location.origin).protocol === 'http:';
+    } catch {
+      return false;
+    }
+  }
+
+  async function loadSBOMText() {
+    const hash = sbomBlobHash();
+    // Prefer the same-origin Blossom proxy (/blossom/blob/<hash>): it avoids
+    // browser mixed-content blocks when the SBOM lives on an http:// Blossom
+    // server while the dashboard is served over https, and sidesteps CORS.
+    if (hash && api?.fetchBlossomBlob) {
+      try {
+        const resp = await api.fetchBlossomBlob(hash);
+        return await resp.text();
+      } catch (proxyErr) {
+        // If a direct fetch would be blocked as mixed content, surface the
+        // proxy failure rather than triggering a guaranteed browser block.
+        if (isMixedContentURL(blossomURI)) throw proxyErr;
+      }
+    }
+    if (isMixedContentURL(blossomURI)) {
+      throw new Error('This SBOM is stored on an insecure (http) Blossom endpoint and cannot be loaded from a secure (https) page. Configure the Blossom server for HTTPS or route it through Bahia.');
+    }
+    const resp = await fetch(blossomURI);
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    return await resp.text();
+  }
+
   async function fetchSBOMContents() {
     if (!blossomURI || rawSBOMLoading) return;
     rawSBOMLoading = true;
     rawSBOMError = null;
     rawSBOM = null;
     try {
-      const resp = await fetch(blossomURI);
-      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-      const text = await resp.text();
+      const text = await loadSBOMText();
       const parsed = JSON.parse(text);
       rawSBOM = parsed;
       rawSBOMFormat = detectSBOMFormat(parsed) || sbomFormat;

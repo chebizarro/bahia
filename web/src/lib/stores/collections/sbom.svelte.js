@@ -87,6 +87,24 @@ export function hasSBOMForArtifact(artifactId) {
   return sbomRefsByArtifact.has(artifactId);
 }
 
+/**
+ * Reactive set of artifact IDs that have at least one SBOM reference or
+ * availability entry. Reads the reactive `sbomRefs`/`sbomAvailability` arrays
+ * directly (unlike the `sbomRefsByArtifact` Map, which is not reactive), so
+ * callers can use it inside `$derived`/`$effect` and stay up to date as SBOM
+ * events arrive.
+ */
+export function sbomArtifactIds() {
+  const ids = new Set();
+  for (const ref of sbomRefs) {
+    if (ref.artifactId) ids.add(ref.artifactId);
+  }
+  for (const avail of sbomAvailability) {
+    if (avail.artifactId) ids.add(avail.artifactId);
+  }
+  return ids;
+}
+
 // ── Event applicators ────────────────────────────────────────────────────────
 
 function extractArtifactId(event) {

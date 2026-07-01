@@ -19,6 +19,8 @@
     ArtifactIcon,
     CopyIcon,
     GenericFileIcon,
+    TypeIcon,
+    VersionIcon,
     SbomIcon,
     ServiceIcon,
     SignatureIcon,
@@ -579,7 +581,9 @@
   function userFacingVerifyError(err) {
     const message = String(err?.message || '').trim();
     if (!message) return 'Failed to verify signatures';
-    if (/method not found/i.test(message)) return 'Signature verification is not available from this Bahia service yet.';
+    if (/method not found/i.test(message) || /not configured/i.test(message)) {
+      return 'Signature verification is not available from this Bahia service yet.';
+    }
     return message
       .replace(/ContextVM requests/gi, 'Bahia requests')
       .replace(/ContextVM request/gi, 'Bahia request')
@@ -608,17 +612,6 @@
         {/if}
         <h1 class="title-with-icon"><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> <span>{displayName}</span></h1>
         <p class="artifact-id"><code>{artifact.id}</code></p>
-      </div>
-      <div class="header-actions header-sbom-actions">
-        <LoadingButton
-          variant="primary"
-          loading={sbomGenerating}
-          disabled={!canGenerateSBOM}
-          onclick={handleGenerateSBOM}
-        >
-          {sbomActionLabel}
-        </LoadingButton>
-        <button class="link-button" onclick={() => activeTab = 'sbom'}>Open SBOM tab</button>
       </div>
     </div>
 
@@ -653,8 +646,8 @@
         <!-- Overview Tab -->
         <div class="overview-grid">
           <Card title="Name" titleIcon={ArtifactIcon} value={displayName} />
-          <Card title="Type" titleIcon={GenericFileIcon} value={artifactTypeLabel(artifact)} />
-          <Card title="Version" titleIcon={GenericFileIcon} value={displayVersion} />
+          <Card title="Type" titleIcon={TypeIcon} value={artifactTypeLabel(artifact)} />
+          <Card title="Version" titleIcon={VersionIcon} value={displayVersion} />
           <Card title="Size" titleIcon={ArtifactIcon} value={formatBytes(artifact.size_bytes)} />
           <Card title="Signature" titleIcon={hasVerifiedSig ? SuccessIcon : WarningIcon} value={hasVerifiedSig ? 'Verified' : signatures.length > 0 ? 'Needs verification' : 'Not signed'} />
           <!-- Digest card: small font, middle-truncated, tooltip + copy on click -->
@@ -870,25 +863,6 @@
     justify-content: space-between;
     gap: 1rem;
     margin-bottom: 1.5rem;
-  }
-
-  .header-sbom-actions {
-    flex-shrink: 0;
-    padding-top: 1.5rem;
-  }
-
-  .link-button {
-    background: none;
-    border: none;
-    color: var(--primary);
-    cursor: pointer;
-    font-size: 0.875rem;
-    padding: 0;
-    text-decoration: none;
-  }
-
-  .link-button:hover {
-    text-decoration: underline;
   }
 
   .title-with-icon,

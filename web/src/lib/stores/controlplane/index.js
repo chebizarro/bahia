@@ -39,6 +39,7 @@ export {
   sbomRefsByArtifact,
   getSBOMRefsForArtifact,
   hasSBOMForArtifact,
+  sbomArtifactIds,
   backupRepositories,
   backupPolicies,
   backupRecipes,

@@ -64,7 +64,7 @@
     SbomIcon,
     ServiceIcon,
     SignatureIcon,
-    UnknownIcon,
+    BranchIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
 
@@ -950,7 +950,7 @@
     <div class="info-grid">
       <Card title="Repository" titleIcon={ArtifactIcon} value={service.artifact_repo || '-'} />
       <Card title="Runtime" titleIcon={ServiceIcon} value={service.runtime_type || 'docker'} />
-      <Card title="Default Branch" titleIcon={UnknownIcon} value={service.default_branch || 'main'} />
+      <Card title="Default Branch" titleIcon={BranchIcon} value={service.default_branch || 'main'} />
     </div>
 
     <section>
@@ -972,8 +972,10 @@
               <div class="artifact-info">
                 <div class="artifact-main">
                   <ArtifactIcon size={16} strokeWidth={1.75} ariaHidden="true" className="inline-entity-icon" />
-                  <code class="artifact-name">{artifact.name}</code>
-                  <span class="artifact-version">v{artifact.version}</span>
+                  <code class="artifact-name">{artifactDisplayName(artifact)}</code>
+                  {#if artifact.version}
+                    <span class="artifact-version">v{artifact.version}</span>
+                  {/if}
                 </div>
                 <div class="artifact-meta">
                   <span class="artifact-created">{formatDate(artifact.created_at)}</span>

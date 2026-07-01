@@ -49,6 +49,8 @@ import IconShieldLock from './tabler/IconShieldLock.svelte';
 import IconSignature from './tabler/IconSignature.svelte';
 import IconSparkles from './tabler/IconSparkles.svelte';
 import IconSun from './tabler/IconSun.svelte';
+import IconTag from './tabler/IconTag.svelte';
+import IconCategory from './tabler/IconCategory.svelte';
 import IconTarget from './tabler/IconTarget.svelte';
 import IconVideo from './tabler/IconVideo.svelte';
 import IconX from './tabler/IconX.svelte';
@@ -105,6 +107,12 @@ export const MLFabricIcon = IconNetwork;
 export const AcceleratorIcon = IconCpu;
 export const DocsIcon = IconBook;
 export const SuspendedIcon = IconPlayerPause;
+
+// Git branch reference (e.g. a service's default branch).
+export const BranchIcon = IconGitBranch;
+// Distinctive callouts for artifact metadata cards.
+export const TypeIcon = IconCategory;
+export const VersionIcon = IconTag;
 
 export const ImageFileIcon = IconPhoto;
 export const VideoFileIcon = IconVideo;

@@ -14,6 +14,7 @@
     blossomContentTypeIcon
   } from '$lib/icons/domain-icons.js';
   import { artifacts as registryArtifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { sbomArtifactIds } from '$lib/stores/controlplane/index.js';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
 
@@ -132,19 +133,23 @@
     loadBlossomBlobs();
   }
 
-  function hasSBOM(artifact) {
-    return Boolean(artifact?.sbom || artifact?.sbom_data || artifact?.sbom_url || artifact?.sbom_ref || artifact?.sbom_hash || (Array.isArray(artifact?.sbom_packages) && artifact.sbom_packages.length > 0));
+  // Artifact SBOM availability is tracked in the SBOM collection store (populated
+  // from canonical 30078/30004 events), not embedded on the registry projection.
+  // Consult both so the status reflects SBOMs that exist out-of-band.
+  let sbomArtifactIdSet = $derived(sbomArtifactIds());
+
+  function hasSBOM(artifact, sbomIds) {
+    if (artifact?.sbom || artifact?.sbom_data || artifact?.sbom_url || artifact?.sbom_ref || artifact?.sbom_hash || (Array.isArray(artifact?.sbom_packages) && artifact.sbom_packages.length > 0)) {
+      return true;
+    }
+    return Boolean(sbomIds && artifact?.id && sbomIds.has(artifact.id));
   }
 
-  function getSBOMBadge(artifact) {
-    if (hasSBOM(artifact)) {
+  function getSBOMBadge(artifact, sbomIds) {
+    if (hasSBOM(artifact, sbomIds)) {
       return { variant: 'success', text: 'Available' };
     }
     return { variant: 'default', text: 'None' };
-  }
-
-  function sbomActionLabel(artifact) {
-    return hasSBOM(artifact) ? 'Regenerate SBOM' : 'Generate SBOM';
   }
 
   function getSignatureBadge(artifact) {
@@ -215,7 +220,11 @@
   // Unique content types for filter dropdown
   let uniqueTypes = $derived([...new Set(blossomBlobs.map(b => b.type).filter(Boolean))].sort());
 
-  let registryColumns = $derived([
+  let registryColumns = $derived.by(() => {
+    // Read the reactive SBOM id set here so the table re-renders when SBOM
+    // events arrive after the initial artifact load.
+    const sbomIds = sbomArtifactIdSet;
+    return [
     {
       key: 'name',
       label: 'Name',
@@ -250,7 +259,7 @@
       key: 'sbom_status', 
       label: 'SBOM Status',
       render: (r) => {
-        const badge = getSBOMBadge(r);
+        const badge = getSBOMBadge(r, sbomIds);
         return `<span class="badge-cell ${badge.variant}">${badge.text}</span>`;
       }
     },
@@ -261,13 +270,9 @@
         const badge = getSignatureBadge(r);
         return `<span class="badge-cell ${badge.variant}">${badge.text}</span>`;
       }
-    },
-    {
-      key: 'sbom_action',
-      label: 'SBOM Action',
-      render: (r) => `<a href="/artifacts/${encodeURIComponent(r.id)}?tab=sbom" class="sbom-action-link">${escapeHtml(sbomActionLabel(r))}</a>`
     }
-  ]);
+  ];
+  });
 
   let blossomColumns = $derived([
     {

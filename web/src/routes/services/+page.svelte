@@ -13,6 +13,7 @@
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { createService as createServiceCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
+  import { toast } from '$lib/components/toast.js';
   import { buildArtifactRepo, validateCreateServiceForm, buildCreateServicePayload } from './create-service-form.js';
 
   // Registry state
@@ -203,9 +204,14 @@
         });
       }
 
+      toast.success(`Service "${payload.name}" created`);
       closeCreateModal();
     } catch (err) {
-      createError = err.message || 'Failed to create service';
+      const message = err?.message || 'Failed to create service';
+      createError = /method not found/i.test(message)
+        ? 'Service creation is not available from this Bahia service yet (missing service/create handler on the backend).'
+        : message;
+      toast.error(createError);
     } finally {
       creating = false;
     }
