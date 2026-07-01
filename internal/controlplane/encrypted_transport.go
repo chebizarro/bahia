@@ -58,6 +58,7 @@ const (
 // encrypted request/result event runtime. RelayPool satisfies this interface.
 type EncryptedRequestSubscriber interface {
 	SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error)
+	AuthenticateRelay(ctx context.Context, relayURL string) error
 }
 
 // EncryptedRequestEnvelope is the deprecated encrypted request payload shape.
@@ -366,11 +367,15 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 		zap.Duration("lookback", encryptedRequestReplayLookback),
 		zap.Strings("p_tags", filter.Tags["p"]),
 	)
-	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	subscribe := func() (*nostrpool.MergedSubscription, error) {
+		return t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	}
+	merged, err := subscribe()
 	if err != nil {
 		return fmt.Errorf("subscribe to encrypted request/result events: %w", err)
 	}
-	defer merged.Close()
+	defer func() { merged.Close() }()
+	authAttempted := make(map[string]struct{})
 	t.logger.Info("subscribed to ContextVM encrypted request events")
 	for {
 		select {
@@ -390,6 +395,35 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 					zap.String("subscription_id", closed.SubscriptionID),
 					zap.String("reason", closed.Reason),
 				)
+				if nostrpool.IsAuthRequiredReason(closed.Reason) && closed.RelayURL != "" {
+					if _, attempted := authAttempted[closed.RelayURL]; attempted {
+						continue
+					}
+					authAttempted[closed.RelayURL] = struct{}{}
+					if err := t.subscriber.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+						t.logger.Warn("relay ContextVM encrypted request subscription auth failed",
+							zap.String("relay", closed.RelayURL),
+							zap.String("reason", closed.Reason),
+							zap.Error(err),
+						)
+						continue
+					}
+					merged.Close()
+					next, err := subscribe()
+					if err != nil {
+						t.logger.Warn("relay ContextVM encrypted request subscription resubscribe after auth failed",
+							zap.String("relay", closed.RelayURL),
+							zap.String("reason", closed.Reason),
+							zap.Error(err),
+						)
+						continue
+					}
+					merged = next
+					t.logger.Info("relay ContextVM encrypted request subscription authenticated and resubscribed",
+						zap.String("relay", closed.RelayURL),
+						zap.String("reason", closed.Reason),
+					)
+				}
 			} else {
 				merged.Closed = nil
 			}

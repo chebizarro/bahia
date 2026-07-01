@@ -215,6 +215,126 @@ func unwrapContextVMResponse(t *testing.T, ev nostr.Event, requesterKey string) 
 	return contextVMResponse(t, inner)
 }
 
+type scriptedEncryptedRequestSubscriber struct {
+	subscribeRequests chan *scriptedEncryptedSubscription
+	authRequests      chan string
+}
+
+type scriptedEncryptedSubscription struct {
+	events chan *nostr.Event
+	eose   chan struct{}
+	relay  chan nostrpool.RelayEOSE
+	closed chan nostrpool.RelayClosed
+}
+
+func newScriptedEncryptedRequestSubscriber() *scriptedEncryptedRequestSubscriber {
+	return &scriptedEncryptedRequestSubscriber{
+		subscribeRequests: make(chan *scriptedEncryptedSubscription, 4),
+		authRequests:      make(chan string, 4),
+	}
+}
+
+func (s *scriptedEncryptedRequestSubscriber) SubscribeAllWithEOSE(_ context.Context, _ []nostr.Filter) (*nostrpool.MergedSubscription, error) {
+	sub := &scriptedEncryptedSubscription{
+		events: make(chan *nostr.Event, 4),
+		eose:   make(chan struct{}),
+		relay:  make(chan nostrpool.RelayEOSE, 4),
+		closed: make(chan nostrpool.RelayClosed, 4),
+	}
+	s.subscribeRequests <- sub
+	return &nostrpool.MergedSubscription{
+		Events:            sub.events,
+		EndOfStoredEvents: sub.eose,
+		RelayEOSE:         sub.relay,
+		Closed:            sub.closed,
+	}, nil
+}
+
+func (s *scriptedEncryptedRequestSubscriber) AuthenticateRelay(_ context.Context, relayURL string) error {
+	s.authRequests <- relayURL
+	return nil
+}
+
+func receiveEncryptedSubscription(t *testing.T, ch <-chan *scriptedEncryptedSubscription) *scriptedEncryptedSubscription {
+	t.Helper()
+	select {
+	case sub := <-ch:
+		return sub
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for subscription")
+		return nil
+	}
+}
+
+func receiveAuthRequest(t *testing.T, ch <-chan string) string {
+	t.Helper()
+	select {
+	case relayURL := <-ch:
+		return relayURL
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for relay auth")
+		return ""
+	}
+}
+
+func assertNoAuthRequest(t *testing.T, ch <-chan string) {
+	t.Helper()
+	select {
+	case relayURL := <-ch:
+		t.Fatalf("unexpected additional relay auth for %s", relayURL)
+	default:
+	}
+}
+
+func TestEncryptedRequestTransport_RunAuthenticatesAndResubscribesOnAuthRequiredClosed(t *testing.T) {
+	subscriber := newScriptedEncryptedRequestSubscriber()
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), nil, zap.NewNop())
+	processed := make(chan string, 1)
+	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, func(_ context.Context, request ContextVMRequest) (any, error) {
+		processed <- request.RPC.Method
+		return map[string]string{"status": "ok"}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- transport.Run(ctx) }()
+
+	first := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
+	first.closed <- nostrpool.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted kind"}
+	if got := receiveAuthRequest(t, subscriber.authRequests); got != "wss://relay.example" {
+		t.Fatalf("unexpected auth relay URL: %s", got)
+	}
+
+	second := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
+	second.closed <- nostrpool.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-2", Reason: "auth-required: still restricted"}
+	assertNoAuthRequest(t, subscriber.authRequests)
+
+	request := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"req-1","method":"service/create","params":{}}`)
+	second.events <- request
+
+	select {
+	case method := <-processed:
+		if method != ContextVMMethodServiceCreate {
+			t.Fatalf("unexpected processed method: %s", method)
+		}
+		assertNoAuthRequest(t, subscriber.authRequests)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ContextVM request processing")
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != context.Canceled {
+			t.Fatalf("unexpected Run error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Run shutdown")
+	}
+}
+
 func TestEncryptedResponder_DecryptRequestContentRoundTrip(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	req := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
