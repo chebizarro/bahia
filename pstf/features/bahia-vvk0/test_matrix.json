@@ -1,0 +1,53 @@
+{
+  "feature_id": "bahia-vvk0",
+  "tests": [
+    {
+      "test_id": "BVVK0-T-001",
+      "command": "go test ./internal/controlplane",
+      "coverage": "TestContextVMTransport_PublishesProgressAckBeforeHandlerForAuthorizedRoutedRequest; TestContextVMTransport_DoesNotPublishProgressAckForRoutingMismatch; encrypted wrapper response sequencing tests",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-002",
+      "command": "go test ./internal/adapters/nostr",
+      "coverage": "System discovery envelope includes control_plane.capabilities and wire_version fields consumed by web clients.",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-003",
+      "command": "cd web && npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+      "coverage": "Progress notifications are parsed as ack-only and terminal response still resolves the request.",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-004",
+      "command": "cd web && npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+      "coverage": "Short ack timeout rejects with an actionable service-pubkey discovery / relay auth message on silence.",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-005",
+      "command": "cd web && npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+      "coverage": "Legacy discovery without v2 capability keeps the single long work timeout.",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-006",
+      "command": "cd web && npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+      "coverage": "Precondition fast-fail for unavailable encrypted discovery, invalid service pubkey, and no connected Bahia relay before publish.",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-007",
+      "command": "cd web && npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+      "coverage": "Progress ack capability uses discovery wire_version contextvm-jsonrpc-v2 while encrypted request events preserve the contextvm-jsonrpc-v1 routing discriminator.",
+      "status": "pass"
+    },
+    {
+      "test_id": "BVVK0-T-008",
+      "command": "cd web && npm run test:unit -- --run tests/unit/encrypted-controlplane.test.js",
+      "coverage": "Gift-wrapped ContextVM result parsing rejects inner events not authored by the discovered service pubkey.",
+      "status": "pass"
+    }
+  ]
+}

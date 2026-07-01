@@ -439,6 +439,23 @@ Sensitive operations use ContextVM JSON-RPC kind `25910`, normally wrapped with 
 
 The unwrapped inner response carries `e=<request-event-id>` with reply marker and `p=<requester-pubkey>`. Long-running completion is observed through canonical kinds `30900`, `4903`, `30315`, `30078`, `30004`, domain NIPs, and NIP-09 kind `5` deletions where applicable.
 
+### Early encrypted ContextVM progress ack
+
+When system discovery advertises `control_plane.capabilities` containing `encrypted_controlplane.progress_ack` and `control_plane.wire_version` equal to `contextvm-jsonrpc-v2`, browser clients use a short ack deadline before the longer work deadline. This discovery wire version describes JSON-RPC payload semantics; the Nostr routing tag value `contextvm-jsonrpc-v1` remains a compatibility discriminator and does not negotiate progress acknowledgements. After routing and requester authorization succeed, but before invoking the domain handler, Bahia publishes a gift-wrapped JSON-RPC notification back to the requester:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/progress",
+  "params": {
+    "requestId": "<published-request-event-id>",
+    "status": "processing"
+  }
+}
+```
+
+The notification has no `id`, `result`, or `error`. It only confirms that a routed, authorized Bahia service accepted processing; terminal success or failure still comes from the correlated JSON-RPC response and durable canonical observables. Routing mismatches remain silent, and unauthorized requests continue to return the existing `-32001` terminal error without a progress ack.
+
 ### Encrypted Operations
 
 - Notifications (channels, logs)

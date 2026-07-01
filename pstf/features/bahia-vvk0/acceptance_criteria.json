@@ -1,0 +1,41 @@
+{
+  "feature_id": "bahia-vvk0",
+  "criteria": [
+    {
+      "ac_id": "BVVK0-AC-001",
+      "title": "Backend emits progress ack only after route and auth pass",
+      "assertion": "Authorized, routed ContextVM requests publish an encrypted notifications/progress JSON-RPC notification before handler dispatch; routing mismatch remains silent and unauthorized requests do not emit an ack.",
+      "tests": ["BVVK0-T-001"]
+    },
+    {
+      "ac_id": "BVVK0-AC-002",
+      "title": "System discovery advertises v2 progress ack capability",
+      "assertion": "Discovery control_plane.capabilities includes encrypted_controlplane.progress_ack and control_plane.wire_version is contextvm-jsonrpc-v2.",
+      "tests": ["BVVK0-T-002"]
+    },
+    {
+      "ac_id": "BVVK0-AC-003",
+      "title": "Frontend progress parser is ack-only",
+      "assertion": "notifications/progress notifications with no id/result/error clear the short ack timer but never resolve/reject the terminal request result.",
+      "tests": ["BVVK0-T-003"]
+    },
+    {
+      "ac_id": "BVVK0-AC-004",
+      "title": "Two-phase timeout is capability gated",
+      "assertion": "The short ack timeout applies only when the v2 progress ack capability is advertised; legacy discovery keeps the single long timeout.",
+      "tests": ["BVVK0-T-004", "BVVK0-T-005"]
+    },
+    {
+      "ac_id": "BVVK0-AC-005",
+      "title": "Frontend publish preconditions fail fast",
+      "assertion": "Encrypted request paths reject before publish when encrypted requests are unavailable, service pubkey is invalid/missing, or no Bahia relay is connected.",
+      "tests": ["BVVK0-T-006"]
+    },
+    {
+      "ac_id": "BVVK0-AC-006",
+      "title": "Service secrets unavailable state is non-alarming",
+      "assertion": "Service detail secrets hydration shows a friendly unavailable/control-plane-unreachable state and logs at info/debug level rather than warning.",
+      "tests": ["BVVK0-T-006", "manual UI inspection"]
+    }
+  ]
+}

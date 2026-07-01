@@ -21,10 +21,17 @@ const (
 	EncryptedRequestRoutingTag  = "encrypted"
 	EncryptedRequestWireVersion = "bahia-encrypted-v1"
 	ContextVMRoutingTag         = "contextvm"
-	ContextVMWireVersion        = "contextvm-jsonrpc-v1"
-	KindContextVMMessage        = kinds.ContextVMMessage
-	KindContextVMGiftWrap       = kinds.ContextVMGiftWrap
-	KindContextVMEphemeralWrap  = kinds.ContextVMEphemeralGiftWrap
+	// ContextVMWireVersion is the historical Nostr routing discriminator. It
+	// remains v1 for compatibility; discovery control_plane.wire_version carries
+	// the JSON-RPC payload/ack contract version.
+	ContextVMWireVersion                = "contextvm-jsonrpc-v1"
+	ContextVMProgressAckCapability      = "encrypted_controlplane.progress_ack"
+	ContextVMProgressAckWireVersion     = "contextvm-jsonrpc-v2"
+	ContextVMProgressNotificationMethod = "notifications/progress"
+	ContextVMProgressStatusProcessing   = "processing"
+	KindContextVMMessage                = kinds.ContextVMMessage
+	KindContextVMGiftWrap               = kinds.ContextVMGiftWrap
+	KindContextVMEphemeralWrap          = kinds.ContextVMEphemeralGiftWrap
 	// Deprecated compatibility aliases retained for callers/tests that still name
 	// the old encrypted transport API. They resolve to canonical ContextVM kinds;
 	// production subscriptions do not accept legacy Bahia encrypted events.
@@ -88,6 +95,17 @@ type ContextVMJSONRPCResponse struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Result  any             `json:"result,omitempty"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
+}
+
+type ContextVMJSONRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+type ContextVMProgressParams struct {
+	RequestID string `json:"requestId"`
+	Status    string `json:"status"`
 }
 
 type JSONRPCError struct {
@@ -258,8 +276,8 @@ func newContextVMDedupCache(limit int) *contextVMDedupCache {
 	}
 	return &contextVMDedupCache{
 		entries: make(map[string]ContextVMJSONRPCResponse, limit),
-		order:  make([]string, 0, limit),
-		limit:  limit,
+		order:   make([]string, 0, limit),
+		limit:   limit,
 	}
 }
 
@@ -483,6 +501,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		return
 	}
 	t.logger.Info("dispatching ContextVM request", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey", innerPubkey))
+	t.publishContextVMProgressAck(ctx, outer, inner, encrypted)
 	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
 	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Result: result}
 	if err != nil {
@@ -512,39 +531,59 @@ func (t *EncryptedRequestTransport) unwrapContextVMEvent(event *nostr.Event) (*n
 	return &inner, nil
 }
 
+func (t *EncryptedRequestTransport) publishContextVMProgressAck(ctx context.Context, outer, request *nostr.Event, encrypted bool) {
+	requestID := request.ID.Hex()
+	if encrypted && outer != nil && outer.ID != (nostr.ID{}) {
+		requestID = outer.ID.Hex()
+	}
+	notification := ContextVMJSONRPCNotification{
+		JSONRPC: "2.0",
+		Method:  ContextVMProgressNotificationMethod,
+		Params: ContextVMProgressParams{
+			RequestID: requestID,
+			Status:    ContextVMProgressStatusProcessing,
+		},
+	}
+	t.publishContextVMPayload(ctx, outer, request, encrypted, notification, "progress ack")
+}
+
 func (t *EncryptedRequestTransport) publishContextVMResponse(ctx context.Context, outer, request *nostr.Event, encrypted bool, response ContextVMJSONRPCResponse) {
+	t.publishContextVMPayload(ctx, outer, request, encrypted, response, "response")
+}
+
+func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context, outer, request *nostr.Event, encrypted bool, payload any, label string) {
 	requestID := request.ID.Hex()
 	requestPubkey := request.PubKey.Hex()
 	if t.responder == nil || t.responder.publisher == nil {
 		t.logger.Warn("ContextVM responder unavailable", zap.String("event_id", requestID))
 		return
 	}
-	content, err := json.Marshal(response)
+	content, err := json.Marshal(payload)
 	if err != nil {
-		t.logger.Error("marshal ContextVM response failed", zap.String("event_id", requestID), zap.Error(err))
+		t.logger.Error("marshal ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 		return
 	}
 	responseEvent := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", requestID, "", "reply"}, {"p", requestPubkey}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
 	if err := SignGoNostrEvent(ctx, t.responder.signer, responseEvent); err != nil {
-		t.logger.Error("sign ContextVM response failed", zap.String("event_id", requestID), zap.Error(err))
+		t.logger.Error("sign ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 		return
 	}
 	publishEvent := responseEvent
 	if encrypted {
 		wrapped, err := t.wrapContextVMResponse(ctx, outer, request, responseEvent)
 		if err != nil {
-			t.logger.Error("wrap ContextVM response failed", zap.String("event_id", requestID), zap.Error(err))
+			t.logger.Error("wrap ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 			return
 		}
 		publishEvent = wrapped
 	}
 	published, err := t.responder.publisher.Publish(ctx, *publishEvent)
 	if err != nil {
-		t.logger.Error("publish ContextVM response failed", zap.String("event_id", requestID), zap.Error(err))
+		t.logger.Error("publish ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 		return
 	}
 	if published == 0 {
-		t.logger.Error("publish ContextVM response failed", zap.String("event_id", requestID), zap.String("error", "no relay accepted event"))
+		t.logger.Error("publish ContextVM "+label+" failed", zap.String("event_id", requestID), zap.String("error", "no relay accepted event"))
 	}
 }
 

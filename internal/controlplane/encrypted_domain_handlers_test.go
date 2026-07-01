@@ -230,10 +230,10 @@ func TestEncryptedDomainHandlers_RegisterContextVMOrgListAlias(t *testing.T) {
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, "orgs/list", map[string]any{}))
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	if len(publisher.events) != 2 {
+		t.Fatalf("published events = %d, want progress ack plus terminal response", len(publisher.events))
 	}
-	response := contextVMResponse(t, publisher.events[0])
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
 	if response.Error != nil {
 		t.Fatalf("unexpected orgs/list error: %+v", response.Error)
 	}

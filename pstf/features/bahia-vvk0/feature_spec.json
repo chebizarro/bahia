@@ -1,0 +1,24 @@
+{
+  "feature_id": "bahia-vvk0",
+  "title": "Encrypted control-plane RPC resilience",
+  "status": "implemented_pending_full_verification",
+  "intent": "Make encrypted NIP-59/ContextVM control-plane RPC fast-failing and observable when a request reaches the Bahia service, without changing terminal truth semantics.",
+  "observed_problem": [
+    "Encrypted gift-wrapped ContextVM requests previously had no early liveness signal.",
+    "A routing mismatch or unauthenticated backend relay subscription was indistinguishable from slow work until the blind long timeout expired."
+  ],
+  "intended_behavior": [
+    "After wrapper routing and requester authorization pass, and before invoking the registered handler, the backend publishes a gift-wrapped JSON-RPC notification to the requester.",
+    "The progress notification shape is {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"requestId\":\"<published-request-event-id>\",\"status\":\"processing\"}} and it has no id/result/error.",
+    "Routing mismatches remain silent; unauthorized requests keep the existing -32001 terminal error without a progress ack.",
+    "System discovery advertises control_plane.capabilities containing encrypted_controlplane.progress_ack and control_plane.wire_version=contextvm-jsonrpc-v2.",
+    "The web shared subscription treats progress as ack-only: it clears the short ack timer and waits for terminal result/error.",
+    "When the capability is absent, browser clients preserve the legacy single long timeout.",
+    "Browser request paths fail before publish when encrypted discovery, service pubkey validity, or connected Bahia relays are absent."
+  ],
+  "out_of_scope": [
+    "Fixing the deployment-side silent drop tracked separately by bahia-50b7.",
+    "Changing canonical observable completion semantics."
+  ],
+  "beads": ["bahia-vvk0", "bahia-vvk0.1", "bahia-vvk0.2", "bahia-vvk0.3"]
+}

@@ -1,6 +1,6 @@
 # Bahia Nostr Control-Plane Events
 
-Bahia's production Nostr control plane is now ContextVM-first. Mutation intent uses ContextVM JSON-RPC kind `25910`, usually encrypted with ContextVM CEP-4 / NIP-59 wrappers (`1059` or `21059`). Long-running truth is observed through canonical Nostr events, not through legacy Bahia request/status/result kind families.
+Bahia's production Nostr control plane is now ContextVM-first. Mutation intent uses ContextVM JSON-RPC kind `25910`, usually encrypted with ContextVM CEP-4 / NIP-59 wrappers (`1059` or `21059`). When discovery advertises `encrypted_controlplane.progress_ack` plus `contextvm-jsonrpc-v2`, routed and authorized encrypted requests receive an early no-`id` `notifications/progress` JSON-RPC notification before the terminal response. Long-running truth is observed through canonical Nostr events, not through legacy Bahia request/status/result kind families.
 
 Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, and `7980` are migration inventory only, excluding explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` where their numbers overlap those ranges. New clients must not publish or subscribe to legacy Bahia numbers as production runtime contracts.
 

@@ -10,6 +10,7 @@ export {
 export { EncryptedControlplaneTransport } from './encrypted-controlplane-transport.js';
 export {
   encryptedRelayUrlsFromSystemInfo,
+  contextVMProgressAckSupported,
   encryptedRequestsAvailable,
   servicePubkeyFromSystemInfo
 } from './encrypted-controlplane-utils.js';
@@ -23,9 +24,13 @@ import {
 import { EncryptedControlplaneTransport } from './encrypted-controlplane-transport.js';
 import { isContextVMWrapperKind, parseContextVMResultPayload } from './encrypted-controlplane-result.js';
 import {
+  assertConnectedBahiaRelays,
+  assertEncryptedRequestsAvailable,
+  contextVMProgressAckSupported,
   encryptedRelayUrlsFromSystemInfo,
   extractContextVMResult,
   hasTagValue,
+  isContextVMProgressNotification,
   randomId,
   servicePubkeyFromSystemInfo,
   signalAbortError,
@@ -45,7 +50,7 @@ const pendingRequests = new Map(); // requestEventId -> { resolve, reject, servi
 function ensureSharedTransport() {
   const relays = encryptedRelayUrlsFromSystemInfo();
   const servicePubkey = servicePubkeyFromSystemInfo();
-  if (sharedTransport?.connected && relaysMatch(sharedTransport.relays, relays)) {
+  if (sharedTransport?.connected && relaysMatch(sharedTransport.relays, relays) && sharedTransport.servicePubkey === servicePubkey) {
     return sharedTransport;
   }
   // Relays changed or not connected — rebuild
@@ -98,6 +103,10 @@ function ensureSharedSubscription(transport) {
         if (!isContextVMWrapperKind(event.kind)) return;
         try {
           const payload = await parseContextVMResultPayload(event, entry.servicePubkey);
+          if (isContextVMProgressNotification(payload, eTag)) {
+            entry.acknowledge();
+            return;
+          }
           const resultPayload = extractContextVMResult(payload, eTag, entry.contextVMRequestId);
           entry.resolve({ event, payload: resultPayload, jsonrpc: payload?.jsonrpc === '2.0' ? payload : null });
         } catch (error) {
@@ -128,15 +137,22 @@ function rejectAllPending(error) {
   pendingRequests.clear();
 }
 
-function waitForResult(requestEventId, { contextVMRequestId, servicePubkey, signal, timeoutMs }) {
+function waitForResult(requestEventId, { contextVMRequestId, servicePubkey, signal, ackTimeoutMs, workTimeoutMs, requireProgressAck }) {
   return new Promise((resolve, reject) => {
-    let timer = null;
+    let ackTimer = null;
+    let workTimer = null;
     let settled = false;
+
+    const clearAckTimer = () => {
+      if (ackTimer) clearTimeout(ackTimer);
+      ackTimer = null;
+    };
 
     const cleanup = () => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      clearAckTimer();
+      if (workTimer) clearTimeout(workTimer);
       signal?.removeEventListener?.('abort', onAbort);
       pendingRequests.delete(requestEventId);
     };
@@ -156,15 +172,22 @@ function waitForResult(requestEventId, { contextVMRequestId, servicePubkey, sign
 
     signal?.addEventListener?.('abort', onAbort, { once: true });
 
-    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        settle(reject, new Error(`ContextVM request timed out after ${timeoutMs}ms waiting for result`));
-      }, timeoutMs);
+    if (requireProgressAck && Number.isFinite(ackTimeoutMs) && ackTimeoutMs > 0) {
+      ackTimer = setTimeout(() => {
+        settle(reject, new Error(`ContextVM request no service acknowledged within ${ackTimeoutMs}ms — check service-pubkey discovery / relay auth`));
+      }, ackTimeoutMs);
+    }
+
+    if (Number.isFinite(workTimeoutMs) && workTimeoutMs > 0) {
+      workTimer = setTimeout(() => {
+        settle(reject, new Error(`ContextVM request timed out after ${workTimeoutMs}ms waiting for result`));
+      }, workTimeoutMs);
     }
 
     pendingRequests.set(requestEventId, {
       resolve: (value) => settle(resolve, value),
       reject: (error) => settle(reject, error),
+      acknowledge: clearAckTimer,
       servicePubkey,
       contextVMRequestId,
       seen: new Set()
@@ -190,15 +213,19 @@ export function createEncryptedControlplaneTransport(options = {}) {
 }
 
 export async function buildEncryptedRequestEvent(options) {
+  assertEncryptedRequestsAvailable();
   const transport = ensureSharedTransport();
   await transport.connect();
+  assertConnectedBahiaRelays(transport.client);
   return transport.buildEncryptedRequestEvent(options);
 }
 
 export async function publishEncryptedRequest(options) {
+  assertEncryptedRequestsAvailable();
   const transport = ensureSharedTransport();
   try {
     await transport.connect();
+    assertConnectedBahiaRelays(transport.client);
     const event = options?.event || await transport.buildEncryptedRequestEvent(options);
     return await transport.publishEncryptedRequest(event);
   } catch (error) {
@@ -208,8 +235,10 @@ export async function publishEncryptedRequest(options) {
 }
 
 export async function awaitEncryptedResult(options) {
+  assertEncryptedRequestsAvailable();
   const transport = ensureSharedTransport();
   await transport.connect();
+  assertConnectedBahiaRelays(transport.client);
   ensureSharedSubscription(transport);
 
   const {
@@ -227,7 +256,9 @@ export async function awaitEncryptedResult(options) {
     contextVMRequestId,
     servicePubkey,
     signal,
-    timeoutMs: options?.timeoutMs ?? 30000
+    ackTimeoutMs: options?.ackTimeoutMs ?? 4000,
+    workTimeoutMs: options?.workTimeoutMs ?? options?.timeoutMs ?? 30000,
+    requireProgressAck: contextVMProgressAckSupported()
   });
 }
 
@@ -236,13 +267,17 @@ export async function requestEncryptedResult(options = {}) {
     resultKinds = [ENCRYPTED_RESULT_KIND],
     signal,
     timeoutMs = 30000,
+    ackTimeoutMs = 4000,
+    workTimeoutMs = timeoutMs,
     ...request
   } = options;
 
   throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
 
+  assertEncryptedRequestsAvailable();
   const transport = ensureSharedTransport();
   await transport.connect();
+  assertConnectedBahiaRelays(transport.client);
   ensureSharedSubscription(transport);
 
   throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
@@ -257,7 +292,9 @@ export async function requestEncryptedResult(options = {}) {
     contextVMRequestId,
     servicePubkey,
     signal,
-    timeoutMs
+    ackTimeoutMs,
+    workTimeoutMs,
+    requireProgressAck: contextVMProgressAckSupported()
   });
 
   try {
@@ -266,8 +303,10 @@ export async function requestEncryptedResult(options = {}) {
     return { ...publishResult, resultEvent: result.event, result: result.payload };
   } catch (error) {
     // Cancel the pending wait if publish failed
-    if (pendingRequests.has(event.id)) {
-      pendingRequests.delete(event.id);
+    const pending = pendingRequests.get(event.id);
+    if (pending) {
+      pending.reject(new Error(`ContextVM request failed before terminal result: ${error.message}`));
+      await resultPromise.catch(() => null);
     }
     if (signal?.aborted) throw signalAbortError(signal, 'ContextVM request aborted');
     throw error;

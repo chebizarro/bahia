@@ -11,6 +11,7 @@ import {
 } from './encrypted-controlplane-constants.js';
 import { awaitEncryptedResultForTransport } from './encrypted-controlplane-result.js';
 import {
+  assertConnectedBahiaRelays,
   buildContextVMRequest,
   encryptedRelayUrlsFromSystemInfo,
   jsonContent,
@@ -41,7 +42,14 @@ export class EncryptedControlplaneTransport {
     // skips the "[nostr] Connected to N/N relays" log) when the relay set is already
     // fully connected, and re-establishes any dropped relay otherwise. This avoids a
     // per-request reconnect without risking a stale connection being reused.
-    if (this.ownClient) await this.client.connect(this.relays);
+    if (this.ownClient) {
+      const summary = await this.client.connect(this.relays);
+      if (summary?.connected === 0) {
+        this.connected = false;
+        throw new Error('ContextVM encrypted requests are not available. No Bahia relay is connected for encrypted control-plane traffic.');
+      }
+    }
+    assertConnectedBahiaRelays(this.client);
     this.connected = true;
     return this;
   }
@@ -82,6 +90,7 @@ export class EncryptedControlplaneTransport {
   async publishEncryptedRequest(event) {
     if (!event?.id) throw new Error('Cannot publish unsigned ContextVM request event');
     await this.connect();
+    assertConnectedBahiaRelays(this.client);
     const results = await this.client.publish(event);
     const acceptedRelays = results.filter(publishAccepted);
     const rejectedRelays = results.filter((result) => !publishAccepted(result));

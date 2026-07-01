@@ -8,12 +8,14 @@ import {
 import {
   extractContextVMResult,
   formatClosedRelays,
+  isContextVMProgressNotification,
   hasTagValue,
   openRelayUrls,
   parseJson,
   signalAbortError
 } from './encrypted-controlplane-utils.js';
 import { ensureHexPubkey } from './nostr-hex.js';
+import { validateInboundNostrEvent } from './validation.js';
 
 export function isContextVMWrapperKind(kind) {
   return kind === CONTEXTVM_GIFT_WRAP_KIND || kind === CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND;
@@ -23,6 +25,10 @@ export async function parseContextVMResultPayload(event, servicePubkey) {
   if (isContextVMWrapperKind(event.kind)) {
     const payload = parseJson(await decryptWithAuth(event.pubkey, event.content || ''));
     if (payload?.kind === CONTEXTVM_MESSAGE_KIND && typeof payload.content === 'string') {
+      if (payload.pubkey !== servicePubkey) {
+        throw new Error('ContextVM encrypted result inner event was not signed by the expected service pubkey');
+      }
+      await validateInboundNostrEvent(payload);
       return parseJson(payload.content);
     }
     return payload;
@@ -103,6 +109,7 @@ export function awaitEncryptedResultForTransport(transport, {
 
         try {
           const payload = await parseContextVMResultPayload(event, servicePubkey);
+          if (isContextVMProgressNotification(payload, requestEventId)) return;
           const resultPayload = extractContextVMResult(payload, requestEventId, contextVMRequestId);
           settle(resolve, { event, payload: resultPayload, jsonrpc: payload?.jsonrpc === '2.0' ? payload : null });
         } catch (error) {

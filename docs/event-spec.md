@@ -17,7 +17,7 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 
 | Kind(s) | Layer | Description |
 |---------|-------|-------------|
-| `25910` | Intent | ContextVM JSON-RPC request/response messages. Method names use `<domain>/<operation>`. |
+| `25910` | Intent | ContextVM JSON-RPC request/response messages. Method names use `<domain>/<operation>`. Encrypted routed+authorized requests may first receive a no-`id` `notifications/progress` JSON-RPC notification with `status=processing` when discovery advertises `encrypted_controlplane.progress_ack` and `contextvm-jsonrpc-v2`. |
 | `1059`, `21059` | Intent transport | CEP-4 / NIP-59 gift-wrap envelopes for encrypted ContextVM messages. |
 | `30900` | State | Canonical addressable control-plane state projection. |
 | `30078` | State/app data | NIP-78 app-specific configuration, registries, and UI/operator projection data; SBOM reference events use `schema=bahia.sbom.ref.v1`. |

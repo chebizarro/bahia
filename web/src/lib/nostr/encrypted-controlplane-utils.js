@@ -1,5 +1,11 @@
 import { currentSystemInfo } from '$lib/stores/system.svelte.js';
 import { getTagValues } from './client.js';
+import { isValidHexPubkey } from './nostr-hex.js';
+
+export const CONTEXTVM_PROGRESS_ACK_CAPABILITY = 'encrypted_controlplane.progress_ack';
+export const CONTEXTVM_PROGRESS_ACK_WIRE_VERSION = 'contextvm-jsonrpc-v2';
+export const CONTEXTVM_PROGRESS_METHOD = 'notifications/progress';
+export const CONTEXTVM_PROGRESS_STATUS_PROCESSING = 'processing';
 
 export function normalizeTags(tags) {
   if (!Array.isArray(tags)) return [];
@@ -49,6 +55,16 @@ export function buildContextVMRequest({ operation, payload, requestId }) {
     progressToken: requestId
   };
   return { jsonrpc: '2.0', id: requestId, method, params };
+}
+
+export function isContextVMProgressNotification(payload, requestEventId = '') {
+  if (payload?.jsonrpc !== '2.0' || payload?.method !== CONTEXTVM_PROGRESS_METHOD) return false;
+  if (Object.prototype.hasOwnProperty.call(payload, 'id')) return false;
+  if (Object.prototype.hasOwnProperty.call(payload, 'result')) return false;
+  if (Object.prototype.hasOwnProperty.call(payload, 'error')) return false;
+  const params = payload?.params && typeof payload.params === 'object' ? payload.params : {};
+  if (params.status !== CONTEXTVM_PROGRESS_STATUS_PROCESSING) return false;
+  return !requestEventId || params.requestId === requestEventId;
 }
 
 export function extractContextVMResult(payload, requestEventId, contextVMRequestId = requestEventId) {
@@ -117,8 +133,38 @@ export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
   return systemInfo?.nostr?.service_pubkey || '';
 }
 
+export function contextVMProgressAckSupported(systemInfo = currentSystemInfo()) {
+  const controlPlane = systemInfo?.control_plane;
+  return Array.isArray(controlPlane?.capabilities)
+    && controlPlane.capabilities.includes(CONTEXTVM_PROGRESS_ACK_CAPABILITY)
+    && controlPlane?.wire_version === CONTEXTVM_PROGRESS_ACK_WIRE_VERSION;
+}
+
 export function encryptedRequestsAvailable(systemInfo = currentSystemInfo()) {
   return systemInfo?.features?.encrypted_nostr_requests === true
     && encryptedRelayUrlsFromSystemInfo(systemInfo).length > 0
-    && Boolean(servicePubkeyFromSystemInfo(systemInfo));
+    && isValidHexPubkey(servicePubkeyFromSystemInfo(systemInfo));
+}
+
+export function assertEncryptedRequestsAvailable(systemInfo = currentSystemInfo()) {
+  const relays = encryptedRelayUrlsFromSystemInfo(systemInfo);
+  const servicePubkey = servicePubkeyFromSystemInfo(systemInfo);
+  if (systemInfo?.features?.encrypted_nostr_requests !== true) {
+    throw new Error('ContextVM encrypted requests are not available. Bahia discovery must advertise features.encrypted_nostr_requests before publishing.');
+  }
+  if (!isValidHexPubkey(servicePubkey)) {
+    throw new Error('ContextVM encrypted requests are not available. Bahia discovery is missing a valid service-pubkey for encryption.');
+  }
+  if (relays.length === 0) {
+    throw new Error('ContextVM encrypted requests are not available. No Bahia relay URLs are advertised for encrypted control-plane traffic.');
+  }
+  return { relays, servicePubkey };
+}
+
+export function assertConnectedBahiaRelays(client) {
+  if (typeof client?.getConnectedRelays !== 'function') return;
+  const connected = client.getConnectedRelays();
+  if (Array.isArray(connected) && connected.length === 0) {
+    throw new Error('ContextVM encrypted requests are not available. No Bahia relay is connected for encrypted control-plane traffic.');
+  }
 }

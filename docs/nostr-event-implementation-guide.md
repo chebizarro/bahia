@@ -41,6 +41,8 @@ ContextVM intent (private command)
 
 The JSON-RPC response to a ContextVM request is only an acknowledgment or immediate error. Long-running completion is proved by observable events.
 
+For encrypted ContextVM browser RPC, `control_plane.capabilities` may advertise `encrypted_controlplane.progress_ack` with `control_plane.wire_version="contextvm-jsonrpc-v2"`. In that mode, a routed and authorized request receives a no-`id` JSON-RPC notification (`method="notifications/progress"`, `params.status="processing"`) before handler execution. Treat it as liveness only: it clears the short ack deadline, never resolves terminal state, and must not be emitted for routing mismatches or unauthorized requests.
+
 ## Decision tree for implementers
 
 ### 1. Is this asking Bahia or an agent to do something?

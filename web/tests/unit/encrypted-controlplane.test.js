@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -8,6 +8,14 @@ const authMock = vi.hoisted(() => ({
   decryptWithAuth: vi.fn(),
   ensureEncryptedSignerReady: vi.fn(),
   signWithAuth: vi.fn()
+}));
+
+const nostrClientMock = vi.hoisted(() => ({
+  activeClient: null,
+  createNostrPoolClient: vi.fn(() => nostrClientMock.activeClient),
+  getTagValues: (event, name) => (event?.tags || [])
+    .filter((tag) => Array.isArray(tag) && tag[0] === name)
+    .map((tag) => tag[1])
 }));
 
 const SERVICE_PUBKEY = 'a70a59980b1be3070959800f94f4221d54ef77a71d686ac85fedadfc586813a0';
@@ -30,13 +38,66 @@ const systemMock = vi.hoisted(() => ({
 
 vi.mock('$lib/stores/auth.js', () => authMock);
 vi.mock('$lib/stores/system.svelte.js', () => systemMock);
+vi.mock('../../src/lib/nostr/client.js', () => nostrClientMock);
+
+function progressAckDiscovery() {
+  return {
+    features: {
+      encrypted_nostr_requests: true
+    },
+    nostr: {
+      service_pubkey: SERVICE_PUBKEY,
+      browser_relays: ['wss://relay.example']
+    },
+    control_plane: {
+      wire_version: 'contextvm-jsonrpc-v2',
+      capabilities: ['encrypted_controlplane.progress_ack']
+    }
+  };
+}
+
+function legacyDiscovery() {
+  return {
+    features: {
+      encrypted_nostr_requests: true
+    },
+    nostr: {
+      service_pubkey: SERVICE_PUBKEY,
+      browser_relays: ['wss://relay.example']
+    }
+  };
+}
+
+async function flushAsync() {
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+}
+
+function resultEvent(module, requestEventId, payload) {
+  const inner = {
+    id: `inner-${Math.random()}`,
+    kind: module.CONTEXTVM_MESSAGE_KIND,
+    pubkey: SERVICE_PUBKEY,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', requestEventId, '', 'reply'], ['p', authMock.authState.pubkey], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION]],
+    content: JSON.stringify(payload),
+    sig: '0'.repeat(128)
+  };
+  return {
+    id: `result-${Math.random()}`,
+    kind: module.CONTEXTVM_GIFT_WRAP_KIND,
+    pubkey: SERVICE_PUBKEY,
+    tags: [['e', requestEventId], ['p', authMock.authState.pubkey]],
+    content: `cipher:${JSON.stringify(inner)}`
+  };
+}
 
 function fakeClient() {
   return {
     getConnectedRelays: vi.fn(() => ['wss://relay.example']),
     connect: vi.fn().mockResolvedValue(),
     publish: vi.fn().mockResolvedValue([{ relay: 'wss://relay.example', sent: true, accepted: true, message: '' }]),
-    subscribe: vi.fn(() => vi.fn())
+    subscribe: vi.fn(() => vi.fn()),
+    disconnect: vi.fn()
   };
 }
 
@@ -53,17 +114,18 @@ describe('encrypted controlplane transport', () => {
     authMock.encryptWithAuth.mockImplementation(async (_pubkey, plaintext) => `cipher:${plaintext}`);
     authMock.decryptWithAuth.mockImplementation(async (_pubkey, ciphertext) => ciphertext.replace(/^cipher:/, ''));
     authMock.signWithAuth.mockImplementation(async (event) => ({ ...event, id: 'request-id', pubkey: authMock.authState.pubkey, sig: 'sig' }));
-    systemMock.currentSystemInfo.mockReturnValue({
-      features: {
-        encrypted_nostr_requests: true
-      },
-      nostr: {
-        service_pubkey: SERVICE_PUBKEY,
-        browser_relays: ['wss://relay.example']
-      }
-    });
+    systemMock.currentSystemInfo.mockReturnValue(legacyDiscovery());
     client = fakeClient();
+    nostrClientMock.activeClient = client;
+    globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS = true;
     module = await import('../../src/lib/nostr/encrypted-controlplane.js');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    module?.disconnectEncryptedControlplane?.();
+    nostrClientMock.activeClient = null;
+    delete globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS;
   });
 
   it('uses standard Bahia relays for ContextVM requests when the feature is enabled', () => {
@@ -169,6 +231,19 @@ describe('encrypted controlplane transport', () => {
     expect(event.content).toEqual(expect.any(String));
   });
 
+  it('advertises v2 progress ack support while preserving the v1 Nostr routing tag', async () => {
+    systemMock.currentSystemInfo.mockReturnValue(progressAckDiscovery());
+    expect(module.contextVMProgressAckSupported()).toBe(true);
+
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+    await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 }, requestId: 'ctx-v2-routing' });
+
+    expect(module.ENCRYPTED_REQUEST_WIRE_VERSION).toBe('contextvm-jsonrpc-v1');
+    expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
+      tags: expect.arrayContaining([[module.ENCRYPTED_REQUEST_ROUTING_TAG, 'contextvm-jsonrpc-v1']])
+    }));
+  });
+
   it('fails locally before publish when the signer lacks browser-visible NIP-44 support', async () => {
     authMock.ensureEncryptedSignerReady.mockRejectedValueOnce(new Error('Failed to encrypt with NIP-44: signer bridge unavailable'));
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
@@ -235,6 +310,34 @@ describe('encrypted controlplane transport', () => {
     await expect(transport.requestEncryptedResult({ operation: 'payments.history', payload: { limit: 5 } })).rejects.toThrow('blocked: no');
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects gift-wrapped ContextVM results whose inner event is not service-authored', async () => {
+    let handlers;
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+
+    const promise = transport.awaitEncryptedResult({ requestEventId: 'req-spoofed' });
+    await handlers.onEvent({
+      id: 'result-spoofed-inner',
+      kind: module.CONTEXTVM_GIFT_WRAP_KIND,
+      pubkey: 'c'.repeat(64),
+      tags: [['e', 'req-spoofed'], ['p', 'a'.repeat(64)]],
+      content: `cipher:${JSON.stringify({
+        id: 'inner-spoofed',
+        kind: module.CONTEXTVM_MESSAGE_KIND,
+        pubkey: 'b'.repeat(64),
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['e', 'req-spoofed'], ['p', 'a'.repeat(64)]],
+        content: '{"jsonrpc":"2.0","id":"req-spoofed","result":{"ok":true}}',
+        sig: '0'.repeat(128)
+      })}`
+    });
+
+    await expect(promise).rejects.toThrow('inner event was not signed by the expected service pubkey');
   });
 
   it('rejects on decrypt failures for correlated result events', async () => {
@@ -326,5 +429,121 @@ describe('encrypted controlplane transport', () => {
 
     await expect(promise).rejects.toThrow('operator cancelled ContextVM request');
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats progress notifications as ack-only and keeps waiting for the terminal result', async () => {
+    vi.useFakeTimers();
+    systemMock.currentSystemInfo.mockReturnValue(progressAckDiscovery());
+    let handlers;
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const promise = module.requestEncryptedResult({
+      operation: 'payments.history',
+      payload: { limit: 1 },
+      requestId: 'ctx-progress',
+      ackTimeoutMs: 10,
+      workTimeoutMs: 100
+    });
+    let settled = false;
+    promise.then(() => { settled = true; }, () => { settled = true; });
+
+    await flushAsync();
+    expect(client.publish).toHaveBeenCalledTimes(1);
+    const requestEventId = client.publish.mock.calls[0][0].id;
+    await handlers.onEvent(resultEvent(module, requestEventId, {
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+      params: { requestId: requestEventId, status: 'processing' }
+    }));
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(settled).toBe(false);
+
+    await handlers.onEvent(resultEvent(module, requestEventId, {
+      jsonrpc: '2.0',
+      id: 'ctx-progress',
+      result: { ok: true }
+    }));
+
+    await expect(promise).resolves.toMatchObject({ result: { ok: true } });
+  });
+
+  it('fires the short ack timeout on silence when progress ack is advertised', async () => {
+    vi.useFakeTimers();
+    systemMock.currentSystemInfo.mockReturnValue(progressAckDiscovery());
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      expect(nextHandlers.onEvent).toEqual(expect.any(Function));
+      return vi.fn();
+    });
+
+    const promise = module.requestEncryptedResult({
+      operation: 'payments.history',
+      payload: { limit: 1 },
+      requestId: 'ctx-silent',
+      ackTimeoutMs: 10,
+      workTimeoutMs: 100
+    });
+
+    const rejection = expect(promise).rejects.toThrow('no service acknowledged within 10ms — check service-pubkey discovery / relay auth');
+    await flushAsync();
+    expect(client.publish).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(11);
+
+    await rejection;
+  });
+
+  it('keeps the backward-compatible single work timeout when progress ack is not advertised', async () => {
+    vi.useFakeTimers();
+    systemMock.currentSystemInfo.mockReturnValue(legacyDiscovery());
+    client.subscribe.mockImplementation(() => vi.fn());
+
+    const promise = module.requestEncryptedResult({
+      operation: 'payments.history',
+      payload: { limit: 1 },
+      requestId: 'ctx-legacy',
+      ackTimeoutMs: 10,
+      workTimeoutMs: 30
+    });
+    let settled = false;
+    promise.then(() => { settled = true; }, () => { settled = true; });
+
+    await flushAsync();
+    expect(client.publish).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(11);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(promise).rejects.toThrow('timed out after 30ms waiting for result');
+  });
+
+  it('fails before publishing when encrypted preconditions are unavailable or relay connectivity is absent', async () => {
+    systemMock.currentSystemInfo.mockReturnValue({
+      features: { encrypted_nostr_requests: false },
+      nostr: { service_pubkey: SERVICE_PUBKEY, browser_relays: ['wss://relay.example'] }
+    });
+
+    await expect(module.requestEncryptedResult({ operation: 'payments.history', payload: {} }))
+      .rejects.toThrow('features.encrypted_nostr_requests');
+    expect(client.publish).not.toHaveBeenCalled();
+    expect(client.subscribe).not.toHaveBeenCalled();
+
+    systemMock.currentSystemInfo.mockReturnValue({
+      features: { encrypted_nostr_requests: true },
+      nostr: { service_pubkey: 'not-a-pubkey', browser_relays: ['wss://relay.example'] }
+    });
+
+    await expect(module.requestEncryptedResult({ operation: 'payments.history', payload: {} }))
+      .rejects.toThrow('missing a valid service-pubkey');
+    expect(client.publish).not.toHaveBeenCalled();
+    expect(client.subscribe).not.toHaveBeenCalled();
+
+    systemMock.currentSystemInfo.mockReturnValue(legacyDiscovery());
+    client.getConnectedRelays.mockReturnValue([]);
+
+    await expect(module.requestEncryptedResult({ operation: 'payments.history', payload: {} }))
+      .rejects.toThrow('No Bahia relay is connected');
+    expect(client.publish).not.toHaveBeenCalled();
   });
 });

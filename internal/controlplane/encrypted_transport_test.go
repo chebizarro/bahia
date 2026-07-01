@@ -129,6 +129,35 @@ func contextVMResponse(t *testing.T, ev nostr.Event) ContextVMJSONRPCResponse {
 	return response
 }
 
+func contextVMNotification(t *testing.T, ev nostr.Event) ContextVMJSONRPCNotification {
+	t.Helper()
+	var notification ContextVMJSONRPCNotification
+	if err := json.Unmarshal([]byte(ev.Content), &notification); err != nil {
+		t.Fatalf("unmarshal ContextVM notification: %v content=%s", err, ev.Content)
+	}
+	return notification
+}
+
+func assertContextVMProgressAck(t *testing.T, ev nostr.Event, request *nostr.Event) {
+	t.Helper()
+	assertContextVMProgressAckWithRequestID(t, ev, request, request.ID.Hex())
+}
+
+func assertContextVMProgressAckWithRequestID(t *testing.T, ev nostr.Event, request *nostr.Event, requestID string) {
+	t.Helper()
+	if ev.Kind != KindContextVMMessage || !hasTag(ev.Tags, "e", request.ID.Hex()) || !hasTag(ev.Tags, "p", request.PubKey.Hex()) {
+		t.Fatalf("unexpected progress ack event: kind=%d tags=%#v", ev.Kind, ev.Tags)
+	}
+	notification := contextVMNotification(t, ev)
+	if notification.JSONRPC != "2.0" || notification.Method != ContextVMProgressNotificationMethod {
+		t.Fatalf("unexpected progress ack notification: %+v", notification)
+	}
+	params, ok := notification.Params.(map[string]any)
+	if !ok || params["requestId"] != requestID || params["status"] != ContextVMProgressStatusProcessing {
+		t.Fatalf("unexpected progress ack params: %#v", notification.Params)
+	}
+}
+
 func wrapContextVMEvent(t *testing.T, inner *nostr.Event, kind int) *nostr.Event {
 	t.Helper()
 	outer := wrapContextVMEventWithWrapperKey(t, inner, nostr.Generate().Hex(), kind)
@@ -327,6 +356,53 @@ func TestContextVMTransport_RejectsUnauthorizedRequester(t *testing.T) {
 	}
 }
 
+func TestContextVMTransport_PublishesProgressAckBeforeHandlerForAuthorizedRoutedRequest(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-1","method":"service/deploy","params":{"service_id":"svc-1"}}`)
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+		if len(publisher.events) != 1 {
+			t.Fatalf("progress ack must publish before handler runs, got %d events", len(publisher.events))
+		}
+		assertContextVMProgressAck(t, publisher.events[0], event)
+		return map[string]any{"accepted": true}, nil
+	})
+
+	transport.HandleEvent(context.Background(), event)
+
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected progress ack and terminal response, got %d", len(publisher.events))
+	}
+	assertContextVMProgressAck(t, publisher.events[0], event)
+	terminal := contextVMResponse(t, publisher.events[1])
+	if terminal.Error != nil || string(terminal.ID) != `"ack-1"` {
+		t.Fatalf("unexpected terminal response after progress ack: %+v", terminal)
+	}
+}
+
+func TestContextVMTransport_DoesNotPublishProgressAckForRoutingMismatch(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-mismatch","method":"service/deploy"}`)
+	event.Tags = nostr.Tags{{"p", "c" + event.PubKey.Hex()[1:]}}
+	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
+		t.Fatal(err)
+	}
+	transport := NewEncryptedRequestTransport(nil, responder, []string{event.PubKey.Hex()}, zap.NewNop())
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+		t.Fatalf("routing mismatch reached handler")
+		return nil, nil
+	})
+
+	transport.HandleEvent(context.Background(), event)
+
+	if len(publisher.events) != 0 {
+		t.Fatalf("routing mismatch must stay silent without progress ack, got %d events", len(publisher.events))
+	}
+}
+
 func TestContextVMTransport_PublishesHandlerFailure(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
@@ -339,10 +415,11 @@ func TestContextVMTransport_PublishesHandlerFailure(t *testing.T) {
 
 	transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("expected ContextVM handler error result, got %d events", len(publisher.events))
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected ContextVM progress ack plus handler error result, got %d events", len(publisher.events))
 	}
-	result := publisher.events[0]
+	assertContextVMProgressAck(t, publisher.events[0], event)
+	result := publisher.events[1]
 	if result.Kind != KindContextVMMessage || !hasTag(result.Tags, "e", event.ID.Hex()) || !hasTag(result.Tags, "p", event.PubKey.Hex()) {
 		t.Fatalf("unexpected result event: kind=%d tags=%#v", result.Kind, result.Tags)
 	}
@@ -367,10 +444,11 @@ func TestContextVMTransport_DispatchesAuthorizedOperation(t *testing.T) {
 
 	transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("expected ContextVM success result, got %d events", len(publisher.events))
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected ContextVM progress ack plus success result, got %d events", len(publisher.events))
 	}
-	response := contextVMResponse(t, publisher.events[0])
+	assertContextVMProgressAck(t, publisher.events[0], event)
+	response := contextVMResponse(t, publisher.events[1])
 	if response.Error != nil || string(response.ID) != `"payments-1"` {
 		t.Fatalf("unexpected success response: %+v", response)
 	}
@@ -391,10 +469,11 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 
 	transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("expected ContextVM response, got %d events", len(publisher.events))
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected ContextVM progress ack plus response, got %d events", len(publisher.events))
 	}
-	responseEvent := publisher.events[0]
+	assertContextVMProgressAck(t, publisher.events[0], event)
+	responseEvent := publisher.events[1]
 	if responseEvent.Kind != KindContextVMMessage || !hasTag(responseEvent.Tags, "e", event.ID.Hex()) || !hasTag(responseEvent.Tags, "p", event.PubKey.Hex()) {
 		t.Fatalf("unexpected ContextVM response event: kind=%d tags=%#v", responseEvent.Kind, responseEvent.Tags)
 	}
@@ -470,10 +549,11 @@ func TestContextVMTransport_IdempotencyCachesProgressToken(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("handler calls = %d, want 1", calls)
 	}
-	if len(publisher.events) != 2 {
-		t.Fatalf("responses = %d, want 2", len(publisher.events))
+	if len(publisher.events) != 3 {
+		t.Fatalf("responses = %d, want 3", len(publisher.events))
 	}
-	if got := contextVMResponse(t, publisher.events[1]); string(got.ID) != "2" || got.Error != nil {
+	assertContextVMProgressAck(t, publisher.events[0], first)
+	if got := contextVMResponse(t, publisher.events[2]); string(got.ID) != "2" || got.Error != nil {
 		t.Fatalf("cached response = %+v", got)
 	}
 }
@@ -509,10 +589,16 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 
 			transport.HandleEvent(context.Background(), outer)
 
-			if len(publisher.events) != 1 {
-				t.Fatalf("expected encrypted ContextVM response, got %d", len(publisher.events))
+			if len(publisher.events) != 2 {
+				t.Fatalf("expected encrypted ContextVM progress ack plus response, got %d", len(publisher.events))
 			}
-			wrappedResponse := publisher.events[0]
+			wrappedAck := publisher.events[0]
+			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "e", outer.ID.Hex()) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) {
+				t.Fatalf("unexpected wrapper progress ack: kind=%d tags=%#v", wrappedAck.Kind, wrappedAck.Tags)
+			}
+			innerAck := unwrapContextVMResponseEvent(t, wrappedAck, testRequesterKey)
+			assertContextVMProgressAckWithRequestID(t, innerAck, inner, outer.ID.Hex())
+			wrappedResponse := publisher.events[1]
 			if err := nostrpool.ValidateInboundEvent(&wrappedResponse, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 				t.Fatalf("response wrapper failed NIP-01 validation: %v", err)
 			}

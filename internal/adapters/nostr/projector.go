@@ -12,9 +12,9 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -2323,7 +2323,7 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 }
 
 func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
-	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models"}
+	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models", "encrypted_controlplane.progress_ack"}
 	methods := []string{
 		"service/deploy",
 		"service/rollback",
@@ -2399,6 +2399,7 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	}
 	return map[string]any{
 		"version":               "bahia-controlplane-v1",
+		"wire_version":          "contextvm-jsonrpc-v2",
 		"capabilities":          capabilities,
 		"transport_kinds":       transportKinds,
 		"methods":               methods,

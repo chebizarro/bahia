@@ -301,12 +301,14 @@ Discovery/config contract:
 - Browser-safe relay URLs are configured as `nostr.browser_relays` and exposed through `d=bahia-browser-v1`.
 - ContextVM request/reply relay URLs are configured as `nostr.contextvm_relays`, exposed through `d=bahia-contextvm-v1`, and fall back to browser relays only with degraded metadata when the ContextVM set is absent.
 - ContextVM discovery `features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend service subscription target, and at least one browser-discoverable relay URL advertised for the operation.
+- ContextVM discovery advertises early liveness support with `control_plane.capabilities=[..., "encrypted_controlplane.progress_ack"]` and `control_plane.wire_version="contextvm-jsonrpc-v2"`; clients that see both fields apply a short ack timeout before the longer work timeout.
 - Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.contextvm_relays`; sensitive payloads must never be inferred safe for public browser relays without encrypted ContextVM capability metadata.
 
 Event contract:
 
 - Production request kind: inner ContextVM `25910`, optionally wrapped as `1059`/`21059`.
 - Production clients subscribe for correlated ContextVM responses and canonical observable kinds before publishing when the request event id is known.
+- For routed and authorized encrypted ContextVM requests, the backend first returns a JSON-RPC notification with `method="notifications/progress"`, no `id`, and `params.status="processing"`; routing mismatches stay silent and unauthorized requests return the existing terminal error without an ack.
 - Request routing tags include `p=<service_pubkey>` and ContextVM method/correlation tags; sensitive payloads stay inside the encrypted wrapper.
 - Completion for long-running work is not the JSON-RPC acknowledgment; clients follow canonical observables (`30900`, `4903`, `30315`, domain NIPs) and NIP-09 delete events where applicable.
 - Backend handlers validate the inner event signature/sender after unwrap, reject unauthorized requesters, publish JSON-RPC errors for decrypt/validation failures, and deduplicate by event id plus `_meta.progressToken` where supplied.

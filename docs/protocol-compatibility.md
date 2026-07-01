@@ -11,7 +11,7 @@ Current production shape:
 - Bahia is a **deployment/runtime control plane**.
 - The **relay sidecar is the primary realtime/public boundary**.
 - Browser/operator identity is **signer-first**.
-- Mutation intent uses **ContextVM JSON-RPC over Nostr kind `25910`**, normally encrypted with CEP-4 / NIP-59 wrappers (`1059` or `21059`).
+- Mutation intent uses **ContextVM JSON-RPC over Nostr kind `25910`**, normally encrypted with CEP-4 / NIP-59 wrappers (`1059` or `21059`). The `encrypted_controlplane.progress_ack` / `contextvm-jsonrpc-v2` discovery capability adds an early no-`id` `notifications/progress` ack for routed and authorized encrypted requests without changing terminal truth semantics.
 - Long-running truth is observed through **canonical Nostr observables** (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30004`, `30078`, and relevant standard NIPs).
 - REST and HTTP MCP remain compatibility/tooling surfaces, but they must return Nostr correlation metadata for long-running work.
 

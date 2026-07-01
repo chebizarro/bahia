@@ -225,8 +225,8 @@
     } catch (secretErr) {
       if (sequence !== loadSequence || id !== serviceId) return;
       secrets = [];
-      secretsError = secretErr?.message || 'Failed to load service secrets';
-      console.warn('Failed to load service secrets through protected service requests:', secretErr);
+      secretsError = 'Secrets unavailable — control plane unreachable. Check service-pubkey discovery and relay auth.';
+      console.info('Service secrets unavailable through protected control plane:', secretErr?.message || secretErr);
     } finally {
       if (sequence === loadSequence && id === serviceId) {
         secretsLoading = false;
@@ -1013,7 +1013,7 @@
       {:else if secretsError}
         <div class="empty-state">
           <WarningIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
-          <p class="empty">Failed to load secrets</p>
+          <p class="empty">Secrets unavailable</p>
           <p class="empty-detail">{secretsError}</p>
         </div>
       {:else if secrets.length > 0}

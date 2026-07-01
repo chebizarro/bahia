@@ -170,10 +170,10 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 
 	transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 1 {
+	if len(publisher.events) != 2 {
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	channelPayload := notificationResultPayload(t, publisher.events[0])["channel"].(map[string]any)
+	channelPayload := notificationResultPayload(t, publisher.events[len(publisher.events)-1])["channel"].(map[string]any)
 	config := channelPayload["config"].(map[string]any)
 	if _, ok := config["secret"]; ok {
 		t.Fatalf("ContextVM create result leaked webhook secret: %#v", config)
@@ -190,7 +190,7 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 	publisher.events = nil
 	listEvent := makeNotificationContextVMWrappedRequest(t, "list-1", EncryptedOperationNotificationChannelsList, nil)
 	transport.HandleEvent(context.Background(), listEvent)
-	channels := notificationResultPayload(t, publisher.events[0])["channels"].([]any)
+	channels := notificationResultPayload(t, publisher.events[len(publisher.events)-1])["channels"].([]any)
 	listedConfig := channels[0].(map[string]any)["config"].(map[string]any)
 	if _, ok := listedConfig["secret"]; ok {
 		t.Fatalf("ContextVM list result leaked webhook secret: %#v", listedConfig)
@@ -221,7 +221,7 @@ func TestNotificationEncryptedHandlers_UpdatePreservesOmittedWebhookSecret(t *te
 	if stored.Config["url"] != "https://hooks.example/new" || stored.Config["secret"] != "super-secret" {
 		t.Fatalf("update did not preserve omitted secret: %#v", stored.Config)
 	}
-	config := notificationResultPayload(t, publisher.events[0])["channel"].(map[string]any)["config"].(map[string]any)
+	config := notificationResultPayload(t, publisher.events[len(publisher.events)-1])["channel"].(map[string]any)["config"].(map[string]any)
 	if _, ok := config["secret"]; ok {
 		t.Fatalf("ContextVM update result leaked webhook secret: %#v", config)
 	}
@@ -245,13 +245,13 @@ func TestNotificationEncryptedHandlers_ListLogsReturnsEncryptedContextVMResponse
 
 	transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 1 {
+	if len(publisher.events) != 2 {
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	if got := publisher.events[0]; got.Kind != KindContextVMGiftWrap || got.Content == "" || got.Content == "only-in-encrypted-result" {
+	if got := publisher.events[len(publisher.events)-1]; got.Kind != KindContextVMGiftWrap || got.Content == "" || got.Content == "only-in-encrypted-result" {
 		t.Fatalf("log result was not published as encrypted ContextVM response: %#v", got)
 	}
-	logs := notificationResultPayload(t, publisher.events[0])["logs"].([]any)
+	logs := notificationResultPayload(t, publisher.events[len(publisher.events)-1])["logs"].([]any)
 	if logs[0].(map[string]any)["payload"].(map[string]any)["secret_detail"] != "only-in-encrypted-result" {
 		t.Fatalf("missing decrypted log payload: %#v", logs[0])
 	}
