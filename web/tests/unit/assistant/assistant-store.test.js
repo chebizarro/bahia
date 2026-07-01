@@ -9,6 +9,10 @@ const controlplaneMock = vi.hoisted(() => ({
   bootstrapControlplane: vi.fn()
 }));
 
+const encryptedControlplaneMock = vi.hoisted(() => ({
+  requestEncryptedResult: vi.fn()
+}));
+
 const nostrMock = vi.hoisted(() => {
   function store(initial) {
     let value = initial;
@@ -34,10 +38,21 @@ const nostrMock = vi.hoisted(() => {
 
 vi.mock('../../../src/lib/stores/auth.js', () => authMock);
 vi.mock('../../../src/lib/stores/controlplane.svelte.js', () => controlplaneMock);
+vi.mock('../../../src/lib/nostr/encrypted-controlplane.js', () => encryptedControlplaneMock);
 vi.mock('../../../src/lib/nostr/client.js', async () => {
   const actual = await vi.importActual('../../../src/lib/nostr/client.js');
   return { ...actual, nostr: nostrMock };
 });
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 function event({ id, kind, pubkey, created_at, tags = [], content = {} }) {
   return {
@@ -63,6 +78,11 @@ describe('assistant store', () => {
     authMock.authState.pubkey = 'a'.repeat(64);
     controlplaneMock.controlplaneConnection.servicePubkey = 'b'.repeat(64);
     controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true });
+    encryptedControlplaneMock.requestEncryptedResult.mockReset();
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValue({
+      result: { session_id: 'assistant-session-1', status: 'completed', summary: 'Assistant completed.' },
+      requestEventId: 'request-event-1'
+    });
     nostrMock.subscribe.mockImplementation((_filters, handlers) => {
       liveHandlers = handlers;
       // Simulate empty bootstrap: deliver EOSE immediately
@@ -195,6 +215,39 @@ describe('assistant store', () => {
       message: 'Deploying route',
       downstreamRequestId: 'downstream-live'
     });
+  });
+
+  it('tracks prompt pending state and records timeout detail when the assistant result does not arrive', async () => {
+    const pending = deferred();
+    encryptedControlplaneMock.requestEncryptedResult.mockReturnValueOnce(pending.promise);
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    store.assistantConnection.servicePubkey = controlplaneMock.controlplaneConnection.servicePubkey;
+
+    const promptPromise = store.publishAssistantPrompt({
+      prompt: 'Deploy api',
+      sessionId: 'assistant-timeout-session',
+      routeContext: { route: '/services' },
+      selectedRefs: ['service:api']
+    });
+
+    let session = store.assistantSessions.find((item) => item.sessionId === 'assistant-timeout-session');
+    expect(session).toBeTruthy();
+    expect(Object.keys(store.pendingAssistantRequests)).toHaveLength(1);
+    expect(session.transcript.some((item) => item.type === 'prompt' && item.prompt === 'Deploy api')).toBe(true);
+    expect(session.transcript.some((item) => item.pending && item.status === 'planning')).toBe(true);
+
+    pending.reject(new Error('ContextVM request timed out after 120000ms waiting for result'));
+    await expect(promptPromise).rejects.toThrow('ContextVM request timed out after 120000ms waiting for result');
+
+    session = store.assistantSessions.find((item) => item.sessionId === 'assistant-timeout-session');
+    expect(Object.keys(store.pendingAssistantRequests)).toHaveLength(0);
+    expect(session.transcript.some((item) => item.pending)).toBe(false);
+    expect(session.transcript).toContainEqual(expect.objectContaining({
+      type: 'result',
+      status: 'failed',
+      summary: 'assistant planning failed',
+      error: 'ContextVM request timed out after 120000ms waiting for result'
+    }));
   });
 
   it('does not replay historical streaming chunks during bootstrap', async () => {

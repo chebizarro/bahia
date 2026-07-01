@@ -205,10 +205,6 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 	if err := o.publishSession(ctx, session); err != nil {
 		return nil, err
 	}
-	if err := o.publishStatus(ctx, event, req.SessionID, "planning", map[string]any{"message": "planning assistant response"}); err != nil {
-		return nil, err
-	}
-
 	contextCtx, cancelContext := context.WithTimeout(ctx, assistantContextTimeout)
 	contextBlock, err := o.contextBuilder.BuildContext(contextCtx, routeContextStrings(req.RouteContext), req.SelectedRefs, session.TranscriptSummary)
 	cancelContext()
@@ -954,7 +950,7 @@ func (o *AssistantOrchestrator) systemPrompt() string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return "You are the Bahia Operator Assistant. Produce a conservative AssistantPlan JSON object. Use only these assistant-safe event-native tools: " + strings.Join(names, ", ") + ".\n\n" +
+	return "You are the Bahia Operator Assistant. Produce a conservative AssistantPlan JSON object. Address the operator directly with second-person pronouns (you/your) in summaries and clarification questions; never describe the operator in third person. Use only these assistant-safe event-native tools: " + strings.Join(names, ", ") + ".\n\n" +
 		"DNS intent mapping:\n" +
 		"- \"expose X internally only\" → bahia_assistant_dns_policy_apply with split-horizon visibility=internal\n" +
 		"- \"add DNS for X\" / \"create zone\" → bahia_assistant_dns_zone_create\n" +

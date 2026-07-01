@@ -12,6 +12,7 @@
     SunIcon,
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
+  import IconX from '$lib/icons/tabler/IconX.svelte';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import UserMenu from '$lib/components/UserMenu.svelte';
   import {
@@ -140,11 +141,10 @@
     <button type="button" class="drawer-backdrop" aria-label="Close navigation menu" onclick={closeMenu}></button>
     <nav id="navigation-drawer" class="navigation-drawer open" aria-label="All navigation links">
       <div class="drawer-header">
-        <div>
-          <p class="drawer-eyebrow">Browse</p>
-          <p class="drawer-title">All destinations</p>
-        </div>
-        <button type="button" class="drawer-close" bind:this={drawerCloseButton} onclick={closeMenu}>Close</button>
+        <p class="drawer-title">All destinations</p>
+        <button type="button" class="drawer-close" aria-label="Close navigation menu" bind:this={drawerCloseButton} onclick={closeMenu}>
+          <IconX size={18} strokeWidth={2} ariaHidden="true" />
+        </button>
       </div>
 
       <div class="nav-sections">
@@ -352,11 +352,21 @@
     color: var(--text-primary);
   }
 
-  .theme-toggle {
-    padding-inline: 0.75rem;
+  .theme-toggle,
+  .drawer-close {
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .theme-toggle {
+    padding-inline: 0.75rem;
+  }
+
+  .drawer-close {
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
   }
 
   .drawer-backdrop {
@@ -406,14 +416,8 @@
     margin-bottom: 1rem;
   }
 
-  .drawer-eyebrow {
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
   .drawer-title {
+    margin: 0;
     color: var(--text-primary);
     font-size: 1rem;
     font-weight: 600;

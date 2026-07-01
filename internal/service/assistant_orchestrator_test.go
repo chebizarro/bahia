@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -273,6 +274,31 @@ func TestAssistantOrchestratorRejectsUnknownToolAtPlanningTime(t *testing.T) {
 	}
 }
 
+func TestAssistantOrchestratorPromptReturnsLLMErrorDetail(t *testing.T) {
+	ctx := context.Background()
+	publisher := &assistantTestPublisher{}
+	invoker := &assistantTestToolInvoker{}
+	orchestrator := newTestAssistantOrchestrator(t, publisher, invoker, &assistantTestChatClient{err: errors.New("upstream 503: model overloaded")}, nil, nil)
+
+	result, err := orchestrator.HandlePromptRequest(ctx, assistantPromptSource("session-1", "turn-1"), assistantPromptRequest("session-1", "turn-1", "deploy api"))
+	if err != nil {
+		t.Fatalf("HandlePromptRequest: %v", err)
+	}
+
+	if got := result["status"]; got != "failed" {
+		t.Fatalf("result status = %q, want failed", got)
+	}
+	if got := result["summary"]; got != "assistant planning failed" {
+		t.Fatalf("summary = %q, want assistant planning failed", got)
+	}
+	if got := result["error"]; got != "upstream 503: model overloaded" {
+		t.Fatalf("error detail = %q", got)
+	}
+	if invoker.callCount() != 0 {
+		t.Fatalf("llm failure dispatched tool calls: %d", invoker.callCount())
+	}
+}
+
 func TestAssistantOrchestratorSystemPromptIncludesDNSGuidance(t *testing.T) {
 	orchestrator := NewAssistantOrchestrator(AssistantOrchestratorConfig{AllowedToolNames: []string{
 		"bahia_assistant_dns_policy_apply",
@@ -285,6 +311,8 @@ func TestAssistantOrchestratorSystemPromptIncludesDNSGuidance(t *testing.T) {
 
 	got := orchestrator.systemPrompt()
 	for _, want := range []string{
+		"Address the operator directly with second-person pronouns (you/your)",
+		"never describe the operator in third person",
 		"DNS intent mapping:",
 		"\"expose X internally only\" → bahia_assistant_dns_policy_apply with split-horizon visibility=internal",
 		"\"add DNS for X\" / \"create zone\" → bahia_assistant_dns_zone_create",
@@ -387,9 +415,15 @@ func assistantTestPubKey(label string) nostr.PubKey {
 	return nostr.PubKey(sum)
 }
 
-type assistantTestChatClient struct{ plan *domain.AssistantPlan }
+type assistantTestChatClient struct {
+	plan *domain.AssistantPlan
+	err  error
+}
 
 func (c *assistantTestChatClient) PlanFromPrompt(context.Context, string, string) (*domain.AssistantPlan, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
 	return c.plan, nil
 }
 

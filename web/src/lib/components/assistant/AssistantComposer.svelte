@@ -34,6 +34,7 @@
     if (!value || submitting) return;
     submitting = true;
     error = '';
+    prompt = '';
     try {
       await publishAssistantPrompt({
         prompt: value,
@@ -41,7 +42,6 @@
         routeContext,
         selectedRefs: visibleSelectedRefs.map((ref) => ref.ref)
       });
-      prompt = '';
     } catch (err) {
       error = err?.message || String(err);
     } finally {

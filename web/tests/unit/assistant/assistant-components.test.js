@@ -27,6 +27,16 @@ async function flush() {
   await tick();
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('assistant refs model', () => {
   it('allows only docs and HTTP(S) hrefs for assistant reference pills', () => {
     expect(safeAssistantRefHref('/docs/features-services')).toBe('/docs/features-services');
@@ -82,6 +92,29 @@ describe('assistant components', () => {
       routeContext,
       selectedRefs: ['docs:features-services']
     });
+  });
+
+  it('clears the composer input immediately while the assistant response is pending', async () => {
+    const pending = deferred();
+    assistantStoreMock.publishAssistantPrompt.mockReturnValueOnce(pending.promise);
+    const target = renderComponent(AssistantComposer, {});
+
+    await setTextAreaValue(target, 'Plan this deployment');
+    const textarea = target.querySelector('textarea');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await tick();
+
+    expect(textarea.value).toBe('');
+    expect(target.querySelector('button[type="submit"]')?.textContent).toBe('Sending…');
+    expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith({
+      prompt: 'Plan this deployment',
+      sessionId: undefined,
+      routeContext: null,
+      selectedRefs: []
+    });
+
+    pending.resolve({ ok: true });
+    await flush();
   });
 
   it('dismisses route docs refs without removing selected operational refs', async () => {
@@ -150,6 +183,46 @@ describe('assistant components', () => {
     expect(text).toContain('deploy-1');
     expect(target.querySelector('button.approve')?.textContent).toBe('Approve');
     expect(target.querySelector('button.reject')?.textContent).toBe('Reject');
+  });
+
+  it('renders a spinner bubble for pending assistant responses', () => {
+    const target = renderComponent(AssistantTurn, {
+      operatorPubkey: 'a'.repeat(64),
+      session: { sessionId: 'assistant-session-1', state: 'planning', lastPlanHash: '' },
+      item: {
+        id: 'assistant-pending-session-turn',
+        type: 'status',
+        pubkey: 'b'.repeat(64),
+        createdAt: 100,
+        status: 'planning',
+        pending: true
+      }
+    });
+
+    expect(textOf(target)).toContain('Waiting for assistant response…');
+    expect(target.querySelector('.spinner')).toBeTruthy();
+    expect(textOf(target)).not.toContain('planning assistant response');
+  });
+
+  it('surfaces assistant planning failure details alongside the summary', () => {
+    const target = renderComponent(AssistantTurn, {
+      operatorPubkey: 'a'.repeat(64),
+      session: { sessionId: 'assistant-session-1', state: 'idle', lastPlanHash: '' },
+      item: {
+        id: 'assistant-failed',
+        type: 'result',
+        pubkey: 'b'.repeat(64),
+        createdAt: 100,
+        status: 'failed',
+        failed: true,
+        summary: 'assistant planning failed',
+        error: 'ContextVM request timed out after 120000ms waiting for result'
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('assistant planning failed');
+    expect(text).toContain('ContextVM request timed out after 120000ms waiting for result');
   });
 
   it('shows blocked visual state for a relay-closed assistant turn', () => {

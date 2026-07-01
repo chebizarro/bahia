@@ -13,9 +13,21 @@
   let { routeContext = null, defaultSelectedRefs = [] } = $props();
 
   const session = $derived(activeAssistantSession());
+  const transcriptItems = $derived(session?.transcript || []);
   const pendingCount = $derived(Object.keys(pendingAssistantRequests).length);
   const otherParticipants = $derived((session?.participants || []).filter((pubkey) => pubkey && pubkey !== assistantConnection.operatorPubkey));
   const state = $derived(assistantUi.panelOpen ? 'open' : 'closed');
+  let transcriptElement;
+
+  $effect(() => {
+    const scrollKey = transcriptItems
+      .map((item) => `${item.id}:${item.streamingContent || ''}:${item.message || ''}:${item.summary || ''}:${item.error || ''}`)
+      .join('|');
+    if (!assistantUi.panelOpen || !transcriptElement || scrollKey === null) return;
+    queueMicrotask(() => {
+      transcriptElement.scrollTop = transcriptElement.scrollHeight;
+    });
+  });
 
   function shortPubkey(pubkey) {
     if (!pubkey) return '';
@@ -64,9 +76,9 @@
       </div>
     {/if}
 
-    <section class="transcript" aria-label="Assistant transcript">
-      {#if session?.transcript?.length}
-        {#each session.transcript as item (item.id)}
+    <section class="transcript" aria-label="Assistant transcript" bind:this={transcriptElement}>
+      {#if transcriptItems.length}
+        {#each transcriptItems as item (item.id)}
           <AssistantTurn {item} {session} operatorPubkey={assistantConnection.operatorPubkey} />
         {/each}
       {:else}

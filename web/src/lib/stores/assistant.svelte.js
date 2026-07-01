@@ -258,6 +258,47 @@ function applyLocalAssistantItem(item) {
   return true;
 }
 
+function removeLocalAssistantItem(itemId) {
+  if (!itemId || !eventMap.delete(itemId)) return false;
+  refreshSessions();
+  return true;
+}
+
+function assistantPendingItem({ sessionId, turnId, prompt }) {
+  return {
+    type: 'status',
+    id: `assistant-pending:${sessionId}:${turnId}`,
+    kind: ASSISTANT_KINDS.STATUS,
+    pubkey: assistantConnection.servicePubkey,
+    createdAt: nowSeconds(),
+    sessionId,
+    turnId,
+    status: 'planning',
+    pending: true,
+    message: '',
+    prompt
+  };
+}
+
+function assistantFailureItem(error, { sessionId, turnId }) {
+  const detail = error?.message || String(error || 'Assistant request failed');
+  return {
+    type: 'result',
+    id: `assistant-failed:${sessionId}:${turnId}:${Date.now()}`,
+    kind: ASSISTANT_KINDS.CONTEXTVM_RESULT,
+    pubkey: assistantConnection.servicePubkey,
+    createdAt: nowSeconds(),
+    sessionId,
+    turnId,
+    status: 'failed',
+    failed: true,
+    summary: 'assistant planning failed',
+    error: detail,
+    content: { status: 'failed', summary: 'assistant planning failed', error: detail },
+    event: null
+  };
+}
+
 function applyAssistantEvent(event, options = {}) {
   if (!event?.id || seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
@@ -478,18 +519,38 @@ export async function publishAssistantPrompt({ prompt, sessionId, routeContext =
     routeContext: content.route_context,
     selectedRefs: content.selected_refs
   });
+  const pendingItem = assistantPendingItem({ sessionId: resolvedSessionId, turnId, prompt: cleanPrompt });
+  applyLocalAssistantItem(pendingItem);
+  pendingMap.set(pendingItem.id, {
+    sessionId: resolvedSessionId,
+    turnId,
+    status: 'planning',
+    startedAt: new Date().toISOString()
+  });
+  syncPendingRequests();
   setActiveAssistantSession(resolvedSessionId);
 
-  const response = await requestEncryptedResult({
-    operation: 'assistant/prompt',
-    payload: content,
-    tags: [['session', resolvedSessionId], ['turn', turnId]],
-    signal,
-    timeoutMs: ASSISTANT_PROMPT_TIMEOUT_MS
-  });
+  try {
+    const response = await requestEncryptedResult({
+      operation: 'assistant/prompt',
+      payload: content,
+      tags: [['session', resolvedSessionId], ['turn', turnId]],
+      signal,
+      timeoutMs: ASSISTANT_PROMPT_TIMEOUT_MS
+    });
 
-  applyLocalAssistantItem(assistantResultItem(response, resolvedSessionId));
-  return response;
+    pendingMap.delete(pendingItem.id);
+    syncPendingRequests();
+    removeLocalAssistantItem(pendingItem.id);
+    applyLocalAssistantItem(assistantResultItem(response, resolvedSessionId));
+    return response;
+  } catch (err) {
+    pendingMap.delete(pendingItem.id);
+    syncPendingRequests();
+    removeLocalAssistantItem(pendingItem.id);
+    applyLocalAssistantItem(assistantFailureItem(err, { sessionId: resolvedSessionId, turnId }));
+    throw err;
+  }
 }
 
 export async function publishAssistantApproval({ sessionId, planHash, decision, message = '', modifiedPlan = null, signal } = {}) {
