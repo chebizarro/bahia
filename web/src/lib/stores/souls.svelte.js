@@ -424,8 +424,16 @@ function applySoulFactoryEvent(event) {
 
 // Single persistent subscription for all soul factory read models.
 // Receives stored events, marks ready on EOSE, keeps listening for live updates.
-export async function subscribeToSoulFactoryUpdates(authorPubkey = null) {
+export async function subscribeToSoulFactoryUpdates(options = null) {
   if (soulFactorySubscription) return;
+
+  // Accept either a bare author pubkey string or an options object. Callers such as
+  // loadRuntimeCapabilities({ method }) pass an options object; only a real pubkey
+  // string may ever reach the relay `authors` filter, which must be an array of
+  // strings (a non-string here triggers a relay "parse error ... of authors").
+  const authorPubkey = typeof options === 'string'
+    ? options
+    : (options && typeof options === 'object' ? (options.authorPubkey || options.author || null) : null);
 
   loading.souls = true;
   loading.templates = true;
@@ -446,7 +454,7 @@ export async function subscribeToSoulFactoryUpdates(authorPubkey = null) {
   }
 
   const soulFilter = { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT] };
-  if (authorPubkey) soulFilter.authors = [authorPubkey];
+  if (typeof authorPubkey === 'string' && authorPubkey) soulFilter.authors = [authorPubkey];
 
   const tracker = createReadModelMetadataTracker({ relays: knownPoolRelays() });
   const finishHistoricalCatchup = () => {

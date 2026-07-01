@@ -16,6 +16,14 @@
     void loadData();
   });
 
+  function describeLoadError(message) {
+    const raw = String(message || 'Unknown error');
+    if (/method not found|not implemented|unknown method|not available/i.test(raw)) {
+      return 'Organizations aren’t available yet — the control-plane service hasn’t enabled this method. Retry once it has been deployed.';
+    }
+    return raw;
+  }
+
   async function loadData() {
     const generation = ++loadGeneration;
     loading = true;
@@ -27,8 +35,9 @@
       myInvites = data.myInvites;
     } catch (e) {
       if (generation !== loadGeneration) return;
-      error = e.message;
-      toast.error(`Failed to load organizations: ${e.message}`);
+      // Surface a single, inline error with a Retry affordance instead of an
+      // additional transient toast so recovery is obvious once the backend lands.
+      error = describeLoadError(e?.message);
     } finally {
       if (generation === loadGeneration) {
         loading = false;
@@ -69,7 +78,7 @@
   <div class="loading">Loading...</div>
 {:else if error}
   <div class="error-state">
-    <p>Error: {error}</p>
+    <p>{error}</p>
     <button onclick={loadData}>Retry</button>
   </div>
 {:else}

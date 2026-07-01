@@ -52,6 +52,7 @@ import IconSun from './tabler/IconSun.svelte';
 import IconTarget from './tabler/IconTarget.svelte';
 import IconVideo from './tabler/IconVideo.svelte';
 import IconX from './tabler/IconX.svelte';
+import IconPlayerPause from './tabler/IconPlayerPause.svelte';
 
 export const ServiceIcon = IconServer;
 export const ArtifactIcon = IconPackage;
@@ -103,6 +104,7 @@ export const HeavyIcon = IconGauge;
 export const MLFabricIcon = IconNetwork;
 export const AcceleratorIcon = IconCpu;
 export const DocsIcon = IconBook;
+export const SuspendedIcon = IconPlayerPause;
 
 export const ImageFileIcon = IconPhoto;
 export const VideoFileIcon = IconVideo;

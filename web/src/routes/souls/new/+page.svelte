@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { untrack } from 'svelte';
   import AvatarStudio from '$lib/components/souls/AvatarStudio.svelte';
   import MemoryConfig from '$lib/components/MemoryConfig.svelte';
@@ -21,6 +22,7 @@
     provisioningRuns,
     runtimeCapabilities,
     souls,
+    drafts,
     trackProvisioningRun
   } from '$lib/stores/souls.js';
   import { customizationPresets } from '$lib/data/customization-presets';
@@ -29,6 +31,8 @@
     capabilityLabel,
     capabilityRef,
     compatibleCapabilities,
+    formatKindList,
+    formatToolGrantList,
     parseKindList,
     parseToolGrantList,
     slugifyAgentId,
@@ -109,6 +113,8 @@
   let showAdvanced = $derived(disclosureMode === 'advanced');
   let activeTabIndex = $derived(customizationTabs.findIndex((tab) => tab.id === activeTab));
   let previewDraftContent = $derived(buildDraftContent());
+  let resumeDraftId = $derived(page.url.searchParams.get('draft') || '');
+  let hydratedDraftId = '';
 
   $effect(() => {
     if (runtimeChoices.length > 0 && (!selectedCapabilityRef || !selectedCapability)) {
@@ -120,6 +126,19 @@
     if (requestEventId && provisioningRuns.has(requestEventId)) {
       currentRun = provisioningRuns.get(requestEventId);
     }
+  });
+
+  // Resume a saved draft once it arrives from the soul-factory subscription. Keyed by
+  // draft id so switching ?draft=<id> re-hydrates, and skipped once the operator has
+  // started editing so a late-arriving draft event can't clobber in-progress work.
+  $effect(() => {
+    if (!resumeDraftId || hydratedDraftId === resumeDraftId) return;
+    const match = drafts.find((item) => item.agentId === resumeDraftId);
+    if (!match) return;
+    hydratedDraftId = resumeDraftId;
+    const formTouched = Boolean(agentName || agentId || purpose);
+    if (formTouched) return;
+    untrack(() => hydrateFromDraft(match));
   });
 
   function clone(value) {
@@ -176,6 +195,52 @@
     const sourceSoul = souls.find((item) => item.agentId === sourceAgentId);
     if (!sourceSoul) return;
     applyCustomizationContent(parseSoulContent(sourceSoul));
+  }
+
+  // Rehydrate the wizard from a previously saved 31952 draft so operators can resume
+  // and provision it later (?draft=<agentId> from the Soul Gallery drafts list).
+  function hydrateFromDraft(draft) {
+    if (!draft) return;
+    const content = draft.content || {};
+    const identity = content.identity || {};
+    agentId = draft.agentId || agentId;
+    agentName = identity.name || draft.name || agentName;
+    purpose = identity.purpose || content.brief || purpose;
+    tier = identity.tier || draft.tier || tier;
+    nip05 = identity.nip05 || nip05;
+    if (identity.theme) identityTheme = identity.theme;
+    if (identity.emoji) identityEmoji = identity.emoji;
+
+    const permissions = content.permissions || {};
+    if (Array.isArray(permissions.allowed_kinds) && permissions.allowed_kinds.length) {
+      allowedKinds = formatKindList(permissions.allowed_kinds);
+    }
+    if (Array.isArray(permissions.tool_grants) && permissions.tool_grants.length) {
+      toolGrants = formatToolGrantList(permissions.tool_grants);
+    }
+    if (permissions.approval_policy) approvalPolicy = permissions.approval_policy;
+
+    const relayPolicy = content.relay_policy || {};
+    if (Array.isArray(relayPolicy.read)) readRelays = relayPolicy.read.join('\n');
+    if (Array.isArray(relayPolicy.write)) writeRelays = relayPolicy.write.join('\n');
+    if (Array.isArray(relayPolicy.control)) controlRelays = relayPolicy.control.join('\n');
+    if (typeof relayPolicy.nip65_discovery === 'boolean') nip65Discovery = relayPolicy.nip65_discovery;
+
+    const workspace = content.workspace || {};
+    if (workspace.branch) branch = workspace.branch;
+    if (workspace.environment) environment = workspace.environment;
+
+    if (content.assets?.voice_ref) voiceRef = content.assets.voice_ref;
+    if (content.persona) personaSpec = createDefaultPersonaSpec(content.persona);
+    if (content.avatar) avatarSpec = createDefaultAvatarSpec(content.avatar);
+    if (content.voice) voiceSpec = createDefaultVoiceSpec(content.voice);
+    if (content.memory) memorySpec = createDefaultMemorySpec(content.memory);
+
+    if (content.runtime?.capability_ref) selectedCapabilityRef = content.runtime.capability_ref;
+
+    draftEventId = draft.id || '';
+    draftSpecHash = draft.specHash || content.spec_hash || '';
+    draftSaveStatus = `Resumed saved draft “${draft.agentId}”`;
   }
 
   function generateAgentId() {
@@ -331,6 +396,22 @@
     }
   }
 
+  // Escape hatch for the runtime dead-end: when no compatible 30317 capability has
+  // been discovered, let the operator persist their work as a signed draft and leave
+  // instead of being trapped on a disabled wizard.
+  async function saveDraftAndExit() {
+    try {
+      if (!isAuthenticated) {
+        await login();
+        if (authState.status !== 'authenticated') throw new Error('Authentication required to save a soul draft');
+      }
+      await saveDraft('Runtime panel');
+      goto('/souls');
+    } catch {
+      // saveDraft surfaces the error in the banner; keep the operator on the panel.
+    }
+  }
+
   async function handleLogin() {
     try {
       error = null;
@@ -402,8 +483,11 @@
       } else if (!authState.extensionAvailable) {
         await refreshExtensionStatus();
       }
+      // All soul-factory read models (souls, templates, drafts, capabilities) share a
+      // single subscription, so call without arguments — passing an options object here
+      // previously leaked into the relay `authors` filter and was rejected as malformed.
       await Promise.all([
-        loadRuntimeCapabilities({ method: SOUL_RUNTIME_METHODS.PROVISION }),
+        loadRuntimeCapabilities(),
         loadSouls()
       ]);
     }
@@ -555,7 +639,14 @@
             <div class="form-section">
               <h3>Runtime capability</h3>
               {#if runtimeChoices.length === 0}
-                <div class="warning-box">No compatible 30317 runtime capability has been discovered for {SOUL_RUNTIME_METHODS.PROVISION}. Provisioning is disabled until OpenClaw or Metiq advertises support.</div>
+                <div class="warning-box">
+                  <p><strong>No compatible 30317 runtime capability discovered yet.</strong></p>
+                  <p>A runtime such as OpenClaw or Metiq must advertise support for <code>{SOUL_RUNTIME_METHODS.PROVISION}</code> before this soul can be provisioned. This list updates live as capabilities are announced — no need to reload.</p>
+                  <p>You can keep configuring now and save your progress as a signed 31952 draft, then resume from the Soul Gallery once a runtime is available.</p>
+                  <button type="button" class="btn-secondary" onclick={saveDraftAndExit} disabled={savingDraft || submitting || (!hasExtension && !isAuthenticated)}>
+                    {savingDraft ? 'Saving draft…' : 'Save draft & return to gallery'}
+                  </button>
+                </div>
               {:else}
                 <label>Runtime target<select bind:value={selectedCapabilityRef}>{#each runtimeChoices as capability}<option value={capabilityRef(capability)}>{capabilityLabel(capability)}</option>{/each}</select></label>
                 <div class="runtime-summary">
@@ -706,6 +797,9 @@
   button:disabled { opacity: 0.55; cursor: not-allowed; }
   .error-banner, .warning-box { padding: 0.85rem 1rem; border-radius: 8px; margin-bottom: 1rem; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); }
   .warning-box { color: var(--warning); background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.3); }
+  .warning-box p { margin: 0 0 0.5rem; color: inherit; }
+  .warning-box p:last-of-type { margin-bottom: 0.75rem; }
+  .warning-box button { margin-top: 0.25rem; }
   .runtime-summary { display: grid; gap: 0.35rem; background: var(--bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; font-size: 0.82rem; color: var(--text-muted); }
   .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
   .preview-grid article { background: var(--bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 0.85rem; display: grid; gap: 0.25rem; min-width: 0; }

@@ -7,7 +7,8 @@
     SuccessIcon,
     PendingIcon,
     WarningIcon,
-    UnknownIcon
+    SuspendedIcon,
+    EditIcon
   } from '$lib/icons/domain-icons.js';
   import {
     emptyStateMessage,
@@ -16,6 +17,7 @@
   } from './page-model.js';
   import {
     souls,
+    drafts,
     soulCounts,
     loading,
     error,
@@ -50,7 +52,7 @@
     </div>
     <a href="/souls/new" class="btn-primary">
       <SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" />
-      New Soul
+      New
     </a>
   </header>
   
@@ -59,10 +61,38 @@
     <Card title="Total Souls" titleIcon={SoulIcon} value={soulCounts().total} />
     <Card title="Active" titleIcon={SuccessIcon} value={soulCounts().active} status="success" />
     <Card title="Provisioning" titleIcon={PendingIcon} value={soulCounts().provisioning} status="warning" />
-    <Card title="Suspended" titleIcon={UnknownIcon} value={soulCounts().suspended} />
+    <Card title="Suspended" titleIcon={SuspendedIcon} value={soulCounts().suspended} />
     <Card title="Runtime Targets" titleIcon={SuccessIcon} value={runtimeCapabilities.filter((capability) => capability.compatible).length} />
   </div>
-  
+
+  <!-- Saved drafts -->
+  {#if drafts.length > 0}
+    <section class="drafts-section">
+      <div class="drafts-header">
+        <h2><SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Saved drafts</h2>
+        <p>Signed 31952 drafts you can resume and provision later.</p>
+      </div>
+      <div class="drafts-list">
+        {#each drafts as draft (draft.agentId || draft.id)}
+          <div class="draft-row">
+            <div class="draft-info">
+              <strong>{draft.name || draft.agentId || 'Untitled draft'}</strong>
+              <span class="draft-meta">
+                {draft.tier || 'standard'}
+                {#if draft.agentId} · <code>{draft.agentId}</code>{/if}
+                {#if draft.createdAt} · saved {new Date(draft.createdAt * 1000).toLocaleString()}{/if}
+              </span>
+            </div>
+            <a class="btn-resume" href={`/souls/new?draft=${encodeURIComponent(draft.agentId || '')}`}>
+              <EditIcon size={16} strokeWidth={1.75} ariaHidden="true" />
+              Resume
+            </a>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
   <!-- Filters -->
   <div class="filters">
     <div class="filter-tabs">
@@ -106,7 +136,10 @@
       <h3>No souls found</h3>
       <p>{emptyStateMessage(filter, search)}</p>
       {#if !search && filter === 'all'}
-        <a href="/souls/new" class="btn-primary">Create Soul</a>
+        <a href="/souls/new" class="btn-primary">
+          <SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" />
+          New
+        </a>
       {/if}
     </div>
   {:else}
@@ -170,6 +203,85 @@
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 1rem;
     margin-bottom: 2rem;
+  }
+
+  .drafts-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 2rem;
+  }
+
+  .drafts-header h2 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.05rem;
+    margin: 0;
+  }
+
+  .drafts-header p {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin: 0.25rem 0 0.75rem;
+  }
+
+  .drafts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .draft-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.65rem 0.85rem;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+  }
+
+  .draft-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+
+  .draft-meta {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+  }
+
+  .draft-meta code {
+    background: var(--card-bg);
+    border-radius: 4px;
+    padding: 0.05rem 0.3rem;
+  }
+
+  .btn-resume {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 0.45rem 0.85rem;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  .btn-resume:hover {
+    border-color: var(--primary);
+    color: var(--primary);
   }
   
   .filters {

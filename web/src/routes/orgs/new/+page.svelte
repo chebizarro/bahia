@@ -9,13 +9,25 @@
 
   let name = $state('');
   let displayName = $state('');
+  let nameEdited = $state(false);
   let submitting = $state(false);
   let errors = $state({});
 
-  // Auto-generate a URL-safe organization name from display name
+  function slugifyOrgName(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^[-.]|[-.]$/g, '')
+      .slice(0, 32);
+  }
+
+  // Auto-generate a URL-safe organization name from the full display name until
+  // the operator edits the URL Name field themselves.
   $effect(() => {
-    if (displayName && !name) {
-      name = displayName.toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^[-.]|[-.]$/g, '').slice(0, 32);
+    const slug = slugifyOrgName(displayName);
+    if (!nameEdited) {
+      name = slug;
     }
   });
 
@@ -79,6 +91,7 @@
           bind:value={name}
           placeholder="my-team"
           disabled={submitting}
+          oninput={() => nameEdited = true}
         />
       </FormField>
 

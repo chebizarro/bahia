@@ -99,6 +99,24 @@ export class PoolBackedClient {
     const connectKey = targetRelays.map(normalizeRelayUrl).join('\n');
     if (this.connectPromise && this.connectRelaysKey === connectKey) return this.connectPromise;
 
+    // Idempotent short-circuit: if not forced and the requested relay set matches the
+    // current set and is already fully connected, skip the reconnect cycle (and its
+    // per-call "Connected to N/N relays" log). Compare normalized URLs order-independently,
+    // and read the connected status using this.relays' own keys (as produced by
+    // refreshConnectionStatus) so URL formatting differences can't defeat the check.
+    if (!force && targetRelays.length > 0) {
+      const targetKeys = targetRelays.map(normalizeRelayUrl);
+      const currentKeys = this.relays.map(normalizeRelayUrl);
+      const sameSet = targetKeys.length === currentKeys.length
+        && targetKeys.every((key) => currentKeys.includes(key));
+      if (sameSet) {
+        const status = this.refreshConnectionStatus();
+        if (this.relays.every((url) => status[url] === 'connected')) {
+          return summarizeRelayConnections(this.relays, status);
+        }
+      }
+    }
+
     const previousRelays = this.relays;
     this.relays = targetRelays;
     this.updateRelayAliases();

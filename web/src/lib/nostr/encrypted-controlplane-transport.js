@@ -37,7 +37,11 @@ export class EncryptedControlplaneTransport {
     if (this.relays.length === 0) {
       throw new Error('No Bahia relay URLs are available for ContextVM requests. Configure browser/bootstrap or ContextVM relays in Bahia discovery before publishing.');
     }
-    if (this.ownClient) await this.client.connect(this.relays, { force: true });
+    // Delegate connection idempotency to the pool client: it short-circuits (and
+    // skips the "[nostr] Connected to N/N relays" log) when the relay set is already
+    // fully connected, and re-establishes any dropped relay otherwise. This avoids a
+    // per-request reconnect without risking a stale connection being reused.
+    if (this.ownClient) await this.client.connect(this.relays);
     this.connected = true;
     return this;
   }
