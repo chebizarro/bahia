@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -44,6 +45,13 @@
       console.warn('Failed to load registries:', err);
     } finally {
       registriesLoading = false;
+    }
+
+    // Cross-agent stitch (bahia-2v2k.11): the dashboard "Create Service" button
+    // navigates to /services?create=1 to auto-open this dialog. Runs once from
+    // the guarded init effect, so it does not reopen on later reactive updates.
+    if (page.url?.searchParams?.get('create')) {
+      openCreateModal();
     }
   }
 
