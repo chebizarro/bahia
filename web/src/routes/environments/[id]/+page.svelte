@@ -422,7 +422,7 @@
     
     <div class="info-grid">
       <Card title="Deploy Strategy" titleIcon={DeploymentIcon} value={environment.deploy_strategy || 'replace'} />
-      <Card title="Protected" titleIcon={environment.protected ? ProtectedIcon : UnknownIcon} value={environment.protected ? 'Yes' : 'No'} />
+      <Card title="Protected" titleIcon={ProtectedIcon} value={environment.protected ? 'Yes' : 'No'} />
       <Card title="Worker Selector" titleIcon={ServiceIcon} value={environment.loom_worker_selector || 'Any worker'} />
       <Card title="Eligible Workers" titleIcon={ServiceIcon} value={String(estimatedPolicyEligibleCount)} />
       <Card title="Current State" titleIcon={driftStatusIcon} value={environmentDriftStatus === 'drifted' ? 'Drifted' : environmentDriftStatus === 'in_sync' ? 'In Sync' : 'Unknown'} />

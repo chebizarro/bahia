@@ -21,11 +21,15 @@
     ArtifactIcon,
     DeploymentIcon,
     EnvironmentIcon,
+    ErrorIcon,
+    PendingIcon,
+    ProgressIcon,
     ServiceIcon,
     SuccessIcon,
     UnknownIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
+  import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
   let intent = $state(null);
   let runs = $state([]);
@@ -172,16 +176,20 @@
   function approvalStatusIcon(status) {
     const normalized = String(status || '').toLowerCase();
     if (normalized === 'approved') return SuccessIcon;
-    if (normalized === 'pending' || normalized === 'rejected') return WarningIcon;
+    if (normalized === 'rejected') return ErrorIcon;
+    if (normalized === 'pending') return PendingIcon;
     return UnknownIcon;
   }
 
   function deploymentStatusIcon(status) {
     const normalized = String(status || '').toLowerCase();
     if (normalized === 'succeeded') return SuccessIcon;
-    if (normalized === 'failed' || normalized === 'cancelled') return WarningIcon;
-    if (normalized === 'running' || normalized === 'queued' || normalized === 'pending') return DeploymentIcon;
-    return UnknownIcon;
+    if (normalized === 'failed') return ErrorIcon;
+    if (normalized === 'cancelled' || normalized === 'timeout') return WarningIcon;
+    if (normalized === 'running') return ProgressIcon;
+    if (normalized === 'queued' || normalized === 'pending') return PendingIcon;
+    // Never fall back to the question-mark icon for the deployment status hero.
+    return DeploymentIcon;
   }
 </script>
 
@@ -196,9 +204,9 @@
       </LoadingButton>
     </div>
   {:else if intent}
+    <a href="/deployments" class="back-link">← Back to Deployments</a>
     <div class="header">
       <div>
-        <a href="/deployments" class="back-link">← Back to Deployments</a>
         <h1 class="title-with-icon"><DeploymentIcon size={28} strokeWidth={1.75} ariaHidden="true" /> <span>Deployment Intent</span></h1>
         <p class="intent-id"><code>{intent.id}</code></p>
       </div>
@@ -255,7 +263,7 @@
           </div>
           <div class="detail-item">
             <span class="detail-label">Requested By</span>
-            <span class="detail-value">{intent.requested_by || '-'}</span>
+            <span class="detail-value" title={intent.requested_by || ''}>{intent.requested_by ? shortenPubkey(intent.requested_by) : '-'}</span>
           </div>
           <div class="detail-item">
             <span class="detail-label">Created At</span>

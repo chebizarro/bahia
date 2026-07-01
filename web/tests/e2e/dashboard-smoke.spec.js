@@ -494,9 +494,9 @@ test.describe('Dashboard Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
 
-    const driftCardLink = page.locator('main a[href="#environment-states"]');
+    const driftCardLink = page.locator('main a[href="/environment-states"]');
     await expect(driftCardLink).toBeVisible();
-    await expect(driftCardLink).toHaveAttribute('href', '#environment-states');
+    await expect(driftCardLink).toHaveAttribute('href', '/environment-states');
     await expect(driftCardLink.locator('.card-action')).toHaveText('Review states');
 
     const environmentStates = page.locator('section#environment-states');

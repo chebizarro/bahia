@@ -16,6 +16,15 @@
   } from '$lib/icons/domain-icons.js';
   import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts } from '$lib/stores';
   import { createDeploymentIntent, rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
+  import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
+
+  function escapeAttr(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 
   const PAGE_SIZE = 25;
 
@@ -133,7 +142,15 @@
         return `<span style="color: ${color}; font-weight: 500;">${status}</span>`;
       }
     },
-    { key: 'requested_by', label: 'Requested By' },
+    {
+      key: 'requested_by',
+      label: 'Requested By',
+      render: (r) => {
+        const value = r.requested_by ? String(r.requested_by) : '';
+        if (!value) return '-';
+        return `<code title="${escapeAttr(value)}">${escapeAttr(shortenPubkey(value))}</code>`;
+      }
+    },
     { 
       key: 'created_at', 
       label: 'Created',

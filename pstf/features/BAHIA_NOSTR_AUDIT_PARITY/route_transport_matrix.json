@@ -19,7 +19,7 @@
       "id": "dashboard-read-models",
       "surface": "Dashboard `/` and shared dashboard stores",
       "transport_class": "nostr_native",
-      "route_files": ["web/src/routes/+page.svelte"],
+      "route_files": ["web/src/routes/+page.svelte", "web/src/routes/environment-states/+page.svelte"],
       "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/controlplane/bootstrap.svelte.js"],
       "evidence": ["Shared dashboard loaders call bootstrapControlplane().", "Read-model bootstrap subscribes to scoped filters, tracks EOSE, and keeps subscriptions open for realtime updates."],
       "rest_import_policy": "forbidden_for_command_ingress",

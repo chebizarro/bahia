@@ -12,6 +12,7 @@
     WarningIcon
   } from '$lib/icons/domain-icons.js';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
+  import { kindLabel } from '$lib/nostr/kind-labels.js';
   import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection, discoveryState } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
   import { summarizeWorkerActivity } from './workers/list-utils.js';
@@ -33,6 +34,8 @@
   let timeColumnLabel = $state('Time (local)');
   let selectedActivityEvent = $state(null);
   let activityEventDialogOpen = $state(false);
+  let selectedDriftState = $state(null);
+  let driftDialogOpen = $state(false);
 
   // Cache configuration
   const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
@@ -274,10 +277,21 @@
     return lines.join('\n');
   }
 
+  // Map raw `nostr.kind.<number>` activity types to a friendly kind name so the
+  // Event column reads as a human label instead of an internal kind string.
+  function activityEventLabel(row) {
+    const type = String(row?.type || 'unknown');
+    const match = type.match(/^nostr\.kind\.(\d+)$/);
+    if (match) return kindLabel(Number(match[1]));
+    if ((type === 'unknown' || type === '') && row?.kind) return kindLabel(row.kind);
+    return type;
+  }
+
   function renderActivityEventTrigger(row) {
     const type = row?.type || 'unknown';
+    const label = activityEventLabel(row);
     const variant = eventBadgeVariant(type);
-    return `<button type="button" class="activity-event-trigger" data-dashboard-action="event" title="${escapeHtml(describeActivityEvent(row))}" aria-label="${escapeHtml(`View details for ${type}`)}"><span class="badge ${variant}">${escapeHtml(type)}</span></button>`;
+    return `<button type="button" class="activity-event-trigger" data-dashboard-action="event" title="${escapeHtml(describeActivityEvent(row))}" aria-label="${escapeHtml(`View details for ${label}`)}"><span class="badge ${variant}">${escapeHtml(label)}</span></button>`;
   }
 
   function addActivityEntityLink(links, seenHrefs, label, basePath, id, displayName = '') {
@@ -320,6 +334,27 @@
     if (!row) return;
     selectedActivityEvent = row;
     activityEventDialogOpen = true;
+  }
+
+  function openDriftDialog(row) {
+    if (!row) return;
+    selectedDriftState = row;
+    driftDialogOpen = true;
+  }
+
+  function handleEnvironmentStateRowClick(row, event) {
+    if (event?.target?.closest?.('[data-dashboard-action="drift"]')) {
+      openDriftDialog(row);
+    }
+  }
+
+  function serializeDriftState(row) {
+    if (!row) return '';
+    try {
+      return JSON.stringify(row, null, 2);
+    } catch {
+      return String(row);
+    }
   }
 
   function handleRecentActivityRowClick(row, event) {
@@ -514,7 +549,7 @@
     { key: 'drift_status', label: 'Drift', render: (r) => {
       const driftStatus = String(r.drift_status || 'unknown');
       const variant = driftStatus === 'in_sync' ? 'success' : driftStatus === 'drifted' ? 'error' : 'default';
-      return `<span class="badge-${variant}">${escapeHtml(driftStatus)}</span>`;
+      return `<span class="drift-cell" data-dashboard-action="drift" tabindex="0" title="View drift details"><span class="badge-${variant}">${escapeHtml(driftStatus)}</span></span>`;
     }},
     { key: 'actions', label: 'Actions', render: dashboardStateActions }
   ]);
@@ -596,7 +631,7 @@
   {/if}
   
   <div class="quick-actions">
-    <a href="/services" class="action-link">+ Create Service</a>
+    <a href="/services?create=1" class="action-link">+ Create Service</a>
     <a href="/deployments" class="action-link">Deployment History</a>
   </div>
 
@@ -616,7 +651,7 @@
         <span class="card-action">View workers</span>
       </Card>
     </a>
-    <a href="#environment-states" class="card-link">
+    <a href="/environment-states" class="card-link">
       <Card 
         title="Drifted" 
         titleIcon={WarningIcon}
@@ -657,7 +692,7 @@
         <WarningIcon size={20} strokeWidth={1.75} ariaHidden="true" />
         Environment States
       </h2>
-      <Table columns={stateColumns} data={states.slice(0, 10)} rowClickable={false} />
+      <Table columns={stateColumns} data={states.slice(0, 10)} onRowClick={handleEnvironmentStateRowClick} rowClickable={false} />
       {#if dashboardSyncing}
         <p class="section-streaming-hint">Snapshot still streaming from relays. Additional states will appear as they arrive.</p>
       {/if}
@@ -706,6 +741,49 @@
         </div>
       </dl>
       <pre class="dashboard-event-json">{serializeActivityEvent(selectedActivityEvent)}</pre>
+    </div>
+  {/if}
+</Modal>
+
+<Modal
+  bind:open={driftDialogOpen}
+  title="Drift Details"
+  titleIcon={WarningIcon}
+  size="lg"
+  onClose={() => {
+    driftDialogOpen = false;
+    selectedDriftState = null;
+  }}
+>
+  {#if selectedDriftState}
+    <div class="dashboard-detail-dialog">
+      <dl>
+        <div>
+          <dt>Service</dt>
+          <dd>{serviceDisplayNameById(firstPresentString(selectedDriftState.service_id))}</dd>
+        </div>
+        <div>
+          <dt>Environment</dt>
+          <dd>{environmentDisplayNameById(firstPresentString(selectedDriftState.environment_id))}</dd>
+        </div>
+        <div>
+          <dt>Drift Status</dt>
+          <dd><code>{firstPresentString(selectedDriftState.drift_status, 'unknown')}</code></dd>
+        </div>
+        {#if selectedDriftState.status}
+          <div>
+            <dt>Status</dt>
+            <dd>{selectedDriftState.status}</dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.artifact_id}
+          <div>
+            <dt>Artifact</dt>
+            <dd><code>{selectedDriftState.artifact_id}</code></dd>
+          </div>
+        {/if}
+      </dl>
+      <pre class="dashboard-event-json">{serializeDriftState(selectedDriftState)}</pre>
     </div>
   {/if}
 </Modal>
@@ -959,16 +1037,30 @@
     word-break: break-word;
   }
   :global(.badge.info) {
-    background: #1e3a5f;
-    color: #93c5fd;
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--primary);
   }
   :global(.badge.warning) {
-    background: #78350f;
-    color: #fcd34d;
+    background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent);
+    color: var(--warning, #f59e0b);
   }
   :global(.badge.success) {
-    background: #065f46;
-    color: #6ee7b7;
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+    color: var(--success);
+  }
+  :global(.badge.default) {
+    background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+    color: var(--text-muted);
+  }
+  :global(.drift-cell) {
+    cursor: pointer;
+    display: inline-flex;
+    border-radius: 4px;
+  }
+  :global(.drift-cell:hover),
+  :global(.drift-cell:focus-visible) {
+    outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent);
+    outline-offset: 2px;
   }
   :global(code) {
     font-family: 'SF Mono', Monaco, monospace;
