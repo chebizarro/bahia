@@ -92,14 +92,14 @@ func (r *StorageResolver) resolveFromBlossom(ctx context.Context, uri string) ([
 		return nil, fmt.Errorf("blossom client not configured")
 	}
 
-	// Extract SHA256 hash from Blossom URL.
-	// Blossom URLs are in format: https://server.com/{sha256}[.ext]
-	hash, err := extractBlossomHash(uri)
-	if err != nil {
+	// Validate the URI shape before delegating the full URL to the Blossom client.
+	// The client verifies the payload hash after download using the hash embedded
+	// in the canonical Blossom URL.
+	if _, err := extractBlossomHash(uri); err != nil {
 		return nil, fmt.Errorf("invalid Blossom URI: %w", err)
 	}
 
-	data, err := r.blossom.Download(ctx, hash)
+	data, err := r.blossom.Download(ctx, uri)
 	if err != nil {
 		return nil, fmt.Errorf("downloading from Blossom: %w", err)
 	}

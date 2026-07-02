@@ -732,6 +732,9 @@ func securitySBOMFilters() []nostr.Filter {
 func securitySBOMReferencesFromEvent(ev *nostr.Event) ([]SecuritySBOMReferenceInput, error) {
 	switch int(ev.Kind) {
 	case sbomadapter.KindSBOMReference:
+		if ignoreLegacySBOMReferenceWrapper(ev) {
+			return nil, nil
+		}
 		att, err := sbomadapter.ParseAttestationFromEvent(ev)
 		if err != nil {
 			return nil, err
@@ -757,6 +760,22 @@ func securitySBOMReferencesFromEvent(ev *nostr.Event) ([]SecuritySBOMReferenceIn
 	default:
 		return nil, fmt.Errorf("unsupported SBOM observable kind %d", ev.Kind)
 	}
+}
+
+func ignoreLegacySBOMReferenceWrapper(ev *nostr.Event) bool {
+	if ev == nil || int(ev.Kind) != sbomadapter.KindSBOMReference {
+		return false
+	}
+	var envelope struct {
+		Type        string          `json:"_type"`
+		LegacyEvent json.RawMessage `json:"legacy_event"`
+	}
+	if err := json.Unmarshal([]byte(ev.Content), &envelope); err != nil {
+		return false
+	}
+	// Migrated legacy wrappers are not in-toto attestations; they are envelopes
+	// carrying prior event content under legacy_event and should not be scanned.
+	return envelope.Type == "" && len(envelope.LegacyEvent) > 0
 }
 
 func securityTargetFromInput(input SecurityScanTargetInput) (domain.SecurityTarget, error) {
