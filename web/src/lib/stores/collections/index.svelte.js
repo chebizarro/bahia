@@ -84,6 +84,23 @@ import { resetSBOM, refreshSBOM } from './sbom.svelte.js';
 
 const CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
 const CONTROLPLANE_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+const PERSISTED_COLLECTION_DEFAULT_CAP = 250;
+const PERSISTED_COLLECTION_MIN_CAP = 10;
+const PERSISTED_COLLECTION_MAX_RETRIES = 4;
+const HIGH_CHURN_PERSISTED_COLLECTION_CAPS = {
+  events: 200,
+  deploymentRuns: 120,
+  builds: 120,
+  states: 150,
+  workerCleanupExecutions: 100,
+  workerEligibilityPreviews: 100,
+  backupRuns: 120,
+  backupVerifications: 120,
+  backupRetentionRuns: 100,
+  backupRuntimeObservations: 100,
+  packagePromotions: 120,
+  sbomRefs: 200
+};
 let persistTimer = null;
 
 export const loading = $state({
@@ -131,6 +148,62 @@ export function refreshCollections() {
 function replaceSnapshotArray(target, values) {
   target.length = 0;
   if (Array.isArray(values)) target.push(...values);
+}
+
+function entryTimestamp(entry) {
+  const timestamp = entry?.updated_at ?? entry?.created_at ?? entry?.cachedAt;
+  const numeric = Number(timestamp);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function persistedCollectionCap(collectionName, scale = 1) {
+  const baseCap = HIGH_CHURN_PERSISTED_COLLECTION_CAPS[collectionName] ?? PERSISTED_COLLECTION_DEFAULT_CAP;
+  return Math.max(PERSISTED_COLLECTION_MIN_CAP, Math.floor(baseCap * scale));
+}
+
+function capPersistedCollection(collectionName, values, scale = 1) {
+  if (!Array.isArray(values)) return values;
+
+  const cap = persistedCollectionCap(collectionName, scale);
+  if (values.length <= cap) return values.slice();
+
+  const timestamped = values.map((value, index) => ({ value, index, timestamp: entryTimestamp(value) }));
+  if (timestamped.some((entry) => entry.timestamp !== null)) {
+    return timestamped
+      .sort((left, right) => {
+        const leftTimestamp = left.timestamp ?? Number.NEGATIVE_INFINITY;
+        const rightTimestamp = right.timestamp ?? Number.NEGATIVE_INFINITY;
+        if (leftTimestamp !== rightTimestamp) return leftTimestamp - rightTimestamp;
+        return left.index - right.index;
+      })
+      .slice(-cap)
+      .map((entry) => entry.value);
+  }
+
+  // Controlplane arrays are appended from Nostr EVENT handlers, so tail order is the best
+  // recency proxy when entries do not carry created_at, updated_at, or cachedAt timestamps.
+  return values.slice(-cap);
+}
+
+export function persistedControlplaneSnapshot(scale = 1) {
+  const snapshot = controlplaneSnapshot();
+  return {
+    ...snapshot,
+    collections: Object.fromEntries(
+      Object.entries(snapshot.collections).map(([collectionName, values]) => [
+        collectionName,
+        capPersistedCollection(collectionName, values, scale)
+      ])
+    )
+  };
+}
+
+export function isQuotaExceededError(error) {
+  return error instanceof DOMException && (
+    error.name === 'QuotaExceededError' ||
+    error.code === 22 ||
+    error.code === 1014
+  );
 }
 
 export function controlplaneSnapshot() {
@@ -232,13 +305,24 @@ export function hydrateCachedCollections() {
 export function persistCachedCollections() {
   if (!browser || typeof localStorage?.setItem !== 'function') return false;
 
-  try {
-    localStorage.setItem(CONTROLPLANE_SNAPSHOT_KEY, JSON.stringify(controlplaneSnapshot()));
-    return true;
-  } catch (error) {
-    console.warn('Failed to persist controlplane snapshot:', error);
-    return false;
+  let scale = 1;
+  for (let attempt = 0; attempt <= PERSISTED_COLLECTION_MAX_RETRIES; attempt += 1) {
+    try {
+      localStorage.setItem(CONTROLPLANE_SNAPSHOT_KEY, JSON.stringify(persistedControlplaneSnapshot(scale)));
+      return true;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        console.warn('Failed to persist controlplane snapshot:', error);
+        return false;
+      }
+
+      scale /= 2;
+    }
   }
+
+  localStorage.removeItem(CONTROLPLANE_SNAPSHOT_KEY);
+  console.warn('Failed to persist controlplane snapshot: storage quota exceeded after bounded retries.');
+  return false;
 }
 
 export function schedulePersistCachedCollections(delayMs = 150) {
