@@ -21,11 +21,11 @@ export const orgDetailState = $state({
 const ORG_ENCRYPTED_DOMAIN_TAG = ['domain', 'orgs'];
 
 function unwrapEncryptedResult(response, fallback = null) {
-  const envelope = response?.result;
+  const envelope = response?.result ?? response;
   if (envelope?.status === 'error') {
     throw new Error(envelope?.error?.message || 'Encrypted org request failed');
   }
-  return envelope?.payload ?? fallback;
+  return envelope?.payload ?? envelope ?? fallback;
 }
 
 async function ensureEncryptedOrgs() {

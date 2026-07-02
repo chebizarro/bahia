@@ -325,9 +325,38 @@
     return value.length > 22 ? `${value.slice(0, 18)}…${value.slice(-6)}` : value;
   }
 
+  function firstNonEmptyValue(...values) {
+    for (const value of values) {
+      const text = String(value ?? '').trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
   function artifactDisplayName(artifact) {
     if (!artifact) return 'Unknown artifact';
-    return artifact.image_tag || artifact.version || artifact.name || formatDigest(artifact.image_digest || artifact.digest || artifact.id);
+    const semanticName = firstNonEmptyValue(
+      artifact.name,
+      artifact.image_repo,
+      artifact.repository,
+      artifact.metadata?.name,
+      artifact.metadata?.image_repo,
+      artifact.metadata?.repository,
+      artifact.metadata?.repo
+    );
+    return semanticName || firstNonEmptyValue(
+      artifact.image_tag,
+      artifact.version,
+      formatDigest(artifact.image_digest || artifact.digest || artifact.id)
+    ) || 'Unknown artifact';
+  }
+
+  function artifactVersionBadge(artifact) {
+    const version = String(artifact?.version ?? '').trim();
+    if (!version) return null;
+    const displayName = artifactDisplayName(artifact);
+    const label = version.startsWith('v') ? version : `v${version}`;
+    return version === displayName || label === displayName ? null : label;
   }
 
   function artifactBuildLabel(artifact) {
@@ -973,8 +1002,8 @@
                 <div class="artifact-main">
                   <ArtifactIcon size={16} strokeWidth={1.75} ariaHidden="true" className="inline-entity-icon" />
                   <code class="artifact-name">{artifactDisplayName(artifact)}</code>
-                  {#if artifact.version}
-                    <span class="artifact-version">v{artifact.version}</span>
+                  {#if artifactVersionBadge(artifact)}
+                    <span class="artifact-version">{artifactVersionBadge(artifact)}</span>
                   {/if}
                 </div>
                 <div class="artifact-meta">

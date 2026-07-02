@@ -41,7 +41,7 @@ describe('notifications encrypted store', () => {
     await expect(store.listNotificationChannels()).resolves.toEqual([{ id: 'ch-1', name: 'Ops', config: { url: 'https://hook' } }]);
 
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({
-      operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.listChannels,
+      operation: 'notifications.channels.list',
       payload: {}
     });
     expect(store.notificationState.channels).toHaveLength(1);
@@ -60,10 +60,10 @@ describe('notifications encrypted store', () => {
     await store.testNotificationChannel('ch-1');
     await store.deleteNotificationChannel('ch-1');
 
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(1, { operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.createChannel, payload: { name: 'Ops' } });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, { operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.updateChannel, payload: { id: 'ch-1', enabled: false } });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(3, { operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.testChannel, payload: { id: 'ch-1' } });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(4, { operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.deleteChannel, payload: { id: 'ch-1' } });
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(1, { operation: 'notifications.channels.create', payload: { name: 'Ops' } });
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, { operation: 'notifications.channels.update', payload: { id: 'ch-1', enabled: false } });
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(3, { operation: 'notifications.channels.test', payload: { id: 'ch-1' } });
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(4, { operation: 'notifications.channels.delete', payload: { id: 'ch-1' } });
     expect(store.notificationState.channels).toEqual([]);
   });
 
@@ -75,7 +75,7 @@ describe('notifications encrypted store', () => {
     await expect(store.listNotificationLogs({ limit: 50 })).resolves.toEqual([{ id: 'log-1', payload: { detail: 'private' } }]);
 
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({
-      operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.listLogs,
+      operation: 'notifications.logs.list',
       payload: { limit: 50 }
     });
     expect(store.notificationState.logs).toHaveLength(1);
@@ -98,7 +98,7 @@ describe('notifications encrypted store', () => {
     await expect(store.listNotificationLogs({ limit: 25 })).rejects.toThrow('failed to list notification logs');
 
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
-      operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.listLogs,
+      operation: 'notifications.logs.list',
       payload: { limit: 25 }
     });
     expect(store.notificationState.logs).toEqual([]);

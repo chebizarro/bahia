@@ -2,10 +2,9 @@
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
-  import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
-  import { SecurityIcon, ErrorIcon, WarningIcon, SuccessIcon } from '$lib/icons/domain-icons.js';
+  import { SecurityIcon, ErrorIcon } from '$lib/icons/domain-icons.js';
   import {
     securityState,
     listSecurityFindings,
@@ -23,20 +22,94 @@
   });
 
   async function loadData() {
-    await Promise.allSettled([
-      listSecurityFindings(),
-      listSecuritySchedules()
-    ]);
+    securityState.findings = [];
+    securityState.findingsError = null;
+    await Promise.allSettled([listSecuritySchedules()]);
   }
 
   let findings = $derived(securityState.findings);
   let schedules = $derived(securityState.schedules);
   let severity = $derived(computeSeverityCounts(findings));
   let loading = $derived(securityState.findingsLoading || securityState.schedulesLoading);
-  let error = $derived(securityState.findingsError || securityState.schedulesError);
 
   // Active tab
   let activeTab = $state('findings');
+
+  let selectedFindingScopeKey = $state('');
+  let loadedFindingScopeKey = $state('');
+
+  function compactId(value, front = 12, back = 6) {
+    const text = String(value || '').trim();
+    if (!text) return '-';
+    return text.length > front + back + 1 ? `${text.slice(0, front)}…${text.slice(-back)}` : text;
+  }
+
+  function scheduleRunId(schedule) {
+    return schedule?.run_id || schedule?.last_run_id || schedule?.latest_run_id || schedule?.scan_run_id || '';
+  }
+
+  function buildFindingScopes(rows) {
+    const scopes = [];
+    const seen = new Set();
+    for (const schedule of rows) {
+      const targetKeyHash = String(schedule?.target_key_hash || '').trim();
+      const runId = String(scheduleRunId(schedule) || '').trim();
+      if (runId) {
+        const key = `run:${runId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          scopes.push({
+            key,
+            label: `Run ${compactId(runId)}`,
+            description: targetKeyHash ? `Target ${compactId(targetKeyHash)}` : 'Scan run',
+            params: { run_id: runId },
+            target_key_hash: targetKeyHash
+          });
+        }
+      }
+      if (targetKeyHash) {
+        const key = `target:${targetKeyHash}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          scopes.push({
+            key,
+            label: `Target ${compactId(targetKeyHash)}`,
+            description: schedule?.policy_id ? `Policy ${compactId(schedule.policy_id)}` : 'Scheduled scan target',
+            params: { target_key_hash: targetKeyHash },
+            target_key_hash: targetKeyHash
+          });
+        }
+      }
+    }
+    return scopes;
+  }
+
+  let findingScopes = $derived(buildFindingScopes(schedules));
+  let selectedFindingScope = $derived(findingScopes.find((scope) => scope.key === selectedFindingScopeKey) || null);
+
+  $effect(() => {
+    const scopes = findingScopes;
+    if (scopes.length === 0) {
+      selectedFindingScopeKey = '';
+      loadedFindingScopeKey = '';
+      return;
+    }
+    if (!scopes.some((scope) => scope.key === selectedFindingScopeKey)) {
+      selectedFindingScopeKey = scopes[0].key;
+    }
+  });
+
+  $effect(() => {
+    const scope = selectedFindingScope;
+    if (!scope || selectedFindingScopeKey === loadedFindingScopeKey) return;
+    loadedFindingScopeKey = selectedFindingScopeKey;
+    void untrack(() => loadFindingsForScope(scope).catch((err) => console.error('Failed to load scoped security findings:', err)));
+  });
+
+  async function loadFindingsForScope(scope = selectedFindingScope) {
+    if (!scope) return [];
+    return listSecurityFindings(scope.params);
+  }
 
   // Rescan handling
   let rescanningHash = $state(null);
@@ -45,7 +118,7 @@
     rescanningHash = targetKeyHash;
     try {
       await rescanSecurityTarget(targetKeyHash);
-      await listSecurityFindings();
+      await loadFindingsForScope();
     } catch (err) {
       console.error('Rescan failed:', err);
     } finally {
@@ -96,8 +169,13 @@
     return label;
   }
 
-  // Unique target hashes in findings for rescan buttons
-  let targetHashes = $derived([...new Set(findings.map((f) => f.target_key_hash).filter(Boolean))]);
+  // Unique target hashes in the selected scope/findings for rescan buttons
+  let targetHashes = $derived([
+    ...new Set([
+      selectedFindingScope?.target_key_hash,
+      ...findings.map((f) => f.target_key_hash)
+    ].filter(Boolean))
+  ]);
 
   let findingsColumns = $derived([
     {
@@ -233,41 +311,75 @@
 
   <!-- Findings Tab -->
   {#if activeTab === 'findings'}
-    {#if loading}
-      <p class="loading">Loading security findings...</p>
-    {:else if error}
+    {#if securityState.schedulesLoading}
+      <p class="loading">Loading scan scopes...</p>
+    {:else if securityState.schedulesError}
       <EmptyState
         iconComponent={ErrorIcon}
-        title="Error loading findings"
-        message={error}
+        title="Error loading scan scopes"
+        message={securityState.schedulesError}
       />
-    {:else if findings.length === 0}
+    {:else if findingScopes.length === 0}
       <EmptyState
         iconComponent={SecurityIcon}
-        title="No vulnerability findings"
-        message="Security scan findings will appear here after scans complete. Scans run automatically when SBOMs are imported, or on a configured schedule."
+        title="Select a scan target"
+        message="Security findings are loaded by scan run or target. Configure a security scan schedule or submit a scan to make a scoped findings query available."
       />
     {:else}
-      {#if targetHashes.length > 0}
-        <div class="actions-bar">
-          <span class="actions-label">Rescan targets:</span>
-          {#each targetHashes.slice(0, 5) as hash}
-            <LoadingButton
-              loading={rescanningHash === hash}
-              onclick={() => handleRescan(hash)}
-              label={hash.slice(0, 12) + '...'}
-              loadingLabel="Scanning..."
-            />
-          {/each}
+      <section class="scope-panel" aria-labelledby="findings-scope-heading">
+        <div>
+          <h2 id="findings-scope-heading">Findings scope</h2>
+          <p>Choose a scan run or target before loading vulnerability findings.</p>
         </div>
+        <label class="scope-field">
+          <span>Run or target</span>
+          <select bind:value={selectedFindingScopeKey} class="scope-select">
+            {#each findingScopes as scope (scope.key)}
+              <option value={scope.key}>{scope.label}</option>
+            {/each}
+          </select>
+        </label>
+        {#if selectedFindingScope?.description}
+          <span class="scope-description">{selectedFindingScope.description}</span>
+        {/if}
+      </section>
+
+      {#if securityState.findingsLoading}
+        <p class="loading">Loading security findings...</p>
+      {:else if securityState.findingsError}
+        <EmptyState
+          iconComponent={ErrorIcon}
+          title="Error loading findings"
+          message={securityState.findingsError}
+        />
+      {:else if findings.length === 0}
+        <EmptyState
+          iconComponent={SecurityIcon}
+          title="No vulnerability findings for this scope"
+          message="This selected scan run or target has no vulnerability findings. Choose another scope or rescan the target."
+        />
+      {:else}
+        {#if targetHashes.length > 0}
+          <div class="actions-bar">
+            <span class="actions-label">Rescan targets:</span>
+            {#each targetHashes.slice(0, 5) as hash}
+              <LoadingButton
+                loading={rescanningHash === hash}
+                onclick={() => handleRescan(hash)}
+                label={hash.slice(0, 12) + '...'}
+                loadingLabel="Scanning..."
+              />
+            {/each}
+          </div>
+        {/if}
+        <Table
+          columns={findingsColumns}
+          data={findings}
+          onRowClick={(row) => {
+            if (row.run_id) goto(`/security/${row.run_id}`);
+          }}
+        />
       {/if}
-      <Table
-        columns={findingsColumns}
-        data={findings}
-        onRowClick={(row) => {
-          if (row.run_id) goto(`/security/${row.run_id}`);
-        }}
-      />
     {/if}
   {/if}
 
@@ -401,6 +513,46 @@
   .tab.active {
     color: var(--primary);
     border-bottom-color: var(--primary);
+  }
+
+  .scope-panel {
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    flex-wrap: wrap;
+  }
+  .scope-panel h2 {
+    margin: 0 0 0.25rem;
+    font-size: 1rem;
+  }
+  .scope-panel p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+  .scope-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 240px;
+  }
+  .scope-field span,
+  .scope-description {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .scope-select {
+    min-height: 2.25rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    padding: 0.4rem 0.6rem;
   }
 
   /* Actions Bar */

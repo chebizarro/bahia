@@ -67,9 +67,9 @@ test.describe('Notifications encrypted transport smoke', () => {
     expect(normalizedRelays.every((relay) => relay === ENCRYPTED_RELAY)).toBe(true);
     expect(normalizedRelays.some((relay) => relay === PUBLIC_RELAY)).toBe(false);
     expect(transportTrace.operations).toEqual(expect.arrayContaining([
-      'notifications/channels-list',
-      'notifications/channels-create',
-      'notifications/channels-test'
+      'notifications.channels.list',
+      'notifications.channels.create',
+      'notifications.channels.test'
     ]));
 
     for (const request of transportTrace.requests) {

@@ -161,6 +161,21 @@ describe('encrypted payments/orgs stores', () => {
     expect(accepted).toEqual({ org_id: 'org-1', role: 'viewer' });
   });
 
+  it('returns raw organization create results without requiring a payload envelope', async () => {
+    encryptedRequests.requestEncryptedResult.mockResolvedValueOnce({
+      result: { id: 'org-raw', name: 'demo', display_name: 'Demo Org' }
+    });
+
+    const created = await orgsStore.createOrg({ name: 'demo', displayName: 'Demo Org' });
+
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledWith({
+      operation: 'orgs.create',
+      payload: { name: 'demo', display_name: 'Demo Org' },
+      tags: [['domain', 'orgs']]
+    });
+    expect(created).toEqual({ id: 'org-raw', name: 'demo', display_name: 'Demo Org' });
+  });
+
   it('waits for system discovery before issuing encrypted org requests', async () => {
     const discoveredInfo = {
       features: { encrypted_nostr_requests: true },

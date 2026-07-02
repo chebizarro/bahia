@@ -95,8 +95,8 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
     }
 
     expect(trace.encryptedOperations).toEqual(expect.arrayContaining([
-      'notifications/channels-list',
-      'notifications/channels-test'
+      'notifications.channels.list',
+      'notifications.channels.test'
     ]));
     expect(trace.encryptedRequests.length).toBeGreaterThanOrEqual(2);
     expect(trace.encryptedRequests.every((request) => request.kind === 25910 && request.relay === ENCRYPTED_RELAY)).toBe(true);

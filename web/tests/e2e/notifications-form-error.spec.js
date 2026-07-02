@@ -38,7 +38,7 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
   test('preserves valid form values and surfaces an alert after encrypted create failure', async ({ page }) => {
     await installFailureHarness(page, {
       operationErrors: {
-        'notifications/channels-create': createError
+        'notifications.channels.create': createError
       }
     });
 
@@ -62,7 +62,7 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     expect(encryptedErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 25910,
-        operation: 'notifications/channels-create',
+        operation: 'notifications.channels.create',
         status: 'error',
         error: expect.objectContaining(createError)
       })
@@ -73,7 +73,7 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     await installFailureHarness(page, {
       initialChannels: [existingChannel],
       operationErrors: {
-        'notifications/channels-update': updateError
+        'notifications.channels.update': updateError
       }
     });
 
@@ -100,7 +100,7 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
   test('exposes labelled controls, headings, and alert regions on notifications routes', async ({ page }) => {
     await installFailureHarness(page, {
       operationErrors: {
-        'notifications/channels-create': createError
+        'notifications.channels.create': createError
       }
     });
 

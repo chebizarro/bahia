@@ -149,16 +149,16 @@ export async function installEncryptedNotificationHarness(
 
       const state = window.__BAHIA_E2E_NOTIFICATION_STATE;
       switch (operation) {
-        case 'notifications/channels-list':
+        case 'notifications.channels.list':
           return { status: 'ok', payload: { channels: [...state.channels] } };
-        case 'notifications/channels-get': {
+        case 'notifications.channels.get': {
           const channel = state.channels.find((candidate) => candidate.id === payload.id) || null;
           if (!channel) {
             return { status: 'error', error: { code: 'not_found', message: 'notification channel not found' } };
           }
           return { status: 'ok', payload: { channel: { ...channel } } };
         }
-        case 'notifications/channels-create': {
+        case 'notifications.channels.create': {
           const channel = {
             id: `ch-${state.nextId++}`,
             name: payload.name,
@@ -172,7 +172,7 @@ export async function installEncryptedNotificationHarness(
           state.channels = [channel, ...state.channels];
           return { status: 'ok', payload: { channel } };
         }
-        case 'notifications/channels-update': {
+        case 'notifications.channels.update': {
           const index = state.channels.findIndex((channel) => channel.id === payload.id);
           if (index === -1) {
             return { status: 'error', error: { code: 'not_found', message: 'notification channel not found' } };
@@ -188,12 +188,12 @@ export async function installEncryptedNotificationHarness(
           state.channels = state.channels.map((channel, i) => (i === index ? next : channel));
           return { status: 'ok', payload: { channel: next } };
         }
-        case 'notifications/channels-test':
+        case 'notifications.channels.test':
           return { status: 'ok', payload: { status: 'test sent' } };
-        case 'notifications/channels-delete':
+        case 'notifications.channels.delete':
           state.channels = state.channels.filter((channel) => channel.id !== payload.id);
           return { status: 'ok', payload: { status: 'deleted', id: payload.id } };
-        case 'notifications/logs-list':
+        case 'notifications.logs.list':
           return { status: 'ok', payload: { logs: [...state.logs] } };
         default:
           return { status: 'error', error: { code: 'unsupported_operation', message: `unsupported encrypted op: ${operation}` } };

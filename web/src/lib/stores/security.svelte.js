@@ -52,6 +52,14 @@ function normalizeSchedulesPayload(payload) {
   return [];
 }
 
+function requireFindingsScope(params = {}) {
+  const scope = params ?? {};
+  if (!scope.run_id && !scope.target_key_hash) {
+    throw new Error('Security findings require run_id or target_key_hash');
+  }
+  return scope;
+}
+
 /**
  * Compute aggregate severity counts from the current findings array.
  * Returns { critical, high, moderate, low, unknown, total }.
@@ -71,16 +79,17 @@ export function computeSeverityCounts(findings) {
 
 /**
  * Load security findings via ContextVM.
- * @param {object} params - Optional filters: { run_id, target_key_hash, severity, osv_id, limit, offset }
+ * @param {object} params - Required scope plus optional filters: { run_id, target_key_hash, severity, osv_id, limit, offset }
  */
 export async function listSecurityFindings(params = {}) {
   securityState.findingsLoading = true;
   securityState.findingsError = null;
   try {
+    const scopedParams = requireFindingsScope(params);
     await ensureEncryptedSecurity();
     const response = await requestEncryptedResult({
       operation: SECURITY_ENCRYPTED_OPERATIONS.findingsList,
-      payload: params
+      payload: scopedParams
     });
     const findings = normalizeFindingsPayload(extractEncryptedPayload(response));
     securityState.findings = findings;

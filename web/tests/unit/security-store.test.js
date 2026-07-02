@@ -44,12 +44,12 @@ describe('security encrypted store', () => {
       result: { status: 'ok', payload: { findings: mockFindings } }
     });
 
-    const result = await store.listSecurityFindings();
+    const result = await store.listSecurityFindings({ target_key_hash: 'hash-1' });
 
     expect(result).toEqual(mockFindings);
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({
       operation: store.SECURITY_ENCRYPTED_OPERATIONS.findingsList,
-      payload: {}
+      payload: { target_key_hash: 'hash-1' }
     });
     expect(store.securityState.findings).toHaveLength(2);
     expect(store.securityState.findingsError).toBeNull();
@@ -149,7 +149,7 @@ describe('security encrypted store', () => {
       result: { status: 'ok', payload: { findings: [mockFinding] } }
     });
 
-    await store.listSecurityFindings();
+    await store.listSecurityFindings({ target_key_hash: 'hash-1' });
     const finding = store.securityState.findings[0];
 
     expect(finding.osv_id).toBe('GHSA-1234');
@@ -181,13 +181,22 @@ describe('security encrypted store', () => {
     expect(store.securityState.findings).toHaveLength(1);
   });
 
+  it('rejects unscoped findings requests before publishing', async () => {
+    await expect(store.listSecurityFindings()).rejects.toThrow('Security findings require run_id or target_key_hash');
+
+    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
+    expect(store.securityState.findings).toEqual([]);
+    expect(store.securityState.findingsError).toBe('Security findings require run_id or target_key_hash');
+    expect(store.securityState.findingsLoading).toBe(false);
+  });
+
   // T-10: Store error handling sets error state without silent fallback
   it('sets findingsError and clears findings on encrypted error', async () => {
     encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
       result: { status: 'error', error: { code: 'handler_failed', message: 'security repository is not configured' } }
     });
 
-    await expect(store.listSecurityFindings()).rejects.toThrow('security repository is not configured');
+    await expect(store.listSecurityFindings({ target_key_hash: 'hash-1' })).rejects.toThrow('security repository is not configured');
 
     expect(store.securityState.findings).toEqual([]);
     expect(store.securityState.findingsError).toBe('security repository is not configured');
@@ -208,7 +217,7 @@ describe('security encrypted store', () => {
   it('fails before publishing when ContextVM requests are not advertised', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
 
-    await expect(store.listSecurityFindings()).rejects.toThrow('ContextVM requests are not available');
+    await expect(store.listSecurityFindings({ target_key_hash: 'hash-1' })).rejects.toThrow('ContextVM requests are not available');
 
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
     expect(store.securityState.findingsError).toContain('ContextVM requests are not available');

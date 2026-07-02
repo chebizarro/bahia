@@ -11,13 +11,13 @@ export const notificationState = $state({
 });
 
 export const NOTIFICATION_ENCRYPTED_OPERATIONS = {
-  listChannels: 'notifications/channels-list',
-  getChannel: 'notifications/channels-get',
-  createChannel: 'notifications/channels-create',
-  updateChannel: 'notifications/channels-update',
-  deleteChannel: 'notifications/channels-delete',
-  testChannel: 'notifications/channels-test',
-  listLogs: 'notifications/logs-list'
+  listChannels: 'notifications.channels.list',
+  getChannel: 'notifications.channels.get',
+  createChannel: 'notifications.channels.create',
+  updateChannel: 'notifications.channels.update',
+  deleteChannel: 'notifications.channels.delete',
+  testChannel: 'notifications.channels.test',
+  listLogs: 'notifications.logs.list'
 };
 
 async function ensureEncryptedNotifications() {

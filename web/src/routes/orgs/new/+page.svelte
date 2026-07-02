@@ -57,6 +57,9 @@
     submitting = true;
     try {
       const org = await createOrg({ name, displayName });
+      if (!org?.id) {
+        throw new Error('Organization creation did not return an organization id');
+      }
       toast.success(`Created organization "${displayName}"`);
       goto(`/orgs/${org.id}`);
     } catch (e) {
