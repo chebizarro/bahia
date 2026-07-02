@@ -129,6 +129,55 @@ describe('SBOMDetails.svelte', () => {
     expect(text).toContain('-');
   });
 
+  it('offers a View Contents button when only a raw hash/digest is present (no source_url/location)', () => {
+    const target = render({
+      sbom: {
+        format: 'spdx',
+        raw_hash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('Attestation Details');
+    // No location URI is available, so the URI row must not be rendered...
+    expect(text).not.toContain('Location URI');
+    // ...but the SBOM contents are still loadable via the Blossom hash proxy,
+    // so the action button must remain available.
+    expect(text).toContain('View Contents');
+  });
+
+  it('offers a View Contents button from an attestation digest with no location', () => {
+    const target = render({
+      attestation: {
+        predicate: {
+          format: 'cyclonedx',
+          digest: {
+            sha256: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100'
+          }
+        }
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('Attestation Details');
+    expect(text).not.toContain('Location URI');
+    expect(text).toContain('View Contents');
+  });
+
+  it('offers a View Contents button when a location/source URI is present', () => {
+    const target = render({
+      sbom: {
+        format: 'spdx',
+        source_url: 'blossom://sboms/example.spdx.json'
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('Location URI');
+    expect(text).toContain('blossom://sboms/example.spdx.json');
+    expect(text).toContain('View Contents');
+  });
+
   it('handles sparse SBOM objects without optional metadata', () => {
     const target = render({ sbom: {} });
 

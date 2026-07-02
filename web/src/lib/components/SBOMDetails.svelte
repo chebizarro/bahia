@@ -68,6 +68,13 @@
   let blossomURI = $derived(attestation?.predicate?.location?.uri || sbom?.source_url || null);
   let sbomFormat = $derived(sbom?.format || attestation?.predicate?.format || null);
 
+  // The SBOM contents can be loaded whenever we have either a Blossom/location
+  // URI OR a raw content hash (digest.sha256 / raw_hash). The hash alone is
+  // enough because loadSBOMText() prefers the same-origin Blossom proxy
+  // (/blossom/blob/<hash>). Gate the "View Contents" button on this so
+  // hash-only SBOMs (no location URI) still expose a way to view the file.
+  let canViewSBOM = $derived(!!(blossomURI || sbomBlobHash()));
+
   // Parsed SBOM document info
   let docInfo = $derived(rawSBOM ? parseSBOMDocInfo(rawSBOM, rawSBOMFormat) : null);
   let fullPackages = $derived(rawSBOM ? parseSBOMPackages(rawSBOM, rawSBOMFormat) : []);
@@ -150,7 +157,7 @@
   }
 
   async function fetchSBOMContents() {
-    if (!blossomURI || rawSBOMLoading) return;
+    if (!(blossomURI || sbomBlobHash()) || rawSBOMLoading) return;
     rawSBOMLoading = true;
     rawSBOMError = null;
     rawSBOM = null;
@@ -285,7 +292,18 @@
     <!-- Attestation Overview -->
     {#if attestation || sbom}
       <div class="section">
-        <h3 class="section-title"><SignatureIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Attestation Details</span></h3>
+        <div class="section-header">
+          <h3 class="section-title"><SignatureIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Attestation Details</span></h3>
+          {#if canViewSBOM}
+            <LoadingButton
+              variant="secondary"
+              loading={rawSBOMLoading}
+              onclick={fetchSBOMContents}
+            >
+              {rawSBOM ? 'Reload' : 'View Contents'}
+            </LoadingButton>
+          {/if}
+        </div>
         <div class="attestation-grid">
           <div class="attestation-item">
             <span class="label">Format</span>
@@ -318,15 +336,6 @@
               <span class="label">Location URI</span>
               <span class="value uri-row">
                 <code class="uri">{loc?.uri || sbom?.source_url || '-'}</code>
-                {#if blossomURI}
-                  <LoadingButton
-                    variant="secondary"
-                    loading={rawSBOMLoading}
-                    onclick={fetchSBOMContents}
-                  >
-                    {rawSBOM ? 'Reload' : 'View Contents'}
-                  </LoadingButton>
-                {/if}
               </span>
             </div>
           {/if}
