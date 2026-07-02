@@ -86,28 +86,39 @@ type WorkerCommandReceipt struct {
 	Command         string `json:"command"`
 }
 
+func (p *WorkerCommandPublisher) PublishWorkerCleanupRequest(ctx context.Context, cmd WorkerLifecycleCommand, cleanupMode string) (*WorkerCommandReceipt, error) {
+	content := map[string]any{
+		"worker_pubkey":     strings.TrimSpace(cmd.WorkerPubKey),
+		"reason":            cmd.Reason,
+		"operator_metadata": cmd.OperatorMetadata,
+		"idempotency_key":   strings.TrimSpace(cmd.IdempotencyKey),
+		"cleanup_mode":      strings.TrimSpace(cleanupMode),
+	}
+	return p.publish(ctx, ContextVMMethodWorkerCleanup, WorkerCommandCleanupRequest, "worker-cleanup", cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
+}
+
 func (p *WorkerCommandPublisher) PublishWorkerCordonRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
 	return p.publishLifecycle(ctx, ContextVMMethodWorkerCordon, WorkerCommandCordon, "worker-cordon", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerUncordonRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, "worker/uncordon", WorkerCommandUncordon, "worker-uncordon", cmd)
+	return p.publishLifecycle(ctx, ContextVMMethodWorkerUncordon, WorkerCommandUncordon, "worker-uncordon", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerDrainRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, "worker/drain", WorkerCommandDrain, "worker-drain", cmd)
+	return p.publishLifecycle(ctx, ContextVMMethodWorkerDrain, WorkerCommandDrain, "worker-drain", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerUndrainRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, "worker/undrain", WorkerCommandUndrain, "worker-undrain", cmd)
+	return p.publishLifecycle(ctx, ContextVMMethodWorkerUndrain, WorkerCommandUndrain, "worker-undrain", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerMaintenanceEnterRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, "worker/maintenance-enter", WorkerCommandMaintenanceEnter, "worker-maintenance-enter", cmd)
+	return p.publishLifecycle(ctx, ContextVMMethodWorkerMaintenanceEnter, WorkerCommandMaintenanceEnter, "worker-maintenance-enter", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerMaintenanceExitRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, "worker/maintenance-exit", WorkerCommandMaintenanceExit, "worker-maintenance-exit", cmd)
+	return p.publishLifecycle(ctx, ContextVMMethodWorkerMaintenanceExit, WorkerCommandMaintenanceExit, "worker-maintenance-exit", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerLabelsUpdateRequest(ctx context.Context, cmd WorkerLabelsUpdateCommand) (*WorkerCommandReceipt, error) {
@@ -118,7 +129,7 @@ func (p *WorkerCommandPublisher) PublishWorkerLabelsUpdateRequest(ctx context.Co
 		"idempotency_key":   strings.TrimSpace(cmd.IdempotencyKey),
 		"labels":            cmd.Labels,
 	}
-	return p.publish(ctx, "worker/labels-update", WorkerCommandLabelsUpdate, "worker-labels-update", cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
+	return p.publish(ctx, ContextVMMethodWorkerLabelsUpdate, WorkerCommandLabelsUpdate, "worker-labels-update", cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerPolicyApplyRequest(ctx context.Context, cmd WorkerPolicyApplyCommand) (*WorkerCommandReceipt, error) {

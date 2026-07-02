@@ -31,6 +31,7 @@ const (
 
 	EncryptedOperationDeploymentRunLogsGet = "deployments.run_logs.get"
 	ContextVMMethodDeploymentRunLogsGet    = "deployments/run-logs-get"
+	ContextVMMethodEnvironmentCreate       = "environment/create"
 	ContextVMMethodEnvironmentUpdate       = "environment/update"
 
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
@@ -52,6 +53,7 @@ type SignatureVerifier interface {
 // semantics for service/environment writes.
 type RegistryMutationBackend interface {
 	CreateService(ctx context.Context, svc *domain.Service) error
+	CreateEnvironment(ctx context.Context, env *domain.Environment) error
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
 }
@@ -122,6 +124,7 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	h.registerRouteHandler(transport, EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs, ContextVMMethodDeploymentRunLogsGet)
 	h.registerRouteHandler(transport, EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, h.CreateService)
+	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentCreate, h.CreateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 }
 
@@ -146,6 +149,14 @@ type encryptedServiceCreatePayload struct {
 	ArtifactRepo  string `json:"artifact_repo"`
 	DefaultBranch string `json:"default_branch,omitempty"`
 	RuntimeType   string `json:"runtime_type,omitempty"`
+}
+
+type encryptedEnvironmentCreatePayload struct {
+	Name               string          `json:"name"`
+	LoomWorkerSelector json.RawMessage `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any  `json:"runtime_config,omitempty"`
+	DeployStrategy     string          `json:"deploy_strategy,omitempty"`
+	Protected          bool            `json:"protected,omitempty"`
 }
 
 type encryptedEnvironmentUpdatePayload struct {
@@ -193,6 +204,47 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 		return nil, fmt.Errorf("failed to create service: %w", err)
 	}
 	return map[string]any{"status": "created", "service": svc, "service_id": svc.ID.String()}, nil
+}
+
+func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("environment registry mutation handling is not configured")
+	}
+	var payload encryptedEnvironmentCreatePayload
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(payload.Name)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	deployStrategy := domain.DeployStrategyReplace
+	if strings.TrimSpace(payload.DeployStrategy) != "" {
+		deployStrategy = domain.DeployStrategy(strings.TrimSpace(payload.DeployStrategy))
+		if err := domain.ValidateDeployStrategy(deployStrategy); err != nil {
+			return nil, fmt.Errorf("invalid deploy_strategy: %w", err)
+		}
+	}
+	var selector map[string]any
+	if payload.LoomWorkerSelector != nil {
+		parsed, err := parseLoomWorkerSelector(payload.LoomWorkerSelector)
+		if err != nil {
+			return nil, err
+		}
+		selector = parsed
+	}
+	env := &domain.Environment{
+		ID:                 uuid.New(),
+		Name:               name,
+		LoomWorkerSelector: selector,
+		RuntimeConfig:      payload.RuntimeConfig,
+		DeployStrategy:     deployStrategy,
+		Protected:          payload.Protected,
+	}
+	if err := h.registry.CreateEnvironment(ctx, env); err != nil {
+		return nil, fmt.Errorf("failed to create environment: %w", err)
+	}
+	return map[string]any{"status": "created", "environment": env, "environment_id": env.ID.String()}, nil
 }
 
 func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {

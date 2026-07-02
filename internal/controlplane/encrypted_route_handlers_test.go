@@ -178,6 +178,14 @@ func (r *fakeEncryptedRegistryMutations) CreateService(_ context.Context, svc *d
 	r.createdServices = append(r.createdServices, &copy)
 	return nil
 }
+func (r *fakeEncryptedRegistryMutations) CreateEnvironment(_ context.Context, env *domain.Environment) error {
+	copy := *env
+	if r.environments == nil {
+		r.environments = map[uuid.UUID]*domain.Environment{}
+	}
+	r.environments[env.ID] = &copy
+	return nil
+}
 func (r *fakeEncryptedRegistryMutations) GetEnvironment(_ context.Context, id uuid.UUID) (*domain.Environment, error) {
 	if env := r.environments[id]; env != nil {
 		copy := *env
@@ -331,6 +339,34 @@ func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryServi
 	}
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["service_id"] == "" || payload["status"] != "created" {
+		t.Fatalf("unexpected create response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodCreatesRegistryEnvironment(t *testing.T) {
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentCreate, map[string]any{
+		"name": "staging", "loom_worker_selector": map[string]any{"region": "us-east"}, "runtime_config": map[string]any{"type": "compose"}, "deploy_strategy": "blue_green", "protected": true,
+	}))
+
+	if len(registry.environments) != 1 {
+		t.Fatalf("created environments = %d, want 1", len(registry.environments))
+	}
+	var created *domain.Environment
+	for _, env := range registry.environments {
+		created = env
+	}
+	if created.Name != "staging" || created.DeployStrategy != domain.DeployStrategyBlueGreen || !created.Protected {
+		t.Fatalf("unexpected created environment: %#v", created)
+	}
+	if created.LoomWorkerSelector["region"] != "us-east" || created.RuntimeConfig["type"] != "compose" {
+		t.Fatalf("unexpected create payload fields: %#v", created)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["environment_id"] == "" || payload["status"] != "created" {
 		t.Fatalf("unexpected create response: %#v", payload)
 	}
 }

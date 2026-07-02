@@ -1006,6 +1006,11 @@ func New(cfg *config.Config) (*App, error) {
 			RBAC:         auth.NewRBAC(orgMemberRepo),
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
+		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport)
+		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport)
+		if dnsOperator != nil {
+			controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator)
+		}
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
