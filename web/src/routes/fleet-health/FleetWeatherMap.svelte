@@ -4,7 +4,7 @@
   let { nodes = [], onCleanup = () => {} } = $props();
 
   function nodesForLane(lane) {
-    return nodes.filter((node) => node.capacity === lane.key);
+    return nodes.filter((node) => (node.lane || node.capacity) === lane.key);
   }
 </script>
 
@@ -101,6 +101,7 @@
   .lane-cleanup_only header { background: linear-gradient(135deg, rgba(154, 52, 18, 0.42), transparent); }
   .lane-reduced header { background: linear-gradient(135deg, rgba(113, 63, 18, 0.42), transparent); }
   .lane-open header { background: linear-gradient(135deg, rgba(20, 83, 45, 0.35), transparent); }
+  .lane-no_telemetry header { background: linear-gradient(135deg, rgba(51, 65, 85, 0.42), transparent); }
 
   .lane-body {
     display: grid;

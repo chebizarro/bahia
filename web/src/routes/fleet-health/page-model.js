@@ -13,8 +13,18 @@ export const FLEET_CAPACITY_LANES = Object.freeze([
   { key: 'blocked', label: 'Storm front', description: 'Deployment admission should reject non-continuity work.' },
   { key: 'cleanup_only', label: 'Cleanup waters', description: 'Cleanup is required before normal placement.' },
   { key: 'reduced', label: 'Caution lane', description: 'Deploy cautiously and preserve reserve.' },
-  { key: 'open', label: 'Clear lane', description: 'Normal scheduling capacity.' }
+  { key: 'open', label: 'Clear lane', description: 'Normal scheduling capacity.' },
+  { key: 'no_telemetry', label: 'Awaiting telemetry', description: 'No telemetry reported yet; excluded from capacity lanes until data arrives.' }
 ]);
+
+// Lane used purely for the fleet weather map grouping. Workers that have not
+// reported telemetry are routed to the dedicated no_telemetry lane so they do
+// not masquerade as a real capacity posture (e.g. Caution). This is kept
+// separate from workerCapacityClass()/recommendedAction() so the action-rail
+// classification is unaffected.
+export function fleetNodeLane(worker) {
+  return hasWorkerTelemetry(worker) ? workerCapacityClass(worker) : 'no_telemetry';
+}
 
 export const CLEANUP_ACTIVE_STATUSES = Object.freeze(['submitting', 'requested', 'dispatched', 'running']);
 
@@ -180,6 +190,7 @@ export function buildFleetWeatherNodes(workers = [], cleanupExecutions = [], ass
         liveness: inferWorkerStatus(worker),
         activity: inferWorkerActivityBucket(worker),
         capacity: workerCapacityClass(worker),
+        lane: fleetNodeLane(worker),
         pressure: workerPressureLevel(worker),
         recommendedAction: workerRecommendedAction(worker),
         telemetryPresent: hasWorkerTelemetry(worker),

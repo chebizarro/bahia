@@ -1,5 +1,6 @@
 <script>
   import Table from '$lib/components/Table.svelte';
+  import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import { events, controlplaneConnection } from '$lib/stores';
@@ -9,6 +10,27 @@
   let pageSize = $state(50);
   let currentPage = $state(1);
   let eventTypeFilter = $state('all');
+  let selectedEvent = $state(null);
+  let eventModalOpen = $state(false);
+
+  function openEvent(row) {
+    selectedEvent = row;
+    eventModalOpen = true;
+  }
+
+  function closeEvent() {
+    eventModalOpen = false;
+    selectedEvent = null;
+  }
+
+  function formatEventJson(event) {
+    if (!event) return '';
+    try {
+      return JSON.stringify(event, null, 2);
+    } catch {
+      return String(event);
+    }
+  }
 
   // Event type categories for filtering
   const eventCategories = [
@@ -116,16 +138,7 @@
         return `<span class="event-type-cell"><span class="badge-inline ${variant}">${label}</span></span>`;
       }
     },
-    { key: 'entity_id', label: 'Entity ID', render: (r) => r.entity_id ? `<code>${r.entity_id}</code>` : '-' },
-    {
-      key: 'data',
-      label: 'Data',
-      render: (r) => {
-        if (!r.data) return '-';
-        const str = JSON.stringify(r.data);
-        return `<code>${str.slice(0, 80)}${str.length > 80 ? '...' : ''}</code>`;
-      }
-    }
+    { key: 'entity_id', label: 'Entity ID', render: (r) => r.entity_id ? `<code>${r.entity_id}</code>` : '-' }
   ]);
 
   let statusDisplay = $derived({
@@ -206,7 +219,7 @@
       </label>
     </div>
     <div class="table-wrap">
-      <Table columns={columns} data={pagedEvents} />
+      <Table columns={columns} data={pagedEvents} onRowClick={openEvent} />
     </div>
   </div>
 
@@ -230,6 +243,22 @@
     <p class="event-count">{filteredEvents.length} event{filteredEvents.length === 1 ? '' : 's'}</p>
   {/if}
 </div>
+
+<Modal bind:open={eventModalOpen} title={selectedEvent ? getEventTypeLabel(selectedEvent) : 'Event'} size="lg" onClose={closeEvent}>
+  {#if selectedEvent}
+    <dl class="event-meta">
+      <div><dt>Time</dt><dd>{selectedEvent.time || '-'}</dd></div>
+      <div><dt>Type</dt><dd>{getEventTypeLabel(selectedEvent)}</dd></div>
+      {#if selectedEvent.entity_id}
+        <div><dt>Entity ID</dt><dd><code>{selectedEvent.entity_id}</code></dd></div>
+      {/if}
+      {#if selectedEvent.kind !== undefined && selectedEvent.kind !== null}
+        <div><dt>Kind</dt><dd>{selectedEvent.kind}</dd></div>
+      {/if}
+    </dl>
+    <pre class="event-json">{formatEventJson(selectedEvent)}</pre>
+  {/if}
+</Modal>
 
 <style>
   .page {
@@ -390,4 +419,39 @@
   :global(.badge-inline.warning) { background: #78350f; color: #fcd34d; }
   :global(.badge-inline.error) { background: #7f1d1d; color: #fca5a5; }
   :global(.badge-inline.info) { background: #1e3a5f; color: #93c5fd; }
+
+  .event-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin: 0 0 1rem;
+  }
+
+  .event-meta dt {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .event-meta dd {
+    margin: 0.15rem 0 0;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+  }
+
+  .event-json {
+    margin: 0;
+    padding: 1rem;
+    background: var(--bg, #0b1020);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 60vh;
+    overflow: auto;
+  }
 </style>

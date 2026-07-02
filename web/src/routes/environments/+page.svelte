@@ -59,7 +59,7 @@
       key: 'protected',
       label: 'Protected',
       icon: (r) => (r.protected ? ProtectedIcon : null),
-      text: (r) => (r.protected ? 'Protected' : '-')
+      text: (r) => (r.protected ? 'Protected' : 'No')
     },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
   ]);

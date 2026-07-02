@@ -41,12 +41,32 @@ function normalizeSecretsPayload(payload) {
 }
 
 /**
+ * Every secret ref returned by `services.secrets.list` carries a secret linkage
+ * (a secret id and/or a redacted/encrypted value); the endpoint omits plaintext.
+ * A genuine secret therefore always exposes one of these markers, so their
+ * presence is treated as an authoritative "this is a secret" signal that blocks
+ * any reclassification to a plain env var.
+ */
+function hasSecretLinkage(entry) {
+  return Boolean(
+    entry.secret_id ?? entry.secretId ?? entry.SecretID ??
+    entry.redacted_value ?? entry.redactedValue ?? entry.RedactedValue ??
+    entry.ciphertext ?? entry.encrypted_value ?? entry.encryptedValue
+  );
+}
+
+/**
  * Detect entries that are plain (non-sensitive) environment variables rather
  * than encrypted secrets. Real secrets are never reclassified: an entry is only
  * treated as a plain env var when it explicitly declares itself non-secret (via a
  * type/kind marker, a secret/is_secret/sensitive/encrypted flag set to false, or a
- * non-encrypted encryption method). This keeps the Secrets section limited to
- * actual secrets even when the backend returns a combined list.
+ * non-encrypted encryption method), OR — as a conservative structural fallback —
+ * when it carries a plaintext `value` and has no secret linkage whatsoever
+ * (secret id / redacted / encrypted value). Since every genuine secret ref from
+ * services.secrets.list carries such a linkage and never a plaintext value, that
+ * fallback can only ever match a real configuration env var. This keeps the
+ * Secrets section limited to actual secrets even when the backend returns a
+ * combined list.
  */
 function isPlainEnvVar(entry) {
   if (!entry || typeof entry !== 'object') return false;
@@ -59,6 +79,11 @@ function isPlainEnvVar(entry) {
   }
   const method = String(entry.encryption_method ?? '').trim().toLowerCase();
   if (['none', 'plain', 'plaintext', 'cleartext'].includes(method)) return true;
+  // Conservative structural discriminator: a plaintext value with no secret
+  // linkage marks a plain config env var. Never fires for a genuine secret,
+  // which always carries a secret id / redacted value and omits plaintext.
+  const hasPlaintextValue = typeof entry.value === 'string' && entry.value.length > 0;
+  if (hasPlaintextValue && !hasSecretLinkage(entry)) return true;
   return false;
 }
 

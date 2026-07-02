@@ -96,6 +96,7 @@
   let labelKeyFilter = $state('');
   let labelValueFilter = $state('');
   let onlineOnly = $state(false);
+  let filtersExpanded = $state(false);
   let pendingCommands = $state({});
   let notice = $state(null);
   let cleanupDialogOpen = $state(false);
@@ -136,6 +137,26 @@
     labelValueFilter,
     onlineOnly
   }));
+
+  // Count of active advanced filters (everything except the always-visible
+  // search box) so the collapsed panel can show how many filters are applied.
+  const activeFilterCount = $derived(
+    [
+      schedulingFilter,
+      activityFilter,
+      capabilityFilter,
+      runtimeFilter,
+      taskFilter,
+      capacityFilter,
+      pressureFilter,
+      recommendedActionFilter,
+      acceleratorFilter,
+      formatFilter,
+      toolchainFilter,
+      labelKeyFilter,
+      labelValueFilter
+    ].filter((value) => String(value || '').trim() !== '').length + (onlineOnly ? 1 : 0)
+  );
 
   function normalizeList(value) {
     if (!Array.isArray(value)) return [];
@@ -509,12 +530,28 @@
     <div class="summary-card capacity-blocked"><strong>{fleetSummary.blocked}</strong><span>Blocked</span></div>
   </div>
 
-  <div class="filters">
-    <label>
+  <div class="filters-toolbar">
+    <label class="search-field">
       <span>Search</span>
       <input bind:value={capabilitySearch} type="search" placeholder="Search workers, labels, capabilities…" />
     </label>
 
+    <button
+      type="button"
+      class="filters-toggle"
+      aria-expanded={filtersExpanded}
+      aria-controls="worker-advanced-filters"
+      onclick={() => (filtersExpanded = !filtersExpanded)}
+    >
+      {filtersExpanded ? 'Hide filters' : 'Filters'}
+      {#if activeFilterCount > 0}
+        <span class="filter-count">{activeFilterCount}</span>
+      {/if}
+    </button>
+  </div>
+
+  {#if filtersExpanded}
+  <div class="filters" id="worker-advanced-filters">
     <label>
       <span>Scheduling</span>
       <select bind:value={schedulingFilter}>
@@ -642,6 +679,7 @@
       <span>Online only</span>
     </label>
   </div>
+  {/if}
 
   {#if loading.workers}
     <p class="loading">Loading...</p>
@@ -835,6 +873,54 @@
   .summary-card.capacity-reduced { border-color: rgba(234, 179, 8, 0.5); }
   .summary-card.capacity-cleanup_only { border-color: rgba(249, 115, 22, 0.5); }
   .summary-card.capacity-blocked { border-color: rgba(239, 68, 68, 0.5); }
+
+  .filters-toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .filters-toolbar .search-field {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+  }
+
+  .filters-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.9rem;
+    border: 1px solid var(--border-color, #2a2a4a);
+    border-radius: 0.375rem;
+    background: var(--surface-bg, #141426);
+    color: var(--text-color, #fff);
+    font-size: 0.875rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .filters-toggle:hover {
+    border-color: var(--primary, #818cf8);
+  }
+
+  .filter-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: var(--primary, #818cf8);
+    color: #0b1020;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
 
   .filters {
     display: grid;

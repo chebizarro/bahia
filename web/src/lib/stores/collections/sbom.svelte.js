@@ -107,8 +107,20 @@ export function sbomArtifactIds() {
 
 // ── Event applicators ────────────────────────────────────────────────────────
 
+// Resolve the artifact this SBOM event refers to. The canonical linkage is the
+// ['artifact', id] tag, but real payloads may express the reference under an
+// alternate tag name or via the artifact digest carried in the ['subject', …]
+// tag. Fall back through the plausible shapes so SBOM STATUS reflects
+// availability regardless of which linkage the producer emitted. The primary
+// 'artifact' tag always wins when present.
 function extractArtifactId(event) {
-  return getTagValue(event, 'artifact') || '';
+  return (
+    getTagValue(event, 'artifact') ||
+    getTagValue(event, 'artifact_id') ||
+    getTagValue(event, 'artifact_ref') ||
+    getTagValue(event, 'subject') ||
+    ''
+  );
 }
 
 function parseSBOMReferenceEvent(event) {
