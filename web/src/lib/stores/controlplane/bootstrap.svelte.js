@@ -124,7 +124,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
     controlplaneConnection.status = 'discovering';
     controlplaneConnection.lastError = null;
     setAllLoading(true);
-    const hydratedFromCache = hydrateCachedCollections();
+    const hydratedFromCache = await hydrateCachedCollections();
     if (hydratedFromCache) {
       controlplaneConnection.lastEventAt = controlplaneConnection.lastEventAt || new Date().toISOString();
     }

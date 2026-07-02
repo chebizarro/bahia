@@ -35,6 +35,7 @@ import { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.s
 import { events } from './activity.svelte.js';
 import { sbomRefs, sbomAvailability, sbomRefsByArtifact, getSBOMRefsForArtifact, hasSBOMForArtifact, sbomArtifactIds } from './sbom.svelte.js';
 import { browser } from '$app/environment';
+import { createIndexedDBCollectionCacheAdapter } from './indexeddb-cache.js';
 
 export { services, upsertServiceProjection } from './services.svelte.js';
 export { environments } from './environments.svelte.js';
@@ -82,26 +83,64 @@ import { resetML, refreshML } from './ml.svelte.js';
 import { resetActivity, refreshActivity } from './activity.svelte.js';
 import { resetSBOM, refreshSBOM } from './sbom.svelte.js';
 
-const CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
-const CONTROLPLANE_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+export const LEGACY_CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
+export const CONTROLPLANE_COLLECTION_CACHE_SCHEMA = 'bahia_controlplane_collection_cache_v2';
+export const CONTROLPLANE_CACHE_TTL_MS = 15 * 60 * 1000;
 const PERSISTED_COLLECTION_DEFAULT_CAP = 250;
 const PERSISTED_COLLECTION_MIN_CAP = 10;
-const PERSISTED_COLLECTION_MAX_RETRIES = 4;
-const HIGH_CHURN_PERSISTED_COLLECTION_CAPS = {
-  events: 200,
-  deploymentRuns: 120,
-  builds: 120,
+const PERSISTED_COLLECTION_CAPS = Object.freeze({
   states: 150,
-  workerCleanupExecutions: 100,
-  workerEligibilityPreviews: 100,
-  backupRuns: 120,
-  backupVerifications: 120,
-  backupRetentionRuns: 100,
-  backupRuntimeObservations: 100,
-  packagePromotions: 120,
-  sbomRefs: 200
-};
+  artifacts: 200,
+  deploymentIntents: 150,
+  packageArtifacts: 200,
+  workerAssignments: 150,
+  workerDrainStatuses: 150,
+  sbomRefs: 200,
+  mlModelVersions: 200
+});
+
+export const PERSISTED_CONTROLPLANE_COLLECTIONS = Object.freeze([
+  'services',
+  'environments',
+  'states',
+  'llmRoutes',
+  'artifacts',
+  'deploymentIntents',
+  'policies',
+  'packageRepositories',
+  'packageArtifacts',
+  'workers',
+  'workerAssignments',
+  'workerDrainStatuses',
+  'backupRepositories',
+  'backupPolicies',
+  'backupRecipes',
+  'backupDefinitions',
+  'mlModels',
+  'mlModelVersions',
+  'mlEndpoints',
+  'sbomRefs',
+  'sbomAvailability'
+]);
+
+export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
+  'events',
+  'builds',
+  'deploymentRuns',
+  'packagePromotions',
+  'llmRouteStates',
+  'workerEligibilityPreviews',
+  'workerCleanupExecutions',
+  'backupRuns',
+  'backupVerifications',
+  'backupRestores',
+  'backupRetentionRuns',
+  'backupRuntimeObservations',
+  'mlEndpointStates'
+]);
+
 let persistTimer = null;
+let collectionCacheStorage = createIndexedDBCollectionCacheAdapter();
 
 export const loading = $state({
   services: false,
@@ -145,9 +184,68 @@ export function refreshCollections() {
   refreshSBOM();
 }
 
+export function setControlplaneCacheStorageAdapter(adapter) {
+  collectionCacheStorage = adapter || createNoopCollectionCacheAdapter();
+}
+
+export function resetControlplaneCacheStorageAdapter() {
+  collectionCacheStorage = createIndexedDBCollectionCacheAdapter();
+}
+
+function createNoopCollectionCacheAdapter() {
+  return {
+    async getAll() { return []; },
+    async putMany() { return false; },
+    async delete() { return false; }
+  };
+}
+
 function replaceSnapshotArray(target, values) {
   target.length = 0;
   if (Array.isArray(values)) target.push(...values);
+}
+
+const COLLECTION_TARGETS = Object.freeze({
+  services,
+  environments,
+  states,
+  llmRoutes,
+  llmRouteStates,
+  artifacts,
+  builds,
+  deploymentIntents,
+  deploymentRuns,
+  policies,
+  packageRepositories,
+  packageArtifacts,
+  packagePromotions,
+  workers,
+  workerAssignments,
+  workerDrainStatuses,
+  workerEligibilityPreviews,
+  workerCleanupExecutions,
+  events,
+  sbomRefs,
+  sbomAvailability,
+  backupRepositories,
+  backupPolicies,
+  backupRecipes,
+  backupDefinitions,
+  backupRuns,
+  backupVerifications,
+  backupRestores,
+  backupRetentionRuns,
+  backupRuntimeObservations,
+  mlModels,
+  mlModelVersions,
+  mlEndpoints,
+  mlEndpointStates
+});
+
+function collectionEntries() {
+  return Object.fromEntries(
+    Object.entries(COLLECTION_TARGETS).map(([collectionName, values]) => [collectionName, Array.from(values)])
+  );
 }
 
 function entryTimestamp(entry) {
@@ -157,7 +255,7 @@ function entryTimestamp(entry) {
 }
 
 function persistedCollectionCap(collectionName, scale = 1) {
-  const baseCap = HIGH_CHURN_PERSISTED_COLLECTION_CAPS[collectionName] ?? PERSISTED_COLLECTION_DEFAULT_CAP;
+  const baseCap = PERSISTED_COLLECTION_CAPS[collectionName] ?? PERSISTED_COLLECTION_DEFAULT_CAP;
   return Math.max(PERSISTED_COLLECTION_MIN_CAP, Math.floor(baseCap * scale));
 }
 
@@ -180,149 +278,94 @@ function capPersistedCollection(collectionName, values, scale = 1) {
       .map((entry) => entry.value);
   }
 
-  // Controlplane arrays are appended from Nostr EVENT handlers, so tail order is the best
-  // recency proxy when entries do not carry created_at, updated_at, or cachedAt timestamps.
   return values.slice(-cap);
 }
 
-export function persistedControlplaneSnapshot(scale = 1) {
-  const snapshot = controlplaneSnapshot();
-  return {
-    ...snapshot,
-    collections: Object.fromEntries(
-      Object.entries(snapshot.collections).map(([collectionName, values]) => [
-        collectionName,
-        capPersistedCollection(collectionName, values, scale)
-      ])
-    )
-  };
+export function persistedControlplaneCollections(scale = 1) {
+  return Object.fromEntries(
+    PERSISTED_CONTROLPLANE_COLLECTIONS.map((collectionName) => [
+      collectionName,
+      capPersistedCollection(collectionName, COLLECTION_TARGETS[collectionName], scale)
+    ])
+  );
 }
 
-export function isQuotaExceededError(error) {
-  return error instanceof DOMException && (
-    error.name === 'QuotaExceededError' ||
-    error.code === 22 ||
-    error.code === 1014
-  );
+export function persistedControlplaneSnapshot(scale = 1) {
+  return {
+    schema: CONTROLPLANE_COLLECTION_CACHE_SCHEMA,
+    cachedAt: Date.now(),
+    collections: persistedControlplaneCollections(scale)
+  };
 }
 
 export function controlplaneSnapshot() {
   return {
-    schema: CONTROLPLANE_SNAPSHOT_KEY,
+    schema: CONTROLPLANE_COLLECTION_CACHE_SCHEMA,
     cachedAt: Date.now(),
-    collections: {
-      services: Array.from(services),
-      environments: Array.from(environments),
-      states: Array.from(states),
-      llmRoutes: Array.from(llmRoutes),
-      llmRouteStates: Array.from(llmRouteStates),
-      artifacts: Array.from(artifacts),
-      builds: Array.from(builds),
-      deploymentIntents: Array.from(deploymentIntents),
-      deploymentRuns: Array.from(deploymentRuns),
-      policies: Array.from(policies),
-      packageRepositories: Array.from(packageRepositories),
-      packageArtifacts: Array.from(packageArtifacts),
-      packagePromotions: Array.from(packagePromotions),
-      workers: Array.from(workers),
-      workerAssignments: Array.from(workerAssignments),
-      workerDrainStatuses: Array.from(workerDrainStatuses),
-      workerEligibilityPreviews: Array.from(workerEligibilityPreviews),
-      workerCleanupExecutions: Array.from(workerCleanupExecutions),
-      events: Array.from(events),
-      sbomRefs: Array.from(sbomRefs),
-      sbomAvailability: Array.from(sbomAvailability),
-      backupRepositories: Array.from(backupRepositories),
-      backupPolicies: Array.from(backupPolicies),
-      backupRecipes: Array.from(backupRecipes),
-      backupDefinitions: Array.from(backupDefinitions),
-      backupRuns: Array.from(backupRuns),
-      backupVerifications: Array.from(backupVerifications),
-      backupRestores: Array.from(backupRestores),
-      backupRetentionRuns: Array.from(backupRetentionRuns),
-      backupRuntimeObservations: Array.from(backupRuntimeObservations),
-      mlModels: Array.from(mlModels),
-      mlModelVersions: Array.from(mlModelVersions),
-      mlEndpoints: Array.from(mlEndpoints),
-      mlEndpointStates: Array.from(mlEndpointStates)
-    }
+    collections: collectionEntries()
   };
 }
 
-export function hydrateCachedCollections() {
-  if (!browser || typeof localStorage?.getItem !== 'function') return false;
+function clearLegacyControlplaneSnapshot() {
+  if (!browser || typeof globalThis.localStorage?.removeItem !== 'function') return;
 
   try {
-    const raw = localStorage.getItem(CONTROLPLANE_SNAPSHOT_KEY);
-    if (!raw) return false;
-
-    const snapshot = JSON.parse(raw);
-    const age = Date.now() - Number(snapshot?.cachedAt || 0);
-    if (snapshot?.schema !== CONTROLPLANE_SNAPSHOT_KEY || age > CONTROLPLANE_SNAPSHOT_TTL_MS) return false;
-
-    const cached = snapshot.collections || {};
-    replaceSnapshotArray(services, cached.services);
-    replaceSnapshotArray(environments, cached.environments);
-    replaceSnapshotArray(states, cached.states);
-    replaceSnapshotArray(llmRoutes, cached.llmRoutes);
-    replaceSnapshotArray(llmRouteStates, cached.llmRouteStates);
-    replaceSnapshotArray(artifacts, cached.artifacts);
-    replaceSnapshotArray(builds, cached.builds);
-    replaceSnapshotArray(deploymentIntents, cached.deploymentIntents);
-    replaceSnapshotArray(deploymentRuns, cached.deploymentRuns);
-    replaceSnapshotArray(policies, cached.policies);
-    replaceSnapshotArray(packageRepositories, cached.packageRepositories);
-    replaceSnapshotArray(packageArtifacts, cached.packageArtifacts);
-    replaceSnapshotArray(packagePromotions, cached.packagePromotions);
-    replaceSnapshotArray(workers, cached.workers);
-    replaceSnapshotArray(workerAssignments, cached.workerAssignments);
-    replaceSnapshotArray(workerDrainStatuses, cached.workerDrainStatuses);
-    replaceSnapshotArray(workerEligibilityPreviews, cached.workerEligibilityPreviews);
-    replaceSnapshotArray(workerCleanupExecutions, cached.workerCleanupExecutions);
-    replaceSnapshotArray(events, cached.events);
-    replaceSnapshotArray(sbomRefs, cached.sbomRefs);
-    replaceSnapshotArray(sbomAvailability, cached.sbomAvailability);
-    replaceSnapshotArray(backupRepositories, cached.backupRepositories);
-    replaceSnapshotArray(backupPolicies, cached.backupPolicies);
-    replaceSnapshotArray(backupRecipes, cached.backupRecipes);
-    replaceSnapshotArray(backupDefinitions, cached.backupDefinitions);
-    replaceSnapshotArray(backupRuns, cached.backupRuns);
-    replaceSnapshotArray(backupVerifications, cached.backupVerifications);
-    replaceSnapshotArray(backupRestores, cached.backupRestores);
-    replaceSnapshotArray(backupRetentionRuns, cached.backupRetentionRuns);
-    replaceSnapshotArray(backupRuntimeObservations, cached.backupRuntimeObservations);
-    replaceSnapshotArray(mlModels, cached.mlModels);
-    replaceSnapshotArray(mlModelVersions, cached.mlModelVersions);
-    replaceSnapshotArray(mlEndpoints, cached.mlEndpoints);
-    replaceSnapshotArray(mlEndpointStates, cached.mlEndpointStates);
-    return true;
+    globalThis.localStorage.removeItem(LEGACY_CONTROLPLANE_SNAPSHOT_KEY);
   } catch (error) {
-    console.warn('Failed to hydrate cached controlplane snapshot:', error);
+    console.warn('Failed to clear legacy controlplane snapshot cache:', error);
+  }
+}
+
+function isFreshCacheRecord(record, now = Date.now()) {
+  const cachedAt = Number(record?.cachedAt);
+  return Number.isFinite(cachedAt) && now - cachedAt <= CONTROLPLANE_CACHE_TTL_MS;
+}
+
+export async function hydrateCachedCollections({ adapter = collectionCacheStorage, now = Date.now() } = {}) {
+  if (!browser) return false;
+  clearLegacyControlplaneSnapshot();
+
+  try {
+    const records = await adapter.getAll();
+    if (!Array.isArray(records) || records.length === 0) return false;
+
+    let hydrated = false;
+    for (const record of records) {
+      const collectionName = record?.name;
+      const target = COLLECTION_TARGETS[collectionName];
+      if (!target) continue;
+      if (!PERSISTED_CONTROLPLANE_COLLECTIONS.includes(collectionName)) continue;
+      if (!Array.isArray(record?.items)) continue;
+
+      if (!isFreshCacheRecord(record, now)) {
+        await adapter.delete?.(collectionName);
+        continue;
+      }
+
+      replaceSnapshotArray(target, capPersistedCollection(collectionName, record.items));
+      hydrated = true;
+    }
+
+    return hydrated;
+  } catch (error) {
+    console.warn('Failed to hydrate cached controlplane collections:', error);
     return false;
   }
 }
 
-export function persistCachedCollections() {
-  if (!browser || typeof localStorage?.setItem !== 'function') return false;
+export async function persistCachedCollections({ adapter = collectionCacheStorage } = {}) {
+  if (!browser) return false;
 
-  let scale = 1;
-  for (let attempt = 0; attempt <= PERSISTED_COLLECTION_MAX_RETRIES; attempt += 1) {
-    try {
-      localStorage.setItem(CONTROLPLANE_SNAPSHOT_KEY, JSON.stringify(persistedControlplaneSnapshot(scale)));
-      return true;
-    } catch (error) {
-      if (!isQuotaExceededError(error)) {
-        console.warn('Failed to persist controlplane snapshot:', error);
-        return false;
-      }
+  const cachedAt = Date.now();
+  const collections = persistedControlplaneCollections();
+  const records = Object.entries(collections).map(([name, items]) => ({ name, cachedAt, items }));
 
-      scale /= 2;
-    }
+  try {
+    return await adapter.putMany(records);
+  } catch (error) {
+    console.warn('Failed to persist controlplane collection cache:', error);
+    return false;
   }
-
-  localStorage.removeItem(CONTROLPLANE_SNAPSHOT_KEY);
-  console.warn('Failed to persist controlplane snapshot: storage quota exceeded after bounded retries.');
-  return false;
 }
 
 export function schedulePersistCachedCollections(delayMs = 150) {
@@ -330,6 +373,8 @@ export function schedulePersistCachedCollections(delayMs = 150) {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
-    persistCachedCollections();
+    persistCachedCollections().catch((error) => {
+      console.warn('Failed to persist scheduled controlplane collection cache:', error);
+    });
   }, delayMs);
 }
