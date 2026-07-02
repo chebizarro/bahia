@@ -2,6 +2,7 @@
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import CreateServiceDialog from './services/CreateServiceDialog.svelte';
   import {
     DeploymentIcon,
     EnvironmentIcon,
@@ -16,6 +17,7 @@
   import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection, discoveryState } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
   import { summarizeWorkerActivity } from './workers/list-utils.js';
+  import { summarizeDriftCause, shortHash } from './dashboard-drift-summary.js';
 
   // Pending deployments state
   let pendingDeployments = $state([]);
@@ -36,6 +38,8 @@
   let activityEventDialogOpen = $state(false);
   let selectedDriftState = $state(null);
   let driftDialogOpen = $state(false);
+  // Create-service dialog opens in place on the dashboard (no navigation).
+  let createServiceOpen = $state(false);
 
   // Cache configuration
   const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
@@ -631,7 +635,7 @@
   {/if}
   
   <div class="quick-actions">
-    <a href="/services?create=1" class="action-link">+ Create Service</a>
+    <button type="button" class="action-link" onclick={() => (createServiceOpen = true)}>+ Create Service</button>
     <a href="/deployments" class="action-link">Deployment History</a>
   </div>
 
@@ -756,7 +760,17 @@
   }}
 >
   {#if selectedDriftState}
+    {@const drift = summarizeDriftCause(selectedDriftState)}
+    {@const statusVariant = drift.status === 'in_sync' ? 'success' : drift.status === 'drifted' ? 'error' : 'default'}
     <div class="dashboard-detail-dialog">
+      <div class="drift-cause drift-cause-{drift.severity}">
+        <span class="badge-{statusVariant} drift-cause-badge">{firstPresentString(selectedDriftState.drift_status, 'unknown')}</span>
+        <div class="drift-cause-text">
+          <strong>{drift.headline}</strong>
+          <p>{drift.detail}</p>
+        </div>
+      </div>
+
       <dl>
         <div>
           <dt>Service</dt>
@@ -766,27 +780,89 @@
           <dt>Environment</dt>
           <dd>{environmentDisplayNameById(firstPresentString(selectedDriftState.environment_id))}</dd>
         </div>
-        <div>
-          <dt>Drift Status</dt>
-          <dd><code>{firstPresentString(selectedDriftState.drift_status, 'unknown')}</code></dd>
-        </div>
-        {#if selectedDriftState.status}
+        {#if drift.desiredHash}
           <div>
-            <dt>Status</dt>
-            <dd>{selectedDriftState.status}</dd>
+            <dt>Desired hash</dt>
+            <dd><code title={drift.desiredHash}>{shortHash(drift.desiredHash)}</code></dd>
           </div>
         {/if}
-        {#if selectedDriftState.artifact_id}
+        {#if drift.observedHash}
           <div>
-            <dt>Artifact</dt>
-            <dd><code>{selectedDriftState.artifact_id}</code></dd>
+            <dt>Observed hash</dt>
+            <dd>
+              <code title={drift.observedHash}>{shortHash(drift.observedHash)}</code>
+              {#if drift.hashesMatch === false}
+                <span class="drift-hash-flag mismatch">≠ desired</span>
+              {:else if drift.hashesMatch === true}
+                <span class="drift-hash-flag match">matches desired</span>
+              {/if}
+            </dd>
+          </div>
+        {:else if drift.status === 'drifted'}
+          <div>
+            <dt>Observed hash</dt>
+            <dd class="drift-muted">No observation reported</dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.renderer}
+          <div>
+            <dt>Renderer</dt>
+            <dd>{selectedDriftState.renderer}</dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.target}
+          <div>
+            <dt>Target</dt>
+            <dd>{selectedDriftState.target}</dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.desired_artifact_id}
+          <div>
+            <dt>Desired artifact</dt>
+            <dd><code>{selectedDriftState.desired_artifact_id}</code></dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.desired_intent_id}
+          <div>
+            <dt>Desired intent</dt>
+            <dd><code>{selectedDriftState.desired_intent_id}</code></dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.last_successful_run_id}
+          <div>
+            <dt>Last successful run</dt>
+            <dd><code>{selectedDriftState.last_successful_run_id}</code></dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.current_observation_id}
+          <div>
+            <dt>Current observation</dt>
+            <dd><code>{selectedDriftState.current_observation_id}</code></dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.last_reconciled_at}
+          <div>
+            <dt>Last reconciled</dt>
+            <dd>{formatLocalDateTime(selectedDriftState.last_reconciled_at)}</dd>
+          </div>
+        {/if}
+        {#if selectedDriftState.updated_at}
+          <div>
+            <dt>Updated</dt>
+            <dd>{formatLocalDateTime(selectedDriftState.updated_at)}</dd>
           </div>
         {/if}
       </dl>
-      <pre class="dashboard-event-json">{serializeDriftState(selectedDriftState)}</pre>
+
+      <details class="drift-raw">
+        <summary>Raw state JSON</summary>
+        <pre class="dashboard-event-json">{serializeDriftState(selectedDriftState)}</pre>
+      </details>
     </div>
   {/if}
 </Modal>
+
+<CreateServiceDialog bind:open={createServiceOpen} />
 
 <style>
   .dashboard h1 {
@@ -822,10 +898,13 @@
     padding: 0.5rem 1rem;
     background: var(--primary);
     color: white;
+    border: none;
     border-radius: 6px;
     text-decoration: none;
+    font-family: inherit;
     font-size: 0.875rem;
     font-weight: 500;
+    cursor: pointer;
     transition: opacity 0.2s;
   }
   .action-link:hover {
@@ -1035,6 +1114,76 @@
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+  .drift-cause {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--hover-bg);
+  }
+  .drift-cause-error {
+    border-color: color-mix(in srgb, var(--error) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--error) 10%, var(--card-bg));
+  }
+  .drift-cause-warning {
+    border-color: color-mix(in srgb, var(--warning, #f59e0b) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--warning, #f59e0b) 10%, var(--card-bg));
+  }
+  .drift-cause-success {
+    border-color: color-mix(in srgb, var(--success) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--success) 10%, var(--card-bg));
+  }
+  .drift-cause-badge {
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+  .drift-cause-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .drift-cause-text strong {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+  }
+  .drift-cause-text p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+  .drift-hash-flag {
+    margin-left: 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .drift-hash-flag.mismatch {
+    color: var(--error);
+  }
+  .drift-hash-flag.match {
+    color: var(--success);
+  }
+  .drift-muted {
+    color: var(--text-muted);
+    font-style: italic;
+  }
+  .drift-raw > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 0.25rem 0;
+    user-select: none;
+  }
+  .drift-raw > summary:hover {
+    color: var(--text-primary);
+  }
+  .drift-raw[open] > summary {
+    margin-bottom: 0.5rem;
   }
   :global(.badge.info) {
     background: color-mix(in srgb, var(--primary) 16%, transparent);
