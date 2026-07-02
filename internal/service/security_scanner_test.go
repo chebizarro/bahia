@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -187,6 +188,59 @@ func TestSecurityScannerSubscriptionHandlesEOSEClosedAUTH(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"wss://relay"}, sub.authenticated)
 	require.True(t, sub.sub.closed)
+}
+
+func TestSecuritySBOMReferencesFromEventIgnoresMigratedLegacyWrapper(t *testing.T) {
+	ev := &nostr.Event{
+		Kind: sbomadapter.KindSBOMReference,
+		Tags: nostr.Tags{
+			{"d", "sbom:ref:migrated:test"},
+			{"schema", "bahia.sbom.ref.v1"},
+		},
+		Content: `{"legacy_event":{"content":"[\"not-an-attestation\"]","kind":30078}}`,
+	}
+
+	refs, err := securitySBOMReferencesFromEvent(ev)
+
+	require.NoError(t, err)
+	require.Empty(t, refs)
+}
+
+func TestSecuritySBOMReferencesFromEventAcceptsActualInTotoReference(t *testing.T) {
+	att := &domain.SBOMAttestation{
+		Type:          sbomadapter.InTotoStatementType,
+		Subject:       []domain.AttestationSubject{{Name: "artifact-1", Digest: map[string]string{"sha256": strings.Repeat("a", 64)}}},
+		PredicateType: domain.AttestationTypeSPDX,
+		Predicate: domain.SBOMPredicate{
+			Format: domain.SBOMFormatSPDX,
+			Location: domain.SBOMLocation{
+				Type:      domain.SBOMStorageBlossom,
+				URI:       "https://blossom.example/" + strings.Repeat("b", 64),
+				MediaType: sbomadapter.MediaTypeSPDX,
+			},
+			Digest: map[string]string{"sha256": strings.Repeat("b", 64)},
+		},
+	}
+	content, err := json.Marshal(att)
+	require.NoError(t, err)
+	ev := &nostr.Event{
+		Kind: sbomadapter.KindSBOMReference,
+		Tags: nostr.Tags{
+			{"d", "sbom:ref:test"},
+			{"subject_type", string(domain.SBOMSubjectArtifact)},
+			{"subject", "sha256:" + strings.Repeat("a", 64)},
+			{"schema", "bahia.sbom.ref.v1"},
+		},
+		Content: string(content),
+	}
+
+	refs, err := securitySBOMReferencesFromEvent(ev)
+
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	require.Equal(t, "artifact-1", refs[0].Subject.ID)
+	require.Equal(t, "https://blossom.example/"+strings.Repeat("b", 64), refs[0].LocationURI)
+	require.Equal(t, strings.Repeat("b", 64), refs[0].PayloadSHA256)
 }
 
 type memorySecurityRepo struct {

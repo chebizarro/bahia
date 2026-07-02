@@ -2,9 +2,11 @@ package sbom
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -213,5 +215,43 @@ func TestStorageResolver_MissingClient(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("Expected error when OCI repo not provided")
+	}
+}
+
+type recordingBlossomClient struct {
+	urls []string
+	data []byte
+}
+
+func (r *recordingBlossomClient) Download(_ context.Context, value string) ([]byte, error) {
+	r.urls = append(r.urls, value)
+	return append([]byte(nil), r.data...), nil
+}
+
+func (r *recordingBlossomClient) Upload(context.Context, []byte, string) (*blossom.BlobDescriptor, error) {
+	return nil, fmt.Errorf("unexpected upload")
+}
+
+func TestStorageResolver_ResolveFromBlossomPassesCanonicalURLToClient(t *testing.T) {
+	client := &recordingBlossomClient{
+		data: []byte(`{"spdxVersion": "SPDX-2.3"}`),
+	}
+	resolver := NewStorageResolver(client, nil, nil, slog.Default())
+	uri := "https://blossom.example.com/" + testHash + ".json"
+
+	_, err := resolver.Resolve(context.Background(), ResolveInput{
+		Location: domain.SBOMLocation{
+			Type: domain.SBOMStorageBlossom,
+			URI:  uri,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if len(client.urls) != 1 {
+		t.Fatalf("Download calls = %d, want 1", len(client.urls))
+	}
+	if client.urls[0] != uri {
+		t.Fatalf("Download arg = %q, want %q", client.urls[0], uri)
 	}
 }
