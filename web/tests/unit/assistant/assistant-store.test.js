@@ -79,6 +79,7 @@ describe('assistant store', () => {
     controlplaneMock.controlplaneConnection.servicePubkey = 'b'.repeat(64);
     controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true });
     encryptedControlplaneMock.requestEncryptedResult.mockReset();
+    globalThis.localStorage?.clear?.();
     encryptedControlplaneMock.requestEncryptedResult.mockResolvedValue({
       result: { session_id: 'assistant-session-1', status: 'completed', summary: 'Assistant completed.' },
       requestEventId: 'request-event-1'
@@ -248,6 +249,66 @@ describe('assistant store', () => {
       summary: 'assistant planning failed',
       error: 'ContextVM request timed out after 120000ms waiting for result'
     }));
+  });
+
+  it('restores cached assistant sessions and transcript across reloads', async () => {
+    const operator = authMock.authState.pubkey;
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    const sessionId = 'assistant-cached-session';
+
+    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+      liveHandlers = handlers;
+      Promise.resolve().then(() => {
+        handlers?.onEvent?.(event({
+          id: 'session-cached',
+          kind: ASSISTANT_KINDS.SESSION,
+          pubkey: service,
+          created_at: 100,
+          tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
+          content: { state: 'executing', operator_pubkey: operator, transcript_summary: 'Cached session' }
+        }));
+        handlers?.onEvent?.(event({
+          id: 'status-cached',
+          kind: ASSISTANT_KINDS.STATUS,
+          pubkey: service,
+          created_at: 110,
+          tags: [['d', `bahia.assistant-status.v1:${sessionId}:executing`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['status', 'executing']],
+          content: { session_id: sessionId, status: 'executing', message: 'Cached transcript survives reload' }
+        }));
+        handlers?.onEose?.();
+      });
+      return vi.fn();
+    });
+
+    await store.bootstrapAssistant({ force: true });
+    expect(store.assistantSessions[0].transcript).toHaveLength(1);
+
+    const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v1:${operator}:${service}`;
+    expect(globalThis.localStorage.getItem(cacheKey)).toContain('Cached transcript survives reload');
+
+    store.resetAssistantStore();
+    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+      liveHandlers = handlers;
+      Promise.resolve().then(() => handlers?.onEose?.());
+      return vi.fn();
+    });
+
+    await store.bootstrapAssistant({ force: true });
+
+    expect(store.assistantUi.activeSessionId).toBe(sessionId);
+    expect(store.assistantSessions).toHaveLength(1);
+    expect(store.assistantSessions[0]).toMatchObject({
+      sessionId,
+      state: 'executing',
+      transcriptSummary: 'Cached session'
+    });
+    expect(store.assistantSessions[0].transcript).toHaveLength(1);
+    expect(store.assistantSessions[0].transcript[0]).toMatchObject({
+      id: 'status-cached',
+      type: 'status',
+      status: 'executing',
+      message: 'Cached transcript survives reload'
+    });
   });
 
   it('does not replay historical streaming chunks during bootstrap', async () => {

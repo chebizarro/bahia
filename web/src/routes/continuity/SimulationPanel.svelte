@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { workers, loadWorkers } from '$lib/stores';
   import { simulateWorkerFailureFromEvents } from '$lib/nostr/continuity';
   import type { ContinuityNostrEvent } from '$lib/nostr/continuity';
   import type { ContinuityAssessmentDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
@@ -18,8 +20,16 @@
   let loading = $state(false);
   let error = $state('');
   let simulatedWorker = $state('');
+  let simulationRan = $state(false);
+  let hasDefaultedWorker = $state(false);
 
-  const workerOptions = $derived(uniqueWorkers(statuses));
+  onMount(() => {
+    loadWorkers().catch((caught) => {
+      console.warn('Unable to load workers for continuity simulation:', caught);
+    });
+  });
+
+  const workerOptions = $derived(uniqueWorkers(statuses, workers));
   const baselineByService = $derived(new Map(baseline.map((assessment) => [assessment.service_key, assessment])));
   const comparisonRows = $derived(
     simulated.map((after) => ({
@@ -32,9 +42,22 @@
     comparisonRows.filter((row) => String(row.after.survivability).toLowerCase() === 'unsatisfied')
   );
 
-  function uniqueWorkers(values: ContinuityServiceStatusDTO[]): string[] {
+  $effect(() => {
+    if (!hasDefaultedWorker && !workerPubKey && workerOptions.length > 0) {
+      workerPubKey = workerOptions[0];
+      hasDefaultedWorker = true;
+    }
+  });
+
+  function uniqueWorkers(statusValues: ContinuityServiceStatusDTO[], workerValues: any[]): string[] {
     const keys = new Set<string>();
-    for (const status of values) {
+    for (const worker of workerValues || []) {
+      for (const key of [worker?.pubkey, worker?.worker_pubkey, worker?.workerPubkey]) {
+        const trimmed = String(key || '').trim();
+        if (trimmed) keys.add(trimmed);
+      }
+    }
+    for (const status of statusValues) {
       for (const key of [status.primary_worker_pubkey, status.active_worker_pubkey, status.standby_worker_pubkey]) {
         const trimmed = String(key || '').trim();
         if (trimmed) keys.add(trimmed);
@@ -78,6 +101,9 @@
   async function runSimulation() {
     const key = workerPubKey.trim();
     if (!key) {
+      simulated = [];
+      simulatedWorker = '';
+      simulationRan = false;
       error = 'Choose or enter a worker pubkey before simulating.';
       return;
     }
@@ -87,9 +113,11 @@
     try {
       simulated = simulateWorkerFailureFromEvents(key, continuityEvents, statuses);
       simulatedWorker = key;
+      simulationRan = true;
     } catch (caught) {
       simulated = [];
       simulatedWorker = '';
+      simulationRan = false;
       error = caught instanceof Error ? caught.message : 'Simulation failed';
     } finally {
       loading = false;
@@ -102,7 +130,7 @@
     <div>
       <p class="eyebrow">What-if analysis</p>
       <h2>Simulate worker failure</h2>
-      <p class="hint">Select an observed worker or paste a pubkey to compare current survivability with graph output after failure.</p>
+      <p class="hint">Select an observed worker or paste a pubkey to run a local what-if simulation against event-derived continuity topology.</p>
     </div>
 
     <div class="controls">
@@ -123,14 +151,23 @@
     <div class="alert error" role="status">{error}</div>
   {/if}
 
-  {#if simulated.length === 0 && !error}
+  {#if !simulationRan && simulated.length === 0 && !error}
     <div class="empty-card">
       <h3>No simulation run yet</h3>
       <p>Run a worker failure simulation to see before/after survivability changes.</p>
+      {#if workerOptions.length === 0}
+        <p>No workers are currently available from worker advertisements or continuity status events. Paste a pubkey to simulate manually.</p>
+      {/if}
+    </div>
+  {:else if simulationRan && simulated.length === 0 && !error}
+    <div class="empty-card" role="status">
+      <h3>Local simulation completed for <code>{shortKey(simulatedWorker)}</code></h3>
+      <p>No service assessments could be derived from the current local Nostr continuity data. The simulation needs continuity status, profile/policy, standby, heartbeat, or worker-state events before it can show before/after survivability.</p>
     </div>
   {:else if simulated.length > 0}
-    <div class="results">
-      <h3>Failure result for <code>{shortKey(simulatedWorker)}</code></h3>
+    <div class="results" role="status">
+      <p class="source-note">Local simulation using {continuityEvents.length} continuity event{continuityEvents.length === 1 ? '' : 's'} and {statuses.length} status read model{statuses.length === 1 ? '' : 's'}.</p>
+      <h3>Local failure result for <code>{shortKey(simulatedWorker)}</code></h3>
 
       {#if unsatisfiedRows.length > 0}
         <div class="alert warning" role="status">
@@ -188,6 +225,7 @@
 
   .eyebrow,
   .hint,
+  .source-note,
   label,
   .empty-card p,
   .before-after span {

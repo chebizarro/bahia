@@ -37,8 +37,8 @@
 <section class="topology" aria-label="Continuity topology">
   {#if sortedAssessments.length === 0}
     <div class="empty-card">
-      <h2>No topology assessments available</h2>
-      <p>Continuity graph assessments will appear when the graph reader is wired and has service data.</p>
+      <h2>No event-derived topology assessments yet</h2>
+      <p>Topology is derived locally from Nostr continuity events. Service assessments will appear after continuity profile, policy, standby, heartbeat, or worker-state events are observed.</p>
     </div>
   {:else}
     <div class="topology-grid">
