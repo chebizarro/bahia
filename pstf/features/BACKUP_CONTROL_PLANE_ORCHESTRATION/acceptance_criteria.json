@@ -85,6 +85,13 @@
       "given": "backup, verification, restore, and retention records exist across repositories",
       "when": "the Nostr projector republishes snapshots or reacts to backup mutations",
       "then": "BackupRuntimeObservationState summarizes last successful run, last verification, last restore outcome, retention outcomes, backend health failures, queued/running/stale counts, pending approvals, and structured failure categories"
+    },
+    {
+      "id": "AC-BACKUP-013",
+      "title": "Backup web mutations publish canonical ContextVM commands",
+      "given": "an operator uses the Backup web UI to create or operate backup resources",
+      "when": "repository registration, policy/recipe/definition apply, run, verification, restore, retention, probe, or restore approval is submitted",
+      "then": "the browser publishes an encrypted ContextVM method that Bahia bridges to the canonical backup command event/action and reports only command acceptance while durable progress remains in backup read models"
     }
   ],
   "coverage_notes": [
@@ -93,7 +100,8 @@
     "Retention enforcement event 38404 uses backend-native adapters, publishes progress as BackupObservation 6984 and terminal BackupRetentionResult 38414, and durable retention outcomes are projected through existing BackupRetentionRegistry 31994 plus fleet posture 31999.",
     "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds.",
     "BackupDefinition domain model and backup_definitions migration added for bahia-gbo2; handlers, MCP, UI, scheduling execution, and executor placement remain tracked in dependent Beads.",
-    "The 2026-05-23 operational posture slice adds persisted and projected verification/restore eligibility, restore approval queue/audit metadata, structured failure categories, retention outcomes, and fleet runtime observation summaries for bahia-bc66/bahia-gzjs/bahia-j46o."
+    "The 2026-05-23 operational posture slice adds persisted and projected verification/restore eligibility, restore approval queue/audit metadata, structured failure categories, retention outcomes, and fleet runtime observation summaries for bahia-bc66/bahia-gzjs/bahia-j46o.",
+    "The 2026-07-02 Wave-2 web mutation slice adds ContextVM bridge methods and UI controls for backup registry mutation and core operation requests without bypassing the canonical Nostr command/read-model flow."
   ],
   "unresolved_questions": [],
   "coverage_summary": {}

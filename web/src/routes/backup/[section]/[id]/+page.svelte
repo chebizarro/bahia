@@ -3,6 +3,7 @@
   import BackupShell from '../../BackupShell.svelte';
   import StatusPill from '../../StatusPill.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import { toast } from '$lib/components/toast.js';
   import { RepositoryIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import {
     backupRepositories,
@@ -16,7 +17,16 @@
     backupRuntimeObservations,
     loadBackupControlplane
   } from '$lib/stores';
-  import { approveBackupRestore, probeBackupRepository, rejectBackupRestore, resultContent } from '$lib/stores/public-controlplane.svelte.js';
+  import {
+    approveBackupRestore,
+    probeBackupRepository,
+    rejectBackupRestore,
+    requestBackupRetention,
+    requestBackupRestore,
+    requestBackupRun,
+    requestBackupVerification,
+    resultContent
+  } from '$lib/stores/public-controlplane.svelte.js';
   import {
     backupContext,
     capabilityEntries,
@@ -71,8 +81,10 @@
       const result = await probeBackupRepository(record);
       const content = resultContent(result);
       notice = { type: 'success', message: content.message || 'Repository probe queued' };
+      toast.success(notice.message);
     } catch (err) {
       notice = { type: 'error', message: err?.message || 'Failed to queue repository probe' };
+      toast.error(notice.message);
     } finally {
       pending = '';
     }
@@ -88,11 +100,48 @@
       const result = await (approved ? approveBackupRestore(record, message) : rejectBackupRestore(record, message));
       const content = resultContent(result);
       notice = { type: 'success', message: content.message || 'Restore decision accepted' };
+      toast.success(notice.message);
     } catch (err) {
       notice = { type: 'error', message: err?.message || 'Failed to submit restore decision' };
+      toast.error(notice.message);
     } finally {
       pending = '';
     }
+  }
+
+  async function publishDetailAction(action, publisher, fallbackMessage) {
+    if (!record) return;
+    pending = action;
+    notice = null;
+    try {
+      const result = await publisher();
+      const content = resultContent(result);
+      notice = { type: 'success', message: content.message || fallbackMessage };
+      toast.success(notice.message);
+    } catch (err) {
+      notice = { type: 'error', message: err?.message || `Failed to publish ${action} command` };
+      toast.error(notice.message);
+    } finally {
+      pending = '';
+    }
+  }
+
+  function runBackupNow() {
+    return publishDetailAction('run', () => requestBackupRun(record), `Backup run requested for ${record.name || record.recipe_name || record.id}`);
+  }
+
+  function verifyBackupRun() {
+    return publishDetailAction('verify', () => requestBackupVerification(record), `Backup verification requested for ${record.id}`);
+  }
+
+  function requestRestore() {
+    const target = globalThis.prompt?.('Restore target ref', record.restore_target_ref || record.target_ref || '') ?? null;
+    if (target === null) return;
+    return publishDetailAction('restore', () => requestBackupRestore(record, target), `Backup restore requested for ${record.id}`);
+  }
+
+  function enforceRetention() {
+    return publishDetailAction('retention', () => requestBackupRetention(record), `Retention enforcement requested for ${record.name || record.id}`);
   }
 
   function jsonBlock(value) {
@@ -119,6 +168,17 @@
       <a href={`/backup/${section}`}>Back to {config.label}</a>
       {#if section === 'repositories'}
         <button type="button" disabled={pending === 'probe'} onclick={runProbe}>{pending === 'probe' ? 'Queueing probe…' : 'Probe repository'}</button>
+      {/if}
+      {#if section === 'recipes'}
+        <button type="button" disabled={pending === 'run'} onclick={runBackupNow}>{pending === 'run' ? 'Requesting run…' : 'Run now'}</button>
+      {/if}
+      {#if section === 'definitions'}
+        <button type="button" disabled={pending === 'run'} onclick={runBackupNow}>{pending === 'run' ? 'Requesting run…' : 'Run now'}</button>
+        <button type="button" disabled={pending === 'retention'} onclick={enforceRetention}>{pending === 'retention' ? 'Requesting retention…' : 'Enforce retention'}</button>
+      {/if}
+      {#if section === 'runs'}
+        <button type="button" disabled={pending === 'verify'} onclick={verifyBackupRun}>{pending === 'verify' ? 'Requesting verification…' : 'Verify'}</button>
+        <button type="button" disabled={pending === 'restore'} onclick={requestRestore}>{pending === 'restore' ? 'Requesting restore…' : 'Request restore'}</button>
       {/if}
       {#if hasApprovalActions(record)}
         <button type="button" class="approve" disabled={Boolean(pending)} onclick={() => decideRestore(true)}>{pending === 'approve' ? 'Approving…' : 'Approve restore'}</button>

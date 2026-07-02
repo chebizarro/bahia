@@ -205,11 +205,27 @@
         "internal/adapters/nostr/projector.go publishes retention run state and BackupRuntimeObservationState with last successful run, verification, restore, retention outcomes, backend health failures, queued/running/stale counts, pending approvals, and failure category counts.",
         "Focused verification command passed: go test ./internal/domain ./internal/service ./internal/controlplane ./internal/adapters/nostr ./internal/repository."
       ]
+    },
+    {
+      "id": "T-BACKUP-013",
+      "criteria": [
+        "AC-BACKUP-002",
+        "AC-BACKUP-008",
+        "AC-BACKUP-013"
+      ],
+      "type": "unit/web",
+      "target": "internal/controlplane, web/src/lib/stores/public-controlplane.svelte.js, web/src/routes/backup",
+      "description": "Verify Backup web mutation and operation controls publish registered encrypted ContextVM methods that bridge to canonical backup command actions and read-model-observed workflows.",
+      "status": "passed",
+      "evidence": [
+        "internal/controlplane/contextvm_handlers_registration_test.go validates every backup ContextVM web method publishes the expected canonical command kind and action tag.",
+        "web/tests/unit/public-controlplane.test.js validates web helper method strings for backup repository/policy/recipe/definition mutation and run/verification/restore/retention operations."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 12,
-    "criteria_with_tests": 12,
+    "criteria_total": 13,
+    "criteria_with_tests": 13,
     "verified_criteria": [
       "AC-BACKUP-001",
       "AC-BACKUP-002",
@@ -222,7 +238,8 @@
       "AC-BACKUP-009",
       "AC-BACKUP-010",
       "AC-BACKUP-011",
-      "AC-BACKUP-012"
+      "AC-BACKUP-012",
+      "AC-BACKUP-013"
     ],
     "known_gaps": []
   },
@@ -233,6 +250,7 @@
     "Projector publishes BackupRunState 31996, BackupVerificationState 31997, BackupRestoreState 31998, retention outcome state 31994, and fleet BackupRuntimeObservationState 31999.",
     "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files.",
     "BackupDefinition CRUD is covered at the domain and repository layer; Nostr handlers, MCP, UI, scheduler dispatch, and executor placement are intentionally out of scope for bahia-gbo2.",
-    "Operational posture projection is recomputed from durable repository pages on backup run, restore, verification, and retention mutations; it does not poll relays or use timeout-based workflow completion."
+    "Operational posture projection is recomputed from durable repository pages on backup run, restore, verification, and retention mutations; it does not poll relays or use timeout-based workflow completion.",
+    "Wave-2 web backup mutations use encrypted ContextVM methods that bridge to the existing 38400-38409 canonical command kinds; UI ACKs are command-submission receipts, not terminal workflow completion."
   ]
 }

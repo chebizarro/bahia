@@ -321,6 +321,27 @@ func routeResultPayload(t *testing.T, ev nostr.Event) map[string]any {
 	return payload
 }
 
+func TestEncryptedRouteHandlers_ContextVMAliasPreservesCanonicalOperation(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	var observedOperation string
+	h := &EncryptedRouteHandlers{}
+	h.registerRouteHandler(transport, "canonical.operation", func(_ context.Context, request EncryptedRequest) (any, error) {
+		observedOperation = request.Envelope.Operation
+		return map[string]any{"operation": request.Envelope.Operation}, nil
+	}, "contextvm/alias")
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, "contextvm/alias", map[string]any{"name": "alias-check"}))
+
+	if observedOperation != "canonical.operation" {
+		t.Fatalf("observed operation = %q, want canonical.operation", observedOperation)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["operation"] != "canonical.operation" {
+		t.Fatalf("unexpected alias response: %#v", payload)
+	}
+}
+
 func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryService(t *testing.T) {
 	registry := &fakeEncryptedRegistryMutations{}
 	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})

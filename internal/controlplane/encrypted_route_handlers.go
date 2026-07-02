@@ -134,7 +134,7 @@ func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedReques
 	transport.RegisterHandler(operation, handler)
 	register := func(method string) {
 		transport.RegisterContextVMHandler(method, func(ctx context.Context, request ContextVMRequest) (any, error) {
-			return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey.Hex(), Payload: request.RPC.Params}})
+			return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: operation, RequesterPubkey: request.Event.PubKey.Hex(), Payload: request.RPC.Params}})
 		})
 	}
 	register(operation)

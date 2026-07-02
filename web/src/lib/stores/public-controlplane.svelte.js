@@ -431,6 +431,180 @@ function backupIdempotencyKey(prefix, id) {
   return `web.backup.${prefix}:${id || 'fleet'}:${randomId()}`;
 }
 
+function backupMetadata(source, metadata = {}) {
+  return { ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}), source };
+}
+
+function backupRequired(value, label) {
+  const text = String(value || '').trim();
+  if (!text) throw new Error(`${label} is required`);
+  return text;
+}
+
+function backupRecipeCoordinate(recipe) {
+  const explicit = String(recipe?.recipe || '').trim();
+  if (explicit) return explicit;
+  const name = String(recipe?.name || recipe?.recipe_name || '').trim();
+  const version = String(recipe?.version || recipe?.recipe_version || '').trim();
+  return name && version ? `recipe:${name}:${version}` : name;
+}
+
+export function registerBackupRepository(payload) {
+  const name = backupRequired(payload?.name, 'repository name');
+  const backend = backupRequired(payload?.backend, 'repository backend');
+  const repositoryUri = backupRequired(payload?.repository_uri || payload?.uri, 'repository URI');
+  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('repository_register', name);
+  const content = {
+    ...payload,
+    name,
+    backend,
+    repository_uri: repositoryUri,
+    idempotency_key: idempotencyKey,
+    metadata: backupMetadata('web.backup.repositories.register', payload?.metadata)
+  };
+  return publishCommand({
+    operation: 'backup/repository-register',
+    tags: [['d', idempotencyKey], ['repository', name], ['name', name], ['backend', backend], ['repository_uri', repositoryUri], ['repository_id', payload?.id || payload?.repository_id]].filter((tag) => tag[1]),
+    content
+  });
+}
+
+export function applyBackupPolicy(payload) {
+  const name = backupRequired(payload?.name, 'policy name');
+  const verificationMode = String(payload?.verification_mode || (payload?.require_verification ? 'kopia_snapshot_verify' : 'none')).trim() || 'none';
+  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('policy_apply', name);
+  const content = {
+    ...payload,
+    name,
+    require_verification: Boolean(payload?.require_verification),
+    verification_mode: verificationMode,
+    idempotency_key: idempotencyKey,
+    metadata: backupMetadata('web.backup.policies.apply', payload?.metadata)
+  };
+  return publishCommand({
+    operation: 'backup/policy-apply',
+    tags: [['d', idempotencyKey], ['policy', name], ['name', name], ['policy_id', payload?.id || payload?.policy_id], ['verification', verificationMode]].filter((tag) => tag[1]),
+    content
+  });
+}
+
+export function applyBackupRecipe(payload) {
+  const name = backupRequired(payload?.name || payload?.recipe_name, 'recipe name');
+  const version = backupRequired(payload?.version || payload?.recipe_version, 'recipe version');
+  const repositoryId = backupRequired(payload?.repository_id, 'repository id');
+  const backend = backupRequired(payload?.backend, 'recipe backend');
+  const targetRef = backupRequired(payload?.target_ref || payload?.target, 'target ref');
+  const recipe = backupRecipeCoordinate({ ...payload, name, version });
+  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('recipe_apply', `${name}:${version}`);
+  const content = {
+    ...payload,
+    name,
+    version,
+    backend,
+    repository_id: repositoryId,
+    target_ref: targetRef,
+    verification_mode: String(payload?.verification_mode || 'none').trim() || 'none',
+    idempotency_key: idempotencyKey,
+    metadata: backupMetadata('web.backup.recipes.apply', payload?.metadata)
+  };
+  return publishCommand({
+    operation: 'backup/recipe-apply',
+    tags: [['d', idempotencyKey], ['recipe', recipe], ['recipe_id', payload?.id || payload?.recipe_id], ['repository_id', repositoryId], ['policy_id', payload?.policy_id], ['backend', backend], ['target', targetRef]].filter((tag) => tag[1]),
+    content
+  });
+}
+
+export function applyBackupDefinition(payload) {
+  const name = backupRequired(payload?.name || payload?.definition, 'definition name');
+  const repositoryId = backupRequired(payload?.repository_id, 'repository id');
+  const policyId = backupRequired(payload?.policy_id, 'policy id');
+  const recipeId = backupRequired(payload?.recipe_id, 'recipe id');
+  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('definition_apply', name);
+  const content = {
+    ...payload,
+    name,
+    repository_id: repositoryId,
+    policy_id: policyId,
+    recipe_id: recipeId,
+    schedule_enabled: Boolean(payload?.schedule_enabled),
+    requires_approval: Boolean(payload?.requires_approval),
+    idempotency_key: idempotencyKey,
+    metadata: backupMetadata('web.backup.definitions.apply', payload?.metadata)
+  };
+  return publishCommand({
+    operation: 'backup/definition-apply',
+    tags: [['d', idempotencyKey], ['definition', name], ['name', name], ['definition_id', payload?.id || payload?.definition_id], ['repository_id', repositoryId], ['policy_id', policyId], ['recipe_id', recipeId]].filter((tag) => tag[1]),
+    content
+  });
+}
+
+export function requestBackupRun(recipeOrDefinition) {
+  const recipeId = String(recipeOrDefinition?.recipe_id || recipeOrDefinition?.id || '').trim();
+  const recipe = backupRecipeCoordinate(recipeOrDefinition);
+  if (!recipeId && !recipe) throw new Error('recipe id or recipe coordinate is required');
+  const idempotencyKey = backupIdempotencyKey('run', recipeId || recipe);
+  return publishCommand({
+    operation: 'backup/run',
+    tags: [['d', idempotencyKey], ['recipe_id', recipeId], ['recipe', recipe]].filter((tag) => tag[1]),
+    content: {
+      recipe_id: recipeId,
+      recipe,
+      idempotency_key: idempotencyKey,
+      metadata: { source: 'web.backup.run' }
+    }
+  });
+}
+
+export function requestBackupVerification(run, mode = '') {
+  const backupRunId = backupRequired(run?.id || run?.backup_run_id || run?.run_id, 'backup run id');
+  const verificationMode = String(mode || run?.verification_mode || 'kopia_snapshot_verify').trim() || 'kopia_snapshot_verify';
+  const idempotencyKey = backupIdempotencyKey('verification', backupRunId);
+  return publishCommand({
+    operation: 'backup/verification',
+    tags: [['d', idempotencyKey], ['backup_run_id', backupRunId], ['run', backupRunId], ['verification_mode', verificationMode]],
+    content: {
+      backup_run_id: backupRunId,
+      mode: verificationMode,
+      idempotency_key: idempotencyKey,
+      metadata: { source: 'web.backup.verification' }
+    }
+  });
+}
+
+export function requestBackupRestore(run, restoreTargetRef) {
+  const backupRunId = backupRequired(run?.id || run?.backup_run_id || run?.run_id, 'backup run id');
+  const target = backupRequired(restoreTargetRef || run?.restore_target_ref || run?.target_ref, 'restore target');
+  const idempotencyKey = backupIdempotencyKey('restore', `${backupRunId}:${target}`);
+  return publishCommand({
+    operation: 'backup/restore',
+    tags: [['d', idempotencyKey], ['backup_run_id', backupRunId], ['run', backupRunId], ['target', target]],
+    content: {
+      backup_run_id: backupRunId,
+      restore_target_ref: target,
+      idempotency_key: idempotencyKey,
+      metadata: { source: 'web.backup.restore' }
+    }
+  });
+}
+
+export function requestBackupRetention(input) {
+  const repositoryId = backupRequired(input?.repository_id || input?.id, 'repository id');
+  const policyId = backupRequired(input?.policy_id, 'policy id');
+  const dryRun = Boolean(input?.dry_run);
+  const idempotencyKey = backupIdempotencyKey('retention', `${repositoryId}:${policyId}:${dryRun}`);
+  return publishCommand({
+    operation: 'backup/retention',
+    tags: [['d', idempotencyKey], ['repository_id', repositoryId], ['policy_id', policyId], ['dry_run', String(dryRun)]],
+    content: {
+      repository_id: repositoryId,
+      policy_id: policyId,
+      dry_run: dryRun,
+      idempotency_key: idempotencyKey,
+      metadata: { source: 'web.backup.retention' }
+    }
+  });
+}
+
 export function probeBackupRepository(repository) {
   const repositoryId = repository?.id || repository?.repository_id || '';
   if (!repositoryId) throw new Error('repository id is required');

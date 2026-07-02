@@ -298,6 +298,36 @@ describe('public controlplane command helpers', () => {
     }));
   });
 
+  it('publishes backup mutation and operation helpers through registered ContextVM methods', async () => {
+    await api.registerBackupRepository({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      operation: 'backup/repository-register',
+      tags: expect.arrayContaining([['d', 'repo-1'], ['repository', 'archive']]),
+      payload: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' })
+    }));
+
+    await api.applyBackupPolicy({ name: 'verified', require_verification: true, verification_mode: 'kopia_snapshot_verify', idempotency_key: 'policy-1' });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/policy-apply' }));
+
+    await api.applyBackupRecipe({ name: 'daily', version: 'v1', backend: 'kopia', repository_id: 'repo-id', target_ref: 'fs:/srv/app', idempotency_key: 'recipe-1' });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/recipe-apply' }));
+
+    await api.applyBackupDefinition({ name: 'daily-app', repository_id: 'repo-id', policy_id: 'policy-id', recipe_id: 'recipe-id', idempotency_key: 'definition-1' });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/definition-apply' }));
+
+    await api.requestBackupRun({ id: 'recipe-id', name: 'daily', version: 'v1' });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/run' }));
+
+    await api.requestBackupVerification({ id: 'run-id', verification_mode: 'kopia_snapshot_verify' });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/verification' }));
+
+    await api.requestBackupRestore({ id: 'run-id' }, 'fs:/restore');
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/restore' }));
+
+    await api.requestBackupRetention({ repository_id: 'repo-id', policy_id: 'policy-id', dry_run: true });
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/retention' }));
+  });
+
   it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
     requestEncryptedResultMock.mockResolvedValueOnce({
       requestEventId: 'req-1',

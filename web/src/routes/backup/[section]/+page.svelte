@@ -1,9 +1,11 @@
 <script>
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import BackupMutationPanel from '../BackupMutationPanel.svelte';
   import BackupShell from '../BackupShell.svelte';
   import StatusPill from '../StatusPill.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import { toast } from '$lib/components/toast.js';
   import { RepositoryIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import {
     backupRepositories,
@@ -17,7 +19,16 @@
     backupRuntimeObservations,
     loadBackupControlplane
   } from '$lib/stores';
-  import { approveBackupRestore, probeBackupRepository, rejectBackupRestore, resultContent } from '$lib/stores/public-controlplane.svelte.js';
+  import {
+    approveBackupRestore,
+    probeBackupRepository,
+    rejectBackupRestore,
+    requestBackupRetention,
+    requestBackupRestore,
+    requestBackupRun,
+    requestBackupVerification,
+    resultContent
+  } from '$lib/stores/public-controlplane.svelte.js';
   import {
     backupContext,
     cellText,
@@ -101,7 +112,7 @@
   }
 
   function shouldShowActions(row) {
-    return section === 'repositories' || (section === 'restores' && (row.pending_approval || row.approval_status === 'pending'));
+    return ['repositories', 'recipes', 'definitions', 'runs'].includes(section) || (section === 'restores' && (row.pending_approval || row.approval_status === 'pending'));
   }
 
   async function runProbe(row, event) {
@@ -112,8 +123,10 @@
       const result = await probeBackupRepository(row);
       const content = resultContent(result);
       notice = { type: 'success', message: content.message || `Repository probe queued for ${row.name || row.id}` };
+      toast.success(notice.message);
     } catch (err) {
       notice = { type: 'error', message: err?.message || 'Failed to queue repository probe' };
+      toast.error(notice.message);
     } finally {
       setPending(row, 'probe', false);
     }
@@ -130,11 +143,49 @@
       const result = await (approved ? approveBackupRestore(row, message) : rejectBackupRestore(row, message));
       const content = resultContent(result);
       notice = { type: 'success', message: content.message || `Restore ${action} command accepted` };
+      toast.success(notice.message);
     } catch (err) {
       notice = { type: 'error', message: err?.message || `Failed to ${action} restore` };
+      toast.error(notice.message);
     } finally {
       setPending(row, action, false);
     }
+  }
+
+  async function publishBackupRowAction(row, action, event, publisher, fallbackMessage) {
+    event.stopPropagation();
+    setPending(row, action, true);
+    notice = null;
+    try {
+      const result = await publisher();
+      const content = resultContent(result);
+      notice = { type: 'success', message: content.message || fallbackMessage };
+      toast.success(notice.message);
+    } catch (err) {
+      notice = { type: 'error', message: err?.message || `Failed to publish ${action} command` };
+      toast.error(notice.message);
+    } finally {
+      setPending(row, action, false);
+    }
+  }
+
+  function runBackupNow(row, event) {
+    return publishBackupRowAction(row, 'run', event, () => requestBackupRun(row), `Backup run requested for ${row.name || row.recipe_name || row.id}`);
+  }
+
+  function verifyBackupRun(row, event) {
+    return publishBackupRowAction(row, 'verify', event, () => requestBackupVerification(row), `Backup verification requested for ${row.id}`);
+  }
+
+  function requestRestore(row, event) {
+    const defaultTarget = row.restore_target_ref || row.target_ref || '';
+    const target = globalThis.prompt?.('Restore target ref', defaultTarget) ?? null;
+    if (target === null) return;
+    return publishBackupRowAction(row, 'restore', event, () => requestBackupRestore(row, target), `Backup restore requested for ${row.id}`);
+  }
+
+  function enforceRetention(row, event) {
+    return publishBackupRowAction(row, 'retention', event, () => requestBackupRetention(row), `Retention enforcement requested for ${row.name || row.id}`);
   }
 </script>
 
@@ -146,6 +197,14 @@
   {:else if error}
     <EmptyState iconComponent={WarningIcon} title={`Unable to load ${config.label.toLowerCase()}`} message={error} />
   {:else}
+    <BackupMutationPanel
+      {section}
+      repositories={backupRepositories}
+      policies={backupPolicies}
+      recipes={backupRecipes}
+      onAccepted={loadBackup}
+    />
+
     <div class="toolbar">
       <label>
         <span>Search</span>
@@ -203,6 +262,14 @@
                   {#if shouldShowActions(row)}
                     {#if section === 'repositories'}
                       <button type="button" disabled={isPending(row, 'probe')} onclick={(event) => runProbe(row, event)}>{isPending(row, 'probe') ? 'Queued…' : 'Probe'}</button>
+                    {:else if section === 'recipes'}
+                      <button type="button" disabled={isPending(row, 'run')} onclick={(event) => runBackupNow(row, event)}>{isPending(row, 'run') ? 'Requesting…' : 'Run now'}</button>
+                    {:else if section === 'definitions'}
+                      <button type="button" disabled={isPending(row, 'run')} onclick={(event) => runBackupNow(row, event)}>{isPending(row, 'run') ? 'Requesting…' : 'Run now'}</button>
+                      <button type="button" disabled={isPending(row, 'retention')} onclick={(event) => enforceRetention(row, event)}>{isPending(row, 'retention') ? 'Requesting…' : 'Enforce retention'}</button>
+                    {:else if section === 'runs'}
+                      <button type="button" disabled={isPending(row, 'verify')} onclick={(event) => verifyBackupRun(row, event)}>{isPending(row, 'verify') ? 'Requesting…' : 'Verify'}</button>
+                      <button type="button" disabled={isPending(row, 'restore')} onclick={(event) => requestRestore(row, event)}>{isPending(row, 'restore') ? 'Requesting…' : 'Request restore'}</button>
                     {:else if section === 'restores'}
                       <button type="button" class="approve" disabled={isPending(row, 'approve') || isPending(row, 'reject')} onclick={(event) => decideRestore(row, true, event)}>{isPending(row, 'approve') ? 'Approving…' : 'Approve'}</button>
                       <button type="button" class="reject" disabled={isPending(row, 'approve') || isPending(row, 'reject')} onclick={(event) => decideRestore(row, false, event)}>{isPending(row, 'reject') ? 'Rejecting…' : 'Reject'}</button>

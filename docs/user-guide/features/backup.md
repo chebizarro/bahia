@@ -58,15 +58,22 @@ config:
 
 ### Web UI
 
-1. Navigate to **Backup** in the sidebar
-2. Click **New Definition**
-3. Configure:
-   - **Name**: Definition identifier
-   - **Target**: What to back up
-   - **Schedule**: When to run
-   - **Policy**: Retention and verification rules
-   - **Repository**: Where to store
-4. Click **Create**
+1. Navigate to **Backup** in the sidebar.
+2. Open **Repositories**, **Policies**, **Recipes**, or **Definitions**.
+3. Use the mutation panel at the top of the section to publish the corresponding signed ContextVM command:
+   - `backup/repository-register`
+   - `backup/policy-apply`
+   - `backup/recipe-apply`
+   - `backup/definition-apply`
+4. Watch the section list and detail pages for projected Nostr read models. The web command response only confirms that Bahia published the canonical backup command event; durable progress and terminal truth are shown by backup status/result projections.
+
+Operational controls are available on list and detail pages:
+- **Run now** on recipes and definitions publishes `backup/run`.
+- **Verify** on backup runs publishes `backup/verification`.
+- **Request restore** on backup runs publishes `backup/restore` and prompts for a restore target.
+- **Enforce retention** on definitions publishes `backup/retention` using the definition repository and policy.
+- **Probe repository** publishes `backup/repository-probe`.
+- **Approve/Reject restore** publishes `approval/backup-restore-approve`.
 
 ### CLI
 

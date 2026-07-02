@@ -133,3 +133,34 @@ Oracle review findings were addressed before closeout:
 - `go test ./...` was run on 2026-05-23 after the operational posture changes. The backup/control-plane touched packages passed, but the full suite failed in unrelated packages already tracked from the earlier BackupDefinition slice:
   - `internal/api/handlers`: `continuity_test.go` still calls `NewContinuityHandler` with the old one-argument constructor; tracked as `bahia-b6h3`.
   - `internal/config`: `TestDNSValidationEnabled/unsupported_backend_type` expects an unsupported backend error, but current validation returns a missing coredns `etcd_endpoints` error first; tracked as `bahia-za2w`.
+
+---
+
+## 2026-07-02 — Wave-2 backup ContextVM mutation UI slice
+
+### Intended behavior
+
+The web Backup area must be able to create and operate backup control-plane objects without inventing request/response semantics over Nostr. Browser actions publish encrypted ContextVM requests; Bahia bridges those requests to canonical backup command events, verifies relay publish acceptance through the existing publisher path, and leaves durable progress/terminal truth to scoped backup read-model projections.
+
+### Evidence gathered
+
+- `internal/controlplane/backup_contextvm_handlers.go` registers encrypted ContextVM method names for repository registration, policy/recipe/definition apply, run, verification, restore, retention, repository probe, and restore approval.
+- Each ContextVM handler publishes the existing canonical backup command action and event kind consumed by the Nostr reactor (`38400`-`38409`) rather than calling backup services directly or polling for completion.
+- `web/src/lib/stores/public-controlplane.svelte.js` exposes matching browser helpers for the registered method strings and includes idempotency keys plus narrow correlation tags.
+- `web/src/routes/backup/BackupMutationPanel.svelte`, list pages, and detail pages add operator controls for repository registration, policy/recipe/definition apply, run now, verification, restore request, retention enforcement, repository probe, and restore approval/rejection.
+- `docs/user-guide/features/backup.md` documents the mutation controls and clarifies that command acceptance is separate from durable backup progress/result projections.
+
+### Verification performed
+
+- `go test ./internal/controlplane ./internal/app` — passed
+- `go build ./...` — passed
+- `cd web && npm run lint && npm run build && npm run test:unit -- --run` — passed after `npm ci` restored missing web dependencies
+
+### Test evidence mapping
+
+- `internal/controlplane/contextvm_handlers_registration_test.go` validates every backup web ContextVM method dispatches, publishes the expected canonical command kind, carries the canonical `command` tag/action, and returns a submitted ACK with request event id.
+- `web/tests/unit/public-controlplane.test.js` validates the web helpers use the exact registered ContextVM method strings for backup repository/policy/recipe/definition mutation plus run, verification, restore, and retention operations.
+
+### Current result
+
+The Wave-2 backup mutation UI bridge is verified: all requested backup creation/operation controls publish encrypted ContextVM methods that bridge to canonical backup Nostr command events, and web acknowledgement is limited to command submission while durable workflow truth remains in backup read-model projections.
