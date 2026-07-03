@@ -76,7 +76,7 @@
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/encrypted-controlplane.test.js",
-      "description": "Builds an encrypted request event and verifies kind `5980`, service pubkey targeting, encrypted wire tag, and ciphertext payload construction.",
+      "description": "Builds an encrypted request event and verifies gift-wrapped outer kind `1059`, service pubkey targeting, inner ContextVM kind `25910`, encrypted wire tag, and ciphertext payload construction.",
       "preconditions": [
         "Authenticated signer mocks are configured.",
         "Encrypted relay list and service pubkey are available."
@@ -86,7 +86,7 @@
         "Build an encrypted request event for a sample operation.",
         "Inspect the signed event passed to `signWithAuth`."
       ],
-      "expected_result": "The event is kind `5980`, tagged with `['p', service_pubkey]` and `['encrypted', 'bahia-encrypted-v1']`, and contains ciphertext rather than plaintext JSON.",
+      "expected_result": "The outer event is kind `1059` and tagged with `['p', service_pubkey]`; the inner signed ContextVM event is kind `25910`, carries `['encrypted', 'contextvm-jsonrpc-v1']`, and the wrapper contains ciphertext rather than plaintext JSON.",
       "fixtures": [],
       "mocks": [
         "`encryptWithAuth`",
@@ -176,7 +176,7 @@
       "type": "e2e",
       "existing_or_new": "existing",
       "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
-      "description": "Runs the browser flow against mocked public and encrypted relay URLs and asserts that notifications list loading stays on encrypted relays.",
+      "description": "Runs the browser flow against mocked public and encrypted relay URLs and asserts that notifications list loading uses gift-wrapped ContextVM kind `1059` on encrypted relays.",
       "preconditions": [
         "Playwright harness provides deterministic Nostr discovery with both public and encrypted relay URLs.",
         "Browser signer and nip44 mocks are installed."
@@ -185,7 +185,7 @@
         "Open `/notifications`.",
         "Observe initial table render and transport trace."
       ],
-      "expected_result": "The notifications page renders the existing channel and all encrypted publishes target the encrypted relay URL, not the public relay URL.",
+      "expected_result": "The notifications page renders the existing channel and all encrypted publishes are outer kind `1059` events targeting the encrypted relay URL, not the public relay URL.",
       "fixtures": [
         "Mock Nostr discovery with `browser_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`.",
         "Initial notification channel fixture."
@@ -486,14 +486,14 @@
       "type": "integration",
       "existing_or_new": "new",
       "target_path": "internal/controlplane/encrypted_transport_test.go",
-      "description": "Adds backend transport coverage proving an authorized notification handler error publishes a correlated kind 7980 encrypted terminal error with handler_failed instead of silently dropping or dispatching a public fallback.",
+      "description": "Adds backend transport coverage proving an authorized notification handler error publishes a correlated gift-wrapped ContextVM encrypted terminal error with handler_failed instead of silently dropping or dispatching a public fallback.",
       "preconditions": [
         "Encrypted request transport has an authorized requester and a registered notification operation handler that returns an error."
       ],
       "steps": [
-        "Deliver a decryptable kind 5980 notification request.",
+        "Deliver a decryptable gift-wrapped ContextVM notification request (`1059` or `21059` around inner `25910`).",
         "Have the registered handler return a deterministic error.",
-        "Decrypt and inspect the published kind 7980 result envelope."
+        "Decrypt and inspect the published gift-wrapped ContextVM result envelope."
       ],
       "expected_result": "One encrypted result is published with #e/#p correlation, status error, error.code handler_failed, and the terminal handler message.",
       "fixtures": [
@@ -523,6 +523,7 @@
     "Implemented browser coverage in `web/tests/e2e/notifications-form-error.spec.js` for encrypted create/update failure persistence and notifications accessibility assertions.",
     "Verification run 2026-05-03 confirmed ECPN-T-001 through ECPN-T-014 passing with deterministic unit, backend, and Playwright evidence.",
     "Acceptance criteria JSON is approved and synchronized with the recorded HITL decision; matrix readiness means every approved criterion is covered by passing tests.",
-    "Added ECPN-T-015 coverage for handler_failed terminal encrypted errors and strengthened browser trace assertions for 5980 requests, accepted OKs, correlated 7980 results, and encrypted/public relay separation."
+    "Added ECPN-T-015 coverage for handler_failed terminal encrypted errors and strengthened browser trace assertions for gift-wrapped `1059` requests, accepted OKs, correlated `1059` results, scoped #e/#p result tags, and public/encrypted ContextVM kind separation.",
+    "Verification run 2026-07-03 for bahia-p0vz confirmed notifications-encrypted-smoke.spec.js, notifications-form-error.spec.js, and mixed-transport-session.spec.js passing with gift-wrapped ContextVM `1059` expectations."
   ]
 }

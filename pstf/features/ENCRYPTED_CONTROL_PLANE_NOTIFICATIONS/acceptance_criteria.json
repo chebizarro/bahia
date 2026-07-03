@@ -74,16 +74,16 @@
       "title": "Encrypted notification requests are addressed to the Bahia service pubkey with the canonical wire marker",
       "type": "security",
       "priority": "must",
-      "assertion": "Each encrypted notification request is published as kind `5980`, encrypted to the Bahia service pubkey, and tagged with both `['p', service_pubkey]` and `['encrypted', 'bahia-encrypted-v1']`.",
+      "assertion": "Each encrypted notification request is published as gift-wrapped ContextVM outer kind `1059`, addressed to the Bahia service pubkey with `['p', service_pubkey]`; the opaque inner request remains canonical ContextVM kind `25910` with the `['encrypted', 'contextvm-jsonrpc-v1']` routing marker.",
       "preconditions": [
         "The browser signer is authenticated.",
         "The encrypted transport has a valid 64-character service pubkey and at least one encrypted relay URL."
       ],
       "steps": [
         "Build an encrypted request event for a notification operation such as `notifications.channels.list`.",
-        "Inspect the signed event before publish."
+        "Inspect the signed inner event and the gift-wrapped outer event before publish."
       ],
-      "expected_result": "The request event carries kind `5980`, targets the service pubkey, contains ciphertext rather than plaintext JSON, and includes the canonical encrypted routing tag.",
+      "expected_result": "The outer request event carries kind `1059`, targets the service pubkey, contains opaque ciphertext rather than plaintext JSON, and wraps an inner signed ContextVM kind `25910` event with the canonical encrypted routing tag.",
       "negative_cases": [
         "If the request omits the `p` tag for the Bahia service pubkey, the criterion fails.",
         "If the request omits the encrypted routing tag or leaks plaintext content, the criterion fails."
@@ -139,7 +139,7 @@
       "title": "Encrypted notification results are correlated by request id, requester pubkey, and service author",
       "type": "data_integrity",
       "priority": "must",
-      "assertion": "The encrypted transport resolves a notification request only from an encrypted result event whose author matches the Bahia service pubkey and whose tags contain both the originating request event id and the requester pubkey.",
+      "assertion": "The encrypted transport resolves a notification request only from an encrypted result event whose tags contain both the originating request event id and requester pubkey; unwrapped ContextVM results must also match the Bahia service author, and gift-wrapped results must validate the decrypted inner ContextVM event when one is present.",
       "preconditions": [
         "An encrypted notification request has been published.",
         "The result subscription is active."

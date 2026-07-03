@@ -1,9 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { installE2EMocks, TEST_PUBKEY } from './helpers.js';
 import {
   PUBLIC_RELAY,
   ENCRYPTED_RELAY,
   SERVICE_PUBKEY,
+  KIND_CONTEXTVM,
+  KIND_GIFT_WRAP,
   createEncryptedNotificationsSystemInfo,
   installEncryptedNotificationHarness
 } from './harnesses/notifications-encrypted.js';
@@ -74,14 +76,29 @@ test.describe('Notifications encrypted transport smoke', () => {
     ]));
 
     for (const request of transportTrace.requests) {
-      expect(request.kind).toBe(25910);
+      expect(request.kind).toBe(KIND_GIFT_WRAP);
+      expect(request.innerKind).toBe(KIND_CONTEXTVM);
+      expect(request.requesterPubkey).toBe(TEST_PUBKEY);
+      expect(request.wrapperPubkey).toMatch(/^[0-9a-f]{64}$/);
+      expect(request.wrapperPubkey).not.toBe(TEST_PUBKEY);
+      expect(request.tags).toEqual(expect.arrayContaining([['p', SERVICE_PUBKEY]]));
       expect(normalizeRelay(request.relay)).toBe(ENCRYPTED_RELAY);
       expect(normalizeRelay(request.relay)).not.toBe(PUBLIC_RELAY);
       expect(transportTrace.oks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: 25910, accepted: true })
+        expect.objectContaining({ eventId: request.eventId, kind: KIND_GIFT_WRAP, accepted: true })
       ]));
       expect(transportTrace.results).toEqual(expect.arrayContaining([
-        expect.objectContaining({ requestEventId: request.eventId, kind: 25910, pubkey: SERVICE_PUBKEY, status: 'ok' })
+        expect.objectContaining({
+          requestEventId: request.eventId,
+          kind: KIND_GIFT_WRAP,
+          requesterPubkey: TEST_PUBKEY,
+          status: 'ok',
+          tags: expect.arrayContaining([
+            ['e', request.eventId],
+            ['p', TEST_PUBKEY],
+            ['encrypted', 'contextvm-jsonrpc-v1']
+          ])
+        })
       ]));
     }
   });

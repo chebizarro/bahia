@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { installE2EMocks, TEST_PUBKEY } from './helpers.js';
 import {
   SERVICE_PUBKEY,
   createPublicState,
@@ -7,6 +7,8 @@ import {
 } from './harnesses/service-deployment-public.js';
 import {
   ENCRYPTED_RELAY,
+  KIND_CONTEXTVM,
+  KIND_GIFT_WRAP,
   installEncryptedNotificationHarness
 } from './harnesses/notifications-encrypted.js';
 
@@ -16,6 +18,7 @@ const systemInfo = {
   nostr: {
     browser_relays: [PUBLIC_RELAY],
     service_relays: [PUBLIC_RELAY],
+    contextvm_relays: [ENCRYPTED_RELAY],
     service_pubkey: SERVICE_PUBKEY
   },
   features: {
@@ -40,9 +43,19 @@ const initialChannels = [
   }
 ];
 
+const contextVMRelaySet = {
+  id: 'e2e-contextvm-relays',
+  kind: 30002,
+  pubkey: SERVICE_PUBKEY,
+  created_at: 1,
+  tags: [['d', 'bahia-contextvm-v1'], ['relay', ENCRYPTED_RELAY]],
+  content: '',
+  sig: '0'.repeat(128)
+};
+
 test.describe('Mixed public plus encrypted browser session transport', () => {
   test('keeps public signer-first and encrypted notification journeys on the shared Bahia relay set', async ({ page }) => {
-    await installE2EMocks(page, { systemInfo });
+    await installE2EMocks(page, { systemInfo, nostrEvents: [contextVMRelaySet] });
     await installPublicServiceDeploymentHarness(page, {
       publicRelay: PUBLIC_RELAY,
       initialState: createPublicState(),
@@ -79,12 +92,14 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       encryptedResults: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
       encryptedOperations: window.__BAHIA_E2E_ENCRYPTED_OPERATIONS
     }));
+    const normalizeRelay = (relay) => String(relay || '').replace(/\/$/, '');
 
     expect(trace.publicRequests).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 25910, relay: PUBLIC_RELAY })
+      expect.objectContaining({ kind: 25910, operation: 'service/create' })
     ]));
-    expect(trace.publicRequests.every((request) => request.relay === PUBLIC_RELAY)).toBe(true);
-    expect(trace.publicRequests.some((request) => request.relay === ENCRYPTED_RELAY)).toBe(false);
+    expect(trace.publicRequests.every((request) => request.kind === 25910)).toBe(true);
+    expect(trace.publicRequests.every((request) => normalizeRelay(request.relay) === ENCRYPTED_RELAY)).toBe(true);
+    expect(trace.publicRequests.some((request) => request.kind === KIND_GIFT_WRAP)).toBe(false);
     for (const request of trace.publicRequests) {
       expect(trace.publicOks).toEqual(expect.arrayContaining([
         expect.objectContaining({ eventId: request.eventId, accepted: true })
@@ -99,14 +114,27 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       'notifications.channels.test'
     ]));
     expect(trace.encryptedRequests.length).toBeGreaterThanOrEqual(2);
-    expect(trace.encryptedRequests.every((request) => request.kind === 25910 && request.relay === ENCRYPTED_RELAY)).toBe(true);
-    expect(trace.encryptedRequests.some((request) => request.relay === PUBLIC_RELAY)).toBe(false);
+    expect(trace.encryptedRequests.every((request) => request.kind === KIND_GIFT_WRAP && normalizeRelay(request.relay) === ENCRYPTED_RELAY)).toBe(true);
+    expect(trace.encryptedRequests.some((request) => normalizeRelay(request.relay) === PUBLIC_RELAY)).toBe(false);
     for (const request of trace.encryptedRequests) {
+      expect(request.innerKind).toBe(KIND_CONTEXTVM);
+      expect(request.requesterPubkey).toBe(TEST_PUBKEY);
+      expect(request.wrapperPubkey).toMatch(/^[0-9a-f]{64}$/);
+      expect(request.tags).toEqual(expect.arrayContaining([['p', SERVICE_PUBKEY]]));
       expect(trace.encryptedOks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: 25910, accepted: true })
+        expect.objectContaining({ eventId: request.eventId, kind: KIND_GIFT_WRAP, accepted: true })
       ]));
       expect(trace.encryptedResults).toEqual(expect.arrayContaining([
-        expect.objectContaining({ requestEventId: request.eventId, kind: 25910, pubkey: SERVICE_PUBKEY })
+        expect.objectContaining({
+          requestEventId: request.eventId,
+          kind: KIND_GIFT_WRAP,
+          requesterPubkey: TEST_PUBKEY,
+          tags: expect.arrayContaining([
+            ['e', request.eventId],
+            ['p', TEST_PUBKEY],
+            ['encrypted', 'contextvm-jsonrpc-v1']
+          ])
+        })
       ]));
     }
   });

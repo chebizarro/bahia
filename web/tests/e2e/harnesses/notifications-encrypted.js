@@ -3,6 +3,8 @@ import { E2E_SERVICE_PUBKEY, TEST_PUBKEY } from '../helpers.js';
 export const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 export const PUBLIC_RELAY = 'ws://public.test.local';
 export const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
+export const KIND_CONTEXTVM = 25910;
+export const KIND_GIFT_WRAP = 1059;
 
 export function createEncryptedNotificationsSystemInfo({
   publicRelay = PUBLIC_RELAY,
@@ -36,7 +38,7 @@ export async function installEncryptedNotificationHarness(
     operationErrors = {}
   } = {}
 ) {
-  await page.addInitScript(({ servicePubkey, encryptedRelay, publicRelay, initialChannels, initialLogs, operationErrors }) => {
+  await page.addInitScript(({ servicePubkey, encryptedRelay, publicRelay, initialChannels, initialLogs, operationErrors, operatorPubkey }) => {
     window.__BAHIA_E2E_ENCRYPTED_PUBLISHES = [];
     window.__BAHIA_E2E_ENCRYPTED_OPERATIONS = [];
     window.__BAHIA_E2E_ENCRYPTED_REQUESTS = [];
@@ -257,7 +259,17 @@ export async function installEncryptedNotificationHarness(
         const requesterPubkey = event.kind === KIND_GIFT_WRAP ? (signedEvent?.pubkey || operatorPubkey) : event.pubkey;
         const result = notificationResult(operation, payload || {});
         window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.push({ relay, eventId: event.id, kind: event.kind });
-        window.__BAHIA_E2E_ENCRYPTED_REQUESTS.push({ relay, eventId: event.id, kind: event.kind, tags: event.tags || [], operation, requesterPubkey: event.pubkey });
+        window.__BAHIA_E2E_ENCRYPTED_REQUESTS.push({
+          relay,
+          eventId: event.id,
+          kind: event.kind,
+          tags: event.tags || [],
+          operation,
+          requesterPubkey,
+          wrapperPubkey: event.kind === KIND_GIFT_WRAP ? event.pubkey : null,
+          innerKind: signedEvent?.kind || event.kind,
+          innerEventId: signedEvent?.id || event.id
+        });
         window.__BAHIA_E2E_ENCRYPTED_OKS.push({ relay, eventId: event.id, kind: event.kind, sent: true, accepted: true, message: '' });
         window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(operation);
 
@@ -288,7 +300,8 @@ export async function installEncryptedNotificationHarness(
           eventId: resultEvent.id,
           kind: resultEvent.kind,
           requestEventId: event.id,
-          requesterPubkey: event.pubkey,
+          requesterPubkey,
+          wrapperPubkey: event.kind === KIND_GIFT_WRAP ? event.pubkey : null,
           pubkey: resultEvent.pubkey,
           status: result.status,
           error: result.error || null,

@@ -2,7 +2,7 @@
 
 ## Summary
 
-The encrypted notifications slice is **fully verified against the current acceptance criteria and test matrix**. On 2026-05-16, coverage was strengthened with deterministic browser traces for encrypted kind 5980 requests, accepted OKs, correlated kind 7980 results, terminal encrypted errors, and backend handler_failed propagation.
+The encrypted notifications slice is **fully verified against the current acceptance criteria and test matrix**. On 2026-07-03, browser E2E expectations were refreshed for the current gift-wrapped ContextVM transport: encrypted notification requests/results use outer kind `1059` with opaque NIP-44 content and scoped `#e`/`#p` result tags, while public control-plane commands remain canonical unwrapped ContextVM kind `25910`.
 
 Current automated evidence covers:
 - encrypted discovery availability and relay selection
@@ -33,6 +33,10 @@ go test ./internal/controlplane -run 'TestEncrypted'
 
 npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/settings-relay-visibility.spec.js
 # 2 passed
+
+# 2026-07-03 bahia-p0vz gift-wrapped ContextVM E2E restoration:
+cd web && npm run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js tests/e2e/mixed-transport-session.spec.js
+# 5 passed
 ```
 
 ## Acceptance Criteria Status
@@ -41,9 +45,9 @@ npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js
 |---|---|---|
 | ECPN-AC-001 | pass | `web/tests/unit/notifications-store.test.js` proves store-side failure before publish when encrypted discovery is unavailable. |
 | ECPN-AC-002 | pass | `web/tests/unit/encrypted-controlplane.test.js` proves public relay URLs do not count as encrypted request relays. |
-| ECPN-AC-003 | pass | `web/tests/unit/encrypted-controlplane.test.js` proves request kind `5980`, service pubkey targeting, encrypted wire tag, and ciphertext payload construction. |
+| ECPN-AC-003 | pass | `web/tests/unit/encrypted-controlplane.test.js` and `web/tests/e2e/notifications-encrypted-smoke.spec.js` prove gift-wrapped outer kind `1059`, inner ContextVM kind `25910`, service pubkey targeting, encrypted wire tag, and ciphertext payload construction. |
 | ECPN-AC-004 | pass | `web/tests/unit/encrypted-controlplane.test.js` proves publish requires an accepted OK and propagates relay rejection reasons. |
-| ECPN-AC-005 | pass | `web/tests/unit/encrypted-controlplane.test.js` proves correlation by `#e`, `#p`, service author, and duplicate-safe cleanup. |
+| ECPN-AC-005 | pass | `web/tests/unit/encrypted-controlplane.test.js` and the notification E2E traces prove correlation by `#e` and `#p`, duplicate-safe cleanup, and service-author validation where an unwrapped or inner ContextVM event is present. |
 | ECPN-AC-006 | pass | `web/tests/unit/notifications-store.test.js` and `web/tests/e2e/notifications-encrypted-smoke.spec.js` prove channel listing loads and renders via encrypted transport. |
 | ECPN-AC-007 | pass | `web/tests/unit/notifications-store.test.js` plus `web/tests/e2e/notifications-encrypted-smoke.spec.js` prove channel mutation flows stay on encrypted operations and update local state deterministically. |
 | ECPN-AC-008 | pass | `web/tests/unit/notifications-store.test.js` now proves both encrypted log success and failure semantics, including stale-log clearing and `logsError` population. |
@@ -61,14 +65,14 @@ npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js
 | ECPN-T-003 | pass | Included in the encrypted controlplane unit run. |
 | ECPN-T-004 | pass | Included in the encrypted controlplane unit run. |
 | ECPN-T-005 | pass | Included in the encrypted controlplane unit run. |
-| ECPN-T-006 | pass | `npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js` passed (4/4 total Playwright tests). |
+| ECPN-T-006 | pass | `cd web && npm run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js tests/e2e/mixed-transport-session.spec.js` passed (5/5 total Playwright tests). |
 | ECPN-T-007 | pass | Same Playwright run as above. |
 | ECPN-T-008 | pass | Included in the notifications store unit run. |
 | ECPN-T-009 | pass | Included in the notifications store unit run. |
 | ECPN-T-010 | pass | Included in the notifications store unit run. |
 | ECPN-T-011 | pass | `go test ./internal/controlplane -run 'TestEncrypted'` passed. |
 | ECPN-T-012 | pass | Same Go test run as above. |
-| ECPN-T-013 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers encrypted create and update failure retention. |
+| ECPN-T-013 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers encrypted create and update failure retention with gift-wrapped `1059` terminal errors. |
 | ECPN-T-014 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers notifications accessibility-critical labels, headings, and alert behavior. |
 | ECPN-T-015 | pass | `internal/controlplane/encrypted_transport_test.go` now covers `handler_failed` terminal encrypted error propagation with #e/#p correlation. |
 
