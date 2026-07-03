@@ -10,6 +10,7 @@ vi.mock('$app/navigation', () => ({
 }));
 
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
+  CONTEXTVM_MESSAGE_KIND: 25910,
   requestEncryptedResult: requestEncryptedResultMock,
   publishEncryptedRequest: publishEncryptedRequestMock
 }));
@@ -55,6 +56,8 @@ describe('public controlplane command helpers', () => {
       operation: 'service/create',
       payload,
       tags: [],
+      kind: 25910,
+      resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });
@@ -71,6 +74,8 @@ describe('public controlplane command helpers', () => {
         environment_id: 'env-1',
         artifact_id: 'artifact-1'
       },
+      kind: 25910,
+      resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });
@@ -83,6 +88,8 @@ describe('public controlplane command helpers', () => {
       operation: 'approval/approve',
       tags: [['intent', 'intent-1'], ['decision', 'approve']],
       payload: { intent_id: 'intent-1', decision: 'approve' },
+      kind: 25910,
+      resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });
@@ -102,6 +109,8 @@ describe('public controlplane command helpers', () => {
       operation: 'llm/route-create',
       tags: [],
       payload: routePayload,
+      kind: 25910,
+      resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });
@@ -117,6 +126,8 @@ describe('public controlplane command helpers', () => {
       operation: 'llm/release-register',
       tags: [['route', 'llm-route-1']],
       payload: releasePayload,
+      kind: 25910,
+      resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });
@@ -148,7 +159,9 @@ describe('public controlplane command helpers', () => {
         environment_id: 'env-prod',
         release_id: 'llm-release-1',
         requested_by: 'f'.repeat(64)
-      }
+      },
+      kind: 25910,
+      resultKinds: [25910]
     });
     expect(deployResult).toMatchObject({
       requestEventId: 'req-1',
@@ -177,7 +190,9 @@ describe('public controlplane command helpers', () => {
         route_id: 'llm-route-1',
         environment_id: 'env-prod',
         requested_by: 'f'.repeat(64)
-      }
+      },
+      kind: 25910,
+      resultKinds: [25910]
     });
     expect(rollbackResult).toMatchObject({ requestEventId: 'req-2', event: { id: 'result-llm-rollback', kind: 25910 } });
   });
@@ -217,6 +232,7 @@ describe('public controlplane command helpers', () => {
         generator: 'syft',
         storage: 'blossom'
       },
+      kind: 25910,
       signal: undefined
     });
   });
@@ -256,6 +272,7 @@ describe('public controlplane command helpers', () => {
         storage: 'blossom',
         generator: { id: 'external-tool', version: '1.0.0' }
       },
+      kind: 25910,
       signal: undefined
     });
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
@@ -348,6 +365,8 @@ describe('public controlplane command helpers', () => {
       operation: 'policy/evaluate',
       tags: [['artifact', 'artifact-1'], ['environment', 'env-1']],
       payload: { artifact_id: 'artifact-1', environment_id: 'env-1' },
+      kind: 25910,
+      resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });

@@ -10,6 +10,20 @@ Fresh verification evidence supports the full approved slice of `LLM_ROUTE_RELEA
 
 Current implementation satisfies the approved acceptance criteria and the current test matrix.
 
+## 2026-07-03 Regression Verification — `bahia-s2fz`
+
+`requestLLMDeploy` and `requestLLMRollback` now use the same canonical public ContextVM transport as sibling LLM route/release helpers: explicit kind `25910` with `resultKinds: [25910]`. Focused unit coverage now asserts this public transport contract for deploy and rollback, and the browser e2e harness observes public request kinds for route, release, deploy, approval, and rollback without REST `/api/v1/llm/**` mutation calls.
+
+Additional commands run for this regression pass:
+- `cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js`
+  - Result: pass (`1` file, `14` tests)
+- `cd /Users/bizarro/Documents/Projects/bahia/web && npx playwright test tests/e2e/llm-route-release-deployment.spec.js tests/e2e/relay-backed-web-functionality.spec.js`
+  - Result: pass (`10` tests)
+- `go test ./cmd/bahia-test-relay`
+  - Result: pass (`[no test files]`)
+
+No sleep-based waits or REST LLM mutation fallbacks were introduced in this pass.
+
 ## Commands Run
 - `go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp`
   - Result: pass

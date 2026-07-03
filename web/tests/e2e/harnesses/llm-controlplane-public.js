@@ -461,8 +461,17 @@ export async function installPublicLLMControlplaneHarness(
         const errorResult = nostrEvent({
           id: `result-${requestEvent.id}`,
           kind: KIND_STATUS,
-          tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['status', 'error'], ['error', 'no LLM route state exists for this route/environment']],
-          content: { status: 'error', error: 'no LLM route state exists for this route/environment', route_id: payload.route_id, environment_id: payload.environment_id }
+          tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['domain', 'llm'], ['schema', 'bahia.result.llm.v1'], ['op', 'rollback'], ['status', 'error'], ['error', 'no LLM route state exists for this route/environment'], ['route', payload.route_id], ['environment', payload.environment_id]],
+          content: {
+            schema: 'bahia.result.llm.v1',
+            domain: 'llm',
+            operation: 'rollback',
+            status: 'error',
+            error: 'no LLM route state exists for this route/environment',
+            message: 'no LLM route state exists for this route/environment',
+            route_id: payload.route_id,
+            environment_id: payload.environment_id
+          }
         });
         recordActivity(errorResult);
         persistReadModels();
@@ -478,10 +487,14 @@ export async function installPublicLLMControlplaneHarness(
         const errorResult = nostrEvent({
           id: `result-${requestEvent.id}`,
           kind: KIND_STATUS,
-          tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['status', 'error'], ['error', 'no previous successfully deployed LLM release to roll back to']],
+          tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['domain', 'llm'], ['schema', 'bahia.result.llm.v1'], ['op', 'rollback'], ['status', 'error'], ['error', 'no previous successfully deployed LLM release to roll back to'], ['route', payload.route_id], ['environment', payload.environment_id]],
           content: {
+            schema: 'bahia.result.llm.v1',
+            domain: 'llm',
+            operation: 'rollback',
             status: 'error',
             error: 'no previous successfully deployed LLM release to roll back to',
+            message: 'no previous successfully deployed LLM release to roll back to',
             route_id: payload.route_id,
             environment_id: payload.environment_id
           }

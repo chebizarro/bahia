@@ -23,6 +23,18 @@
 - Added `web/tests/e2e/relay-harness.js` to start/stop the relay, install bootstrap/auth context without overriding `window.WebSocket`, expose real NIP-07-style signing/NIP-44 helpers, and persist the relay list for browser-side Nostr pool helpers.
 - Added `web/tests/e2e/relay-backed-web-functionality.spec.js` with visible UI assertions for dashboard, service/deployment/package/worker routes, DNS/FIPS mesh tabs, Events, Assistant UI hydration through a real Assistant bubble click, Soul Gallery hydration, encrypted ContextVM mutation publish/result, and deterministic docs cache bypass.
 
+## 2026-07-03 Regression Verification — `bahia-qiyu`
+
+The fresh `bahia-test-relay` discovery seed now advertises `features.encrypted_nostr_requests: true`, matching the relay-backed encrypted ContextVM mutation exercised by the Playwright harness. The encrypted case publishes gift-wrapped kind `1059`, receives relay OK acceptance, and observes the correlated encrypted result on a newly started test relay.
+
+Additional commands run for this regression pass:
+- `go test ./cmd/bahia-test-relay`
+  - Result: pass (`[no test files]`)
+- `cd /Users/bizarro/Documents/Projects/bahia/web && npx playwright test tests/e2e/llm-route-release-deployment.spec.js tests/e2e/relay-backed-web-functionality.spec.js`
+  - Result: pass (`10` tests)
+
+No sleep-based waits were introduced in this pass.
+
 ## Verification
 
 Command:

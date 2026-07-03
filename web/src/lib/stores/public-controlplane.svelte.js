@@ -152,7 +152,13 @@ export function registerLLMRelease(payload) {
 
 async function requestLLMAsyncLifecycle(operation, payload, tags) {
   await bootstrapControlplane();
-  const response = await requestEncryptedResult({ operation, payload, tags });
+  const response = await requestEncryptedResult({
+    operation,
+    payload,
+    tags,
+    kind: CONTEXTVM_MESSAGE_KIND,
+    resultKinds: [CONTEXTVM_MESSAGE_KIND]
+  });
   const event = throwIfErrorResult(operationResultEvent(response));
   return { requestEventId: response.requestEventId, event };
 }
