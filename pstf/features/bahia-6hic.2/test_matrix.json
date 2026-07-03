@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-6hic.2",
+  "tests": [
+    {"acceptance": "AC1,AC2,AC3,AC4", "command": "go test ./internal/mcp", "coverage": "Registry descriptor wrapping, agent-safe discovery, and mode/effect/risk/resource metadata for assistant, DNS, service, LLM, and ML tools"},
+    {"acceptance": "AC1,AC2", "command": "go build ./...", "coverage": "Repository-wide compile of the MCP registry API against domain-owned assistant permission/tool types"}
+  ]
+}

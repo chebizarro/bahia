@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-6hic.2",
+  "title": "Assistant agentic MCP tool descriptor registry",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "internal/mcp exposes ToolDescriptor values that wrap existing MCP Tool definitions and carry execution-mode, effect, default-risk, resource-type, and resource-id-field metadata using the domain-owned assistant tool types."
+    },
+    {
+      "id": "AC2",
+      "statement": "AssistantToolRegistry discovers current agent-safe MCP tools without changing Server.GetTools or Server.CallTool public behavior."
+    },
+    {
+      "id": "AC3",
+      "statement": "Existing assistant, DNS, service, LLM, and ML tools have descriptor metadata; public mutation tools that are not assistant-safe remain discoverable as descriptors but are excluded from agent-safe discovery."
+    },
+    {
+      "id": "AC4",
+      "statement": "Unit tests assert descriptor mode/effect/risk/resource correctness and verify descriptors wrap the current GetTools definitions."
+    }
+  ]
+}
