@@ -390,6 +390,7 @@ func NewKindCatalog() *KindCatalog {
 		catalog.decoders[kind] = decoderNotImplemented(kind)
 	}
 	catalog.registerRequiredGroupNoopDecoders()
+	catalog.registerOptionalProtocolDecoders()
 	catalog.registerProjectionDecoders()
 	return catalog
 }
@@ -469,6 +470,15 @@ func (c *KindCatalog) registerRequiredGroupNoopDecoders() {
 			c.decoders[kind] = decodeNoopProjection(group.Name, group.Tier, family)
 		}
 	}
+}
+
+func (c *KindCatalog) registerOptionalProtocolDecoders() {
+	c.decoders[KindLoomJobStatusUpdate] = decodeNoopProjection("loom_live", 3, FamilyLoom)
+	c.decoders[KindLoomJobResult] = decodeNoopProjection("loom_live", 3, FamilyLoom)
+	c.decoders[KindLoomJobCancellation] = decodeNoopProjection("loom_live", 3, FamilyLoom)
+	c.decoders[KindHiveCIWorkflowRun] = decodeNoopProjection("hive_ci_live", 3, FamilyHiveCI)
+	c.decoders[KindHiveCIWorkflowResult] = decodeNoopProjection("hive_ci_live", 3, FamilyHiveCI)
+	c.decoders[KindFIPSOverlayAdvert] = decodeNoopProjection("fips_snapshot", 3, FamilyFIPS)
 }
 
 func (c *KindCatalog) registerProjectionDecoders() {

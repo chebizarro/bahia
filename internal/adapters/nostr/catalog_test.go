@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	gonostr "fiatjaf.com/nostr"
@@ -62,6 +63,24 @@ func TestAllKindsReturnsUniqueSortedValues(t *testing.T) {
 		}
 		seen[kind] = struct{}{}
 		last = kind
+	}
+}
+
+func TestAllKindsHaveImplementedDecoders(t *testing.T) {
+	catalog := NewKindCatalog()
+	var notImplemented []int
+	for _, kind := range catalog.AllKinds() {
+		decoder, ok := catalog.Decoder(kind)
+		if !ok {
+			t.Fatalf("missing decoder for kind %d", kind)
+		}
+		_, err := decoder(requiredDecoderFixture(kind))
+		if err != nil && strings.Contains(err.Error(), "not yet implemented") {
+			notImplemented = append(notImplemented, kind)
+		}
+	}
+	if len(notImplemented) > 0 {
+		t.Fatalf("catalog kinds with default decoderNotImplemented: %v", notImplemented)
 	}
 }
 
