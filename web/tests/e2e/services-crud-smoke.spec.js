@@ -1,101 +1,97 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
+import { SERVICE_PUBKEY, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
-// Mock API responses with Bahia envelope shape
-test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page);
+const systemInfo = createPublicSystemInfo();
 
-  // Mock services list - initially empty
-  await page.route('**/api/v1/services', (route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ data: [] })
-      });
-    } else if (route.request().method() === 'POST') {
-      // Capture the POST request and return success
-      const postData = route.request().postDataJSON();
-      return route.fulfill({
-        status: 201,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          data: {
-            id: 'test-service-id',
-            ...postData,
-            created_at: new Date().toISOString()
-          }
-        })
-      });
-    }
+async function setupServices(page, initialState = createPublicState()) {
+  await installE2EMocks(page, { systemInfo });
+  await installPublicServiceDeploymentHarness(page, { initialState });
+}
 
-    return route.fulfill({
-      status: 404,
-      contentType: 'application/json',
-      body: JSON.stringify({ error: 'Not found' })
-    });
+async function serviceTrace(page) {
+  return page.evaluate(() => ({
+    relays: window.__BAHIA_E2E_PUBLIC_PUBLISHES.map((entry) => entry.relay),
+    requests: window.__BAHIA_E2E_PUBLIC_REQUESTS,
+    oks: window.__BAHIA_E2E_PUBLIC_OKS,
+    results: window.__BAHIA_E2E_PUBLIC_RESULTS,
+    projections: window.__BAHIA_E2E_PUBLIC_PROJECTIONS,
+    kinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]
+  }));
+}
+
+async function expectContextVMOperation(page, operation) {
+  await expect.poll(() => serviceTrace(page)).toMatchObject({
+    requests: expect.arrayContaining([expect.objectContaining({ kind: 25910, operation })]),
+    oks: expect.arrayContaining([expect.objectContaining({ kind: 25910, accepted: true })]),
+    results: expect.arrayContaining([expect.objectContaining({ kind: 25910 })]),
+    projections: expect.arrayContaining([expect.objectContaining({ kind: 30900 })]),
+    kinds: expect.arrayContaining([25910])
   });
 
-});
+  const trace = await serviceTrace(page);
+  expect(trace.kinds).not.toContain(5980);
+  const request = trace.requests.find((entry) => entry.operation === operation);
+  expect(request).toBeTruthy();
+  expect(trace.results).toEqual(expect.arrayContaining([expect.objectContaining({ requestEventId: request.eventId })]));
+  expect(trace.projections).toEqual(expect.arrayContaining([expect.objectContaining({ requestEventId: request.eventId, kind: 30900 })]));
+  return request;
+}
+
+function pagedServicesState() {
+  return createPublicState({
+    services: Array.from({ length: 30 }, (_, index) => ({
+      id: `svc-page-${String(index + 1).padStart(2, '0')}`,
+      name: `service-${index + 1}`,
+      repo_url: '',
+      artifact_repo: `ghcr.io/acme/service-${index + 1}`,
+      runtime_type: index < 15 ? 'docker' : 'kubernetes',
+      default_branch: 'main',
+      deleted: false,
+      created_at: `2026-05-03T10:${String(index).padStart(2, '0')}:00.000Z`
+    }))
+  });
+}
 
 test.describe('Services CRUD Smoke Test', () => {
-  test('should create a service via modal form', async ({ page }) => {
-    // Track API calls
-    const apiCalls = {
-      post: null
-    };
+  test('loads services from canonical relay read models', async ({ page }) => {
+    await setupServices(page);
 
-    await page.route('**/api/v1/services', (route) => {
-      if (route.request().method() === 'GET') {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ data: [] })
-        });
-      } else if (route.request().method() === 'POST') {
-        apiCalls.post = route.request().postDataJSON();
-        return route.fulfill({
-          status: 201,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            data: {
-              id: 'test-service-123',
-              ...route.request().postDataJSON(),
-              created_at: new Date().toISOString()
-            }
-          })
-        });
-      }
-    });
-
-    // Navigate to services page
     await page.goto('/services');
-    await page.waitForLoadState('networkidle');
 
-    // Open Create Service modal
-    await page.click('text=Create Service');
+    await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'existing-service', exact: true })).toBeVisible();
+    await expect(page.getByText('1 services')).toBeVisible();
+  });
 
-    // Wait for modal to appear
-    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
+  test('creates a service through ContextVM and canonical 30900 projection', async ({ page }) => {
+    await setupServices(page);
 
-    // Fill out the form
-    await page.fill('#service-name', 'test-service');
-    await page.fill('#artifact-repo-path', 'ghcr.io/test/test-service');
-    await page.selectOption('#runtime-type', 'docker');
-    await page.fill('#default-branch', 'main');
+    await page.goto('/services');
+    await page.getByRole('button', { name: 'Create Service' }).first().click();
 
-    // Repository selection flow is available in modal
-    await expect(page.getByRole('button', { name: 'Choose Repository' })).toBeVisible();
+    const dialog = page.getByRole('dialog', { name: 'Create Service' });
+    await expect(dialog).toBeVisible();
 
-    // Submit the form
-    await page.click('button[type="submit"]:has-text("Create")');
+    await dialog.locator('#service-name').fill('test-service');
+    await dialog.locator('#artifact-repo-path').fill('ghcr.io/test/test-service');
+    await dialog.locator('#runtime-type').selectOption('docker');
+    await dialog.locator('#default-branch').fill('main');
+    await expect(dialog.getByRole('button', { name: 'Choose Repository' })).toBeVisible();
 
-    // Wait for modal to close (request + refresh done)
-    await expect(page.getByRole('dialog', { name: 'Create Service' })).not.toBeVisible();
+    await dialog.getByRole('button', { name: 'Create' }).click();
 
-    // Verify POST was called with correct data
-    expect(apiCalls.post).not.toBeNull();
-    expect(apiCalls.post).toMatchObject({
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole('cell', { name: 'test-service', exact: true })).toBeVisible();
+    await expect(page.getByText('2 services')).toBeVisible();
+
+    const request = await expectContextVMOperation(page, 'service/create');
+    expect(request.tags).toEqual(expect.arrayContaining([
+      ['p', SERVICE_PUBKEY],
+      ['encrypted', 'contextvm-jsonrpc-v1'],
+      ['method', 'service/create']
+    ]));
+    expect(JSON.parse(request.content).params).toMatchObject({
       name: 'test-service',
       repo_url: '',
       artifact_repo: 'ghcr.io/test/test-service',
@@ -104,104 +100,80 @@ test.describe('Services CRUD Smoke Test', () => {
     });
   });
 
-  test('should show validation error for empty name', async ({ page }) => {
+  test('shows validation error for empty name without publishing', async ({ page }) => {
+    await setupServices(page);
+
     await page.goto('/services');
-    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Create Service' }).first().click();
 
-    // Open modal
-    await page.click('text=Create Service');
+    const dialog = page.getByRole('dialog', { name: 'Create Service' });
+    await expect(dialog).toBeVisible();
+    await dialog.locator('#artifact-repo-path').fill('ghcr.io/test/test-service');
+    await dialog.getByRole('button', { name: 'Create' }).click();
 
-    // Try to submit without filling required fields
-    await page.fill('#artifact-repo-path', 'ghcr.io/test/test-service');
-    await page.click('button[type="submit"]:has-text("Create")');
-
-    // Should show validation error
-    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('#service-name')).toBeFocused();
+    await expect.poll(() => serviceTrace(page)).toMatchObject({ requests: [] });
   });
 
-  test('should show validation error for empty artifact repo', async ({ page }) => {
+  test('shows validation error for empty artifact repository without publishing', async ({ page }) => {
+    await setupServices(page);
+
     await page.goto('/services');
-    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Create Service' }).first().click();
 
-    // Open modal
-    await page.click('text=Create Service');
+    const dialog = page.getByRole('dialog', { name: 'Create Service' });
+    await expect(dialog).toBeVisible();
+    await dialog.locator('#service-name').fill('test-service');
+    await dialog.getByRole('button', { name: 'Create' }).click();
 
-    // Fill only name
-    await page.fill('#service-name', 'test-service');
-    await page.click('button[type="submit"]:has-text("Create")');
-
-    // Should show validation error
-    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('#artifact-repo-path')).toBeFocused();
+    await expect.poll(() => serviceTrace(page)).toMatchObject({ requests: [] });
   });
 
-  test('should close modal on cancel', async ({ page }) => {
+  test('closes the create modal on cancel', async ({ page }) => {
+    await setupServices(page);
+
     await page.goto('/services');
-    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Create Service' }).first().click();
 
-    // Open modal
-    await page.click('text=Create Service');
-    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
+    const dialog = page.getByRole('dialog', { name: 'Create Service' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
 
-    // Click cancel
-    await page.click('button:has-text("Cancel")');
-
-    // Modal should be closed
-    await expect(page.locator('text=Artifact Repository')).not.toBeVisible();
+    await expect(dialog).not.toBeVisible();
   });
 
-  test('should support search, runtime filtering, and pagination controls', async ({ page }) => {
-    const services = Array.from({ length: 30 }, (_, index) => ({
-      id: `service-${index + 1}`,
-      name: `service-${index + 1}`,
-      artifact_repo: `ghcr.io/acme/service-${index + 1}`,
-      runtime_type: index < 15 ? 'docker' : 'kubernetes',
-      default_branch: 'main'
-    }));
-
-    await page.unroute('**/api/v1/services');
-    await page.route('**/api/v1/services', (route) => {
-      if (route.request().method() === 'GET') {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ data: services })
-        });
-      }
-
-      return route.fulfill({
-        status: 201,
-        contentType: 'application/json',
-        body: JSON.stringify({ data: { id: 'created-service' } })
-      });
-    });
+  test('supports search, runtime filtering, and pagination controls over relay read models', async ({ page }) => {
+    await setupServices(page, pagedServicesState());
 
     await page.goto('/services');
-    await page.waitForLoadState('networkidle');
 
     await expect(page.locator('#service-search')).toBeVisible();
     await expect(page.locator('#runtime-filter')).toBeVisible();
     await expect(page.locator('#page-size')).toBeVisible();
 
     await expect(page.locator('tbody tr')).toHaveCount(25);
-    await expect(page.locator('text=Page 1 of 2')).toBeVisible();
+    await expect(page.getByText('Page 1 of 2')).toBeVisible();
 
-    await page.selectOption('#page-size', '10');
-    await expect(page.locator('text=Page 1 of 3')).toBeVisible();
+    await page.locator('#page-size').selectOption('10');
+    await expect(page.getByText('Page 1 of 3')).toBeVisible();
     await expect(page.locator('tbody tr')).toHaveCount(10);
 
     await page.getByRole('button', { name: 'Next' }).click();
-    await expect(page.locator('text=Page 2 of 3')).toBeVisible();
+    await expect(page.getByText('Page 2 of 3')).toBeVisible();
 
-    await page.fill('#service-search', 'service-2');
+    await page.locator('#service-search').fill('service-2');
     await expect(page.locator('tbody tr')).toHaveCount(10);
-    await expect(page.locator('text=Page 1 of 2')).toBeVisible();
+    await expect(page.getByText('Page 1 of 2')).toBeVisible();
 
-    await page.selectOption('#runtime-filter', 'kubernetes');
+    await page.locator('#runtime-filter').selectOption('kubernetes');
     await expect(page.locator('tbody tr')).toHaveCount(10);
-    await expect(page.locator('text=Page 1 of 1')).not.toBeVisible();
+    await expect(page.getByText('Page 1 of 1')).not.toBeVisible();
 
-    await page.selectOption('#page-size', '50');
+    await page.locator('#page-size').selectOption('50');
     await expect(page.locator('tbody tr')).toHaveCount(10);
-    await expect(page.locator('text=Page 1 of 1')).not.toBeVisible();
+    await expect(page.getByText('Page 1 of 1')).not.toBeVisible();
   });
 });

@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-la6v",
+  "tests": [
+    {
+      "id": "PW-LA6V-SERVICES",
+      "target": "web/tests/e2e/services-crud-smoke.spec.js",
+      "type": "playwright/e2e",
+      "status": "passed",
+      "acceptance_criteria": ["AC1", "AC3"],
+      "evidence": "npx playwright test tests/e2e/services-crud-smoke.spec.js tests/e2e/policies-crud-smoke.spec.js --reporter=line — 14 passed"
+    },
+    {
+      "id": "PW-LA6V-POLICIES",
+      "target": "web/tests/e2e/policies-crud-smoke.spec.js",
+      "type": "playwright/e2e",
+      "status": "passed",
+      "acceptance_criteria": ["AC2", "AC3"],
+      "evidence": "npx playwright test tests/e2e/services-crud-smoke.spec.js tests/e2e/policies-crud-smoke.spec.js --reporter=line — 14 passed"
+    },
+    {
+      "id": "STATIC-LA6V-NO-SLEEPS",
+      "target": "web/tests/e2e/services-crud-smoke.spec.js, web/tests/e2e/policies-crud-smoke.spec.js",
+      "type": "static/search",
+      "status": "passed",
+      "acceptance_criteria": ["AC3"],
+      "evidence": "Repo search found no waitForTimeout, networkidle, or REST /api/v1 route mocks in the two updated specs."
+    }
+  ]
+}

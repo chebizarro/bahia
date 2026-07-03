@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-la6v",
+  "title": "Align legacy services and policies CRUD Playwright specs with relay-native control-plane UI",
+  "bead": "bahia-la6v",
+  "status": "verified",
+  "intended_behavior": [
+    "Services and policies browser CRUD smoke coverage must exercise the current relay-native control-plane UI, not stale REST CRUD route mocks.",
+    "Public control-plane commands publish canonical unwrapped ContextVM kind 25910 requests and verify accepted OK/result behavior through deterministic relay harnesses.",
+    "Services and policies list/detail assertions hydrate from canonical relay read models, including 30900 control-plane registry projections.",
+    "Policy create uses the current visual rule builder by default while JSON editor validation remains covered explicitly."
+  ],
+  "scope": {
+    "included": [
+      "web/tests/e2e/services-crud-smoke.spec.js",
+      "web/tests/e2e/policies-crud-smoke.spec.js"
+    ],
+    "excluded": [
+      "production app behavior changes",
+      "shared helper/harness changes",
+      "artifact/SBOM/service-secret E2E fixtures owned by sibling bead bahia-rxae",
+      "SecurityScanner Go failures tracked by bahia-x3km"
+    ]
+  },
+  "evidence_date": "2026-07-03"
+}

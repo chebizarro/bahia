@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-la6v",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Services CRUD smoke spec uses relay-backed read models and canonical public ContextVM kind 25910 for create behavior instead of REST route mocks.",
+      "tests": ["PW-LA6V-SERVICES"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Policies CRUD smoke spec uses relay-backed policy/environment read models and canonical public ContextVM kind 25910 for create, update, delete, and evaluate flows.",
+      "tests": ["PW-LA6V-POLICIES"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Updated specs contain no sleep-based waits or network-idle completion assumptions for event delivery.",
+      "tests": ["STATIC-LA6V-NO-SLEEPS"]
+    }
+  ]
+}
