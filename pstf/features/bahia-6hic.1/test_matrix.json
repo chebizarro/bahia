@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-6hic.1",
+  "tests": [
+    {"acceptance": "AC1,AC2,AC3,AC4", "command": "go test ./internal/domain", "coverage": "Domain type compile checks, approval JSON compatibility, transcript envelope constants"},
+    {"acceptance": "AC5", "command": "go test ./internal/config", "coverage": "Assistant agentic defaults, YAML/env loading, validation failures, legacy assistant config with agentic disabled"},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5", "command": "go build ./...", "coverage": "Repository-wide compile of new shared types and config imports"}
+  ]
+}

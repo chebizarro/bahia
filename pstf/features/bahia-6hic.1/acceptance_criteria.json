@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-6hic.1",
+  "title": "Assistant agentic domain and config foundation",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Domain package defines provider-neutral agent loop state, tool observation, deferred action, message, and tool-call skeleton types without implementing the loop/runtime/model clients."
+    },
+    {
+      "id": "AC2",
+      "statement": "Assistant permission mode, decision, effect, risk, and execution-mode types have a single owner in internal/domain/assistant_permissions.go."
+    },
+    {
+      "id": "AC3",
+      "statement": "Assistant transcript kind 30316 constants and content structs represent bahia.assistant-transcript.v1 as a service-held symmetric-key AEAD envelope with key-reference and rotation metadata mirrored in tags."
+    },
+    {
+      "id": "AC4",
+      "statement": "AssistantApprovalRequest accepts additive action_id and cancel_scope fields while preserving plan_hash JSON compatibility."
+    },
+    {
+      "id": "AC5",
+      "statement": "AssistantConfig exposes agentic, permissions, and mcp.async_observation blocks with validation; legacy assistant LLM config remains valid when agentic is disabled."
+    }
+  ]
+}

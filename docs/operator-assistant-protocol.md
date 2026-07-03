@@ -19,6 +19,7 @@ This document defines Milestone 1 protocol contracts only. It does not define or
 | Assistant prompt and approval intents | ContextVM `25910`, optionally wrapped in `1059`/`21059` | Operator browser key | JSON-RPC methods such as `assistant/prompt`, `assistant/approve`, `assistant/reject`, and `assistant/cancel` |
 | Assistant session state | `30900` or `30078` | Bahia service pubkey | Replaceable canonical projection keyed by `d=<assistant-session-coordinate>` |
 | Assistant status | `30315` | Bahia service pubkey | NIP-38 progress/status events correlated to the ContextVM request with `e` and resource tags |
+| Assistant transcript | `30316` | Bahia service pubkey | Append-only encrypted conversation/tool transcript entries using a service-held symmetric-key AEAD envelope in `content` |
 | Assistant audit/result facts | `4903` | Bahia service pubkey | Immutable terminal, approval, execution, and provenance facts |
 | Discovery and relay topology | `11316`-`11320`, `30002` | Bahia service pubkey | ContextVM tool/resource announcements and relay sidecar/bootstrap sets |
 
@@ -69,7 +70,7 @@ Content JSON contract inside kind `25910`:
 
 Author: operator browser key.
 
-Semantics: approval/cancel decision. The decision is valid only for the latest session plan hash.
+Semantics: approval/cancel decision. Legacy approvals remain valid by `plan_hash`; agentic approvals add `action_id` to resume one deferred action. `cancel_scope` scopes cancel decisions (`action`, `turn`, or `session`) without removing the existing `plan_hash` compatibility field.
 
 Content JSON contract:
 
@@ -81,6 +82,8 @@ Content JSON contract:
   "params": {
     "session_id": "<session_id>",
     "plan_hash": "<sha256_hex>",
+    "action_id": "<agentic-action-id>",
+    "cancel_scope": "action",
     "decision": "approve",
     "reason": "operator-provided note",
     "_meta": { "progressToken": "assistant-approval:<session_id>:<plan_hash>" }
@@ -94,6 +97,7 @@ Author: Bahia service pubkey.
 
 - `30900`/`30078` carries the latest assistant session projection with `d`, `session`, `p=<operator_pubkey>`, `agent`, `status`, `domain=assistant`, and `schema` tags.
 - `30315` carries non-terminal progress such as `planning`, `planned`, `awaiting_approval`, `executing`, `step_started`, `step_completed`, or `blocked`.
+- `30316` carries durable transcript messages. Its `content` is not per-recipient sealed; it is a service-held symmetric-key AEAD envelope with `schema=bahia.assistant-transcript.v1`, `envelope=service-held-symmetric-key-aead`, `key_ref`, `key_version`, `nonce`, and `ciphertext`. Tags mirror `domain=assistant`, `schema`, `session`, `turn`, `role`, `seq`, `key_ref`, `key_version`, `key_rotation`, and `envelope` for scoped replay and key rotation.
 - `4903` carries immutable approval, execution, and terminal facts such as `completed`, `blocked`, `failed`, `rejected`, `cancelled`, or `needs_clarification`.
 
 Observable content SHOULD include concise human summaries plus structured metadata such as `AssistantPlan`, `plan_hash`, downstream ContextVM request event IDs, token/cost accounting, or error details. Terminal facts MUST accurately reflect the downstream terminal result when one exists.

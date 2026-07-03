@@ -220,6 +220,7 @@ These are the main event kinds production runtime code should publish or subscri
 | `1059` | NIP-59 gift wrap | Stored encrypted ContextVM envelope |
 | `21059` | ephemeral gift wrap | Ephemeral encrypted ContextVM envelope when supported |
 | `30315` | NIP-38 status | Operational status/progress; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, and heartbeat `d`/`worker` tags |
+| `30316` | Assistant transcript | Service-authored append-only assistant transcript entries; content is a service-held symmetric-key AEAD envelope with `key_ref`/rotation metadata mirrored in tags |
 | `30900` | Cascadia/Bahia control state | Durable state/read-model projection |
 | `4903` | Cascadia/Bahia audit | Immutable audit facts and attestations |
 | `11316`-`11320` | ContextVM discovery | Server/tool/resource/prompt/template discovery |

@@ -165,6 +165,7 @@ Bahia is **Nostr-native** — it uses Nostr events as the primary control plane.
 | **ContextVM intents** | `25910`, optionally wrapped in `1059` or `21059` | Signed JSON-RPC mutation requests, immediate acknowledgments, and encrypted transport |
 | **Canonical state** | `30900`, `30078` | Current control-plane state projections and app-specific data |
 | **Canonical status/audit** | `30315`, `4903` | Operational progress, terminal facts, provenance, and audit |
+| **Assistant transcript** | `30316` | Encrypted assistant transcript entries using a service-held symmetric-key AEAD envelope and key-reference/rotation tags |
 | **Discovery and relays** | `11316`-`11320`, `30002` | ContextVM announcements and NIP-51 relay topology |
 
 Legacy Bahia custom ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are startup migration inventory only.

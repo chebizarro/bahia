@@ -7,6 +7,7 @@ Bahia publishes signed Nostr events for control-plane intent, state, status, dis
 - **Intent/mutation**: ContextVM JSON-RPC kind `25910`, usually encrypted with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`).
 - **State**: canonical control-plane projections in kind `30900`, plus NIP-78 app-specific data in kind `30078`.
 - **Status**: NIP-38 operational status kind `30315`.
+- **Assistant transcript**: service-authored kind `30316` with a service-held symmetric-key AEAD envelope in `content` and key-reference/rotation tags.
 - **Audit**: Cascadia/Bahia audit kind `4903`.
 - **Discovery/collections**: ContextVM announcements `11316`-`11320`, NIP-51 relay sets `30002`, and NIP-51 curation sets `30004` where a domain needs curated reference inventories such as SBOM availability.
 - **Deletion**: NIP-09 kind `5` where relay-level deletion semantics apply; durable domain tombstones may still be represented as canonical replacement state with `deleted=true`.
@@ -23,6 +24,7 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 | `30078` | State/app data | NIP-78 app-specific configuration, registries, and UI/operator projection data; SBOM reference events use `schema=bahia.sbom.ref.v1`. |
 | `30004` | Collection | NIP-51 Curation Set for SBOM availability lists and other curated reference inventories. |
 | `30315` | Status | NIP-38 operational status for agents, workers, services, and long-running actions. |
+| `30316` | Assistant transcript | Append-only encrypted assistant transcript entries; `content` is `bahia.assistant-transcript.v1` service-held symmetric-key AEAD metadata plus ciphertext, with `session`, `turn`, `role`, `seq`, `key_ref`, `key_version`, `key_rotation`, and `envelope` tags. |
 | `4903` | Audit | Immutable audit fact / attestation / provenance breadcrumb. |
 | `11316`-`11320` | Discovery | ContextVM server, tools, resources, templates, and prompts announcements. |
 | `30002` | Collection/discovery | NIP-51 relay sets for browser, ContextVM, service, and operational relay topology. |

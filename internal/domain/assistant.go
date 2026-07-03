@@ -14,12 +14,34 @@ import (
 const (
 	KindAssistantSessionState = 30900
 	KindAssistantStatus       = 30315
+	KindAssistantTranscript   = 30316
 
-	AssistantSessionSchema = "bahia.assistant-session.v1"
-	AssistantStatusSchema  = "bahia.assistant-status.v1"
+	AssistantSessionSchema    = "bahia.assistant-session.v1"
+	AssistantStatusSchema     = "bahia.assistant-status.v1"
+	AssistantTranscriptSchema = "bahia.assistant-transcript.v1"
 
 	AssistantContextVMMethodPrompt   = "assistant/prompt"
 	AssistantContextVMMethodApproval = "assistant/approval"
+)
+
+const (
+	AssistantDomain = "assistant"
+
+	AssistantTranscriptDTagPrefix = AssistantTranscriptSchema + ":"
+
+	AssistantTranscriptTagDomain      = "domain"
+	AssistantTranscriptTagSchema      = "schema"
+	AssistantTranscriptTagSession     = "session"
+	AssistantTranscriptTagTurn        = "turn"
+	AssistantTranscriptTagRole        = "role"
+	AssistantTranscriptTagSequence    = "seq"
+	AssistantTranscriptTagKeyRef      = "key_ref"
+	AssistantTranscriptTagKeyVersion  = "key_version"
+	AssistantTranscriptTagKeyRotation = "key_rotation"
+	AssistantTranscriptTagEnvelope    = "envelope"
+
+	AssistantTranscriptEnvelopeServiceHeldAEAD = "service-held-symmetric-key-aead"
+	AssistantTranscriptAEADAlgorithmXChaCha20  = "XChaCha20-Poly1305"
 )
 
 // AssistantSessionState describes the canonical per-session lifecycle state.
@@ -104,10 +126,42 @@ type AssistantPromptRequest struct {
 type AssistantApprovalRequest struct {
 	SessionID    string         `json:"session_id"`
 	PlanHash     string         `json:"plan_hash"`
+	ActionID     string         `json:"action_id,omitempty"`
+	CancelScope  string         `json:"cancel_scope,omitempty"`
 	Decision     string         `json:"decision"`
 	Reason       string         `json:"reason,omitempty"`
 	Message      string         `json:"message,omitempty"`
 	ModifiedPlan *AssistantPlan `json:"modified_plan,omitempty"`
+}
+
+// AssistantTranscriptAEADEnvelope is the JSON content shape for kind 30316
+// transcript events. The ciphertext is produced with a service-held symmetric
+// key; key lookup and rotation metadata are mirrored in tags so clients can
+// scope subscriptions without decrypting content.
+type AssistantTranscriptAEADEnvelope struct {
+	Schema         string            `json:"schema"`
+	Envelope       string            `json:"envelope"`
+	Algorithm      string            `json:"algorithm"`
+	KeyRef         string            `json:"key_ref"`
+	KeyVersion     string            `json:"key_version,omitempty"`
+	KeyRotation    string            `json:"key_rotation,omitempty"`
+	Nonce          string            `json:"nonce"`
+	Ciphertext     string            `json:"ciphertext"`
+	AssociatedData map[string]string `json:"associated_data,omitempty"`
+	Compression    string            `json:"compression,omitempty"`
+}
+
+// AssistantTranscriptPayload is the plaintext schema encrypted inside
+// AssistantTranscriptAEADEnvelope. It is defined now so transcript publishers,
+// replayers, and model adapters share one canonical shape when item 6 adds the
+// store and crypto.
+type AssistantTranscriptPayload struct {
+	SessionID string                `json:"session_id"`
+	TurnID    string                `json:"turn_id,omitempty"`
+	RunID     string                `json:"run_id,omitempty"`
+	Sequence  int                   `json:"seq"`
+	Message   AssistantAgentMessage `json:"message"`
+	Metadata  map[string]any        `json:"metadata,omitempty"`
 }
 
 // AsyncToolReceipt normalizes event-native downstream tool dispatch metadata for

@@ -144,6 +144,7 @@ Production runtime subscribes to ContextVM `25910` messages and canonical observ
 | ContextVM CRU | `25910` inside `1059`/`21059` where supported | Browser/CLI/agent JSON-RPC mutation methods and correlated responses |
 | Canonical state | `30900`, `30078` | Control-plane state projections and NIP-78 app-specific data; SBOM references use `30078` with `schema=bahia.sbom.ref.v1` |
 | Canonical audit/status | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
+| Assistant transcript | `30316` | Assistant conversation/tool transcript entries encrypted as service-held symmetric-key AEAD envelopes with key-reference/rotation tags |
 | ContextVM discovery | `11316`-`11320` | Server, tool, resource, prompt, and template announcements |
 | Relay sets and curation sets | `30002`, `30004` | NIP-51 relay topology/bootstrap sets and complete SBOM availability lists |
 | Deletions | `5` | NIP-09 delete events where relay-level deletion semantics apply |

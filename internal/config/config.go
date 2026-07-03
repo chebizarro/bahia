@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openagentsinc/bahia/internal/domain"
+
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
@@ -168,12 +170,45 @@ type SoulFactoryConfig struct {
 
 // AssistantConfig controls the operator assistant backend orchestration path.
 type AssistantConfig struct {
-	Enabled         bool   `koanf:"enabled"`
-	LLMBaseURL      string `koanf:"llm_base_url"`
-	LLMModel        string `koanf:"llm_model"`
-	LLMAPIKey       string `koanf:"llm_api_key"`
-	SignetBunkerURI string `koanf:"signet_bunker_uri"`
-	SignetAllowMock bool   `koanf:"signet_allow_mock"`
+	Enabled         bool                       `koanf:"enabled" yaml:"enabled"`
+	LLMBaseURL      string                     `koanf:"llm_base_url" yaml:"llm_base_url"`
+	LLMModel        string                     `koanf:"llm_model" yaml:"llm_model"`
+	LLMAPIKey       string                     `koanf:"llm_api_key" yaml:"llm_api_key"`
+	SignetBunkerURI string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetAllowMock bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock"`
+	Agentic         AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
+	Permissions     AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
+	MCP             AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
+}
+
+// AssistantAgenticConfig selects the provider-neutral agent loop model backend.
+// Increment 1 supports only OpenAI-compatible chat-completions tool calling.
+type AssistantAgenticConfig struct {
+	Enabled                    bool          `koanf:"enabled" yaml:"enabled"`
+	Provider                   string        `koanf:"provider" yaml:"provider"`
+	BaseURL                    string        `koanf:"base_url" yaml:"base_url"`
+	Model                      string        `koanf:"model" yaml:"model"`
+	APIKey                     string        `koanf:"api_key" yaml:"api_key"`
+	MaxIterations              int           `koanf:"max_iterations" yaml:"max_iterations"`
+	MaxConsecutiveToolFailures int           `koanf:"max_consecutive_tool_failures" yaml:"max_consecutive_tool_failures"`
+	RequestTimeout             time.Duration `koanf:"request_timeout" yaml:"request_timeout"`
+}
+
+// AssistantPermissionsConfig configures the assistant permission posture. The
+// engine implementation lands later; this config owns the canonical default.
+type AssistantPermissionsConfig struct {
+	Mode domain.AssistantPermissionMode `koanf:"mode" yaml:"mode"`
+}
+
+// AssistantMCPConfig holds assistant-specific MCP runtime settings.
+type AssistantMCPConfig struct {
+	AsyncObservation AssistantMCPAsyncObservationConfig `koanf:"async_observation" yaml:"async_observation"`
+}
+
+// AssistantMCPAsyncObservationConfig bounds event-native async tool observation.
+type AssistantMCPAsyncObservationConfig struct {
+	MaxWait       time.Duration `koanf:"max_wait" yaml:"max_wait"`
+	BackfillLimit int           `koanf:"backfill_limit" yaml:"backfill_limit"`
 }
 
 // PackageControlplaneConfig registers package repository backends and source-fetch guardrails.
@@ -679,6 +714,23 @@ func Defaults() *Config {
 		Assistant: AssistantConfig{
 			Enabled:    false,
 			LLMBaseURL: "https://api.openai.com",
+			Agentic: AssistantAgenticConfig{
+				Enabled:                    false,
+				Provider:                   "openai_compatible",
+				BaseURL:                    "https://api.openai.com",
+				MaxIterations:              12,
+				MaxConsecutiveToolFailures: 3,
+				RequestTimeout:             110 * time.Second,
+			},
+			Permissions: AssistantPermissionsConfig{
+				Mode: domain.AssistantPermissionModeReview,
+			},
+			MCP: AssistantMCPConfig{
+				AsyncObservation: AssistantMCPAsyncObservationConfig{
+					MaxWait:       30 * time.Minute,
+					BackfillLimit: 50,
+				},
+			},
 		},
 		DNS: DNSConfig{
 			Enabled:           false,
@@ -820,6 +872,15 @@ func Load(configPath string) (*Config, error) {
 		}
 		if strings.HasPrefix(key, "sbom_cdxgen_") {
 			return "sbom.cdxgen." + strings.TrimPrefix(key, "sbom_cdxgen_")
+		}
+		if strings.HasPrefix(key, "assistant_agentic_") {
+			return "assistant.agentic." + strings.TrimPrefix(key, "assistant_agentic_")
+		}
+		if strings.HasPrefix(key, "assistant_permissions_") {
+			return "assistant.permissions." + strings.TrimPrefix(key, "assistant_permissions_")
+		}
+		if strings.HasPrefix(key, "assistant_mcp_async_observation_") {
+			return "assistant.mcp.async_observation." + strings.TrimPrefix(key, "assistant_mcp_async_observation_")
 		}
 		switch key {
 		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key":
@@ -1251,27 +1312,109 @@ func (c *Config) validateLLM() error {
 }
 
 func (c *Config) validateAssistant() error {
-	c.Assistant.LLMBaseURL = strings.TrimRight(strings.TrimSpace(c.Assistant.LLMBaseURL), "/")
-	c.Assistant.LLMModel = strings.TrimSpace(c.Assistant.LLMModel)
-	c.Assistant.LLMAPIKey = strings.TrimSpace(c.Assistant.LLMAPIKey)
-	c.Assistant.SignetBunkerURI = strings.TrimSpace(c.Assistant.SignetBunkerURI)
-	if c.Assistant.LLMBaseURL == "" {
-		c.Assistant.LLMBaseURL = "https://api.openai.com"
+	assistant := &c.Assistant
+	assistant.LLMBaseURL = strings.TrimRight(strings.TrimSpace(assistant.LLMBaseURL), "/")
+	assistant.LLMModel = strings.TrimSpace(assistant.LLMModel)
+	assistant.LLMAPIKey = strings.TrimSpace(assistant.LLMAPIKey)
+	assistant.SignetBunkerURI = strings.TrimSpace(assistant.SignetBunkerURI)
+	if assistant.LLMBaseURL == "" {
+		assistant.LLMBaseURL = "https://api.openai.com"
 	}
-	if !c.Assistant.Enabled {
+
+	agentic := &assistant.Agentic
+	agentic.Provider = normalizeAssistantProvider(agentic.Provider)
+	if agentic.Provider == "" {
+		agentic.Provider = "openai_compatible"
+	}
+	agentic.BaseURL = strings.TrimRight(strings.TrimSpace(agentic.BaseURL), "/")
+	if agentic.BaseURL == "" {
+		agentic.BaseURL = assistant.LLMBaseURL
+	}
+	agentic.Model = strings.TrimSpace(agentic.Model)
+	if agentic.Model == "" {
+		agentic.Model = assistant.LLMModel
+	}
+	agentic.APIKey = strings.TrimSpace(agentic.APIKey)
+	if agentic.APIKey == "" {
+		agentic.APIKey = assistant.LLMAPIKey
+	}
+	if agentic.MaxIterations == 0 {
+		agentic.MaxIterations = 12
+	}
+	if agentic.MaxConsecutiveToolFailures == 0 {
+		agentic.MaxConsecutiveToolFailures = 3
+	}
+	if agentic.RequestTimeout == 0 {
+		agentic.RequestTimeout = 110 * time.Second
+	}
+
+	permissions := &assistant.Permissions
+	permissions.Mode = domain.AssistantPermissionMode(strings.ToLower(strings.TrimSpace(string(permissions.Mode))))
+	if permissions.Mode == "" {
+		permissions.Mode = domain.AssistantPermissionModeReview
+	}
+	switch permissions.Mode {
+	case domain.AssistantPermissionModeReview, domain.AssistantPermissionModeAudited:
+	default:
+		return fmt.Errorf("config validation failed: assistant.permissions.mode must be one of review, audited")
+	}
+
+	asyncObservation := &assistant.MCP.AsyncObservation
+	if asyncObservation.MaxWait == 0 {
+		asyncObservation.MaxWait = 30 * time.Minute
+	}
+	if asyncObservation.BackfillLimit == 0 {
+		asyncObservation.BackfillLimit = 50
+	}
+	if asyncObservation.MaxWait < 0 {
+		return fmt.Errorf("config validation failed: assistant.mcp.async_observation.max_wait must not be negative")
+	}
+	if asyncObservation.BackfillLimit < 0 {
+		return fmt.Errorf("config validation failed: assistant.mcp.async_observation.backfill_limit must not be negative")
+	}
+
+	if !assistant.Enabled {
 		return nil
 	}
-	if c.Assistant.LLMModel == "" {
-		return fmt.Errorf("config validation failed: assistant.llm_model is required when assistant.enabled=true")
+	if assistant.LLMModel == "" && !agentic.Enabled {
+		return fmt.Errorf("config validation failed: assistant.llm_model is required when assistant.enabled=true and assistant.agentic.enabled=false")
 	}
-	parsed, err := url.Parse(c.Assistant.LLMBaseURL)
+	parsed, err := url.Parse(assistant.LLMBaseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return fmt.Errorf("config validation failed: assistant.llm_base_url must be a valid URL")
 	}
 	if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
 		return fmt.Errorf("config validation failed: nostr.private_key is required when assistant.enabled=true")
 	}
+	if !agentic.Enabled {
+		return nil
+	}
+	if agentic.Provider != "openai_compatible" {
+		return fmt.Errorf("config validation failed: assistant.agentic.provider must be openai_compatible")
+	}
+	if agentic.Model == "" {
+		return fmt.Errorf("config validation failed: assistant.agentic.model is required when assistant.agentic.enabled=true")
+	}
+	parsedAgentic, err := url.Parse(agentic.BaseURL)
+	if err != nil || parsedAgentic.Scheme == "" || parsedAgentic.Host == "" {
+		return fmt.Errorf("config validation failed: assistant.agentic.base_url must be a valid URL")
+	}
+	if agentic.MaxIterations <= 0 {
+		return fmt.Errorf("config validation failed: assistant.agentic.max_iterations must be > 0 when assistant.agentic.enabled=true")
+	}
+	if agentic.MaxConsecutiveToolFailures <= 0 {
+		return fmt.Errorf("config validation failed: assistant.agentic.max_consecutive_tool_failures must be > 0 when assistant.agentic.enabled=true")
+	}
+	if agentic.RequestTimeout <= 0 {
+		return fmt.Errorf("config validation failed: assistant.agentic.request_timeout must be > 0 when assistant.agentic.enabled=true")
+	}
 	return nil
+}
+
+func normalizeAssistantProvider(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	provider = strings.ReplaceAll(provider, "-", "_")
+	return provider
 }
 
 func (c *Config) validatePackages() error {

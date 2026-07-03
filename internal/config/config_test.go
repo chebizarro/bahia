@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func TestDefaults(t *testing.T) {
@@ -76,6 +78,137 @@ func TestDefaults(t *testing.T) {
 	if cfg.WorkerPressure.MemoryWarningMinGB != 4 || cfg.WorkerPressure.DiskWarningMinGB != 40 || cfg.WorkerPressure.VRAMWarningMinGB != 4 {
 		t.Errorf("worker pressure defaults = %#v", cfg.WorkerPressure)
 	}
+}
+
+func TestAssistantAgenticDefaults(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Assistant.Agentic.Enabled {
+		t.Fatal("assistant.agentic.enabled should default false")
+	}
+	if cfg.Assistant.Agentic.Provider != "openai_compatible" {
+		t.Fatalf("assistant.agentic.provider = %q", cfg.Assistant.Agentic.Provider)
+	}
+	if cfg.Assistant.Permissions.Mode != domain.AssistantPermissionModeReview {
+		t.Fatalf("assistant.permissions.mode = %q, want review", cfg.Assistant.Permissions.Mode)
+	}
+	if cfg.Assistant.MCP.AsyncObservation.MaxWait != 30*time.Minute {
+		t.Fatalf("assistant.mcp.async_observation.max_wait = %s", cfg.Assistant.MCP.AsyncObservation.MaxWait)
+	}
+	if cfg.Assistant.MCP.AsyncObservation.BackfillLimit != 50 {
+		t.Fatalf("assistant.mcp.async_observation.backfill_limit = %d", cfg.Assistant.MCP.AsyncObservation.BackfillLimit)
+	}
+}
+
+func TestLoadAssistantAgenticConfigFromYAMLAndEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`assistant:
+  enabled: true
+  llm_base_url: "https://legacy.example/"
+  llm_model: "legacy-model"
+  llm_api_key: "legacy-key"
+  agentic:
+    enabled: true
+    provider: "openai-compatible"
+    base_url: "https://agentic.example/"
+    model: "agentic-model"
+    api_key: "agentic-key"
+    max_iterations: 20
+    max_consecutive_tool_failures: 4
+    request_timeout: 45s
+  permissions:
+    mode: "audited"
+  mcp:
+    async_observation:
+      max_wait: 10m
+      backfill_limit: 75
+nostr:
+  private_key: "test-secret-key"
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	t.Setenv("BAHIA_ASSISTANT_AGENTIC_MODEL", "agentic-env-model")
+	t.Setenv("BAHIA_ASSISTANT_PERMISSIONS_MODE", "review")
+	t.Setenv("BAHIA_ASSISTANT_MCP_ASYNC_OBSERVATION_BACKFILL_LIMIT", "90")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Assistant.Agentic.Enabled {
+		t.Fatal("assistant.agentic.enabled = false")
+	}
+	if cfg.Assistant.Agentic.Provider != "openai_compatible" {
+		t.Fatalf("assistant.agentic.provider = %q", cfg.Assistant.Agentic.Provider)
+	}
+	if cfg.Assistant.Agentic.BaseURL != "https://agentic.example" {
+		t.Fatalf("assistant.agentic.base_url = %q", cfg.Assistant.Agentic.BaseURL)
+	}
+	if cfg.Assistant.Agentic.Model != "agentic-env-model" {
+		t.Fatalf("assistant.agentic.model = %q", cfg.Assistant.Agentic.Model)
+	}
+	if cfg.Assistant.Agentic.APIKey != "agentic-key" {
+		t.Fatalf("assistant.agentic.api_key = %q", cfg.Assistant.Agentic.APIKey)
+	}
+	if cfg.Assistant.Agentic.MaxIterations != 20 || cfg.Assistant.Agentic.MaxConsecutiveToolFailures != 4 || cfg.Assistant.Agentic.RequestTimeout != 45*time.Second {
+		t.Fatalf("assistant.agentic limits = %+v", cfg.Assistant.Agentic)
+	}
+	if cfg.Assistant.Permissions.Mode != domain.AssistantPermissionModeReview {
+		t.Fatalf("assistant.permissions.mode = %q", cfg.Assistant.Permissions.Mode)
+	}
+	if cfg.Assistant.MCP.AsyncObservation.MaxWait != 10*time.Minute || cfg.Assistant.MCP.AsyncObservation.BackfillLimit != 90 {
+		t.Fatalf("assistant.mcp.async_observation = %+v", cfg.Assistant.MCP.AsyncObservation)
+	}
+}
+
+func TestAssistantAgenticValidation(t *testing.T) {
+	t.Run("legacy assistant valid when agentic disabled", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.Enabled = true
+		cfg.Assistant.LLMModel = "legacy-model"
+		cfg.Nostr.PrivateKey = "test-secret-key"
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("legacy assistant config should validate with agentic disabled: %v", err)
+		}
+	})
+
+	t.Run("agentic requires model", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.Enabled = true
+		cfg.Assistant.Agentic.Enabled = true
+		cfg.Nostr.PrivateKey = "test-secret-key"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.model") {
+			t.Fatalf("validate() error = %v, want assistant.agentic.model requirement", err)
+		}
+	})
+
+	t.Run("unsupported agentic provider rejected", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.Enabled = true
+		cfg.Assistant.Agentic.Enabled = true
+		cfg.Assistant.Agentic.Provider = "anthropic"
+		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Nostr.PrivateKey = "test-secret-key"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.provider") {
+			t.Fatalf("validate() error = %v, want provider rejection", err)
+		}
+	})
+
+	t.Run("invalid permission mode rejected", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.Permissions.Mode = domain.AssistantPermissionMode("readonly")
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.permissions.mode") {
+			t.Fatalf("validate() error = %v, want permissions mode rejection", err)
+		}
+	})
+
+	t.Run("negative async observation rejected", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.MCP.AsyncObservation.MaxWait = -time.Second
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.mcp.async_observation.max_wait") {
+			t.Fatalf("validate() error = %v, want async observation rejection", err)
+		}
+	})
 }
 
 func TestDBConfigDSN(t *testing.T) {

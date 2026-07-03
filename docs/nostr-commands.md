@@ -13,6 +13,7 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | ContextVM discovery | `11316`-`11320` | outbound replaceable | Server, tools, resources, templates, and prompts announcements |
 | Canonical state | `30900`, `30078` | outbound replaceable/addressable | Control-plane state projections and NIP-78 app-specific data |
 | Canonical audit/status | `4903`, `30315` | outbound | Immutable audit facts and NIP-38 operational statuses |
+| Assistant transcript | `30316` | outbound | Append-only `bahia.assistant-transcript.v1` entries with service-held symmetric-key AEAD `content` plus key-reference/rotation tags |
 | Relay sets | `30002` | outbound addressable | NIP-51 relay topology and bootstrap sets |
 | SBOM availability lists | `30004` | outbound addressable | NIP-51 complete availability lists for subject-scoped SBOM references |
 | Relay preferences | `10002` | outbound replaceable | Advisory NIP-65 service read/write hints; not Bahia bootstrap |
