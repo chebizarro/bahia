@@ -20,8 +20,15 @@ name: Hive CI Build
 # Path" for the retirement conditions that let this replace deploy-edge.yml.
 
 on:
-  push:
-    branches: [master]
+  # The durable Hive CI path is triggered by grasp-gitea (kind 5401) and executed
+  # by hive-ci-runner via nektos/act (pointed at this workflow_path) — NOT by
+  # GitHub-hosted Actions, which lack Harbor credentials and cannot succeed. The
+  # GitHub push run also startup_fails under the repo's allowed_actions=local_only
+  # policy (it uses actions/checkout). workflow_dispatch keeps the file runnable
+  # by act / manual dispatch without GitHub auto-running (and failing) it on push.
+  # NOTE: if hive-ci-runner invokes `act push`, switch it to `act workflow_dispatch`
+  # (or re-add `push:` here) so the durable path keeps triggering.
+  workflow_dispatch:
 
 permissions:
   contents: read
