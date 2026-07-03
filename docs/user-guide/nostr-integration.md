@@ -334,6 +334,21 @@ When a page has route documentation metadata, the assistant composer shows a dis
 
 The backend resolves `docs:<topic>` and `bahia://docs/<topic>` references from the central `docs/user-guide` catalog into a bounded `Documentation References` section before calling the assistant model. Missing docs refs are reported in context as unresolved references; they do not convert the prompt into a failed control-plane mutation. If the assistant later performs or follows an operational command, durable progress and terminal truth still come from the canonical observable event stream described above.
 
+When agentic assistant mode is enabled, the prompt still uses `assistant/prompt`. Clients subscribe to service-authored assistant status events (`30315`, `#domain=assistant`) and render the `phase` field for progress such as `tool_call_requested`, `tool_submitted`, `tool_observed`, `approval_required`, and `loop_completed`. Full turn transcript entries are service-authored kind `30316` events tagged with `schema=bahia.assistant-transcript.v1`; their production content is the service-held symmetric-key AEAD envelope described in the event spec, so clients without the key should render envelope metadata rather than pretending to decrypt it.
+
+Action-level approvals are separate from the legacy plan-hash approval flow. When a status event has `phase=approval_required` and an `action_id`, the operator decision is published as `assistant/approval` with params:
+
+```json
+{
+  "session_id": "assistant-session-id",
+  "action_id": "deferred-action-id",
+  "decision": "approve",
+  "reason": "operator-visible reason"
+}
+```
+
+A ContextVM acknowledgment for `assistant/approval` only confirms the decision was accepted for processing. Execution progress and terminal truth still come from scoped subscriptions to `30315`, `30316`, and any domain observables correlated to the downstream action.
+
 ### Example: Deployment Follow
 
 Desired-state deploy followers should display optional `step`, `desired_hash`, `renderer`, `target`, and `observation_id` metadata when present, but should not require those fields to conclude whether an event is valid. The ContextVM response is an acknowledgment; completion and convergence still come from the subscribed observable stream.

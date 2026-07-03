@@ -7,6 +7,7 @@ import { renderComponent, textOf, tick } from '../utils/svelte-component-test';
 
 const assistantStoreMock = vi.hoisted(() => ({
   assistantConnection: { status: 'live', operatorPubkey: 'a'.repeat(64) },
+  publishAssistantActionDecision: vi.fn(),
   publishAssistantApproval: vi.fn(),
   publishAssistantPrompt: vi.fn(),
   downstreamRequestsForTurn: (item) => item?.downstreamRequestId ? [item.downstreamRequestId] : []
@@ -65,8 +66,10 @@ describe('assistant refs model', () => {
 
 describe('assistant components', () => {
   beforeEach(() => {
+    assistantStoreMock.publishAssistantActionDecision.mockReset();
     assistantStoreMock.publishAssistantApproval.mockReset();
     assistantStoreMock.publishAssistantPrompt.mockReset();
+    assistantStoreMock.publishAssistantActionDecision.mockResolvedValue({ ok: true });
     assistantStoreMock.publishAssistantPrompt.mockResolvedValue({ ok: true });
     assistantStoreMock.assistantConnection.status = 'live';
   });
@@ -223,6 +226,55 @@ describe('assistant components', () => {
     const text = textOf(target);
     expect(text).toContain('assistant planning failed');
     expect(text).toContain('ContextVM request timed out after 120000ms waiting for result');
+  });
+
+  it('renders agentic action approval and publishes action decisions', async () => {
+    const target = renderComponent(AssistantTurn, {
+      operatorPubkey: 'a'.repeat(64),
+      session: {
+        sessionId: 'assistant-session-1',
+        state: 'awaiting_approval',
+        pendingActions: [{
+          actionId: 'action-rollback-1',
+          toolCallId: 'tool-call-1',
+          toolName: 'bahia_assistant_llm_rollback',
+          approvalPrompt: 'Rollback production requires approval',
+          argsPreview: { route_id: 'route-prod', environment_id: 'prod' },
+          permission: { risk: 'high' }
+        }]
+      },
+      item: {
+        id: 'status-approval-required',
+        type: 'status',
+        pubkey: 'b'.repeat(64),
+        createdAt: 100,
+        status: 'awaiting_approval',
+        phase: 'approval_required',
+        actionId: 'action-rollback-1',
+        toolCallId: 'tool-call-1',
+        toolName: 'bahia_assistant_llm_rollback',
+        message: 'assistant tool requires operator approval'
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('approval_required');
+    expect(text).toContain('bahia_assistant_llm_rollback');
+    expect(text).toContain('Rollback production requires approval');
+    expect(text).toContain('route-prod');
+    expect(text).toContain('high');
+
+    target.querySelector('input').value = 'operator approved rollback';
+    target.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+    target.querySelector('button.approve').click();
+    await flush();
+
+    expect(assistantStoreMock.publishAssistantActionDecision).toHaveBeenCalledWith({
+      sessionId: 'assistant-session-1',
+      actionId: 'action-rollback-1',
+      decision: 'approve',
+      reason: 'operator approved rollback'
+    });
   });
 
   it('shows blocked visual state for a relay-closed assistant turn', () => {

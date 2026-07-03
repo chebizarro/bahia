@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-6hic.9",
+  "defects": [
+    {
+      "id": "bahia-e1gn",
+      "scope": "out-of-scope web Playwright baseline",
+      "observed": "`npm run test:e2e` reported 50 failures across non-assistant suites during verification.",
+      "intended": "The full web Playwright suite is green or any intentional failures are documented and tracked narrowly.",
+      "status": "open"
+    }
+  ]
+}

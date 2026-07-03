@@ -10,6 +10,7 @@ import {
   parseJsonContent,
   parseAssistantSessionEvent,
   parseAssistantStatusEvent,
+  parseAssistantTranscriptEvent,
   computeAssistantPlanHash
 } from '../nostr/client.js';
 
@@ -205,6 +206,8 @@ function emptySession(sessionId) {
     currentPlan: null,
     pendingSteps: [],
     transcriptSummary: '',
+    metadata: {},
+    pendingActions: [],
     lastResultId: '',
     updatedAt: 0,
     sessionEvent: null,
@@ -220,6 +223,55 @@ function ensureSession(sessionId) {
 
 function eventSessionId(event, content = null) {
   return getTagValue(event, 'session', content?.session_id || content?.sessionId || '');
+}
+
+function normalizePendingAction(action = {}) {
+  const actionId = String(action.action_id || action.actionId || action.ActionID || '').trim();
+  if (!actionId) return null;
+  return {
+    actionId,
+    sessionId: action.session_id || action.sessionId || action.SessionID || '',
+    runId: action.run_id || action.runId || action.RunID || '',
+    turnId: action.turn_id || action.turnId || action.TurnID || '',
+    toolCallId: action.tool_call_id || action.toolCallId || action.ToolCallID || '',
+    toolName: action.tool_name || action.toolName || action.ToolName || '',
+    argsPreview: action.args_preview || action.argsPreview || action.tool_args || action.toolArgs || action.ToolArgs || null,
+    approvalPrompt: action.approval_prompt || action.approvalPrompt || action.ApprovalPrompt || '',
+    permission: action.permission || action.Permission || null,
+    createdAt: action.created_at || action.createdAt || action.CreatedAt || ''
+  };
+}
+
+function pendingActionsFromMetadata(metadata = {}) {
+  const raw = metadata?.deferred_actions || metadata?.deferredActions || {};
+  const values = Array.isArray(raw) ? raw : Object.values(raw || {});
+  return values.map(normalizePendingAction).filter(Boolean);
+}
+
+function pendingActionFromStatus(item) {
+  if (item?.type !== 'status' || item.phase !== 'approval_required' || !item.actionId) return null;
+  return normalizePendingAction({
+    action_id: item.actionId,
+    session_id: item.sessionId,
+    tool_call_id: item.toolCallId,
+    tool_name: item.toolName,
+    args_preview: item.argsPreview,
+    approval_prompt: item.approvalPrompt || item.message,
+    permission: item.permission,
+    created_at: item.createdAt
+  });
+}
+
+function upsertPendingAction(session, action) {
+  const normalized = normalizePendingAction(action);
+  if (!session || !normalized) return;
+  const existing = Array.isArray(session.pendingActions) ? session.pendingActions : [];
+  session.pendingActions = [normalized, ...existing.filter((item) => item.actionId !== normalized.actionId)];
+}
+
+function resolvePendingAction(session, actionId) {
+  if (!session || !actionId || !Array.isArray(session.pendingActions)) return;
+  session.pendingActions = session.pendingActions.filter((item) => item.actionId !== actionId);
 }
 
 function eventTimestamp(item) {
@@ -267,6 +319,8 @@ function applySessionEvent(event) {
     currentPlan: parsed.currentPlan,
     pendingSteps: parsed.pendingSteps,
     transcriptSummary: parsed.transcriptSummary,
+    metadata: parsed.content?.metadata || {},
+    pendingActions: pendingActionsFromMetadata(parsed.content?.metadata || {}),
     lastResultId: parsed.lastResultId,
     updatedAt: Math.max(session.updatedAt || 0, parsed.createdAt || 0),
     sessionEvent: parsed
@@ -286,11 +340,20 @@ function normalizeAssistantItem(event) {
         }
       : null;
   }
+  if (event.kind === ASSISTANT_KINDS.TRANSCRIPT) {
+    const parsed = parseAssistantTranscriptEvent(event);
+    return parsed
+      ? {
+          ...parsed,
+          type: 'transcript'
+        }
+      : null;
+  }
   return null;
 }
 
 function authorAllowed(event) {
-  if (event.kind === ASSISTANT_KINDS.STATUS || event.kind === ASSISTANT_KINDS.SESSION) {
+  if (event.kind === ASSISTANT_KINDS.STATUS || event.kind === ASSISTANT_KINDS.SESSION || event.kind === ASSISTANT_KINDS.TRANSCRIPT) {
     return !assistantConnection.servicePubkey || event.pubkey === assistantConnection.servicePubkey;
   }
   return false;
@@ -323,6 +386,14 @@ function recordAssistantItem(item) {
   session.updatedAt = Math.max(session.updatedAt || 0, item.createdAt || 0);
   if ((item.type === 'status' || item.type === 'result' || item.type === 'approval') && item.planHash) session.lastPlanHash = item.planHash;
   if ((item.type === 'status' || item.type === 'result') && item.plan && !session.currentPlan) session.currentPlan = item.plan;
+  if (item.type === 'status' && item.phase === 'approval_required') upsertPendingAction(session, pendingActionFromStatus(item));
+  if (item.actionId && (
+    item.type === 'approval'
+    || (item.type === 'result' && item.status !== 'awaiting_approval')
+    || (item.type === 'status' && item.phase && item.phase !== 'approval_required')
+  )) {
+    resolvePendingAction(session, item.actionId);
+  }
   if (item.type === 'result' && item.id) session.lastResultId = item.id;
 
   if (item.requestEventId && pendingMap.has(item.requestEventId) && item.type === 'result') {
@@ -414,7 +485,8 @@ function subscriptionFilters(operatorPubkey, servicePubkey) {
   const since = nowSeconds() - RECENT_TRANSCRIPT_SECONDS;
   return [
     { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-session.v1'], limit: SESSION_LIMIT },
-    { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#schema': ['bahia.assistant-status.v1'], since, limit: TRANSCRIPT_LIMIT }
+    { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#schema': ['bahia.assistant-status.v1'], since, limit: TRANSCRIPT_LIMIT },
+    { kinds: [ASSISTANT_KINDS.TRANSCRIPT], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-transcript.v1'], '#domain': ['assistant'], since, limit: TRANSCRIPT_LIMIT }
   ];
 }
 
@@ -571,7 +643,11 @@ function assistantResultItem(response, fallbackSessionId = '') {
     status,
     requestEventId: payload.request_event_id || response?.requestEventId || '',
     planHash: payload.plan_hash || payload.planHash || '',
-    downstreamRequestId: payload.downstream_request_id || payload.downstreamRequestId || '',
+    downstreamRequestId: payload.downstream_request_id || payload.downstreamRequestId || payload.downstream_request || payload.downstreamRequest || '',
+    actionId: payload.action_id || payload.actionId || '',
+    toolCallId: payload.tool_call_id || payload.toolCallId || '',
+    toolName: payload.tool_name || payload.toolName || '',
+    phase: payload.phase || '',
     success: status === 'completed' || status === 'planned',
     blocked: status === 'blocked',
     failed: status === 'failed',
@@ -645,36 +721,55 @@ export async function publishAssistantPrompt({ prompt, sessionId, routeContext =
   }
 }
 
-export async function publishAssistantApproval({ sessionId, planHash, decision, message = '', modifiedPlan = null, signal } = {}) {
+export async function publishAssistantApproval({ sessionId, planHash = '', actionId = '', decision, message = '', reason = '', modifiedPlan = null, signal } = {}) {
   if (!sessionId) throw new Error('sessionId is required');
-  if (!planHash) throw new Error('planHash is required');
+  if (!planHash && !actionId) throw new Error('planHash or actionId is required');
   if (!['approve', 'reject', 'cancel'].includes(decision)) throw new Error('decision must be approve, reject, or cancel');
-  const effectivePlanHash = modifiedPlan ? await computeAssistantPlanHash(modifiedPlan, sessionId) : planHash;
-  const content = { session_id: sessionId, plan_hash: effectivePlanHash, decision, message };
-  if (modifiedPlan) content.modified_plan = modifiedPlan;
+  if (actionId && !['approve', 'reject'].includes(decision)) throw new Error('action decision must be approve or reject');
+  if (actionId && modifiedPlan) throw new Error('modifiedPlan is only valid for plan-hash approvals');
+  const effectivePlanHash = !actionId && modifiedPlan ? await computeAssistantPlanHash(modifiedPlan, sessionId) : planHash;
+  const content = { session_id: sessionId, decision };
+  if (actionId) {
+    content.action_id = actionId;
+    if (reason || message) content.reason = reason || message;
+  } else {
+    content.plan_hash = effectivePlanHash;
+    content.message = message;
+    if (modifiedPlan) content.modified_plan = modifiedPlan;
+  }
 
   applyLocalAssistantItem({
     type: 'approval',
-    id: `assistant-approval:${sessionId}:${effectivePlanHash}:${decision}:${Date.now()}`,
+    id: `assistant-approval:${sessionId}:${actionId || effectivePlanHash}:${decision}:${Date.now()}`,
     kind: ASSISTANT_KINDS.CONTEXTVM_RESULT,
     pubkey: assistantConnection.operatorPubkey,
     createdAt: nowSeconds(),
     sessionId,
     planHash: effectivePlanHash,
+    actionId,
     decision,
-    message
+    message: reason || message
   });
 
+  const tags = actionId
+    ? [['session', sessionId], ['action', actionId], ['decision', decision]]
+    : [['session', sessionId], ['plan-hash', effectivePlanHash], ['decision', decision]];
   const response = await requestEncryptedResult({
     operation: 'assistant/approval',
     payload: content,
-    tags: [['session', sessionId], ['plan-hash', effectivePlanHash], ['decision', decision]],
+    tags,
     signal,
     timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS
   });
 
   applyLocalAssistantItem(assistantResultItem(response, sessionId));
   return response;
+}
+
+export async function publishAssistantActionDecision({ sessionId, actionId, decision, reason = '', signal } = {}) {
+  if (!actionId) throw new Error('actionId is required');
+  if (!['approve', 'reject'].includes(decision)) throw new Error('decision must be approve or reject');
+  return publishAssistantApproval({ sessionId, actionId, decision, reason, signal });
 }
 
 export function downstreamRequestsForTurn(item) {

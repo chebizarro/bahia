@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-6hic.9",
+  "tests": [
+    {"acceptance": "AC1,AC2,AC3", "command": "npm run test:unit -- --run web/tests/unit/assistant/assistant-store.test.js web/tests/unit/assistant/assistant-components.test.js", "coverage": "Store parsing for 30315 phase/action fields, 30316 transcript entries, pending action tracking, action_id approval payloads, and component action approval rendering/publishing."},
+    {"acceptance": "AC4,AC5,AC6,AC7", "command": "npx playwright test web/tests/e2e/assistant-agentic-enablement.spec.js", "coverage": "Relay-style E2E scenarios for read-only completion, audited low-risk mutation, high-risk rollback action approval, and blocked-to-recovered status flow."},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5,AC6,AC7", "command": "npm run test:unit", "coverage": "Full frontend unit regression suite."},
+    {"acceptance": "AC4,AC5,AC6,AC7", "command": "npx playwright test", "coverage": "Full frontend Playwright regression suite when time/environment permits."}
+  ]
+}

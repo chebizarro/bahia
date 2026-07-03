@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-6hic.9",
+  "title": "Assistant agentic minimal frontend and enablement",
+  "bead": "bahia-6hic.9",
+  "date": "2026-07-03",
+  "intent": "Make the flag-off backend agentic assistant from items 1-8 exercisable from the web UI by parsing agentic status/transcript events, rendering minimal phase/action state, and publishing action_id approval decisions through the existing assistant/approval ContextVM operation.",
+  "scope": [
+    "web/src/lib/nostr/assistant.js parses kind 30316 transcript events and kind 30315 phase/action/tool fields while preserving legacy plan_hash plan parsing.",
+    "web/src/lib/stores/assistant.svelte.js subscribes to 30316 transcript events, records agentic phase statuses in the session transcript, tracks pending action approvals, and publishes assistant/approval payloads keyed by action_id.",
+    "AssistantTurn renders agentic phases/tool metadata, encrypted/plaintext transcript entries, and a minimal action approval card for pending approval_required statuses.",
+    "Playwright enablement coverage exercises read-only completion, audited low-risk mutation observation, high-risk rollback approval, and relay close blocked-to-recovered status flows using the existing relay-style harness conventions."
+  ],
+  "out_of_scope": [
+    "Backend Go orchestrator, agent loop, tool runtime, or recovery changes.",
+    "Increment-2 rich subagent/tool-call UI beyond minimal phase/tool/action rendering.",
+    "Frontend decryption of service-held symmetric 30316 transcript envelopes; encrypted transcript metadata is parsed and plaintext fixtures are rendered when present."
+  ],
+  "architecture_notes": [
+    "The prompt flow remains assistant/prompt; no frontend prompt transport changes are introduced.",
+    "Action decisions are additive to the legacy publishAssistantApproval path: plan_hash approvals still compute and send legacy payloads, while publishAssistantActionDecision sends {session_id, action_id, decision, reason}.",
+    "Pending action approval state is derived from event-backed 30315 approval_required phases and session metadata.deferred_actions, then removed locally on action decision or later non-approval status/result for that action."
+  ]
+}

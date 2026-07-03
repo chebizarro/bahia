@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-6hic.9",
+  "title": "Assistant agentic minimal frontend and enablement",
+  "criteria": [
+    {"id": "AC1", "statement": "The frontend parser accepts assistant kind 30316 transcript events and kind 30315 agentic phase/action/tool fields without regressing legacy plan_hash plan parsing."},
+    {"id": "AC2", "statement": "Assistant sessions subscribe to and render 30316 transcript entries plus 30315 agentic phases including tool_call_requested, tool_submitted, tool_observed, approval_required, blocked, and loop_completed."},
+    {"id": "AC3", "statement": "approval_required statuses with action_id create a pending action approval UI and publish assistant/approval params {session_id, action_id, decision, reason}; plan_hash approvals continue to work."},
+    {"id": "AC4", "statement": "E2E read-only assistant question completes without surfacing an approval UI."},
+    {"id": "AC5", "statement": "E2E low-risk audited mutation displays tool submission and downstream Nostr observation without requiring approval."},
+    {"id": "AC6", "statement": "E2E high-risk rollback displays approval_required and does not execute until the operator approves the action_id."},
+    {"id": "AC7", "statement": "E2E relay close status renders blocked and later recovery events resume to loop_completed."}
+  ]
+}

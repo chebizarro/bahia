@@ -218,6 +218,149 @@ describe('assistant store', () => {
     });
   });
 
+  it('parses agentic status phases, pending action approvals, and 30316 transcript events', async () => {
+    const operator = authMock.authState.pubkey;
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    const sessionId = 'assistant-agentic-session';
+
+    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+      liveHandlers = handlers;
+      Promise.resolve().then(() => {
+        handlers?.onEvent?.(event({
+          id: 'session-agentic',
+          kind: ASSISTANT_KINDS.SESSION,
+          pubkey: service,
+          created_at: 100,
+          tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
+          content: { state: 'executing', operator_pubkey: operator, metadata: { agent_loop: { state: 'running' } } }
+        }));
+        handlers?.onEose?.();
+      });
+      return vi.fn();
+    });
+
+    await store.bootstrapAssistant({ force: true });
+
+    liveHandlers.onEvent(event({
+      id: 'status-tool-submitted',
+      kind: ASSISTANT_KINDS.STATUS,
+      pubkey: service,
+      created_at: 120,
+      tags: [['d', `bahia.assistant-status.v1:${sessionId}:tool-submitted`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['status', 'executing']],
+      content: {
+        session_id: sessionId,
+        status: 'executing',
+        phase: 'tool_submitted',
+        message: 'async tool submitted; waiting for downstream result',
+        tool_call_id: 'tool-call-1',
+        tool_name: 'bahia_assistant_dns_zone_create',
+        downstream_request: 'downstream-1',
+        args_preview: { zone: 'prod.example.com' }
+      }
+    }));
+    liveHandlers.onEvent(event({
+      id: 'status-approval-required',
+      kind: ASSISTANT_KINDS.STATUS,
+      pubkey: service,
+      created_at: 130,
+      tags: [['d', `bahia.assistant-status.v1:${sessionId}:approval`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['status', 'awaiting_approval']],
+      content: {
+        session_id: sessionId,
+        status: 'awaiting_approval',
+        phase: 'approval_required',
+        action_id: 'action-rollback-1',
+        tool_call_id: 'tool-call-2',
+        tool_name: 'bahia_assistant_llm_rollback',
+        approval_prompt: 'Rollback production requires approval',
+        permission: { risk: 'high' }
+      }
+    }));
+    liveHandlers.onEvent(event({
+      id: 'transcript-assistant',
+      kind: ASSISTANT_KINDS.TRANSCRIPT,
+      pubkey: service,
+      created_at: 140,
+      tags: [['d', `bahia.assistant-transcript.v1:${sessionId}:00000000000000000001`], ['domain', 'assistant'], ['schema', 'bahia.assistant-transcript.v1'], ['session', sessionId], ['turn', 'turn-1'], ['role', 'assistant'], ['seq', '1'], ['p', operator, '', 'operator']],
+      content: {
+        session_id: sessionId,
+        turn_id: 'turn-1',
+        seq: 1,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'DNS records are healthy.' }] },
+        metadata: { phase: 'assistant_model_response' }
+      }
+    }));
+
+    const session = store.assistantSessions.find((item) => item.sessionId === sessionId);
+    expect(session.pendingActions).toEqual([expect.objectContaining({
+      actionId: 'action-rollback-1',
+      toolCallId: 'tool-call-2',
+      toolName: 'bahia_assistant_llm_rollback',
+      approvalPrompt: 'Rollback production requires approval',
+      permission: { risk: 'high' }
+    })]);
+    expect(session.transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'status-tool-submitted',
+        type: 'status',
+        phase: 'tool_submitted',
+        toolCallId: 'tool-call-1',
+        toolName: 'bahia_assistant_dns_zone_create',
+        downstreamRequestId: 'downstream-1',
+        argsPreview: { zone: 'prod.example.com' }
+      }),
+      expect.objectContaining({
+        id: 'transcript-assistant',
+        type: 'transcript',
+        role: 'assistant',
+        sequence: 1,
+        phase: 'assistant_model_response',
+        text: 'DNS records are healthy.'
+      })
+    ]));
+  });
+
+  it('publishes action-level assistant approval decisions with action_id and reason', async () => {
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    store.assistantConnection.servicePubkey = controlplaneMock.controlplaneConnection.servicePubkey;
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({
+      result: { session_id: 'assistant-action-session', status: 'executing', action_id: 'action-1', decision: 'approve' },
+      requestEventId: 'approval-request-1'
+    });
+
+    await store.publishAssistantActionDecision({
+      sessionId: 'assistant-action-session',
+      actionId: 'action-1',
+      decision: 'approve',
+      reason: 'safe rollback window'
+    });
+
+    expect(encryptedControlplaneMock.requestEncryptedResult).toHaveBeenCalledWith({
+      operation: 'assistant/approval',
+      payload: {
+        session_id: 'assistant-action-session',
+        action_id: 'action-1',
+        decision: 'approve',
+        reason: 'safe rollback window'
+      },
+      tags: [['session', 'assistant-action-session'], ['action', 'action-1'], ['decision', 'approve']],
+      signal: undefined,
+      timeoutMs: 180000
+    });
+    const session = store.assistantSessions.find((item) => item.sessionId === 'assistant-action-session');
+    expect(session.transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'approval', actionId: 'action-1', decision: 'approve', message: 'safe rollback window' })
+    ]));
+  });
+
+  it('rejects cancel decisions for action-level assistant approvals', async () => {
+    await expect(store.publishAssistantApproval({
+      sessionId: 'assistant-action-session',
+      actionId: 'action-1',
+      decision: 'cancel'
+    })).rejects.toThrow('action decision must be approve or reject');
+    expect(encryptedControlplaneMock.requestEncryptedResult).not.toHaveBeenCalled();
+  });
+
   it('tracks prompt pending state and records timeout detail when the assistant result does not arrive', async () => {
     const pending = deferred();
     encryptedControlplaneMock.requestEncryptedResult.mockReturnValueOnce(pending.promise);

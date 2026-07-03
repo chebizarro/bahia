@@ -42,14 +42,18 @@ export async function computeAssistantPlanHash(plan, sessionId) {
 
 export const ASSISTANT_SESSION_SCHEMA = 'bahia.assistant-session.v1';
 export const ASSISTANT_STATUS_SCHEMA = 'bahia.assistant-status.v1';
+export const ASSISTANT_TRANSCRIPT_SCHEMA = 'bahia.assistant-transcript.v1';
+export const ASSISTANT_TRANSCRIPT_ENVELOPE = 'service-held-symmetric-key-aead';
+export const ASSISTANT_TRANSCRIPT_KIND = 30316;
 
 export const ASSISTANT_KINDS = {
   SESSION: CAS_CONTROL_STATE,
   STATUS: NIP38_STATUS,
+  TRANSCRIPT: ASSISTANT_TRANSCRIPT_KIND,
   CONTEXTVM_RESULT: CONTEXTVM_MESSAGE
 };
 
-export const ASSISTANT_EVENT_KINDS = [ASSISTANT_KINDS.SESSION, ASSISTANT_KINDS.STATUS];
+export const ASSISTANT_EVENT_KINDS = [ASSISTANT_KINDS.SESSION, ASSISTANT_KINDS.STATUS, ASSISTANT_KINDS.TRANSCRIPT];
 
 export const ASSISTANT_SESSION_STATES = {
   IDLE: 'idle',
@@ -134,6 +138,11 @@ export function parseAssistantStatusEvent(event) {
   if (getTagValue(event, 'schema', '') !== ASSISTANT_STATUS_SCHEMA) return null;
   const content = parseJsonContent(event, {});
   const status = getTagValue(event, 'status', content.status || '');
+  const phase = getTagValue(event, 'phase', content.phase || '');
+  const actionId = getTagValue(event, 'action', content.action_id || content.actionId || '');
+  const toolCallId = getTagValue(event, 'tool-call', content.tool_call_id || content.toolCallId || '');
+  const toolName = getTagValue(event, 'tool', content.tool_name || content.toolName || '');
+  const argsPreview = content.args_preview || content.argsPreview || null;
 
   return {
     id: event.id,
@@ -143,13 +152,78 @@ export function parseAssistantStatusEvent(event) {
     sessionId: getTagValue(event, 'session', content.session_id || ''),
     assistantId: getTagValue(event, 'agent', content.assistant_id || ''),
     status,
+    phase,
     requestEventId: getTaggedEventRef(event, 'reply') || content.request_event_id || '',
     planHash: getTagValue(event, 'plan-hash', content.plan_hash || ''),
     stepId: getTagValue(event, 'step', content.step_id || ''),
-    downstreamRequestId: getTagValue(event, 'downstream-request', content.downstream_request_id || ''),
-    message: content.message || event.content || '',
+    downstreamRequestId: getTagValue(event, 'downstream-request', content.downstream_request_id || content.downstreamRequest || content.downstream_request || ''),
+    actionId,
+    toolCallId,
+    toolName,
+    argsPreview,
+    observationId: getTagValue(event, 'observation', content.observation_id || content.observationId || ''),
+    approvalPrompt: content.approval_prompt || content.approvalPrompt || '',
+    permission: content.permission || null,
+    message: content.message || content.summary || event.content || '',
     plan: content.plan || null,
     receipt: content.receipt || null,
+    content,
+    event
+  };
+}
+
+function transcriptPayloadFromContent(content) {
+  if (!content || typeof content !== 'object') return null;
+  if (content.message || content.session_id || content.sessionId) return content;
+  if (content.payload && typeof content.payload === 'object') return content.payload;
+  return null;
+}
+
+function transcriptTextFromMessage(message) {
+  if (!message || typeof message !== 'object') return '';
+  if (typeof message.text === 'string') return message.text;
+  const blocks = Array.isArray(message.content) ? message.content : [];
+  const parts = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue;
+    if (typeof block.text === 'string' && block.text.trim()) parts.push(block.text);
+    else if (block.json !== undefined) parts.push(JSON.stringify(block.json));
+    else if (block.observation !== undefined) parts.push(JSON.stringify(block.observation));
+  }
+  if (parts.length > 0) return parts.join('\n');
+  if (message.observation) return JSON.stringify(message.observation);
+  return '';
+}
+
+export function parseAssistantTranscriptEvent(event) {
+  if (!event || event.kind !== ASSISTANT_KINDS.TRANSCRIPT) return null;
+  if (getTagValue(event, 'schema', '') !== ASSISTANT_TRANSCRIPT_SCHEMA) return null;
+  const content = parseJsonContent(event, {});
+  const payload = transcriptPayloadFromContent(content);
+  const envelope = content?.envelope === ASSISTANT_TRANSCRIPT_ENVELOPE ? content : null;
+  const message = payload?.message || null;
+  const metadata = payload?.metadata || content?.metadata || {};
+  const seq = Number(getTagValue(event, 'seq', payload?.seq ?? payload?.sequence ?? 0));
+
+  return {
+    id: event.id,
+    kind: event.kind,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    sessionId: getTagValue(event, 'session', payload?.session_id || payload?.sessionId || ''),
+    assistantId: getTagValue(event, 'agent', payload?.assistant_id || ''),
+    turnId: getTagValue(event, 'turn', payload?.turn_id || payload?.turnId || ''),
+    runId: payload?.run_id || payload?.runId || metadata?.run_id || metadata?.runId || '',
+    role: getTagValue(event, 'role', message?.role || ''),
+    sequence: Number.isFinite(seq) ? seq : 0,
+    phase: metadata?.phase || '',
+    message,
+    text: transcriptTextFromMessage(message),
+    metadata,
+    envelope,
+    encrypted: Boolean(envelope),
+    keyRef: getTagValue(event, 'key_ref', content?.key_ref || ''),
+    keyVersion: getTagValue(event, 'key_version', content?.key_version || ''),
     content,
     event
   };
@@ -170,7 +244,11 @@ export function parseAssistantResultEvent(event) {
     status,
     requestEventId: getTaggedEventRef(event, 'reply') || content.request_event_id || '',
     planHash: getTagValue(event, 'plan-hash', content.plan_hash || ''),
-    downstreamRequestId: getTagValue(event, 'downstream-request', content.downstream_request_id || ''),
+    downstreamRequestId: getTagValue(event, 'downstream-request', content.downstream_request_id || content.downstreamRequest || content.downstream_request || ''),
+    actionId: getTagValue(event, 'action', content.action_id || content.actionId || ''),
+    toolCallId: getTagValue(event, 'tool-call', content.tool_call_id || content.toolCallId || ''),
+    toolName: getTagValue(event, 'tool', content.tool_name || content.toolName || ''),
+    phase: content.phase || '',
     success: status === ASSISTANT_RESULT_STATUSES.COMPLETED || content.success === true,
     blocked: status === ASSISTANT_RESULT_STATUSES.BLOCKED,
     failed: status === ASSISTANT_RESULT_STATUSES.FAILED || content.success === false,
