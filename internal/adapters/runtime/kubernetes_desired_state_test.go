@@ -381,9 +381,9 @@ func TestMapDesiredSpecToK8sManifest_NoServiceWithoutType(t *testing.T) {
 // ---------------------------------------------------------------------------
 // MapDesiredSpecToK8sManifest — Service generation (via buildK8sService)
 //
-// KubernetesExtension currently lacks the ServiceType field, so we test the
-// buildK8sService helper directly. When KubernetesExtension gains ServiceType,
-// this can be promoted to a full MapDesiredSpecToK8sManifest integration test.
+// This exercises the buildK8sService helper directly. The full end-to-end
+// path (KubernetesExtension.ServiceType -> generated Service) is covered by
+// TestMapDesiredSpecToK8sManifest_ExtensionHonored.
 // ---------------------------------------------------------------------------
 
 func TestMapDesiredSpecToK8sManifest_ServiceGeneration(t *testing.T) {
@@ -1013,5 +1013,134 @@ func TestMapDesiredSpecToK8sManifest_VolumesWired(t *testing.T) {
 	// Volume name should be consistent between pod spec and mount.
 	if vols[0]["name"] != mounts[0]["name"] {
 		t.Errorf("volume name %q != mount name %q", vols[0]["name"], mounts[0]["name"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// KubernetesExtension is honored end-to-end (regression for bahia-840y)
+//
+// Prior to the fix, the k8sExtension accessors returned hardcoded defaults and
+// silently discarded every operator-supplied Kubernetes setting. These tests
+// prove MapDesiredSpecToK8sManifest reflects the populated extension.
+// ---------------------------------------------------------------------------
+
+func int32Ptr(v int32) *int32 { return &v }
+
+func k8sTestSpecWithExtension() *domain.DesiredServiceSpec {
+	spec := k8sTestSpec()
+	spec.KubernetesExtension = &domain.KubernetesExtension{
+		Namespace:   "team-payments",
+		Replicas:    int32Ptr(3),
+		ServiceType: "LoadBalancer",
+		ServicePorts: []domain.K8sServicePort{
+			{Name: "http", Port: 80, TargetPort: 8080, Protocol: "TCP", NodePort: 30080},
+		},
+		ResourceLimits:   &domain.K8sResources{CPU: "500m", Memory: "512Mi"},
+		ResourceRequests: &domain.K8sResources{CPU: "100m", Memory: "128Mi"},
+		Annotations:      map[string]string{"team": "payments"},
+		NodeSelector:     map[string]string{"disktype": "ssd"},
+		Tolerations:      []domain.K8sToleration{{Key: "dedicated", Operator: "Equal", Value: "payments", Effect: "NoSchedule"}},
+		ImagePullSecrets: []string{"regcred"},
+		LivenessProbe:    &domain.K8sProbe{HTTPGet: &domain.K8sHTTPGet{Path: "/healthz", Port: 8080, Scheme: "HTTP"}, InitialDelaySeconds: 5, PeriodSeconds: 10},
+		ReadinessProbe:   &domain.K8sProbe{Exec: []string{"cat", "/tmp/ready"}, TimeoutSeconds: 2, FailureThreshold: 3},
+	}
+	return spec
+}
+
+func TestMapDesiredSpecToK8sManifest_ExtensionHonored(t *testing.T) {
+	t.Parallel()
+	spec := k8sTestSpecWithExtension()
+	m, err := MapDesiredSpecToK8sManifest(spec, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	dep := m.Deployment
+	meta := dep["metadata"].(map[string]any)
+	if meta["namespace"] != "team-payments" {
+		t.Errorf("deployment namespace = %v, want team-payments", meta["namespace"])
+	}
+	ann := meta["annotations"].(map[string]string)
+	if ann["team"] != "payments" {
+		t.Errorf("annotation team = %q, want payments", ann["team"])
+	}
+
+	depSpec := dep["spec"].(map[string]any)
+	if depSpec["replicas"] != int32(3) {
+		t.Errorf("replicas = %v (%T), want int32(3)", depSpec["replicas"], depSpec["replicas"])
+	}
+
+	tmpl := depSpec["template"].(map[string]any)
+	podSpec := tmpl["spec"].(map[string]any)
+
+	ns := podSpec["nodeSelector"].(map[string]string)
+	if ns["disktype"] != "ssd" {
+		t.Errorf("nodeSelector[disktype] = %q, want ssd", ns["disktype"])
+	}
+	tols := podSpec["tolerations"].([]map[string]any)
+	if len(tols) != 1 || tols[0]["key"] != "dedicated" || tols[0]["effect"] != "NoSchedule" {
+		t.Errorf("tolerations not wired: %#v", tols)
+	}
+	ips := podSpec["imagePullSecrets"].([]map[string]any)
+	if len(ips) != 1 || ips[0]["name"] != "regcred" {
+		t.Errorf("imagePullSecrets not wired: %#v", ips)
+	}
+
+	containers := podSpec["containers"].([]any)
+	container := containers[0].(map[string]any)
+
+	resources := container["resources"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if limits["cpu"] != "500m" || limits["memory"] != "512Mi" {
+		t.Errorf("resource limits not wired: %#v", limits)
+	}
+	requests := resources["requests"].(map[string]any)
+	if requests["cpu"] != "100m" || requests["memory"] != "128Mi" {
+		t.Errorf("resource requests not wired: %#v", requests)
+	}
+
+	lp := container["livenessProbe"].(map[string]any)
+	lpHTTP := lp["httpGet"].(map[string]any)
+	if lpHTTP["path"] != "/healthz" || lpHTTP["port"] != int32(8080) {
+		t.Errorf("livenessProbe httpGet not wired: %#v", lpHTTP)
+	}
+	if lp["initialDelaySeconds"] != int32(5) {
+		t.Errorf("livenessProbe initialDelaySeconds = %v, want 5", lp["initialDelaySeconds"])
+	}
+	rp := container["readinessProbe"].(map[string]any)
+	rpExec := rp["exec"].(map[string]any)
+	if cmd, ok := rpExec["command"].([]string); !ok || len(cmd) != 2 || cmd[0] != "cat" {
+		t.Errorf("readinessProbe exec not wired: %#v", rpExec)
+	}
+
+	// Service must be generated because ServiceType is set.
+	if m.Service == nil {
+		t.Fatal("expected Service manifest when ServiceType is set")
+	}
+	svcSpec := m.Service["spec"].(map[string]any)
+	if svcSpec["type"] != "LoadBalancer" {
+		t.Errorf("service type = %v, want LoadBalancer", svcSpec["type"])
+	}
+	svcMeta := m.Service["metadata"].(map[string]any)
+	if svcMeta["namespace"] != "team-payments" {
+		t.Errorf("service namespace = %v, want team-payments", svcMeta["namespace"])
+	}
+	svcPorts := svcSpec["ports"].([]map[string]any)
+	if len(svcPorts) != 1 || svcPorts[0]["port"] != int32(80) || svcPorts[0]["nodePort"] != int32(30080) {
+		t.Errorf("service ports not wired: %#v", svcPorts)
+	}
+}
+
+func TestMapDesiredSpecToK8sManifest_ZeroReplicasDefaultsToOne(t *testing.T) {
+	t.Parallel()
+	spec := k8sTestSpec()
+	spec.KubernetesExtension = &domain.KubernetesExtension{Replicas: int32Ptr(0)}
+	m, err := MapDesiredSpecToK8sManifest(spec, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	depSpec := m.Deployment["spec"].(map[string]any)
+	if depSpec["replicas"] != int32(1) {
+		t.Errorf("replicas = %v, want 1 (zero must not silently scale to zero)", depSpec["replicas"])
 	}
 }

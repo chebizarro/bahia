@@ -985,3 +985,49 @@ func TestDesiredEnvironmentPlan_RevisionHashDeterministic(t *testing.T) {
 		t.Errorf("revision hash should be order-independent:\n  plan1: %s\n  plan2: %s", plan1.RevisionHash, plan2.RevisionHash)
 	}
 }
+
+func TestKubernetesExtensionFromDeploymentUnit_NilUnit(t *testing.T) {
+	ext := KubernetesExtensionFromDeploymentUnit(nil)
+	if ext == nil {
+		t.Fatal("expected non-nil extension for nil unit")
+	}
+	if ext.Namespace != "" || ext.Replicas != nil || ext.ServiceType != "" {
+		t.Errorf("expected empty extension, got %#v", ext)
+	}
+}
+
+func TestKubernetesExtensionFromDeploymentUnit_PopulatesFromRuntimeConfig(t *testing.T) {
+	unit := &DeploymentUnit{
+		Namespace: "prod",
+		RuntimeConfig: map[string]any{
+			"replicas":      float64(4), // JSON-decoded numbers arrive as float64
+			"service_type":  "NodePort",
+			"node_selector": map[string]any{"zone": "us-east"},
+			"annotations":   map[string]any{"owner": "platform"},
+		},
+	}
+	ext := KubernetesExtensionFromDeploymentUnit(unit)
+	if ext.Namespace != "prod" {
+		t.Errorf("namespace = %q, want prod", ext.Namespace)
+	}
+	if ext.Replicas == nil || *ext.Replicas != 4 {
+		t.Errorf("replicas = %v, want 4", ext.Replicas)
+	}
+	if ext.ServiceType != "NodePort" {
+		t.Errorf("service_type = %q, want NodePort", ext.ServiceType)
+	}
+	if ext.NodeSelector["zone"] != "us-east" {
+		t.Errorf("node_selector[zone] = %q, want us-east", ext.NodeSelector["zone"])
+	}
+	if ext.Annotations["owner"] != "platform" {
+		t.Errorf("annotations[owner] = %q, want platform", ext.Annotations["owner"])
+	}
+}
+
+func TestKubernetesExtensionFromDeploymentUnit_IgnoresBadReplicas(t *testing.T) {
+	unit := &DeploymentUnit{RuntimeConfig: map[string]any{"replicas": "not-a-number"}}
+	ext := KubernetesExtensionFromDeploymentUnit(unit)
+	if ext.Replicas != nil {
+		t.Errorf("replicas should be nil for non-numeric config, got %v", *ext.Replicas)
+	}
+}

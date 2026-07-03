@@ -33,18 +33,10 @@ import (
 //   9. Fragments never contain plaintext secret values.
 //  10. Fragment project name matches the full project name.
 //
-// Tests guarded by fragmentEligibilityAvailable() skip until
-// CheckFragmentEligibility is implemented in compose_fragment_eligibility.go.
+// Each eligibility assertion below calls the production CheckFragmentEligibility
+// (compose_fragment_eligibility.go) with a real rendered baseline and asserts
+// the expected ineligibility ReasonCode.
 // ===========================================================================
-
-// fragmentEligibilityAvailable reports whether CheckFragmentEligibility has
-// been implemented in compose_fragment_eligibility.go.
-//
-// Set to true once the fragment optimization implementation lands so the
-// eligibility assertions in these tests activate automatically.
-func fragmentEligibilityAvailable() bool {
-	return false
-}
 
 // ---------------------------------------------------------------------------
 // 1. Full project remains source of truth
@@ -104,28 +96,15 @@ func TestFragmentSafety_FullProjectRemainsSourceOfTruth(t *testing.T) {
 // TestFragmentSafety_NoFragmentWithoutBaseline verifies that the first
 // render of an environment always uses full-project apply, never fragments.
 func TestFragmentSafety_NoFragmentWithoutBaseline(t *testing.T) {
-	if !fragmentEligibilityAvailable() {
-		t.Skip("CheckFragmentEligibility not yet implemented; remove this guard and add assertions when compose_fragment_eligibility.go lands")
-	}
-
 	// Contract: CheckFragmentEligibility must return ineligible when there is
-	// no prior render baseline (i.e., no previous DesiredEnvironmentPlan or
-	// render-state.json). The first render must use full-project apply to
+	// no prior render baseline. The first render must use full-project apply to
 	// establish the canonical baseline that future fragment diffs compare against.
-	//
-	// When CheckFragmentEligibility is defined, this test should:
-	//   1. Call CheckFragmentEligibility with nil/empty previous state and a
-	//      current plan.
-	//   2. Assert the result is NOT eligible for fragment apply.
-	//
-	// Example:
-	//   plan := testEnvironmentPlan()
-	//   eligibility := CheckFragmentEligibility(nil, plan)
-	//   if eligibility.Eligible {
-	//       t.Error("first render without baseline must not use fragment apply")
-	//   }
 	plan := testEnvironmentPlan()
-	_ = plan // placeholder until CheckFragmentEligibility is defined
+	target := &plan.Services[0]
+
+	got := CheckFragmentEligibility(plan, target, nil)
+
+	assertIneligible(t, got, FragmentIneligibleNoBaseline)
 }
 
 // ---------------------------------------------------------------------------
@@ -191,15 +170,39 @@ func TestFragmentSafety_DependencyChangeRequiresFullProject(t *testing.T) {
 	}
 
 	// Eligibility contract: dependency changes must be ineligible for fragment apply.
-	if !fragmentEligibilityAvailable() {
-		t.Skip("CheckFragmentEligibility not yet implemented; skipping eligibility assertion for dependency changes")
+	// Baseline: the same two services but WITHOUT the web-frontend depends_on.
+	baselinePlan := &domain.DesiredEnvironmentPlan{
+		EnvironmentID: envID,
+		Services: []domain.DesiredServiceSpec{
+			{
+				SchemaVersion:    domain.DesiredStateSchemaVersion,
+				ServiceID:        fixedUUID("svc-dep-api00"),
+				EnvironmentID:    envID,
+				ArtifactID:       fixedUUID("art-dep-api00"),
+				StableServiceKey: "api-server",
+				ImageRef:         "api:latest",
+				ComposeExtension: &domain.ComposeExtension{ProjectName: "dep-frag-test"},
+			},
+			{
+				SchemaVersion:    domain.DesiredStateSchemaVersion,
+				ServiceID:        fixedUUID("svc-dep-web00"),
+				EnvironmentID:    envID,
+				ArtifactID:       fixedUUID("art-dep-web00"),
+				StableServiceKey: "web-frontend",
+				ImageRef:         "web:latest",
+				ComposeExtension: &domain.ComposeExtension{ProjectName: "dep-frag-test"},
+			},
+		},
 	}
+	for i := range baselinePlan.Services {
+		baselinePlan.Services[i].ComputeDesiredHash()
+	}
+	baselinePlan.ComputeRevisionHash()
+	baseline := baselineFrom(t, baselinePlan)
 
-	// When CheckFragmentEligibility is defined, this test should:
-	// Build planWithoutDependency vs planWithDependency (above), call
-	// CheckFragmentEligibility(previous, current), and assert it returns
-	// ineligible because depends_on changes require full-project apply to
-	// ensure the new startup ordering takes effect.
+	target := findSvc(t, plan, "web-frontend")
+	got := CheckFragmentEligibility(plan, target, baseline)
+	assertIneligible(t, got, FragmentIneligibleDependencyChange)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,14 +263,30 @@ func TestFragmentSafety_NetworkChangeRequiresFullProject(t *testing.T) {
 	}
 
 	// Eligibility contract: network changes must be ineligible for fragment apply.
-	if !fragmentEligibilityAvailable() {
-		t.Skip("CheckFragmentEligibility not yet implemented; skipping eligibility assertion for network changes")
+	// Baseline: net-service WITHOUT any network declarations.
+	baselinePlan := &domain.DesiredEnvironmentPlan{
+		EnvironmentID: envID,
+		Services: []domain.DesiredServiceSpec{
+			{
+				SchemaVersion:    domain.DesiredStateSchemaVersion,
+				ServiceID:        fixedUUID("svc-net-frag0"),
+				EnvironmentID:    envID,
+				ArtifactID:       fixedUUID("art-net-frag0"),
+				StableServiceKey: "net-service",
+				ImageRef:         "app:latest",
+				ComposeExtension: &domain.ComposeExtension{ProjectName: "net-frag-test"},
+			},
+		},
 	}
+	for i := range baselinePlan.Services {
+		baselinePlan.Services[i].ComputeDesiredHash()
+	}
+	baselinePlan.ComputeRevisionHash()
+	baseline := baselineFrom(t, baselinePlan)
 
-	// When CheckFragmentEligibility is defined, this test should:
-	// Build planWithoutNetwork vs planWithNetwork (above), call
-	// CheckFragmentEligibility(previous, current), and assert it returns
-	// ineligible because project-wide network changes require full-project apply.
+	target := findSvc(t, plan, "net-service")
+	got := CheckFragmentEligibility(plan, target, baseline)
+	assertIneligible(t, got, FragmentIneligibleNetworkChange)
 }
 
 // ---------------------------------------------------------------------------
@@ -326,14 +345,30 @@ func TestFragmentSafety_VolumeChangeRequiresFullProject(t *testing.T) {
 	}
 
 	// Eligibility contract: volume changes must be ineligible for fragment apply.
-	if !fragmentEligibilityAvailable() {
-		t.Skip("CheckFragmentEligibility not yet implemented; skipping eligibility assertion for volume changes")
+	// Baseline: vol-service WITHOUT any named-volume declarations.
+	baselinePlan := &domain.DesiredEnvironmentPlan{
+		EnvironmentID: envID,
+		Services: []domain.DesiredServiceSpec{
+			{
+				SchemaVersion:    domain.DesiredStateSchemaVersion,
+				ServiceID:        fixedUUID("svc-vol-frag0"),
+				EnvironmentID:    envID,
+				ArtifactID:       fixedUUID("art-vol-frag0"),
+				StableServiceKey: "vol-service",
+				ImageRef:         "app:latest",
+				ComposeExtension: &domain.ComposeExtension{ProjectName: "vol-frag-test"},
+			},
+		},
 	}
+	for i := range baselinePlan.Services {
+		baselinePlan.Services[i].ComputeDesiredHash()
+	}
+	baselinePlan.ComputeRevisionHash()
+	baseline := baselineFrom(t, baselinePlan)
 
-	// When CheckFragmentEligibility is defined, this test should:
-	// Build planWithoutVolume vs planWithVolume (above), call
-	// CheckFragmentEligibility(previous, current), and assert it returns
-	// ineligible because project-wide volume changes require full-project apply.
+	target := findSvc(t, plan, "vol-service")
+	got := CheckFragmentEligibility(plan, target, baseline)
+	assertIneligible(t, got, FragmentIneligibleVolumeChange)
 }
 
 // ---------------------------------------------------------------------------
@@ -384,15 +419,30 @@ func TestFragmentSafety_ProjectNameChangeRequiresFullProject(t *testing.T) {
 	}
 
 	// Eligibility contract: project name changes must be ineligible for fragment apply.
-	if !fragmentEligibilityAvailable() {
-		t.Skip("CheckFragmentEligibility not yet implemented; skipping eligibility assertion for project name changes")
+	// Baseline: pnm-service under a DIFFERENT project name.
+	baselinePlan := &domain.DesiredEnvironmentPlan{
+		EnvironmentID: envID,
+		Services: []domain.DesiredServiceSpec{
+			{
+				SchemaVersion:    domain.DesiredStateSchemaVersion,
+				ServiceID:        fixedUUID("svc-pnm-frag0"),
+				EnvironmentID:    envID,
+				ArtifactID:       fixedUUID("art-pnm-frag0"),
+				StableServiceKey: "pnm-service",
+				ImageRef:         "app:latest",
+				ComposeExtension: &domain.ComposeExtension{ProjectName: "staging-cluster-b"},
+			},
+		},
 	}
+	for i := range baselinePlan.Services {
+		baselinePlan.Services[i].ComputeDesiredHash()
+	}
+	baselinePlan.ComputeRevisionHash()
+	baseline := baselineFrom(t, baselinePlan)
 
-	// When CheckFragmentEligibility is defined, this test should:
-	// Build planWithOldName vs planWithNewName (above), call
-	// CheckFragmentEligibility(previous, current), and assert it returns
-	// ineligible because a project name change could orphan containers if
-	// applied via a service-scoped fragment.
+	target := findSvc(t, plan, "pnm-service")
+	got := CheckFragmentEligibility(plan, target, baseline)
+	assertIneligible(t, got, FragmentIneligibleProjectNameChange)
 }
 
 // ---------------------------------------------------------------------------

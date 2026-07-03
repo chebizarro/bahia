@@ -161,7 +161,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	}
 
 	// Build renderer extensions based on runtime type.
-	buildRendererExtensions(spec, input.Service, adopted)
+	buildRendererExtensions(spec, input.Service, adopted, input.DeploymentUnit)
 
 	// Compute desired hash from canonical fields.
 	spec.ComputeDesiredHash()
@@ -193,7 +193,7 @@ func desiredUnitIdentity(input BuildInput) (*uuid.UUID, string, domain.RuntimeTy
 	return unitID, unitKey, runtimeType
 }
 
-func buildRendererExtensions(spec *domain.DesiredServiceSpec, svc *domain.Service, adopted *domain.AdoptedRuntimeConfig) {
+func buildRendererExtensions(spec *domain.DesiredServiceSpec, svc *domain.Service, adopted *domain.AdoptedRuntimeConfig, unit *domain.DeploymentUnit) {
 	switch svc.RuntimeType {
 	case domain.RuntimeTypeCompose:
 		ext := &domain.ComposeExtension{}
@@ -209,7 +209,7 @@ func buildRendererExtensions(spec *domain.DesiredServiceSpec, svc *domain.Servic
 		spec.PodmanExtension = &domain.PodmanExtension{}
 
 	case domain.RuntimeTypeK8s:
-		spec.KubernetesExtension = &domain.KubernetesExtension{}
+		spec.KubernetesExtension = domain.KubernetesExtensionFromDeploymentUnit(unit)
 	}
 }
 

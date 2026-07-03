@@ -198,6 +198,73 @@ type KubernetesExtension struct {
 	ImagePullSecrets []string `json:"image_pull_secrets,omitempty"`
 }
 
+// KubernetesExtensionFromDeploymentUnit derives a KubernetesExtension from a
+// deployment unit's namespace and runtime_config. It always returns a non-nil
+// extension so K8s specs carry a stable (possibly empty) extension. Recognized
+// runtime_config keys:
+//
+//	replicas       -> Replicas       (integer)
+//	service_type   -> ServiceType    (string: ClusterIP|NodePort|LoadBalancer)
+//	node_selector  -> NodeSelector   (map[string]string)
+//	annotations    -> Annotations    (map[string]string)
+//
+// Unknown/absent keys leave the corresponding field at its zero value. Richer
+// fields (service ports, resources, probes, tolerations) are populated by
+// callers that build a fully typed extension directly.
+func KubernetesExtensionFromDeploymentUnit(unit *DeploymentUnit) *KubernetesExtension {
+	ext := &KubernetesExtension{}
+	if unit == nil {
+		return ext
+	}
+	ext.Namespace = unit.Namespace
+	cfg := unit.RuntimeConfig
+	if cfg == nil {
+		return ext
+	}
+	if r, ok := int32FromRuntimeConfig(cfg, "replicas"); ok {
+		ext.Replicas = &r
+	}
+	ext.ServiceType = stringFromRuntimeConfig(cfg, "service_type")
+	if ns := stringMapFromRuntimeConfig(cfg, "node_selector"); len(ns) > 0 {
+		ext.NodeSelector = ns
+	}
+	if ann := stringMapFromRuntimeConfig(cfg, "annotations"); len(ann) > 0 {
+		ext.Annotations = ann
+	}
+	return ext
+}
+
+// int32FromRuntimeConfig extracts an integer value from a runtime_config map,
+// tolerating the numeric types produced by JSON decoding (float64, json.Number)
+// as well as native integer types. The second return value reports whether a
+// usable integer was found.
+func int32FromRuntimeConfig(config map[string]any, key string) (int32, bool) {
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case int:
+		return int32(v), true
+	case int32:
+		return v, true
+	case int64:
+		return int32(v), true
+	case float64:
+		return int32(v), true
+	case float32:
+		return int32(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int32(n), true
+	default:
+		return 0, false
+	}
+}
+
 // PodmanExtension carries Podman-specific renderer metadata. Podman reuses
 // the Docker-compatible Engine API path where feasible.
 type PodmanExtension struct {

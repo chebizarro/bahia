@@ -46,10 +46,11 @@ type K8sManifest struct {
 // ---------------------------------------------------------------------------
 
 // k8sExtension provides nil-safe accessors for KubernetesExtension fields.
-// All methods return safe zero/default values while KubernetesExtension remains
-// an empty struct. When the struct gains fields (per the KubernetesExtension
-// contract), update each accessor to return the real value instead of its
-// placeholder default.
+// Each accessor reads the corresponding field from the underlying
+// domain.KubernetesExtension, returning safe zero/default values when the
+// extension (or the specific field) is unset. This keeps MapDesiredSpecToK8sManifest
+// free of nil checks while ensuring operator-supplied Kubernetes configuration
+// (replicas, namespace, Service, resources, probes, scheduling) is honored.
 type k8sExtension struct {
 	ext *domain.KubernetesExtension
 }
@@ -62,49 +63,207 @@ func newK8sExtension(spec *domain.DesiredServiceSpec) k8sExtension {
 }
 
 // Namespace returns the K8s namespace override, or "" if not set.
-// TODO: return e.ext.Namespace when KubernetesExtension gains the Namespace field.
-func (e k8sExtension) Namespace() string { return "" }
+func (e k8sExtension) Namespace() string {
+	if e.ext == nil {
+		return ""
+	}
+	return e.ext.Namespace
+}
 
-// Replicas returns the desired replica count (default 1).
-// TODO: use *e.ext.Replicas when KubernetesExtension gains the Replicas field.
-func (e k8sExtension) Replicas() int32 { return 1 }
+// Replicas returns the desired replica count. It defaults to 1 when unset or
+// when a non-positive value is configured (0 replicas would silently scale the
+// service to zero, which is never the desired-state intent for an active spec).
+func (e k8sExtension) Replicas() int32 {
+	if e.ext == nil || e.ext.Replicas == nil || *e.ext.Replicas < 1 {
+		return 1
+	}
+	return *e.ext.Replicas
+}
 
 // ServiceType returns the K8s Service type string, or "" if no Service should
 // be created.
-// TODO: return e.ext.ServiceType when KubernetesExtension gains the ServiceType field.
-func (e k8sExtension) ServiceType() string { return "" }
+func (e k8sExtension) ServiceType() string {
+	if e.ext == nil {
+		return ""
+	}
+	return e.ext.ServiceType
+}
 
 // ServicePorts returns K8s Service port configuration entries.
-// TODO: map e.ext.ServicePorts when KubernetesExtension gains the ServicePorts field.
-func (e k8sExtension) ServicePorts() []map[string]any { return nil }
+func (e k8sExtension) ServicePorts() []map[string]any {
+	if e.ext == nil || len(e.ext.ServicePorts) == 0 {
+		return nil
+	}
+	ports := make([]map[string]any, 0, len(e.ext.ServicePorts))
+	for _, p := range e.ext.ServicePorts {
+		entry := map[string]any{"port": p.Port}
+		if p.Name != "" {
+			entry["name"] = p.Name
+		}
+		if p.TargetPort != 0 {
+			entry["targetPort"] = p.TargetPort
+		}
+		if p.Protocol != "" {
+			entry["protocol"] = p.Protocol
+		}
+		if p.NodePort != 0 {
+			entry["nodePort"] = p.NodePort
+		}
+		ports = append(ports, entry)
+	}
+	return ports
+}
 
-// Resources returns the K8s resource limits/requests map, or nil if not set.
-// TODO: map ResourceLimits/ResourceRequests when KubernetesExtension gains those fields.
-func (e k8sExtension) Resources() map[string]any { return nil }
+// Resources returns the K8s container resource requirements map (limits and/or
+// requests), or nil if neither is configured.
+func (e k8sExtension) Resources() map[string]any {
+	if e.ext == nil {
+		return nil
+	}
+	resources := map[string]any{}
+	if q := k8sResourceQuantities(e.ext.ResourceLimits); q != nil {
+		resources["limits"] = q
+	}
+	if q := k8sResourceQuantities(e.ext.ResourceRequests); q != nil {
+		resources["requests"] = q
+	}
+	if len(resources) == 0 {
+		return nil
+	}
+	return resources
+}
 
 // Annotations returns deployment metadata annotation overrides, or nil.
-// TODO: return e.ext.Annotations when KubernetesExtension gains the Annotations field.
-func (e k8sExtension) Annotations() map[string]string { return nil }
+func (e k8sExtension) Annotations() map[string]string {
+	if e.ext == nil {
+		return nil
+	}
+	return e.ext.Annotations
+}
 
 // NodeSelector returns the pod node selector map, or nil.
-// TODO: return e.ext.NodeSelector when KubernetesExtension gains the NodeSelector field.
-func (e k8sExtension) NodeSelector() map[string]string { return nil }
+func (e k8sExtension) NodeSelector() map[string]string {
+	if e.ext == nil {
+		return nil
+	}
+	return e.ext.NodeSelector
+}
 
 // Tolerations returns the pod tolerations slice, or nil.
-// TODO: map e.ext.Tolerations when KubernetesExtension gains the Tolerations field.
-func (e k8sExtension) Tolerations() []map[string]any { return nil }
+func (e k8sExtension) Tolerations() []map[string]any {
+	if e.ext == nil || len(e.ext.Tolerations) == 0 {
+		return nil
+	}
+	tols := make([]map[string]any, 0, len(e.ext.Tolerations))
+	for _, t := range e.ext.Tolerations {
+		entry := map[string]any{}
+		if t.Key != "" {
+			entry["key"] = t.Key
+		}
+		if t.Operator != "" {
+			entry["operator"] = t.Operator
+		}
+		if t.Value != "" {
+			entry["value"] = t.Value
+		}
+		if t.Effect != "" {
+			entry["effect"] = t.Effect
+		}
+		tols = append(tols, entry)
+	}
+	return tols
+}
 
 // ImagePullSecrets returns imagePullSecrets entries for the pod spec, or nil.
-// TODO: map e.ext.ImagePullSecrets when KubernetesExtension gains the field.
-func (e k8sExtension) ImagePullSecrets() []map[string]any { return nil }
+func (e k8sExtension) ImagePullSecrets() []map[string]any {
+	if e.ext == nil || len(e.ext.ImagePullSecrets) == 0 {
+		return nil
+	}
+	secrets := make([]map[string]any, 0, len(e.ext.ImagePullSecrets))
+	for _, name := range e.ext.ImagePullSecrets {
+		if name == "" {
+			continue
+		}
+		secrets = append(secrets, map[string]any{"name": name})
+	}
+	if len(secrets) == 0 {
+		return nil
+	}
+	return secrets
+}
 
 // LivenessProbe returns the liveness probe map, or nil if not set.
-// TODO: map e.ext.LivenessProbe when KubernetesExtension gains the LivenessProbe field.
-func (e k8sExtension) LivenessProbe() map[string]any { return nil }
+func (e k8sExtension) LivenessProbe() map[string]any {
+	if e.ext == nil {
+		return nil
+	}
+	return k8sProbeMap(e.ext.LivenessProbe)
+}
 
 // ReadinessProbe returns the readiness probe map, or nil if not set.
-// TODO: map e.ext.ReadinessProbe when KubernetesExtension gains the ReadinessProbe field.
-func (e k8sExtension) ReadinessProbe() map[string]any { return nil }
+func (e k8sExtension) ReadinessProbe() map[string]any {
+	if e.ext == nil {
+		return nil
+	}
+	return k8sProbeMap(e.ext.ReadinessProbe)
+}
+
+// k8sResourceQuantities converts a domain.K8sResources into a Kubernetes
+// resource quantity map ({cpu, memory}), or nil when nothing is set.
+func k8sResourceQuantities(r *domain.K8sResources) map[string]any {
+	if r == nil {
+		return nil
+	}
+	q := map[string]any{}
+	if r.CPU != "" {
+		q["cpu"] = r.CPU
+	}
+	if r.Memory != "" {
+		q["memory"] = r.Memory
+	}
+	if len(q) == 0 {
+		return nil
+	}
+	return q
+}
+
+// k8sProbeMap converts a domain.K8sProbe into a Kubernetes probe map, or nil
+// when the probe has no actionable action (neither httpGet nor exec).
+func k8sProbeMap(p *domain.K8sProbe) map[string]any {
+	if p == nil {
+		return nil
+	}
+	probe := map[string]any{}
+	switch {
+	case p.HTTPGet != nil:
+		httpGet := map[string]any{
+			"path": p.HTTPGet.Path,
+			"port": p.HTTPGet.Port,
+		}
+		if p.HTTPGet.Scheme != "" {
+			httpGet["scheme"] = p.HTTPGet.Scheme
+		}
+		probe["httpGet"] = httpGet
+	case len(p.Exec) > 0:
+		probe["exec"] = map[string]any{"command": p.Exec}
+	default:
+		// No actionable probe action configured.
+		return nil
+	}
+	if p.InitialDelaySeconds != 0 {
+		probe["initialDelaySeconds"] = p.InitialDelaySeconds
+	}
+	if p.PeriodSeconds != 0 {
+		probe["periodSeconds"] = p.PeriodSeconds
+	}
+	if p.TimeoutSeconds != 0 {
+		probe["timeoutSeconds"] = p.TimeoutSeconds
+	}
+	if p.FailureThreshold != 0 {
+		probe["failureThreshold"] = p.FailureThreshold
+	}
+	return probe
+}
 
 // ---------------------------------------------------------------------------
 // Manifest generation
