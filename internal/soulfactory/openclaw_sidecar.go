@@ -242,7 +242,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 		Tags: nostr.TagMap{
 			tagPubkey: []string{s.runtimePubkey},
 			tagSchema: []string{domain.SoulFactoryRuntimeControlSchema},
-			"method":  s.methods,
+			tagMethod: s.methods,
 		},
 	}}
 	sub, err := s.transport.SubscribeAllWithEOSE(ctx, filters)
@@ -307,7 +307,7 @@ func (s *OpenClawSidecar) BuildCapabilityEvent() (*nostr.Event, error) {
 		{"control-schema", domain.SoulFactoryRuntimeControlSchema},
 	}
 	for _, method := range s.methods {
-		tags = append(tags, nostr.Tag{"method", method})
+		tags = append(tags, nostr.Tag{tagMethod, method})
 	}
 	for _, controller := range s.trustedList {
 		tags = append(tags, nostr.Tag{"controller", controller})
@@ -417,7 +417,7 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 	if event.PubKey.Hex() == s.runtimePubkey {
 		return request, controlError("unauthorized_controller", "runtime must not accept self-authored control requests", false)
 	}
-	for _, tag := range []string{tagPubkey, "method", tagEvent, tagSoul, tagAgentID, "controller", "idempotency-key", tagSpecHash, tagSchema} {
+	for _, tag := range []string{tagPubkey, tagMethod, tagEvent, tagSoul, tagAgentID, "controller", tagIdempotencyKey, tagSpecHash, tagSchema} {
 		if tagValue(event.Tags, tag) == "" {
 			return request, controlError("missing_required_tag", "missing required tag: "+tag, false)
 		}
@@ -437,7 +437,7 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 	if _, ok := s.trusted[event.PubKey.Hex()]; !ok {
 		return request, controlError("unauthorized_controller", "controller pubkey is not trusted by this OpenClaw sidecar", false)
 	}
-	if !stringInSlice(envelope.Method, s.methods) || tagValue(event.Tags, "method") != envelope.Method {
+	if !stringInSlice(envelope.Method, s.methods) || tagValue(event.Tags, tagMethod) != envelope.Method {
 		return request, controlError("unsupported_method", "SoulFactory method is not supported by this OpenClaw sidecar", false)
 	}
 	if tagValue(event.Tags, tagEvent) != envelope.Operator.RequestEvent || envelope.Operator.RequestEvent == "" || envelope.Operator.Pubkey == "" {
@@ -449,7 +449,7 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 	if tagValue(event.Tags, tagAgentID) != envelope.Target.AgentID || envelope.Target.AgentID == "" {
 		return request, controlError("invalid_schema", "agent-id tag/content mismatch", false)
 	}
-	if tagValue(event.Tags, "idempotency-key") != envelope.IdempotencyKey || envelope.IdempotencyKey == "" {
+	if tagValue(event.Tags, tagIdempotencyKey) != envelope.IdempotencyKey || envelope.IdempotencyKey == "" {
 		return request, controlError("invalid_schema", "idempotency-key tag/content mismatch", false)
 	}
 	if tagValue(event.Tags, tagSpecHash) != envelope.Soul.SpecHash || envelope.Soul.SpecHash == "" {
@@ -491,8 +491,8 @@ func (s *OpenClawSidecar) publishOutcome(ctx context.Context, requestEvent *nost
 	tags := nostr.Tags{
 		{tagPubkey, envelope.Controller.Pubkey},
 		{tagEvent, requestEvent.ID.Hex()},
-		{"method", envelope.Method},
-		{"idempotency-key", envelope.IdempotencyKey},
+		{tagMethod, envelope.Method},
+		{tagIdempotencyKey, envelope.IdempotencyKey},
 		{tagAgentID, envelope.Target.AgentID},
 		{tagSoul, envelope.Soul.ID},
 		{tagSpecHash, envelope.Soul.SpecHash},

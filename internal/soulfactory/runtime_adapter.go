@@ -300,7 +300,7 @@ func (a *runtimeControlAdapter) Execute(ctx context.Context, req RuntimeAdapterR
 		Tags: nostr.TagMap{
 			tagEvent:          []string{event.ID.Hex()},
 			tagPubkey:         []string{a.controllerPubkey},
-			"idempotency-key": []string{req.IdempotencyKey},
+			tagIdempotencyKey: []string{req.IdempotencyKey},
 		},
 	}}
 	sub, err := transport.SubscribeAllWithEOSE(ctx, filters)
@@ -505,7 +505,7 @@ func ParseRuntimeCapabilityEvent(event *nostr.Event) (RuntimeCapability, bool) {
 			continue
 		}
 		switch tag[0] {
-		case "method":
+		case tagMethod:
 			capability.Methods = append(capability.Methods, tag[1])
 		case "controller":
 			capability.ControllerPubkeys = append(capability.ControllerPubkeys, tag[1])
@@ -651,10 +651,10 @@ func parseRuntimeControlResultEvent(event *nostr.Event) (*RuntimeControlResultEn
 		result.Schema = tagValue(event.Tags, tagSchema)
 	}
 	if result.Method == "" {
-		result.Method = tagValue(event.Tags, "method")
+		result.Method = tagValue(event.Tags, tagMethod)
 	}
 	if result.IdempotencyKey == "" {
-		result.IdempotencyKey = tagValue(event.Tags, "idempotency-key")
+		result.IdempotencyKey = tagValue(event.Tags, tagIdempotencyKey)
 	}
 	if result.RequestEvent == "" {
 		result.RequestEvent = tagValue(event.Tags, tagEvent)

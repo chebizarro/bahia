@@ -89,7 +89,7 @@ func (r *AssistantSessionRecoveryRunner) queryRecentSessions(ctx context.Context
 	if err != nil {
 		return nil, fmt.Errorf("decode service pubkey: %w", err)
 	}
-	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{serviceAuthor}, Tags: nostr.TagMap{"schema": []string{domain.AssistantSessionSchema}}, Limit: r.limit}})
+	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{serviceAuthor}, Tags: nostr.TagMap{domain.AssistantSessionTagSchema: []string{domain.AssistantSessionSchema}}, Limit: r.limit}})
 	if err != nil {
 		return nil, err
 	}

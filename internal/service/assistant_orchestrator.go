@@ -1006,7 +1006,7 @@ func (o *AssistantOrchestrator) publishSession(ctx context.Context, session *dom
 	}
 	tags := nostr.Tags{
 		{"d", domain.AssistantSessionSchema + ":" + session.SessionID},
-		{"schema", domain.AssistantSessionSchema},
+		{domain.AssistantSessionTagSchema, domain.AssistantSessionSchema},
 		{"domain", "assistant"},
 		{"entity", "session"},
 		{"session", session.SessionID},

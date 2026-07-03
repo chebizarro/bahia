@@ -35,7 +35,15 @@ const (
 	KindJobRequest   = 5100  // Job request (subprocess)
 	KindJobStatus    = 30100 // Parameterized replaceable status update
 	KindJobResult    = 5101  // Final job result
-	KindJobCancelReq = 5102  // Cancellation request
+	KindJobCancelReq = 5102 // Cancellation request
+)
+
+// Nostr tag keys shared by job producers (request/cancel) and consumers
+// (status/result subscription filters + validation) so the two cannot drift.
+const (
+	tagJobEvent  = "e" // references the originating job-request event id
+	tagJobPubkey = "p" // client or worker pubkey
+	tagJobDedup  = "d" // parameterized-replaceable status identifier
 )
 
 // Job status values returned in Kind 30100 status tags.
@@ -191,7 +199,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 
 	// Target worker.
 	if workerPubkey != "" {
-		tags = append(tags, nostr.Tag{"p", workerPubkey})
+		tags = append(tags, nostr.Tag{tagJobPubkey, workerPubkey})
 	}
 
 	// Payment token (required by spec, optional in Bahia until Cashu is wired).
@@ -388,17 +396,17 @@ func (c *Client) jobStatusFilters(jobEventID string, expectedWorkerPubkey string
 	statusFilter := nostr.Filter{
 		Kinds: []nostr.Kind{KindJobStatus},
 		Tags: nostr.TagMap{
-			"d": {jobEventID},
-			"e": {jobEventID},
+			tagJobDedup: {jobEventID},
+			tagJobEvent: {jobEventID},
 		},
 	}
 	resultFilter := nostr.Filter{
 		Kinds: []nostr.Kind{KindJobResult},
-		Tags:  nostr.TagMap{"e": {jobEventID}},
+		Tags:  nostr.TagMap{tagJobEvent: {jobEventID}},
 	}
 	if c.clientPubkey != "" {
-		statusFilter.Tags["p"] = []string{c.clientPubkey}
-		resultFilter.Tags["p"] = []string{c.clientPubkey}
+		statusFilter.Tags[tagJobPubkey] = []string{c.clientPubkey}
+		resultFilter.Tags[tagJobPubkey] = []string{c.clientPubkey}
 	}
 	if expectedWorkerPubkey != "" {
 		if pubkey, err := nostrutil.PubKeyFromHex(expectedWorkerPubkey); err == nil {
@@ -466,19 +474,19 @@ func (c *Client) validateJobEvent(ev *nostr.Event, jobEventID string, expectedWo
 	if expectedWorkerPubkey != "" && nostrutil.EventPubKeyHex(ev) != expectedWorkerPubkey {
 		return fmt.Errorf("worker pubkey mismatch")
 	}
-	if c.clientPubkey != "" && getTagValue(ev.Tags, "p") != c.clientPubkey {
+	if c.clientPubkey != "" && getTagValue(ev.Tags, tagJobPubkey) != c.clientPubkey {
 		return fmt.Errorf("client pubkey tag mismatch")
 	}
 
 	switch int(ev.Kind) {
 	case KindJobStatus:
-		if err := requireTagValue(ev.Tags, "d", jobEventID); err != nil {
+		if err := requireTagValue(ev.Tags, tagJobDedup, jobEventID); err != nil {
 			return err
 		}
-		if err := requireTagValue(ev.Tags, "e", jobEventID); err != nil {
+		if err := requireTagValue(ev.Tags, tagJobEvent, jobEventID); err != nil {
 			return err
 		}
-		if err := requireTagPresent(ev.Tags, "p"); err != nil {
+		if err := requireTagPresent(ev.Tags, tagJobPubkey); err != nil {
 			return err
 		}
 		status := getTagValue(ev.Tags, "status")
@@ -486,10 +494,10 @@ func (c *Client) validateJobEvent(ev *nostr.Event, jobEventID string, expectedWo
 			return fmt.Errorf("invalid status tag %q", status)
 		}
 	case KindJobResult:
-		if err := requireTagValue(ev.Tags, "e", jobEventID); err != nil {
+		if err := requireTagValue(ev.Tags, tagJobEvent, jobEventID); err != nil {
 			return err
 		}
-		for _, key := range []string{"p", "success", "exit_code", "duration"} {
+		for _, key := range []string{tagJobPubkey, "success", "exit_code", "duration"} {
 			if err := requireTagPresent(ev.Tags, key); err != nil {
 				return err
 			}
@@ -544,10 +552,10 @@ func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey 
 	}
 
 	tags := nostr.Tags{
-		{"e", jobEventID},
+		{tagJobEvent, jobEventID},
 	}
 	if workerPubkey != "" {
-		tags = append(tags, nostr.Tag{"p", workerPubkey})
+		tags = append(tags, nostr.Tag{tagJobPubkey, workerPubkey})
 	}
 
 	ev := nostr.Event{

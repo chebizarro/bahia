@@ -8,6 +8,46 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+// TestTagEnvelope_RuntimeControlRequest_MethodFilterRoundTrip proves the
+// runtime-control request envelope built by BuildRuntimeControlRequestEvent
+// (producer) is matched by the OpenClaw sidecar subscription filter, which
+// selects on tagPubkey + tagSchema + tagMethod. Guards drift of the
+// method/pubkey/schema filter keys now shared via constants (bahia-s7o9).
+func TestTagEnvelope_RuntimeControlRequest_MethodFilterRoundTrip(t *testing.T) {
+	const runtimePubkey = "runtime-pubkey-hex"
+	env := RuntimeControlEnvelope{
+		Method: RuntimeMethodProvision,
+		Schema: domain.SoulFactoryRuntimeControlSchema,
+		Target: RuntimeTargetRef{RuntimePubkey: runtimePubkey, AgentID: "scout"},
+	}
+	event, err := BuildRuntimeControlRequestEvent(env)
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlRequestEvent: %v", err)
+	}
+
+	// Consumer filter: mirrors OpenClaw sidecar subscription (pubkey+schema+method).
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
+		Tags: nostr.TagMap{
+			tagPubkey: []string{runtimePubkey},
+			tagSchema: []string{domain.SoulFactoryRuntimeControlSchema},
+			tagMethod: []string{RuntimeMethodProvision},
+		},
+	}
+	if !filter.Matches(*event) {
+		t.Fatalf("runtime-control request not matched by sidecar filter; tags=%v", event.Tags)
+	}
+
+	// Drift guard: a filter requiring a different method must NOT match.
+	wrong := nostr.Filter{
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
+		Tags:  nostr.TagMap{tagMethod: []string{"some/other-method"}},
+	}
+	if wrong.Matches(*event) {
+		t.Fatal("filter with mismatched method tag unexpectedly matched")
+	}
+}
+
 // Exact-envelope round-trip tests (bahia-vkeh).
 //
 // These guard against producer/consumer tag drift: an event is built by the

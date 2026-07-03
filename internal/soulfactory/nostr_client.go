@@ -223,7 +223,7 @@ func (c *NostrClient) PublishProvisionRequest(ctx context.Context, req domain.Pr
 		{tagName, name},
 		{tagTier, string(tier)},
 		{"output", "application/json"},
-		{"method", RuntimeMethodProvision},
+		{tagMethod, RuntimeMethodProvision},
 		{tagRequestKind, fmt.Sprint(domain.KindProvisioningRequest)},
 	}
 	if templateRef != "" {

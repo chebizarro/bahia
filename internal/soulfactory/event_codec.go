@@ -29,6 +29,8 @@ const (
 	tagDraft              = "draft"
 	tagDraftEvent         = "draft-event"
 	tagEvent              = "e"
+	tagIdempotencyKey     = "idempotency-key"
+	tagMethod             = "method"
 	tagName               = "name"
 	tagNIP05              = "nip05"
 	tagNpub               = "npub"
@@ -916,12 +918,12 @@ func BuildRuntimeControlRequestEvent(envelope RuntimeControlEnvelope) (*nostr.Ev
 	}
 	tags := nostr.Tags{
 		{tagPubkey, envelope.Target.RuntimePubkey},
-		{"method", envelope.Method},
+		{tagMethod, envelope.Method},
 		{tagEvent, envelope.Operator.RequestEvent},
 		{tagSoul, envelope.Soul.ID},
 		{tagAgentID, envelope.Target.AgentID},
 		{"controller", envelope.Controller.Pubkey},
-		{"idempotency-key", envelope.IdempotencyKey},
+		{tagIdempotencyKey, envelope.IdempotencyKey},
 		{tagSpecHash, envelope.Soul.SpecHash},
 		{tagSchema, envelope.Schema},
 	}
@@ -946,10 +948,10 @@ func ParseRuntimeControlRequestEvent(event *nostr.Event) (*RuntimeControlEnvelop
 		envelope.Schema = tagValue(event.Tags, tagSchema)
 	}
 	if envelope.Method == "" {
-		envelope.Method = tagValue(event.Tags, "method")
+		envelope.Method = tagValue(event.Tags, tagMethod)
 	}
 	if envelope.IdempotencyKey == "" {
-		envelope.IdempotencyKey = tagValue(event.Tags, "idempotency-key")
+		envelope.IdempotencyKey = tagValue(event.Tags, tagIdempotencyKey)
 	}
 	if envelope.Operator.RequestEvent == "" {
 		envelope.Operator.RequestEvent = tagValue(event.Tags, tagEvent)

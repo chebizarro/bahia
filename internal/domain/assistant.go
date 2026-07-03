@@ -29,6 +29,12 @@ const (
 
 	AssistantTranscriptDTagPrefix = AssistantTranscriptSchema + ":"
 
+	// AssistantSessionTagSchema is the tag key that scopes assistant
+	// session-state (kind 30900) events and their recovery subscription filter.
+	// Shared by the orchestrator producer and the session-recovery consumer so
+	// the two cannot drift.
+	AssistantSessionTagSchema = "schema"
+
 	AssistantTranscriptTagDomain      = "domain"
 	AssistantTranscriptTagSchema      = "schema"
 	AssistantTranscriptTagSession     = "session"

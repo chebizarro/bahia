@@ -18,6 +18,12 @@ import (
 )
 
 const (
+	// Standard Nostr tag keys shared by encrypted/ContextVM response producers
+	// and the recipient-scoped subscription filter + routing gates, so the
+	// producer envelope and the consumer filter cannot drift.
+	tagReplyEvent      = "e" // references the originating request event id
+	tagRecipientPubkey = "p" // recipient (service) pubkey the reply is addressed to
+
 	EncryptedRequestRoutingTag  = "encrypted"
 	EncryptedRequestWireVersion = "bahia-encrypted-v1"
 	ContextVMRoutingTag         = "contextvm"
@@ -236,8 +242,8 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 		Kind:      KindEncryptedResult,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
-			{"e", requestEvent.ID.Hex(), "", "reply"},
-			{"p", requestEvent.PubKey.Hex()},
+			{tagReplyEvent, requestEvent.ID.Hex(), "", "reply"},
+			{tagRecipientPubkey, requestEvent.PubKey.Hex()},
 			{EncryptedRequestRoutingTag, EncryptedRequestWireVersion},
 			{"status", status},
 		},
@@ -378,7 +384,7 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	since := nostr.Timestamp(time.Now().Add(-encryptedRequestReplayLookback).Unix())
 	filter := nostr.Filter{Kinds: []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: since}
 	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
-		filter.Tags = nostr.TagMap{"p": []string{servicePubkey}}
+		filter.Tags = nostr.TagMap{tagRecipientPubkey: []string{servicePubkey}}
 	}
 	t.logger.Info("subscribing to ContextVM encrypted request events",
 		zap.Any("kinds", filter.Kinds),
@@ -616,7 +622,7 @@ func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context,
 		t.logger.Error("marshal ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 		return
 	}
-	responseEvent := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", requestID, "", "reply"}, {"p", requestPubkey}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
+	responseEvent := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, requestID, "", "reply"}, {tagRecipientPubkey, requestPubkey}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
 	if err := SignGoNostrEvent(ctx, t.responder.signer, responseEvent); err != nil {
 		t.logger.Error("sign ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 		return
@@ -659,7 +665,7 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(_ context.Context, out
 	if outer != nil && outer.Kind == KindContextVMEphemeralWrap {
 		kind = KindContextVMEphemeralWrap
 	}
-	wrapped := &nostr.Event{Kind: nostr.Kind(kind), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", outer.ID.Hex(), "", "reply"}, {"p", request.PubKey.Hex()}}, Content: ciphertext}
+	wrapped := &nostr.Event{Kind: nostr.Kind(kind), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, outer.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}}, Content: ciphertext}
 	if err := wrapped.Sign(wrapperPrivateKey); err != nil {
 		return nil, fmt.Errorf("sign ContextVM gift wrap response: %w", err)
 	}
@@ -690,7 +696,7 @@ func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) 
 		return false
 	}
 	servicePubkey := t.responder.ServicePubkey()
-	return servicePubkey == "" || tagContains(event.Tags, "p", servicePubkey)
+	return servicePubkey == "" || tagContains(event.Tags, tagRecipientPubkey, servicePubkey)
 }
 
 func (t *EncryptedRequestTransport) matchesContextVMWrapperRouting(event *nostr.Event) bool {
@@ -698,7 +704,7 @@ func (t *EncryptedRequestTransport) matchesContextVMWrapperRouting(event *nostr.
 		return false
 	}
 	servicePubkey := t.responder.ServicePubkey()
-	return servicePubkey != "" && tagContains(event.Tags, "p", servicePubkey)
+	return servicePubkey != "" && tagContains(event.Tags, tagRecipientPubkey, servicePubkey)
 }
 
 func (t *EncryptedRequestTransport) validContextVMWrapperPubkey(outer, inner *nostr.Event) bool {
@@ -742,7 +748,7 @@ func (t *EncryptedRequestTransport) matchesRoutingTags(event *nostr.Event) bool 
 		return false
 	}
 	servicePubkey := t.responder.ServicePubkey()
-	return servicePubkey != "" && tagContains(event.Tags, "p", servicePubkey)
+	return servicePubkey != "" && tagContains(event.Tags, tagRecipientPubkey, servicePubkey)
 }
 
 func tagContains(tags nostr.Tags, name, value string) bool {
