@@ -446,7 +446,7 @@ func (l *AssistantAgentLoop) continueLoop(ctx context.Context, run assistantAgen
 					continue
 				}
 			}
-			completed, err := l.completeLoop(ctx, run.session, resp.StopReason, run.observations)
+			completed, err := l.completeLoop(ctx, run.session, resp.StopReason, run.observations, assistantAgentBlocksText(resp.Content))
 			return completed, err
 		}
 
@@ -663,7 +663,7 @@ func (l *AssistantAgentLoop) recordObservationAndMaybeBlock(ctx context.Context,
 	return nil
 }
 
-func (l *AssistantAgentLoop) completeLoop(ctx context.Context, session *domain.AssistantSession, stopReason llm.AgentStopReason, observations []*domain.AssistantToolObservation) (*AssistantAgentLoopResult, error) {
+func (l *AssistantAgentLoop) completeLoop(ctx context.Context, session *domain.AssistantSession, stopReason llm.AgentStopReason, observations []*domain.AssistantToolObservation, answer string) (*AssistantAgentLoopResult, error) {
 	metadata := assistantAgentLoopMetadata(session)
 	metadata.State = domain.AssistantAgentLoopStateCompleted
 	metadata.UpdatedAt = l.now().UTC()
@@ -672,7 +672,15 @@ func (l *AssistantAgentLoop) completeLoop(ctx context.Context, session *domain.A
 	if err := l.persistSession(ctx, session); err != nil {
 		return nil, err
 	}
-	_ = l.publishStatus(ctx, session.SessionID, "completed", map[string]any{"phase": "loop_completed", "run_id": metadata.RunID, "iteration": metadata.Iteration, "stop_reason": string(stopReason)})
+	completionContent := map[string]any{"phase": "loop_completed", "run_id": metadata.RunID, "iteration": metadata.Iteration, "stop_reason": string(stopReason)}
+	// Surface the model's final answer to the operator. The frontend renders a
+	// status item's summary/message, so a completed turn shows the reply instead
+	// of an empty "loop_completed" event.
+	if answer = strings.TrimSpace(answer); answer != "" {
+		completionContent["summary"] = answer
+		completionContent["message"] = answer
+	}
+	_ = l.publishStatus(ctx, session.SessionID, "completed", completionContent)
 	if l.hooks != nil {
 		_ = l.hooks.Run(ctx, AssistantHookEventSessionEnd, AssistantHookInput{SessionID: session.SessionID})
 	}

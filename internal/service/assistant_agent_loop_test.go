@@ -18,7 +18,7 @@ func TestAssistantAgentLoopReadToolContinuesToCompletion(t *testing.T) {
 		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-read", Name: "bahia_list_services"}}, StopReason: llm.AgentStopReasonToolCalls},
 		{Content: textBlocks("api is running"), StopReason: llm.AgentStopReasonEndTurn},
 	}}
-	loop, transcript, _ := newAssistantLoopForTest(t, model, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), domain.AssistantPermissionModeReview, nil, config.AssistantAgenticConfig{})
+	loop, transcript, persister := newAssistantLoopForTest(t, model, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), domain.AssistantPermissionModeReview, nil, config.AssistantAgenticConfig{})
 	session := assistantRuntimeSession("session-read")
 
 	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-read", Prompt: "list services", OperatorPubkey: "operator"})
@@ -37,6 +37,15 @@ func TestAssistantAgentLoopReadToolContinuesToCompletion(t *testing.T) {
 	}
 	if got := transcript.roles("session-read"); strings.Join(got, ",") != "user,assistant,tool,assistant" {
 		t.Fatalf("transcript roles = %v", got)
+	}
+	foundAnswer := false
+	for _, st := range persister.statuses {
+		if st["phase"] == "loop_completed" && st["summary"] == "api is running" {
+			foundAnswer = true
+		}
+	}
+	if !foundAnswer {
+		t.Fatalf("loop_completed status missing final answer summary: %#v", persister.statuses)
 	}
 }
 
@@ -348,3 +357,31 @@ func cloneAssistantLoopMessages(in []domain.AssistantAgentMessage) []domain.Assi
 }
 
 var _ llm.AgentModelClient = (*assistantLoopModel)(nil)
+
+func TestAssistantAgentLoopCompletionSurfacesFinalAnswer(t *testing.T) {
+	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
+		{Content: textBlocks("here is your answer"), StopReason: llm.AgentStopReasonEndTurn},
+	}}
+	loop, _, persister := newAssistantLoopForTest(t, model, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(), domain.AssistantPermissionModeReview, nil, config.AssistantAgenticConfig{})
+	session := assistantRuntimeSession("session-answer")
+
+	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-answer", Prompt: "hello", OperatorPubkey: "operator"})
+	if err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	if !res.Completed {
+		t.Fatalf("expected completed result: %#v", res)
+	}
+	var completed map[string]any
+	for _, st := range persister.statuses {
+		if st["phase"] == "loop_completed" {
+			completed = st
+		}
+	}
+	if completed == nil {
+		t.Fatalf("no loop_completed status published; statuses=%#v", persister.statuses)
+	}
+	if completed["summary"] != "here is your answer" || completed["message"] != "here is your answer" {
+		t.Fatalf("loop_completed status missing final answer: %#v", completed)
+	}
+}
