@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func TestStartBackgroundRunnersRespectsActiveTier(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startBackgroundRunners(ctx, manager, policy)
+	startBackgroundRunners(ctx, manager, policy, nil)
 
 	requireRunnerStarted(t, tier0)
 	requireRunnerStarted(t, tier1)
@@ -155,6 +156,78 @@ func TestStartBackgroundRunnersRespectsActiveTier(t *testing.T) {
 
 	cancel()
 	manager.Wait()
+}
+
+func TestNewRegistersDatabaseRecoveryRunnerWhenHigherTierStartupLosesDB(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	cfg := startupTestConfig(ModeFull)
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer app.Logger.Sync()
+	defer closeRelayPools(app.relayPools...)
+
+	require.True(t, appHasRunner(app, "database-recovery"))
+}
+
+func TestNewSkipsDatabaseRecoveryRunnerInEmergencyMode(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	cfg := startupTestConfig(ModeEmergency)
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer app.Logger.Sync()
+	defer closeRelayPools(app.relayPools...)
+
+	require.False(t, appHasRunner(app, "database-recovery"))
+}
+
+func TestStartBackgroundRunnersReportsRestartRequest(t *testing.T) {
+	manager := NewBackgroundManager(zap.NewNop())
+	manager.RegisterWithOptions(&restartRequestRunner{}, RunnerTier(Tier1), RunnerRequired(false))
+
+	policy := NewModePolicy(ModeEmergency)
+	errCh := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startBackgroundRunners(ctx, manager, policy, errCh)
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, errBackgroundRestartRequired)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "restart request was not reported")
+	}
+	manager.Wait()
+}
+
+func TestDatabaseRecoveryRunnerRequestsRestartAfterRecovery(t *testing.T) {
+	t.Helper()
+
+	var attempts atomic.Int32
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	origConnect := dbConnect
+	origMigrate := dbMigrate
+	dbConnect = func(ctx context.Context, cfg config.DBConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
+		if attempts.Add(1) == 1 {
+			return nil, errors.New("database unavailable")
+		}
+		return nil, nil
+	}
+	dbMigrate = func(context.Context, *pgxpool.Pool, *zap.Logger) error { return nil }
+	defer func() {
+		dbConnect = origConnect
+		dbMigrate = origMigrate
+		restoreDBHooks()
+	}()
+
+	runner := newDatabaseRecoveryRunner(config.DBConfig{}, 5*time.Millisecond, zap.NewNop())
+	err := runner.Run(context.Background())
+	require.ErrorIs(t, err, errBackgroundRestartRequired)
+	require.GreaterOrEqual(t, attempts.Load(), int32(2))
 }
 
 func stubDBHooks(t *testing.T, connectErr error, migrateErr error) func() {
@@ -331,4 +404,11 @@ func requireRunnerStarted(t *testing.T, runner *gatedRunner) {
 	case <-time.After(2 * time.Second):
 		require.Failf(t, "runner did not start", "%s did not start", runner.name)
 	}
+}
+
+type restartRequestRunner struct{}
+
+func (r *restartRequestRunner) Name() string { return "restart-request" }
+func (r *restartRequestRunner) Run(context.Context) error {
+	return errBackgroundRestartRequired
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -383,6 +384,9 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
+	if !dbAvailable && policy.RequestedTier > Tier1 {
+		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerTier(Tier1), RunnerRequired(false))
+	}
 
 	var soulFactoryRuntime *soulFactoryRuntime
 	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, logger)
@@ -1769,7 +1773,7 @@ func cleanupJobStatusFromLoom(status *loom.JobStatus) *service.CleanupJobStatus 
 	return &service.CleanupJobStatus{JobID: status.JobID, Status: status.Status, Success: status.Success, ExitCode: status.ExitCode, Duration: status.Duration, WorkerPubkey: status.WorkerPubkey, StdoutURL: status.StdoutURL, StderrURL: status.StderrURL, ChangeToken: status.ChangeToken, Error: status.Error, LogOutput: status.LogOutput}
 }
 
-func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, policy *ModePolicy) {
+func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, policy *ModePolicy, fatalErrCh chan<- error) {
 	if manager == nil {
 		return
 	}
@@ -1795,6 +1799,12 @@ func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, pol
 			err := runner.Run(ctx)
 			manager.markRunnerStopped(runner.Name(), err, ctx.Err() != nil)
 			if err != nil && ctx.Err() == nil {
+				if fatalErrCh != nil && errors.Is(err, errBackgroundRestartRequired) {
+					select {
+					case fatalErrCh <- err:
+					default:
+					}
+				}
 				manager.logger.Error("background runner exited with error", zap.String("name", runner.Name()), zap.Error(err))
 			} else {
 				manager.logger.Info("background runner stopped", zap.String("name", runner.Name()))
@@ -1815,13 +1825,16 @@ func (a *App) Run() error {
 			errCh <- err
 		}
 	}()
+	runnerErrCh := make(chan error, 1)
 
 	// Start allowed background runners after HTTP is accepting connections.
-	startBackgroundRunners(ctx, a.Background, a.ModePolicy)
+	startBackgroundRunners(ctx, a.Background, a.ModePolicy, runnerErrCh)
 
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("server error: %w", err)
+	case err := <-runnerErrCh:
+		return err
 	case <-ctx.Done():
 		a.Logger.Info("shutdown signal received")
 	}
