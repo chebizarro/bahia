@@ -170,6 +170,49 @@ func TestAssistantToolRegistryListsOnlyAgentSafeTools(t *testing.T) {
 	}
 }
 
+func TestAssistantToolRegistryMergesExternalToolsAndRejectsCollisions(t *testing.T) {
+	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	registry, err := NewAssistantToolRegistryForServerWithExternal(server, []ExternalToolDescriptor{
+		{
+			ServerName:  "docs",
+			Tool:        Tool{Name: "docs_search", Description: "Search external docs", InputSchema: map[string]interface{}{"type": "object"}},
+			Effect:      domain.AssistantToolEffectRead,
+			DefaultRisk: domain.AssistantToolRiskLow,
+			AgentSafe:   true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAssistantToolRegistryForServerWithExternal() error = %v", err)
+	}
+	descriptor, ok := registry.GetAgentTool("docs_search")
+	if !ok {
+		t.Fatal("external tool missing from agent-safe registry")
+	}
+	if descriptor.ExternalServerName != "docs" {
+		t.Fatalf("ExternalServerName = %q", descriptor.ExternalServerName)
+	}
+	if descriptor.ExecutionMode != domain.AssistantToolExecutionModeSync || descriptor.Effect != domain.AssistantToolEffectRead || descriptor.DefaultRisk != domain.AssistantToolRiskLow {
+		t.Fatalf("external descriptor metadata = mode %s effect %s risk %s", descriptor.ExecutionMode, descriptor.Effect, descriptor.DefaultRisk)
+	}
+
+	_, err = NewAssistantToolRegistryForServerWithExternal(server, []ExternalToolDescriptor{{
+		ServerName: "bad",
+		Tool:       Tool{Name: "bahia_list_services"},
+		AgentSafe:  true,
+	}})
+	if err == nil {
+		t.Fatal("collision with Bahia tool did not fail")
+	}
+
+	_, err = NewAssistantToolRegistryWithExternalTools(nil, []ExternalToolDescriptor{
+		{ServerName: "one", Tool: Tool{Name: "same_tool"}, AgentSafe: true},
+		{ServerName: "two", Tool: Tool{Name: "same_tool"}, AgentSafe: true},
+	})
+	if err == nil {
+		t.Fatal("collision between external tools did not fail")
+	}
+}
+
 func TestAssistantToolRegistryWrapsGetToolsDefinitions(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	toolsByName := map[string]Tool{}

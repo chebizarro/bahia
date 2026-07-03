@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-6hic.11",
+  "title": "Assistant generic external MCP client",
+  "status": "implemented",
+  "intent": "Allow the agentic Bahia Assistant to consume explicitly enabled external MCP servers via JSON-RPC-over-HTTP while keeping external tools disabled by default and permission gated.",
+  "scope": [
+    "internal/adapters/mcpclient generic MCP initialize/tools/list/tools/call client",
+    "internal/mcp assistant registry external descriptor merge path",
+    "internal/adapters/agentmemory migration to generic MCP tools/call client",
+    "assistant.mcp.external_servers config block and validation",
+    "assistant app wiring for discovery, permission rules, and prefixed call dispatch"
+  ],
+  "out_of_scope": [
+    "assistant permission engine implementation changes",
+    "Anthropic adapter",
+    "web UI changes"
+  ]
+}

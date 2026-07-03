@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -9,13 +11,28 @@ import (
 // ToolDescriptor wraps an existing public MCP Tool with the assistant metadata
 // needed by discovery, permission evaluation, and tool-runtime routing.
 type ToolDescriptor struct {
-	Tool             Tool                              `json:"tool"`
-	ExecutionMode    domain.AssistantToolExecutionMode `json:"execution_mode"`
-	Effect           domain.AssistantToolEffect        `json:"effect"`
-	DefaultRisk      domain.AssistantToolRisk          `json:"default_risk"`
-	ResourceTypes    []string                          `json:"resource_types,omitempty"`
-	ResourceIDFields []string                          `json:"resource_id_fields,omitempty"`
-	AgentSafe        bool                              `json:"agent_safe"`
+	Tool               Tool                              `json:"tool"`
+	ExecutionMode      domain.AssistantToolExecutionMode `json:"execution_mode"`
+	Effect             domain.AssistantToolEffect        `json:"effect"`
+	DefaultRisk        domain.AssistantToolRisk          `json:"default_risk"`
+	ResourceTypes      []string                          `json:"resource_types,omitempty"`
+	ResourceIDFields   []string                          `json:"resource_id_fields,omitempty"`
+	AgentSafe          bool                              `json:"agent_safe"`
+	ExternalServerName string                            `json:"external_server_name,omitempty"`
+}
+
+// ExternalToolDescriptor describes one tool discovered from an explicitly
+// enabled external MCP server. External tools are sync MCP tools from the
+// assistant runtime's point of view; permission rules decide whether the model
+// can execute them.
+type ExternalToolDescriptor struct {
+	ServerName       string
+	Tool             Tool
+	Effect           domain.AssistantToolEffect
+	DefaultRisk      domain.AssistantToolRisk
+	ResourceTypes    []string
+	ResourceIDFields []string
+	AgentSafe        bool
 }
 
 // Name returns the wrapped MCP tool name.
@@ -61,6 +78,17 @@ func NewAssistantToolRegistry(tools []Tool) AssistantToolRegistry {
 	return registry
 }
 
+// NewAssistantToolRegistryWithExternalTools builds a registry from Bahia MCP
+// tools and merges explicitly configured external MCP descriptors. It rejects
+// name collisions so external servers cannot shadow Bahia tools or each other.
+func NewAssistantToolRegistryWithExternalTools(tools []Tool, external []ExternalToolDescriptor) (AssistantToolRegistry, error) {
+	registry := NewAssistantToolRegistry(tools)
+	if err := registry.MergeExternalTools(external); err != nil {
+		return AssistantToolRegistry{}, err
+	}
+	return registry, nil
+}
+
 // NewAssistantToolRegistryForServer constructs a discovery registry from the
 // server's current public MCP tool definitions.
 func NewAssistantToolRegistryForServer(server *Server) AssistantToolRegistry {
@@ -70,10 +98,67 @@ func NewAssistantToolRegistryForServer(server *Server) AssistantToolRegistry {
 	return NewAssistantToolRegistry(server.GetTools())
 }
 
+// NewAssistantToolRegistryForServerWithExternal constructs a server registry and
+// merges explicitly configured external MCP descriptors.
+func NewAssistantToolRegistryForServerWithExternal(server *Server, external []ExternalToolDescriptor) (AssistantToolRegistry, error) {
+	if server == nil {
+		return NewAssistantToolRegistryWithExternalTools(nil, external)
+	}
+	return NewAssistantToolRegistryWithExternalTools(server.GetTools(), external)
+}
+
 // AssistantToolRegistry constructs the server-scoped assistant discovery
 // registry without changing the public MCP GetTools/CallTool surface.
 func (s *Server) AssistantToolRegistry() AssistantToolRegistry {
 	return NewAssistantToolRegistryForServer(s)
+}
+
+// MergeExternalTools adds external MCP descriptors to the assistant discovery
+// surface. External MCP is opt-in at configuration time; this method only merges
+// descriptors passed by the application wiring.
+func (r *AssistantToolRegistry) MergeExternalTools(external []ExternalToolDescriptor) error {
+	if len(external) == 0 {
+		return nil
+	}
+	if r.descriptors == nil {
+		r.descriptors = make(map[string]ToolDescriptor)
+	}
+	seenInBatch := map[string]struct{}{}
+	for _, ext := range external {
+		serverName := strings.TrimSpace(ext.ServerName)
+		tool := ext.Tool
+		tool.Name = strings.TrimSpace(tool.Name)
+		tool.Description = strings.TrimSpace(tool.Description)
+		if serverName == "" {
+			return fmt.Errorf("external MCP tool %q is missing server name", tool.Name)
+		}
+		if tool.Name == "" {
+			return fmt.Errorf("external MCP server %s returned a tool with an empty name", serverName)
+		}
+		if _, ok := r.descriptors[tool.Name]; ok {
+			return fmt.Errorf("external MCP tool %q from server %s collides with an existing assistant tool", tool.Name, serverName)
+		}
+		if _, ok := seenInBatch[tool.Name]; ok {
+			return fmt.Errorf("external MCP tool %q is registered by more than one external server", tool.Name)
+		}
+		seenInBatch[tool.Name] = struct{}{}
+		if tool.InputSchema == nil {
+			tool.InputSchema = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+		}
+		descriptor := ToolDescriptor{
+			Tool:               tool,
+			ExecutionMode:      domain.AssistantToolExecutionModeSync,
+			Effect:             normalizeExternalToolEffect(ext.Effect),
+			DefaultRisk:        normalizeExternalToolRisk(ext.DefaultRisk),
+			ResourceTypes:      cloneStringSlice(ext.ResourceTypes),
+			ResourceIDFields:   cloneStringSlice(ext.ResourceIDFields),
+			AgentSafe:          ext.AgentSafe,
+			ExternalServerName: serverName,
+		}
+		r.descriptors[tool.Name] = descriptor
+		r.order = append(r.order, tool.Name)
+	}
+	return nil
 }
 
 // All returns every descriptor known to the assistant registry, including
@@ -220,4 +305,30 @@ func cloneStringSlice(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+func normalizeExternalToolEffect(effect domain.AssistantToolEffect) domain.AssistantToolEffect {
+	switch domain.AssistantToolEffect(strings.ToLower(strings.TrimSpace(string(effect)))) {
+	case domain.AssistantToolEffectRead:
+		return domain.AssistantToolEffectRead
+	case domain.AssistantToolEffectMutation:
+		return domain.AssistantToolEffectMutation
+	default:
+		return domain.AssistantToolEffectMutation
+	}
+}
+
+func normalizeExternalToolRisk(risk domain.AssistantToolRisk) domain.AssistantToolRisk {
+	switch domain.AssistantToolRisk(strings.ToLower(strings.TrimSpace(string(risk)))) {
+	case domain.AssistantToolRiskLow:
+		return domain.AssistantToolRiskLow
+	case domain.AssistantToolRiskMedium:
+		return domain.AssistantToolRiskMedium
+	case domain.AssistantToolRiskHigh:
+		return domain.AssistantToolRiskHigh
+	case domain.AssistantToolRiskDestructive:
+		return domain.AssistantToolRiskDestructive
+	default:
+		return domain.AssistantToolRiskHigh
+	}
 }

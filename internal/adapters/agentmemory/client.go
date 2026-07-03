@@ -1,33 +1,34 @@
-// Package agentmemory provides a client for the agent-memory MCP server.
+// Package agentmemory provides typed helpers for the agent-memory MCP server.
 package agentmemory
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
+
+	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
 )
 
 // ErrNotConfigured is returned when an operation is attempted without an explicit agent-memory URL.
 var ErrNotConfigured = errors.New("agent-memory client not configured")
 
-// Client communicates with agent-memory MCP server.
+// Client communicates with agent-memory through the generic MCP client while
+// preserving Soul Factory's typed helper methods.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	logger     *slog.Logger
+	baseURL string
+	client  *mcpclient.Client
+	logger  *slog.Logger
 }
 
 // Config holds client configuration.
 type Config struct {
-	URL     string        // MCP server URL (e.g., http://localhost:8282)
-	Timeout time.Duration // Request timeout
+	URL         string            // MCP server URL (e.g., http://localhost:8282)
+	Timeout     time.Duration     // Request timeout
+	AuthHeaders map[string]string // Optional MCP HTTP auth headers
 }
 
 // NewClient creates a new agent-memory client.
@@ -39,19 +40,23 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	componentLogger := logger.With("component", "agentmemory")
 
 	return &Client{
 		baseURL: config.URL,
-		httpClient: &http.Client{
-			Timeout: config.Timeout,
-		},
-		logger: logger.With("component", "agentmemory"),
+		client: mcpclient.NewClient(mcpclient.Config{
+			Name:        "agent-memory",
+			URL:         config.URL,
+			Timeout:     config.Timeout,
+			AuthHeaders: config.AuthHeaders,
+		}, componentLogger),
+		logger: componentLogger,
 	}
 }
 
 // Configured reports whether this client has an explicit agent-memory endpoint.
 func (c *Client) Configured() bool {
-	return c != nil && strings.TrimSpace(c.baseURL) != ""
+	return c != nil && c.client != nil && c.client.Configured()
 }
 
 func (c *Client) requireConfigured() error {
@@ -59,28 +64,6 @@ func (c *Client) requireConfigured() error {
 		return ErrNotConfigured
 	}
 	return nil
-}
-
-// MCPRequest represents an MCP JSON-RPC request.
-type MCPRequest struct {
-	JSONRPC string                 `json:"jsonrpc"`
-	ID      int                    `json:"id"`
-	Method  string                 `json:"method"`
-	Params  map[string]interface{} `json:"params,omitempty"`
-}
-
-// MCPResponse represents an MCP JSON-RPC response.
-type MCPResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *MCPError       `json:"error,omitempty"`
-}
-
-// MCPError represents an MCP error.
-type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
 }
 
 // RegisterAgent registers a new agent with the memory system.
@@ -98,8 +81,7 @@ func (c *Client) RegisterAgent(ctx context.Context, agentID string, npub string,
 		params[k] = v
 	}
 
-	_, err := c.call(ctx, "agent_register", params)
-	if err != nil {
+	if _, err := c.callTool(ctx, "agent_register", params); err != nil {
 		return fmt.Errorf("register agent: %w", err)
 	}
 
@@ -121,7 +103,7 @@ func (c *Client) SeedMemory(ctx context.Context, agentID string, entries []Memor
 			"metadata": entry.Metadata,
 		}
 
-		if _, err := c.call(ctx, "memory_add", params); err != nil {
+		if _, err := c.callTool(ctx, "memory_add", params); err != nil {
 			return fmt.Errorf("add memory entry: %w", err)
 		}
 	}
@@ -168,7 +150,7 @@ func CreateInitialMemory(agentID, name, purpose, soulMD string) []MemoryEntry {
 
 // GetAgentContext retrieves an agent's context.
 func (c *Client) GetAgentContext(ctx context.Context, agentID string) ([]MemoryEntry, error) {
-	result, err := c.call(ctx, "context_get", map[string]interface{}{
+	result, err := c.callTool(ctx, "context_get", map[string]interface{}{
 		"agent_id": agentID,
 	})
 	if err != nil {
@@ -176,67 +158,44 @@ func (c *Client) GetAgentContext(ctx context.Context, agentID string) ([]MemoryE
 	}
 
 	var entries []MemoryEntry
-	if err := json.Unmarshal(result, &entries); err != nil {
-		return nil, fmt.Errorf("unmarshal context: %w", err)
+	if len(result) > 0 {
+		if err := json.Unmarshal(result, &entries); err != nil {
+			return nil, fmt.Errorf("unmarshal context: %w", err)
+		}
 	}
 
 	return entries, nil
 }
 
-// call makes an MCP JSON-RPC call.
-func (c *Client) call(ctx context.Context, method string, params map[string]interface{}) (json.RawMessage, error) {
+func (c *Client) callTool(ctx context.Context, name string, params map[string]interface{}) (json.RawMessage, error) {
 	if err := c.requireConfigured(); err != nil {
 		return nil, err
 	}
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  method,
-		Params:  params,
+	args := make(map[string]any, len(params))
+	for key, value := range params {
+		args[key] = value
 	}
-
-	body, err := json.Marshal(req)
+	result, err := c.client.CallTool(ctx, name, args)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		if errors.Is(err, mcpclient.ErrNotConfigured) {
+			return nil, ErrNotConfigured
+		}
+		return nil, err
 	}
-
-	url := c.baseURL + "/mcp"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	if result != nil && result.IsError {
+		return nil, fmt.Errorf("agent-memory tool %s returned an MCP error result", name)
 	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var mcpResp MCPResponse
-	if err := json.Unmarshal(respBody, &mcpResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if mcpResp.Error != nil {
-		return nil, fmt.Errorf("MCP error %d: %s", mcpResp.Error.Code, mcpResp.Error.Message)
-	}
-
-	return mcpResp.Result, nil
+	return result.ResultJSON(), nil
 }
 
 // Health checks agent-memory connectivity.
 func (c *Client) Health(ctx context.Context) error {
-	_, err := c.call(ctx, "health", nil)
+	if err := c.requireConfigured(); err != nil {
+		return err
+	}
+	_, err := c.client.Initialize(ctx)
+	if errors.Is(err, mcpclient.ErrNotConfigured) {
+		return ErrNotConfigured
+	}
 	return err
 }

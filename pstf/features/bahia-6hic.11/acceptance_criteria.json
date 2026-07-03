@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-6hic.11",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "External MCP servers are disabled by default and enabled servers require explicit permission rules.",
+      "tests": ["TestAssistantExternalMCPDefaultsDisabled", "TestAssistantExternalMCPEnabledRequiresExplicitPermissions"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The generic client implements initialize, tools/list, and tools/call over JSON-RPC HTTP with auth headers and timeouts.",
+      "tests": ["TestClientInitializeListAndCallWithAuthAndPrefix", "TestClientTimeout"]
+    },
+    {
+      "id": "AC3",
+      "statement": "External tool names are prefixed and collisions are rejected before discovery.",
+      "tests": ["TestClientListToolsRejectsPrefixedNameCollision", "TestAssistantToolRegistryMergesExternalToolsAndRejectsCollisions"]
+    },
+    {
+      "id": "AC4",
+      "statement": "External tools merge into assistant discovery and calls remain subject to the existing permission engine.",
+      "tests": ["TestAssistantToolRegistryMergesExternalToolsAndRejectsCollisions", "TestAssistantExternalPermissionRulesArePrefixedAndDeny"]
+    },
+    {
+      "id": "AC5",
+      "statement": "agentmemory keeps typed helper methods while using the generic MCP tools/call client internally.",
+      "tests": ["TestClientTypedHelpersUseMCPToolsCall", "TestClientMissingURLIsNotConfigured"]
+    }
+  ]
+}

@@ -219,12 +219,42 @@ type AssistantPermissionsConfig struct {
 // AssistantMCPConfig holds assistant-specific MCP runtime settings.
 type AssistantMCPConfig struct {
 	AsyncObservation AssistantMCPAsyncObservationConfig `koanf:"async_observation" yaml:"async_observation"`
+	ExternalServers  []AssistantExternalMCPServerConfig `koanf:"external_servers" yaml:"external_servers"`
 }
 
 // AssistantMCPAsyncObservationConfig bounds event-native async tool observation.
 type AssistantMCPAsyncObservationConfig struct {
 	MaxWait       time.Duration `koanf:"max_wait" yaml:"max_wait"`
 	BackfillLimit int           `koanf:"backfill_limit" yaml:"backfill_limit"`
+}
+
+// AssistantExternalMCPServerConfig describes one opt-in external MCP server.
+// Servers are disabled by default and only enabled entries are contacted.
+type AssistantExternalMCPServerConfig struct {
+	Enabled       bool                                   `koanf:"enabled" yaml:"enabled"`
+	Name          string                                 `koanf:"name" yaml:"name"`
+	URL           string                                 `koanf:"url" yaml:"url"`
+	ToolPrefix    string                                 `koanf:"tool_prefix" yaml:"tool_prefix"`
+	Timeout       time.Duration                          `koanf:"timeout" yaml:"timeout"`
+	AuthHeaders   map[string]string                      `koanf:"auth_headers" yaml:"auth_headers"`
+	DefaultEffect domain.AssistantToolEffect             `koanf:"default_effect" yaml:"default_effect"`
+	DefaultRisk   domain.AssistantToolRisk               `koanf:"default_risk" yaml:"default_risk"`
+	ResourceTypes []string                               `koanf:"resource_types" yaml:"resource_types"`
+	Permissions   []AssistantExternalMCPPermissionConfig `koanf:"permissions" yaml:"permissions"`
+}
+
+// AssistantExternalMCPPermissionConfig is converted into an assistant
+// permission rule scoped to the server's prefixed tool names.
+type AssistantExternalMCPPermissionConfig struct {
+	ID             string                              `koanf:"id" yaml:"id"`
+	Decision       domain.AssistantPermissionDecision  `koanf:"decision" yaml:"decision"`
+	ToolNames      []string                            `koanf:"tool_names" yaml:"tool_names"`
+	ToolPrefixes   []string                            `koanf:"tool_prefixes" yaml:"tool_prefixes"`
+	Effects        []domain.AssistantToolEffect        `koanf:"effects" yaml:"effects"`
+	Risks          []domain.AssistantToolRisk          `koanf:"risks" yaml:"risks"`
+	ExecutionModes []domain.AssistantToolExecutionMode `koanf:"execution_modes" yaml:"execution_modes"`
+	ResourceTypes  []string                            `koanf:"resource_types" yaml:"resource_types"`
+	Reason         string                              `koanf:"reason" yaml:"reason"`
 }
 
 // PackageControlplaneConfig registers package repository backends and source-fetch guardrails.
@@ -1402,6 +1432,9 @@ func (c *Config) validateAssistant() error {
 	if asyncObservation.BackfillLimit < 0 {
 		return fmt.Errorf("config validation failed: assistant.mcp.async_observation.backfill_limit must not be negative")
 	}
+	if err := validateAssistantExternalMCPServers(assistant.MCP.ExternalServers); err != nil {
+		return err
+	}
 
 	if !assistant.Enabled {
 		return nil
@@ -1439,6 +1472,136 @@ func (c *Config) validateAssistant() error {
 		return fmt.Errorf("config validation failed: assistant.agentic.request_timeout must be > 0 when assistant.agentic.enabled=true")
 	}
 	return nil
+}
+
+func validateAssistantExternalMCPServers(servers []AssistantExternalMCPServerConfig) error {
+	seenNames := map[string]struct{}{}
+	seenPrefixes := map[string]struct{}{}
+	for i := range servers {
+		server := &servers[i]
+		field := fmt.Sprintf("assistant.mcp.external_servers[%d]", i)
+		server.Name = strings.TrimSpace(server.Name)
+		server.URL = strings.TrimRight(strings.TrimSpace(server.URL), "/")
+		server.ToolPrefix = strings.TrimSpace(server.ToolPrefix)
+		server.ResourceTypes = normalizeStringList(server.ResourceTypes)
+		if server.AuthHeaders == nil {
+			server.AuthHeaders = map[string]string{}
+		} else {
+			headers := make(map[string]string, len(server.AuthHeaders))
+			for key, value := range server.AuthHeaders {
+				key = strings.TrimSpace(key)
+				if key == "" {
+					return fmt.Errorf("config validation failed: %s.auth_headers contains an empty header name", field)
+				}
+				headers[key] = strings.TrimSpace(value)
+			}
+			server.AuthHeaders = headers
+		}
+		server.DefaultEffect = domain.AssistantToolEffect(strings.ToLower(strings.TrimSpace(string(server.DefaultEffect))))
+		if server.DefaultEffect == "" {
+			server.DefaultEffect = domain.AssistantToolEffectMutation
+		}
+		if server.DefaultEffect != domain.AssistantToolEffectRead && server.DefaultEffect != domain.AssistantToolEffectMutation {
+			return fmt.Errorf("config validation failed: %s.default_effect must be one of read, mutation", field)
+		}
+		server.DefaultRisk = domain.AssistantToolRisk(strings.ToLower(strings.TrimSpace(string(server.DefaultRisk))))
+		if server.DefaultRisk == "" {
+			server.DefaultRisk = domain.AssistantToolRiskHigh
+		}
+		switch server.DefaultRisk {
+		case domain.AssistantToolRiskLow, domain.AssistantToolRiskMedium, domain.AssistantToolRiskHigh, domain.AssistantToolRiskDestructive:
+		default:
+			return fmt.Errorf("config validation failed: %s.default_risk must be one of low, medium, high, destructive", field)
+		}
+		if !server.Enabled {
+			continue
+		}
+		if server.Name == "" {
+			return fmt.Errorf("config validation failed: %s.name is required when enabled=true", field)
+		}
+		if _, ok := seenNames[server.Name]; ok {
+			return fmt.Errorf("config validation failed: %s.name %q is duplicated", field, server.Name)
+		}
+		seenNames[server.Name] = struct{}{}
+		if server.URL == "" {
+			return fmt.Errorf("config validation failed: %s.url is required when enabled=true", field)
+		}
+		parsed, err := url.Parse(server.URL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("config validation failed: %s.url must be a valid http(s) URL", field)
+		}
+		if server.ToolPrefix == "" {
+			return fmt.Errorf("config validation failed: %s.tool_prefix is required when enabled=true", field)
+		}
+		if !isAssistantToolNameToken(server.ToolPrefix) {
+			return fmt.Errorf("config validation failed: %s.tool_prefix may only contain letters, numbers, underscores, or dashes", field)
+		}
+		if _, ok := seenPrefixes[server.ToolPrefix]; ok {
+			return fmt.Errorf("config validation failed: %s.tool_prefix %q is duplicated", field, server.ToolPrefix)
+		}
+		seenPrefixes[server.ToolPrefix] = struct{}{}
+		if server.Timeout == 0 {
+			server.Timeout = 30 * time.Second
+		}
+		if server.Timeout < 0 {
+			return fmt.Errorf("config validation failed: %s.timeout must not be negative", field)
+		}
+		if len(server.Permissions) == 0 {
+			return fmt.Errorf("config validation failed: %s.permissions must contain at least one explicit rule when enabled=true", field)
+		}
+		for j := range server.Permissions {
+			perm := &server.Permissions[j]
+			perm.ID = strings.TrimSpace(perm.ID)
+			perm.Decision = domain.AssistantPermissionDecision(strings.ToLower(strings.TrimSpace(string(perm.Decision))))
+			switch perm.Decision {
+			case domain.AssistantPermissionDecisionAllow, domain.AssistantPermissionDecisionAsk, domain.AssistantPermissionDecisionDeny:
+			default:
+				return fmt.Errorf("config validation failed: %s.permissions[%d].decision must be one of allow, ask, deny", field, j)
+			}
+			perm.ToolNames = normalizeStringList(perm.ToolNames)
+			perm.ToolPrefixes = normalizeStringList(perm.ToolPrefixes)
+			for k := range perm.Effects {
+				perm.Effects[k] = domain.AssistantToolEffect(strings.ToLower(strings.TrimSpace(string(perm.Effects[k]))))
+				switch perm.Effects[k] {
+				case domain.AssistantToolEffectRead, domain.AssistantToolEffectMutation:
+				default:
+					return fmt.Errorf("config validation failed: %s.permissions[%d].effects contains unsupported effect %q", field, j, perm.Effects[k])
+				}
+			}
+			for k := range perm.Risks {
+				perm.Risks[k] = domain.AssistantToolRisk(strings.ToLower(strings.TrimSpace(string(perm.Risks[k]))))
+				switch perm.Risks[k] {
+				case domain.AssistantToolRiskLow, domain.AssistantToolRiskMedium, domain.AssistantToolRiskHigh, domain.AssistantToolRiskDestructive:
+				default:
+					return fmt.Errorf("config validation failed: %s.permissions[%d].risks contains unsupported risk %q", field, j, perm.Risks[k])
+				}
+			}
+			for k := range perm.ExecutionModes {
+				perm.ExecutionModes[k] = domain.AssistantToolExecutionMode(strings.ToLower(strings.TrimSpace(string(perm.ExecutionModes[k]))))
+				switch perm.ExecutionModes[k] {
+				case domain.AssistantToolExecutionModeSync, domain.AssistantToolExecutionModeAsync:
+				default:
+					return fmt.Errorf("config validation failed: %s.permissions[%d].execution_modes contains unsupported mode %q", field, j, perm.ExecutionModes[k])
+				}
+			}
+			perm.ResourceTypes = normalizeStringList(perm.ResourceTypes)
+			perm.Reason = strings.TrimSpace(perm.Reason)
+		}
+	}
+	return nil
+}
+
+func isAssistantToolNameToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // validateAssistantExtensionPaths normalizes and containment-checks one

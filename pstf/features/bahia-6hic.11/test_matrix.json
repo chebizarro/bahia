@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-6hic.11",
+  "test_matrix": [
+    {"test": "go test ./internal/adapters/mcpclient", "acceptance": ["AC2", "AC3"]},
+    {"test": "go test ./internal/adapters/agentmemory", "acceptance": ["AC5"]},
+    {"test": "go test ./internal/mcp", "acceptance": ["AC3", "AC4"]},
+    {"test": "go test ./internal/config", "acceptance": ["AC1"]},
+    {"test": "go test ./internal/app", "acceptance": ["AC4"]},
+    {"test": "go build ./...", "acceptance": ["AC1", "AC2", "AC3", "AC4", "AC5"]}
+  ]
+}

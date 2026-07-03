@@ -28,6 +28,7 @@ import (
 	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
+	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
@@ -952,8 +953,15 @@ func New(cfg *config.Config) (*App, error) {
 		})
 		var assistantAgentLoop service.AssistantAgentLoopController
 		if cfg.Assistant.Agentic.Enabled {
-			agentToolRegistry := mcpServer.AssistantToolRegistry()
-			permissionEngine := service.NewAssistantPermissionEngine(cfg.Assistant.Permissions, nil)
+			externalMCP, externalErr := loadAssistantExternalMCP(ctx, cfg.Assistant.MCP.ExternalServers, slog.Default())
+			if externalErr != nil {
+				return nil, externalErr
+			}
+			agentToolRegistry, registryErr := mcp.NewAssistantToolRegistryForServerWithExternal(mcpServer, externalMCP.descriptors)
+			if registryErr != nil {
+				return nil, registryErr
+			}
+			permissionEngine := service.NewAssistantPermissionEngine(cfg.Assistant.Permissions, externalMCP.permissionRules)
 			// Item 10 extensibility surface: load subagents/skills/commands/hooks from
 			// their configured roots. A malformed definition fails closed at startup.
 			var assistantSubagents *service.AssistantSubagentLibrary
@@ -991,7 +999,7 @@ func New(cfg *config.Config) (*App, error) {
 				assistantHooks = service.NewAssistantHookRunner(service.AssistantHookRunnerConfig{Set: hookSet})
 			}
 			toolRuntime := service.NewAssistantToolRuntime(service.AssistantToolRuntimeConfig{
-				MCPServer:   assistantMCPRuntimeAdapter{server: mcpServer},
+				MCPServer:   assistantMCPRuntimeAdapter{server: mcpServer, externalTools: externalMCP.clients},
 				Registry:    assistantToolRegistryAdapter{registry: agentToolRegistry},
 				Permissions: permissionEngine,
 				Sessions:    assistantOrchestrator,
@@ -2504,11 +2512,131 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.Assista
 	return out
 }
 
+type assistantExternalMCPRuntime struct {
+	clients         map[string]*mcpclient.Client
+	descriptors     []mcp.ExternalToolDescriptor
+	permissionRules []service.AssistantPermissionRule
+}
+
+func loadAssistantExternalMCP(ctx context.Context, servers []config.AssistantExternalMCPServerConfig, logger *slog.Logger) (assistantExternalMCPRuntime, error) {
+	bundle := assistantExternalMCPRuntime{clients: map[string]*mcpclient.Client{}}
+	for _, server := range servers {
+		if !server.Enabled {
+			continue
+		}
+		client := mcpclient.NewClient(mcpclient.Config{
+			Name:        server.Name,
+			URL:         server.URL,
+			ToolPrefix:  server.ToolPrefix,
+			Timeout:     server.Timeout,
+			AuthHeaders: server.AuthHeaders,
+		}, logger)
+		if _, err := client.Initialize(ctx); err != nil {
+			return assistantExternalMCPRuntime{}, fmt.Errorf("initialize external MCP server %s: %w", server.Name, err)
+		}
+		tools, err := client.ListTools(ctx)
+		if err != nil {
+			return assistantExternalMCPRuntime{}, fmt.Errorf("list tools for external MCP server %s: %w", server.Name, err)
+		}
+		for _, tool := range tools {
+			if _, exists := bundle.clients[tool.Name]; exists {
+				return assistantExternalMCPRuntime{}, fmt.Errorf("external MCP tool %q is registered more than once", tool.Name)
+			}
+			bundle.clients[tool.Name] = client
+			bundle.descriptors = append(bundle.descriptors, mcp.ExternalToolDescriptor{
+				ServerName:    server.Name,
+				Tool:          mcp.Tool{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema},
+				Effect:        server.DefaultEffect,
+				DefaultRisk:   server.DefaultRisk,
+				ResourceTypes: append([]string(nil), server.ResourceTypes...),
+				AgentSafe:     true,
+			})
+		}
+		bundle.permissionRules = append(bundle.permissionRules, assistantExternalPermissionRules(server)...)
+	}
+	return bundle, nil
+}
+
+func assistantExternalPermissionRules(server config.AssistantExternalMCPServerConfig) []service.AssistantPermissionRule {
+	rules := make([]service.AssistantPermissionRule, 0, len(server.Permissions))
+	for i, permission := range server.Permissions {
+		id := strings.TrimSpace(permission.ID)
+		if id == "" {
+			id = fmt.Sprintf("external-mcp-%s-%d", server.Name, i+1)
+		}
+		rule := service.AssistantPermissionRule{
+			ID:             id,
+			Decision:       permission.Decision,
+			ToolNames:      prefixExternalPermissionToolNames(server.ToolPrefix, permission.ToolNames),
+			ToolPrefixes:   prefixExternalPermissionToolPrefixes(server.ToolPrefix, permission.ToolPrefixes),
+			Effects:        append([]domain.AssistantToolEffect(nil), permission.Effects...),
+			Risks:          append([]domain.AssistantToolRisk(nil), permission.Risks...),
+			ExecutionModes: append([]domain.AssistantToolExecutionMode(nil), permission.ExecutionModes...),
+			ResourceTypes:  append([]string(nil), permission.ResourceTypes...),
+			Reason:         permission.Reason,
+		}
+		if len(rule.ToolNames) == 0 && len(rule.ToolPrefixes) == 0 {
+			rule.ToolPrefixes = []string{server.ToolPrefix}
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+func prefixExternalPermissionToolNames(prefix string, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !strings.HasPrefix(name, prefix) {
+			name = prefix + name
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+func prefixExternalPermissionToolPrefixes(prefix string, prefixes []string) []string {
+	out := make([]string, 0, len(prefixes))
+	for _, value := range prefixes {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !strings.HasPrefix(value, prefix) {
+			value = prefix + value
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
 type assistantMCPRuntimeAdapter struct {
-	server *mcp.Server
+	server        *mcp.Server
+	externalTools map[string]*mcpclient.Client
 }
 
 func (a assistantMCPRuntimeAdapter) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*service.AssistantToolRuntimeToolResult, error) {
+	if client, ok := a.externalTools[name]; ok {
+		args := make(map[string]any, len(arguments))
+		for key, value := range arguments {
+			args[key] = value
+		}
+		result, err := client.CallTool(ctx, name, args)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, nil
+		}
+		content := make([]service.AssistantToolRuntimeToolContent, 0, len(result.Content))
+		for _, item := range result.Content {
+			content = append(content, service.AssistantToolRuntimeToolContent{Type: item.Type, Text: item.Text})
+		}
+		return &service.AssistantToolRuntimeToolResult{Content: content, IsError: result.IsError}, nil
+	}
 	if a.server == nil {
 		return nil, fmt.Errorf("assistant MCP server is not configured")
 	}
