@@ -489,7 +489,7 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 	defer bus.Close()
 	filter := nostr.Filter{
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)},
-		Tags:  map[string][]string{"d": {agentID}},
+		Tags:  nostr.TagMap{tagParameterizedD: {agentID}},
 		Limit: 1,
 	}
 	if factoryPubkey := strings.TrimSpace(r.config.SoulFactoryPubkey); factoryPubkey != "" {

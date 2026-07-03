@@ -153,7 +153,7 @@ func (c *NostrClient) GetSoul(ctx context.Context, agentID string) (*domain.Agen
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id is required")
 	}
-	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Tags: nostr.TagMap{"d": []string{agentID}}, Limit: 10}})
+	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Tags: nostr.TagMap{tagParameterizedD: []string{agentID}}, Limit: 10}})
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +281,7 @@ func (c *NostrClient) AwaitProvisioningResult(ctx context.Context, receipt *Soul
 	if receipt == nil || receipt.RequestID == "" || receipt.RequesterPubkey == "" {
 		return nil, fmt.Errorf("valid provisioning receipt is required")
 	}
-	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult)}, Tags: nostr.TagMap{"e": []string{receipt.RequestID}, "p": []string{receipt.RequesterPubkey}}}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult)}, Tags: nostr.TagMap{tagEvent: []string{receipt.RequestID}, tagPubkey: []string{receipt.RequesterPubkey}}}}
 	reply, err := c.awaitTerminal(ctx, filters, map[int]bool{domain.KindProvisioningStatus: true}, map[int]bool{domain.KindProvisioningResult: true}, func(ev *nostr.Event) {
 		if onStatus != nil {
 			onStatus(statusEventFromNostr(ev))
@@ -317,7 +317,7 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign soul action: %w", err)
 	}
-	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)}, Tags: nostr.TagMap{"e": []string{event.ID.Hex()}}}}
+	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)}, Tags: nostr.TagMap{tagEvent: []string{event.ID.Hex()}}}}
 	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, fmt.Errorf("subscribe for soul action result: %w", err)

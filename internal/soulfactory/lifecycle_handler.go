@@ -189,7 +189,7 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	}
 	results, err := bus.Query(ctx, []nostr.Filter{{
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)},
-		Tags:  nostr.TagMap{"e": []string{eventID}},
+		Tags:  nostr.TagMap{tagEvent: []string{eventID}},
 		Limit: 1,
 	}})
 	if err != nil {
