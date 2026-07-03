@@ -82,6 +82,8 @@
   let error = $state(null);
   let serviceId = $derived(page.params.id);
   let loadSequence = 0;
+  let lastServiceRequestId = null;
+  let hydratedRelatedForServiceId = null;
 
 
   // Edit modal state
@@ -211,8 +213,27 @@
 
   $effect(() => {
     const id = serviceId;
+    if (!id || id === lastServiceRequestId) return;
+    lastServiceRequestId = id;
+    void untrack(() => loadServiceDetail(id));
+  });
+
+  $effect(() => {
+    const id = serviceId;
     if (!id) return;
-    void loadServiceDetail(id);
+    const loadedService = serviceStore.find((candidate) => candidate.id === id) || null;
+    if (loadedService) {
+      const sequence = loadSequence;
+      untrack(() => applyLoadedService(loadedService, id, sequence));
+    }
+  });
+
+  $effect(() => {
+    const id = service?.id;
+    if (!id) return;
+    builds = buildStore.filter((build) => build.service_id === id);
+    artifacts = artifactStore.filter((artifact) => artifact.service_id === id);
+    environments = [...environmentStore];
   });
 
   async function hydrateServiceSecrets(id, sequence) {
@@ -247,22 +268,17 @@
     }
   }
 
-  const SERVICE_DETAIL_WAIT_MS = 5000;
-  const SERVICE_DETAIL_POLL_MS = 50;
+  function applyLoadedService(loadedService, id, sequence) {
+    if (sequence !== loadSequence || id !== serviceId) return;
+    service = loadedService;
+    error = null;
+    loading = false;
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  async function waitForServiceProjection(id, sequence) {
-    const deadline = Date.now() + SERVICE_DETAIL_WAIT_MS;
-    while (sequence === loadSequence && id === serviceId) {
-      const match = untrack(() => serviceStore.find((candidate) => candidate.id === id) || null);
-      if (match) return match;
-      if (Date.now() >= deadline) return null;
-      await sleep(SERVICE_DETAIL_POLL_MS);
+    if (hydratedRelatedForServiceId !== id) {
+      hydratedRelatedForServiceId = id;
+      void hydrateServiceSecrets(id, sequence);
+      void hydrateRepositories(sequence);
     }
-    return null;
   }
 
   async function loadServiceDetail(id) {
@@ -278,23 +294,17 @@
     secrets = [];
     secretsLoading = false;
     secretsError = null;
+    hydratedRelatedForServiceId = null;
 
     try {
       await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
       if (sequence !== loadSequence || id !== serviceId) return;
 
-      service = await waitForServiceProjection(id, sequence);
-      if (sequence !== loadSequence || id !== serviceId) return;
-      if (!service) {
+      const loadedService = serviceStore.find((candidate) => candidate.id === id) || null;
+      if (!loadedService) {
         throw new Error('Service not found');
       }
-      builds = buildStore.filter((build) => build.service_id === id);
-      artifacts = artifactStore.filter((artifact) => artifact.service_id === id);
-      environments = [...environmentStore];
-      loading = false;
-
-      void hydrateServiceSecrets(id, sequence);
-      void hydrateRepositories(sequence);
+      applyLoadedService(loadedService, id, sequence);
     } catch (err) {
       if (sequence !== loadSequence || id !== serviceId) return;
       error = err.message;

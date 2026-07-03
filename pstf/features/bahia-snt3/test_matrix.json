@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-snt3",
+  "tests": [
+    {
+      "command": "npm run lint",
+      "maps_to": ["AC1", "AC3"],
+      "status": "passed",
+      "evidence": "svelte-check found 0 errors and 0 warnings."
+    },
+    {
+      "command": "npm run test:unit",
+      "maps_to": ["AC1", "AC3"],
+      "status": "passed",
+      "evidence": "73 test files passed; 576 tests passed."
+    },
+    {
+      "command": "npm run test:e2e -- --list service-detail-read-model-hydration.spec.js",
+      "maps_to": ["AC2"],
+      "status": "passed",
+      "evidence": "Playwright listed the deterministic service detail read-model hydration spec."
+    },
+    {
+      "command": "npm run test:e2e -- service-detail-read-model-hydration.spec.js",
+      "maps_to": ["AC2", "AC3"],
+      "status": "blocked",
+      "evidence": "Sandboxed Chromium launch failed with macOS MachPortRendezvousServer permission denied; the required escalated rerun was rejected by the approval system due to environment usage limits."
+    }
+  ]
+}

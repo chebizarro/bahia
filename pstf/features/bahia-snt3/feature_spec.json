@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-snt3",
+  "title": "Remove timer-based service detail projection wait",
+  "issue": "bahia-snt3",
+  "type": "bug",
+  "priority": "P2",
+  "observed_behavior": "The service detail route waited for relay-backed service projections with SERVICE_DETAIL_WAIT_MS, SERVICE_DETAIL_POLL_MS, sleep(), and a polling loop.",
+  "intended_behavior": "The service detail route performs relay read-model bootstrap and then reacts to deterministic service store updates delivered by 30900 read-model events, preserving existing loading, error, and detail UI states without timer-based completion detection.",
+  "scope": [
+    "web/src/routes/services/[id]/+page.svelte",
+    "web/tests/e2e/service-detail-read-model-hydration.spec.js"
+  ],
+  "out_of_scope": [
+    "Go internal/service SecurityScanner fixture work tracked by sibling issue bahia-x3km"
+  ]
+}

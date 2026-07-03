@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-snt3",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Service detail loading does not use route-local sleep, polling intervals, or deadline loops to detect service projection delivery or completion."
+    },
+    {
+      "id": "AC2",
+      "description": "The route reacts to relay read-model store updates so a service projection delivered after initial EOSE hydrates the detail page without navigation or refresh."
+    },
+    {
+      "id": "AC3",
+      "description": "Existing user-visible loading, not-found error, and service detail states remain available."
+    }
+  ]
+}
