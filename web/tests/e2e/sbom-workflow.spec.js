@@ -18,11 +18,13 @@ const KINDS = {
 const relaySystemInfo = {
   nostr: {
     browser_relays: ['ws://relay.test.local'],
+    contextvm_relays: ['ws://relay.test.local'],
     service_pubkey: SERVICE_PUBKEY
   },
   features: {
     relay_sidecar: true,
     relay_read_models: true,
+    encrypted_nostr_requests: true,
     legacy_sse: false
   }
 };
@@ -117,7 +119,7 @@ async function addVisualRule(page, dialog, ruleName, configure) {
 }
 
 test.describe('SBOM workflow', () => {
-  test('artifact registry list maps name, version, and digest columns from projection fields', async ({ page }) => {
+  test('artifact registry list maps name, version, digest, and SBOM status columns from projection fields', async ({ page }) => {
     await installE2EMocks(page, {
       authenticated: true,
       extension: true,
@@ -133,7 +135,8 @@ test.describe('SBOM workflow', () => {
     await expect(row.locator('td').nth(1)).toContainText('sbom-service');
     await expect(row.locator('td').nth(2)).toHaveText('1.2.3');
     await expect(row.locator('td').nth(3)).toContainText('sha256:111122223333…ff0000');
-    await expect(row.getByRole('link', { name: 'Generate SBOM' })).toHaveAttribute('href', `/artifacts/${ARTIFACT_ID}?tab=sbom`);
+    await expect(row.locator('td').nth(5)).toContainText('None');
+    await expect(row.getByRole('link', { name: 'Generate SBOM' })).toHaveCount(0);
   });
 
   test('artifact page displays SBOM attestation details', async ({ page }) => {
@@ -213,6 +216,7 @@ test.describe('SBOM workflow', () => {
 
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}`);
     await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();
+    await page.getByRole('button', { name: /^SBOM/ }).click();
     await expect(page.getByRole('button', { name: 'Generate SBOM' }).first()).toBeVisible();
     await page.evaluate(({ artifactId, digest }) => {
       window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION = {
@@ -224,9 +228,12 @@ test.describe('SBOM workflow', () => {
         }
       };
     }, { artifactId: NO_SBOM_ARTIFACT_ID, digest: artifactPayload({ id: NO_SBOM_ARTIFACT_ID }).digest });
-    const generated = page.evaluate(() => new Promise((resolve) => {
-      window.addEventListener('__bahia_e2e_sbom_generated', (event) => resolve(event.detail), { once: true });
-    }));
+    let resolveGenerated;
+    const generated = new Promise((resolve) => { resolveGenerated = resolve; });
+    await page.exposeFunction('__bahiaResolveGeneratedSBOM', (detail) => resolveGenerated(detail));
+    await page.evaluate(() => {
+      window.addEventListener('__bahia_e2e_sbom_generated', (event) => window.__bahiaResolveGeneratedSBOM(event.detail), { once: true });
+    });
     await page.getByRole('button', { name: 'Generate SBOM' }).first().click();
     const generatedDetail = await generated;
     expect(generatedDetail).toMatchObject({ artifactId: NO_SBOM_ARTIFACT_ID, formats: ['spdx', 'cyclonedx'], generator: 'syft' });
@@ -235,7 +242,7 @@ test.describe('SBOM workflow', () => {
       const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
       const hasTag = (event, name, value) => Array.isArray(event.tags) && event.tags.some((tag) => Array.isArray(tag) && tag[0] === name && (value === undefined || tag[1] === value));
       return {
-        request: events.find((event) => event.kind === 1059 && hasTag(event, 'p')) || null,
+        request: events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/generate') && !hasTag(event, 'e')) || null,
         status: events.find((event) => event.kind === 30315 && hasTag(event, 'artifact', artifactId)) || null,
         references: events.filter((event) => event.kind === 30078 && hasTag(event, 'artifact', artifactId)).map((event) => ({ tags: event.tags, content: JSON.parse(event.content || '{}') })),
         availability: events.find((event) => event.kind === 30004 && hasTag(event, 'artifact', artifactId)) || null,
@@ -288,9 +295,12 @@ test.describe('SBOM workflow', () => {
       };
     }, { artifactId: NO_SBOM_ARTIFACT_ID, digest, payloadBase64: Buffer.from(sbomPayload).toString('base64') });
 
-    const imported = page.evaluate(() => new Promise((resolve) => {
-      window.addEventListener('__bahia_e2e_sbom_imported', (event) => resolve(event.detail), { once: true });
-    }));
+    let resolveImported;
+    const imported = new Promise((resolve) => { resolveImported = resolve; });
+    await page.exposeFunction('__bahiaResolveImportedSBOM', (detail) => resolveImported(detail));
+    await page.evaluate(() => {
+      window.addEventListener('__bahia_e2e_sbom_imported', (event) => window.__bahiaResolveImportedSBOM(event.detail), { once: true });
+    });
     await page.getByLabel('SBOM file').setInputFiles({
       name: 'artifact.import.spdx.json',
       mimeType: 'application/json',
@@ -306,7 +316,7 @@ test.describe('SBOM workflow', () => {
       const parseContent = (event) => {
         try { return JSON.parse(event?.content || '{}'); } catch { return {}; }
       };
-      const ackEvent = events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/import')) || null;
+      const ackEvent = events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/import') && parseContent(event).payload?.accepted === true) || null;
       const ackPayload = parseContent(ackEvent).payload || {};
       const compatibilityProjection = events
         .filter((event) => event.kind === 30900 && hasTag(event, 'artifact', artifactId))
@@ -315,7 +325,7 @@ test.describe('SBOM workflow', () => {
       const reference = events.find((event) => event.kind === 30078 && hasTag(event, 'artifact', artifactId) && hasTag(event, 'format', 'spdx')) || null;
       const availability = events.find((event) => event.kind === 30004 && hasTag(event, 'artifact', artifactId)) || null;
       return {
-        request: events.find((event) => event.kind === 1059 && hasTag(event, 'p')) || null,
+        request: events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/import') && !hasTag(event, 'e')) || null,
         ackPayload,
         status: events.find((event) => event.kind === 30315 && hasTag(event, 'artifact', artifactId) && hasTag(event, 'd', statusDTag)) || null,
         reference: reference ? { tags: reference.tags, content: parseContent(reference) } : null,
@@ -353,7 +363,7 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByText('bbbbbbbbbbbbbbbb...bbbbbbbb')).toBeVisible();
   });
 
-  test('artifact registry SBOM action opens detail page on SBOM tab', async ({ page }) => {
+  test('artifact registry row opens detail page and SBOM tab exposes generation action', async ({ page }) => {
     await installE2EMocks(page, {
       authenticated: true,
       extension: true,
@@ -363,9 +373,10 @@ test.describe('SBOM workflow', () => {
 
     await page.goto('/artifacts');
     const row = page.locator('tbody tr', { hasText: 'registry.example.com/bahia/no-sbom' }).first();
-    await row.getByRole('link', { name: 'Generate SBOM' }).click();
+    await row.click();
 
-    await expect(page).toHaveURL(new RegExp(`/artifacts/${NO_SBOM_ARTIFACT_ID}\\?tab=sbom$`));
+    await expect(page).toHaveURL(new RegExp(`/artifacts/${NO_SBOM_ARTIFACT_ID}$`));
+    await page.getByRole('button', { name: /^SBOM/ }).click();
     await expect(page.getByRole('heading', { name: 'SBOM', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Generate SBOM' }).first()).toBeVisible();
   });

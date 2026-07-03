@@ -225,6 +225,26 @@ export async function installE2EMocks(
       }
     }
 
+    function takeQueuedContextVMOperation(predicate = () => true) {
+      const queue = Array.isArray(window.__BAHIA_E2E_CONTEXTVM_OPERATIONS)
+        ? window.__BAHIA_E2E_CONTEXTVM_OPERATIONS
+        : [];
+      const index = queue.findIndex((entry) => entry && predicate(entry));
+      if (index === -1) return null;
+      const [entry] = queue.splice(index, 1);
+      window.__BAHIA_E2E_CONTEXTVM_OPERATIONS = queue;
+      return entry;
+    }
+
+    function queuedEnvelopeFromOperation(event, entry) {
+      if (!entry) return null;
+      return {
+        id: entry.id || event.id,
+        method: entry.operation || entry.method,
+        params: entry.payload || entry.params || {}
+      };
+    }
+
     function encryptedContextVMResponse(event, envelope, payload, tags = []) {
       const response = {
         request_event_id: event.id,
@@ -243,7 +263,13 @@ export async function installE2EMocks(
     }
 
     function handleEncryptedServiceSecretRequest(event) {
-      const envelope = decodeEncryptedContextVMEnvelope(event);
+      let envelope = decodeEncryptedContextVMEnvelope(event);
+      if (!envelope && event?.kind === 1059) {
+        envelope = queuedEnvelopeFromOperation(event, takeQueuedContextVMOperation((entry) => {
+          const operation = String(entry?.operation || entry?.method || '');
+          return operation.startsWith('services/secrets-') || operation.startsWith('services.secrets.');
+        }));
+      }
       if (!envelope) return null;
       const operation = String(envelope.method || envelope.operation || '');
       const params = { ...(envelope.params || envelope.payload || {}) };

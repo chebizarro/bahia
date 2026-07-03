@@ -164,6 +164,20 @@ cd web && pnpm test:unit
 
 Result: FAIL on 2026-06-30 due to unrelated existing unit-suite failures outside the SBOM import slice (for example missing `../../src/lib/nostr/pool-query.js`, route matrix entries for `web/src/routes/security/*`, and stale mocks lacking `nostr`/`queryUntilEose` exports). The focused public-controlplane unit file passed with the direct Vitest command above.
 
+## bahia-rxae relay-backed web fixture restoration — 2026-07-03
+
+- Restored the SBOM browser E2E fixture for current relay-native behavior: discovery now advertises `features.encrypted_nostr_requests` and `contextvm_relays`, public SBOM generate/import commands are asserted as canonical unwrapped ContextVM kind `25910`, and completion remains driven by injected canonical `30315`, `4903`, `30078`, and `30004` relay events.
+- Updated `web/tests/e2e/sbom-workflow.spec.js` so artifact registry coverage matches current UI behavior: the registry list exposes row navigation plus SBOM status, while generate/import actions are exercised from the artifact detail SBOM tab.
+- Replaced unresolved browser-side promise waits for SBOM generated/imported fixture events with Playwright `exposeFunction` callbacks, keeping the spec event-driven without sleep waits.
+
+Targeted gate:
+
+```bash
+cd web && npm run test:e2e -- sbom-workflow.spec.js service-secrets-smoke.spec.js
+```
+
+Result: PASS on 2026-07-03 — 12 passed. Playwright required unsandboxed browser launch on macOS after sandboxed Chromium launch failed before assertions with `MachPortRendezvousServer ... Permission denied`.
+
 ## Remaining tracked work
 
 - `bahia-ndmr`: Relay-backed merge of existing canonical 30004 availability-list entries across Bahia instances remains tracked.
