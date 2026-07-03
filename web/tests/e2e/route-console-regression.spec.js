@@ -4,6 +4,15 @@ import { attachRuntimeErrorGuards } from './helpers-console.js';
 
 const BROWSER_RELAY = 'ws://relay.test.local';
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
+const CONTROLPLANE_STATE_KIND = 30900;
+const CONTROLPLANE_DOMAIN = 'controlplane';
+const STATE_SCHEMAS = {
+  service: 'bahia.registry.service.v1',
+  environment: 'bahia.registry.environment.v1',
+  artifact: 'bahia.registry.artifact.v1',
+  deploymentIntent: 'bahia.registry.deployment-intent.v1',
+  deploymentRun: 'bahia.registry.deployment-run.v1'
+};
 
 const systemInfo = {
   nostr: {
@@ -35,16 +44,27 @@ const fixtures = {
   },
   deployment: {
     id: 'dep-1',
+    intent_id: 'dep-1',
     run_id: 'run-1',
     service_id: 'svc-1',
     environment_id: 'env-1',
-    status: 'running'
+    artifact_id: 'art-1',
+    approval_status: 'pending',
+    deployment_status: 'running',
+    status: 'running',
+    requested_by: 'f'.repeat(64),
+    created_at: '2026-05-04T00:00:00.000Z',
+    updated_at: '2026-05-04T00:05:00.000Z'
   },
   artifact: {
     id: 'art-1',
+    artifact_id: 'art-1',
     service_id: 'svc-1',
     digest: 'sha256:abc',
-    status: 'available'
+    image_digest: 'sha256:abc',
+    image_repo: 'registry.example/checkout',
+    status: 'available',
+    created_at: '2026-05-04T00:00:00.000Z'
   },
   organization: {
     id: 'org-1',
@@ -77,6 +97,80 @@ const fixtures = {
     status: 'online'
   }
 };
+
+function controlplaneStateEvent({ id, schema, content, tags = [], createdAt = 1777852800 }) {
+  return {
+    id: `route-console-${id}`,
+    kind: CONTROLPLANE_STATE_KIND,
+    pubkey: SERVICE_PUBKEY,
+    created_at: createdAt,
+    tags: [
+      ['domain', CONTROLPLANE_DOMAIN],
+      ['schema', schema],
+      ['d', id],
+      ...tags
+    ],
+    content: JSON.stringify({ schema, ...content }),
+    sig: '0'.repeat(128)
+  };
+}
+
+function controlplaneFixtureEvents() {
+  return [
+    controlplaneStateEvent({
+      id: fixtures.service.id,
+      schema: STATE_SCHEMAS.service,
+      content: fixtures.service,
+      tags: [['service', fixtures.service.id], ['name', fixtures.service.name]]
+    }),
+    controlplaneStateEvent({
+      id: fixtures.environment.id,
+      schema: STATE_SCHEMAS.environment,
+      content: fixtures.environment,
+      tags: [['environment', fixtures.environment.id], ['name', fixtures.environment.name]]
+    }),
+    controlplaneStateEvent({
+      id: fixtures.artifact.id,
+      schema: STATE_SCHEMAS.artifact,
+      content: fixtures.artifact,
+      tags: [['artifact', fixtures.artifact.id], ['service', fixtures.artifact.service_id]]
+    }),
+    controlplaneStateEvent({
+      id: fixtures.deployment.id,
+      schema: STATE_SCHEMAS.deploymentIntent,
+      content: fixtures.deployment,
+      tags: [
+        ['intent', fixtures.deployment.id],
+        ['service', fixtures.deployment.service_id],
+        ['environment', fixtures.deployment.environment_id],
+        ['artifact', fixtures.deployment.artifact_id]
+      ]
+    }),
+    controlplaneStateEvent({
+      id: fixtures.deployment.run_id,
+      schema: STATE_SCHEMAS.deploymentRun,
+      content: {
+        id: fixtures.deployment.run_id,
+        run_id: fixtures.deployment.run_id,
+        deployment_intent_id: fixtures.deployment.id,
+        intent_id: fixtures.deployment.id,
+        service_id: fixtures.deployment.service_id,
+        environment_id: fixtures.deployment.environment_id,
+        artifact_id: fixtures.deployment.artifact_id,
+        status: fixtures.deployment.status,
+        created_at: fixtures.deployment.created_at,
+        updated_at: fixtures.deployment.updated_at
+      },
+      tags: [
+        ['run', fixtures.deployment.run_id],
+        ['intent', fixtures.deployment.id],
+        ['service', fixtures.deployment.service_id],
+        ['environment', fixtures.deployment.environment_id],
+        ['artifact', fixtures.deployment.artifact_id]
+      ]
+    })
+  ];
+}
 
 const routeCases = [
   ['dashboard', '/'],
@@ -194,7 +288,7 @@ test.describe('route console regressions', () => {
     await installE2EMocks(page, {
       authenticated: true,
       extension: true,
-      nostrEvents: [],
+      nostrEvents: controlplaneFixtureEvents(),
       systemInfo
     });
     await installApiMocks(page);

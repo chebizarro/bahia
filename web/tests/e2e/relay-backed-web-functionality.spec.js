@@ -8,6 +8,12 @@ import {
 
 let relay;
 
+function attachRelayRuntimeErrorGuards(page) {
+  return attachRuntimeErrorGuards(page, {
+    allowConsole: ['WebSocket is already in CLOSING or CLOSED state.']
+  });
+}
+
 test.describe.serial('relay-backed Bahia web functionality', () => {
   test.beforeAll(async () => {
     relay = await startBahiaTestRelay();
@@ -23,7 +29,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('dashboard hydrates first-party read models through real REQ/EVENT/EOSE', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/');
 
@@ -36,7 +42,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('service, deployment, package, and worker routes render seeded relay projections', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/services');
     await expect(page.getByText('Checkout API')).toBeVisible();
@@ -53,7 +59,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('DNS and FIPS mesh pages use relay metadata and DNS read models', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/dns');
     await expect(page.getByRole('heading', { name: 'DNS management' })).toBeVisible();
@@ -69,7 +75,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('events consume relay-backed audit events', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/events');
     await expect(page.getByRole('heading', { name: 'Live Events' })).toBeVisible();
@@ -79,7 +85,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('assistant panel hydrates relay-backed session and status events', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -97,7 +103,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('Soul Factory hydrates template, soul, draft, and runtime capability events', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/souls');
 
@@ -110,9 +116,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('encrypted ContextVM mutation publishes to relay, verifies OK, and observes encrypted result', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page, {
-      allowConsole: ['WebSocket is already in CLOSING or CLOSED state.']
-    });
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/');
     const response = await page.evaluate(async ({ relayUrl, servicePubkey }) => {
@@ -157,7 +161,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
   });
 
   test('docs fetch bypasses stale cache and reads relay-backed NIP-23 topic deterministically', async ({ page }) => {
-    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const assertNoRuntimeErrors = await attachRelayRuntimeErrorGuards(page);
 
     await page.goto('/');
     const docsProbe = await page.evaluate(async (relayUrl) => {

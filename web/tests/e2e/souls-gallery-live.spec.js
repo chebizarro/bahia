@@ -42,8 +42,8 @@ test('Souls gallery bootstraps from relays and reflects live soul updates', asyn
   await expect(page.getByRole('link', { name: /Alpha/ })).toBeVisible();
   await expect(page.getByRole('link', { name: /Bravo/ })).toBeVisible();
   const statsGrid = page.locator('.stats-grid');
-  await expect(statsGrid.getByText('Total Souls').locator('..')).toContainText('2');
-  await expect(statsGrid.getByText('Suspended').locator('..')).toContainText('1');
+  await expect(statsGrid.locator('.card:has-text("Total Souls") .card-value')).toHaveText('2');
+  await expect(statsGrid.locator('.card:has-text("Suspended") .card-value')).toHaveText('1');
 
   const liveUpdate = soulEvent({
     id: 'soul-bravo-live',
@@ -60,6 +60,6 @@ test('Souls gallery bootstraps from relays and reflects live soul updates', asyn
   await expect(page.getByRole('link', { name: /Bravo Prime/ })).toBeVisible();
   await expect(page.getByText('Handle escalations with live updates')).toBeVisible();
   await expect(page.getByRole('link', { name: /Bravo(?! Prime)/ })).toHaveCount(0);
-  await expect(statsGrid.getByText('Active').locator('..')).toContainText('2');
-  await expect(statsGrid.getByText('Suspended').locator('..')).toContainText('0');
+  await expect(statsGrid.locator('.card:has-text("Active") .card-value')).toHaveText('2');
+  await expect(statsGrid.locator('.card:has-text("Suspended") .card-value')).toHaveText('0');
 });

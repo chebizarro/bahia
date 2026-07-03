@@ -131,6 +131,7 @@ test('A newly provisioned soul becomes visible through relay-backed browsing', a
 
   await page.goto('/souls');
 
-  await expect(page.getByText('Scout Prime')).toBeVisible();
-  await expect(page.getByText('Guide release operators safely')).toBeVisible();
+  const scoutCard = page.getByRole('link', { name: /Scout Prime/ });
+  await expect(scoutCard).toBeVisible();
+  await expect(scoutCard).toContainText('Guide release operators safely');
 });

@@ -57,6 +57,29 @@ A review pass recommended asserting route HTTP success and adding CORS headers t
 
 Unit tests were not run because the behavior under acceptance is Playwright route/runtime behavior and the change adds E2E-only coverage plus PSTF artifacts; no production or unit-targeted code changed.
 
+## 2026-07-03 bahia-dgdm follow-up
+
+Command:
+
+```sh
+npm run test:e2e -- route-console-regression.spec.js soul-provisioned-visibility.spec.js souls-gallery-live.spec.js --reporter=line --workers=1
+```
+
+Result:
+
+- 45 passed in 35.9s
+
+Evidence:
+
+- `web/tests/e2e/route-console-regression.spec.js` now seeds the canonical relay-backed `30900` read models for the exact deployment intent/run and artifact IDs navigated by the route sweep.
+- `web/tests/e2e/soul-provisioned-visibility.spec.js` and `web/tests/e2e/souls-gallery-live.spec.js` use current accessible card/stat selectors rather than strict ambiguous text/parent selectors.
+- No sleep-based waits were added.
+
+Residuals tracked outside this verified slice:
+
+- `bahia-s2fz`: LLM async deploy/rollback appears to use the encrypted default transport instead of canonical public ContextVM `25910`; the LLM spec still fails because no public request reaches the deterministic harness.
+- `bahia-qiyu`: relay-backed encrypted ContextVM fixture discovery/publish behavior needs a focused encrypted-transport pass.
+
 ## Conclusion
 
-The route console regression coverage is verified for the representative Bahia web routes. The deterministic harness now covers REST data, Nostr bootstrap discovery, relay EVENT/EOSE delivery, route HTTP success, and NIP-11 metadata lookup for the DNS route.
+The route console regression coverage is verified for the representative Bahia web routes. The deterministic harness now covers REST data, Nostr bootstrap discovery, relay EVENT/EOSE delivery, route HTTP success, NIP-11 metadata lookup for the DNS route, and canonical `30900` read models for deployment/artifact detail pages.

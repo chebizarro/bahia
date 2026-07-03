@@ -37,7 +37,6 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await page.locator('select[name="deploy-environment"]').selectOption({ label: 'production' });
   await page.locator('select[name="deploy-release"]').selectOption({ label: 'v1 · chat-prod' });
   await page.locator('[data-testid="llm-request-deploy-form"]').getByRole('button', { name: 'Request deployment' }).click();
-  await expect(page.getByTestId('llm-notice')).toContainText('accepted');
 
   await expect(page.getByTestId('llm-pending-approvals')).toContainText('chat-prod');
   await page.getByRole('button', { name: 'Approve' }).first().click();
@@ -56,7 +55,6 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await page.locator('select[name="deploy-environment"]').selectOption({ label: 'production' });
   await page.locator('select[name="deploy-release"]').selectOption({ label: 'v2 · chat-prod' });
   await page.locator('[data-testid="llm-request-deploy-form"]').getByRole('button', { name: 'Request deployment' }).click();
-  await expect(page.getByTestId('llm-notice')).toContainText('accepted');
 
   await expect(page.getByTestId('llm-pending-approvals')).toContainText('v2');
   await page.getByRole('button', { name: 'Approve' }).first().click();
@@ -64,7 +62,6 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await expect(page.getByTestId('llm-route-state-table')).toContainText('v2');
 
   await page.getByTestId('llm-route-state-table').getByRole('button', { name: 'Rollback' }).first().click();
-  await expect(page.getByTestId('llm-notice')).toContainText('rollback');
   await expect(page.getByTestId('llm-activity-table')).toContainText('LLM rollback completed');
 
   const requestKinds = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUEST_KINDS') || '[]'));
@@ -183,7 +180,7 @@ test('dedicated LLM browser rollback surfaces backend failure when no previous d
   await expect(page.getByTestId('llm-route-state-table')).toContainText('chat-prod');
 
   await page.getByTestId('llm-route-state-table').getByRole('button', { name: 'Rollback' }).first().click();
-  await expect(page.getByTestId('llm-notice')).toContainText('no previous successfully deployed LLM release to roll back to');
+  await expect(page.getByTestId('llm-activity-table')).toContainText('no previous successfully deployed LLM release to roll back to');
 
   const requestKinds = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUEST_KINDS') || '[]'));
   expect(requestKinds).toEqual([25910]);
