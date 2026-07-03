@@ -614,14 +614,32 @@ func (p *recordingSecurityPublisher) pubkey(t *testing.T) string {
 
 type fakeBlossom struct{ payloads map[string][]byte }
 
-func (f fakeBlossom) Download(_ context.Context, sha256Hash string) ([]byte, error) {
-	if data := f.payloads[sha256Hash]; data != nil {
-		return data, nil
+func (f fakeBlossom) Download(_ context.Context, blossomURI string) ([]byte, error) {
+	for _, key := range blossomLookupKeys(blossomURI) {
+		if data, ok := f.payloads[key]; ok {
+			return data, nil
+		}
 	}
-	return nil, fmt.Errorf("missing blob %s", sha256Hash)
+	return nil, fmt.Errorf("missing blob %s", blossomURI)
 }
 func (f fakeBlossom) Upload(context.Context, []byte, string) (*blossom.BlobDescriptor, error) {
 	return nil, fmt.Errorf("upload not used")
+}
+
+func blossomLookupKeys(blossomURI string) []string {
+	keys := []string{blossomURI}
+	lastSlash := strings.LastIndex(blossomURI, "/")
+	if lastSlash == -1 || lastSlash == len(blossomURI)-1 {
+		return keys
+	}
+	hash := blossomURI[lastSlash+1:]
+	if dot := strings.LastIndex(hash, "."); dot != -1 {
+		hash = hash[:dot]
+	}
+	if hash != blossomURI {
+		keys = append(keys, hash)
+	}
+	return keys
 }
 
 type scriptedSecuritySubscriber struct {

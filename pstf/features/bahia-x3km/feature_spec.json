@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-x3km",
+  "title": "Fix SecurityScanner SBOM Blossom fixture failures",
+  "type": "bugfix",
+  "status": "verified",
+  "observed_behavior": "SecurityScanner SBOM tests supplied fake Blossom blobs by bare payload hash while the production storage resolver delegates the canonical Blossom URL to the Blossom client, causing deterministic tests to fail with missing-blob errors before reaching hash, OSV, persistence, and publish assertions.",
+  "intended_behavior": "SecurityScanner SBOM tests provide deterministic local Blossom blobs through the same URL-shaped seam used in production so successful scans reach hash verification, OSV querying, persistence, and Nostr observable publish assertions; checksum mismatch tests download a present local blob and fail at checksum validation before OSV.",
+  "scope": [
+    "internal/service/security_scanner_test.go"
+  ],
+  "production_code_changed": false
+}

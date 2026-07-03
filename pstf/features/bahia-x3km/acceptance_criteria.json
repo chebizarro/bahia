@@ -1,0 +1,28 @@
+{
+  "feature_id": "bahia-x3km",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "SecurityScanner SBOM success tests resolve Blossom payloads from deterministic local test data and reach hash verification, OSV query, persistence, and publish assertions without network or missing-blob dependence.",
+      "tests": [
+        "TestSecurityScannerSBOMScanVerifiesHashQueriesOSVPersistsAndPublishes",
+        "TestSecurityScannerCompletionUpdatesCompatibilityAndDispatchesNewBreachOnly"
+      ]
+    },
+    {
+      "id": "AC2",
+      "description": "The SBOM checksum mismatch test downloads a present local blob and fails at checksum validation before issuing OSV queries.",
+      "tests": [
+        "TestSecurityScannerSBOMHashMismatchFailsBeforeOSV"
+      ]
+    },
+    {
+      "id": "AC3",
+      "description": "The service package test suite and full Go build pass after the deterministic fixture repair.",
+      "tests": [
+        "go test ./internal/service",
+        "go build ./..."
+      ]
+    }
+  ]
+}

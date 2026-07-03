@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-x3km",
+  "test_matrix": [
+    {
+      "acceptance_id": "AC1",
+      "command": "GOCACHE=/private/tmp/bahia-go-cache go test ./internal/service",
+      "coverage": "Runs the SecurityScanner SBOM success paths with local fake Blossom payloads and verifies OSV, persistence, compatibility update, breach dispatch de-dupe, and Nostr observable publication behavior."
+    },
+    {
+      "acceptance_id": "AC2",
+      "command": "GOCACHE=/private/tmp/bahia-go-cache go test ./internal/service",
+      "coverage": "Runs the hash mismatch path with a present local blob whose actual hash differs from target metadata, proving OSV is not queried after checksum failure."
+    },
+    {
+      "acceptance_id": "AC3",
+      "command": "go build ./...",
+      "coverage": "Builds all Go packages after the test fixture repair."
+    }
+  ]
+}
