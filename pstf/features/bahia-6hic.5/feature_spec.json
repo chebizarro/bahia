@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-6hic.5",
+  "title": "Assistant agentic async tool-runtime bridge and suspend/resume",
+  "bead": "bahia-6hic.5",
+  "date": "2026-07-03",
+  "intent": "Normalize agent model tool calls into AssistantToolObservation values while preserving Bahia's event-native Nostr/ContextVM async mutation semantics.",
+  "scope": [
+    "Execute read-only sync tools inline through the MCP tool-call adapter and return completed observations.",
+    "Evaluate assistant permissions before every tool execution and normalize ask/deny decisions into deferred/denied observations.",
+    "Dispatch policy-allowed async mutation tools, persist agent_loop waiting_async metadata with the AsyncToolReceipt, and return without waiting for terminal events.",
+    "Resume waiting async work from receipt metadata through the existing downstream Nostr result observer and fail closed to blocked on relay/observer closure.",
+    "Extend startup recovery to resume waiting_async agent loops from AssistantSession.Metadata."
+  ],
+  "out_of_scope": [
+    "The multi-step agent loop that consumes observations.",
+    "Application wiring in internal/app/app.go.",
+    "Frontend action-level approval handling.",
+    "New Nostr event kinds or payload contracts."
+  ],
+  "architecture_notes": [
+    "internal/service cannot import internal/mcp without creating an import cycle, so the runtime exposes service-local descriptor/result projection interfaces for item 8 to adapt from mcp.Server and mcp.AssistantToolRegistry.",
+    "Async terminal observation reuses AssistantOrchestrator.observeDownstreamResult through the ObserveAssistantAsyncResult adapter, preserving scoped subscriptions on receipt.ResultKinds plus e=RequestEventID and existing event validation.",
+    "waiting_async state is stored in AssistantSession.Metadata.agent_loop using AssistantAgentLoopMetadata; deferred approvals are stored in Metadata.deferred_actions."
+  ]
+}

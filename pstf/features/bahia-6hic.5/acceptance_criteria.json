@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-6hic.5",
+  "criteria": [
+    {"id":"AC1","statement":"Read-only synchronous tools are executed inline and returned as succeeded AssistantToolObservation values.","tests":["TestAssistantToolRuntimeSyncReadReturnsCompletedObservation"]},
+    {"id":"AC2","statement":"Allowed async mutation tools are dispatched once, persisted as agent_loop waiting_async with receipt metadata, and return without blocking for terminal results.","tests":["TestAssistantToolRuntimeAsyncAllowedSuspendsThenResumesLiveSuccess","TestAssistantToolRuntimeDuplicateWaitingReceiptDoesNotInvokeAgain"]},
+    {"id":"AC3","statement":"Runtime resume converts terminal downstream success/failure events into normalized observations using the receipt correlation metadata.","tests":["TestAssistantToolRuntimeAsyncAllowedSuspendsThenResumesLiveSuccess","TestAssistantToolRuntimeAsyncBackfillResultResumes","TestAssistantToolRuntimeAsyncFailureObservation"]},
+    {"id":"AC4","statement":"Relay close or missing observer/receipt metadata fails closed by marking the loop and session blocked, not by losing the pending work.","tests":["TestAssistantToolRuntimeRelayClosedBlocksSession","TestAssistantSessionRecoveryWaitingAsyncWithoutRuntimeBlocks"]},
+    {"id":"AC5","statement":"Permission ask creates an AssistantDeferredAction and awaiting_approval session state without executing the tool; deny returns a denied observation without execution.","tests":["TestAssistantToolRuntimeAskDefersWithoutExecuting","TestAssistantToolRuntimeDenyReturnsDeniedObservation"]},
+    {"id":"AC6","statement":"Startup recovery resumes agent_loop waiting_async sessions from receipt metadata.","tests":["TestAssistantToolRuntimeRestartRecoveryResumesWaitingAsync"]}
+  ]
+}

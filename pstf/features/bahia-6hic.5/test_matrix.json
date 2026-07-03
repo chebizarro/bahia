@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-6hic.5",
+  "test_matrix": [
+    {"test":"TestAssistantToolRuntimeSyncReadReturnsCompletedObservation","acceptance_criteria":["AC1"],"evidence":"MCP sync result is parsed into a succeeded observation, JSON result map, and running loop metadata."},
+    {"test":"TestAssistantToolRuntimeAsyncAllowedSuspendsThenResumesLiveSuccess","acceptance_criteria":["AC2","AC3"],"evidence":"Allowed async tool invokes once, persists waiting_async receipt metadata, then resumes through the live downstream observer."},
+    {"test":"TestAssistantToolRuntimeAsyncBackfillResultResumes","acceptance_criteria":["AC3"],"evidence":"A stored result emitted by SubscribeAllWithEOSE is accepted during resume before any live event is needed."},
+    {"test":"TestAssistantToolRuntimeAsyncFailureObservation","acceptance_criteria":["AC3"],"evidence":"Terminal failed downstream status becomes a failed tool observation while clearing waiting_async."},
+    {"test":"TestAssistantToolRuntimeRelayClosedBlocksSession","acceptance_criteria":["AC4"],"evidence":"Observer/relay closure returns a blocked failed observation and sets AssistantSession.State plus agent_loop state to blocked."},
+    {"test":"TestAssistantToolRuntimeAskDefersWithoutExecuting","acceptance_criteria":["AC5"],"evidence":"Review-mode mutation stores an AssistantDeferredAction and never calls the MCP server."},
+    {"test":"TestAssistantToolRuntimeDenyReturnsDeniedObservation","acceptance_criteria":["AC5"],"evidence":"Explicit deny rule returns denied observation and does not call sync or async MCP execution."},
+    {"test":"TestAssistantSessionRecoveryWaitingAsyncWithoutRuntimeBlocks","acceptance_criteria":["AC4"],"evidence":"Recovery fails closed and publishes blocked session/status when waiting_async metadata exists but no agent runtime is configured."},
+    {"test":"TestAssistantToolRuntimeRestartRecoveryResumesWaitingAsync","acceptance_criteria":["AC6"],"evidence":"AssistantSessionRecoveryRunner detects agent_loop waiting_async and calls Runtime.ResumeAsync."},
+    {"test":"TestAssistantToolRuntimeDuplicateWaitingReceiptDoesNotInvokeAgain","acceptance_criteria":["AC2"],"evidence":"Repeated execution of the same waiting tool call returns the stored receipt without invoking the async MCP publisher again."}
+  ]
+}
