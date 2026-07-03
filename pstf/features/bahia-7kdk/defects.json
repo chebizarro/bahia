@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-7kdk",
+  "defects": [
+    {
+      "id": "D1",
+      "issue": "bahia-7kdk",
+      "severity": "P0",
+      "observed": "Assistant transcript replay subscriptions for kind 30316 are rejected by the Bahia sidecar as not readable.",
+      "expected": "Kind 30316 is a canonical, service-authored assistant transcript observable and is readable as encrypted ciphertext through the sidecar.",
+      "status": "fixed",
+      "verification": [
+        "go test ./internal/kinds",
+        "go test ./internal/relaysidecar"
+      ]
+    }
+  ]
+}

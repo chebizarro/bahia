@@ -129,7 +129,7 @@ func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testin
 	}
 
 	canonicalFilter := nostr.Filter{Kinds: []nostr.Kind{
-		30315, 30900, 4903,
+		nostr.Kind(kinds.NIP38Status), nostr.Kind(kinds.AssistantTranscript), nostr.Kind(kinds.CASControlState), nostr.Kind(kinds.CASAudit),
 		nostr.Kind(kinds.HeartbeatObservation),
 		nostr.Kind(kinds.ContinuityStatus),
 		nostr.Kind(kinds.DegradedModeActivation),
@@ -142,7 +142,7 @@ func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testin
 	}}
 	reject, msg := server.Relay().OnRequest(context.Background(), canonicalFilter)
 	if reject {
-		t.Fatalf("expected canonical status/state/audit/continuity kinds to be readable, got rejection %q", msg)
+		t.Fatalf("expected canonical assistant/status/state/audit/continuity kinds to be readable, got rejection %q", msg)
 	}
 
 	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}

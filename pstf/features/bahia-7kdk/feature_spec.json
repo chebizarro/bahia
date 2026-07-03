@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-7kdk",
+  "title": "Allow assistant transcript kind 30316 readable through the Bahia sidecar",
+  "issue": "bahia-7kdk",
+  "observed_behavior": [
+    "The default agentic assistant fails transcript replay with a relay rejection: event kind 30316 is not readable from the Bahia sidecar.",
+    "The sidecar read policy delegates readable-kind checks to internal/kinds.IsReadableKind.",
+    "Kind 30316 is defined as the assistant transcript kind in internal/domain/assistant.go but was not present in internal/kinds/kinds.go or IsCanonicalObservableKind."
+  ],
+  "intended_behavior": [
+    "Assistant transcript events are service-authored canonical observable projections and are readable through scoped sidecar REQ subscriptions.",
+    "Readable transcript payloads remain AEAD-encrypted ciphertext; this change does not alter encryption or transcript-store decryption semantics.",
+    "Backend and frontend canonical kind constants remain in drift-checked parity."
+  ],
+  "scope": [
+    "internal/kinds/kinds.go",
+    "internal/kinds/policy.go",
+    "internal/kinds/policy_test.go",
+    "internal/relaysidecar/server_test.go",
+    "web/src/lib/nostr/kinds.gen.js"
+  ],
+  "out_of_scope": [
+    "Changing assistant transcript encryption, storage, or replay implementation.",
+    "Redeploying the live Bahia edge stack."
+  ]
+}

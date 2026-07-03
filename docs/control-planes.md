@@ -112,7 +112,7 @@ Browser and Bahia control-plane traffic should target the relay sidecar first.
 - Upstream relays: configure `nostr.relays` for public interop/audit traffic. If `nostr.sidecar.mirror_external=true`, Bahia treats the sidecar as the upstream mirror boundary and does not also connect directly to those URLs.
 - Encrypted-request relay URLs and Loom relays remain explicitly configured for their own traffic and are not used for Bahia read-model publication.
 
-This avoids duplicate event loops: Bahia publishes canonical observables (`30900` state, `4903` audit, `30315` status, ContextVM discovery `11316`-`11320`, relay sets `30002`, and app data `30078`) to the sidecar pool only, while optional upstream mirroring is isolated behind the sidecar boundary.
+This avoids duplicate event loops: Bahia publishes canonical observables (`30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext, ContextVM discovery `11316`-`11320`, relay sets `30002`, and app data `30078`) to the sidecar pool only, while optional upstream mirroring is isolated behind the sidecar boundary.
 
 ### Relay-purpose boundaries
 
@@ -175,7 +175,7 @@ Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecyc
 1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/restart`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, or `ml/recipe-run`.
 2. Publish the request as ContextVM kind `25910`, usually wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`) when encrypted transport is available.
 3. Require relay `OK` with `accepted=true` for the signed Nostr event. A JSON-RPC acknowledgment is only command receipt, not proof of long-running completion.
-4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
+4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext for assistant flows, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
 5. Treat EOSE as historical catch-up only; keep subscriptions open for realtime convergence. Deduplicate by event id and use replaceable semantics for `(kind, pubkey, d-tag)` state events.
 6. Handle `CLOSED` and `AUTH` explicitly. Auth-related closures fail distinctly; non-auth closures fail only when all known result/observable relays close before a correlated terminal state/audit/status event.
 
@@ -214,6 +214,7 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 | `30900` | Canonical control-plane state projection | Scope by service author, `#d`, `#domain`, `#schema`, resource tags (`#service`, `#environment`, `#artifact`, `#dns`, `#worker`, etc.) |
 | `4903` | Canonical audit fact | Scope by service author, requester `#p`, resource tags, and correlation `#e` where present |
 | `30315` | NIP-38 operational status | Scope by service author, `#d`, `#domain`, `#status`, resource tags, and correlation `#e`; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, and heartbeat `d`/`worker` tags rather than a separate `30350` kind |
+| `30316` | Assistant transcript | Scope by service author, `#schema=bahia.assistant-transcript.v1`, `#session`, `#turn`, `#role`, and sequence/key tags; content is service-held symmetric-key AEAD ciphertext |
 | `11316`-`11320` | ContextVM server/tool/resource/prompt/template discovery | Scope by Bahia service pubkey; use for bootstrap before mutation or state subscriptions |
 | `30002` | NIP-51 relay set | Scope by Bahia service pubkey and relay-set `#d` tags |
 | `30004` | NIP-51 Curation Set | Scope by Bahia service pubkey, `#d`, `#domain=sbom`, `#schema=bahia.sbom.available-list.v1`, and subject tags |

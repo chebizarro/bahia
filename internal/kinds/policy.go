@@ -17,7 +17,7 @@ func IsRequestKind(kind int) bool {
 // production-readable after the Nostr-native migration boundary.
 func IsCanonicalObservableKind(kind int) bool {
 	switch kind {
-	case CASControlState, CASAudit, NIP38Status,
+	case CASControlState, CASAudit, NIP38Status, AssistantTranscript,
 		ContextVMServerAnnouncement, ContextVMToolsList, ContextVMResourcesList,
 		ContextVMResourceTemplatesList, ContextVMPromptsList,
 		RelaySetDiscovery, NIP65RelayList, NIP51DMRelayList, SBOMReference, SBOMAvailabilityList,

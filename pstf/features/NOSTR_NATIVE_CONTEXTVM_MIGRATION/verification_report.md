@@ -7,7 +7,7 @@ Complete. ContextVM/canonical Nostr migration streams A/B/C are complete and doc
 - `bahia-dgju` CLOSED: CEP-4/NIP-59 random-key gift-wrap support for `1059`/`21059` around inner ContextVM `25910` was implemented in `internal/controlplane/encrypted_transport*`; focused transport tests passed.
 - `bahia-f0uw` CLOSED: production runtime legacy kind reactor/subscriber support was removed; legacy custom kinds are isolated outside production runtime except startup migration/fixtures.
 - `bahia-viys` CLOSED: web/CLI client cutover to ContextVM/canonical observables was completed.
-- `web/src/lib/nostr/kinds.gen.js` exposes ContextVM (`25910`, `1059`, `21059`, `11316`-`11320`) and canonical observable constants (`30900`, `4903`, `30315`, `30002`, `30078`), while labelling legacy ranges migration-only.
+- `web/src/lib/nostr/kinds.gen.js` exposes ContextVM (`25910`, `1059`, `21059`, `11316`-`11320`) and canonical observable constants (`30900`, `4903`, `30315`, `30316`, `30002`, `30078`), while labelling legacy ranges migration-only.
 - Docs finalized: `docs/user-guide/nostr-integration.md`, `docs/control-planes.md`, `docs/user-guide/mcp-tools.md`, `docs/user-guide/cli-reference.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md`, `docs/operator-assistant-protocol.md`, and `AGENTS.md`.
 
 ## Tests run

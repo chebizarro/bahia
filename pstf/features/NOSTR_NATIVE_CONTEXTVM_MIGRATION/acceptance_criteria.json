@@ -17,7 +17,7 @@
     },
     {
       "id": "AC-003",
-      "statement": "The web kind surface exposes ContextVM and canonical observable read kinds: 25910, 1059, 21059, 11316-11320, 30900, 4903, 30315, 30002, 30078.",
+      "statement": "The web kind surface exposes ContextVM and canonical observable read kinds: 25910, 1059, 21059, 11316-11320, 30900, 4903, 30315, 30316, 30002, 30078.",
       "tests": [
         "static inspection: web/src/lib/nostr/kinds.gen.js"
       ]

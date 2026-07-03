@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-7kdk",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "internal/kinds exposes AssistantTranscript as canonical kind 30316 and keeps web/src/lib/nostr/kinds.gen.js parity with ASSISTANT_TRANSCRIPT = 30316.",
+      "tests": ["go test ./internal/kinds"]
+    },
+    {
+      "id": "AC2",
+      "statement": "kinds.IsReadableKind(30316) returns true and the kind is treated as a Bahia projection/canonical observable.",
+      "tests": ["go test ./internal/kinds"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The relay sidecar read policy accepts a REQ filter for kind 30316 instead of rejecting it as not readable.",
+      "tests": ["go test ./internal/relaysidecar"]
+    },
+    {
+      "id": "AC4",
+      "statement": "The repository still builds after the sidecar readable-kind policy change.",
+      "tests": ["go build ./..."]
+    },
+    {
+      "id": "AC5",
+      "statement": "Frontend unit tests remain green with the mirrored generated kind constant.",
+      "tests": ["cd web && npm run test:unit"]
+    }
+  ]
+}

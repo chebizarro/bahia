@@ -1,0 +1,41 @@
+{
+  "feature_id": "bahia-7kdk",
+  "tests": [
+    {
+      "name": "TestGeneratedFrontendKindsMatchCanonicalGoKinds",
+      "command": "go test ./internal/kinds",
+      "criteria": ["AC1"],
+      "purpose": "Proves the new Go AssistantTranscript constant has a frontend ASSISTANT_TRANSCRIPT parity entry."
+    },
+    {
+      "name": "TestIsBahiaProjectionKind",
+      "command": "go test ./internal/kinds",
+      "criteria": ["AC2"],
+      "purpose": "Proves kind 30316 is classified as a canonical Bahia projection."
+    },
+    {
+      "name": "TestIsReadableKind",
+      "command": "go test ./internal/kinds",
+      "criteria": ["AC2"],
+      "purpose": "Proves kind 30316 is readable through the shared readable-kind predicate."
+    },
+    {
+      "name": "TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds",
+      "command": "go test ./internal/relaysidecar",
+      "criteria": ["AC3"],
+      "purpose": "Proves the sidecar OnRequest policy accepts kind 30316 in canonical readable filters."
+    },
+    {
+      "name": "Repository build",
+      "command": "go build ./...",
+      "criteria": ["AC4"],
+      "purpose": "Verifies the repository builds after the kind-policy change."
+    },
+    {
+      "name": "Frontend unit suite",
+      "command": "cd web && npm run test:unit",
+      "criteria": ["AC5"],
+      "purpose": "Verifies frontend unit coverage remains green with the generated constant change."
+    }
+  ]
+}

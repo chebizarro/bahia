@@ -314,7 +314,7 @@ ContextVM commands use JSON-RPC request/response for private intent acknowledgme
 
 1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `worker/cordon`, `package/promote`, `dns/zone-create`, or `backup/run`.
 2. Encrypt and route it through ContextVM (`25910` inside CEP-4/NIP-59 `1059` or `21059` where supported), tagged to the Bahia service pubkey.
-3. Subscribe for the correlated ContextVM response and for observable state/audit/status kinds (`30900`, `4903`, `30315`, plus domain-specific standard NIPs) before publishing when possible.
+3. Subscribe for the correlated ContextVM response and for observable state/audit/status kinds (`30900`, `4903`, `30315`, plus `30316` assistant transcript ciphertext for assistant flows and domain-specific standard NIPs) before publishing when possible.
 4. Publish and require at least one relay `OK` with `accepted=true`.
 5. Treat JSON-RPC response status as command acknowledgment only; long-running truth is the canonical observable event stream.
 6. Surface `AUTH`, `CLOSED`, zero-accepted publish, explicit abort, and configured timeout outcomes as distinct failures or degraded waits.

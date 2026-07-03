@@ -95,6 +95,7 @@ export const PACKAGE_DRIFT_EVENT = 7992;
 export const WORKER_RESULT = 7997;
 export const CAS_AUDIT = 4903;
 export const NIP38_STATUS = 30315;
+export const ASSISTANT_TRANSCRIPT = 30316;
 export const CAS_CONTROL_STATE = 30900;
 export const LOOM_WORKER_ADVERTISEMENT = 10100;
 export const LOOM_JOB_STATUS_UPDATE = 30100;
