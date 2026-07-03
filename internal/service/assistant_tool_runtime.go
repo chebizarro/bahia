@@ -114,13 +114,14 @@ type AssistantToolRuntime struct {
 
 // AssistantToolRuntimeRequest is one model-requested tool invocation.
 type AssistantToolRuntimeRequest struct {
-	Session     *domain.AssistantSession
-	RunID       string
-	TurnID      string
-	Iteration   int
-	ToolCall    domain.AssistantAgentToolCall
-	PlanHash    string
-	CancelScope string
+	Session        *domain.AssistantSession
+	RunID          string
+	TurnID         string
+	Iteration      int
+	ToolCall       domain.AssistantAgentToolCall
+	PlanHash       string
+	CancelScope    string
+	ApprovedAction *domain.AssistantDeferredAction
 }
 
 // AssistantToolResumeRequest resumes a previously suspended async tool call.
@@ -170,6 +171,19 @@ func (r *AssistantToolRuntime) Execute(ctx context.Context, req AssistantToolRun
 	descriptor, ok := r.lookupDescriptor(call.Name)
 	if !ok {
 		return r.deniedObservation(req, call, domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Reason: "assistant tool is not registered for agent use"}), nil
+	}
+	if req.ApprovedAction != nil {
+		permission, err := r.permissionFromApprovedAction(req, call, descriptor)
+		if err != nil {
+			return r.deniedObservation(req, call, domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Effect: descriptor.Effect, Risk: descriptor.DefaultRisk, ExecutionMode: descriptor.ExecutionMode, Reason: err.Error()}), nil
+		}
+		if descriptor.ExecutionMode == domain.AssistantToolExecutionModeAsync {
+			return r.executeAsync(ctx, req, call, descriptor, permission)
+		}
+		if descriptor.ExecutionMode != domain.AssistantToolExecutionModeSync {
+			return r.failedObservation(req, call, descriptor, permission, "assistant tool execution mode is unsupported", nil), nil
+		}
+		return r.executeSync(ctx, req, call, descriptor, permission)
 	}
 	permission := r.evaluatePermission(descriptor, call.Arguments)
 	switch permission.Decision {
@@ -311,6 +325,9 @@ func (r *AssistantToolRuntime) executeSync(ctx context.Context, req AssistantToo
 	metadata.RunID = firstNonEmptyString(req.RunID, metadata.RunID)
 	metadata.Iteration = req.Iteration
 	metadata.State = domain.AssistantAgentLoopStateRunning
+	metadata.PendingActionID = ""
+	metadata.PendingToolCallID = ""
+	metadata.WaitingReceipt = nil
 	metadata.LastObservationID = obs.ObservationID
 	metadata.UpdatedAt = r.now().UTC()
 	setAssistantAgentLoopMetadata(req.Session, metadata)
@@ -493,6 +510,46 @@ func (r *AssistantToolRuntime) evaluatePermission(descriptor AssistantToolRuntim
 		return domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Effect: descriptor.Effect, Risk: descriptor.DefaultRisk, ExecutionMode: descriptor.ExecutionMode, Reason: "assistant permission engine is not configured"}
 	}
 	return r.permissions.Evaluate(AssistantPermissionRequest{Tool: metadata, Args: args})
+}
+
+func (r *AssistantToolRuntime) permissionFromApprovedAction(req AssistantToolRuntimeRequest, call domain.AssistantAgentToolCall, descriptor AssistantToolRuntimeToolDescriptor) (domain.AssistantPermissionResult, error) {
+	action := req.ApprovedAction
+	if action == nil {
+		return domain.AssistantPermissionResult{}, fmt.Errorf("approved deferred action is required")
+	}
+	if action.SessionID != "" && req.Session != nil && action.SessionID != req.Session.SessionID {
+		return domain.AssistantPermissionResult{}, fmt.Errorf("approved action session does not match assistant session")
+	}
+	if action.RunID != "" && req.RunID != "" && action.RunID != req.RunID {
+		return domain.AssistantPermissionResult{}, fmt.Errorf("approved action run does not match active assistant run")
+	}
+	if action.TurnID != "" && req.TurnID != "" && action.TurnID != req.TurnID {
+		return domain.AssistantPermissionResult{}, fmt.Errorf("approved action turn does not match active assistant turn")
+	}
+	if action.ToolCallID != "" && action.ToolCallID != call.ID {
+		return domain.AssistantPermissionResult{}, fmt.Errorf("approved action tool call does not match model tool call")
+	}
+	if action.ToolName != "" && action.ToolName != call.Name {
+		return domain.AssistantPermissionResult{}, fmt.Errorf("approved action tool name does not match model tool call")
+	}
+	permission := action.Permission
+	permission.Decision = domain.AssistantPermissionDecisionAllow
+	if permission.Effect == "" {
+		permission.Effect = descriptor.Effect
+	}
+	if permission.Risk == "" {
+		permission.Risk = descriptor.DefaultRisk
+	}
+	if permission.ExecutionMode == "" {
+		permission.ExecutionMode = descriptor.ExecutionMode
+	}
+	permission.Reason = firstNonEmptyString(permission.Reason, "operator approved deferred assistant action")
+	if permission.Metadata == nil {
+		permission.Metadata = map[string]any{}
+	}
+	permission.Metadata["approved_action_id"] = action.ActionID
+	permission.Metadata["approval_decision"] = "approve"
+	return permission, nil
 }
 
 func (r *AssistantToolRuntime) persistBlocked(ctx context.Context, session *domain.AssistantSession, metadata domain.AssistantAgentLoopMetadata, obs *domain.AssistantToolObservation) error {

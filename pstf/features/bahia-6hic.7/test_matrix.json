@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-6hic.7",
+  "tests": [
+    {"acceptance": "AC1,AC5,AC7", "command": "go test ./internal/service -run TestAssistantAgentLoopReadToolContinuesToCompletion -count=1", "coverage": "Sync read tool call, model continuation, transcript append order, tool observation threading."},
+    {"acceptance": "AC2,AC7", "command": "go test ./internal/service -run TestAssistantAgentLoopAsyncSuspendsThenResumesAndContinues -count=1", "coverage": "waiting_async suspend, runtime ResumeAsync bridge, terminal observation fed into next model request."},
+    {"acceptance": "AC3", "command": "go test ./internal/service -run TestAssistantAgentLoopAskApproveExecutesDeferredAction -count=1", "coverage": "Deferred approval suspend, ApprovedAction runtime execution, success observation continuation."},
+    {"acceptance": "AC4", "command": "go test ./internal/service -run TestAssistantAgentLoopRejectFeedsDenialObservation -count=1", "coverage": "Approval rejection creates denial observation and does not call the tool server."},
+    {"acceptance": "AC5", "command": "go test ./internal/service -run TestAssistantAgentLoopReplaysMemoryAcrossTurns -count=1", "coverage": "Transcript-backed prior user/assistant messages are replayed into the next turn."},
+    {"acceptance": "AC6", "command": "go test ./internal/service -run 'TestAssistantAgentLoopMax(Iterations|ConsecutiveToolFailures)' -count=1", "coverage": "Iteration and consecutive failure guards block runaway loops."},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5,AC6,AC7", "command": "go test ./internal/service -run 'TestAssistant(ToolRuntime|AgentLoop)' -count=1", "coverage": "Loop paths plus existing runtime bridge regression coverage."},
+    {"acceptance": "AC7", "command": "go build ./...", "coverage": "Repository-wide compile of public loop API and narrow runtime ApprovedAction extension."}
+  ]
+}

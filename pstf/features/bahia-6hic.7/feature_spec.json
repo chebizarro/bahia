@@ -1,0 +1,27 @@
+{
+  "feature_id": "bahia-6hic.7",
+  "title": "Assistant agentic multi-step loop",
+  "bead": "bahia-6hic.7",
+  "date": "2026-07-03",
+  "intent": "Wire the item-3 model client, item-5 tool runtime, and item-6 transcript replay into a resumable multi-iteration assistant loop without modifying orchestrator/app wiring.",
+  "scope": [
+    "Expose a service-level AssistantAgentLoop API with StartTurn, ResumeAfterAsyncObservation, and ResumeAfterActionDecision entry points for item 8 to call.",
+    "Build model input from AssistantContextBuilder.BuildModelHistory, including replayed transcript memory and the current operator prompt.",
+    "Inject provider-neutral tool schemas into AgentModelClient.Next requests without importing internal/mcp into internal/service.",
+    "Persist assistant, user, and tool observation messages through the transcript append interface so subsequent turns replay memory.",
+    "Execute model tool calls through AssistantToolRuntime and suspend on waiting_async or deferred approval observations.",
+    "Resume async observations and approval decisions by feeding normalized tool observations back to the model loop.",
+    "Bound runaway behavior with max_iterations and max_consecutive_tool_failures from AssistantAgenticConfig."
+  ],
+  "out_of_scope": [
+    "Routing assistant prompts through the loop in AssistantOrchestrator or app wiring.",
+    "Frontend action-level approval UX.",
+    "External MCP client or subagent/skill/hook loading.",
+    "Changing Nostr event kinds or payload shapes."
+  ],
+  "architecture_notes": [
+    "AssistantAgentToolSchemaProvider is a service-local model schema interface so item 8 can adapt MCP descriptors without creating an internal/service -> internal/mcp import cycle.",
+    "Approved deferred actions are executed through AssistantToolRuntime.Execute with a narrow ApprovedAction override that validates session/run/turn/tool-call binding and preserves runtime dispatch semantics.",
+    "waiting_async and awaiting_approval observations are not fed to the model immediately; the loop persists/suspends and later feeds the terminal async observation or approve/reject decision observation."
+  ]
+}

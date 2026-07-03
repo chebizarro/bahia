@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-6hic.7",
+  "title": "Assistant agentic multi-step loop",
+  "criteria": [
+    {"id": "AC1", "statement": "StartTurn builds replay-backed model input, injects tool schemas, executes a read-only sync tool through AssistantToolRuntime, feeds the resulting AssistantToolObservation back as a role=tool message, and completes when the model stops."},
+    {"id": "AC2", "statement": "An async mutation tool produces a waiting_async observation that suspends the loop without blocking; ResumeAfterAsyncObservation observes the terminal result through the runtime, appends a tool observation, and continues model iteration."},
+    {"id": "AC3", "statement": "A permission ask observation suspends the loop as awaiting_approval; approving the deferred action executes the original tool through the runtime and feeds the resulting observation back to the model."},
+    {"id": "AC4", "statement": "Rejecting a deferred action does not execute the tool and instead feeds a denial observation back to the model so it can continue."},
+    {"id": "AC5", "statement": "Transcript replay is used as model memory across turns, and loop appends user, assistant, and tool observation messages to the transcript interface."},
+    {"id": "AC6", "statement": "max_iterations and max_consecutive_tool_failures from AssistantAgenticConfig bound runaway loops by moving the session/loop to blocked."},
+    {"id": "AC7", "statement": "The loop remains decoupled from internal/mcp by using service-local tool schema and runtime interfaces, exposing a clean API for item 8."}
+  ]
+}
