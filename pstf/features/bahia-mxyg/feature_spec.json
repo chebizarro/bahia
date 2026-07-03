@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-mxyg",
+  "title": "Per-provider legacy assistant planner streaming toggle",
+  "observed_behavior": "The legacy assistant planner attempted streaming whenever its chat client implemented AssistantStreamingChatClient, causing OpenAI-compatible providers that omit delta.content for streamed response_format (json_schema) outputs to incur a failed streaming attempt before falling back.",
+  "intended_behavior": "The legacy assistant planner uses non-streaming chat completions by default and only attempts streaming when the assistant provider configuration explicitly enables assistant.llm_streaming.",
+  "scope": [
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "internal/service/assistant_orchestrator.go",
+    "internal/config/config_test.go",
+    "internal/service/assistant_orchestrator_test.go",
+    "docs/user-guide/getting-started.md"
+  ],
+  "authoritative_contract": "Beads issue bahia-mxyg requires AssistantConfig.LLMStreaming with koanf/yaml key llm_streaming, BAHIA_ASSISTANT_LLM_STREAMING flat compatibility env loading, AssistantOrchestratorConfig.StreamingEnabled wiring, default-off non-streaming behavior, and opt-in streaming behavior. Follow-up to bahia-m6qs; the chat_client.go empty-stream fallback remains unchanged."
+}

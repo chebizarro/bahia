@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-mxyg",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "assistant.llm_streaming exists on AssistantConfig, defaults to false, and can be enabled from YAML.",
+      "tests": ["go test ./internal/config"]
+    },
+    {
+      "id": "AC2",
+      "statement": "BAHIA_ASSISTANT_LLM_STREAMING enables the same assistant.llm_streaming setting through the assistant flat-compat environment path.",
+      "tests": ["go test ./internal/config"]
+    },
+    {
+      "id": "AC3",
+      "statement": "When StreamingEnabled is false, the legacy assistant planner uses PlanFromPrompt even if the client supports PlanFromPromptStreaming.",
+      "tests": ["go test ./internal/service -run TestAssistantOrchestrator"]
+    },
+    {
+      "id": "AC4",
+      "statement": "When StreamingEnabled is true and the client supports streaming, the legacy assistant planner uses PlanFromPromptStreaming.",
+      "tests": ["go test ./internal/service -run TestAssistantOrchestrator"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Application wiring passes cfg.Assistant.LLMStreaming into AssistantOrchestratorConfig.StreamingEnabled without changing the bahia-m6qs chat client fallback.",
+      "tests": ["go build ./...", "go vet ./internal/service ./internal/config"]
+    }
+  ]
+}

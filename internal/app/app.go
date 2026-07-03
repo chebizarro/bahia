@@ -953,6 +953,7 @@ func New(cfg *config.Config) (*App, error) {
 			AllowedToolNames: assistantToolNames(mcpServer),
 			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
 			AgenticEnabled:   cfg.Assistant.Agentic.Enabled,
+			StreamingEnabled: cfg.Assistant.LLMStreaming,
 			Logger:           slog.Default(),
 		})
 		var assistantAgentLoop service.AssistantAgentLoopController

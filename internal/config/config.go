@@ -171,10 +171,15 @@ type SoulFactoryConfig struct {
 
 // AssistantConfig controls the operator assistant backend orchestration path.
 type AssistantConfig struct {
-	Enabled         bool                       `koanf:"enabled" yaml:"enabled"`
-	LLMBaseURL      string                     `koanf:"llm_base_url" yaml:"llm_base_url"`
-	LLMModel        string                     `koanf:"llm_model" yaml:"llm_model"`
-	LLMAPIKey       string                     `koanf:"llm_api_key" yaml:"llm_api_key"`
+	Enabled    bool   `koanf:"enabled" yaml:"enabled"`
+	LLMBaseURL string `koanf:"llm_base_url" yaml:"llm_base_url"`
+	LLMModel   string `koanf:"llm_model" yaml:"llm_model"`
+	LLMAPIKey  string `koanf:"llm_api_key" yaml:"llm_api_key"`
+	// LLMStreaming controls whether the legacy planner uses streaming chat completions.
+	// When false (the default), the legacy planner uses non-streaming chat completions;
+	// some OpenAI-compatible providers do not emit delta.content for streamed
+	// response_format (json_schema) outputs, so streaming is opt-in per provider.
+	LLMStreaming    bool                       `koanf:"llm_streaming" yaml:"llm_streaming"`
 	SignetBunkerURI string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
 	SignetAllowMock bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock"`
 	Agentic         AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
@@ -929,7 +934,7 @@ func Load(configPath string) (*Config, error) {
 			return "assistant.mcp.async_observation." + strings.TrimPrefix(key, "assistant_mcp_async_observation_")
 		}
 		switch key {
-		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key":
+		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key", "assistant_llm_streaming":
 			return key
 		}
 		// If no explicit separator was found, split on the first underscore.
@@ -972,6 +977,9 @@ func applyAssistantFlatCompat(k *koanf.Koanf, cfg *Config) {
 	}
 	if k.Exists("assistant_llm_api_key") {
 		cfg.Assistant.LLMAPIKey = k.String("assistant_llm_api_key")
+	}
+	if k.Exists("assistant_llm_streaming") {
+		cfg.Assistant.LLMStreaming = k.Bool("assistant_llm_streaming")
 	}
 }
 

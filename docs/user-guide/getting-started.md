@@ -71,6 +71,7 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
+| `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for the legacy assistant planner provider | `false` |
 
 ### Config File (bahia.yaml)
 
@@ -103,6 +104,13 @@ sbom:
     # Disabled by default; Syft remains the fallback/default generator.
     enabled: false
     binary_path: "cdxgen"
+
+assistant:
+  llm_base_url: "https://api.openai.com"
+  llm_model: "<planner-model>"
+  # Disabled by default. Enable only for providers that emit delta.content when
+  # streaming response_format (json_schema) chat completions.
+  llm_streaming: false
 ```
 
 ## Your First Deployment

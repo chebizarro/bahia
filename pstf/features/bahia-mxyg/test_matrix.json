@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-mxyg",
+  "tests": [
+    {
+      "name": "TestDefaults",
+      "type": "Go unit test",
+      "acceptance_criteria": ["AC1"],
+      "notes": "Verifies AssistantConfig.LLMStreaming remains default false."
+    },
+    {
+      "name": "TestAssistantLLMStreamingLoadsFromYAMLAndEnv",
+      "type": "Go unit test",
+      "acceptance_criteria": ["AC1", "AC2"],
+      "notes": "Verifies assistant.llm_streaming loads true from YAML and BAHIA_ASSISTANT_LLM_STREAMING."
+    },
+    {
+      "name": "TestAssistantOrchestratorPlanFromPromptHonorsStreamingToggle",
+      "type": "Go unit test",
+      "acceptance_criteria": ["AC3", "AC4"],
+      "notes": "Uses a fake chat client implementing both planner methods and counts which path was invoked."
+    },
+    {
+      "name": "go build ./...",
+      "type": "Go build",
+      "acceptance_criteria": ["AC5"],
+      "notes": "Compiles application wiring including cfg.Assistant.LLMStreaming to AssistantOrchestratorConfig.StreamingEnabled."
+    },
+    {
+      "name": "go vet ./internal/service ./internal/config",
+      "type": "Go vet",
+      "acceptance_criteria": ["AC5"],
+      "notes": "Checks the touched service/config packages for vet issues."
+    }
+  ]
+}

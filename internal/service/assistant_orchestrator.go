@@ -105,23 +105,25 @@ type AssistantOrchestratorConfig struct {
 	AllowedToolNames []string
 	InitialSessions  []domain.AssistantSession
 	AgenticEnabled   bool
+	StreamingEnabled bool
 	AgentLoop        AssistantAgentLoopController
 	Logger           *slog.Logger
 }
 
 // AssistantOrchestrator coordinates assistant prompt planning and approval dispatch.
 type AssistantOrchestrator struct {
-	chatClient     AssistantChatClient
-	contextBuilder AssistantContextProvider
-	toolInvoker    AssistantAsyncToolInvoker
-	publisher      AssistantEventPublisher
-	subscriber     AssistantRelaySubscriber
-	signer         canonicalnostr.Signer
-	identity       AssistantIdentity
-	allowedTools   map[string]struct{}
-	logger         *slog.Logger
-	agenticEnabled bool
-	agentLoop      AssistantAgentLoopController
+	chatClient       AssistantChatClient
+	contextBuilder   AssistantContextProvider
+	toolInvoker      AssistantAsyncToolInvoker
+	publisher        AssistantEventPublisher
+	subscriber       AssistantRelaySubscriber
+	signer           canonicalnostr.Signer
+	identity         AssistantIdentity
+	allowedTools     map[string]struct{}
+	logger           *slog.Logger
+	agenticEnabled   bool
+	streamingEnabled bool
+	agentLoop        AssistantAgentLoopController
 
 	mu                 sync.Mutex
 	sessions           map[string]*domain.AssistantSession
@@ -159,6 +161,7 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 		allowedTools:       allowed,
 		logger:             logger.With("component", "assistant_orchestrator"),
 		agenticEnabled:     config.AgenticEnabled,
+		streamingEnabled:   config.StreamingEnabled,
 		agentLoop:          config.AgentLoop,
 		sessions:           make(map[string]*domain.AssistantSession),
 		sessionLocks:       make(map[string]*sync.Mutex),
@@ -945,34 +948,33 @@ func sessionHasParticipant(session *domain.AssistantSession, operator string) bo
 }
 
 func (o *AssistantOrchestrator) planFromPrompt(ctx context.Context, requestEvent *nostr.Event, sessionID, systemPrompt, userPrompt string) (*domain.AssistantPlan, error) {
-	streamingClient, ok := o.chatClient.(AssistantStreamingChatClient)
-	if !ok {
-		return o.chatClient.PlanFromPrompt(ctx, systemPrompt, userPrompt)
+	if streamingClient, ok := o.chatClient.(AssistantStreamingChatClient); ok && o.streamingEnabled {
+		var pending strings.Builder
+		lastPublished := time.Now()
+		flush := func(force bool) {
+			chunk := pending.String()
+			if chunk == "" {
+				return
+			}
+			if !force && time.Since(lastPublished) < 200*time.Millisecond && len(chunk) < 50 {
+				return
+			}
+			pending.Reset()
+			lastPublished = time.Now()
+			if err := o.publishStatus(ctx, requestEvent, sessionID, "planning", map[string]any{"phase": "planning", "streaming": true, "chunk": chunk}); err != nil {
+				o.logger.Warn("failed to publish assistant planning stream chunk", "error", err)
+			}
+		}
+
+		plan, err := streamingClient.PlanFromPromptStreaming(ctx, systemPrompt, userPrompt, func(chunk string) {
+			pending.WriteString(chunk)
+			flush(false)
+		})
+		flush(true)
+		return plan, err
 	}
 
-	var pending strings.Builder
-	lastPublished := time.Now()
-	flush := func(force bool) {
-		chunk := pending.String()
-		if chunk == "" {
-			return
-		}
-		if !force && time.Since(lastPublished) < 200*time.Millisecond && len(chunk) < 50 {
-			return
-		}
-		pending.Reset()
-		lastPublished = time.Now()
-		if err := o.publishStatus(ctx, requestEvent, sessionID, "planning", map[string]any{"phase": "planning", "streaming": true, "chunk": chunk}); err != nil {
-			o.logger.Warn("failed to publish assistant planning stream chunk", "error", err)
-		}
-	}
-
-	plan, err := streamingClient.PlanFromPromptStreaming(ctx, systemPrompt, userPrompt, func(chunk string) {
-		pending.WriteString(chunk)
-		flush(false)
-	})
-	flush(true)
-	return plan, err
+	return o.chatClient.PlanFromPrompt(ctx, systemPrompt, userPrompt)
 }
 
 func (o *AssistantOrchestrator) validatePlan(plan domain.AssistantPlan) error {

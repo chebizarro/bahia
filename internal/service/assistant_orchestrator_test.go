@@ -42,6 +42,52 @@ func TestAssistantOrchestratorPromptPublishesPlanWithoutSideEffects(t *testing.T
 	}
 }
 
+func TestAssistantOrchestratorPlanFromPromptHonorsStreamingToggle(t *testing.T) {
+	tests := []struct {
+		name             string
+		streamingEnabled bool
+		wantNonStreaming int
+		wantStreaming    int
+	}{
+		{name: "disabled uses non-streaming even when client supports streaming", wantNonStreaming: 1},
+		{name: "enabled uses streaming", streamingEnabled: true, wantStreaming: 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			chat := &assistantStreamingRoutingChatClient{plan: executableTestPlan()}
+			orchestrator := NewAssistantOrchestrator(AssistantOrchestratorConfig{
+				ChatClient:       chat,
+				StreamingEnabled: tc.streamingEnabled,
+				AllowedToolNames: []string{assistantTestTool},
+				ContextBuilder:   assistantTestContextBuilder{},
+				ToolInvoker:      &assistantTestToolInvoker{},
+				Publisher:        &assistantTestPublisher{},
+				Signer:           testAssistantSigner(t),
+				Identity:         AssistantIdentity{AgentID: "assistant-test", Pubkey: "assistant-pubkey"},
+				InitialSessions:  nil,
+				AgenticEnabled:   false,
+				AgentLoop:        nil,
+				Subscriber:       nil,
+			})
+
+			plan, err := orchestrator.planFromPrompt(context.Background(), nil, "session-1", "system", "user")
+			if err != nil {
+				t.Fatalf("planFromPrompt: %v", err)
+			}
+			if plan == nil || plan.Summary != "Deploy the API service." {
+				t.Fatalf("plan = %#v", plan)
+			}
+			if chat.nonStreamingCalls != tc.wantNonStreaming {
+				t.Fatalf("non-streaming calls = %d, want %d", chat.nonStreamingCalls, tc.wantNonStreaming)
+			}
+			if chat.streamingCalls != tc.wantStreaming {
+				t.Fatalf("streaming calls = %d, want %d", chat.streamingCalls, tc.wantStreaming)
+			}
+		})
+	}
+}
+
 func TestAssistantOrchestratorRejectsStaleApprovalAsFailed(t *testing.T) {
 	ctx := context.Background()
 	plan := executableTestPlan()
@@ -531,6 +577,22 @@ func (c *assistantTestChatClient) PlanFromPrompt(context.Context, string, string
 	if c.err != nil {
 		return nil, c.err
 	}
+	return c.plan, nil
+}
+
+type assistantStreamingRoutingChatClient struct {
+	plan              *domain.AssistantPlan
+	nonStreamingCalls int
+	streamingCalls    int
+}
+
+func (c *assistantStreamingRoutingChatClient) PlanFromPrompt(context.Context, string, string) (*domain.AssistantPlan, error) {
+	c.nonStreamingCalls++
+	return c.plan, nil
+}
+
+func (c *assistantStreamingRoutingChatClient) PlanFromPromptStreaming(context.Context, string, string, func(string)) (*domain.AssistantPlan, error) {
+	c.streamingCalls++
 	return c.plan, nil
 }
 

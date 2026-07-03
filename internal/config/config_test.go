@@ -54,6 +54,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.LLM.AllowOperationalREST {
 		t.Error("expected LLM operational REST disabled by default")
 	}
+	if cfg.Assistant.LLMStreaming {
+		t.Error("expected assistant LLM streaming disabled by default")
+	}
 	if cfg.Nostr.Sidecar.Enabled {
 		t.Error("expected relay sidecar disabled by default")
 	}
@@ -78,6 +81,38 @@ func TestDefaults(t *testing.T) {
 	if cfg.WorkerPressure.MemoryWarningMinGB != 4 || cfg.WorkerPressure.DiskWarningMinGB != 40 || cfg.WorkerPressure.VRAMWarningMinGB != 4 {
 		t.Errorf("worker pressure defaults = %#v", cfg.WorkerPressure)
 	}
+}
+
+func TestAssistantLLMStreamingLoadsFromYAMLAndEnv(t *testing.T) {
+	t.Run("yaml", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		content := []byte(`assistant:
+  llm_streaming: true
+`)
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if !cfg.Assistant.LLMStreaming {
+			t.Fatal("assistant.llm_streaming = false, want true from yaml")
+		}
+	})
+
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("BAHIA_ASSISTANT_LLM_STREAMING", "true")
+
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if !cfg.Assistant.LLMStreaming {
+			t.Fatal("assistant.llm_streaming = false, want true from env")
+		}
+	})
 }
 
 func TestAssistantAgenticDefaults(t *testing.T) {
