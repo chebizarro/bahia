@@ -122,7 +122,7 @@
       label: 'Rollback',
       render: (r) => {
         if (!r?.service_id || !r?.environment_id) return '-';
-        return `<button type="button" class="rollback-btn" data-rollback-id="${r.id}">Rollback</button>`;
+        return `<button type="button" class="rollback-btn" data-dashboard-action="rollback" data-rollback-id="${r.id}">Rollback</button>`;
       }
     },
     { key: 'service_name', label: 'Service', icon: ServiceIcon, text: (r) => r.service_name || '-' },

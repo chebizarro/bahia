@@ -4,22 +4,39 @@
     {
       "id": "AC1",
       "statement": "Representative unrelated dashboard and environment failures resolve through shared root-cause fixes, not per-test sleeps.",
-      "tests": ["npx playwright test tests/e2e/dashboard-smoke.spec.js tests/e2e/environments-crud-smoke.spec.js"]
+      "tests": [
+        "npx playwright test tests/e2e/dashboard-smoke.spec.js tests/e2e/environments-crud-smoke.spec.js"
+      ]
     },
     {
       "id": "AC2",
       "statement": "Public ContextVM commands use kind 25910 and resolve from scoped kind 25910 result subscriptions; encrypted commands keep gift-wrap support.",
-      "tests": ["tests/e2e/environments-crud-smoke.spec.js", "tests/e2e/dashboard-smoke.spec.js recent spend coverage"]
+      "tests": [
+        "tests/e2e/environments-crud-smoke.spec.js",
+        "tests/e2e/dashboard-smoke.spec.js recent spend coverage"
+      ]
     },
     {
       "id": "AC3",
       "statement": "Generated Playwright artifacts are removed from git and ignored.",
-      "tests": ["git status shows web/playwright-report and web/test-results deletions plus .gitignore entries"]
+      "tests": [
+        "git status excludes web/playwright-report and web/test-results"
+      ]
     },
     {
       "id": "AC4",
-      "statement": "Any remaining full-suite failures are grouped by distinct root cause and covered by narrower Beads.",
-      "tests": ["npm run test:e2e", "bd show bahia-la6v", "bd show bahia-rxae", "bd show bahia-p0vz", "bd show bahia-dgdm"]
+      "statement": "The full web Playwright suite is restored with no failing tests and only the intentional skip remaining.",
+      "tests": [
+        "npm run test:e2e => 180 passed, 1 skipped, 0 failed"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Last-mile deployment rollback/log, policy tombstone, and relay-backed DNS regressions are verified without sleep-based waits.",
+      "tests": [
+        "npm run test:e2e -- tests/e2e/deployment-history-and-run-details.spec.js --reporter=line --workers=1",
+        "npm run test:e2e -- tests/e2e/deployment-history-and-run-details.spec.js tests/e2e/policies-crud-smoke.spec.js tests/e2e/relay-backed-web-functionality.spec.js --reporter=line --workers=1"
+      ]
     }
   ]
 }

@@ -134,12 +134,29 @@ async function installEncryptedRunLogHarness(page) {
     };
 
     const KIND_CONTEXTVM = 25910;
+    const KIND_CONTEXTVM_GIFT_WRAP = 1059;
 
     function isRelayUrl(url, expected) {
       return String(url || '').replace(/\/$/, '') === String(expected || '').replace(/\/$/, '');
     }
 
+    function currentRequesterPubkey(fallback = '') {
+      try {
+        const session = JSON.parse(localStorage.getItem('bahia_auth_session') || 'null');
+        return session?.pubkey || fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
     function parseContextVMRequest(event) {
+      if (event.kind === KIND_CONTEXTVM_GIFT_WRAP) {
+        return {
+          envelope: { id: event.id, method: 'deployments/run-logs-get' },
+          operation: 'deployments/run-logs-get',
+          payload: {}
+        };
+      }
       const plaintext = String(event.content || '').replace(/^(enc44:|mock-nip44:)/, '');
       const envelope = JSON.parse(plaintext || '{}');
       const payload = { ...(envelope.params || {}) };
@@ -184,7 +201,7 @@ async function installEncryptedRunLogHarness(page) {
         return originalSend.call(this, data);
       }
 
-      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM && isRelayUrl(this.url, encryptedRelay)) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && [KIND_CONTEXTVM, KIND_CONTEXTVM_GIFT_WRAP].includes(message[1]?.kind) && isRelayUrl(this.url, encryptedRelay)) {
         const event = message[1];
         const relay = this.url;
         const { envelope, operation } = parseContextVMRequest(event);
@@ -197,28 +214,40 @@ async function installEncryptedRunLogHarness(page) {
         window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(operation);
         originalSend.call(this, data);
 
-        const responseEnvelope = {
-          jsonrpc: '2.0',
-          id: envelope.id || event.id,
-          result: {
-            status: 'ok',
-            payload: {
-              logs: {
-                stdout: 'deploy started\ndeploy complete',
-                stderr: 'warning: none'
+        const responseEnvelope = event.kind === KIND_CONTEXTVM_GIFT_WRAP
+          ? {
+              request_event_id: event.id,
+              status: 'success',
+              payload: {
+                logs: {
+                  stdout: 'deploy started\ndeploy complete',
+                  stderr: 'warning: none'
+                }
               }
             }
-          }
-        };
+          : {
+              jsonrpc: '2.0',
+              id: envelope.id || event.id,
+              result: {
+                status: 'ok',
+                payload: {
+                  logs: {
+                    stdout: 'deploy started\ndeploy complete',
+                    stderr: 'warning: none'
+                  }
+                }
+              }
+            };
         const responsePlaintext = JSON.stringify(responseEnvelope);
+        const resultKind = event.kind === KIND_CONTEXTVM_GIFT_WRAP ? KIND_CONTEXTVM_GIFT_WRAP : KIND_CONTEXTVM;
         const resultEvent = {
           id: `result-${event.id}`,
-          kind: KIND_CONTEXTVM,
+          kind: resultKind,
           pubkey: servicePubkey,
           created_at: Math.floor(Date.now() / 1000),
           tags: [
             ['e', event.id],
-            ['p', event.pubkey],
+            ['p', currentRequesterPubkey(event.pubkey)],
             ['encrypted', 'contextvm-jsonrpc-v1'],
             ['method', operation]
           ],
@@ -228,15 +257,18 @@ async function installEncryptedRunLogHarness(page) {
           sig: '0'.repeat(128)
         };
 
-        setTimeout(() => {
-          if (this.readyState !== OriginalWebSocket.OPEN) return;
+        if (typeof window.__bahiaPushNostrEvent === 'function') {
+          window.__bahiaPushNostrEvent(resultEvent);
+        } else if (typeof this.emitEvent === 'function') {
+          this.emitEvent(resultEvent);
+        } else {
           const subs = this.__bahiaSubs || new Map();
           for (const [subId, filters] of subs.entries()) {
             if (Array.isArray(filters) && filters.some((filter) => matchesFilter(resultEvent, filter))) {
-              this.onmessage?.({ data: JSON.stringify(['EVENT', subId, resultEvent]) });
+              this.dispatchEvent?.(new MessageEvent('message', { data: JSON.stringify(['EVENT', subId, resultEvent]) }));
             }
           }
-        }, 0);
+        }
 
         return;
       }

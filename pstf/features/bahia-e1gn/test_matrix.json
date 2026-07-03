@@ -9,12 +9,37 @@
     {
       "command": "npm run test:e2e",
       "result": "142 passed, 33 failed, 1 skipped, 7 did not run",
-      "evidence": "Remaining failures grouped into follow-up beads bahia-la6v, bahia-rxae, bahia-p0vz, bahia-dgdm."
+      "evidence": "Earlier baseline used to group remaining failures into follow-up beads bahia-la6v, bahia-rxae, bahia-p0vz, bahia-dgdm."
     },
     {
       "command": "npx playwright test tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js tests/e2e/mixed-transport-session.spec.js",
       "result": "2 passed, 3 failed",
-      "evidence": "Gift-wrap result handling works for part of notification flow; remaining assertions still expect unwrapped 25910 and mixed seed visibility tracked in bahia-p0vz."
+      "evidence": "Earlier notification-focused baseline before gift-wrap/mixed-session fixes landed under follow-up beads."
+    },
+    {
+      "command": "npm run test:e2e -- tests/e2e/deployment-history-and-run-details.spec.js --reporter=line --workers=1",
+      "result": "3 passed",
+      "evidence": "Rollback dialog opens through the production table action convention; completed run logs load through gift-wrapped 1059 ContextVM harness response."
+    },
+    {
+      "command": "npm run test:e2e -- tests/e2e/policies-crud-smoke.spec.js --reporter=line --workers=1",
+      "result": "8 passed",
+      "evidence": "Policy delete/tombstone projection is green in isolation; no production policy fix required."
+    },
+    {
+      "command": "npm run test:e2e -- tests/e2e/relay-backed-web-functionality.spec.js --reporter=line --workers=1",
+      "result": "8 passed",
+      "evidence": "Relay-backed DNS/FIPS read models hydrate prod.example.com and mesh metadata in isolation; no production DNS fix required."
+    },
+    {
+      "command": "npm run test:e2e -- tests/e2e/deployment-history-and-run-details.spec.js tests/e2e/policies-crud-smoke.spec.js tests/e2e/relay-backed-web-functionality.spec.js --reporter=line --workers=1",
+      "result": "19 passed",
+      "evidence": "The four reported last-mile failures are green together, ruling out remaining cross-spec state leakage in this batch."
+    },
+    {
+      "command": "npm run test:e2e",
+      "result": "180 passed, 1 skipped, 0 failed",
+      "evidence": "Final full web Playwright baseline is restored; the intentional skipped test remains the only non-passing item."
     }
   ]
 }
