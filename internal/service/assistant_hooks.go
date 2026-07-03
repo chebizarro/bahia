@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/openagentsinc/bahia/internal/adapters/llm"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // AssistantHookEvent is a lifecycle point at which operator-configured hooks run.
@@ -153,6 +156,163 @@ func NewAssistantHookRunner(cfg AssistantHookRunnerConfig) *AssistantHookRunner 
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &AssistantHookRunner{set: cfg.Set, prompt: cfg.Prompt, mcp: cfg.MCP, now: now}
+}
+
+// AssistantHookModelPromptEvaluatorConfig wires a production prompt-hook
+// evaluator to the provider-neutral agent model seam.
+type AssistantHookModelPromptEvaluatorConfig struct {
+	ModelClient llm.AgentModelClient
+	Model       string
+	MaxTokens   int
+}
+
+// AssistantHookModelPromptEvaluator evaluates prompt hooks by asking the same
+// native tool-use model seam for a structured hook outcome.
+type AssistantHookModelPromptEvaluator struct {
+	client    llm.AgentModelClient
+	model     string
+	maxTokens int
+}
+
+// NewAssistantHookModelPromptEvaluator creates a prompt-hook evaluator.
+func NewAssistantHookModelPromptEvaluator(cfg AssistantHookModelPromptEvaluatorConfig) *AssistantHookModelPromptEvaluator {
+	maxTokens := cfg.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 512
+	}
+	return &AssistantHookModelPromptEvaluator{client: cfg.ModelClient, model: strings.TrimSpace(cfg.Model), maxTokens: maxTokens}
+}
+
+// EvaluateHookPrompt sends the hook prompt plus event payload to the model. The
+// model must return one JSON object compatible with assistantHookOutcomeFromMap.
+func (e *AssistantHookModelPromptEvaluator) EvaluateHookPrompt(ctx context.Context, req AssistantHookPromptRequest) (AssistantHookOutcome, error) {
+	if e == nil || e.client == nil {
+		return AssistantHookOutcome{}, fmt.Errorf("assistant hook prompt evaluator model client is not configured")
+	}
+	payload, err := json.MarshalIndent(map[string]any{
+		"event": req.Event,
+		"input": req.Input,
+	}, "", "  ")
+	if err != nil {
+		return AssistantHookOutcome{}, fmt.Errorf("marshal assistant hook input: %w", err)
+	}
+	messages := []domain.AssistantAgentMessage{
+		{Role: domain.AssistantAgentMessageRoleSystem, Content: assistantTextBlocks("You are a Bahia assistant hook evaluator. Return only a compact JSON object. Supported keys: permissionDecision (allow, ask, deny), reason, systemMessage, additionalContext, updatedInput, block. Hooks are restrictive only; do not return allow unless no restriction is needed.")},
+		{Role: domain.AssistantAgentMessageRoleUser, Content: assistantTextBlocks("Hook prompt:\n" + strings.TrimSpace(req.Prompt) + "\n\nEvent payload:\n" + string(payload))},
+	}
+	resp, err := e.client.Next(ctx, llm.AgentModelRequest{Model: e.model, Messages: messages, ToolChoice: llm.AgentToolChoice{Mode: llm.AgentToolChoiceNone}, MaxTokens: e.maxTokens}, nil)
+	if err != nil {
+		return AssistantHookOutcome{}, err
+	}
+	outcomeMap, err := assistantHookJSONFromModelResponse(resp)
+	if err != nil {
+		return AssistantHookOutcome{}, err
+	}
+	return assistantHookOutcomeFromMap(outcomeMap), nil
+}
+
+// AssistantReadOnlyMCPHookCallerConfig wires mcp-tool hooks to the same
+// descriptor-gated runtime adapter used by agent tool execution.
+type AssistantReadOnlyMCPHookCallerConfig struct {
+	MCPServer AssistantToolRuntimeMCPServer
+	Registry  AssistantToolRuntimeRegistry
+}
+
+// AssistantReadOnlyMCPHookCaller enforces read-only, sync tool descriptors before
+// executing an mcp-tool hook handler.
+type AssistantReadOnlyMCPHookCaller struct {
+	mcpServer AssistantToolRuntimeMCPServer
+	registry  AssistantToolRuntimeRegistry
+}
+
+// NewAssistantReadOnlyMCPHookCaller creates a read-only MCP hook caller.
+func NewAssistantReadOnlyMCPHookCaller(cfg AssistantReadOnlyMCPHookCallerConfig) *AssistantReadOnlyMCPHookCaller {
+	return &AssistantReadOnlyMCPHookCaller{mcpServer: cfg.MCPServer, registry: cfg.Registry}
+}
+
+// CallReadOnlyTool invokes a registered read-only sync MCP tool and normalizes
+// its response to a hook outcome map.
+func (c *AssistantReadOnlyMCPHookCaller) CallReadOnlyTool(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
+	if c == nil || c.mcpServer == nil || c.registry == nil {
+		return nil, fmt.Errorf("assistant hook MCP caller is not configured")
+	}
+	name = strings.TrimSpace(name)
+	descriptor, ok := c.registry.GetAgentTool(name)
+	if !ok {
+		return nil, fmt.Errorf("assistant hook MCP tool %q is not registered for agent use", name)
+	}
+	if descriptor.Effect != domain.AssistantToolEffectRead {
+		return nil, fmt.Errorf("assistant hook MCP tool %q is not read-only", name)
+	}
+	if descriptor.ExecutionMode != domain.AssistantToolExecutionModeSync {
+		return nil, fmt.Errorf("assistant hook MCP tool %q is not synchronous", name)
+	}
+	result, err := c.mcpServer.CallTool(ctx, name, cloneInterfaceArgs(args))
+	if err != nil {
+		return nil, err
+	}
+	return assistantHookOutcomeMapFromToolResult(result), nil
+}
+
+func assistantHookJSONFromModelResponse(resp *llm.AgentModelResponse) (map[string]any, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("assistant hook model returned no response")
+	}
+	for _, block := range resp.Content {
+		if block.Type == domain.AssistantAgentContentJSON && block.JSON != nil {
+			return block.JSON, nil
+		}
+		if strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		parsed, err := assistantHookParseJSONMap(block.Text)
+		if err == nil {
+			return parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("assistant hook model response did not contain a JSON outcome")
+}
+
+func assistantHookParseJSONMap(text string) (map[string]any, error) {
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func assistantHookOutcomeMapFromToolResult(result *AssistantToolRuntimeToolResult) map[string]any {
+	if result == nil {
+		return map[string]any{}
+	}
+	if result.IsError {
+		return map[string]any{"permissionDecision": "deny", "reason": assistantHookToolContentText(result.Content)}
+	}
+	if len(result.Content) == 1 && strings.TrimSpace(result.Content[0].Text) != "" {
+		if parsed, err := assistantHookParseJSONMap(result.Content[0].Text); err == nil {
+			return parsed
+		}
+	}
+	content := make([]map[string]any, 0, len(result.Content))
+	for _, item := range result.Content {
+		content = append(content, map[string]any{"type": item.Type, "text": item.Text})
+	}
+	return map[string]any{"hookSpecificOutput": map[string]any{"additionalContext": assistantHookToolContentText(result.Content)}, "content": content}
+}
+
+func assistantHookToolContentText(content []AssistantToolRuntimeToolContent) string {
+	parts := make([]string, 0, len(content))
+	for _, item := range content {
+		if strings.TrimSpace(item.Text) != "" {
+			parts = append(parts, item.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // Run evaluates every matching handler for the event and folds their outcomes

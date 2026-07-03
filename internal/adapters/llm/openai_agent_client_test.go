@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -234,13 +233,5 @@ func TestOpenAIAgentClientContextTooLarge(t *testing.T) {
 	_, err := client.Next(context.Background(), AgentModelRequest{Messages: []domain.AssistantAgentMessage{{Role: domain.AssistantAgentMessageRoleUser, Content: []domain.AssistantAgentContentBlock{{Type: domain.AssistantAgentContentText, Text: "hi"}}}}}, nil)
 	if !IsContextTooLarge(err) {
 		t.Fatalf("IsContextTooLarge(%v) = false", err)
-	}
-}
-
-func TestAnthropicAgentClientDeferred(t *testing.T) {
-	client := NewAnthropicAgentClient(AnthropicAgentClientConfig{Model: "claude-agent"}, nil)
-	_, err := client.Next(context.Background(), AgentModelRequest{}, nil)
-	if !errors.Is(err, ErrAgentModelClientNotImplemented) {
-		t.Fatalf("error = %v", err)
 	}
 }

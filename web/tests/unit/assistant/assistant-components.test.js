@@ -277,6 +277,75 @@ describe('assistant components', () => {
     });
   });
 
+  it('renders agentic tool calls, async waits, subagents, and phase timeline', () => {
+    const target = renderComponent(AssistantTurn, {
+      operatorPubkey: 'a'.repeat(64),
+      session: { sessionId: 'assistant-session-1', state: 'executing', lastPlanHash: '' },
+      item: {
+        id: 'status-tool-submitted',
+        type: 'status',
+        pubkey: 'b'.repeat(64),
+        createdAt: 100,
+        status: 'executing',
+        phase: 'tool_submitted',
+        runId: 'run-1',
+        turnId: 'turn-1',
+        iteration: 2,
+        toolCallId: 'call-1',
+        toolName: 'bahia_assistant_dns_zone_create',
+        argsPreview: { zone: 'staging.example' },
+        receipt: { request_event_id: 'downstream-1', result_kinds: [30315, 4903] },
+        subagent: 'researcher',
+        summary: 'submitted DNS command'
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('tool_submitted');
+    expect(text).toContain('run-1');
+    expect(text).toContain('turn-1');
+    expect(text).toContain('iteration');
+    expect(text).toContain('Tool calls');
+    expect(text).toContain('bahia_assistant_dns_zone_create');
+    expect(text).toContain('staging.example');
+    expect(text).toContain('Waiting for downstream result');
+    expect(text).toContain('downstream-1');
+    expect(text).toContain('30315, 4903');
+    expect(text).toContain('Subagent run');
+    expect(text).toContain('researcher');
+    expect(target.querySelector('.phase-timeline')).toBeTruthy();
+    expect(target.querySelector('.tool-calls')).toBeTruthy();
+    expect(target.querySelector('.async-wait')).toBeTruthy();
+    expect(target.querySelector('.subagent-run')).toBeTruthy();
+  });
+
+  it('renders transcript tool observations', () => {
+    const target = renderComponent(AssistantTurn, {
+      operatorPubkey: 'a'.repeat(64),
+      session: { sessionId: 'assistant-session-1', state: 'executing', lastPlanHash: '' },
+      item: {
+        id: 'transcript-tool-observed',
+        type: 'transcript',
+        pubkey: 'b'.repeat(64),
+        createdAt: 100,
+        role: 'tool',
+        phase: 'tool_observed',
+        observation: {
+          tool_call_id: 'call-1',
+          tool_name: 'bahia_list_services',
+          status: 'succeeded',
+          summary: 'Found two services'
+        }
+      }
+    });
+
+    const text = textOf(target);
+    expect(text).toContain('Found two services');
+    expect(text).toContain('Tool observation');
+    expect(text).toContain('bahia_list_services');
+    expect(text).toContain('succeeded');
+  });
+
   it('shows blocked visual state for a relay-closed assistant turn', () => {
     const target = renderComponent(AssistantTurn, {
       operatorPubkey: 'a'.repeat(64),

@@ -88,8 +88,8 @@ func TestAssistantAgenticDefaults(t *testing.T) {
 	if cfg.Assistant.Agentic.Provider != "openai_compatible" {
 		t.Fatalf("assistant.agentic.provider = %q", cfg.Assistant.Agentic.Provider)
 	}
-	if cfg.Assistant.Permissions.Mode != domain.AssistantPermissionModeReview {
-		t.Fatalf("assistant.permissions.mode = %q, want review", cfg.Assistant.Permissions.Mode)
+	if cfg.Assistant.Permissions.Mode != domain.AssistantPermissionModeAudited {
+		t.Fatalf("assistant.permissions.mode = %q, want audited", cfg.Assistant.Permissions.Mode)
 	}
 	if cfg.Assistant.MCP.AsyncObservation.MaxWait != 30*time.Minute {
 		t.Fatalf("assistant.mcp.async_observation.max_wait = %s", cfg.Assistant.MCP.AsyncObservation.MaxWait)
@@ -182,11 +182,27 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("unsupported agentic provider rejected", func(t *testing.T) {
+	t.Run("anthropic agentic provider accepted", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Assistant.Enabled = true
 		cfg.Assistant.Agentic.Enabled = true
 		cfg.Assistant.Agentic.Provider = "anthropic"
+		cfg.Assistant.Agentic.BaseURL = ""
+		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Nostr.PrivateKey = "test-secret-key"
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate() error = %v", err)
+		}
+		if cfg.Assistant.Agentic.BaseURL != "https://api.anthropic.com" {
+			t.Fatalf("anthropic base_url = %q", cfg.Assistant.Agentic.BaseURL)
+		}
+	})
+
+	t.Run("unsupported agentic provider rejected", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.Enabled = true
+		cfg.Assistant.Agentic.Enabled = true
+		cfg.Assistant.Agentic.Provider = "unknown"
 		cfg.Assistant.Agentic.Model = "agentic-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.provider") {
@@ -194,9 +210,19 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("readonly and emergency permission modes accepted", func(t *testing.T) {
+		for _, mode := range []domain.AssistantPermissionMode{domain.AssistantPermissionModeReadonly, domain.AssistantPermissionModeEmergency} {
+			cfg := Defaults()
+			cfg.Assistant.Permissions.Mode = mode
+			if err := cfg.validate(); err != nil {
+				t.Fatalf("validate(%s) error = %v", mode, err)
+			}
+		}
+	})
+
 	t.Run("invalid permission mode rejected", func(t *testing.T) {
 		cfg := Defaults()
-		cfg.Assistant.Permissions.Mode = domain.AssistantPermissionMode("readonly")
+		cfg.Assistant.Permissions.Mode = domain.AssistantPermissionMode("unsafe")
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.permissions.mode") {
 			t.Fatalf("validate() error = %v, want permissions mode rejection", err)
 		}

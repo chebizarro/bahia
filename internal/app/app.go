@@ -968,6 +968,10 @@ func New(cfg *config.Config) (*App, error) {
 			var assistantSkills *service.AssistantSkillLibrary
 			var assistantCommands *service.AssistantCommandLibrary
 			var assistantHooks *service.AssistantHookRunner
+			modelClient, modelClientErr := newAssistantAgentModelClient(cfg.Assistant.Agentic, slog.Default())
+			if modelClientErr != nil {
+				return nil, modelClientErr
+			}
 			if cfg.Assistant.Subagents.Enabled {
 				lib, loadErr := service.LoadAssistantSubagents(cfg.Assistant.Subagents.Paths)
 				if loadErr != nil {
@@ -994,9 +998,14 @@ func New(cfg *config.Config) (*App, error) {
 				if loadErr != nil {
 					return nil, loadErr
 				}
-				// Prompt/mcp-tool hook evaluators are injected in a later increment; an
-				// unevaluatable hook is skipped and can never upgrade a deny to an allow.
-				assistantHooks = service.NewAssistantHookRunner(service.AssistantHookRunnerConfig{Set: hookSet})
+				assistantHooks = service.NewAssistantHookRunner(service.AssistantHookRunnerConfig{
+					Set:    hookSet,
+					Prompt: service.NewAssistantHookModelPromptEvaluator(service.AssistantHookModelPromptEvaluatorConfig{ModelClient: modelClient, Model: cfg.Assistant.Agentic.Model}),
+					MCP: service.NewAssistantReadOnlyMCPHookCaller(service.AssistantReadOnlyMCPHookCallerConfig{
+						MCPServer: assistantMCPRuntimeAdapter{server: mcpServer},
+						Registry:  assistantToolRegistryAdapter{registry: agentToolRegistry},
+					}),
+				})
 			}
 			toolRuntime := service.NewAssistantToolRuntime(service.AssistantToolRuntimeConfig{
 				MCPServer:   assistantMCPRuntimeAdapter{server: mcpServer, externalTools: externalMCP.clients},
@@ -1005,12 +1014,6 @@ func New(cfg *config.Config) (*App, error) {
 				Sessions:    assistantOrchestrator,
 				Observer:    assistantOrchestrator,
 			})
-			modelClient := llmadapter.NewOpenAIAgentClient(llmadapter.OpenAIAgentClientConfig{
-				BaseURL: cfg.Assistant.Agentic.BaseURL,
-				Model:   cfg.Assistant.Agentic.Model,
-				APIKey:  cfg.Assistant.Agentic.APIKey,
-				Timeout: cfg.Assistant.Agentic.RequestTimeout,
-			}, slog.Default())
 			agentLoop := service.NewAssistantAgentLoop(service.AssistantAgentLoopConfig{
 				ModelClient:    modelClient,
 				ToolRuntime:    toolRuntime,
@@ -2510,6 +2513,27 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.Assista
 	}
 	add(assistant.Pubkey)
 	return out
+}
+
+func newAssistantAgentModelClient(cfg config.AssistantAgenticConfig, logger *slog.Logger) (llmadapter.AgentModelClient, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "", "openai_compatible":
+		return llmadapter.NewOpenAIAgentClient(llmadapter.OpenAIAgentClientConfig{
+			BaseURL: cfg.BaseURL,
+			Model:   cfg.Model,
+			APIKey:  cfg.APIKey,
+			Timeout: cfg.RequestTimeout,
+		}, logger), nil
+	case "anthropic":
+		return llmadapter.NewAnthropicAgentClient(llmadapter.AnthropicAgentClientConfig{
+			BaseURL: cfg.BaseURL,
+			Model:   cfg.Model,
+			APIKey:  cfg.APIKey,
+			Timeout: cfg.RequestTimeout,
+		}, logger), nil
+	default:
+		return nil, fmt.Errorf("unsupported assistant.agentic.provider %q", cfg.Provider)
+	}
 }
 
 type assistantExternalMCPRuntime struct {

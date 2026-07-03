@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-6hic.12",
+  "matrix": [
+    {"area": "Anthropic adapter", "command": "go test ./internal/adapters/llm", "status": "pass"},
+    {"area": "Config", "command": "go test ./internal/config", "status": "pass"},
+    {"area": "Assistant permissions/hooks", "command": "go test ./internal/service -run 'TestAssistant(Permission|Hook)'", "status": "pass"},
+    {"area": "Frontend unit", "command": "cd web && npm test -- --run tests/unit", "status": "pass"},
+    {"area": "Full Go build", "command": "go build ./...", "status": "pass", "notes": "Verified after item-11 external-MCP commit 46c0ddc8 was present; item-12 provider/permission/hook wiring and item-11 external MCP config/wiring coexist."}
+  ]
+}

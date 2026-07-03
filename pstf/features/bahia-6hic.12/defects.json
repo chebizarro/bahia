@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-6hic.12",
+  "defects": [
+    {
+      "id": "DEF1",
+      "status": "resolved_by_item11",
+      "summary": "Repository-wide go build was previously blocked by concurrent item-11 external-MCP wiring outside item-12 ownership.",
+      "observed": "Before item-11 completion, go build ./... failed in internal/app because the external MCP client package and loader wiring were not yet present together.",
+      "resolution": "Item 11 committed and pushed 46c0ddc8; after rebasing item 12 on that commit, go build ./... passes with both item-11 external MCP wiring and item-12 provider/permission/hook wiring present.",
+      "beads": ["bahia-6hic.12"]
+    }
+  ]
+}

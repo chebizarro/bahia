@@ -769,7 +769,7 @@ func Defaults() *Config {
 				RequestTimeout:             110 * time.Second,
 			},
 			Permissions: AssistantPermissionsConfig{
-				Mode: domain.AssistantPermissionModeReview,
+				Mode: domain.AssistantPermissionModeAudited,
 			},
 			MCP: AssistantMCPConfig{
 				AsyncObservation: AssistantMCPAsyncObservationConfig{
@@ -1373,6 +1373,9 @@ func (c *Config) validateAssistant() error {
 		agentic.Provider = "openai_compatible"
 	}
 	agentic.BaseURL = strings.TrimRight(strings.TrimSpace(agentic.BaseURL), "/")
+	if agentic.Provider == "anthropic" && (agentic.BaseURL == "" || agentic.BaseURL == "https://api.openai.com") {
+		agentic.BaseURL = "https://api.anthropic.com"
+	}
 	if agentic.BaseURL == "" {
 		agentic.BaseURL = assistant.LLMBaseURL
 	}
@@ -1397,12 +1400,12 @@ func (c *Config) validateAssistant() error {
 	permissions := &assistant.Permissions
 	permissions.Mode = domain.AssistantPermissionMode(strings.ToLower(strings.TrimSpace(string(permissions.Mode))))
 	if permissions.Mode == "" {
-		permissions.Mode = domain.AssistantPermissionModeReview
+		permissions.Mode = domain.AssistantPermissionModeAudited
 	}
 	switch permissions.Mode {
-	case domain.AssistantPermissionModeReview, domain.AssistantPermissionModeAudited:
+	case domain.AssistantPermissionModeReview, domain.AssistantPermissionModeAudited, domain.AssistantPermissionModeReadonly, domain.AssistantPermissionModeEmergency:
 	default:
-		return fmt.Errorf("config validation failed: assistant.permissions.mode must be one of review, audited")
+		return fmt.Errorf("config validation failed: assistant.permissions.mode must be one of review, audited, readonly, emergency")
 	}
 
 	for _, block := range []struct {
@@ -1452,8 +1455,8 @@ func (c *Config) validateAssistant() error {
 	if !agentic.Enabled {
 		return nil
 	}
-	if agentic.Provider != "openai_compatible" {
-		return fmt.Errorf("config validation failed: assistant.agentic.provider must be openai_compatible")
+	if agentic.Provider != "openai_compatible" && agentic.Provider != "anthropic" {
+		return fmt.Errorf("config validation failed: assistant.agentic.provider must be one of openai_compatible, anthropic")
 	}
 	if agentic.Model == "" {
 		return fmt.Errorf("config validation failed: assistant.agentic.model is required when assistant.agentic.enabled=true")

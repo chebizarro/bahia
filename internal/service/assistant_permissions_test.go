@@ -87,7 +87,30 @@ func TestAssistantPermissionEngineExplicitDenyOverridesReviewReadAllow(t *testin
 	}
 }
 
-func TestAssistantPermissionEngineAuditedScaffoldAsksWhenArgsUpgradeRisk(t *testing.T) {
+func TestAssistantPermissionEngineDefaultAuditedAllowsLowRiskMutation(t *testing.T) {
+	engine := NewAssistantPermissionEngine(config.AssistantPermissionsConfig{}, nil)
+
+	result := engine.Evaluate(AssistantPermissionRequest{
+		Tool: AssistantToolPermissionMetadata{
+			Name:          "bahia_assistant_update_dns_record",
+			Effect:        domain.AssistantToolEffectMutation,
+			DefaultRisk:   domain.AssistantToolRiskLow,
+			ExecutionMode: domain.AssistantToolExecutionModeAsync,
+			ResourceTypes: []string{"dns"},
+		},
+		Args: map[string]any{"zone": "staging", "record": "api.example.com"},
+	})
+
+	assertPermissionDecision(t, result, domain.AssistantPermissionDecisionAllow)
+	if result.Mode != domain.AssistantPermissionModeAudited {
+		t.Fatalf("result mode = %q, want audited", result.Mode)
+	}
+	if result.Risk != domain.AssistantToolRiskLow {
+		t.Fatalf("result risk = %q, want low", result.Risk)
+	}
+}
+
+func TestAssistantPermissionEngineAuditedAsksWhenArgsUpgradeRisk(t *testing.T) {
 	engine := NewAssistantPermissionEngine(config.AssistantPermissionsConfig{
 		Mode: domain.AssistantPermissionModeAudited,
 	}, nil)
@@ -100,7 +123,7 @@ func TestAssistantPermissionEngineAuditedScaffoldAsksWhenArgsUpgradeRisk(t *test
 			ExecutionMode: domain.AssistantToolExecutionModeAsync,
 			ResourceTypes: []string{"dns"},
 		},
-		Args: map[string]any{"zone": "prod", "record": "api.example.com"},
+		Args: map[string]any{"operation": "revoke", "zone": "prod", "record": "api.example.com"},
 	})
 
 	assertPermissionDecision(t, result, domain.AssistantPermissionDecisionAsk)
@@ -109,6 +132,16 @@ func TestAssistantPermissionEngineAuditedScaffoldAsksWhenArgsUpgradeRisk(t *test
 	}
 	if result.Metadata["risk_upgraded_from"] != string(domain.AssistantToolRiskLow) {
 		t.Fatalf("risk upgrade metadata = %#v, want previous low risk", result.Metadata)
+	}
+}
+
+func TestAssistantPermissionEngineReadonlyAndEmergencyDenyMutations(t *testing.T) {
+	for _, mode := range []domain.AssistantPermissionMode{domain.AssistantPermissionModeReadonly, domain.AssistantPermissionModeEmergency} {
+		t.Run(string(mode), func(t *testing.T) {
+			engine := NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: mode}, nil)
+			result := engine.Evaluate(AssistantPermissionRequest{Tool: AssistantToolPermissionMetadata{Name: "bahia_assistant_delete_policy", Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, ExecutionMode: domain.AssistantToolExecutionModeSync}})
+			assertPermissionDecision(t, result, domain.AssistantPermissionDecisionDeny)
+		})
 	}
 }
 

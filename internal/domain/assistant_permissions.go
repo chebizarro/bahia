@@ -9,10 +9,17 @@ const (
 	AssistantPermissionModeReview AssistantPermissionMode = "review"
 
 	// AssistantPermissionModeAudited allows policy-approved autonomous execution
-	// with audit events. The engine that graduates this mode is implemented in a
-	// later item; the canonical value is defined here so descriptors/config share
-	// one type owner.
+	// with audit events: reads and low/medium-risk scoped mutations may run while
+	// high-risk or destructive actions require approval.
 	AssistantPermissionModeAudited AssistantPermissionMode = "audited"
+
+	// AssistantPermissionModeReadonly allows read-only assistant tools and denies
+	// mutations regardless of their default risk.
+	AssistantPermissionModeReadonly AssistantPermissionMode = "readonly"
+
+	// AssistantPermissionModeEmergency denies assistant tool execution by default
+	// during incident lockdown.
+	AssistantPermissionModeEmergency AssistantPermissionMode = "emergency"
 )
 
 // AssistantPermissionDecision is the canonical allow/ask/deny result emitted by

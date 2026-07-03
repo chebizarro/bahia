@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-6hic.12",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Anthropic AgentModelClient serializes system/messages/tools/tool_choice to /v1/messages and parses text plus tool_use responses.",
+      "tests": ["TestAnthropicAgentClientToolUseAndToolResultThreading", "TestAnthropicAgentClientMalformedResponses", "TestAnthropicAgentClientContextTooLarge"]
+    },
+    {
+      "id": "AC2",
+      "description": "assistant.agentic.provider supports anthropic without enabling agentic by default.",
+      "tests": ["TestAssistantAgenticDefaults", "TestAssistantAgenticValidation/anthropic_agentic_provider_accepted"]
+    },
+    {
+      "id": "AC3",
+      "description": "audited is the default permission posture and allows low-risk scoped mutations while asking on high-risk arg upgrades.",
+      "tests": ["TestAssistantPermissionEngineDefaultAuditedAllowsLowRiskMutation", "TestAssistantPermissionEngineAuditedAsksWhenArgsUpgradeRisk"]
+    },
+    {
+      "id": "AC4",
+      "description": "readonly/emergency modes fail closed for mutations.",
+      "tests": ["TestAssistantPermissionEngineReadonlyAndEmergencyDenyMutations", "TestAssistantAgenticValidation/readonly_and_emergency_permission_modes_accepted"]
+    },
+    {
+      "id": "AC5",
+      "description": "Prompt hook evaluator calls the model with hook prompt and event payload; mcp-tool hook caller invokes only read-only sync MCP tools.",
+      "tests": ["TestAssistantHookModelPromptEvaluatorCallsModelWithPayload", "TestAssistantReadOnlyMCPHookCallerAllowsOnlyReadOnlySyncTools"]
+    },
+    {
+      "id": "AC6",
+      "description": "Frontend renders tool calls, async waits, subagent runs, tool observations, and agentic phase timeline while preserving action approval.",
+      "tests": ["assistant-components.test.js: renders agentic tool calls, async waits, subagents, and phase timeline", "assistant-components.test.js: renders transcript tool observations", "assistant-components.test.js: renders agentic action approval and publishes action decisions"]
+    }
+  ]
+}

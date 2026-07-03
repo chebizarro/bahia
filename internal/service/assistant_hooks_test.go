@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/adapters/llm"
@@ -140,6 +141,48 @@ func TestAssistantAgentLoopPreToolUseHookCannotRewriteArgsToEscapeAsk(t *testing
 	}
 	if server.callCount() != 0 {
 		t.Fatalf("tool must not execute, server calls = %d", server.callCount())
+	}
+}
+
+func TestAssistantHookModelPromptEvaluatorCallsModelWithPayload(t *testing.T) {
+	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{{Content: textBlocks(`{"permissionDecision":"ask","reason":"production change","updatedInput":{"environment":"prod"}}`), StopReason: llm.AgentStopReasonEndTurn}}}
+	evaluator := NewAssistantHookModelPromptEvaluator(AssistantHookModelPromptEvaluatorConfig{ModelClient: model, Model: "hook-model", MaxTokens: 123})
+
+	outcome, err := evaluator.EvaluateHookPrompt(context.Background(), AssistantHookPromptRequest{Event: AssistantHookEventPreToolUse, Prompt: "Gate production", Input: AssistantHookInput{SessionID: "session-1", ToolName: "bahia_deploy", ToolArgs: map[string]any{"environment": "prod"}}})
+	if err != nil {
+		t.Fatalf("EvaluateHookPrompt: %v", err)
+	}
+	if outcome.Decision != AssistantHookDecisionAsk || outcome.Reason != "production change" || outcome.UpdatedInput["environment"] != "prod" {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	req := model.request(0)
+	if req.Model != "hook-model" || req.MaxTokens != 123 || req.ToolChoice.Mode != llm.AgentToolChoiceNone {
+		t.Fatalf("model request = %#v", req)
+	}
+	if len(req.Messages) != 2 || !strings.Contains(req.Messages[1].Content[0].Text, "Gate production") || !strings.Contains(req.Messages[1].Content[0].Text, "bahia_deploy") {
+		t.Fatalf("model messages = %#v", req.Messages)
+	}
+}
+
+func TestAssistantReadOnlyMCPHookCallerAllowsOnlyReadOnlySyncTools(t *testing.T) {
+	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"permissionDecision":"deny","reason":"maintenance window closed"}`}}}}
+	caller := NewAssistantReadOnlyMCPHookCaller(AssistantReadOnlyMCPHookCallerConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services"))})
+
+	out, err := caller.CallReadOnlyTool(context.Background(), "bahia_list_services", map[string]any{"limit": float64(1)})
+	if err != nil {
+		t.Fatalf("CallReadOnlyTool: %v", err)
+	}
+	if out["permissionDecision"] != "deny" || out["reason"] != "maintenance window closed" {
+		t.Fatalf("outcome map = %#v", out)
+	}
+	if server.callCount() != 1 {
+		t.Fatalf("server calls = %d", server.callCount())
+	}
+
+	mutation := AssistantToolRuntimeToolDescriptor{Name: "bahia_mutate", ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow}
+	mutationCaller := NewAssistantReadOnlyMCPHookCaller(AssistantReadOnlyMCPHookCallerConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(mutation)})
+	if _, err := mutationCaller.CallReadOnlyTool(context.Background(), "bahia_mutate", nil); err == nil || !strings.Contains(err.Error(), "not read-only") {
+		t.Fatalf("mutation tool error = %v, want read-only rejection", err)
 	}
 }
 

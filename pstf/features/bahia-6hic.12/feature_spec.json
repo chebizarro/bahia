@@ -1,0 +1,28 @@
+{
+  "feature_id": "bahia-6hic.12",
+  "title": "Assistant agentic item 12: Anthropic adapter, audited graduation, hook evaluators, richer UX",
+  "date": "2026-07-03",
+  "status": "implemented_verified",
+  "intended_behavior": [
+    "Anthropic agent model provider uses /v1/messages with anthropic-version and native tool_use/tool_result blocks behind the AgentModelClient seam.",
+    "assistant.agentic.provider accepts openai_compatible and anthropic while assistant.agentic.enabled remains false by default.",
+    "assistant.permissions.mode defaults to audited; review remains selectable; audited allows reads and low/medium-risk scoped mutations while asking for high/destructive risk.",
+    "Risk is upgraded from arguments containing production/prod/rollback/delete/remove/revoke markers to high risk.",
+    "Prompt hooks evaluate via the configured agent model client and mcp-tool hooks execute only registered read-only synchronous MCP tools.",
+    "Assistant UI renders native tool calls, async downstream waits, subagent runs, and phase timeline details without breaking action approval."
+  ],
+  "scope_files": [
+    "internal/adapters/llm/anthropic_agent_client.go",
+    "internal/service/assistant_permissions.go",
+    "internal/service/assistant_hooks.go",
+    "internal/config/config.go",
+    "web/src/lib/components/assistant/AssistantTurn.svelte",
+    "web/src/lib/nostr/assistant.js",
+    "web/src/lib/stores/assistant.svelte.js"
+  ],
+  "out_of_scope": [
+    "external MCP merge path in internal/mcp/registry.go and internal/adapters/mcpclient/",
+    "pre-existing internal/service SecurityScanner failures tracked as bahia-x3km",
+    "pre-existing web Playwright baseline tracked as bahia-e1gn"
+  ]
+}

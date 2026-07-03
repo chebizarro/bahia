@@ -94,6 +94,10 @@ func (e *AssistantPermissionEngine) Evaluate(req AssistantPermissionRequest) dom
 			return ruleResult(e.mode, tool, rule, riskMetadata)
 		}
 		return e.evaluateAudited(tool, riskMetadata)
+	case domain.AssistantPermissionModeReadonly:
+		return e.evaluateReadonly(tool, riskMetadata)
+	case domain.AssistantPermissionModeEmergency:
+		return e.evaluateEmergency(tool, riskMetadata)
 	default:
 		return denyResult(e.mode, tool, fmt.Sprintf("unsupported assistant permission mode %q", e.mode), "")
 	}
@@ -112,12 +116,23 @@ func (e *AssistantPermissionEngine) evaluateAudited(tool AssistantToolPermission
 	}
 	switch tool.DefaultRisk {
 	case domain.AssistantToolRiskLow, domain.AssistantToolRiskMedium:
-		return permissionResult(domain.AssistantPermissionDecisionAllow, e.mode, tool, "audited mode allows low and medium risk assistant mutations", "", metadata)
+		return permissionResult(domain.AssistantPermissionDecisionAllow, e.mode, tool, "audited mode allows low and medium risk scoped assistant mutations", "", metadata)
 	case domain.AssistantToolRiskHigh, domain.AssistantToolRiskDestructive:
 		return permissionResult(domain.AssistantPermissionDecisionAsk, e.mode, tool, "audited mode requires approval for high risk or destructive assistant mutations", "", metadata)
 	default:
 		return permissionResult(domain.AssistantPermissionDecisionAsk, e.mode, tool, "audited mode requires approval when assistant tool risk is unknown", "", metadata)
 	}
+}
+
+func (e *AssistantPermissionEngine) evaluateReadonly(tool AssistantToolPermissionMetadata, metadata map[string]any) domain.AssistantPermissionResult {
+	if tool.Effect == domain.AssistantToolEffectRead {
+		return permissionResult(domain.AssistantPermissionDecisionAllow, e.mode, tool, "readonly mode allows read-only assistant tools", "", metadata)
+	}
+	return permissionResult(domain.AssistantPermissionDecisionDeny, e.mode, tool, "readonly mode denies assistant mutations", "", metadata)
+}
+
+func (e *AssistantPermissionEngine) evaluateEmergency(tool AssistantToolPermissionMetadata, metadata map[string]any) domain.AssistantPermissionResult {
+	return permissionResult(domain.AssistantPermissionDecisionDeny, e.mode, tool, "emergency mode denies assistant tool execution", "", metadata)
 }
 
 func (e *AssistantPermissionEngine) evaluateRisk(tool AssistantToolPermissionMetadata, args map[string]any) (domain.AssistantToolRisk, map[string]any) {
@@ -170,8 +185,14 @@ func normalizeAssistantPermissionMode(mode domain.AssistantPermissionMode) domai
 	switch domain.AssistantPermissionMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
 	case domain.AssistantPermissionModeAudited:
 		return domain.AssistantPermissionModeAudited
-	case domain.AssistantPermissionModeReview, "":
+	case domain.AssistantPermissionModeReadonly:
+		return domain.AssistantPermissionModeReadonly
+	case domain.AssistantPermissionModeEmergency:
+		return domain.AssistantPermissionModeEmergency
+	case domain.AssistantPermissionModeReview:
 		return domain.AssistantPermissionModeReview
+	case "":
+		return domain.AssistantPermissionModeAudited
 	default:
 		return mode
 	}
@@ -231,13 +252,13 @@ func upgradeAssistantToolRiskFromArgs(current domain.AssistantToolRisk, args map
 		return current, ""
 	}
 	haystack := strings.ToLower(fmt.Sprintf("%v", args))
-	destructiveMarkers := []string{"delete", "destroy", "purge", "remove"}
+	destructiveMarkers := []string{"destroy", "purge"}
 	for _, marker := range destructiveMarkers {
 		if strings.Contains(haystack, marker) {
 			return maxAssistantToolRisk(current, domain.AssistantToolRiskDestructive), "arguments reference destructive operation marker " + marker
 		}
 	}
-	highMarkers := []string{"production", "prod", "rollback"}
+	highMarkers := []string{"production", "prod", "rollback", "delete", "remove", "revoke"}
 	for _, marker := range highMarkers {
 		if strings.Contains(haystack, marker) {
 			return maxAssistantToolRisk(current, domain.AssistantToolRiskHigh), "arguments reference elevated risk marker " + marker
