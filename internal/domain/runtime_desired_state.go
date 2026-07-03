@@ -201,16 +201,23 @@ type KubernetesExtension struct {
 // KubernetesExtensionFromDeploymentUnit derives a KubernetesExtension from a
 // deployment unit's namespace and runtime_config. It always returns a non-nil
 // extension so K8s specs carry a stable (possibly empty) extension. Recognized
-// runtime_config keys:
+// runtime_config keys match the KubernetesExtension JSON tags:
 //
-//	replicas       -> Replicas       (integer)
-//	service_type   -> ServiceType    (string: ClusterIP|NodePort|LoadBalancer)
-//	node_selector  -> NodeSelector   (map[string]string)
-//	annotations    -> Annotations    (map[string]string)
+//	replicas           -> Replicas          (integer)
+//	service_type       -> ServiceType       (string: ClusterIP|NodePort|LoadBalancer)
+//	service_ports      -> ServicePorts      ([]object)
+//	resource_limits    -> ResourceLimits    (object: cpu, memory)
+//	resource_requests  -> ResourceRequests  (object: cpu, memory)
+//	liveness_probe     -> LivenessProbe     (object)
+//	readiness_probe    -> ReadinessProbe    (object)
+//	node_selector      -> NodeSelector      (map[string]string)
+//	annotations        -> Annotations       (map[string]string)
+//	tolerations        -> Tolerations       ([]object)
+//	image_pull_secrets -> ImagePullSecrets  ([]string)
 //
-// Unknown/absent keys leave the corresponding field at its zero value. Richer
-// fields (service ports, resources, probes, tolerations) are populated by
-// callers that build a fully typed extension directly.
+// Unknown/absent keys and malformed shapes leave the corresponding field at its
+// zero value. The constructor is intentionally best-effort because it cannot
+// return a validation error.
 func KubernetesExtensionFromDeploymentUnit(unit *DeploymentUnit) *KubernetesExtension {
 	ext := &KubernetesExtension{}
 	if unit == nil {
@@ -225,11 +232,32 @@ func KubernetesExtensionFromDeploymentUnit(unit *DeploymentUnit) *KubernetesExte
 		ext.Replicas = &r
 	}
 	ext.ServiceType = stringFromRuntimeConfig(cfg, "service_type")
+	if ports := k8sServicePortsFromRuntimeConfig(cfg, "service_ports"); len(ports) > 0 {
+		ext.ServicePorts = ports
+	}
+	if limits := k8sResourcesFromRuntimeConfig(cfg, "resource_limits"); limits != nil {
+		ext.ResourceLimits = limits
+	}
+	if requests := k8sResourcesFromRuntimeConfig(cfg, "resource_requests"); requests != nil {
+		ext.ResourceRequests = requests
+	}
+	if probe := k8sProbeFromRuntimeConfig(cfg, "liveness_probe"); probe != nil {
+		ext.LivenessProbe = probe
+	}
+	if probe := k8sProbeFromRuntimeConfig(cfg, "readiness_probe"); probe != nil {
+		ext.ReadinessProbe = probe
+	}
 	if ns := stringMapFromRuntimeConfig(cfg, "node_selector"); len(ns) > 0 {
 		ext.NodeSelector = ns
 	}
 	if ann := stringMapFromRuntimeConfig(cfg, "annotations"); len(ann) > 0 {
 		ext.Annotations = ann
+	}
+	if tolerations := k8sTolerationsFromRuntimeConfig(cfg, "tolerations"); len(tolerations) > 0 {
+		ext.Tolerations = tolerations
+	}
+	if secrets := stringSliceFromRuntimeConfig(cfg, "image_pull_secrets"); len(secrets) > 0 {
+		ext.ImagePullSecrets = secrets
 	}
 	return ext
 }
@@ -243,6 +271,10 @@ func int32FromRuntimeConfig(config map[string]any, key string) (int32, bool) {
 	if !ok || raw == nil {
 		return 0, false
 	}
+	return int32FromRuntimeConfigValue(raw)
+}
+
+func int32FromRuntimeConfigValue(raw any) (int32, bool) {
 	switch v := raw.(type) {
 	case int:
 		return int32(v), true
@@ -263,6 +295,261 @@ func int32FromRuntimeConfig(config map[string]any, key string) (int32, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func k8sServicePortsFromRuntimeConfig(config map[string]any, key string) []K8sServicePort {
+	items := objectSliceFromRuntimeConfig(config, key)
+	if len(items) == 0 {
+		return nil
+	}
+	ports := make([]K8sServicePort, 0, len(items))
+	for _, item := range items {
+		port, ok := k8sServicePortFromRuntimeConfigValue(item)
+		if ok {
+			ports = append(ports, port)
+		}
+	}
+	if len(ports) == 0 {
+		return nil
+	}
+	return ports
+}
+
+func k8sServicePortFromRuntimeConfigValue(raw any) (K8sServicePort, bool) {
+	m, ok := stringAnyMap(raw)
+	if !ok {
+		return K8sServicePort{}, false
+	}
+	port, ok := int32FromMap(m, "port")
+	if !ok || port < 1 {
+		return K8sServicePort{}, false
+	}
+	out := K8sServicePort{
+		Name:     stringFromMap(m, "name"),
+		Port:     port,
+		Protocol: stringFromMap(m, "protocol"),
+	}
+	if targetPort, ok := int32FromMap(m, "target_port"); ok {
+		out.TargetPort = targetPort
+	}
+	if nodePort, ok := int32FromMap(m, "node_port"); ok {
+		out.NodePort = nodePort
+	}
+	return out, true
+}
+
+func k8sResourcesFromRuntimeConfig(config map[string]any, key string) *K8sResources {
+	if config == nil {
+		return nil
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	m, ok := stringAnyMap(raw)
+	if !ok {
+		return nil
+	}
+	resources := &K8sResources{
+		CPU:    stringFromMap(m, "cpu"),
+		Memory: stringFromMap(m, "memory"),
+	}
+	if resources.CPU == "" && resources.Memory == "" {
+		return nil
+	}
+	return resources
+}
+
+func k8sProbeFromRuntimeConfig(config map[string]any, key string) *K8sProbe {
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	m, ok := stringAnyMap(raw)
+	if !ok {
+		return nil
+	}
+	probe := &K8sProbe{}
+	if httpGetRaw, ok := m["http_get"]; ok {
+		if httpGet := k8sHTTPGetFromRuntimeConfigValue(httpGetRaw); httpGet != nil {
+			probe.HTTPGet = httpGet
+		}
+	}
+	if exec := stringSliceFromMap(m, "exec"); len(exec) > 0 {
+		probe.Exec = exec
+	}
+	if probe.HTTPGet == nil && len(probe.Exec) == 0 {
+		return nil
+	}
+	if value, ok := int32FromMap(m, "initial_delay_seconds"); ok {
+		probe.InitialDelaySeconds = value
+	}
+	if value, ok := int32FromMap(m, "period_seconds"); ok {
+		probe.PeriodSeconds = value
+	}
+	if value, ok := int32FromMap(m, "timeout_seconds"); ok {
+		probe.TimeoutSeconds = value
+	}
+	if value, ok := int32FromMap(m, "failure_threshold"); ok {
+		probe.FailureThreshold = value
+	}
+	return probe
+}
+
+func k8sHTTPGetFromRuntimeConfigValue(raw any) *K8sHTTPGet {
+	m, ok := stringAnyMap(raw)
+	if !ok {
+		return nil
+	}
+	path := stringFromMap(m, "path")
+	port, ok := int32FromMap(m, "port")
+	if path == "" || !ok || port < 1 {
+		return nil
+	}
+	return &K8sHTTPGet{
+		Path:   path,
+		Port:   port,
+		Scheme: stringFromMap(m, "scheme"),
+	}
+}
+
+func k8sTolerationsFromRuntimeConfig(config map[string]any, key string) []K8sToleration {
+	items := objectSliceFromRuntimeConfig(config, key)
+	if len(items) == 0 {
+		return nil
+	}
+	tolerations := make([]K8sToleration, 0, len(items))
+	for _, item := range items {
+		m, ok := stringAnyMap(item)
+		if !ok {
+			continue
+		}
+		toleration := K8sToleration{
+			Key:      stringFromMap(m, "key"),
+			Operator: stringFromMap(m, "operator"),
+			Value:    stringFromMap(m, "value"),
+			Effect:   stringFromMap(m, "effect"),
+		}
+		if toleration.Key == "" && toleration.Operator == "" && toleration.Value == "" && toleration.Effect == "" {
+			continue
+		}
+		tolerations = append(tolerations, toleration)
+	}
+	if len(tolerations) == 0 {
+		return nil
+	}
+	return tolerations
+}
+
+func objectSliceFromRuntimeConfig(config map[string]any, key string) []any {
+	if config == nil {
+		return nil
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch values := raw.(type) {
+	case []any:
+		return values
+	case []map[string]any:
+		items := make([]any, 0, len(values))
+		for _, value := range values {
+			items = append(items, value)
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func stringSliceFromRuntimeConfig(config map[string]any, key string) []string {
+	if config == nil {
+		return nil
+	}
+	raw, ok := config[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	return stringSliceFromRuntimeConfigValue(raw)
+}
+
+func stringSliceFromMap(m map[string]any, key string) []string {
+	raw, ok := m[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	return stringSliceFromRuntimeConfigValue(raw)
+}
+
+func stringSliceFromRuntimeConfigValue(raw any) []string {
+	var rawItems []any
+	switch values := raw.(type) {
+	case []string:
+		items := make([]string, 0, len(values))
+		for _, value := range values {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				items = append(items, trimmed)
+			}
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		return items
+	case []any:
+		rawItems = values
+	default:
+		return nil
+	}
+	items := make([]string, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		value, ok := rawItem.(string)
+		if !ok {
+			continue
+		}
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+func stringAnyMap(raw any) (map[string]any, bool) {
+	switch m := raw.(type) {
+	case map[string]any:
+		return m, true
+	case map[string]string:
+		out := make(map[string]any, len(m))
+		for k, v := range m {
+			out[k] = v
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func stringFromMap(m map[string]any, key string) string {
+	raw, ok := m[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func int32FromMap(m map[string]any, key string) (int32, bool) {
+	raw, ok := m[key]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	return int32FromRuntimeConfigValue(raw)
 }
 
 // PodmanExtension carries Podman-specific renderer metadata. Podman reuses

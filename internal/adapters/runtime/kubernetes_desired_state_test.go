@@ -724,8 +724,8 @@ func TestKubernetesApplyDesiredState_NewDeployment(t *testing.T) {
 	t.Parallel()
 	spec := k8sTestSpec()
 	runner := &mockK8sRunner{}
-	runner.enqueue(emptyK8sDeploymentList, nil)                              // get deployment → not found
-	runner.enqueue("deployment.apps/bahia-22222222-my-api created\n", nil)  // apply deployment
+	runner.enqueue(emptyK8sDeploymentList, nil)                            // get deployment → not found
+	runner.enqueue("deployment.apps/bahia-22222222-my-api created\n", nil) // apply deployment
 
 	k := newTestK8sRuntime(runner)
 	result, err := k.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
@@ -1128,6 +1128,75 @@ func TestMapDesiredSpecToK8sManifest_ExtensionHonored(t *testing.T) {
 	svcPorts := svcSpec["ports"].([]map[string]any)
 	if len(svcPorts) != 1 || svcPorts[0]["port"] != int32(80) || svcPorts[0]["nodePort"] != int32(30080) {
 		t.Errorf("service ports not wired: %#v", svcPorts)
+	}
+}
+
+func TestMapDesiredSpecToK8sManifest_ExtensionFromDeploymentUnitRuntimeConfig(t *testing.T) {
+	t.Parallel()
+	spec := k8sTestSpec()
+	spec.KubernetesExtension = domain.KubernetesExtensionFromDeploymentUnit(&domain.DeploymentUnit{
+		Namespace: "team-payments",
+		RuntimeConfig: map[string]any{
+			"service_type": "NodePort",
+			"service_ports": []any{
+				map[string]any{"name": "http", "port": float64(80), "target_port": float64(8080), "protocol": "TCP", "node_port": float64(30080)},
+			},
+			"resource_limits":    map[string]any{"cpu": "500m", "memory": "512Mi"},
+			"resource_requests":  map[string]any{"cpu": "100m", "memory": "128Mi"},
+			"liveness_probe":     map[string]any{"http_get": map[string]any{"path": "/healthz", "port": float64(8080), "scheme": "HTTP"}, "initial_delay_seconds": float64(5)},
+			"readiness_probe":    map[string]any{"exec": []any{"cat", "/tmp/ready"}, "timeout_seconds": float64(2)},
+			"tolerations":        []any{map[string]any{"key": "dedicated", "operator": "Equal", "value": "payments", "effect": "NoSchedule"}},
+			"image_pull_secrets": []any{"regcred"},
+		},
+	})
+
+	m, err := MapDesiredSpecToK8sManifest(spec, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	dep := m.Deployment
+	meta := dep["metadata"].(map[string]any)
+	if meta["namespace"] != "team-payments" {
+		t.Errorf("deployment namespace = %v, want team-payments", meta["namespace"])
+	}
+	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if tolerations := podSpec["tolerations"].([]map[string]any); len(tolerations) != 1 || tolerations[0]["key"] != "dedicated" {
+		t.Errorf("tolerations from runtime_config not rendered: %#v", tolerations)
+	}
+	if secrets := podSpec["imagePullSecrets"].([]map[string]any); len(secrets) != 1 || secrets[0]["name"] != "regcred" {
+		t.Errorf("imagePullSecrets from runtime_config not rendered: %#v", secrets)
+	}
+
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	resources := container["resources"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if limits["cpu"] != "500m" || limits["memory"] != "512Mi" {
+		t.Errorf("resource limits from runtime_config not rendered: %#v", limits)
+	}
+	requests := resources["requests"].(map[string]any)
+	if requests["cpu"] != "100m" || requests["memory"] != "128Mi" {
+		t.Errorf("resource requests from runtime_config not rendered: %#v", requests)
+	}
+	livenessHTTP := container["livenessProbe"].(map[string]any)["httpGet"].(map[string]any)
+	if livenessHTTP["path"] != "/healthz" || livenessHTTP["port"] != int32(8080) {
+		t.Errorf("livenessProbe from runtime_config not rendered: %#v", livenessHTTP)
+	}
+	readinessExec := container["readinessProbe"].(map[string]any)["exec"].(map[string]any)
+	if cmd := readinessExec["command"].([]string); len(cmd) != 2 || cmd[0] != "cat" {
+		t.Errorf("readinessProbe from runtime_config not rendered: %#v", readinessExec)
+	}
+
+	if m.Service == nil {
+		t.Fatal("expected Service manifest when runtime_config service_type is set")
+	}
+	svcSpec := m.Service["spec"].(map[string]any)
+	if svcSpec["type"] != "NodePort" {
+		t.Errorf("service type = %v, want NodePort", svcSpec["type"])
+	}
+	ports := svcSpec["ports"].([]map[string]any)
+	if len(ports) != 1 || ports[0]["port"] != int32(80) || ports[0]["targetPort"] != int32(8080) || ports[0]["nodePort"] != int32(30080) {
+		t.Errorf("service ports from runtime_config not rendered: %#v", ports)
 	}
 }
 

@@ -1031,3 +1031,143 @@ func TestKubernetesExtensionFromDeploymentUnit_IgnoresBadReplicas(t *testing.T) 
 		t.Errorf("replicas should be nil for non-numeric config, got %v", *ext.Replicas)
 	}
 }
+
+func TestKubernetesExtensionFromDeploymentUnit_ParsesRichRuntimeConfigFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		runtimeConfig map[string]any
+		assert        func(t *testing.T, ext *KubernetesExtension)
+	}{
+		{
+			name: "service ports",
+			runtimeConfig: map[string]any{
+				"service_ports": []any{
+					map[string]any{"name": "http", "port": float64(80), "target_port": float64(8080), "protocol": "TCP", "node_port": float64(30080)},
+				},
+			},
+			assert: func(t *testing.T, ext *KubernetesExtension) {
+				t.Helper()
+				if len(ext.ServicePorts) != 1 {
+					t.Fatalf("ServicePorts len = %d, want 1", len(ext.ServicePorts))
+				}
+				port := ext.ServicePorts[0]
+				if port.Name != "http" || port.Port != 80 || port.TargetPort != 8080 || port.Protocol != "TCP" || port.NodePort != 30080 {
+					t.Errorf("ServicePorts[0] = %+v, unexpected", port)
+				}
+			},
+		},
+		{
+			name: "resources",
+			runtimeConfig: map[string]any{
+				"resource_limits":   map[string]any{"cpu": "500m", "memory": "512Mi"},
+				"resource_requests": map[string]any{"cpu": "100m", "memory": "128Mi"},
+			},
+			assert: func(t *testing.T, ext *KubernetesExtension) {
+				t.Helper()
+				if ext.ResourceLimits == nil || ext.ResourceLimits.CPU != "500m" || ext.ResourceLimits.Memory != "512Mi" {
+					t.Errorf("ResourceLimits = %+v, unexpected", ext.ResourceLimits)
+				}
+				if ext.ResourceRequests == nil || ext.ResourceRequests.CPU != "100m" || ext.ResourceRequests.Memory != "128Mi" {
+					t.Errorf("ResourceRequests = %+v, unexpected", ext.ResourceRequests)
+				}
+			},
+		},
+		{
+			name: "probes",
+			runtimeConfig: map[string]any{
+				"liveness_probe": map[string]any{
+					"http_get":              map[string]any{"path": "/healthz", "port": float64(8080), "scheme": "HTTP"},
+					"initial_delay_seconds": float64(5),
+					"period_seconds":        float64(10),
+				},
+				"readiness_probe": map[string]any{
+					"exec":              []any{"cat", "/tmp/ready"},
+					"timeout_seconds":   float64(2),
+					"failure_threshold": float64(3),
+				},
+			},
+			assert: func(t *testing.T, ext *KubernetesExtension) {
+				t.Helper()
+				if ext.LivenessProbe == nil || ext.LivenessProbe.HTTPGet == nil {
+					t.Fatalf("LivenessProbe = %+v, want http_get", ext.LivenessProbe)
+				}
+				if ext.LivenessProbe.HTTPGet.Path != "/healthz" || ext.LivenessProbe.HTTPGet.Port != 8080 || ext.LivenessProbe.HTTPGet.Scheme != "HTTP" {
+					t.Errorf("LivenessProbe.HTTPGet = %+v, unexpected", ext.LivenessProbe.HTTPGet)
+				}
+				if ext.LivenessProbe.InitialDelaySeconds != 5 || ext.LivenessProbe.PeriodSeconds != 10 {
+					t.Errorf("LivenessProbe timings = %+v, unexpected", ext.LivenessProbe)
+				}
+				if ext.ReadinessProbe == nil || len(ext.ReadinessProbe.Exec) != 2 || ext.ReadinessProbe.Exec[0] != "cat" || ext.ReadinessProbe.TimeoutSeconds != 2 || ext.ReadinessProbe.FailureThreshold != 3 {
+					t.Errorf("ReadinessProbe = %+v, unexpected", ext.ReadinessProbe)
+				}
+			},
+		},
+		{
+			name: "tolerations",
+			runtimeConfig: map[string]any{
+				"tolerations": []any{
+					map[string]any{"key": "dedicated", "operator": "Equal", "value": "payments", "effect": "NoSchedule"},
+				},
+			},
+			assert: func(t *testing.T, ext *KubernetesExtension) {
+				t.Helper()
+				if len(ext.Tolerations) != 1 {
+					t.Fatalf("Tolerations len = %d, want 1", len(ext.Tolerations))
+				}
+				tol := ext.Tolerations[0]
+				if tol.Key != "dedicated" || tol.Operator != "Equal" || tol.Value != "payments" || tol.Effect != "NoSchedule" {
+					t.Errorf("Tolerations[0] = %+v, unexpected", tol)
+				}
+			},
+		},
+		{
+			name: "image pull secrets",
+			runtimeConfig: map[string]any{
+				"image_pull_secrets": []any{" regcred ", "backup-regcred"},
+			},
+			assert: func(t *testing.T, ext *KubernetesExtension) {
+				t.Helper()
+				if len(ext.ImagePullSecrets) != 2 || ext.ImagePullSecrets[0] != "regcred" || ext.ImagePullSecrets[1] != "backup-regcred" {
+					t.Errorf("ImagePullSecrets = %v, unexpected", ext.ImagePullSecrets)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ext := KubernetesExtensionFromDeploymentUnit(&DeploymentUnit{RuntimeConfig: tt.runtimeConfig})
+			tt.assert(t, ext)
+		})
+	}
+}
+
+func TestKubernetesExtensionFromDeploymentUnit_IgnoresMalformedRichRuntimeConfig(t *testing.T) {
+	unit := &DeploymentUnit{
+		RuntimeConfig: map[string]any{
+			"service_ports":      []any{"not-a-map", map[string]any{"name": "missing-port"}, map[string]any{"port": "eighty"}},
+			"resource_limits":    "not-a-map",
+			"resource_requests":  map[string]any{"cpu": float64(1)},
+			"liveness_probe":     map[string]any{"http_get": "not-a-map"},
+			"readiness_probe":    map[string]any{"exec": "not-a-list"},
+			"tolerations":        []any{"not-a-map", map[string]any{"key": float64(1)}},
+			"image_pull_secrets": []any{float64(123), "  "},
+		},
+	}
+	ext := KubernetesExtensionFromDeploymentUnit(unit)
+	if len(ext.ServicePorts) != 0 {
+		t.Errorf("ServicePorts = %+v, want empty", ext.ServicePorts)
+	}
+	if ext.ResourceLimits != nil || ext.ResourceRequests != nil {
+		t.Errorf("resources = limits:%+v requests:%+v, want nil", ext.ResourceLimits, ext.ResourceRequests)
+	}
+	if ext.LivenessProbe != nil || ext.ReadinessProbe != nil {
+		t.Errorf("probes = liveness:%+v readiness:%+v, want nil", ext.LivenessProbe, ext.ReadinessProbe)
+	}
+	if len(ext.Tolerations) != 0 {
+		t.Errorf("Tolerations = %+v, want empty", ext.Tolerations)
+	}
+	if len(ext.ImagePullSecrets) != 0 {
+		t.Errorf("ImagePullSecrets = %v, want empty", ext.ImagePullSecrets)
+	}
+}
