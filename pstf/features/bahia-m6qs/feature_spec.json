@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-m6qs",
+  "title": "Assistant legacy planner falls back to non-streaming completion on empty streaming response",
+  "observed_behavior": "With agentic mode off (default), AssistantOrchestrator.planFromPrompt uses ChatClient.PlanFromPromptStreaming. callChatCompletionsStreaming accumulated only choices[].delta.content and hard-failed with 'empty response from streaming chat completion API' whenever the configured OpenAI-compatible provider did not emit content deltas for a stream+response_format(json_schema) request. The assistant surfaced 'assistant planning failed' at runtime.",
+  "intended_behavior": "When the streaming completion produces no content deltas, the planner detects a sentinel error and transparently falls back to the non-streaming callChatCompletions path (which reads the full choices[0].message.content). Streaming is preserved when it works. A model refusal (delta.refusal / message.refusal) with empty content surfaces as a graceful clarification AssistantPlan rather than a bare empty-response error. When both paths are genuinely empty with no refusal, a clear actionable error is returned. ContextTooLargeError classification is preserved on both paths.",
+  "scope": [
+    "internal/adapters/llm/chat_client.go",
+    "internal/adapters/llm/chat_client_test.go"
+  ],
+  "authoritative_contract": "ChatClient exposes PlanFromPrompt (non-streaming) and PlanFromPromptStreaming (streaming with onChunk callback), both returning *domain.AssistantPlan. The OpenAI-compatible /v1/chat/completions request schema (stream flag, response_format json_schema) is unchanged; only the legacy-path response handling gains an empty-streaming fallback and refusal surfacing. The agentic openai_agent_client.go and provider selection are untouched."
+}

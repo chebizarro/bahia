@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-m6qs",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "When streaming returns no content deltas, the planner falls back to the non-streaming completion and parses the plan from the full message content.",
+      "tests": ["go test ./internal/adapters/llm -run TestPlanFromPromptStreamingFallsBackToNonStreaming"]
+    },
+    {
+      "id": "AC2",
+      "statement": "A streamed model refusal with empty content surfaces as a clarification AssistantPlan (NeedsClarification=true with the refusal text) and does not trigger the non-streaming fallback.",
+      "tests": ["go test ./internal/adapters/llm -run TestPlanFromPromptStreamingSurfacesRefusal", "go test ./internal/adapters/llm -run TestPlanFromPromptSurfacesNonStreamingRefusal"]
+    },
+    {
+      "id": "AC3",
+      "statement": "When the provider streams content deltas normally, the plan is parsed from the accumulated stream, onChunk receives the deltas, and no non-streaming fallback occurs.",
+      "tests": ["go test ./internal/adapters/llm -run TestPlanFromPromptStreamingStreamsNormally"]
+    },
+    {
+      "id": "AC4",
+      "statement": "When both streaming and non-streaming return empty with no refusal, a clear actionable error is returned instead of a bare empty-response message.",
+      "tests": ["go test ./internal/adapters/llm -run TestPlanFromPromptStreamingEmptyEverywhereErrors"]
+    },
+    {
+      "id": "AC5",
+      "statement": "ContextTooLargeError classification is preserved on the streaming path.",
+      "tests": ["go test ./internal/adapters/llm -run TestPlanFromPromptStreamingContextTooLargePreserved"]
+    }
+  ]
+}

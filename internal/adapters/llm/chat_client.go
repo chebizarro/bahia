@@ -45,6 +45,19 @@ func IsContextTooLarge(err error) bool {
 	return errors.As(err, &target)
 }
 
+// errEmptyStreamingResponse is a sentinel returned by callChatCompletionsStreaming
+// when the provider produced neither content deltas nor a refusal. Some
+// OpenAI-compatible providers do not emit delta.content for streamed
+// structured (json_schema) outputs — the content only arrives in the final
+// non-streaming message. PlanFromPromptStreaming detects this sentinel and
+// transparently falls back to the non-streaming completion path.
+var errEmptyStreamingResponse = errors.New("empty response from streaming chat completion API")
+
+// errEmptyCompletionResponse is returned when a completion (streaming fallback
+// included) yields no content and no refusal at all. This is a genuine,
+// actionable failure rather than a provider streaming quirk.
+var errEmptyCompletionResponse = errors.New("empty response from chat completion API: provider returned no content and no refusal")
+
 // ChatClient plans assistant turns using an OpenAI-compatible chat completions endpoint.
 type ChatClient struct {
 	baseURL     string
@@ -83,9 +96,48 @@ func NewChatClient(config ChatClientConfig, logger *slog.Logger) *ChatClient {
 
 // PlanFromPrompt sends a single non-streaming planning request and parses an AssistantPlan.
 func (c *ChatClient) PlanFromPrompt(ctx context.Context, systemPrompt string, userPrompt string) (*domain.AssistantPlan, error) {
-	content, err := c.callChatCompletions(ctx, systemPrompt, userPrompt)
+	content, refusal, err := c.callChatCompletions(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return nil, err
+	}
+	return c.planFromContent(content, refusal)
+}
+
+// PlanFromPromptStreaming streams planning tokens and parses the accumulated response into an AssistantPlan.
+//
+// Some OpenAI-compatible providers do not emit delta.content for streamed
+// structured (json_schema) outputs, so the streaming accumulator can be empty
+// even on a successful request. When that happens callChatCompletionsStreaming
+// returns errEmptyStreamingResponse and we transparently fall back to the
+// non-streaming completion path (which reads the full message content).
+func (c *ChatClient) PlanFromPromptStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (*domain.AssistantPlan, error) {
+	content, refusal, err := c.callChatCompletionsStreaming(ctx, systemPrompt, userPrompt, onChunk)
+	if errors.Is(err, errEmptyStreamingResponse) {
+		c.logger.Warn("streaming completion produced no content; falling back to non-streaming completion")
+		content, refusal, err = c.callChatCompletions(ctx, systemPrompt, userPrompt)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.planFromContent(content, refusal)
+}
+
+// planFromContent turns a completion's content/refusal into an AssistantPlan.
+// Empty content with a refusal surfaces as a graceful clarification (mirroring
+// the invalid-JSON handling); empty content with no refusal is a clear error.
+func (c *ChatClient) planFromContent(content, refusal string) (*domain.AssistantPlan, error) {
+	if strings.TrimSpace(content) == "" {
+		if refusal = strings.TrimSpace(refusal); refusal != "" {
+			c.logger.Warn("planning model refused the request", "refusal", refusal)
+			return &domain.AssistantPlan{
+				Summary:            "The planning model declined to produce a plan.",
+				NeedsClarification: true,
+				ClarifyingQuestion: refusal,
+				RiskLevel:          "low",
+				Steps:              []domain.AssistantPlanStep{},
+			}, nil
+		}
+		return nil, errEmptyCompletionResponse
 	}
 	plan, err := parseAssistantPlan(content)
 	if err != nil {
@@ -101,39 +153,22 @@ func (c *ChatClient) PlanFromPrompt(ctx context.Context, systemPrompt string, us
 	return plan, nil
 }
 
-// PlanFromPromptStreaming streams planning tokens and parses the accumulated response into an AssistantPlan.
-func (c *ChatClient) PlanFromPromptStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (*domain.AssistantPlan, error) {
-	content, err := c.callChatCompletionsStreaming(ctx, systemPrompt, userPrompt, onChunk)
-	if err != nil {
-		return nil, err
-	}
-	plan, err := parseAssistantPlan(content)
-	if err != nil {
-		c.logger.Warn("invalid streamed assistant plan JSON", "error", err)
-		return &domain.AssistantPlan{
-			Summary:            "The planning model returned invalid JSON.",
-			NeedsClarification: true,
-			ClarifyingQuestion: "I could not parse the generated plan. Please restate the request with explicit target resources and desired action.",
-			RiskLevel:          "low",
-			Steps:              []domain.AssistantPlanStep{},
-		}, nil
-	}
-	return plan, nil
-}
-
-func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+// callChatCompletions performs a non-streaming completion and returns the
+// message content and any refusal string. Content is empty when the provider
+// only returned a refusal; both empty yields errEmptyCompletionResponse.
+func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, userPrompt string) (string, string, error) {
 	reqBody, err := c.chatCompletionRequestBody(systemPrompt, userPrompt, false)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("marshal chat completion request: %w", err)
+		return "", "", fmt.Errorf("marshal chat completion request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("create chat completion request: %w", err)
+		return "", "", fmt.Errorf("create chat completion request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -142,25 +177,26 @@ func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, user
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("send chat completion request: %w", err)
+		return "", "", fmt.Errorf("send chat completion request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read chat completion response: %w", err)
+		return "", "", fmt.Errorf("read chat completion response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if isContextLimitResponse(resp.StatusCode, respBody) {
-			return "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: string(respBody)}
+			return "", "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: string(respBody)}
 		}
-		return "", fmt.Errorf("chat completion API error %d: %s", resp.StatusCode, string(respBody))
+		return "", "", fmt.Errorf("chat completion API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var apiResp struct {
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
+				Refusal string `json:"refusal"`
 			} `json:"message"`
 		} `json:"choices"`
 		Error *struct {
@@ -170,34 +206,44 @@ func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, user
 		} `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
-		return "", fmt.Errorf("unmarshal chat completion response: %w", err)
+		return "", "", fmt.Errorf("unmarshal chat completion response: %w", err)
 	}
 	if apiResp.Error != nil {
 		msg := apiResp.Error.Message
 		if strings.Contains(apiResp.Error.Code, "context_length") || strings.Contains(apiResp.Error.Type, "context_length") {
-			return "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: msg}
+			return "", "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: msg}
 		}
-		return "", fmt.Errorf("chat completion API error: %s", msg)
+		return "", "", fmt.Errorf("chat completion API error: %s", msg)
 	}
-	if len(apiResp.Choices) == 0 || strings.TrimSpace(apiResp.Choices[0].Message.Content) == "" {
-		return "", fmt.Errorf("empty response from chat completion API")
+	if len(apiResp.Choices) == 0 {
+		return "", "", errEmptyCompletionResponse
 	}
-	return apiResp.Choices[0].Message.Content, nil
+	content := apiResp.Choices[0].Message.Content
+	refusal := apiResp.Choices[0].Message.Refusal
+	if strings.TrimSpace(content) == "" && strings.TrimSpace(refusal) == "" {
+		return "", "", errEmptyCompletionResponse
+	}
+	return content, refusal, nil
 }
 
-func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (string, error) {
+// callChatCompletionsStreaming performs a streaming completion, accumulating
+// delta.content and delta.refusal. It returns (content, refusal, nil) on
+// success. When neither content nor refusal was streamed it returns
+// errEmptyStreamingResponse so the caller can fall back to the non-streaming
+// path (some providers do not stream content deltas for json_schema outputs).
+func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (string, string, error) {
 	reqBody, err := c.chatCompletionRequestBody(systemPrompt, userPrompt, true)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("marshal streaming chat completion request: %w", err)
+		return "", "", fmt.Errorf("marshal streaming chat completion request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("create streaming chat completion request: %w", err)
+		return "", "", fmt.Errorf("create streaming chat completion request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -207,22 +253,23 @@ func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPro
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("send streaming chat completion request: %w", err)
+		return "", "", fmt.Errorf("send streaming chat completion request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			return "", fmt.Errorf("read streaming chat completion error response: %w", readErr)
+			return "", "", fmt.Errorf("read streaming chat completion error response: %w", readErr)
 		}
 		if isContextLimitResponse(resp.StatusCode, respBody) {
-			return "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: string(respBody)}
+			return "", "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: string(respBody)}
 		}
-		return "", fmt.Errorf("streaming chat completion API error %d: %s", resp.StatusCode, string(respBody))
+		return "", "", fmt.Errorf("streaming chat completion API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var accumulated strings.Builder
+	var refusal strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -237,9 +284,12 @@ func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPro
 		if data == "[DONE]" {
 			break
 		}
-		chunk, err := parseStreamingDelta(data)
+		chunk, refusalChunk, err := parseStreamingDelta(data)
 		if err != nil {
-			return "", err
+			return "", "", err
+		}
+		if refusalChunk != "" {
+			refusal.WriteString(refusalChunk)
 		}
 		if chunk == "" {
 			continue
@@ -250,12 +300,12 @@ func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPro
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read streaming chat completion response: %w", err)
+		return "", "", fmt.Errorf("read streaming chat completion response: %w", err)
 	}
-	if strings.TrimSpace(accumulated.String()) == "" {
-		return "", fmt.Errorf("empty response from streaming chat completion API")
+	if strings.TrimSpace(accumulated.String()) == "" && strings.TrimSpace(refusal.String()) == "" {
+		return "", "", errEmptyStreamingResponse
 	}
-	return accumulated.String(), nil
+	return accumulated.String(), refusal.String(), nil
 }
 
 func (c *ChatClient) chatCompletionRequestBody(systemPrompt, userPrompt string, stream bool) (map[string]any, error) {
@@ -275,11 +325,14 @@ func (c *ChatClient) chatCompletionRequestBody(systemPrompt, userPrompt string, 
 	}, nil
 }
 
-func parseStreamingDelta(data string) (string, error) {
+// parseStreamingDelta extracts the content and refusal deltas from a single SSE
+// data payload. Either (or both) may be empty for a given chunk.
+func parseStreamingDelta(data string) (string, string, error) {
 	var apiResp struct {
 		Choices []struct {
 			Delta struct {
 				Content string `json:"content"`
+				Refusal string `json:"refusal"`
 			} `json:"delta"`
 		} `json:"choices"`
 		Error *struct {
@@ -287,15 +340,15 @@ func parseStreamingDelta(data string) (string, error) {
 		} `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(data), &apiResp); err != nil {
-		return "", fmt.Errorf("unmarshal streaming chat completion chunk: %w", err)
+		return "", "", fmt.Errorf("unmarshal streaming chat completion chunk: %w", err)
 	}
 	if apiResp.Error != nil {
-		return "", fmt.Errorf("streaming chat completion API error: %s", apiResp.Error.Message)
+		return "", "", fmt.Errorf("streaming chat completion API error: %s", apiResp.Error.Message)
 	}
 	if len(apiResp.Choices) == 0 {
-		return "", nil
+		return "", "", nil
 	}
-	return apiResp.Choices[0].Delta.Content, nil
+	return apiResp.Choices[0].Delta.Content, apiResp.Choices[0].Delta.Refusal, nil
 }
 
 func parseAssistantPlan(content string) (*domain.AssistantPlan, error) {

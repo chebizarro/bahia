@@ -1,0 +1,47 @@
+{
+  "feature_id": "bahia-m6qs",
+  "tests": [
+    {
+      "name": "go test ./internal/adapters/llm -run TestPlanFromPromptStreamingFallsBackToNonStreaming",
+      "type": "Go unit test (httptest fake transport)",
+      "acceptance_criteria": ["AC1"],
+      "notes": "Streaming endpoint returns SSE with role/finish frames but no delta.content; asserts exactly one streaming call, one non-streaming fallback call, and a parsed plan."
+    },
+    {
+      "name": "go test ./internal/adapters/llm -run TestPlanFromPromptStreamingSurfacesRefusal",
+      "type": "Go unit test (httptest fake transport)",
+      "acceptance_criteria": ["AC2"],
+      "notes": "Streaming endpoint emits delta.refusal only; asserts a clarification plan containing the refusal and zero non-streaming fallback calls."
+    },
+    {
+      "name": "go test ./internal/adapters/llm -run TestPlanFromPromptSurfacesNonStreamingRefusal",
+      "type": "Go unit test (httptest fake transport)",
+      "acceptance_criteria": ["AC2"],
+      "notes": "Non-streaming endpoint returns message.refusal with empty content; asserts a clarification plan."
+    },
+    {
+      "name": "go test ./internal/adapters/llm -run TestPlanFromPromptStreamingStreamsNormally",
+      "type": "Go unit test (httptest fake transport)",
+      "acceptance_criteria": ["AC3"],
+      "notes": "Streaming endpoint emits the plan JSON across delta.content chunks; asserts parsed plan, onChunk delivery, and zero non-streaming fallback calls."
+    },
+    {
+      "name": "go test ./internal/adapters/llm -run TestPlanFromPromptStreamingEmptyEverywhereErrors",
+      "type": "Go unit test (httptest fake transport)",
+      "acceptance_criteria": ["AC4"],
+      "notes": "Both endpoints empty; asserts an error mentioning 'no content and no refusal'."
+    },
+    {
+      "name": "go test ./internal/adapters/llm -run TestPlanFromPromptStreamingContextTooLargePreserved",
+      "type": "Go unit test (httptest fake transport)",
+      "acceptance_criteria": ["AC5"],
+      "notes": "Streaming endpoint returns a context_length_exceeded error; asserts IsContextTooLarge(err)."
+    },
+    {
+      "name": "go test ./internal/service -run TestAssistantOrchestrator",
+      "type": "Go unit test (scoped regression)",
+      "acceptance_criteria": ["AC1", "AC3"],
+      "notes": "Confirms the orchestrator legacy planning path still passes with the refactored ChatClient."
+    }
+  ]
+}
