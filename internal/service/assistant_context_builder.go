@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -20,20 +21,25 @@ const (
 	assistantDocsContextBudgetDivisor = 4
 )
 
-// AssistantContextBuilder assembles bounded operational context for the assistant planner.
+// AssistantContextBuilder assembles bounded operational context and replay-backed
+// model history for the assistant planner/agent loop.
 type AssistantContextBuilder struct {
-	services AssistantServiceRegistry
-	llm      AssistantLLMRegistry
-	ml       AssistantMLRegistry
-	dns      AssistantDNSRegistry
-	workers  AssistantWorkerCatalog
-	docs     AssistantDocsProvider
-	maxChars int
+	services          AssistantServiceRegistry
+	llm               AssistantLLMRegistry
+	ml                AssistantMLRegistry
+	dns               AssistantDNSRegistry
+	workers           AssistantWorkerCatalog
+	docs              AssistantDocsProvider
+	transcriptHistory AssistantTranscriptHistoryProvider
+	maxChars          int
+	transcriptLimit   int
 }
 
 // AssistantContextBuilderConfig configures AssistantContextBuilder.
 type AssistantContextBuilderConfig struct {
-	MaxChars int
+	MaxChars          int
+	TranscriptHistory AssistantTranscriptHistoryProvider
+	TranscriptLimit   int
 }
 
 // AssistantServiceRegistry is the service-registry surface needed for context assembly.
@@ -77,6 +83,12 @@ type AssistantDocsProvider interface {
 	Read(ctx context.Context, topic string) (userdocs.Document, error)
 }
 
+// AssistantTranscriptHistoryProvider replays decrypted transcript messages for
+// model history. AssistantTranscriptStore implements this interface.
+type AssistantTranscriptHistoryProvider interface {
+	BuildModelHistory(ctx context.Context, sessionID string, limit int) ([]domain.AssistantAgentMessage, error)
+}
+
 // NewAssistantContextBuilder creates a context builder.
 func NewAssistantContextBuilder(
 	services AssistantServiceRegistry,
@@ -90,7 +102,10 @@ func NewAssistantContextBuilder(
 	if config.MaxChars <= 0 {
 		config.MaxChars = defaultAssistantContextMaxChars
 	}
-	return &AssistantContextBuilder{services: services, llm: llm, ml: ml, dns: dns, workers: workers, docs: docs, maxChars: config.MaxChars}
+	if config.TranscriptLimit <= 0 {
+		config.TranscriptLimit = defaultAssistantTranscriptReplayLimit
+	}
+	return &AssistantContextBuilder{services: services, llm: llm, ml: ml, dns: dns, workers: workers, docs: docs, transcriptHistory: config.TranscriptHistory, maxChars: config.MaxChars, transcriptLimit: config.TranscriptLimit}
 }
 
 // BuildContext returns a structured, bounded, secret-free text block for LLM planning.
@@ -105,7 +120,15 @@ func (b *AssistantContextBuilder) BuildContext(ctx context.Context, routeContext
 			writeKV(&out, key, routeContext[key])
 		}
 	}
-	if strings.TrimSpace(transcriptSummary) != "" {
+	if b.transcriptHistory != nil {
+		if sessionID := assistantSessionIDFromContext(routeContext); sessionID != "" {
+			messages, err := b.transcriptHistory.BuildModelHistory(ctx, sessionID, b.transcriptLimit)
+			if err != nil {
+				return "", fmt.Errorf("replay assistant transcript history: %w", err)
+			}
+			b.appendTranscriptHistory(&out, messages, b.maxChars/5)
+		}
+	} else if strings.TrimSpace(transcriptSummary) != "" {
 		writeSection(&out, "Transcript Summary")
 		out.WriteString(truncateString(transcriptSummary, b.maxChars/5))
 		out.WriteString("\n")
@@ -131,6 +154,122 @@ func (b *AssistantContextBuilder) BuildContext(ctx context.Context, routeContext
 	}
 
 	return truncateContext(out.String(), b.maxChars), nil
+}
+
+// BuildModelHistory returns provider-neutral messages for the agent loop: a
+// system message with bounded operational context, decrypted transcript replay in
+// chronological order, and the current operator prompt when provided. It is the
+// memory path for agentic turns; TranscriptSummary is intentionally not used.
+func (b *AssistantContextBuilder) BuildModelHistory(ctx context.Context, sessionID string, routeContext map[string]string, selectedRefs []string, currentOperatorPrompt string) ([]domain.AssistantAgentMessage, error) {
+	contextRoute := cloneAssistantContextStringMap(routeContext)
+	delete(contextRoute, "session_id")
+	delete(contextRoute, "assistant_session_id")
+	delete(contextRoute, "session")
+	contextBlock, err := b.BuildContext(ctx, contextRoute, selectedRefs, "")
+	if err != nil {
+		return nil, err
+	}
+	messages := []domain.AssistantAgentMessage{{
+		Role: domain.AssistantAgentMessageRoleSystem,
+		Content: []domain.AssistantAgentContentBlock{{
+			Type: domain.AssistantAgentContentText,
+			Text: contextBlock,
+		}},
+	}}
+	if b.transcriptHistory != nil && strings.TrimSpace(sessionID) != "" {
+		history, err := b.transcriptHistory.BuildModelHistory(ctx, strings.TrimSpace(sessionID), b.transcriptLimit)
+		if err != nil {
+			return nil, fmt.Errorf("replay assistant transcript history: %w", err)
+		}
+		messages = append(messages, history...)
+	}
+	if strings.TrimSpace(currentOperatorPrompt) != "" {
+		messages = append(messages, domain.AssistantAgentMessage{
+			Role: domain.AssistantAgentMessageRoleUser,
+			Content: []domain.AssistantAgentContentBlock{{
+				Type: domain.AssistantAgentContentText,
+				Text: strings.TrimSpace(currentOperatorPrompt),
+			}},
+		})
+	}
+	return messages, nil
+}
+
+func (b *AssistantContextBuilder) appendTranscriptHistory(out *strings.Builder, messages []domain.AssistantAgentMessage, maxChars int) {
+	if len(messages) == 0 || maxChars <= 0 {
+		return
+	}
+	var history strings.Builder
+	writeSection(&history, "Transcript History")
+	for _, message := range messages {
+		line := fmt.Sprintf("- %s: %s\n", message.Role, assistantAgentMessageText(message))
+		appendLineWithinBudget(&history, maxChars, line)
+		if history.Len() >= maxChars {
+			break
+		}
+	}
+	out.WriteString(truncateToBudget(history.String(), maxChars))
+	if !strings.HasSuffix(out.String(), "\n") {
+		out.WriteString("\n")
+	}
+}
+
+func assistantAgentMessageText(message domain.AssistantAgentMessage) string {
+	parts := make([]string, 0, len(message.Content)+1)
+	for _, block := range message.Content {
+		switch block.Type {
+		case domain.AssistantAgentContentText:
+			if strings.TrimSpace(block.Text) != "" {
+				parts = append(parts, strings.TrimSpace(block.Text))
+			}
+		case domain.AssistantAgentContentJSON:
+			if len(block.JSON) > 0 {
+				encoded, err := json.Marshal(block.JSON)
+				if err == nil {
+					parts = append(parts, string(encoded))
+				}
+			}
+		case domain.AssistantAgentContentToolCall:
+			if block.ToolCall != nil {
+				parts = append(parts, "tool_call "+block.ToolCall.Name)
+			}
+		case domain.AssistantAgentContentObservation:
+			if block.Observation != nil {
+				parts = append(parts, strings.TrimSpace(block.Observation.Summary))
+			}
+		}
+	}
+	if message.Observation != nil && strings.TrimSpace(message.Observation.Summary) != "" {
+		parts = append(parts, strings.TrimSpace(message.Observation.Summary))
+	}
+	if len(parts) == 0 && len(message.ToolCalls) > 0 {
+		names := make([]string, 0, len(message.ToolCalls))
+		for _, call := range message.ToolCalls {
+			names = append(names, call.Name)
+		}
+		parts = append(parts, "tool_calls "+strings.Join(names, ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func assistantSessionIDFromContext(routeContext map[string]string) string {
+	for _, key := range []string{"session_id", "assistant_session_id", "session"} {
+		if value := strings.TrimSpace(routeContext[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func cloneAssistantContextStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func (b *AssistantContextBuilder) appendDocumentationReferences(ctx context.Context, out *strings.Builder, selectedRefs []string) {
@@ -609,4 +748,5 @@ func assistantDNSRecordType(address string) domain.DNSRecordType {
 
 var _ interface {
 	BuildContext(ctx context.Context, routeContext map[string]string, selectedRefs []string, transcriptSummary string) (string, error)
+	BuildModelHistory(ctx context.Context, sessionID string, routeContext map[string]string, selectedRefs []string, currentOperatorPrompt string) ([]domain.AssistantAgentMessage, error)
 } = (*AssistantContextBuilder)(nil)

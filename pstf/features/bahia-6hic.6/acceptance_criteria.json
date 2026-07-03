@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-6hic.6",
+  "title": "Assistant transcript store + memory",
+  "criteria": [
+    {"id": "AC-1", "statement": "Kind 30316 transcript events are published with session, turn, role, sequence, envelope, and service-held key metadata tags.", "tests": ["TestAssistantTranscriptStorePublishesEncrypted30316Envelope"]},
+    {"id": "AC-2", "statement": "Kind 30316 content is a service-held symmetric-key AEAD envelope and does not expose plaintext transcript text.", "tests": ["TestAssistantTranscriptStorePublishesEncrypted30316Envelope"]},
+    {"id": "AC-3", "statement": "Replay uses scoped EOSE subscription semantics, dedupes relay duplicates by event id, decrypts payloads, and returns chronological multi-turn history by sequence.", "tests": ["TestAssistantTranscriptStoreReplayOrdersAndDedupes"]},
+    {"id": "AC-4", "statement": "Replay truncation keeps the most recent messages while preserving chronological order.", "tests": ["TestAssistantTranscriptStoreReplayTruncatesToMostRecentMessages"]},
+    {"id": "AC-5", "statement": "A fresh store/session with the same service-held key can decrypt and rebuild history without per-recipient sealing state.", "tests": ["TestAssistantTranscriptStoreDecryptsWithServiceHeldKeyOnFreshSession"]},
+    {"id": "AC-6", "statement": "Context building exposes replay-backed provider-neutral model history and does not use legacy TranscriptSummary when a transcript provider is configured.", "tests": ["TestAssistantContextBuilderUsesTranscriptReplayForModelHistory"]}
+  ]
+}

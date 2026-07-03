@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-6hic.6",
+  "tests": [
+    {"name": "TestAssistantTranscriptStorePublishesEncrypted30316Envelope", "acceptance": ["AC-1", "AC-2"], "type": "unit", "evidence": "Validates kind/tags/envelope metadata and confirms plaintext is absent from event content."},
+    {"name": "TestAssistantTranscriptStoreReplayOrdersAndDedupes", "acceptance": ["AC-3"], "type": "unit", "evidence": "Injects out-of-order duplicate relay events and verifies scoped replay returns sequence-ordered unique records."},
+    {"name": "TestAssistantTranscriptStoreReplayTruncatesToMostRecentMessages", "acceptance": ["AC-4"], "type": "unit", "evidence": "Publishes three messages and verifies replay limit returns the most recent two in chronological order."},
+    {"name": "TestAssistantTranscriptStoreDecryptsWithServiceHeldKeyOnFreshSession", "acceptance": ["AC-5"], "type": "unit", "evidence": "Replays events through a freshly constructed store using the same service-held key provider."},
+    {"name": "TestAssistantContextBuilderUsesTranscriptReplayForModelHistory", "acceptance": ["AC-6"], "type": "unit", "evidence": "Verifies provider-neutral model history uses replayed messages and legacy TranscriptSummary is ignored when replay is configured."}
+  ]
+}
