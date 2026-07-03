@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-e1gn",
+  "title": "Restore web Playwright baseline shared harness regressions",
+  "issue": "bahia-e1gn",
+  "intent": "Diagnose the broad web Playwright baseline failure pattern and repair shared setup/harness/app regressions before splitting unrelated residual failures.",
+  "observed_behavior": [
+    "A representative dashboard + environments slice initially failed across unrelated areas.",
+    "Public ContextVM commands were built as kind 25910 but shared result subscriptions only listened for encrypted wrapper kinds, leaving modal submissions unresolved.",
+    "Several E2E harnesses used an invalid repeated-b service pubkey that modern secp/NIP-44 validation rejects.",
+    "Dashboard payment result events were emitted before the shared result subscription existed and bypassed mock relay normalization.",
+    "Generated Playwright report/test-result artifacts were tracked in git."
+  ],
+  "intended_behavior": [
+    "Public ContextVM kind 25910 requests resolve from scoped kind 25910 result subscriptions with #p/#e correlation and OK verification preserved.",
+    "Encrypted flows continue to use gift-wrapped 1059 unless a public control-plane caller explicitly selects kind 25910.",
+    "E2E harness service pubkeys are valid hex secp256k1 public keys.",
+    "Harness result delivery is event-driven: queue until matching REQ subscriptions exist, then deliver EVENT through mock relay callbacks; no sleep-based waits are introduced.",
+    "Generated Playwright artifacts are removed from git and ignored."
+  ],
+  "deferred_issue_ids": ["bahia-la6v", "bahia-rxae", "bahia-p0vz", "bahia-dgdm"]
+}

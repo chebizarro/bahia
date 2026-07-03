@@ -1,6 +1,6 @@
 import { goto } from '$app/navigation';
 import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
-import { publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
 function operationResultEvent({ requestEventId, resultEvent, result }) {
@@ -58,6 +58,8 @@ export async function publishCommand({ operation, tags = [], content = {}, paylo
     operation,
     payload: payload ?? content,
     tags,
+    kind: CONTEXTVM_MESSAGE_KIND,
+    resultKinds: [CONTEXTVM_MESSAGE_KIND],
     signal,
     timeoutMs
   });
@@ -83,6 +85,7 @@ export async function publishCommandOnly({ operation, tags = [], content = {}, p
     operation,
     payload: payload ?? content,
     tags,
+    kind: CONTEXTVM_MESSAGE_KIND,
     signal
   });
 }

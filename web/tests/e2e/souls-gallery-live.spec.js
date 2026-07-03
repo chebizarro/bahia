@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
-const FACTORY_PUBKEY = 'b'.repeat(64);
+const FACTORY_PUBKEY = E2E_SERVICE_PUBKEY;
 const AGENT_PUBKEY = 'c'.repeat(64);
 
 function soulEvent({ id, agentId, name, purpose, status = 'active', deployStatus = '', createdAt }) {

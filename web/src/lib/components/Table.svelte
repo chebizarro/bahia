@@ -2,6 +2,10 @@
   let { columns = [], data = [], onRowClick = null, rowClickable = Boolean(onRowClick) } = $props();
 
   function handleRowClick(row, event) {
+    if (event?.target?.closest?.('[data-dashboard-action]')) {
+      onRowClick?.(row, event);
+      return;
+    }
     if (event?.target?.closest?.('a, button, input, select, textarea, [role="button"]')) return;
     onRowClick?.(row, event);
   }

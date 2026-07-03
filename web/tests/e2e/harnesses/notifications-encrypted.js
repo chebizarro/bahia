@@ -1,4 +1,6 @@
-export const SERVICE_PUBKEY = 'b'.repeat(64);
+import { E2E_SERVICE_PUBKEY, TEST_PUBKEY } from '../helpers.js';
+
+export const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 export const PUBLIC_RELAY = 'ws://public.test.local';
 export const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
 
@@ -47,8 +49,20 @@ export async function installEncryptedNotificationHarness(
       logs: (initialLogs || []).map((log) => ({ ...log }))
     };
 
+    const originalSignEvent = window.nostr?.signEvent?.bind(window.nostr);
+    window.__BAHIA_E2E_ENCRYPTED_SIGNED_CONTEXTVM = [];
     window.nostr = {
       ...(window.nostr || {}),
+      signEvent: async (event) => {
+        const signed = originalSignEvent ? await originalSignEvent(event) : { ...event, pubkey: operatorPubkey, id: `mock-event-id-${Date.now()}-${Math.random().toString(36).slice(2)}`, sig: '0'.repeat(128) };
+        if (signed?.kind === 25910) {
+          try {
+            const parsed = parseContextVMRequest(signed);
+            window.__BAHIA_E2E_ENCRYPTED_SIGNED_CONTEXTVM.push({ ...parsed, signedEvent: signed });
+          } catch {}
+        }
+        return signed;
+      },
       nip44: {
         encrypt: async (_recipientPubkey, plaintext) => `enc44:${plaintext}`,
         decrypt: async (_senderPubkey, ciphertext) => {
@@ -61,6 +75,7 @@ export async function installEncryptedNotificationHarness(
     };
 
     const KIND_CONTEXTVM = 25910;
+    const KIND_GIFT_WRAP = 1059;
 
     function isRelayUrl(url, expected) {
       return String(url || '').replace(/\/$/, '') === String(expected || '').replace(/\/$/, '');
@@ -141,14 +156,21 @@ export async function installEncryptedNotificationHarness(
       deliverPendingEncryptedResults();
     }
 
+    function canonicalNotificationOperation(operation) {
+      return String(operation || '')
+        .replace(/^notifications\/channels-/, 'notifications.channels.')
+        .replace(/^notifications\/logs-/, 'notifications.logs.');
+    }
+
     function notificationResult(operation, payload = {}) {
-      const forcedError = operationErrors?.[operation];
+      const canonicalOperation = canonicalNotificationOperation(operation);
+      const forcedError = operationErrors?.[canonicalOperation] || operationErrors?.[operation];
       if (forcedError) {
         return { status: 'error', error: { ...forcedError } };
       }
 
       const state = window.__BAHIA_E2E_NOTIFICATION_STATE;
-      switch (operation) {
+      switch (canonicalOperation) {
         case 'notifications.channels.list':
           return { status: 'ok', payload: { channels: [...state.channels] } };
         case 'notifications.channels.get': {
@@ -226,10 +248,13 @@ export async function installEncryptedNotificationHarness(
         return originalSend.call(this, data);
       }
 
-      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM && isRelayUrl(this.url, encryptedRelay)) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && [KIND_CONTEXTVM, KIND_GIFT_WRAP].includes(message[1]?.kind) && isRelayUrl(this.url, encryptedRelay)) {
         const event = message[1];
         const relay = this.url;
-        const { envelope, operation, payload } = parseContextVMRequest(event);
+        const signedContext = event.kind === KIND_GIFT_WRAP ? window.__BAHIA_E2E_ENCRYPTED_SIGNED_CONTEXTVM.shift() : null;
+        const { envelope, operation: rawOperation, payload, signedEvent } = signedContext || parseContextVMRequest(event);
+        const operation = canonicalNotificationOperation(rawOperation);
+        const requesterPubkey = event.kind === KIND_GIFT_WRAP ? (signedEvent?.pubkey || operatorPubkey) : event.pubkey;
         const result = notificationResult(operation, payload || {});
         window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.push({ relay, eventId: event.id, kind: event.kind });
         window.__BAHIA_E2E_ENCRYPTED_REQUESTS.push({ relay, eventId: event.id, kind: event.kind, tags: event.tags || [], operation, requesterPubkey: event.pubkey });
@@ -240,12 +265,12 @@ export async function installEncryptedNotificationHarness(
 
         const resultEvent = {
           id: `result-${event.id}`,
-          kind: KIND_CONTEXTVM,
+          kind: event.kind === KIND_GIFT_WRAP ? KIND_GIFT_WRAP : KIND_CONTEXTVM,
           pubkey: servicePubkey,
           created_at: Math.floor(Date.now() / 1000),
           tags: [
             ['e', event.id],
-            ['p', event.pubkey],
+            ['p', requesterPubkey],
             ['encrypted', 'contextvm-jsonrpc-v1'],
             ['method', operation]
           ],
@@ -285,6 +310,7 @@ export async function installEncryptedNotificationHarness(
     publicRelay,
     initialChannels,
     initialLogs,
-    operationErrors
+    operationErrors,
+    operatorPubkey: TEST_PUBKEY
   });
 }

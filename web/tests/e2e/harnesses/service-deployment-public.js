@@ -1,4 +1,6 @@
-export const SERVICE_PUBKEY = 'b'.repeat(64);
+import { E2E_SERVICE_PUBKEY } from '../helpers.js';
+
+export const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 export const PUBLIC_RELAY = 'ws://relay.test.local';
 
 export function createPublicSystemInfo({ publicRelay = PUBLIC_RELAY, servicePubkey = SERVICE_PUBKEY, extraFeatures = {} } = {}) {
@@ -197,10 +199,14 @@ export async function installPublicServiceDeploymentHarness(
 
     function encodeContextVMCiphertext(requestEvent, envelope) {
       const plaintext = JSON.stringify(envelope);
-      if (String(requestEvent.content || '').startsWith('mock-nip44:')) {
+      const requestContent = String(requestEvent.content || '');
+      if (requestContent.startsWith('mock-nip44:')) {
         return `mock-nip44:${btoa(unescape(encodeURIComponent(plaintext)))}`;
       }
-      return `enc44:${plaintext}`;
+      if (requestContent.startsWith('enc44:')) {
+        return `enc44:${plaintext}`;
+      }
+      return plaintext;
     }
 
     function contextVMResultEvent(requestEvent, result) {
@@ -341,19 +347,19 @@ export async function installPublicServiceDeploymentHarness(
       return { delivered, correlated };
     }
 
-    function queueRelayEvent(event, { requireCorrelationId = null, traceAs = null } = {}) {
+    function queueRelayEvent(event, { requireCorrelationId = null, traceAs = null, traceRequestEventId = requireCorrelationId } = {}) {
       if (traceAs === 'result') {
         window.__BAHIA_E2E_PUBLIC_RESULTS.push({
           eventId: event.id,
           kind: event.kind,
-          requestEventId: requireCorrelationId,
+          requestEventId: traceRequestEventId,
           tags: event.tags || []
         });
       } else if (traceAs === 'projection') {
         window.__BAHIA_E2E_PUBLIC_PROJECTIONS.push({
           eventId: event.id,
           kind: event.kind,
-          requestEventId: requireCorrelationId,
+          requestEventId: traceRequestEventId,
           tags: event.tags || []
         });
       }
@@ -872,7 +878,7 @@ export async function installPublicServiceDeploymentHarness(
         if (window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.has(requestEvent.id)) return;
         window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.add(requestEvent.id);
         const { projections, resultEvent, delayedResultEvent } = handlePublicRequest(requestEvent);
-        for (const projection of projections) queueRelayEvent(projection, { requireCorrelationId: requestEvent.id, traceAs: 'projection' });
+        for (const projection of projections) queueRelayEvent(projection, { traceAs: 'projection', traceRequestEventId: requestEvent.id });
         if (delayedResultEvent) {
           window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.set(requestEvent.id, {
             requestEvent,

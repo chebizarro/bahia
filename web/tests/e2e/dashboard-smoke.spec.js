@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks, seedNostrEvents } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, installE2EMocks, seedNostrEvents } from './helpers.js';
 
 // Mock data
 const mockServices = [
@@ -198,7 +198,7 @@ const mockEvents = [
   }
 ];
 
-const SERVICE_PUBKEY = 'b'.repeat(64);
+const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
 const now = Math.floor(Date.now() / 1000);
 
@@ -257,7 +257,7 @@ const relaySystemInfo = {
 };
 
 async function installEncryptedDashboardPaymentHarness(page) {
-  await page.addInitScript(({ servicePubkey }) => {
+  await page.addInitScript(({ servicePubkey, operatorPubkey }) => {
     function matchesFilter(event, filter) {
       if (!filter || typeof filter !== 'object') return true;
       if (Array.isArray(filter.kinds) && !filter.kinds.includes(event.kind)) return false;
@@ -276,6 +276,8 @@ async function installEncryptedDashboardPaymentHarness(page) {
     window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY = window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY || {};
     window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS = window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS || {};
     window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = [];
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_WORKER_QUEUE = Object.keys(window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY).sort();
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_REQUEST_INDEX = 0;
     window.nostr = {
       ...(window.nostr || {}),
       nip44: {
@@ -289,6 +291,71 @@ async function installEncryptedDashboardPaymentHarness(page) {
       }
     };
 
+    function nextPaymentWorkerForWrappedRequest() {
+      const queue = Array.isArray(window.__BAHIA_E2E_DASHBOARD_PAYMENT_WORKER_QUEUE)
+        ? window.__BAHIA_E2E_DASHBOARD_PAYMENT_WORKER_QUEUE
+        : [];
+      if (queue.length === 0) return '';
+      const index = Number(window.__BAHIA_E2E_DASHBOARD_PAYMENT_REQUEST_INDEX || 0);
+      window.__BAHIA_E2E_DASHBOARD_PAYMENT_REQUEST_INDEX = index + 1;
+      return queue[index % queue.length];
+    }
+
+    function paymentResultPayloadForWorker(worker, requestEventId) {
+      const error = window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS?.[worker];
+      if (error) {
+        return {
+          request_event_id: requestEventId,
+          status: 'error',
+          error: typeof error === 'string' ? { code: 'handler_failed', message: error } : error
+        };
+      }
+      return {
+        request_event_id: requestEventId,
+        status: 'ok',
+        payload: window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY?.[worker] || []
+      };
+    }
+
+    window.__BAHIA_E2E_DASHBOARD_PENDING_PAYMENT_RESULTS = [];
+
+    function socketMatchesResult(socket, resultEvent) {
+      for (const filters of socket.subscriptions?.values() || []) {
+        if (filters.some((filter) => matchesFilter(resultEvent, filter))) return true;
+      }
+      return false;
+    }
+
+    function deliverPaymentResult(resultEvent) {
+      let delivered = false;
+      for (const socket of window.__BAHIA_E2E_WS_CONNECTIONS || []) {
+        if (socket.readyState !== window.WebSocket.OPEN || !socketMatchesResult(socket, resultEvent)) continue;
+        delivered = true;
+        if (typeof socket.emitEvent === 'function') {
+          socket.emitEvent(resultEvent);
+          continue;
+        }
+        for (const [subId, filters] of socket.subscriptions?.entries() || []) {
+          if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
+            const messageEvent = { type: 'message', data: JSON.stringify(['EVENT', subId, resultEvent]), target: socket };
+            socket.onmessage?.(messageEvent);
+            socket.dispatchEvent?.(messageEvent);
+          }
+        }
+      }
+      return delivered;
+    }
+
+    function queuePaymentResult(resultEvent) {
+      window.__BAHIA_E2E_DASHBOARD_PENDING_PAYMENT_RESULTS.push(resultEvent);
+      flushPaymentResults();
+    }
+
+    function flushPaymentResults() {
+      window.__BAHIA_E2E_DASHBOARD_PENDING_PAYMENT_RESULTS = (window.__BAHIA_E2E_DASHBOARD_PENDING_PAYMENT_RESULTS || [])
+        .filter((resultEvent) => !deliverPaymentResult(resultEvent));
+    }
+
     const originalSend = window.WebSocket.prototype.send;
     window.WebSocket.prototype.send = function patchedSend(data) {
       let message;
@@ -296,6 +363,35 @@ async function installEncryptedDashboardPaymentHarness(page) {
         message = JSON.parse(data);
       } catch {
         return originalSend.call(this, data);
+      }
+
+      if (Array.isArray(message) && message[0] === 'REQ') {
+        const sent = originalSend.call(this, data);
+        flushPaymentResults();
+        return sent;
+      }
+
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 1059) {
+        const event = message[1];
+        const worker = nextPaymentWorkerForWrappedRequest();
+        if (!worker) return originalSend.call(this, data);
+        const trace = window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE || [];
+        trace.push({ relay: this.url, operation: 'payments.history', worker });
+        window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = trace;
+
+        const resultEvent = {
+          id: `result-${event.id}`,
+          kind: 1059,
+          pubkey: servicePubkey,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [['e', event.id], ['p', operatorPubkey]],
+          content: `enc44:${JSON.stringify(paymentResultPayloadForWorker(worker, event.id))}`,
+          sig: '0'.repeat(128)
+        };
+
+        const sent = originalSend.call(this, data);
+        queuePaymentResult(resultEvent);
+        return sent;
       }
 
       if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 25910) {
@@ -307,7 +403,7 @@ async function installEncryptedDashboardPaymentHarness(page) {
         const envelope = JSON.parse(plaintext);
           const params = { ...(envelope.params || {}) };
           delete params._meta;
-        if (envelope.method === 'payments/history') {
+        if (envelope.method === 'payments/history' || envelope.method === 'payments.history') {
           const worker = String(params.worker || envelope.payload?.worker || '');
           const trace = window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE || [];
           trace.push({ relay: this.url, operation: 'payments.history', worker });
@@ -351,7 +447,7 @@ async function installEncryptedDashboardPaymentHarness(page) {
 
       return originalSend.call(this, data);
     };
-  }, { servicePubkey: SERVICE_PUBKEY });
+  }, { servicePubkey: SERVICE_PUBKEY, operatorPubkey: TEST_PUBKEY });
 }
 
 async function seedEncryptedDashboardPayments(page, { paymentHistoryByWorker = mockPaymentHistoryByWorker, paymentErrorsByWorker = {} } = {}) {
@@ -359,6 +455,8 @@ async function seedEncryptedDashboardPayments(page, { paymentHistoryByWorker = m
     window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY = structuredClone(paymentHistoryByWorker || {});
     window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS = structuredClone(paymentErrorsByWorker || {});
     window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = [];
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_WORKER_QUEUE = Object.keys(window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY).sort();
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_REQUEST_INDEX = 0;
   }, { paymentHistoryByWorker, paymentErrorsByWorker });
 }
 

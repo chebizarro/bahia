@@ -44,5 +44,7 @@ node_modules/
 dist/
 
 # Testing
+web/playwright-report/
+web/test-results/
 # Production integration credentials (never commit)
 test/integration/.env.integration

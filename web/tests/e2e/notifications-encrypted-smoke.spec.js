@@ -3,6 +3,7 @@ import { installE2EMocks } from './helpers.js';
 import {
   PUBLIC_RELAY,
   ENCRYPTED_RELAY,
+  SERVICE_PUBKEY,
   createEncryptedNotificationsSystemInfo,
   installEncryptedNotificationHarness
 } from './harnesses/notifications-encrypted.js';
@@ -80,7 +81,7 @@ test.describe('Notifications encrypted transport smoke', () => {
         expect.objectContaining({ eventId: request.eventId, kind: 25910, accepted: true })
       ]));
       expect(transportTrace.results).toEqual(expect.arrayContaining([
-        expect.objectContaining({ requestEventId: request.eventId, kind: 25910, pubkey: 'b'.repeat(64), status: 'ok' })
+        expect.objectContaining({ requestEventId: request.eventId, kind: 25910, pubkey: SERVICE_PUBKEY, status: 'ok' })
       ]));
     }
   });

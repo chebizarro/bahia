@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-e1gn",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Representative unrelated dashboard and environment failures resolve through shared root-cause fixes, not per-test sleeps.",
+      "tests": ["npx playwright test tests/e2e/dashboard-smoke.spec.js tests/e2e/environments-crud-smoke.spec.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Public ContextVM commands use kind 25910 and resolve from scoped kind 25910 result subscriptions; encrypted commands keep gift-wrap support.",
+      "tests": ["tests/e2e/environments-crud-smoke.spec.js", "tests/e2e/dashboard-smoke.spec.js recent spend coverage"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Generated Playwright artifacts are removed from git and ignored.",
+      "tests": ["git status shows web/playwright-report and web/test-results deletions plus .gitignore entries"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Any remaining full-suite failures are grouped by distinct root cause and covered by narrower Beads.",
+      "tests": ["npm run test:e2e", "bd show bahia-la6v", "bd show bahia-rxae", "bd show bahia-p0vz", "bd show bahia-dgdm"]
+    }
+  ]
+}

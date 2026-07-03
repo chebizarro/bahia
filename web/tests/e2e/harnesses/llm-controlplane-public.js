@@ -1,6 +1,6 @@
-import { installE2EMocks, TEST_PUBKEY } from '../helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks, TEST_PUBKEY } from '../helpers.js';
 
-export const LLM_SERVICE_PUBKEY = 'b'.repeat(64);
+export const LLM_SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 export const LLM_PUBLIC_RELAY = 'ws://relay.test.local';
 
 export function createLLMSystemInfo({ publicRelay = LLM_PUBLIC_RELAY, servicePubkey = LLM_SERVICE_PUBKEY } = {}) {
@@ -138,10 +138,14 @@ export async function installPublicLLMControlplaneHarness(
 
     function encodeContextVMCiphertext(requestEvent, envelope) {
       const plaintext = JSON.stringify(envelope);
-      if (String(requestEvent.content || '').startsWith('mock-nip44:')) {
+      const requestContent = String(requestEvent.content || '');
+      if (requestContent.startsWith('mock-nip44:')) {
         return `mock-nip44:${btoa(unescape(encodeURIComponent(plaintext)))}`;
       }
-      return `enc44:${plaintext}`;
+      if (requestContent.startsWith('enc44:')) {
+        return `enc44:${plaintext}`;
+      }
+      return plaintext;
     }
 
     function contextVMResultEvent(requestEvent, result) {

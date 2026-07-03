@@ -1,9 +1,10 @@
 export const TEST_PUBKEY = 'f'.repeat(64);
+export const E2E_SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 
 const DEFAULT_DISCOVERY_INFO = {
   nostr: {
     browser_relays: [],
-    service_pubkey: 'b'.repeat(64)
+    service_pubkey: E2E_SERVICE_PUBKEY
   },
   features: {
     relay_sidecar: true,
@@ -25,16 +26,25 @@ export async function installE2EMocks(
     extension = true,
     sseEvents = [],
     nostrEvents = [],
-    systemInfo = DEFAULT_DISCOVERY_INFO,
+    systemInfo = null,
     routeRoleRequirements = null
   } = {}
 ) {
+  const effectiveSystemInfo = systemInfo || {
+    ...DEFAULT_DISCOVERY_INFO,
+    features: {
+      ...DEFAULT_DISCOVERY_INFO.features,
+      relay_sidecar: Array.isArray(nostrEvents) && nostrEvents.length > 0,
+      relay_read_models: Array.isArray(nostrEvents) && nostrEvents.length > 0,
+      legacy_sse: !(Array.isArray(nostrEvents) && nostrEvents.length > 0)
+    }
+  };
   await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
     }
-    const servicePubkey = systemInfo?.nostr?.service_pubkey || 'b'.repeat(64);
+    const servicePubkey = systemInfo?.nostr?.service_pubkey || '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
     const browserRelays = systemInfo?.nostr?.browser_relays || [];
     window.__BAHIA_BOOTSTRAP__ = {
       schema: 'bahia.bootstrap.v1',
@@ -562,7 +572,7 @@ export async function installE2EMocks(
     }
 
     window.EventSource = MockEventSource;
-  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents, systemInfo, routeRoleRequirements });
+  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents, systemInfo: effectiveSystemInfo, routeRoleRequirements });
 }
 
 export async function seedSseEvents(page, events) {

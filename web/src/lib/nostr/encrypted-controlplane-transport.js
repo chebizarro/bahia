@@ -67,7 +67,9 @@ export class EncryptedControlplaneTransport {
       throw new Error('ContextVM request operation is required');
     }
     ensureHexPubkey(this.servicePubkey, 'servicePubkey');
-    await ensureEncryptedSignerReady(this.servicePubkey);
+    if (kind === CONTEXTVM_GIFT_WRAP_KIND) {
+      await ensureEncryptedSignerReady(this.servicePubkey);
+    }
 
     const envelope = buildContextVMRequest({ operation, payload, requestId });
     const mergedTags = [

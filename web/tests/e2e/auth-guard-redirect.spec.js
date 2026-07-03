@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/**', (route) => {
@@ -62,7 +62,7 @@ test('shows compatibility-needed state on /orgs when REST compatibility is unava
     systemInfo: {
       nostr: {
         browser_relays: [],
-        service_pubkey: 'b'.repeat(64)
+        service_pubkey: E2E_SERVICE_PUBKEY
       },
       features: {
         relay_sidecar: true,

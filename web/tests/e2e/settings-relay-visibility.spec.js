@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
-const SERVICE_PUBKEY = 'b'.repeat(64);
+const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const BROWSER_RELAY = 'ws://browser-bootstrap.test.local';
 const ENCRYPTED_RELAY = 'ws://encrypted-requests.test.local';
 const SERVICE_RELAYS = ['ws://service-read.test.local', 'wss://service-write.example'];

@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
 
 const BROWSER_RELAY = 'ws://relay.test.local';
-const SERVICE_PUBKEY = 'b'.repeat(64);
+const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const systemInfo = {
   nostr: {
     browser_relays: [BROWSER_RELAY],

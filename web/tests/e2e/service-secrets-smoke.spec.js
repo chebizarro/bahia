@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
 const SERVICE_ID = 'service-1';
 const ENCRYPTED_RELAY = 'wss://relay.example.com';
@@ -34,7 +34,7 @@ test.beforeEach(async ({ page }) => {
       nostr: {
         browser_relays: [ENCRYPTED_RELAY],
         service_relays: [ENCRYPTED_RELAY],
-        service_pubkey: 'b'.repeat(64)
+        service_pubkey: E2E_SERVICE_PUBKEY
       },
       features: {
         relay_sidecar: true,

@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY } from './helpers.js';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
 
-const SERVICE_PUBKEY = 'b'.repeat(64);
+const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const WORKER_PUBKEY = 'c'.repeat(64);
 const now = Math.floor(Date.now() / 1000);
 

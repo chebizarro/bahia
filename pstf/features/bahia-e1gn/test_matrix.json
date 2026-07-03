@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-e1gn",
+  "runs": [
+    {
+      "command": "npx playwright test tests/e2e/dashboard-smoke.spec.js tests/e2e/environments-crud-smoke.spec.js",
+      "result": "33 passed",
+      "evidence": "Representative unrelated dashboard/environments slice green after shared ContextVM/pubkey/payment harness fixes."
+    },
+    {
+      "command": "npm run test:e2e",
+      "result": "142 passed, 33 failed, 1 skipped, 7 did not run",
+      "evidence": "Remaining failures grouped into follow-up beads bahia-la6v, bahia-rxae, bahia-p0vz, bahia-dgdm."
+    },
+    {
+      "command": "npx playwright test tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js tests/e2e/mixed-transport-session.spec.js",
+      "result": "2 passed, 3 failed",
+      "evidence": "Gift-wrap result handling works for part of notification flow; remaining assertions still expect unwrapped 25910 and mixed seed visibility tracked in bahia-p0vz."
+    }
+  ]
+}

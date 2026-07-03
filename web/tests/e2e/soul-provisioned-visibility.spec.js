@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
-const FACTORY_PUBKEY = 'b'.repeat(64);
+const FACTORY_PUBKEY = E2E_SERVICE_PUBKEY;
 const AGENT_PUBKEY = 'c'.repeat(64);
 const RUNTIME_PUBKEY = 'd'.repeat(64);
 const BROWSER_RELAY = 'ws://relay.test.local';

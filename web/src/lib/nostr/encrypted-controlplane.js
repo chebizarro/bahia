@@ -19,6 +19,7 @@ import { authState } from '$lib/stores/auth.js';
 import {
   CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND,
   CONTEXTVM_GIFT_WRAP_KIND,
+  CONTEXTVM_MESSAGE_KIND,
   ENCRYPTED_RESULT_KIND
 } from './encrypted-controlplane-constants.js';
 import { EncryptedControlplaneTransport } from './encrypted-controlplane-transport.js';
@@ -88,7 +89,10 @@ function ensureSharedSubscription(transport) {
   sharedRequesterPubkey = requesterPubkey;
 
   const wrapperKinds = [CONTEXTVM_GIFT_WRAP_KIND, CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND];
-  const filters = [{ kinds: wrapperKinds, '#p': [requesterPubkey] }];
+  const filters = [
+    { kinds: wrapperKinds, '#p': [requesterPubkey] },
+    { kinds: [CONTEXTVM_MESSAGE_KIND], '#p': [requesterPubkey] }
+  ];
 
   sharedUnsubscribe = transport.client.subscribe(filters, {
     onEvent: async (event) => {
@@ -100,7 +104,7 @@ function ensureSharedSubscription(transport) {
         if (!entry) continue;
         if (entry.seen.has(event.id)) return;
         entry.seen.add(event.id);
-        if (!isContextVMWrapperKind(event.kind)) return;
+        if (!isContextVMWrapperKind(event.kind) && event?.pubkey !== entry.servicePubkey) return;
         try {
           const payload = await parseContextVMResultPayload(event, entry.servicePubkey);
           if (isContextVMProgressNotification(payload, eTag)) {

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks, seedNostrEvents } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks, seedNostrEvents } from './helpers.js';
 
 // Mock data
 const mockWorkers = [
@@ -96,7 +96,7 @@ const mockEvents = [
 ];
 
 function mockNostrActivityEvents(events) {
-  const pubkey = 'b'.repeat(64);
+  const pubkey = E2E_SERVICE_PUBKEY;
   const base = Math.floor(Date.now() / 1000);
   return events.map((event, index) => ({
     id: `nostr-${event.id}`,
@@ -123,7 +123,7 @@ function mockNostrActivityEvents(events) {
 
 function mockNostrWorkerEvents(workers) {
   const base = Math.floor(Date.now() / 1000);
-  const pubkey = 'b'.repeat(64);
+  const pubkey = E2E_SERVICE_PUBKEY;
   return workers.map((worker, index) => ({
     id: `nostr-worker-${index}`,
     pubkey,
@@ -164,7 +164,7 @@ test.beforeEach(async ({ page }) => {
     systemInfo: {
       nostr: {
         browser_relays: ['ws://localhost:10547/relay'],
-        service_pubkey: 'b'.repeat(64)
+        service_pubkey: E2E_SERVICE_PUBKEY
       },
       features: {
         relay_sidecar: true,

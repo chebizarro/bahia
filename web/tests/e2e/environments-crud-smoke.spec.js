@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
+import { SERVICE_PUBKEY, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 const initialState = createPublicState({
@@ -155,7 +155,7 @@ test.describe('Environments CRUD Smoke Test', () => {
 
     const request = await expectContextVMOperation(page, 'environment/create');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['p', 'b'.repeat(64)],
+      ['p', SERVICE_PUBKEY],
       ['encrypted', 'contextvm-jsonrpc-v1'],
       ['method', 'environment/create']
     ]));
@@ -197,7 +197,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     const request = await expectContextVMOperation(page, 'environment/update');
     expect(request.tags).toEqual(expect.arrayContaining([
       ['environment', 'env-1'],
-      ['p', 'b'.repeat(64)],
+      ['p', SERVICE_PUBKEY],
       ['encrypted', 'contextvm-jsonrpc-v1'],
       ['method', 'environment/update']
     ]));
@@ -221,7 +221,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     const request = await expectContextVMOperation(page, 'environment/delete');
     expect(request.tags).toEqual(expect.arrayContaining([
       ['environment', 'env-2'],
-      ['p', 'b'.repeat(64)],
+      ['p', SERVICE_PUBKEY],
       ['encrypted', 'contextvm-jsonrpc-v1'],
       ['method', 'environment/delete']
     ]));
