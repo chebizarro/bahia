@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,8 +51,14 @@ type AssistantAgentLoopConfig struct {
 	Transcript     AssistantAgentTranscriptAppender
 	Sessions       AssistantToolRuntimeSessionPersister
 	Agentic        config.AssistantAgenticConfig
-	Now            func() time.Time
-	NewID          func(prefix string) string
+	// Item 10 extensibility surface. All optional; a nil library/runner simply
+	// disables that capability, leaving the core loop behavior unchanged.
+	Subagents *AssistantSubagentLibrary
+	Skills    *AssistantSkillLibrary
+	Commands  *AssistantCommandLibrary
+	Hooks     *AssistantHookRunner
+	Now       func() time.Time
+	NewID     func(prefix string) string
 }
 
 // AssistantAgentLoop executes one assistant turn as a resumable model/tool loop.
@@ -63,6 +70,11 @@ type AssistantAgentLoop struct {
 	transcript     AssistantAgentTranscriptAppender
 	sessions       AssistantToolRuntimeSessionPersister
 	agentic        config.AssistantAgenticConfig
+	subagents      *AssistantSubagentLibrary
+	skills         *AssistantSkillLibrary
+	commands       *AssistantCommandLibrary
+	hooks          *AssistantHookRunner
+	internalTools  map[string]*assistantInternalTool
 	now            func() time.Time
 	newID          func(prefix string) string
 }
@@ -127,7 +139,45 @@ func NewAssistantAgentLoop(config AssistantAgentLoopConfig) *AssistantAgentLoop 
 	if newID == nil {
 		newID = randomAssistantAgentLoopID
 	}
-	return &AssistantAgentLoop{modelClient: config.ModelClient, toolRuntime: config.ToolRuntime, contextBuilder: config.ContextBuilder, toolSchemas: config.ToolSchemas, transcript: config.Transcript, sessions: config.Sessions, agentic: config.Agentic, now: now, newID: newID}
+	loop := &AssistantAgentLoop{modelClient: config.ModelClient, toolRuntime: config.ToolRuntime, contextBuilder: config.ContextBuilder, toolSchemas: config.ToolSchemas, transcript: config.Transcript, sessions: config.Sessions, agentic: config.Agentic, subagents: config.Subagents, skills: config.Skills, commands: config.Commands, hooks: config.Hooks, now: now, newID: newID}
+	loop.internalTools = loop.buildInternalTools()
+	return loop
+}
+
+// buildInternalTools registers the service-owned internal tools through the
+// distinct internal-tool path (never the external MCP registry merge path).
+// Delegation registers only when subagents are configured; skill_load only when
+// skills are configured.
+func (l *AssistantAgentLoop) buildInternalTools() map[string]*assistantInternalTool {
+	tools := map[string]*assistantInternalTool{}
+	if l.subagents.Len() > 0 {
+		tool := l.buildDelegateSubagentTool()
+		tools[tool.name] = tool
+	}
+	if l.skills.Len() > 0 {
+		tool := l.buildSkillLoadTool()
+		tools[tool.name] = tool
+	}
+	if len(tools) == 0 {
+		return nil
+	}
+	return tools
+}
+
+func (l *AssistantAgentLoop) internalToolSchemas() []llm.AgentToolSchema {
+	if len(l.internalTools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(l.internalTools))
+	for name := range l.internalTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	schemas := make([]llm.AgentToolSchema, 0, len(names))
+	for _, name := range names {
+		schemas = append(schemas, l.internalTools[name].schema())
+	}
+	return schemas
 }
 
 // StartTurn builds replay-backed model input, appends the current user message to
@@ -139,6 +189,37 @@ func (l *AssistantAgentLoop) StartTurn(ctx context.Context, req AssistantAgentTu
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("assistant agent turn prompt is required")
+	}
+	// Command expansion happens before UserPromptSubmit hooks so hooks observe the
+	// fully expanded operator message.
+	var runAllowedTools []string
+	if l.commands != nil {
+		if expansion, ok := l.commands.Expand(prompt); ok {
+			prompt = expansion.Prompt
+			runAllowedTools = expansion.AllowedTools
+			_ = l.publishStatus(ctx, req.Session.SessionID, "planning", map[string]any{"phase": "command_expanded", "command": expansion.Command.Name})
+		}
+	}
+	var injectedContext []string
+	if l.hooks != nil {
+		// SessionStart fires once, on the first turn of a session.
+		if assistantAgentLoopMetadata(req.Session).RunID == "" {
+			startOutcome := l.hooks.Run(ctx, AssistantHookEventSessionStart, AssistantHookInput{SessionID: req.Session.SessionID})
+			if text := strings.TrimSpace(firstNonEmptyString(startOutcome.AdditionalContext, startOutcome.SystemMessage)); text != "" {
+				injectedContext = append(injectedContext, text)
+			}
+		}
+		promptOutcome := l.hooks.Run(ctx, AssistantHookEventUserPromptSubmit, AssistantHookInput{SessionID: req.Session.SessionID, Text: prompt})
+		if promptOutcome.Blocked || promptOutcome.Decision == AssistantHookDecisionDeny {
+			reason := firstNonEmptyString(promptOutcome.Reason, "operator prompt blocked by UserPromptSubmit hook")
+			return l.failLoop(ctx, req.Session, "user_prompt_blocked", fmt.Errorf("%s", reason)), nil
+		}
+		if updated := strings.TrimSpace(stringFromAnyMapAny(promptOutcome.UpdatedInput, "prompt")); updated != "" {
+			prompt = updated
+		}
+		if text := strings.TrimSpace(firstNonEmptyString(promptOutcome.AdditionalContext, promptOutcome.SystemMessage)); text != "" {
+			injectedContext = append(injectedContext, text)
+		}
 	}
 	turnID := firstNonEmptyString(strings.TrimSpace(req.TurnID), strings.TrimSpace(req.Session.CurrentTurnID), l.newID("turn"))
 	runID := l.newID("run")
@@ -158,6 +239,9 @@ func (l *AssistantAgentLoop) StartTurn(ctx context.Context, req AssistantAgentTu
 	if err != nil {
 		return l.failLoop(ctx, req.Session, "context_error", err), err
 	}
+	if system := l.turnSystemContext(injectedContext); len(system) > 0 {
+		messages = append(system, messages...)
+	}
 	messages = ensureAssistantCurrentPrompt(messages, prompt)
 	seq := countAssistantTranscriptMessages(messages)
 	if err := l.appendTranscript(ctx, req.Session, turnID, runID, seq, lastAssistantMessage(messages), map[string]any{"phase": "user_prompt"}); err != nil {
@@ -167,7 +251,27 @@ func (l *AssistantAgentLoop) StartTurn(ctx context.Context, req AssistantAgentTu
 	if err := l.persistSession(ctx, req.Session); err != nil {
 		return nil, err
 	}
-	return l.continueLoop(ctx, assistantAgentLoopRun{session: req.Session, runID: runID, turnID: turnID, routeContext: req.RouteContext, selectedRefs: req.SelectedRefs, messages: messages, nextSequence: seq + 1, planHash: req.PlanHash, cancelScope: req.CancelScope})
+	return l.continueLoop(ctx, assistantAgentLoopRun{session: req.Session, runID: runID, turnID: turnID, routeContext: req.RouteContext, selectedRefs: req.SelectedRefs, messages: messages, nextSequence: seq + 1, planHash: req.PlanHash, cancelScope: req.CancelScope, allowedTools: runAllowedTools})
+}
+
+// turnSystemContext builds the additional system messages injected at turn start:
+// the progressive-disclosure skill catalog and any hook-provided context.
+func (l *AssistantAgentLoop) turnSystemContext(extra []string) []domain.AssistantAgentMessage {
+	var blocks []string
+	if l.skills.Len() > 0 {
+		if catalog := l.skills.Catalog(); catalog != "" {
+			blocks = append(blocks, catalog)
+		}
+	}
+	blocks = append(blocks, extra...)
+	messages := make([]domain.AssistantAgentMessage, 0, len(blocks))
+	for _, text := range blocks {
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		messages = append(messages, domain.AssistantAgentMessage{Role: domain.AssistantAgentMessageRoleSystem, Content: assistantTextBlocks(text)})
+	}
+	return messages
 }
 
 // ResumeAfterAsyncObservation observes the terminal event for a waiting async
@@ -282,13 +386,19 @@ type assistantAgentLoopRun struct {
 	observations []*domain.AssistantToolObservation
 	planHash     string
 	cancelScope  string
+	// depth is 0 for the operator turn and >0 inside a delegated subagent run.
+	depth int
+	// allowedTools, when non-nil, restricts the tool schemas exposed to the model
+	// for this run (e.g. a command's allowed-tools scope). nil means no restriction.
+	allowedTools []string
 }
 
 func (l *AssistantAgentLoop) continueLoop(ctx context.Context, run assistantAgentLoopRun) (*AssistantAgentLoopResult, error) {
-	tools, err := l.toolSchemas.AgentToolSchemas(ctx)
+	baseTools, err := l.toolSchemas.AgentToolSchemas(ctx)
 	if err != nil {
 		return l.failLoop(ctx, run.session, "tool_schema_error", err), err
 	}
+	tools := l.assembleToolSchemas(baseTools, run)
 	for {
 		metadata := assistantAgentLoopMetadata(run.session)
 		if metadata.RunID == "" {
@@ -327,13 +437,22 @@ func (l *AssistantAgentLoop) continueLoop(ctx context.Context, run assistantAgen
 			if resp.StopReason == llm.AgentStopReasonMaxTokens || resp.StopReason == llm.AgentStopReasonContentGuard {
 				return l.failLoop(ctx, run.session, "model_stopped_before_completion", fmt.Errorf("assistant model stopped with %s", resp.StopReason)), nil
 			}
+			if l.hooks != nil {
+				stop := l.hooks.Run(ctx, AssistantHookEventStop, AssistantHookInput{SessionID: run.session.SessionID, Text: assistantAgentBlocksText(resp.Content)})
+				if stop.Blocked || stop.Decision == AssistantHookDecisionBlock {
+					reason := firstNonEmptyString(stop.Reason, "Stop hook requested the assistant continue working")
+					run.messages = append(run.messages, domain.AssistantAgentMessage{Role: domain.AssistantAgentMessageRoleUser, Content: assistantTextBlocks("Stop hook blocked completion: " + reason)})
+					_ = l.publishStatus(ctx, run.session.SessionID, "executing", map[string]any{"phase": "stop_hook_blocked", "summary": reason, "run_id": run.runID, "turn_id": run.turnID, "iteration": metadata.Iteration})
+					continue
+				}
+			}
 			completed, err := l.completeLoop(ctx, run.session, resp.StopReason, run.observations)
 			return completed, err
 		}
 
 		for _, toolCall := range resp.ToolCalls {
 			_ = l.publishStatus(ctx, run.session.SessionID, "executing", map[string]any{"phase": "tool_call_requested", "run_id": run.runID, "turn_id": run.turnID, "iteration": metadata.Iteration, "tool_call_id": toolCall.ID, "tool_name": toolCall.Name})
-			obs, err := l.toolRuntime.Execute(ctx, AssistantToolRuntimeRequest{Session: run.session, RunID: run.runID, TurnID: run.turnID, Iteration: metadata.Iteration, ToolCall: toolCall, PlanHash: run.planHash, CancelScope: run.cancelScope})
+			obs, err := l.dispatchToolCall(ctx, run, metadata.Iteration, toolCall)
 			if err != nil {
 				return l.failLoop(ctx, run.session, "tool_execute_error", err), err
 			}
@@ -355,6 +474,121 @@ func (l *AssistantAgentLoop) continueLoop(ctx context.Context, run assistantAgen
 			}
 		}
 	}
+}
+
+// assembleToolSchemas merges the descriptor-derived MCP tool schemas with the
+// internal (service-owned) tool schemas and applies any per-run allowed-tools
+// restriction from an expanded command.
+func (l *AssistantAgentLoop) assembleToolSchemas(base []llm.AgentToolSchema, run assistantAgentLoopRun) []llm.AgentToolSchema {
+	tools := append([]llm.AgentToolSchema(nil), base...)
+	tools = append(tools, l.internalToolSchemas()...)
+	if len(run.allowedTools) == 0 {
+		return tools
+	}
+	allowed := assistantStringSet(run.allowedTools)
+	out := make([]llm.AgentToolSchema, 0, len(tools))
+	for _, schema := range tools {
+		if allowed[schema.Name] {
+			out = append(out, schema)
+		}
+	}
+	return out
+}
+
+// dispatchToolCall routes a model tool call to the internal-tool handler or the
+// MCP tool runtime. For MCP tools with hooks configured it enforces the
+// hard-deny -> PreToolUse hooks -> re-evaluate -> execute ordering; hooks can
+// tighten a decision but never upgrade a deny to an allow.
+func (l *AssistantAgentLoop) dispatchToolCall(ctx context.Context, run assistantAgentLoopRun, iteration int, toolCall domain.AssistantAgentToolCall) (*domain.AssistantToolObservation, error) {
+	if tool, ok := l.internalTools[toolCall.Name]; ok {
+		return tool.handler(ctx, run, toolCall)
+	}
+	baseReq := AssistantToolRuntimeRequest{Session: run.session, RunID: run.runID, TurnID: run.turnID, Iteration: iteration, ToolCall: toolCall, PlanHash: run.planHash, CancelScope: run.cancelScope}
+	if l.hooks == nil {
+		return l.toolRuntime.Execute(ctx, baseReq)
+	}
+	basePerm, found := l.toolRuntime.EvaluateToolPermission(toolCall.Name, toolCall.Arguments)
+	if !found {
+		// Unknown tool: let the runtime emit the canonical not-registered denial.
+		return l.toolRuntime.Execute(ctx, baseReq)
+	}
+	outcome := l.hooks.Run(ctx, AssistantHookEventPreToolUse, AssistantHookInput{SessionID: run.session.SessionID, ToolName: toolCall.Name, ToolArgs: toolCall.Arguments})
+	finalPerm := basePerm
+	if len(outcome.UpdatedInput) > 0 {
+		toolCall.Arguments = mergeAssistantToolArgs(toolCall.Arguments, outcome.UpdatedInput)
+		baseReq.ToolCall = toolCall
+		// Re-evaluate permission on the hook-modified input, but never loosen the
+		// decision below the original: a hook must not rewrite arguments to escape
+		// a base deny/ask. Only an equally- or more-restrictive re-evaluation wins.
+		if reeval, ok := l.toolRuntime.EvaluateToolPermission(toolCall.Name, toolCall.Arguments); ok {
+			if assistantPermissionRank(reeval.Decision) >= assistantPermissionRank(basePerm.Decision) {
+				finalPerm = reeval
+			}
+		}
+	}
+	finalPerm = applyAssistantHookDecision(finalPerm, outcome)
+	baseReq.PermissionOverride = &finalPerm
+	obs, err := l.toolRuntime.Execute(ctx, baseReq)
+	if err != nil || obs == nil {
+		return obs, err
+	}
+	post := l.hooks.Run(ctx, AssistantHookEventPostToolUse, AssistantHookInput{SessionID: run.session.SessionID, ToolName: toolCall.Name, ToolArgs: toolCall.Arguments, Text: obs.Summary})
+	if text := strings.TrimSpace(firstNonEmptyString(post.AdditionalContext, post.SystemMessage)); text != "" {
+		if obs.Metadata == nil {
+			obs.Metadata = map[string]any{}
+		}
+		obs.Metadata["post_tool_use_context"] = text
+	}
+	return obs, nil
+}
+
+func applyAssistantHookDecision(perm domain.AssistantPermissionResult, outcome AssistantHookOutcome) domain.AssistantPermissionResult {
+	var hookDecision domain.AssistantPermissionDecision
+	switch outcome.Decision {
+	case AssistantHookDecisionDeny:
+		hookDecision = domain.AssistantPermissionDecisionDeny
+	case AssistantHookDecisionAsk:
+		hookDecision = domain.AssistantPermissionDecisionAsk
+	case AssistantHookDecisionAllow:
+		hookDecision = domain.AssistantPermissionDecisionAllow
+	default:
+		return perm
+	}
+	if assistantPermissionRank(hookDecision) > assistantPermissionRank(perm.Decision) {
+		perm.Decision = hookDecision
+		if strings.TrimSpace(outcome.Reason) != "" {
+			perm.Reason = outcome.Reason
+		}
+		if perm.Metadata == nil {
+			perm.Metadata = map[string]any{}
+		}
+		perm.Metadata["hook_decision"] = string(outcome.Decision)
+	}
+	return perm
+}
+
+func assistantPermissionRank(decision domain.AssistantPermissionDecision) int {
+	switch decision {
+	case domain.AssistantPermissionDecisionAllow:
+		return 1
+	case domain.AssistantPermissionDecisionAsk:
+		return 2
+	case domain.AssistantPermissionDecisionDeny:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func mergeAssistantToolArgs(base, updated map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(updated))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range updated {
+		out[k] = v
+	}
+	return out
 }
 
 func (l *AssistantAgentLoop) validateReady(session *domain.AssistantSession) error {
@@ -439,6 +673,9 @@ func (l *AssistantAgentLoop) completeLoop(ctx context.Context, session *domain.A
 		return nil, err
 	}
 	_ = l.publishStatus(ctx, session.SessionID, "completed", map[string]any{"phase": "loop_completed", "run_id": metadata.RunID, "iteration": metadata.Iteration, "stop_reason": string(stopReason)})
+	if l.hooks != nil {
+		_ = l.hooks.Run(ctx, AssistantHookEventSessionEnd, AssistantHookInput{SessionID: session.SessionID})
+	}
 	res := l.result(session, observations, "")
 	res.StopReason = stopReason
 	res.Completed = true

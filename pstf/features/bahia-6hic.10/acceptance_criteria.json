@@ -1,0 +1,14 @@
+{
+  "feature_id": "bahia-6hic.10",
+  "title": "Assistant agentic extensibility: subagents, skills, commands, hooks",
+  "criteria": [
+    {"id": "AC1", "statement": "Each loader parses claude-code-convention frontmatter and rejects malformed frontmatter, missing required fields, unsupported hook events/handler types, and duplicate names with a hard error."},
+    {"id": "AC2", "statement": "The bahia_assistant_delegate_subagent internal tool runs a bounded child loop and returns the child result to the parent model as a synchronous succeeded observation."},
+    {"id": "AC3", "statement": "A subagent tool call is restricted to its allowed-tool subset; a call outside the subset is denied and never executed (tool-restriction intersection)."},
+    {"id": "AC4", "statement": "PreToolUse hooks gate tool execution: a deny yields a denied observation without executing the tool, and an ask defers the call for operator approval; hooks can never upgrade a base deny to an allow."},
+    {"id": "AC5", "statement": "A Stop hook that returns block prevents loop completion and forces the model to continue, then completes once the block clears."},
+    {"id": "AC6", "statement": "Skills inject only names/descriptions at turn start; the read-only bahia_assistant_skill_load tool returns a skill body and confines supporting-file reads to the skill root (traversal/absolute paths rejected)."},
+    {"id": "AC7", "statement": "A leading slash-command is expanded into the initial user message (with $ARGUMENTS/$N substitution) before the loop runs, and command allowed-tools scope the exposed schema list."},
+    {"id": "AC8", "statement": "Assistant config exposes subagents/skills/commands/hooks path blocks that reject parent traversal and require a non-empty path list when enabled; the build (go build ./...) passes."}
+  ]
+}

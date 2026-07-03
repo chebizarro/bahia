@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-6hic.10",
+  "title": "Assistant agentic extensibility: subagents, skills, commands, hooks",
+  "bead": "bahia-6hic.10",
+  "date": "2026-07-03",
+  "intent": "Add the server-side extensibility surface to the agentic assistant loop using claude-code markdown+frontmatter conventions: subagent delegation, progressive-disclosure skills, slash-command prompt templates, and a lifecycle hook runner, all gated by the existing permission engine and fail-closed loaders.",
+  "scope": [
+    "internal/service/assistant_subagents.go loads name/description/model/tools markdown subagents and registers an internal bahia_assistant_delegate_subagent tool that runs a bounded child loop restricted to an allowed-tool subset intersected with global policy, returning the child result as a synchronous observation and gating acceptance with SubagentStop hooks.",
+    "internal/service/assistant_skills.go loads SKILL.md packages, injects only names/descriptions at turn start (progressive disclosure), and exposes a read-only bahia_assistant_skill_load internal tool whose file reads are confined to each skill root.",
+    "internal/service/assistant_commands.go loads description/allowed-tools/model/argument-hint markdown command templates and expands a leading slash-command into the initial user message before UserPromptSubmit hooks.",
+    "internal/service/assistant_hooks.go loads JSON hook files and runs UserPromptSubmit/SessionStart/SessionEnd/PreToolUse/PostToolUse/Stop/SubagentStop hooks with prompt and mcp-tool handler types only (no shell), enforcing hard-deny rules then hooks then re-evaluate permission on hook-modified input then execute, so hooks can never upgrade a deny to an allow.",
+    "internal/config/config.go gains subagents/skills/commands/hooks path blocks with parent-traversal containment validation; internal/app wires the loaders into the agent loop behind assistant.agentic.enabled."
+  ],
+  "out_of_scope": [
+    "Shell hook handlers (deferred until a sandboxed runner exists) and production prompt/mcp-tool hook evaluators (injected in item 12).",
+    "External MCP client merge path (item 11 owns internal/mcp/registry.go merge).",
+    "Anthropic adapter, richer transcript/subagent UI, and permission posture graduation (item 12).",
+    "Async or approval-requiring tool execution inside subagents; subagent child loops are synchronous by construction."
+  ],
+  "architecture_notes": [
+    "Internal tools (delegate/skill_load) are registered through a distinct service-owned internal-tool path in the agent loop, never through internal/mcp/registry.go; their schemas are appended to the descriptor-derived schema list and dispatched before the MCP runtime.",
+    "Subagent child loops execute through a session-effect-free clone of the tool runtime (WithoutSessionEffects) so they never publish phantom session/status events or corrupt the parent loop persisted agent_loop metadata; permission is still evaluated by the shared engine so the allowed-tool subset is intersected with global policy.",
+    "The loop enforces the hook/permission ordering by evaluating base permission, running PreToolUse hooks, re-evaluating on any hook-modified input, folding the most-restrictive decision, and passing it to the runtime as a PermissionOverride; the runtime keeps self-evaluating when no override is supplied so existing item-5/7 behavior is unchanged.",
+    "All four loaders and the hook set fail closed: malformed frontmatter/JSON, missing required fields, unsupported hook events/handler types, and duplicate names are hard errors surfaced at startup."
+  ]
+}

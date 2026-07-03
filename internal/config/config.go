@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -179,6 +180,21 @@ type AssistantConfig struct {
 	Agentic         AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
 	Permissions     AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
 	MCP             AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
+	// Item 10 extensibility surface. Each block points at directories of
+	// markdown+frontmatter (subagents/skills/commands) or JSON (hooks) sources.
+	Subagents AssistantExtensionSourceConfig `koanf:"subagents" yaml:"subagents"`
+	Skills    AssistantExtensionSourceConfig `koanf:"skills" yaml:"skills"`
+	Commands  AssistantExtensionSourceConfig `koanf:"commands" yaml:"commands"`
+	Hooks     AssistantExtensionSourceConfig `koanf:"hooks" yaml:"hooks"`
+}
+
+// AssistantExtensionSourceConfig points the assistant at directories that hold
+// one class of extension definitions (subagents, skills, commands, or hooks).
+// Paths must not contain parent traversal so an operator cannot point the loader
+// outside an intended tree.
+type AssistantExtensionSourceConfig struct {
+	Enabled bool     `koanf:"enabled" yaml:"enabled"`
+	Paths   []string `koanf:"paths" yaml:"paths"`
 }
 
 // AssistantAgenticConfig selects the provider-neutral agent loop model backend.
@@ -1359,6 +1375,20 @@ func (c *Config) validateAssistant() error {
 		return fmt.Errorf("config validation failed: assistant.permissions.mode must be one of review, audited")
 	}
 
+	for _, block := range []struct {
+		name string
+		cfg  *AssistantExtensionSourceConfig
+	}{
+		{"subagents", &assistant.Subagents},
+		{"skills", &assistant.Skills},
+		{"commands", &assistant.Commands},
+		{"hooks", &assistant.Hooks},
+	} {
+		if err := validateAssistantExtensionPaths(block.name, block.cfg); err != nil {
+			return err
+		}
+	}
+
 	asyncObservation := &assistant.MCP.AsyncObservation
 	if asyncObservation.MaxWait == 0 {
 		asyncObservation.MaxWait = 30 * time.Minute
@@ -1407,6 +1437,30 @@ func (c *Config) validateAssistant() error {
 	}
 	if agentic.RequestTimeout <= 0 {
 		return fmt.Errorf("config validation failed: assistant.agentic.request_timeout must be > 0 when assistant.agentic.enabled=true")
+	}
+	return nil
+}
+
+// validateAssistantExtensionPaths normalizes and containment-checks one
+// extensibility source block. Entries with parent traversal are rejected, and a
+// path list is required when the block is enabled.
+func validateAssistantExtensionPaths(field string, cfg *AssistantExtensionSourceConfig) error {
+	cleaned := make([]string, 0, len(cfg.Paths))
+	for _, raw := range cfg.Paths {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
+			if segment == ".." {
+				return fmt.Errorf("config validation failed: assistant.%s.paths entry %q must not contain parent traversal", field, raw)
+			}
+		}
+		cleaned = append(cleaned, filepath.Clean(path))
+	}
+	cfg.Paths = cleaned
+	if cfg.Enabled && len(cleaned) == 0 {
+		return fmt.Errorf("config validation failed: assistant.%s.paths is required when assistant.%s.enabled=true", field, field)
 	}
 	return nil
 }

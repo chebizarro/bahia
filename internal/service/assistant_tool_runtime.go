@@ -122,6 +122,11 @@ type AssistantToolRuntimeRequest struct {
 	PlanHash       string
 	CancelScope    string
 	ApprovedAction *domain.AssistantDeferredAction
+	// PermissionOverride, when set, short-circuits the runtime's own permission
+	// evaluation. The agent loop uses it to enforce the hard-deny -> hooks ->
+	// re-evaluate-on-modified-input ordering before execution. It is only
+	// consulted for fresh (non-approved) tool calls.
+	PermissionOverride *domain.AssistantPermissionResult
 }
 
 // AssistantToolResumeRequest resumes a previously suspended async tool call.
@@ -185,7 +190,7 @@ func (r *AssistantToolRuntime) Execute(ctx context.Context, req AssistantToolRun
 		}
 		return r.executeSync(ctx, req, call, descriptor, permission)
 	}
-	permission := r.evaluatePermission(descriptor, call.Arguments)
+	permission := r.resolvePermission(req, descriptor, call.Arguments)
 	switch permission.Decision {
 	case domain.AssistantPermissionDecisionDeny:
 		return r.deniedObservation(req, call, permission), nil
@@ -502,6 +507,62 @@ func (r *AssistantToolRuntime) lookupDescriptor(name string) (AssistantToolRunti
 		return AssistantToolRuntimeToolDescriptor{}, false
 	}
 	return r.registry.GetAgentTool(name)
+}
+
+// AgentToolDescriptor exposes the descriptor registry lookup so the agent loop
+// can reason about execution mode (e.g. to keep subagents synchronous) without
+// importing internal/mcp.
+func (r *AssistantToolRuntime) AgentToolDescriptor(name string) (AssistantToolRuntimeToolDescriptor, bool) {
+	if r == nil {
+		return AssistantToolRuntimeToolDescriptor{}, false
+	}
+	return r.lookupDescriptor(name)
+}
+
+// EvaluateToolPermission evaluates the permission engine for a candidate tool
+// call without executing it. The agent loop uses it to apply hooks in the
+// hard-deny -> hooks -> re-evaluate ordering. found is false when the tool is
+// not registered for agent use.
+func (r *AssistantToolRuntime) EvaluateToolPermission(name string, args map[string]any) (domain.AssistantPermissionResult, bool) {
+	if r == nil {
+		return domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Reason: "assistant tool runtime is not configured"}, false
+	}
+	descriptor, ok := r.lookupDescriptor(name)
+	if !ok {
+		return domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Reason: "assistant tool is not registered for agent use"}, false
+	}
+	return r.evaluatePermission(descriptor, args), true
+}
+
+// WithoutSessionEffects returns a shallow copy of the runtime with session
+// persistence and async observation disabled. Subagent child loops use it so
+// their tool calls never publish phantom session/status events or corrupt the
+// parent loop's persisted metadata.
+func (r *AssistantToolRuntime) WithoutSessionEffects() *AssistantToolRuntime {
+	if r == nil {
+		return nil
+	}
+	clone := *r
+	clone.sessions = nil
+	clone.observer = nil
+	return &clone
+}
+
+func (r *AssistantToolRuntime) resolvePermission(req AssistantToolRuntimeRequest, descriptor AssistantToolRuntimeToolDescriptor, args map[string]any) domain.AssistantPermissionResult {
+	if req.PermissionOverride != nil {
+		permission := *req.PermissionOverride
+		if permission.Effect == "" {
+			permission.Effect = descriptor.Effect
+		}
+		if permission.Risk == "" {
+			permission.Risk = descriptor.DefaultRisk
+		}
+		if permission.ExecutionMode == "" {
+			permission.ExecutionMode = descriptor.ExecutionMode
+		}
+		return permission
+	}
+	return r.evaluatePermission(descriptor, args)
 }
 
 func (r *AssistantToolRuntime) evaluatePermission(descriptor AssistantToolRuntimeToolDescriptor, args map[string]any) domain.AssistantPermissionResult {

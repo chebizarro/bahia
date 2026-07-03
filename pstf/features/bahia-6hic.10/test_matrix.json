@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-6hic.10",
+  "tests": [
+    {"acceptance": "AC1", "command": "go test ./internal/service/ -run 'ParseAssistantSubagent|ParseAssistantSkill|ParseAssistantCommand|ParseAssistantHookDocument'", "coverage": "Valid and invalid frontmatter/JSON parsing for all four loaders, including missing fields, malformed yaml/json, unsupported hook events, shell/empty handlers, and empty bodies."},
+    {"acceptance": "AC2,AC3", "command": "go test ./internal/service/ -run 'AssistantAgentLoopDelegatesSubagentReturningSyncObservation|AssistantAgentLoopSubagentToolRestrictionIntersection'", "coverage": "Subagent delegation returns a synchronous succeeded observation to the parent; a disallowed subagent tool call is denied and not executed."},
+    {"acceptance": "AC4,AC5", "command": "go test ./internal/service/ -run 'AssistantAgentLoopPreToolUseHook|AssistantAgentLoopStopHookBlocksThenCompletes'", "coverage": "PreToolUse hook deny blocks execution; PreToolUse hook ask defers for approval; Stop hook block forces a second model turn then completes."},
+    {"acceptance": "AC6", "command": "go test ./internal/service/ -run 'AssistantSkillCatalogProgressiveDisclosure|AssistantResolveContainedPathRejectsTraversal|AssistantAgentLoopSkillLoadReturnsBody'", "coverage": "Catalog discloses only names/descriptions; skill_load returns the body; skill file reads reject traversal/absolute paths."},
+    {"acceptance": "AC7", "command": "go test ./internal/service/ -run 'AssistantCommandExpand|AssistantAgentLoopExpandsCommandIntoPrompt'", "coverage": "Slash-command expansion with positional and $ARGUMENTS substitution, and expansion into the initial operator prompt at turn start."},
+    {"acceptance": "AC8", "command": "go test ./internal/config/ -run AssistantExtension && go build ./...", "coverage": "Path containment rejection, required-when-enabled, path normalization, and full-module build."},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5,AC6,AC7", "command": "go test ./internal/service/ -run Assistant", "coverage": "Full agentic assistant regression (loaders, loop, runtime, permissions, recovery) excluding the unrelated pre-existing SecurityScanner fixture failures tracked as bahia-x3km."}
+  ]
+}

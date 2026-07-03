@@ -954,6 +954,42 @@ func New(cfg *config.Config) (*App, error) {
 		if cfg.Assistant.Agentic.Enabled {
 			agentToolRegistry := mcpServer.AssistantToolRegistry()
 			permissionEngine := service.NewAssistantPermissionEngine(cfg.Assistant.Permissions, nil)
+			// Item 10 extensibility surface: load subagents/skills/commands/hooks from
+			// their configured roots. A malformed definition fails closed at startup.
+			var assistantSubagents *service.AssistantSubagentLibrary
+			var assistantSkills *service.AssistantSkillLibrary
+			var assistantCommands *service.AssistantCommandLibrary
+			var assistantHooks *service.AssistantHookRunner
+			if cfg.Assistant.Subagents.Enabled {
+				lib, loadErr := service.LoadAssistantSubagents(cfg.Assistant.Subagents.Paths)
+				if loadErr != nil {
+					return nil, loadErr
+				}
+				assistantSubagents = lib
+			}
+			if cfg.Assistant.Skills.Enabled {
+				lib, loadErr := service.LoadAssistantSkills(cfg.Assistant.Skills.Paths)
+				if loadErr != nil {
+					return nil, loadErr
+				}
+				assistantSkills = lib
+			}
+			if cfg.Assistant.Commands.Enabled {
+				lib, loadErr := service.LoadAssistantCommands(cfg.Assistant.Commands.Paths)
+				if loadErr != nil {
+					return nil, loadErr
+				}
+				assistantCommands = lib
+			}
+			if cfg.Assistant.Hooks.Enabled {
+				hookSet, loadErr := service.LoadAssistantHooks(cfg.Assistant.Hooks.Paths)
+				if loadErr != nil {
+					return nil, loadErr
+				}
+				// Prompt/mcp-tool hook evaluators are injected in a later increment; an
+				// unevaluatable hook is skipped and can never upgrade a deny to an allow.
+				assistantHooks = service.NewAssistantHookRunner(service.AssistantHookRunnerConfig{Set: hookSet})
+			}
 			toolRuntime := service.NewAssistantToolRuntime(service.AssistantToolRuntimeConfig{
 				MCPServer:   assistantMCPRuntimeAdapter{server: mcpServer},
 				Registry:    assistantToolRegistryAdapter{registry: agentToolRegistry},
@@ -975,6 +1011,10 @@ func New(cfg *config.Config) (*App, error) {
 				Transcript:     transcriptStore,
 				Sessions:       assistantOrchestrator,
 				Agentic:        cfg.Assistant.Agentic,
+				Subagents:      assistantSubagents,
+				Skills:         assistantSkills,
+				Commands:       assistantCommands,
+				Hooks:          assistantHooks,
 			})
 			assistantAgentLoop = agentLoop
 			assistantOrchestrator.SetAgentLoop(agentLoop)
