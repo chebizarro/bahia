@@ -202,11 +202,19 @@ type AssistantExtensionSourceConfig struct {
 	Paths   []string `koanf:"paths" yaml:"paths"`
 }
 
+const (
+	AssistantAgenticToolModeNative   = "native"
+	AssistantAgenticToolModePrompted = "prompted"
+)
+
 // AssistantAgenticConfig selects the provider-neutral agent loop model backend.
-// Increment 1 supports only OpenAI-compatible chat-completions tool calling.
+// OpenAI-compatible providers default to native chat-completions tool calls;
+// prompted mode is available for instruction-tuned OpenAI-compatible endpoints
+// that do not implement native function-calling.
 type AssistantAgenticConfig struct {
 	Enabled                    bool          `koanf:"enabled" yaml:"enabled"`
 	Provider                   string        `koanf:"provider" yaml:"provider"`
+	ToolMode                   string        `koanf:"tool_mode" yaml:"tool_mode"`
 	BaseURL                    string        `koanf:"base_url" yaml:"base_url"`
 	Model                      string        `koanf:"model" yaml:"model"`
 	APIKey                     string        `koanf:"api_key" yaml:"api_key"`
@@ -768,6 +776,7 @@ func Defaults() *Config {
 			Agentic: AssistantAgenticConfig{
 				Enabled:                    true,
 				Provider:                   "openai_compatible",
+				ToolMode:                   AssistantAgenticToolModeNative,
 				BaseURL:                    "https://api.openai.com",
 				MaxIterations:              12,
 				MaxConsecutiveToolFailures: 3,
@@ -1379,6 +1388,18 @@ func (c *Config) validateAssistant() error {
 	agentic.Provider = normalizeAssistantProvider(agentic.Provider)
 	if agentic.Provider == "" {
 		agentic.Provider = "openai_compatible"
+	}
+	agentic.ToolMode = strings.ToLower(strings.TrimSpace(agentic.ToolMode))
+	if agentic.ToolMode == "" {
+		agentic.ToolMode = AssistantAgenticToolModeNative
+	}
+	switch agentic.ToolMode {
+	case AssistantAgenticToolModeNative, AssistantAgenticToolModePrompted:
+	default:
+		return fmt.Errorf("config validation failed: assistant.agentic.tool_mode must be one of native, prompted")
+	}
+	if agentic.ToolMode == AssistantAgenticToolModePrompted && agentic.Provider != "openai_compatible" {
+		return fmt.Errorf("config validation failed: assistant.agentic.tool_mode=prompted requires assistant.agentic.provider=openai_compatible")
 	}
 	agentic.BaseURL = strings.TrimRight(strings.TrimSpace(agentic.BaseURL), "/")
 	agenticBaseURLWasUnsetOrDefault := agentic.BaseURL == "" || agentic.BaseURL == "https://api.openai.com"

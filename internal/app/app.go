@@ -2532,6 +2532,14 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.Assista
 func newAssistantAgentModelClient(cfg config.AssistantAgenticConfig, logger *slog.Logger) (llmadapter.AgentModelClient, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
 	case "", "openai_compatible":
+		if strings.ToLower(strings.TrimSpace(cfg.ToolMode)) == config.AssistantAgenticToolModePrompted {
+			return llmadapter.NewPromptedAgentClient(llmadapter.PromptedAgentClientConfig{
+				BaseURL: cfg.BaseURL,
+				Model:   cfg.Model,
+				APIKey:  cfg.APIKey,
+				Timeout: cfg.RequestTimeout,
+			}, logger), nil
+		}
 		return llmadapter.NewOpenAIAgentClient(llmadapter.OpenAIAgentClientConfig{
 			BaseURL: cfg.BaseURL,
 			Model:   cfg.Model,

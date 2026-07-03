@@ -1,0 +1,41 @@
+{
+  "feature_id": "bahia-ua4h6",
+  "tests": [
+    {
+      "name": "TestPromptedAgentClientTextResponse",
+      "package": "internal/adapters/llm",
+      "acceptance_criteria": ["AC3", "AC5"],
+      "method": "Mock HTTP RoundTripper returns plain text and captures request body."
+    },
+    {
+      "name": "TestPromptedAgentClientToolCallBlock",
+      "package": "internal/adapters/llm",
+      "acceptance_criteria": ["AC3", "AC5"],
+      "method": "Mock HTTP RoundTripper returns a strict fenced tool_call JSON block."
+    },
+    {
+      "name": "TestPromptedAgentClientRendersToolHistoryAndParsesNextCall",
+      "package": "internal/adapters/llm",
+      "acceptance_criteria": ["AC4", "AC5"],
+      "method": "Canonical assistant ToolCalls and tool Observation messages are serialized as text, then a next tool_call block is parsed."
+    },
+    {
+      "name": "TestPromptedAgentClientMalformedToolCallBlockTreatedAsText",
+      "package": "internal/adapters/llm",
+      "acceptance_criteria": ["AC5"],
+      "method": "Malformed fenced block is preserved as normal assistant content with end_turn."
+    },
+    {
+      "name": "TestPromptedAgentClientContextTooLarge",
+      "package": "internal/adapters/llm",
+      "acceptance_criteria": ["AC6"],
+      "method": "Mock HTTP RoundTripper returns a context_length_exceeded error body."
+    },
+    {
+      "name": "TestAssistantAgenticDefaults / TestLoadAssistantAgenticConfigFromYAMLAndEnv / TestAssistantAgenticValidation",
+      "package": "internal/config",
+      "acceptance_criteria": ["AC1"],
+      "method": "Direct config defaults, YAML/env loading, normalization, and validation checks."
+    }
+  ]
+}

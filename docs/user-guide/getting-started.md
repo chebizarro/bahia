@@ -72,6 +72,7 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
 | `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Run the multi-step agentic assistant loop; set `false` to use the legacy plan/approve planner | `true` |
+| `BAHIA_ASSISTANT_AGENTIC_TOOL_MODE` | Agentic OpenAI-compatible tool harness: `native` sends provider tool calls; `prompted` injects text tool instructions for models without native function-calling | `native` |
 | `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for the legacy assistant planner provider | `false` |
 
 ### Config File (bahia.yaml)
@@ -114,6 +115,11 @@ assistant:
   llm_api_key: "<provider-api-key>"
   agentic:
     enabled: true
+    # native is the default. Use prompted for OpenAI-compatible endpoints whose
+    # models do not implement native tools/function-calling (for example local
+    # llama.cpp-compatible instruction models). In prompted mode Bahia asks for
+    # a fenced tool_call block containing {"name":"<tool name>","arguments":{}}.
+    tool_mode: "native"
     # Optional overrides; omit these to inherit llm_base_url/llm_model/llm_api_key above.
     # base_url: "https://api.openai.com"
     # model: "<agentic-model>"

@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-ua4h6",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "assistant.agentic.tool_mode defaults to native and validates only native or prompted.",
+      "tests": ["internal/config TestAssistantAgenticDefaults", "internal/config TestLoadAssistantAgenticConfigFromYAMLAndEnv", "internal/config TestAssistantAgenticValidation"]
+    },
+    {
+      "id": "AC2",
+      "statement": "When prompted mode is selected for an OpenAI-compatible provider, Bahia constructs a prompted AgentModelClient and leaves native/Anthropic behavior unchanged.",
+      "tests": ["go build ./...", "internal/adapters/llm compile-time AgentModelClient assertion"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Prompted requests send no native tools or tool_choice fields and inject tool schemas plus the strict tool_call fenced JSON protocol into text messages.",
+      "tests": ["internal/adapters/llm TestPromptedAgentClientTextResponse", "internal/adapters/llm TestPromptedAgentClientToolCallBlock"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Prior assistant tool calls and tool observations render as readable text without using the native tool role.",
+      "tests": ["internal/adapters/llm TestPromptedAgentClientRendersToolHistoryAndParsesNextCall"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Prompted text responses return final content; valid tool_call blocks return canonical ToolCalls with StopReason tool_calls; malformed blocks are handled gracefully as text.",
+      "tests": ["internal/adapters/llm TestPromptedAgentClientTextResponse", "internal/adapters/llm TestPromptedAgentClientToolCallBlock", "internal/adapters/llm TestPromptedAgentClientMalformedToolCallBlockTreatedAsText"]
+    },
+    {
+      "id": "AC6",
+      "statement": "Context-window provider failures remain classified as ContextTooLargeError.",
+      "tests": ["internal/adapters/llm TestPromptedAgentClientContextTooLarge"]
+    }
+  ]
+}

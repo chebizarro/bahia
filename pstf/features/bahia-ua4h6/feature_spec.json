@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-ua4h6",
+  "title": "Prompted text tool-calling mode for assistant agent models",
+  "beads_issue": "bahia-ua4h6",
+  "status": "unit_verified_live_validation_tracked_in_bahia-vq3bb",
+  "observed_behavior": [
+    "The assistant agent loop sends AgentModelRequest.Tools and ToolChoice auto to the configured AgentModelClient.",
+    "The native OpenAIAgentClient serializes those fields as OpenAI-compatible tools/tool_choice and expects content or native message.tool_calls in the response.",
+    "Gemma via the operator's local llama.cpp/lemmy OpenAI-compatible endpoint does not emit native OpenAI function-calling tool_calls and can return an empty assistant message."
+  ],
+  "intended_behavior": [
+    "Native OpenAI-compatible tool-calling remains the default behavior.",
+    "Operators can set assistant.agentic.tool_mode to prompted for OpenAI-compatible models that follow text instructions but do not implement native function-calling.",
+    "Prompted mode sends no native tools or tool_choice fields, injects the available tool catalog and strict tool-call format into the prompt, renders prior assistant tool calls and tool observations as text, and parses a fenced tool_call JSON block into Bahia's canonical AgentModelResponse.ToolCalls."
+  ],
+  "scope": {
+    "included": [
+      "internal/adapters/llm prompted AgentModelClient",
+      "assistant.agentic.tool_mode config default/loading/validation",
+      "OpenAI-compatible model client construction",
+      "unit tests and setup documentation"
+    ],
+    "excluded": [
+      "Native OpenAIAgentClient behavior changes",
+      "Assistant agent loop control-flow changes",
+      "Anthropic model path changes",
+      "Live validation against the operator's LAN-only Gemma endpoint"
+    ]
+  }
+}
