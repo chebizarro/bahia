@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-yu6g",
+  "tests": [
+    {
+      "name": "go test ./internal/config",
+      "type": "deterministic Go unit tests",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "notes": "Covers default-on agentic config, legacy llm_* inheritance, explicit agentic opt-out for the legacy planner, provider validation, and the effective-model validation error."
+    },
+    {
+      "name": "go test ./internal/service -run TestAssistantOrchestrator",
+      "type": "deterministic Go unit tests",
+      "acceptance_criteria": ["AC3"],
+      "notes": "Exercises existing orchestrator agentic and legacy behavior without changing the legacy planner fallback path."
+    },
+    {
+      "name": "go build ./...",
+      "type": "Go build",
+      "acceptance_criteria": ["AC2"],
+      "notes": "Verifies the config changes compile through application wiring, including app.go's agentic construction path."
+    },
+    {
+      "name": "go vet ./internal/config",
+      "type": "Go vet",
+      "acceptance_criteria": ["AC1", "AC2", "AC4"],
+      "notes": "Static vetting for the touched config package."
+    }
+  ]
+}

@@ -117,8 +117,8 @@ func TestAssistantLLMStreamingLoadsFromYAMLAndEnv(t *testing.T) {
 
 func TestAssistantAgenticDefaults(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Assistant.Agentic.Enabled {
-		t.Fatal("assistant.agentic.enabled should default false")
+	if !cfg.Assistant.Agentic.Enabled {
+		t.Fatal("assistant.agentic.enabled should default true")
 	}
 	if cfg.Assistant.Agentic.Provider != "openai_compatible" {
 		t.Fatalf("assistant.agentic.provider = %q", cfg.Assistant.Agentic.Provider)
@@ -196,10 +196,43 @@ nostr:
 	}
 }
 
+func TestLoadAssistantAgenticInheritsLegacyLLMConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`assistant:
+  enabled: true
+  llm_base_url: "https://legacy.example/v1/"
+  llm_model: "legacy-model"
+  llm_api_key: "legacy-key"
+nostr:
+  private_key: "test-secret-key"
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Assistant.Agentic.Enabled {
+		t.Fatal("assistant.agentic.enabled = false, want default true")
+	}
+	if cfg.Assistant.Agentic.Model != "legacy-model" {
+		t.Fatalf("assistant.agentic.model = %q, want inherited legacy-model", cfg.Assistant.Agentic.Model)
+	}
+	if cfg.Assistant.Agentic.BaseURL != "https://legacy.example/v1" {
+		t.Fatalf("assistant.agentic.base_url = %q, want inherited legacy base URL", cfg.Assistant.Agentic.BaseURL)
+	}
+	if cfg.Assistant.Agentic.APIKey != "legacy-key" {
+		t.Fatalf("assistant.agentic.api_key = %q, want inherited legacy-key", cfg.Assistant.Agentic.APIKey)
+	}
+}
+
 func TestAssistantAgenticValidation(t *testing.T) {
 	t.Run("legacy assistant valid when agentic disabled", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Assistant.Enabled = true
+		cfg.Assistant.Agentic.Enabled = false
 		cfg.Assistant.LLMModel = "legacy-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err != nil {
@@ -207,13 +240,13 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("agentic requires model", func(t *testing.T) {
+	t.Run("agentic requires effective model", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Assistant.Enabled = true
-		cfg.Assistant.Agentic.Enabled = true
 		cfg.Nostr.PrivateKey = "test-secret-key"
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.model") {
-			t.Fatalf("validate() error = %v, want assistant.agentic.model requirement", err)
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "assistant.agentic.model or assistant.llm_model") {
+			t.Fatalf("validate() error = %v, want effective model requirement", err)
 		}
 	})
 

@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-yu6g",
+  "title": "Make the agentic assistant the default with legacy planner fallback",
+  "observed_behavior": "assistant.agentic.enabled defaulted false, so enabled assistants used the legacy plan/approve planner unless operators explicitly opted into the multi-step agentic loop. Agentic provider fields did not consistently inherit legacy llm_* configuration when the agentic base URL remained at the default OpenAI URL.",
+  "intended_behavior": "The assistant defaults to the multi-step agentic loop in audited permission mode. Deployments that configure assistant.llm_model, assistant.llm_base_url, and assistant.llm_api_key continue to work because empty or default agentic provider fields inherit those legacy fields before validation and app wiring. Operators can explicitly set assistant.agentic.enabled=false to run the legacy planner without changing the existing llm_streaming or fallback paths.",
+  "scope": [
+    "internal/config/config.go",
+    "internal/config/config_test.go",
+    "docs/user-guide/getting-started.md"
+  ],
+  "authoritative_contract": "bahia-yu6g acceptance criteria: default assistant.agentic.enabled=true; legacy llm_* fields populate effective agentic provider config when agentic fields are omitted; explicit assistant.agentic.enabled=false remains the legacy planner escape hatch; validation points operators at either assistant.agentic.model or assistant.llm_model when no effective model exists."
+}

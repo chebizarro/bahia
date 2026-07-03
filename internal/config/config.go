@@ -766,7 +766,7 @@ func Defaults() *Config {
 			Enabled:    false,
 			LLMBaseURL: "https://api.openai.com",
 			Agentic: AssistantAgenticConfig{
-				Enabled:                    false,
+				Enabled:                    true,
 				Provider:                   "openai_compatible",
 				BaseURL:                    "https://api.openai.com",
 				MaxIterations:              12,
@@ -1381,11 +1381,12 @@ func (c *Config) validateAssistant() error {
 		agentic.Provider = "openai_compatible"
 	}
 	agentic.BaseURL = strings.TrimRight(strings.TrimSpace(agentic.BaseURL), "/")
-	if agentic.Provider == "anthropic" && (agentic.BaseURL == "" || agentic.BaseURL == "https://api.openai.com") {
-		agentic.BaseURL = "https://api.anthropic.com"
-	}
-	if agentic.BaseURL == "" {
+	agenticBaseURLWasUnsetOrDefault := agentic.BaseURL == "" || agentic.BaseURL == "https://api.openai.com"
+	if agenticBaseURLWasUnsetOrDefault {
 		agentic.BaseURL = assistant.LLMBaseURL
+	}
+	if agentic.Provider == "anthropic" && agenticBaseURLWasUnsetOrDefault && assistant.LLMBaseURL == "https://api.openai.com" {
+		agentic.BaseURL = "https://api.anthropic.com"
 	}
 	agentic.Model = strings.TrimSpace(agentic.Model)
 	if agentic.Model == "" {
@@ -1467,7 +1468,7 @@ func (c *Config) validateAssistant() error {
 		return fmt.Errorf("config validation failed: assistant.agentic.provider must be one of openai_compatible, anthropic")
 	}
 	if agentic.Model == "" {
-		return fmt.Errorf("config validation failed: assistant.agentic.model is required when assistant.agentic.enabled=true")
+		return fmt.Errorf("config validation failed: assistant.agentic.model or assistant.llm_model is required when assistant.enabled=true and assistant.agentic.enabled=true")
 	}
 	parsedAgentic, err := url.Parse(agentic.BaseURL)
 	if err != nil || parsedAgentic.Scheme == "" || parsedAgentic.Host == "" {

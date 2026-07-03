@@ -71,6 +71,7 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
+| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Run the multi-step agentic assistant loop; set `false` to use the legacy plan/approve planner | `true` |
 | `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for the legacy assistant planner provider | `false` |
 
 ### Config File (bahia.yaml)
@@ -106,10 +107,24 @@ sbom:
     binary_path: "cdxgen"
 
 assistant:
+  # The assistant uses the multi-step agentic loop by default in audited permission mode.
+  # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.
   llm_base_url: "https://api.openai.com"
-  llm_model: "<planner-model>"
-  # Disabled by default. Enable only for providers that emit delta.content when
-  # streaming response_format (json_schema) chat completions.
+  llm_model: "<assistant-model>"
+  llm_api_key: "<provider-api-key>"
+  agentic:
+    enabled: true
+    # Optional overrides; omit these to inherit llm_base_url/llm_model/llm_api_key above.
+    # base_url: "https://api.openai.com"
+    # model: "<agentic-model>"
+    # api_key: "<agentic-api-key>"
+  permissions:
+    mode: "audited"
+  # Legacy planner escape hatch:
+  # agentic:
+  #   enabled: false
+  # Disabled by default. Enable only for legacy planner providers that emit delta.content
+  # when streaming response_format (json_schema) chat completions.
   llm_streaming: false
 ```
 

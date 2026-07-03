@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-yu6g",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Default configuration has assistant.agentic.enabled=true while assistant permission mode remains audited.",
+      "tests": ["go test ./internal/config"]
+    },
+    {
+      "id": "AC2",
+      "statement": "An enabled assistant with only legacy llm_model, llm_base_url, and llm_api_key configured inherits those fields into the effective agentic model, base_url, and api_key before validation/app wiring.",
+      "tests": ["go test ./internal/config", "go build ./..."]
+    },
+    {
+      "id": "AC3",
+      "statement": "Explicit assistant.agentic.enabled=false remains a valid escape hatch to the legacy plan/approve planner when assistant.llm_model is configured.",
+      "tests": ["go test ./internal/config", "go test ./internal/service -run TestAssistantOrchestrator"]
+    },
+    {
+      "id": "AC4",
+      "statement": "When agentic is enabled and neither assistant.agentic.model nor assistant.llm_model is configured, validation fails with an operator-facing error naming both accepted fields.",
+      "tests": ["go test ./internal/config"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Getting-started documentation explains the new agentic default, legacy llm_* inheritance, audited permission mode, and the legacy planner opt-out.",
+      "tests": ["manual documentation review"]
+    }
+  ]
+}
