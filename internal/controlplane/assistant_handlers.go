@@ -48,11 +48,14 @@ func (a assistantContextVMAdapter) handleApproval(ctx context.Context, request C
 		return nil, fmt.Errorf("invalid assistant approval params: %w", err)
 	}
 	payload.Decision = strings.ToLower(strings.TrimSpace(payload.Decision))
-	if strings.TrimSpace(payload.SessionID) == "" || strings.TrimSpace(payload.PlanHash) == "" || payload.Decision == "" {
-		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "approval request requires session_id, plan_hash, and decision", "error": "approval request requires session_id, plan_hash, and decision"}, nil
+	if strings.TrimSpace(payload.SessionID) == "" || (strings.TrimSpace(payload.PlanHash) == "" && strings.TrimSpace(payload.ActionID) == "") || payload.Decision == "" {
+		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "approval request requires session_id, plan_hash or action_id, and decision", "error": "approval request requires session_id, plan_hash or action_id, and decision"}, nil
 	}
 	if payload.Decision != "approve" && payload.Decision != "reject" && payload.Decision != "cancel" {
 		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "decision must be approve, reject, or cancel", "error": "decision must be approve, reject, or cancel"}, nil
+	}
+	if strings.TrimSpace(payload.ActionID) != "" && payload.ModifiedPlan != nil {
+		return service.AssistantOperationResult{"status": "failed", "step": "validation_error", "session_id": payload.SessionID, "summary": "modified_plan is only valid for legacy plan_hash approvals", "error": "modified_plan is only valid for legacy plan_hash approvals"}, nil
 	}
 	if !a.orchestrator.IsSessionParticipant(payload.SessionID, request.Event.PubKey.Hex()) {
 		return service.AssistantOperationResult{"status": "failed", "step": "unauthorized_participant", "session_id": payload.SessionID, "summary": "requester is not a participant in this assistant session", "error": "requester is not a participant in this assistant session"}, nil

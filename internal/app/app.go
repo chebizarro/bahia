@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -906,8 +907,31 @@ func New(cfg *config.Config) (*App, error) {
 		if dnsProjector != nil {
 			assistantDNS = assistantDNSRegistryAdapter{endpoints: dnsProjector, zones: dnsZoneRepo, staticZones: dnsZones, policies: dnsPolicyRepo}
 		}
+		assistantPublisher := &auditedNostrPublisher{delegate: controlPlanePool, repo: nostrEventRepo, logger: logger}
+		assistantSubscriber := assistantRelaySubscriber{pool: controlPlanePool}
+		servicePubkey := ""
+		if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+			if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
+				servicePubkey = secret.Public().Hex()
+			}
+		}
+		var transcriptStore *service.AssistantTranscriptStore
+		if cfg.Assistant.Agentic.Enabled {
+			transcriptKeys, err := assistantTranscriptKeyProvider(cfg)
+			if err != nil {
+				return nil, err
+			}
+			transcriptStore = service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{
+				Publisher:     assistantPublisher,
+				Subscriber:    assistantSubscriber,
+				Signer:        controlPlaneSigner,
+				Identity:      identity,
+				KeyProvider:   transcriptKeys,
+				ServicePubkey: servicePubkey,
+			})
+		}
 		userDocs := docs.New(docs.DefaultBasePath)
-		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, &userDocs, service.AssistantContextBuilderConfig{})
+		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, &userDocs, service.AssistantContextBuilderConfig{TranscriptHistory: transcriptStore})
 		chatClient := llmadapter.NewChatClient(llmadapter.ChatClientConfig{
 			BaseURL: cfg.Assistant.LLMBaseURL,
 			Model:   cfg.Assistant.LLMModel,
@@ -917,22 +941,46 @@ func New(cfg *config.Config) (*App, error) {
 			ChatClient:       chatClient,
 			ContextBuilder:   contextBuilder,
 			ToolInvoker:      mcpServer,
-			Publisher:        &auditedNostrPublisher{delegate: controlPlanePool, repo: nostrEventRepo, logger: logger},
-			Subscriber:       assistantRelaySubscriber{pool: controlPlanePool},
+			Publisher:        assistantPublisher,
+			Subscriber:       assistantSubscriber,
 			Signer:           controlPlaneSigner,
 			Identity:         identity,
 			AllowedToolNames: assistantToolNames(mcpServer),
 			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
+			AgenticEnabled:   cfg.Assistant.Agentic.Enabled,
 			Logger:           slog.Default(),
 		})
-		servicePubkey := ""
-		if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-			if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
-				servicePubkey = secret.Public().Hex()
-			}
+		var assistantAgentLoop service.AssistantAgentLoopController
+		if cfg.Assistant.Agentic.Enabled {
+			agentToolRegistry := mcpServer.AssistantToolRegistry()
+			permissionEngine := service.NewAssistantPermissionEngine(cfg.Assistant.Permissions, nil)
+			toolRuntime := service.NewAssistantToolRuntime(service.AssistantToolRuntimeConfig{
+				MCPServer:   assistantMCPRuntimeAdapter{server: mcpServer},
+				Registry:    assistantToolRegistryAdapter{registry: agentToolRegistry},
+				Permissions: permissionEngine,
+				Sessions:    assistantOrchestrator,
+				Observer:    assistantOrchestrator,
+			})
+			modelClient := llmadapter.NewOpenAIAgentClient(llmadapter.OpenAIAgentClientConfig{
+				BaseURL: cfg.Assistant.Agentic.BaseURL,
+				Model:   cfg.Assistant.Agentic.Model,
+				APIKey:  cfg.Assistant.Agentic.APIKey,
+				Timeout: cfg.Assistant.Agentic.RequestTimeout,
+			}, slog.Default())
+			agentLoop := service.NewAssistantAgentLoop(service.AssistantAgentLoopConfig{
+				ModelClient:    modelClient,
+				ToolRuntime:    toolRuntime,
+				ContextBuilder: contextBuilder,
+				ToolSchemas:    assistantToolSchemaProvider{registry: agentToolRegistry},
+				Transcript:     transcriptStore,
+				Sessions:       assistantOrchestrator,
+				Agentic:        cfg.Assistant.Agentic,
+			})
+			assistantAgentLoop = agentLoop
+			assistantOrchestrator.SetAgentLoop(agentLoop)
 		}
-		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, Logger: slog.Default()}), RunnerTier(Tier3))
-		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey))
+		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, AgentLoop: assistantAgentLoop, Logger: slog.Default()}), RunnerTier(Tier3))
+		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.Bool("agentic_enabled", cfg.Assistant.Agentic.Enabled))
 	}
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
@@ -2414,6 +2462,107 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.Assista
 	}
 	add(assistant.Pubkey)
 	return out
+}
+
+type assistantMCPRuntimeAdapter struct {
+	server *mcp.Server
+}
+
+func (a assistantMCPRuntimeAdapter) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*service.AssistantToolRuntimeToolResult, error) {
+	if a.server == nil {
+		return nil, fmt.Errorf("assistant MCP server is not configured")
+	}
+	result, err := a.server.CallTool(ctx, name, arguments)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	content := make([]service.AssistantToolRuntimeToolContent, 0, len(result.Content))
+	for _, item := range result.Content {
+		content = append(content, service.AssistantToolRuntimeToolContent{Type: item.Type, Text: item.Text})
+	}
+	return &service.AssistantToolRuntimeToolResult{Content: content, IsError: result.IsError}, nil
+}
+
+func (a assistantMCPRuntimeAdapter) InvokeAssistantAsyncTool(ctx context.Context, name string, args map[string]interface{}) (*domain.AsyncToolReceipt, error) {
+	if a.server == nil {
+		return nil, fmt.Errorf("assistant MCP server is not configured")
+	}
+	return a.server.InvokeAssistantAsyncTool(ctx, name, args)
+}
+
+type assistantToolRegistryAdapter struct {
+	registry mcp.AssistantToolRegistry
+}
+
+func (a assistantToolRegistryAdapter) GetAgentTool(name string) (service.AssistantToolRuntimeToolDescriptor, bool) {
+	descriptor, ok := a.registry.GetAgentTool(name)
+	if !ok {
+		return service.AssistantToolRuntimeToolDescriptor{}, false
+	}
+	return service.AssistantToolRuntimeToolDescriptor{
+		Name:          descriptor.Tool.Name,
+		ExecutionMode: descriptor.ExecutionMode,
+		Effect:        descriptor.Effect,
+		DefaultRisk:   descriptor.DefaultRisk,
+		ResourceTypes: append([]string(nil), descriptor.ResourceTypes...),
+	}, true
+}
+
+type assistantToolSchemaProvider struct {
+	registry mcp.AssistantToolRegistry
+}
+
+func (p assistantToolSchemaProvider) AgentToolSchemas(context.Context) ([]llmadapter.AgentToolSchema, error) {
+	descriptors := p.registry.AgentTools()
+	if len(descriptors) == 0 {
+		return nil, nil
+	}
+	schemas := make([]llmadapter.AgentToolSchema, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		schemas = append(schemas, llmadapter.AgentToolSchema{
+			Name:        descriptor.Tool.Name,
+			Description: descriptor.Tool.Description,
+			InputSchema: assistantInputSchemaMap(descriptor.Tool.InputSchema),
+			Metadata: map[string]any{
+				"effect":         string(descriptor.Effect),
+				"execution_mode": string(descriptor.ExecutionMode),
+				"default_risk":   string(descriptor.DefaultRisk),
+				"resource_types": append([]string(nil), descriptor.ResourceTypes...),
+			},
+		})
+	}
+	return schemas, nil
+}
+
+func assistantInputSchemaMap(schema map[string]interface{}) map[string]any {
+	if len(schema) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(schema))
+	for key, value := range schema {
+		out[key] = value
+	}
+	return out
+}
+
+func assistantTranscriptKeyProvider(cfg *config.Config) (service.AssistantTranscriptKeyProvider, error) {
+	privateKey := ""
+	if cfg != nil {
+		privateKey = strings.TrimSpace(cfg.Nostr.PrivateKey)
+	}
+	if privateKey == "" {
+		return nil, fmt.Errorf("assistant transcript key requires nostr.private_key when assistant.agentic.enabled=true")
+	}
+	sum := sha256.Sum256([]byte("bahia assistant transcript key v1\x00" + privateKey))
+	return service.StaticAssistantTranscriptKeyProvider{Key: service.AssistantTranscriptKey{
+		Ref:      "assistant-transcript/service-nostr-key",
+		Version:  "v1",
+		Rotation: "service-nostr-key",
+		Key:      sum[:],
+	}}, nil
 }
 
 func assistantToolNames(server *mcp.Server) []string {

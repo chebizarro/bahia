@@ -18,13 +18,13 @@ type AssistantSessionRecoveryConfig struct {
 	RecentLimit   int
 	ServicePubkey string
 	Logger        *slog.Logger
-	AgentRuntime  *AssistantToolRuntime
+	AgentLoop     AssistantAgentLoopController
 }
 
 // AssistantSessionRecoveryRunner resumes observation of pending assistant steps after restart.
 type AssistantSessionRecoveryRunner struct {
 	orchestrator  *AssistantOrchestrator
-	agentRuntime  *AssistantToolRuntime
+	agentLoop     AssistantAgentLoopController
 	limit         int
 	servicePubkey string
 	logger        *slog.Logger
@@ -44,7 +44,7 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 	if limit <= 0 {
 		limit = 500
 	}
-	return &AssistantSessionRecoveryRunner{orchestrator: orchestrator, agentRuntime: cfg.AgentRuntime, limit: limit, servicePubkey: strings.TrimSpace(cfg.ServicePubkey), logger: logger.With("component", "assistant_session_recovery")}
+	return &AssistantSessionRecoveryRunner{orchestrator: orchestrator, agentLoop: cfg.AgentLoop, limit: limit, servicePubkey: strings.TrimSpace(cfg.ServicePubkey), logger: logger.With("component", "assistant_session_recovery")}
 }
 
 func (r *AssistantSessionRecoveryRunner) Name() string { return "assistant-session-recovery" }
@@ -229,9 +229,9 @@ func (r *AssistantSessionRecoveryRunner) recoverAgentLoop(ctx context.Context, r
 	if metadata.State != domain.AssistantAgentLoopStateWaitingAsync || metadata.WaitingReceipt == nil {
 		return false
 	}
-	if r.agentRuntime == nil {
-		r.logger.Warn("agentic assistant session is waiting_async but runtime recovery is not configured", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID)
-		r.blockAgentLoopRecovery(ctx, recovered, metadata, "agentic assistant async recovery runtime is not configured")
+	if r.agentLoop == nil {
+		r.logger.Warn("agentic assistant session is waiting_async but loop recovery is not configured", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID)
+		r.blockAgentLoopRecovery(ctx, recovered, metadata, "agentic assistant async recovery loop is not configured")
 		return true
 	}
 	if recovered.State != domain.AssistantSessionStateExecuting && recovered.State != domain.AssistantSessionStateBlocked {
@@ -243,18 +243,20 @@ func (r *AssistantSessionRecoveryRunner) recoverAgentLoop(ctx context.Context, r
 	*session = *recovered
 	lock.Unlock()
 
-	r.logger.Info("recovering agentic assistant async tool", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "downstream_request", metadata.WaitingReceipt.RequestEventID)
-	obs, err := r.agentRuntime.ResumeAsync(ctx, AssistantToolResumeRequest{Session: session, RunID: metadata.RunID})
+	r.logger.Info("recovering agentic assistant async tool through loop", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "downstream_request", metadata.WaitingReceipt.RequestEventID)
+	result, err := r.agentLoop.ResumeAfterAsyncObservation(ctx, AssistantAgentResumeAsyncRequest{Session: session})
 	if err != nil {
-		r.logger.Warn("agentic assistant async recovery failed", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "error", err)
+		r.logger.Warn("agentic assistant loop async recovery failed", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "error", err)
+		r.blockAgentLoopRecovery(ctx, session, metadata, err.Error())
 		return true
 	}
-	if obs != nil && obs.Status == domain.AssistantToolObservationFailed {
-		r.logger.Warn("agentic assistant async recovery produced failed observation", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "observation_id", obs.ObservationID, "blocked", obs.Metadata["blocked"])
+	if result != nil && result.Error != "" {
+		r.logger.Warn("agentic assistant loop async recovery returned error result", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "error", result.Error, "loop_state", result.State)
+		r.blockAgentLoopRecovery(ctx, session, metadata, result.Error)
 		return true
 	}
-	if obs != nil {
-		r.logger.Info("agentic assistant async recovery resumed", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "observation_id", obs.ObservationID)
+	if result != nil {
+		r.logger.Info("agentic assistant loop async recovery resumed", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "loop_state", result.State, "iteration", result.Iteration)
 	}
 	return true
 }

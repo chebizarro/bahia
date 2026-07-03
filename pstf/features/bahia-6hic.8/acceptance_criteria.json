@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-6hic.8",
+  "title": "Assistant agentic orchestrator integration (flag-off)",
+  "criteria": [
+    {"id": "AC1", "statement": "When assistant.agentic.enabled is true, HandlePromptRequest routes a valid prompt to AssistantAgentLoop.StartTurn and returns an agentic ContextVM result containing run_id, loop_state, and session status."},
+    {"id": "AC2", "statement": "When assistant.agentic.enabled is false, the legacy single-shot planner and plan_hash approval path remain unchanged."},
+    {"id": "AC3", "statement": "assistant/approval accepts action_id decisions without plan_hash and resumes deferred actions through AssistantAgentLoop.ResumeAfterActionDecision."},
+    {"id": "AC4", "statement": "Startup recovery for persisted waiting_async agent-loop sessions calls AssistantAgentLoop.ResumeAfterAsyncObservation rather than stopping at AssistantToolRuntime.ResumeAsync."},
+    {"id": "AC5", "statement": "internal/app/app.go wires the concrete OpenAI-compatible model client, MCP runtime/schema/registry adapters, permission engine, transcript store, tool runtime, and loop only behind assistant.agentic.enabled."},
+    {"id": "AC6", "statement": "Repository compile passes with the integration wired, and no frontend item-9 behavior is introduced."}
+  ]
+}

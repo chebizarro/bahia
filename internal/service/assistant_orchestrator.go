@@ -84,6 +84,15 @@ type AssistantRequestSource struct {
 // for prompt/approval operations.
 type AssistantOperationResult map[string]any
 
+// AssistantAgentLoopController is the agentic loop surface consumed by the
+// orchestrator and startup recovery. The concrete AssistantAgentLoop implements
+// it; tests can supply a deterministic loop without reaching a real model.
+type AssistantAgentLoopController interface {
+	StartTurn(ctx context.Context, req AssistantAgentTurnRequest) (*AssistantAgentLoopResult, error)
+	ResumeAfterAsyncObservation(ctx context.Context, req AssistantAgentResumeAsyncRequest) (*AssistantAgentLoopResult, error)
+	ResumeAfterActionDecision(ctx context.Context, req AssistantAgentActionDecisionRequest) (*AssistantAgentLoopResult, error)
+}
+
 // AssistantOrchestratorConfig contains dependencies and startup state.
 type AssistantOrchestratorConfig struct {
 	ChatClient       AssistantChatClient
@@ -95,6 +104,8 @@ type AssistantOrchestratorConfig struct {
 	Identity         AssistantIdentity
 	AllowedToolNames []string
 	InitialSessions  []domain.AssistantSession
+	AgenticEnabled   bool
+	AgentLoop        AssistantAgentLoopController
 	Logger           *slog.Logger
 }
 
@@ -109,6 +120,8 @@ type AssistantOrchestrator struct {
 	identity       AssistantIdentity
 	allowedTools   map[string]struct{}
 	logger         *slog.Logger
+	agenticEnabled bool
+	agentLoop      AssistantAgentLoopController
 
 	mu                 sync.Mutex
 	sessions           map[string]*domain.AssistantSession
@@ -145,6 +158,8 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 		identity:           identity,
 		allowedTools:       allowed,
 		logger:             logger.With("component", "assistant_orchestrator"),
+		agenticEnabled:     config.AgenticEnabled,
+		agentLoop:          config.AgentLoop,
 		sessions:           make(map[string]*domain.AssistantSession),
 		sessionLocks:       make(map[string]*sync.Mutex),
 		processedTurns:     make(map[string]AssistantOperationResult),
@@ -160,6 +175,19 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 		}
 	}
 	return o
+}
+
+// SetAgentLoop installs the concrete agent loop after the orchestrator exists.
+// The app uses this to resolve the runtime/orchestrator DI cycle: the runtime
+// needs the orchestrator as its session persister and async observer, while the
+// orchestrator needs the loop for agentic turns.
+func (o *AssistantOrchestrator) SetAgentLoop(loop AssistantAgentLoopController) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.agentLoop = loop
+	o.mu.Unlock()
 }
 
 // HandlePromptRequest processes a ContextVM assistant prompt request into an
@@ -201,9 +229,12 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 	session.State = domain.AssistantSessionStatePlanning
 	session.CurrentTurnID = req.TurnID
 	session.CurrentRequestID = event.ID.Hex()
-	o.logger.Info("assistant prompt started", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", event.ID.Hex())
+	o.logger.Info("assistant prompt started", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", event.ID.Hex(), "agentic", o.agenticEnabled)
 	if err := o.publishSession(ctx, session); err != nil {
 		return nil, err
+	}
+	if o.agenticEnabled {
+		return o.handleAgenticPromptRequest(ctx, event, dedupKey, source, req, session)
 	}
 	contextCtx, cancelContext := context.WithTimeout(ctx, assistantContextTimeout)
 	contextBlock, err := o.contextBuilder.BuildContext(contextCtx, routeContextStrings(req.RouteContext), req.SelectedRefs, session.TranscriptSummary)
@@ -284,13 +315,17 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
 	planHash := strings.TrimSpace(req.PlanHash)
+	actionID := strings.TrimSpace(req.ActionID)
 	decision := strings.ToLower(strings.TrimSpace(req.Decision))
 	reason := firstNonEmptyString(strings.TrimSpace(req.Reason), strings.TrimSpace(req.Message))
-	if sessionID == "" || planHash == "" || decision == "" {
-		return o.failureResult(sessionID, "validation_error", "session_id, plan_hash, and decision are required"), nil
+	if sessionID == "" || (planHash == "" && actionID == "") || decision == "" {
+		return o.failureResult(sessionID, "validation_error", "session_id, plan_hash or action_id, and decision are required"), nil
 	}
 	if decision != "approve" && decision != "reject" && decision != "cancel" {
 		return o.failureResult(sessionID, "validation_error", "decision must be approve, reject, or cancel"), nil
+	}
+	if actionID != "" && req.ModifiedPlan != nil {
+		return o.failureResult(sessionID, "validation_error", "modified_plan is only valid for legacy plan_hash approvals"), nil
 	}
 
 	lock := o.lockForSession(sessionID)
@@ -315,6 +350,11 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 	if !sessionHasParticipant(session, source.OperatorPubkey) {
 		lock.Unlock()
 		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "unauthorized_participant", map[string]any{"summary": "operator is not a participant in this assistant session"})
+	}
+	if actionID != "" {
+		result, err := o.handleAgenticActionDecision(ctx, event, dedupKey, source, session, actionID, decision, reason, req)
+		lock.Unlock()
+		return result, err
 	}
 	if decision == "cancel" {
 		if session.State != domain.AssistantSessionStateExecuting && session.State != domain.AssistantSessionStateBlocked && session.State != domain.AssistantSessionStateAwaitingApproval {
@@ -456,6 +496,166 @@ func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, sourc
 	_ = o.publishSession(ctx, session)
 	lock.Unlock()
 	return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed", "plan_hash": planHash})
+}
+
+func (o *AssistantOrchestrator) handleAgenticPromptRequest(ctx context.Context, event *nostr.Event, dedupKey string, source AssistantRequestSource, req domain.AssistantPromptRequest, session *domain.AssistantSession) (AssistantOperationResult, error) {
+	if o.agentLoop == nil {
+		session.State = domain.AssistantSessionStateFailed
+		_ = o.publishSession(ctx, session)
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "agent_loop_unavailable", map[string]any{"summary": "assistant agent loop is not configured", "agentic": true}), nil)
+	}
+	loopCtx, cancel := context.WithTimeout(ctx, assistantLLMTimeout)
+	defer cancel()
+	result, err := o.agentLoop.StartTurn(loopCtx, AssistantAgentTurnRequest{
+		Session:        session,
+		Prompt:         req.Prompt,
+		TurnID:         req.TurnID,
+		RouteContext:   routeContextStrings(req.RouteContext),
+		SelectedRefs:   append([]string(nil), req.SelectedRefs...),
+		OperatorPubkey: source.OperatorPubkey,
+	})
+	if err != nil {
+		session.State = domain.AssistantSessionStateFailed
+		_ = o.publishSession(ctx, session)
+		_ = o.publishStatus(ctx, event, session.SessionID, "failed", map[string]any{"phase": "agent_loop_error", "summary": "assistant agent loop failed", "error": err.Error()})
+		content := map[string]any{"summary": "assistant agent loop failed", "error": err.Error(), "agentic": true}
+		if result != nil {
+			mergeAgenticLoopResult(content, result)
+		}
+		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "agent_loop_error", content), nil)
+	}
+	return o.storePromptResult(ctx, dedupKey, o.agenticResultPayload(event, req.SessionID, result), nil)
+}
+
+func (o *AssistantOrchestrator) handleAgenticActionDecision(ctx context.Context, event *nostr.Event, dedupKey string, source AssistantRequestSource, session *domain.AssistantSession, actionID, decision, reason string, req domain.AssistantApprovalRequest) (AssistantOperationResult, error) {
+	if !o.agenticEnabled {
+		return o.publishApprovalResult(ctx, dedupKey, event, session.SessionID, "failed", "agentic_disabled", map[string]any{"summary": "assistant action approvals require assistant.agentic.enabled=true", "action_id": actionID, "agentic": false})
+	}
+	if o.agentLoop == nil {
+		return o.publishApprovalResult(ctx, dedupKey, event, session.SessionID, "failed", "agent_loop_unavailable", map[string]any{"summary": "assistant agent loop is not configured", "action_id": actionID, "agentic": true})
+	}
+	loopCtx, cancel := context.WithTimeout(ctx, assistantLLMTimeout)
+	defer cancel()
+	result, err := o.agentLoop.ResumeAfterActionDecision(loopCtx, AssistantAgentActionDecisionRequest{
+		Session:        session,
+		ActionID:       actionID,
+		Decision:       decision,
+		Reason:         reason,
+		RouteContext:   nil,
+		SelectedRefs:   nil,
+		OperatorPubkey: source.OperatorPubkey,
+	})
+	if err != nil {
+		session.State = domain.AssistantSessionStateFailed
+		_ = o.publishSession(ctx, session)
+		return o.publishApprovalResult(ctx, dedupKey, event, session.SessionID, "failed", "action_decision_error", map[string]any{"summary": "assistant action decision failed", "error": err.Error(), "action_id": actionID, "decision": decision, "agentic": true})
+	}
+	payload := o.agenticResultPayload(event, session.SessionID, result)
+	payload["action_id"] = actionID
+	payload["decision"] = decision
+	if req.PlanHash != "" {
+		payload["plan_hash"] = req.PlanHash
+	}
+	return o.markApprovalProcessed(dedupKey, payload, nil)
+}
+
+func (o *AssistantOrchestrator) agenticResultPayload(requestEvent *nostr.Event, sessionID string, result *AssistantAgentLoopResult) AssistantOperationResult {
+	status := string(domain.AssistantSessionStateFailed)
+	step := "agent_loop"
+	content := map[string]any{"summary": "assistant agent loop failed", "agentic": true}
+	if result != nil {
+		status = string(result.SessionState)
+		if status == "" {
+			status = agenticStatusFromLoopState(result.State)
+		}
+		step = string(result.State)
+		if step == "" {
+			step = "agent_loop"
+		}
+		content["summary"] = agenticSummary(result)
+		mergeAgenticLoopResult(content, result)
+	}
+	return o.resultPayload(requestEvent, sessionID, status, step, content)
+}
+
+func mergeAgenticLoopResult(content map[string]any, result *AssistantAgentLoopResult) {
+	if content == nil || result == nil {
+		return
+	}
+	content["run_id"] = result.RunID
+	content["turn_id"] = result.TurnID
+	content["iteration"] = result.Iteration
+	content["loop_state"] = string(result.State)
+	content["session_state"] = string(result.SessionState)
+	content["suspended"] = result.Suspended
+	content["completed"] = result.Completed
+	if result.StopReason != "" {
+		content["stop_reason"] = string(result.StopReason)
+	}
+	if result.Error != "" {
+		content["error"] = result.Error
+	}
+	if len(result.Observations) > 0 {
+		content["observations"] = result.Observations
+		last := result.Observations[len(result.Observations)-1]
+		if last != nil {
+			content["observation_id"] = last.ObservationID
+			content["observation_status"] = string(last.Status)
+			content["tool_call_id"] = last.ToolCallID
+			content["tool_name"] = last.ToolName
+			if last.Receipt != nil {
+				content["downstream_request"] = last.Receipt.RequestEventID
+			}
+		}
+	}
+	if result.DeferredAction != nil {
+		content["action_id"] = result.DeferredAction.ActionID
+		content["tool_call_id"] = result.DeferredAction.ToolCallID
+		content["tool_name"] = result.DeferredAction.ToolName
+		content["permission"] = result.DeferredAction.Permission
+		content["approval_prompt"] = result.DeferredAction.ApprovalPrompt
+	}
+}
+
+func agenticStatusFromLoopState(state domain.AssistantAgentLoopState) string {
+	switch state {
+	case domain.AssistantAgentLoopStateCompleted:
+		return string(domain.AssistantSessionStateCompleted)
+	case domain.AssistantAgentLoopStateBlocked:
+		return string(domain.AssistantSessionStateBlocked)
+	case domain.AssistantAgentLoopStateFailed:
+		return string(domain.AssistantSessionStateFailed)
+	case domain.AssistantAgentLoopStateAwaitingApproval:
+		return string(domain.AssistantSessionStateAwaitingApproval)
+	default:
+		return string(domain.AssistantSessionStateExecuting)
+	}
+}
+
+func agenticSummary(result *AssistantAgentLoopResult) string {
+	if result == nil {
+		return "assistant agent loop failed"
+	}
+	if result.Error != "" {
+		return result.Error
+	}
+	if result.DeferredAction != nil {
+		return "assistant action requires operator approval"
+	}
+	switch result.State {
+	case domain.AssistantAgentLoopStateCompleted:
+		return "assistant agent loop completed"
+	case domain.AssistantAgentLoopStateWaitingAsync:
+		return "assistant agent loop is waiting for an async tool observation"
+	case domain.AssistantAgentLoopStateAwaitingApproval:
+		return "assistant agent loop is awaiting action approval"
+	case domain.AssistantAgentLoopStateBlocked:
+		return "assistant agent loop blocked"
+	case domain.AssistantAgentLoopStateFailed:
+		return "assistant agent loop failed"
+	default:
+		return "assistant agent loop running"
+	}
 }
 
 type downstreamOutcome struct {

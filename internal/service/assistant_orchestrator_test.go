@@ -251,6 +251,80 @@ func TestAssistantOrchestratorReadOnlyPlanCompletesWithoutAwaitingApproval(t *te
 	}
 }
 
+func TestAssistantOrchestratorAgenticPromptUsesLoopWhenFlagEnabled(t *testing.T) {
+	ctx := context.Background()
+	loop := &assistantFakeAgentLoop{startResult: &AssistantAgentLoopResult{RunID: "run-1", TurnID: "turn-1", Iteration: 1, State: domain.AssistantAgentLoopStateCompleted, SessionState: domain.AssistantSessionStateCompleted, Completed: true}}
+	chat := &assistantTestChatClient{plan: executableTestPlan()}
+	orchestrator := NewAssistantOrchestrator(AssistantOrchestratorConfig{
+		ChatClient:       chat,
+		ContextBuilder:   assistantTestContextBuilder{},
+		ToolInvoker:      &assistantTestToolInvoker{},
+		Publisher:        &assistantTestPublisher{},
+		Signer:           testAssistantSigner(t),
+		Identity:         AssistantIdentity{AgentID: "assistant-test", Pubkey: "assistant-pubkey"},
+		AllowedToolNames: []string{assistantTestTool},
+		AgenticEnabled:   true,
+		AgentLoop:        loop,
+	})
+
+	result, err := orchestrator.HandlePromptRequest(ctx, assistantPromptSource("session-1", "turn-1"), assistantPromptRequest("session-1", "turn-1", "inspect dns"))
+	if err != nil {
+		t.Fatalf("HandlePromptRequest: %v", err)
+	}
+	if loop.startCalls != 1 {
+		t.Fatalf("loop StartTurn calls = %d, want 1", loop.startCalls)
+	}
+	if got := loop.lastStart.Prompt; got != "inspect dns" {
+		t.Fatalf("loop prompt = %q", got)
+	}
+	if got := result["status"]; got != string(domain.AssistantSessionStateCompleted) {
+		t.Fatalf("result status = %q, want completed", got)
+	}
+	if got := result["agentic"]; got != true {
+		t.Fatalf("result agentic = %#v, want true", got)
+	}
+	if got := result["run_id"]; got != "run-1" {
+		t.Fatalf("run_id = %q, want run-1", got)
+	}
+}
+
+func TestAssistantOrchestratorActionIDApprovalResumesLoop(t *testing.T) {
+	ctx := context.Background()
+	loop := &assistantFakeAgentLoop{decisionResult: &AssistantAgentLoopResult{RunID: "run-1", TurnID: "turn-1", Iteration: 2, State: domain.AssistantAgentLoopStateWaitingAsync, SessionState: domain.AssistantSessionStateExecuting, Suspended: true}}
+	orchestrator := NewAssistantOrchestrator(AssistantOrchestratorConfig{
+		ChatClient:     &assistantTestChatClient{plan: executableTestPlan()},
+		Publisher:      &assistantTestPublisher{},
+		Signer:         testAssistantSigner(t),
+		Identity:       AssistantIdentity{AgentID: "assistant-test", Pubkey: "assistant-pubkey"},
+		AgenticEnabled: true,
+		AgentLoop:      loop,
+		InitialSessions: []domain.AssistantSession{{
+			SessionID:      "session-1",
+			State:          domain.AssistantSessionStateAwaitingApproval,
+			OperatorPubkey: "operator",
+			Participants:   []string{"operator"},
+		}},
+	})
+
+	req := domain.AssistantApprovalRequest{SessionID: "session-1", ActionID: "action-1", Decision: "approve", Reason: "ok"}
+	result, err := orchestrator.HandleApprovalRequest(ctx, assistantApprovalSource("session-1", "action-1"), req)
+	if err != nil {
+		t.Fatalf("HandleApprovalRequest: %v", err)
+	}
+	if loop.decisionCalls != 1 {
+		t.Fatalf("loop action-decision calls = %d, want 1", loop.decisionCalls)
+	}
+	if got := loop.lastDecision.ActionID; got != "action-1" {
+		t.Fatalf("action_id = %q, want action-1", got)
+	}
+	if got := result["status"]; got != string(domain.AssistantSessionStateExecuting) {
+		t.Fatalf("result status = %q, want executing", got)
+	}
+	if got := result["action_id"]; got != "action-1" {
+		t.Fatalf("result action_id = %q, want action-1", got)
+	}
+}
+
 func TestAssistantOrchestratorRejectsUnknownToolAtPlanningTime(t *testing.T) {
 	ctx := context.Background()
 	plan := &domain.AssistantPlan{Summary: "Use unsafe tool.", RiskLevel: "medium", Steps: []domain.AssistantPlanStep{{StepID: "s1", Title: "Unsafe", ToolName: "shell_exec", ToolArgs: map[string]any{"cmd": "date"}}}}
@@ -413,6 +487,39 @@ func assistantSignedResultEvent(t *testing.T, label string, kind int, requestEve
 func assistantTestPubKey(label string) nostr.PubKey {
 	sum := sha256.Sum256([]byte(label))
 	return nostr.PubKey(sum)
+}
+
+type assistantFakeAgentLoop struct {
+	startCalls     int
+	lastStart      AssistantAgentTurnRequest
+	startResult    *AssistantAgentLoopResult
+	startErr       error
+	asyncCalls     int
+	lastAsync      AssistantAgentResumeAsyncRequest
+	asyncResult    *AssistantAgentLoopResult
+	asyncErr       error
+	decisionCalls  int
+	lastDecision   AssistantAgentActionDecisionRequest
+	decisionResult *AssistantAgentLoopResult
+	decisionErr    error
+}
+
+func (l *assistantFakeAgentLoop) StartTurn(_ context.Context, req AssistantAgentTurnRequest) (*AssistantAgentLoopResult, error) {
+	l.startCalls++
+	l.lastStart = req
+	return l.startResult, l.startErr
+}
+
+func (l *assistantFakeAgentLoop) ResumeAfterAsyncObservation(_ context.Context, req AssistantAgentResumeAsyncRequest) (*AssistantAgentLoopResult, error) {
+	l.asyncCalls++
+	l.lastAsync = req
+	return l.asyncResult, l.asyncErr
+}
+
+func (l *assistantFakeAgentLoop) ResumeAfterActionDecision(_ context.Context, req AssistantAgentActionDecisionRequest) (*AssistantAgentLoopResult, error) {
+	l.decisionCalls++
+	l.lastDecision = req
+	return l.decisionResult, l.decisionErr
 }
 
 type assistantTestChatClient struct {

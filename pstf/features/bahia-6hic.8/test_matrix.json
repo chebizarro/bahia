@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-6hic.8",
+  "tests": [
+    {"acceptance": "AC1", "command": "go test ./internal/service -run TestAssistantOrchestratorAgenticPromptUsesLoopWhenFlagEnabled", "coverage": "Verifies flag-on prompt routing calls StartTurn and returns agentic result metadata."},
+    {"acceptance": "AC2", "command": "go test ./internal/service -run TestAssistantOrchestratorPromptPublishesPlanWithoutSideEffects", "coverage": "Existing legacy prompt path still returns planned and does not dispatch tools when agentic flag is unset."},
+    {"acceptance": "AC3", "command": "go test ./internal/service -run TestAssistantOrchestratorActionIDApprovalResumesLoop", "coverage": "Verifies action_id approval requests resume the loop without requiring plan_hash."},
+    {"acceptance": "AC4", "command": "go test ./internal/service -run 'TestAssistant(SessionRecoveryUsesLoopForWaitingAsync|ToolRuntimeRestartRecoveryResumesWaitingAsync)'", "coverage": "Verifies waiting_async recovery invokes ResumeAfterAsyncObservation on the loop."},
+    {"acceptance": "AC3", "command": "go test ./internal/controlplane", "coverage": "ContextVM assistant handler validation accepts approval requests keyed by action_id or legacy plan_hash."},
+    {"acceptance": "AC5,AC6", "command": "go test ./internal/app", "coverage": "App package compiles/tests with concrete agentic DI adapters and no frontend changes."},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5,AC6", "command": "go build ./...", "coverage": "Repository-wide compile with orchestrator, recovery, app wiring, and adapters."}
+  ]
+}

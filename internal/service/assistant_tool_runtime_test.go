@@ -189,10 +189,9 @@ func TestAssistantToolRuntimeRestartRecoveryResumesWaitingAsync(t *testing.T) {
 	session := assistantRuntimeSession("session-restart")
 	session.State = domain.AssistantSessionStateExecuting
 	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-restart", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-restart", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-restart")})
-	observer := &assistantRuntimeObserver{status: "completed", event: assistantSignedResultEvent(t, "result-restart", 7961, "downstream-restart", "completed")}
-	runtime := newAssistantRuntimeForTest(t, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, observer, nil)
+	loop := &assistantFakeAgentLoop{asyncResult: &AssistantAgentLoopResult{RunID: "run-restart", TurnID: "turn-1", Iteration: 2, State: domain.AssistantAgentLoopStateCompleted, SessionState: domain.AssistantSessionStateCompleted, Completed: true}}
 	orchestrator := newTestAssistantOrchestrator(t, &assistantTestPublisher{}, &assistantTestToolInvoker{}, nil, nil, nil)
-	runner := NewAssistantSessionRecoveryRunner(orchestrator, AssistantSessionRecoveryConfig{AgentRuntime: runtime, Logger: slog.New(slog.NewTextHandler(testingWriter{t: t}, nil))})
+	runner := NewAssistantSessionRecoveryRunner(orchestrator, AssistantSessionRecoveryConfig{AgentLoop: loop, Logger: slog.New(slog.NewTextHandler(testingWriter{t: t}, nil))})
 
 	runner.recoverSession(context.Background(), session)
 
@@ -200,12 +199,11 @@ func TestAssistantToolRuntimeRestartRecoveryResumesWaitingAsync(t *testing.T) {
 	if stored == nil {
 		t.Fatal("recovered session was not loaded into orchestrator")
 	}
-	metadata := assistantAgentLoopMetadata(stored)
-	if metadata.State != domain.AssistantAgentLoopStateRunning || metadata.WaitingReceipt != nil || metadata.LastObservationID == "" {
-		t.Fatalf("recovered metadata = %#v", metadata)
+	if loop.asyncCalls != 1 {
+		t.Fatalf("ResumeAfterAsyncObservation calls = %d, want 1", loop.asyncCalls)
 	}
-	if observer.callCount() != 1 {
-		t.Fatalf("observer calls = %d", observer.callCount())
+	if loop.lastAsync.Session == nil || loop.lastAsync.Session.SessionID != "session-restart" {
+		t.Fatalf("loop received wrong session: %#v", loop.lastAsync.Session)
 	}
 }
 

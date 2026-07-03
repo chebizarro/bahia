@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-6hic.8",
+  "title": "Assistant agentic orchestrator integration (flag-off)",
+  "bead": "bahia-6hic.8",
+  "date": "2026-07-03",
+  "intent": "Wire the previously decoupled assistant agentic components into the production orchestrator and app DI seam while leaving the default legacy plan/approve path dark behind assistant.agentic.enabled=false.",
+  "scope": [
+    "Route HandlePromptRequest through AssistantAgentLoop.StartTurn only when assistant.agentic.enabled is true; preserve the legacy single-shot planner path when false.",
+    "Accept assistant approval requests keyed by action_id as well as legacy plan_hash, and resume deferred actions through AssistantAgentLoop.ResumeAfterActionDecision.",
+    "Register startup waiting_async recovery against AssistantAgentLoop.ResumeAfterAsyncObservation so recovered terminal observations advance the next model iteration.",
+    "In internal/app/app.go, construct the OpenAI-compatible agent model client, assistant tool runtime, permission engine, transcript store, MCP registry/runtime/schema adapters, and loop behind the feature flag.",
+    "Keep frontend enablement and action-level UI out of scope for item 9."
+  ],
+  "out_of_scope": [
+    "Frontend rendering or publishing changes for action_id approvals.",
+    "Subagents, skills, hooks, commands, external MCP servers, or Anthropic runtime selection.",
+    "Changing Nostr event kinds or payload schemas beyond already-added action_id fields and status content metadata."
+  ],
+  "architecture_notes": [
+    "internal/app/app.go is the intentional seam where internal/mcp descriptors and results are adapted into internal/service-local interfaces, avoiding an internal/service -> internal/mcp import cycle.",
+    "The orchestrator owns the rollout flag. AgenticEnabled=false keeps existing plan_hash planning, approval, async observation, and duplicate-submission behavior unchanged.",
+    "The transcript key provider derives a service-held XChaCha20 key from the already-required service Nostr private key for deterministic restart/replay behavior without hardcoded key material.",
+    "Startup recovery no longer stops at AssistantToolRuntime.ResumeAsync; it calls the loop API so a recovered async observation can be appended and fed to the next model step."
+  ]
+}
