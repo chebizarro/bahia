@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-6hic.4",
+  "tests": [
+    {"acceptance": "AC1,AC2", "command": "go test ./internal/service -run TestAssistantPermissionEngineReviewAllowsReadOnlyTool", "coverage": "Review mode returns allow for a read-only sync tool with canonical result metadata"},
+    {"acceptance": "AC1,AC3", "command": "go test ./internal/service -run TestAssistantPermissionEngineReviewAsksForMutationTool", "coverage": "Review mode returns ask for an async mutation tool"},
+    {"acceptance": "AC1,AC4", "command": "go test ./internal/service -run TestAssistantPermissionEngineExplicitDenyOverridesReviewReadAllow", "coverage": "Explicit deny rule takes precedence over review read allowance"},
+    {"acceptance": "AC5", "command": "go test ./internal/service -run TestAssistantPermissionEngineAuditedScaffoldAsksWhenArgsUpgradeRisk", "coverage": "Audited mode shares the evaluator and asks when arguments upgrade risk to high"},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5", "command": "go build ./...", "coverage": "Repository-wide compile of the service-owned permission engine and tests"}
+  ]
+}

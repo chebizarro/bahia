@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-6hic.4",
+  "title": "Assistant agentic permission engine review gate",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Permission engine returns canonical allow, ask, and deny decisions using internal/domain assistant permission result types."
+    },
+    {
+      "id": "AC2",
+      "statement": "Review mode allows read-only assistant tools without approval."
+    },
+    {
+      "id": "AC3",
+      "statement": "Review mode asks for approval on all assistant mutation tools."
+    },
+    {
+      "id": "AC4",
+      "statement": "Explicit deny rules override review-mode read allowance for forbidden tools."
+    },
+    {
+      "id": "AC5",
+      "statement": "Audited mode and argument-driven risk upgrades are available behind the same evaluation interface without app wiring."
+    }
+  ]
+}
