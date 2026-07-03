@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-6hic.3",
+  "tests": [
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5", "command": "go test ./internal/adapters/llm", "coverage": "Mocked OpenAI text response, native tool-call request/parse flow, canonical tool observation threading, malformed provider responses, context-too-large classification, and Anthropic deferred seam"},
+    {"acceptance": "AC1,AC2,AC3,AC4,AC5", "command": "go build ./...", "coverage": "Repository-wide compile of the new model-client seam without wiring it into app/orchestrator code"}
+  ]
+}

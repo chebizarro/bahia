@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-6hic.3",
+  "title": "Assistant agentic model client interface and OpenAI adapter",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "internal/adapters/llm defines an AgentModelClient Next(ctx, req, onEvent) seam with provider-neutral request, response, tool schema, tool_choice, stop_reason, and progress-event types."
+    },
+    {
+      "id": "AC2",
+      "statement": "The cross-provider model request/response datamodel serializes to the item 1 domain types for AssistantAgentMessage, AssistantAgentContentBlock, AssistantAgentToolCall, and AssistantToolObservation; tool results thread back with one role=tool message per tool_call_id and multi-call assistant turns stay grouped in one assistant message."
+    },
+    {
+      "id": "AC3",
+      "statement": "The OpenAI-compatible adapter posts /v1/chat/completions requests with native tools/tool_choice fields and parses choices[].message.tool_calls into domain.AssistantAgentToolCall values."
+    },
+    {
+      "id": "AC4",
+      "statement": "The OpenAI-compatible adapter preserves the legacy ContextTooLargeError classification pattern for HTTP and provider error responses."
+    },
+    {
+      "id": "AC5",
+      "statement": "The Anthropic agent client compiles behind the same AgentModelClient seam and returns a typed deferred-provider error until item 12 implements /v1/messages tool_use/tool_result support."
+    }
+  ]
+}
