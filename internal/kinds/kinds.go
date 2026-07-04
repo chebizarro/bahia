@@ -20,7 +20,7 @@
 // reusing any event kind.
 package kinds
 
-import cascadia "github.com/cascadia-nips/cascadia-go"
+import cascadia "git.sharegap.net/cascadia/cascadia-nips/generated/go"
 
 // =============================================================================
 // DNS Control-Plane Kinds (5941-5945, 6941, 7941-7945)

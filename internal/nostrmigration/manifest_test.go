@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	cascadia "github.com/cascadia-nips/cascadia-go"
+	cascadia "git.sharegap.net/cascadia/cascadia-nips/generated/go"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
 )

@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	cuelang.org/go v0.11.0
-	github.com/cascadia-nips/cascadia-go v0.0.0
+	git.sharegap.net/cascadia/cascadia-nips/generated/go v0.0.0
 	fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
@@ -26,7 +26,8 @@ require (
 	modernc.org/sqlite v1.52.0
 )
 
-replace github.com/cascadia-nips/cascadia-go => ../cascadia-nips/generated/go
+// Interim local replace until git.sharegap.net go-get metadata and subdir tag resolution are verified.
+replace git.sharegap.net/cascadia/cascadia-nips/generated/go => ../cascadia-nips/generated/go
 
 require (
 	cel.dev/expr v0.25.1 // indirect
