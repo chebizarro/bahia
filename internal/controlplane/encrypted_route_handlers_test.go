@@ -201,6 +201,13 @@ func (r *fakeEncryptedRegistryMutations) UpdateEnvironment(_ context.Context, en
 	r.environments[env.ID] = &copy
 	return nil
 }
+func (r *fakeEncryptedRegistryMutations) DeleteEnvironment(_ context.Context, id uuid.UUID, _ bool) error {
+	if r.environments == nil || r.environments[id] == nil {
+		return repository.ErrNotFound
+	}
+	delete(r.environments, id)
+	return nil
+}
 
 func encryptedAuthDeps(t *testing.T, serviceID, orgID uuid.UUID, role domain.Role) (*fakeEncryptedServiceRepo, *auth.RBAC) {
 	t.Helper()
@@ -414,6 +421,27 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSel
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["environment_id"] != envID.String() || payload["status"] != "updated" {
 		t.Fatalf("unexpected update response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_DeleteEnvironmentContextVMMethodDeletesRegistryEnvironment(t *testing.T) {
+	envID := uuid.New()
+	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
+		envID: {ID: envID, Name: "staging"},
+	}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentDelete, map[string]any{
+		"id": envID.String(), "force": true,
+	}))
+
+	if registry.environments[envID] != nil {
+		t.Fatalf("environment %s was not deleted", envID)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["environment_id"] != envID.String() || payload["status"] != "deleted" {
+		t.Fatalf("unexpected delete response: %#v", payload)
 	}
 }
 

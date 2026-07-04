@@ -205,21 +205,36 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
 			observedHash = obs.NormalizedState.ObservationHash
 		}
-		if currentState.DesiredHash == "" || observedHash == "" {
-			newDrift = domain.DriftStatusUnknown
-		} else if currentState.DesiredHash == observedHash && obs.HealthStatus == domain.HealthStatusHealthy {
-			newDrift = domain.DriftStatusInSync
-		} else {
-			newDrift = r.driftStatusForMode(mode)
-			r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
-				"desired_hash":  currentState.DesiredHash,
-				"observed_hash": observedHash,
-			})
+		acceptableHealth := obs.HealthStatus == domain.HealthStatusHealthy || obs.HealthStatus == domain.HealthStatusStarting
+		if currentState.DesiredHash != "" && observedHash != "" {
+			if currentState.DesiredHash == observedHash && acceptableHealth {
+				newDrift = domain.DriftStatusInSync
+			} else {
+				newDrift = r.driftStatusForMode(mode)
+				r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+					"desired_hash":  currentState.DesiredHash,
+					"observed_hash": observedHash,
+				})
+			}
+		} else if observedHash == "" && currentState.DesiredArtifactID != nil {
+			desired, err := r.artifacts.GetByID(ctx, *currentState.DesiredArtifactID)
+			if err == nil && desired != nil && desired.ImageDigest != "" && obs.ObservedImageDigest != "" {
+				if obs.ObservedImageDigest == desired.ImageDigest && acceptableHealth {
+					newDrift = domain.DriftStatusInSync
+				} else {
+					newDrift = r.driftStatusForMode(mode)
+					r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+						"desired_digest":  desired.ImageDigest,
+						"observed_digest": obs.ObservedImageDigest,
+					})
+				}
+			}
 		}
 	} else if currentState.DesiredArtifactID != nil {
 		desired, err := r.artifacts.GetByID(ctx, *currentState.DesiredArtifactID)
 		if err == nil && desired != nil {
-			if obs.ObservedImageDigest == desired.ImageDigest {
+			acceptableHealth := obs.HealthStatus == domain.HealthStatusHealthy || obs.HealthStatus == domain.HealthStatusStarting
+			if obs.ObservedImageDigest == desired.ImageDigest && acceptableHealth {
 				newDrift = domain.DriftStatusInSync
 			} else {
 				newDrift = r.driftStatusForMode(mode)

@@ -50,28 +50,34 @@ func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport,
 		return
 	}
 	h := &notificationEncryptedHandler{repo: repo, dispatcher: dispatcher}
-	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels)
-	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel)
-	h.register(transport, EncryptedOperationNotificationChannelsCreate, h.createChannel)
-	h.register(transport, EncryptedOperationNotificationChannelsUpdate, h.updateChannel)
-	h.register(transport, EncryptedOperationNotificationChannelsDelete, h.deleteChannel)
-	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel)
-	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs)
+	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels, "notifications/list")
+	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel, "notifications/get")
+	h.register(transport, EncryptedOperationNotificationChannelsCreate, h.createChannel, "notifications/new", "notifications/create")
+	h.register(transport, EncryptedOperationNotificationChannelsUpdate, h.updateChannel, "notifications/update")
+	h.register(transport, EncryptedOperationNotificationChannelsDelete, h.deleteChannel, "notifications/delete")
+	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel, "notifications/test")
+	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs, "notifications/logs")
 }
 
-func (h *notificationEncryptedHandler) register(transport *EncryptedRequestTransport, operation string, handler EncryptedRequestHandler) {
+func (h *notificationEncryptedHandler) register(transport *EncryptedRequestTransport, operation string, handler EncryptedRequestHandler, contextVMAliases ...string) {
 	transport.RegisterHandler(operation, handler)
-	transport.RegisterContextVMHandler(operation, func(ctx context.Context, request ContextVMRequest) (any, error) {
-		return handler(ctx, EncryptedRequest{
-			Event: request.Event,
-			Envelope: EncryptedRequestEnvelope{
-				Version:         ContextVMWireVersion,
-				Operation:       request.RPC.Method,
-				RequesterPubkey: request.Event.PubKey.Hex(),
-				Payload:         request.RPC.Params,
-			},
+	register := func(method string) {
+		transport.RegisterContextVMHandler(method, func(ctx context.Context, request ContextVMRequest) (any, error) {
+			return handler(ctx, EncryptedRequest{
+				Event: request.Event,
+				Envelope: EncryptedRequestEnvelope{
+					Version:         ContextVMWireVersion,
+					Operation:       request.RPC.Method,
+					RequesterPubkey: request.Event.PubKey.Hex(),
+					Payload:         request.RPC.Params,
+				},
+			})
 		})
-	})
+	}
+	register(operation)
+	for _, alias := range contextVMAliases {
+		register(alias)
+	}
 }
 
 func (h *notificationEncryptedHandler) listChannels(ctx context.Context, _ EncryptedRequest) (any, error) {

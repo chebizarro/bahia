@@ -2,17 +2,17 @@ package nostrmigration
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
-	"go/constant"
 	"go/parser"
 	"go/token"
-	"go/types"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
+	cascadia "github.com/cascadia-nips/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
 )
@@ -273,22 +273,57 @@ func parseKindsGoConstants(t *testing.T) map[string]int {
 	file, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments)
 	require.NoError(t, err)
 
-	info := &types.Info{Defs: map[*ast.Ident]types.Object{}}
-	_, err = (&types.Config{}).Check("github.com/openagentsinc/bahia/internal/kinds", fileSet, []*ast.File{file}, info)
-	require.NoError(t, err)
+	cascadiaConstants := map[string]int{
+		"CAS_AUDIT":                             cascadia.CAS_AUDIT,
+		"CAS_AGENT_HEARTBEAT":                   cascadia.CAS_AGENT_HEARTBEAT,
+		"CAS_CP_STATE":                          cascadia.CAS_CP_STATE,
+		"CAS_WORKER_AD":                         cascadia.CAS_WORKER_AD,
+		"CAS_INTENT":                            cascadia.CAS_INTENT,
+		"NIP59_GIFT_WRAP":                       cascadia.NIP59_GIFT_WRAP,
+		"NIP59_EPHEMERAL_GIFT_WRAP":             cascadia.NIP59_EPHEMERAL_GIFT_WRAP,
+		"CTXVM_SERVER_ANNOUNCEMENT":             cascadia.CTXVM_SERVER_ANNOUNCEMENT,
+		"CTXVM_TOOLS_ANNOUNCEMENT":              cascadia.CTXVM_TOOLS_ANNOUNCEMENT,
+		"CTXVM_RESOURCES_ANNOUNCEMENT":          cascadia.CTXVM_RESOURCES_ANNOUNCEMENT,
+		"CTXVM_RESOURCE_TEMPLATES_ANNOUNCEMENT": cascadia.CTXVM_RESOURCE_TEMPLATES_ANNOUNCEMENT,
+		"CTXVM_PROMPTS_ANNOUNCEMENT":            cascadia.CTXVM_PROMPTS_ANNOUNCEMENT,
+	}
 
 	out := map[string]int{}
-	for ident, obj := range info.Defs {
-		if ident == nil || strings.TrimSpace(ident.Name) == "" {
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.CONST {
 			continue
 		}
-		constObj, ok := obj.(*types.Const)
-		if !ok {
-			continue
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if strings.TrimSpace(name.Name) == "" || i >= len(valueSpec.Values) {
+					continue
+				}
+				switch expr := valueSpec.Values[i].(type) {
+				case *ast.BasicLit:
+					var value int
+					_, err := fmt.Sscanf(expr.Value, "%d", &value)
+					require.NoErrorf(t, err, "constant %s is not an integer literal", name.Name)
+					out[name.Name] = value
+				case *ast.SelectorExpr:
+					pkg, ok := expr.X.(*ast.Ident)
+					if ok && pkg.Name == "cascadia" {
+						value, ok := cascadiaConstants[expr.Sel.Name]
+						require.Truef(t, ok, "unmapped cascadia constant %s", expr.Sel.Name)
+						out[name.Name] = value
+					}
+				case *ast.Ident:
+					value, ok := out[expr.Name]
+					if ok {
+						out[name.Name] = value
+					}
+				}
+			}
 		}
-		value, exact := constant.Int64Val(constObj.Val())
-		require.Truef(t, exact, "constant %s is not an int64 event kind", ident.Name)
-		out[ident.Name] = int(value)
 	}
 	require.NotEmpty(t, out, "parsed no constants from %s", path)
 	return out

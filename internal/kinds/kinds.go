@@ -20,6 +20,8 @@
 // reusing any event kind.
 package kinds
 
+import cascadia "github.com/cascadia-nips/cascadia-go"
+
 // =============================================================================
 // DNS Control-Plane Kinds (5941-5945, 6941, 7941-7945)
 // =============================================================================
@@ -152,10 +154,10 @@ const (
 // =============================================================================
 
 const (
-	CASAudit            = 4903
+	CASAudit            = cascadia.CAS_AUDIT
 	NIP38Status         = 30315
-	AssistantTranscript = 30316
-	CASControlState     = 30900
+	AssistantTranscript = cascadia.CAS_AGENT_HEARTBEAT
+	CASControlState     = cascadia.CAS_CP_STATE
 )
 
 // =============================================================================
@@ -163,7 +165,7 @@ const (
 // =============================================================================
 
 const (
-	LoomWorkerAdvertisement = 10100
+	LoomWorkerAdvertisement = cascadia.CAS_WORKER_AD
 	LoomJobStatusUpdate     = 30100
 	LoomJobResult           = 5101
 	LoomJobCancellation     = 5102
@@ -203,14 +205,14 @@ const (
 // =============================================================================
 
 const (
-	ContextVMMessage               = 25910
-	ContextVMGiftWrap              = 1059
-	ContextVMEphemeralGiftWrap     = 21059
-	ContextVMServerAnnouncement    = 11316
-	ContextVMToolsList             = 11317
-	ContextVMResourcesList         = 11318
-	ContextVMResourceTemplatesList = 11319
-	ContextVMPromptsList           = 11320
+	ContextVMMessage               = cascadia.CAS_INTENT
+	ContextVMGiftWrap              = cascadia.NIP59_GIFT_WRAP
+	ContextVMEphemeralGiftWrap     = cascadia.NIP59_EPHEMERAL_GIFT_WRAP
+	ContextVMServerAnnouncement    = cascadia.CTXVM_SERVER_ANNOUNCEMENT
+	ContextVMToolsList             = cascadia.CTXVM_TOOLS_ANNOUNCEMENT
+	ContextVMResourcesList         = cascadia.CTXVM_RESOURCES_ANNOUNCEMENT
+	ContextVMResourceTemplatesList = cascadia.CTXVM_RESOURCE_TEMPLATES_ANNOUNCEMENT
+	ContextVMPromptsList           = cascadia.CTXVM_PROMPTS_ANNOUNCEMENT
 )
 
 // =============================================================================

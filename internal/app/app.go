@@ -1596,6 +1596,11 @@ func setupWorkerPressureSubscriptions(
 				},
 			})
 		}
+		if workerRepo != nil {
+			if err := workerRepo.Upsert(ctx, &observed.Worker); err != nil {
+				logger.Warn("persist worker telemetry observation failed", zap.String("worker_pubkey", observed.Worker.PubKey), zap.Error(err))
+			}
+		}
 		if statePublisher != nil {
 			if err := statePublisher.Publish(ctx, &observed.Worker); err != nil {
 				logger.Warn("publish worker state after telemetry observation failed", zap.String("worker_pubkey", observed.Worker.PubKey), zap.Error(err))

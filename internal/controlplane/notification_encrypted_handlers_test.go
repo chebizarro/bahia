@@ -197,6 +197,28 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 	}
 }
 
+func TestNotificationEncryptedHandlers_NotificationsNewAliasCreatesChannel(t *testing.T) {
+	repo := newFakeNotificationRepo()
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	RegisterNotificationEncryptedHandlers(transport, repo, nil)
+
+	event := makeNotificationContextVMWrappedRequest(t, "create-alias-1", "notifications/new", map[string]any{
+		"name":         "Ops Webhook",
+		"channel_type": "webhook",
+		"config":       map[string]any{"url": "https://hooks.example/ops"},
+	})
+	transport.HandleEvent(context.Background(), event)
+
+	if len(repo.channels) != 1 {
+		t.Fatalf("channels = %d, want 1", len(repo.channels))
+	}
+	channelPayload := notificationResultPayload(t, publisher.events[len(publisher.events)-1])["channel"].(map[string]any)
+	if channelPayload["name"] != "Ops Webhook" {
+		t.Fatalf("unexpected alias response: %#v", channelPayload)
+	}
+}
+
 func TestNotificationEncryptedHandlers_UpdatePreservesOmittedWebhookSecret(t *testing.T) {
 	repo := newFakeNotificationRepo()
 	channelID := uuid.New()

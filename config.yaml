@@ -31,6 +31,8 @@ loom:
   poll_interval: 10s
 
 nostr:
+  # Locked-down default: empty means the 25910 ContextVM control plane is not enabled.
+  # Deployments must inject the operator signer key through secrets/env; never commit it here.
   private_key: ""
   # Backward-compatible alias for service_relays. Do not use this as the public browser relay policy.
   relays:
@@ -44,11 +46,13 @@ nostr:
   # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
   browser_relays:
     - "ws://localhost:3000/relay"
-  # ContextVM request/reply relays. If omitted, clients may fall back to browser_relays with degraded metadata.
+  # ContextVM request/reply relays. MVP deployments must configure at least one
+  # operator-approved control-plane relay; checked-in defaults are local-only and locked down by publish_enabled=false.
   contextvm_relays:
     - "ws://localhost:3000/relay"
   # Fixed relay AUTH-unavailable behavior: exclude auth-required relays without credentials and fail if quorum is unmet.
   relay_auth_unavailable: "exclude_and_fail"
+  # Locked-down default. MVP enablement is a deploy step with a deployment-provided signer key.
   publish_enabled: false
   sidecar:
     enabled: false
@@ -67,6 +71,15 @@ reconcile:
   enabled: true
 
 runtime:
+  # Locked-down default: no production runtime endpoint aliases are shipped enabled.
+  # MVP btc-01 enablement must register a server-managed endpoint_ref such as
+  # runtime.endpoints.btc-01-docker; raw docker_host values must not be sent over Nostr.
+  # endpoints:
+  #   btc-01-docker:
+  #     docker_host: "tcp://btc-01.example.com:2376"
+  #     ca_cert_file: "/etc/bahia/docker/btc-01/ca.pem"
+  #     client_cert_file: "/etc/bahia/docker/btc-01/cert.pem"
+  #     client_key_file: "/etc/bahia/docker/btc-01/key.pem"
   # Legacy flat keys remain supported as the process-wide fallback.
   type: docker
   docker_host: "unix:///var/run/docker.sock"
@@ -98,10 +111,14 @@ log:
   format: json
 
 auth:
+  # Locked-down default. MVP deployments enable this and configure operator/agent
+  # allowlists (Biz, Stew, and the Bahia signer) outside the committed config.
   # When enabled, protected HTTP routes require NIP-98 Authorization headers.
   enabled: false
 
 adoption:
+  # Locked-down default. MVP deployments enable this only with auth.enabled=true,
+  # operator pubkey allowlists, and endpoint_ref targets such as btc-01-docker.
   # Privileged adoption scan/import routes are disabled by default.
   # To enable, set auth.enabled=true and configure at least one operator allowlist.
   enabled: false
@@ -113,6 +130,8 @@ adoption:
   allowed_emails: []
 
 direct_runtime_actions:
+  # Locked-down default. MVP deployments enable this only after btc-01 endpoint_ref
+  # registration and operator allowlist review.
   # Direct deploy/restart/stop runtime routes are disabled by default.
   # To enable, set auth.enabled=true and configure at least one operator allowlist.
   enabled: false

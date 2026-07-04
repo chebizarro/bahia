@@ -33,6 +33,7 @@ const (
 	ContextVMMethodDeploymentRunLogsGet    = "deployments/run-logs-get"
 	ContextVMMethodEnvironmentCreate       = "environment/create"
 	ContextVMMethodEnvironmentUpdate       = "environment/update"
+	ContextVMMethodEnvironmentDelete       = "environment/delete"
 
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
 )
@@ -56,6 +57,7 @@ type RegistryMutationBackend interface {
 	CreateEnvironment(ctx context.Context, env *domain.Environment) error
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
+	DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error
 }
 
 type EncryptedRouteHandlersConfig struct {
@@ -126,6 +128,7 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, h.CreateService)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentCreate, h.CreateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
+	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
 }
 
 type encryptedRouteHandler = EncryptedRequestHandler
@@ -166,6 +169,11 @@ type encryptedEnvironmentUpdatePayload struct {
 	RuntimeConfig      map[string]any  `json:"runtime_config,omitempty"`
 	DeployStrategy     string          `json:"deploy_strategy,omitempty"`
 	Protected          *bool           `json:"protected,omitempty"`
+}
+
+type encryptedEnvironmentDeletePayload struct {
+	ID    string `json:"id"`
+	Force bool   `json:"force,omitempty"`
 }
 
 func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -296,6 +304,24 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 		return nil, fmt.Errorf("failed to update environment: %w", err)
 	}
 	return map[string]any{"status": "updated", "environment": env, "environment_id": env.ID.String()}, nil
+}
+
+func (h *EncryptedRouteHandlers) DeleteEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("environment registry mutation handling is not configured")
+	}
+	var payload encryptedEnvironmentDeletePayload
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	id, err := parseEncryptedUUID(payload.ID, "environment ID")
+	if err != nil {
+		return nil, err
+	}
+	if err := h.registry.DeleteEnvironment(ctx, id, payload.Force); err != nil {
+		return nil, fmt.Errorf("failed to delete environment: %w", err)
+	}
+	return map[string]any{"status": "deleted", "environment_id": id.String()}, nil
 }
 
 func parseLoomWorkerSelector(raw json.RawMessage) (map[string]any, error) {

@@ -257,7 +257,15 @@ type MockBlossomClient struct {
 }
 
 func (m *MockBlossomClient) Download(ctx context.Context, sha256Hash string) ([]byte, error) {
-	data, ok := m.Blobs[sha256Hash]
+	key := sha256Hash
+	if strings.Contains(sha256Hash, "://") {
+		hash, err := extractBlossomHash(sha256Hash)
+		if err != nil {
+			return nil, err
+		}
+		key = hash
+	}
+	data, ok := m.Blobs[key]
 	if !ok {
 		return nil, fmt.Errorf("blob not found: %s", sha256Hash)
 	}
