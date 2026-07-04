@@ -73,6 +73,9 @@ const (
 	ContextVMMethodBackupRepositoryProbe      = "backup/repository-probe"
 	ContextVMMethodBackupRestoreApprovalAlias = "approval/backup-restore-approve"
 	ContextVMMethodMLRecipeRun                = "ml/recipe-run"
+	ContextVMMethodLoomSubmit                 = "loom/submit"
+	ContextVMMethodLoomCancel                 = "loom/cancel"
+	ContextVMLoomSchema                       = "cascadia.loom.v1"
 	ContextVMMethodApprovalApprove            = "approval/approve"
 	ContextVMMethodToolsCall                  = "tools/call"
 
