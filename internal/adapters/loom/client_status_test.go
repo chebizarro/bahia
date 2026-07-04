@@ -9,6 +9,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
@@ -345,6 +346,29 @@ func TestPollJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
 	}
 	if pool.authCalls != 1 {
 		t.Fatalf("auth calls = %d, want 1", pool.authCalls)
+	}
+}
+
+func TestSelectWorker_FailClosedOnCriteria(t *testing.T) {
+	job := JobRequest{
+		RequiredSoftware:     []string{"docker"},
+		RequiredArchitecture: "linux/amd64",
+		AllowedWorkerPubkeys: []string{"allowed"},
+	}
+	if workerMatchesJob(domain.Worker{PubKey: "other", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 0, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
+		t.Fatal("expected allowlist mismatch to fail closed")
+	}
+	if workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/arm64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 0, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
+		t.Fatal("expected architecture mismatch to fail closed")
+	}
+	if workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "bash"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 0, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
+		t.Fatal("expected software mismatch to fail closed")
+	}
+	if workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 2, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
+		t.Fatal("expected full worker to fail closed")
+	}
+	if !workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 1, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
+		t.Fatal("expected matching worker to be accepted")
 	}
 }
 

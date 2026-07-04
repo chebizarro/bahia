@@ -35,7 +35,7 @@ const (
 	KindJobRequest   = 5100  // Job request (subprocess)
 	KindJobStatus    = 30100 // Parameterized replaceable status update
 	KindJobResult    = 5101  // Final job result
-	KindJobCancelReq = 5102 // Cancellation request
+	KindJobCancelReq = 5102  // Cancellation request
 )
 
 // Nostr tag keys shared by job producers (request/cancel) and consumers
@@ -58,20 +58,23 @@ const (
 
 // JobRequest represents a deploy job request sent to Loom workers.
 type JobRequest struct {
-	ID           string            `json:"id"`
-	Type         string            `json:"type"` // "deploy", "build"
-	Image        string            `json:"image"`
-	Digest       string            `json:"digest"`
-	Environment  string            `json:"environment"`
-	Service      string            `json:"service"`
-	WorkerPubkey string            `json:"worker_pubkey,omitempty"` // target a specific worker (auto-selected if empty)
-	Cmd          string            `json:"cmd,omitempty"`           // executable (default: "bash")
-	Args         []string          `json:"args,omitempty"`          // extra args appended after generated script
-	Env          map[string]string `json:"env,omitempty"`           // additional env vars
-	Secrets      map[string]string `json:"secrets,omitempty"`       // NIP-44 encrypted secret env vars
-	Params       map[string]string `json:"params,omitempty"`
-	PaymentToken string            `json:"payment_token,omitempty"` // Cashu payment token
-	Timeout      time.Duration     `json:"timeout,omitempty"`
+	ID                   string            `json:"id"`
+	Type                 string            `json:"type"` // "deploy", "build"
+	Image                string            `json:"image"`
+	Digest               string            `json:"digest"`
+	Environment          string            `json:"environment"`
+	Service              string            `json:"service"`
+	WorkerPubkey         string            `json:"worker_pubkey,omitempty"` // target a specific worker (auto-selected if empty)
+	Cmd                  string            `json:"cmd,omitempty"`           // executable (default: "bash")
+	Args                 []string          `json:"args,omitempty"`          // extra args appended after generated script
+	Env                  map[string]string `json:"env,omitempty"`           // additional env vars
+	Secrets              map[string]string `json:"secrets,omitempty"`       // NIP-44 encrypted secret env vars
+	Params               map[string]string `json:"params,omitempty"`
+	PaymentToken         string            `json:"payment_token,omitempty"` // Cashu payment token
+	Timeout              time.Duration     `json:"timeout,omitempty"`
+	RequiredSoftware     []string          `json:"required_software,omitempty"`
+	RequiredArchitecture string            `json:"required_architecture,omitempty"`
+	AllowedWorkerPubkeys []string          `json:"allowed_worker_pubkeys,omitempty"`
 }
 
 // JobStatus represents the current status of a Loom job.
@@ -166,7 +169,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	// Auto-select worker if none specified.
 	workerPubkey := job.WorkerPubkey
 	if workerPubkey == "" && c.workerRepo != nil {
-		selected, err := c.selectWorker(ctx)
+		selected, err := c.selectWorker(ctx, job)
 		if err != nil {
 			return "", fmt.Errorf("auto-selecting worker: %w", err)
 		}
@@ -588,17 +591,57 @@ func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey 
 // ---------------------------------------------------------------------------
 
 // selectWorker picks the best available online worker from the catalog.
-// Currently selects the most recently advertised online worker.
-func (c *Client) selectWorker(ctx context.Context) (string, error) {
-	workers, err := c.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 10)
+// Selection is fail-closed: a worker must match allowlist, software,
+// architecture, scheduling state, and capacity before it can be chosen.
+func (c *Client) selectWorker(ctx context.Context, job JobRequest) (string, error) {
+	workers, err := c.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 50)
 	if err != nil {
 		return "", fmt.Errorf("listing online workers: %w", err)
 	}
 	if len(workers) == 0 {
 		return "", fmt.Errorf("no online workers available")
 	}
-	// Return the most recently advertised worker (list is ordered by last_advertisement_at DESC).
-	return workers[0].PubKey, nil
+	allowed := make(map[string]struct{}, len(job.AllowedWorkerPubkeys))
+	for _, pubkey := range job.AllowedWorkerPubkeys {
+		pubkey = strings.TrimSpace(pubkey)
+		if pubkey != "" {
+			allowed[pubkey] = struct{}{}
+		}
+	}
+	for _, worker := range workers {
+		if !workerMatchesJob(worker, job, allowed) {
+			continue
+		}
+		return worker.PubKey, nil
+	}
+	return "", fmt.Errorf("no online Loom worker matches required software/arch/allowlist/capacity")
+}
+
+func workerMatchesJob(worker domain.Worker, job JobRequest, allowed map[string]struct{}) bool {
+	if len(allowed) > 0 {
+		if _, ok := allowed[worker.PubKey]; !ok {
+			return false
+		}
+	}
+	if worker.SchedulingState != "" && worker.SchedulingState != domain.WorkerSchedulingActive {
+		return false
+	}
+	if worker.MaxConcurrentJobs > 0 && worker.CurrentQueueDepth >= worker.MaxConcurrentJobs {
+		return false
+	}
+	if job.RequiredArchitecture != "" && worker.Architecture != job.RequiredArchitecture {
+		return false
+	}
+	for _, software := range job.RequiredSoftware {
+		software = strings.TrimSpace(software)
+		if software == "" {
+			continue
+		}
+		if !worker.HasSoftware(software) {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
