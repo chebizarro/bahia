@@ -1112,6 +1112,7 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport)
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport)
+		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient)
 		if dnsOperator != nil {
 			controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator)
 		}
