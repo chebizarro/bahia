@@ -44,7 +44,6 @@ type Template struct {
 
 var defaultRelays = []string{
 	"wss://relay.sharegap.net",
-	"wss://armada.sharegap.net",
 }
 
 type cliSoulFactoryClient interface {

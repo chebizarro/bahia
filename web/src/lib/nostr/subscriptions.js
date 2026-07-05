@@ -5,7 +5,7 @@ import { validateInboundNostrEvent } from './validation.js';
 
 // Default relays - can be overridden via localStorage or connect() parameter
 const DEFAULT_RELAYS = [
-  'wss://bahia.sharegap.net/relay'
+  'wss://relay.sharegap.net'
 ];
 
 // Storage key for user-configured relays

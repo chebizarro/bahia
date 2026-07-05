@@ -18,7 +18,9 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
+	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
+	"fiatjaf.com/nostr/nip59"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -40,6 +42,9 @@ const (
 	AgentStatusActive = "active"
 	// AgentStatusSuspended is the suspended Signet agent state.
 	AgentStatusSuspended = "suspended"
+
+	signetKindContextVM = 25910
+	signetKindGiftWrap  = 1059
 )
 
 // Client communicates with Signet via NIP-46.
@@ -192,25 +197,15 @@ func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKind
 		return "", "", "", ErrNotConnected
 	}
 
-	// Call Signet's custom provision_agent RPC
-	params := map[string]interface{}{
-		"agent_id":      agentID,
-		"allowed_kinds": allowedKinds,
-	}
-	paramsJSON, _ := json.Marshal(params)
-
-	result, err := bunker.RPC(ctx, "provision_agent", []string{string(paramsJSON)})
-	if err != nil {
-		return "", "", "", fmt.Errorf("provision_agent RPC failed: %w", err)
-	}
-
-	// Parse response
 	var resp struct {
 		Pubkey    string `json:"pubkey"`
 		BunkerURI string `json:"bunker_uri"`
 	}
-	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		return "", "", "", fmt.Errorf("parse provision response: %w", err)
+	if err := c.callManagement(ctx, "agent/provision", map[string]interface{}{
+		"agent_id":      agentID,
+		"allowed_kinds": allowedKinds,
+	}, &resp); err != nil {
+		return "", "", "", fmt.Errorf("agent/provision intent failed: %w", err)
 	}
 
 	provisionedPubKey, err := nostrutil.PubKeyFromHex(resp.Pubkey)
@@ -380,15 +375,8 @@ func (c *Client) RevokeAgent(ctx context.Context, pubkey string) error {
 	}
 
 	if !mockMode {
-		// Call Signet's custom revoke_agent RPC
-		params := map[string]interface{}{
-			"pubkey": pubkey,
-		}
-		paramsJSON, _ := json.Marshal(params)
-
-		_, err := bunker.RPC(ctx, "revoke_agent", []string{string(paramsJSON)})
-		if err != nil {
-			return fmt.Errorf("revoke_agent RPC failed: %w", err)
+		if err := c.callManagement(ctx, "agent/revoke", c.managementParamsForPubkey(pubkey), nil); err != nil {
+			return fmt.Errorf("agent/revoke intent failed: %w", err)
 		}
 	}
 
@@ -427,15 +415,10 @@ func (c *Client) SuspendAgent(ctx context.Context, pubkey string) error {
 		return ErrNotConnected
 	}
 
-	// Call Signet's custom suspend_agent RPC
-	params := map[string]interface{}{
-		"pubkey": pubkey,
-	}
-	paramsJSON, _ := json.Marshal(params)
-
-	_, err := bunker.RPC(ctx, "suspend_agent", []string{string(paramsJSON)})
-	if err != nil {
-		return fmt.Errorf("suspend_agent RPC failed: %w", err)
+	params := c.managementParamsForPubkey(pubkey)
+	params["policy"] = map[string]interface{}{"status": AgentStatusSuspended}
+	if err := c.callManagement(ctx, "agent/set-policy", params, nil); err != nil {
+		return fmt.Errorf("agent/set-policy suspend intent failed: %w", err)
 	}
 
 	c.logger.Info("agent suspended", "pubkey", redactPubkey(pubkey))
@@ -468,15 +451,10 @@ func (c *Client) ResumeAgent(ctx context.Context, pubkey string) error {
 		return ErrNotConnected
 	}
 
-	// Call Signet's custom resume_agent RPC
-	params := map[string]interface{}{
-		"pubkey": pubkey,
-	}
-	paramsJSON, _ := json.Marshal(params)
-
-	_, err := bunker.RPC(ctx, "resume_agent", []string{string(paramsJSON)})
-	if err != nil {
-		return fmt.Errorf("resume_agent RPC failed: %w", err)
+	params := c.managementParamsForPubkey(pubkey)
+	params["policy"] = map[string]interface{}{"status": AgentStatusActive}
+	if err := c.callManagement(ctx, "agent/set-policy", params, nil); err != nil {
+		return fmt.Errorf("agent/set-policy resume intent failed: %w", err)
 	}
 
 	c.logger.Info("agent resumed", "pubkey", redactPubkey(pubkey))
@@ -503,22 +481,11 @@ func (c *Client) GetAgentStatus(ctx context.Context, pubkey string) (string, err
 		return "", ErrNotConnected
 	}
 
-	// Call Signet's custom get_agent_status RPC
-	params := map[string]interface{}{
-		"pubkey": pubkey,
-	}
-	paramsJSON, _ := json.Marshal(params)
-
-	result, err := bunker.RPC(ctx, "get_agent_status", []string{string(paramsJSON)})
-	if err != nil {
-		return "", fmt.Errorf("get_agent_status RPC failed: %w", err)
-	}
-
 	var resp struct {
 		Status string `json:"status"`
 	}
-	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		return "", fmt.Errorf("parse status response: %w", err)
+	if err := c.callManagement(ctx, "agent/get-status", c.managementParamsForPubkey(pubkey), &resp); err != nil {
+		return "", fmt.Errorf("agent/get-status intent failed: %w", err)
 	}
 
 	return resp.Status, nil
@@ -565,6 +532,140 @@ func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return pubkey.Hex(), nil
+}
+
+type signetJSONRPCRequest struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      string                 `json:"id"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+}
+
+type signetJSONRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      string          `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    string `json:"data,omitempty"`
+	} `json:"error,omitempty"`
+}
+
+func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
+	bunkerPubkey, relayURLs, _, err := ParseBunkerURI(c.bunkerURI)
+	if err != nil {
+		return err
+	}
+	if len(relayURLs) == 0 {
+		relayURLs = append([]string{}, c.relays...)
+	}
+	if len(relayURLs) == 0 {
+		return fmt.Errorf("signet management relays are required")
+	}
+	clientSK, err := nostr.SecretKeyFromHex(c.clientSecretKey)
+	if err != nil {
+		return fmt.Errorf("decode Signet client secret key: %w", err)
+	}
+	clientPK := clientSK.Public()
+	bunkerPK, err := nostr.PubKeyFromHex(bunkerPubkey)
+	if err != nil {
+		return fmt.Errorf("decode Signet bunker pubkey: %w", err)
+	}
+
+	requestID := nostrutil.GeneratePrivateKeyHex()[:16]
+	body, err := json.Marshal(signetJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      requestID,
+		Method:  method,
+		Params:  params,
+	})
+	if err != nil {
+		return fmt.Errorf("encode Signet management request: %w", err)
+	}
+
+	rumor := nostr.Event{
+		Kind:      signetKindContextVM,
+		Content:   string(body),
+		Tags:      nostr.Tags{nostr.Tag{"p", bunkerPK.Hex()}},
+		CreatedAt: nostr.Now(),
+		PubKey:    clientPK,
+	}
+	rumor.ID = rumor.GetID()
+	gift, err := nip59.GiftWrap(
+		rumor,
+		bunkerPK,
+		func(plaintext string) (string, error) {
+			conversationKey, err := nip44.GenerateConversationKey(bunkerPK, clientSK)
+			if err != nil {
+				return "", err
+			}
+			return nip44.Encrypt(plaintext, conversationKey)
+		},
+		func(event *nostr.Event) error { return event.Sign(clientSK) },
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("gift-wrap Signet management request: %w", err)
+	}
+
+	publishCtx, cancelPublish := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelPublish()
+	published := 0
+	var publishErr error
+	for result := range c.pool.PublishMany(publishCtx, relayURLs, gift) {
+		if result.Error != nil {
+			publishErr = result.Error
+			continue
+		}
+		published++
+	}
+	if published == 0 {
+		if publishErr != nil {
+			return fmt.Errorf("publish Signet management intent: %w", publishErr)
+		}
+		return fmt.Errorf("publish Signet management intent: no relay accepted event")
+	}
+
+	responseCtx, cancelResponse := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelResponse()
+	for relayEvent := range c.pool.SubscribeMany(responseCtx, relayURLs, nostr.Filter{
+		Kinds: []nostr.Kind{signetKindGiftWrap},
+		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
+		Since: nostr.Now() - 60,
+	}, nostr.SubscriptionOptions{Label: "signet-mgmt"}) {
+		rumor, err := nip59.GiftUnwrap(relayEvent.Event, func(otherPubkey nostr.PubKey, ciphertext string) (string, error) {
+			conversationKey, err := nip44.GenerateConversationKey(otherPubkey, clientSK)
+			if err != nil {
+				return "", err
+			}
+			return nip44.Decrypt(ciphertext, conversationKey)
+		})
+		if err != nil || rumor.PubKey != bunkerPK {
+			continue
+		}
+		var resp signetJSONRPCResponse
+		if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil || resp.ID != requestID {
+			continue
+		}
+		if resp.Error != nil {
+			return fmt.Errorf("Signet management error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+		if out == nil {
+			return nil
+		}
+		if len(resp.Result) == 0 || string(resp.Result) == "null" {
+			return nil
+		}
+		if err := json.Unmarshal(resp.Result, out); err != nil {
+			return fmt.Errorf("parse Signet management result: %w", err)
+		}
+		return nil
+	}
+	if err := responseCtx.Err(); err != nil {
+		return fmt.Errorf("await Signet management response: %w", err)
+	}
+	return fmt.Errorf("await Signet management response: subscription closed")
 }
 
 // --- NIP-98 Auth Helpers ---
@@ -670,6 +771,19 @@ func (c *Client) setMockAgentStatus(pubkey, status string) error {
 	}
 
 	return fmt.Errorf("%w: %s", ErrAgentNotFound, pubkey)
+}
+
+func (c *Client) managementParamsForPubkey(pubkey string) map[string]interface{} {
+	params := map[string]interface{}{"pubkey": pubkey}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, identity := range c.agents {
+		if identity.Pubkey == pubkey {
+			params["agent_id"] = identity.AgentID
+			return params
+		}
+	}
+	return params
 }
 
 func (c *Client) getMockAgentStatus(pubkey string) (string, error) {

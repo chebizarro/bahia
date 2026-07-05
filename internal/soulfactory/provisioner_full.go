@@ -335,7 +335,6 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	if p.nip05Manager != nil {
 		if err := p.nip05Manager.Register(ctx, soul.AgentID, soul.NostrPubkey, []string{
 			"wss://relay.sharegap.net",
-			"wss://armada.sharegap.net",
 		}); err != nil {
 			logger.Warn("NIP-05 registration failed", "error", err)
 		}
