@@ -208,9 +208,15 @@ func New(cfg *config.Config) (*App, error) {
 		nostrEventRepo = repository.NewInMemoryNostrEventRepository()
 	}
 
-	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger,
-		loom.WithWorkerRepo(workerRepo),
-	)
+	loomClientOptions := []loom.ClientOption{loom.WithWorkerRepo(workerRepo)}
+	loomCanonicalSigner, err := newLoomCanonicalProjectionSigner(ctx, cfg, relayURLs, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configuring Loom canonical projection signer: %w", err)
+	}
+	if loomCanonicalSigner != nil {
+		loomClientOptions = append(loomClientOptions, loom.WithCanonicalSigner(loomCanonicalSigner))
+	}
+	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger, loomClientOptions...)
 
 	// Image verifier: use Harbor (legacy), or the new multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
@@ -2796,6 +2802,30 @@ func assistantToolNames(server *mcp.Server) []string {
 		}
 	}
 	return names
+}
+
+func newLoomCanonicalProjectionSigner(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) (loom.CanonicalSigner, error) {
+	if cfg == nil || !cfg.Loom.CanonicalProjection.Enabled {
+		return nil, nil
+	}
+	projection := cfg.Loom.CanonicalProjection
+	if strings.TrimSpace(projection.SignetBunkerURI) != "" {
+		signetClient, err := signetAdapter.NewClient(signetAdapter.Config{
+			BunkerURI:       projection.SignetBunkerURI,
+			Relays:          relays,
+			ClientSecretKey: projection.SignetClientSecretKey,
+			AllowMock:       false,
+		}, slog.Default())
+		if err != nil {
+			return nil, fmt.Errorf("initialize Signet client: %w", err)
+		}
+		if err := signetClient.Connect(ctx); err != nil {
+			return nil, fmt.Errorf("connect Signet client: %w", err)
+		}
+		logger.Info("Loom canonical projection will use Signet/NIP-46 signer")
+		return signetClient, nil
+	}
+	return nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
 }
 
 func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) service.AssistantIdentity {

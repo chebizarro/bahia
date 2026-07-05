@@ -29,6 +29,16 @@ loom:
     - "wss://nos.lol"
   job_timeout: 30m
   poll_interval: 10s
+  canonical_projection:
+    # Disabled by default. When enabled, production signs canonical 30900 state
+    # and 4903 audit projections through Signet/NIP-46, not raw nsec material.
+    enabled: false
+    signet_bunker_uri: ""
+    signet_client_secret_key: ""
+    # Reserved for rejected legacy/dev configs; validated Bahia runtime config
+    # never enables raw-key canonical projection signing.
+    allow_raw_key_dev: false
+    raw_private_key: ""
 
 nostr:
   # Locked-down default: empty means the 25910 ContextVM control plane is not enabled.

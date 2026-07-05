@@ -371,9 +371,20 @@ type HarborConfig struct {
 
 // LoomConfig holds Loom worker integration settings.
 type LoomConfig struct {
-	Relays       []string      `koanf:"relays"`
-	JobTimeout   time.Duration `koanf:"job_timeout"`
-	PollInterval time.Duration `koanf:"poll_interval"`
+	Relays              []string                      `koanf:"relays"`
+	JobTimeout          time.Duration                 `koanf:"job_timeout"`
+	PollInterval        time.Duration                 `koanf:"poll_interval"`
+	CanonicalProjection LoomCanonicalProjectionConfig `koanf:"canonical_projection" yaml:"canonical_projection"`
+}
+
+// LoomCanonicalProjectionConfig controls projection of Loom-native status/result
+// events into canonical CAS 30900 state and 4903 audit events.
+type LoomCanonicalProjectionConfig struct {
+	Enabled               bool   `koanf:"enabled" yaml:"enabled"`
+	SignetBunkerURI       string `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetClientSecretKey string `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	AllowRawKeyDev        bool   `koanf:"allow_raw_key_dev" yaml:"allow_raw_key_dev"`
+	RawPrivateKey         string `koanf:"raw_private_key" yaml:"raw_private_key"`
 }
 
 const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
@@ -930,6 +941,9 @@ func Load(configPath string) (*Config, error) {
 		if strings.HasPrefix(key, "soul_factory_") {
 			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
 		}
+		if strings.HasPrefix(key, "loom_canonical_projection_") {
+			return "loom.canonical_projection." + strings.TrimPrefix(key, "loom_canonical_projection_")
+		}
 		if strings.HasPrefix(key, "sbom_cdxgen_") {
 			return "sbom.cdxgen." + strings.TrimPrefix(key, "sbom_cdxgen_")
 		}
@@ -1088,6 +1102,9 @@ func (c *Config) validate() error {
 	if c.Cashu.Enabled {
 		return fmt.Errorf("config validation failed: cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")
 	}
+	if err := c.validateLoom(); err != nil {
+		return err
+	}
 	if err := c.validateQdrant(); err != nil {
 		return err
 	}
@@ -1144,6 +1161,27 @@ func (c *Config) validate() error {
 	}
 	c.Auth.BootstrapOwnerPubkeys = bootstrapOwners
 
+	return nil
+}
+
+func (c *Config) validateLoom() error {
+	projection := &c.Loom.CanonicalProjection
+	projection.SignetBunkerURI = strings.TrimSpace(projection.SignetBunkerURI)
+	projection.SignetClientSecretKey = strings.TrimSpace(projection.SignetClientSecretKey)
+	projection.RawPrivateKey = strings.TrimSpace(projection.RawPrivateKey)
+
+	if projection.AllowRawKeyDev {
+		return fmt.Errorf("config validation failed: loom.canonical_projection.allow_raw_key_dev is unavailable in validated runtime configuration; use Signet/NIP-46 projection signing")
+	}
+	if projection.RawPrivateKey != "" {
+		return fmt.Errorf("config validation failed: loom.canonical_projection.raw_private_key is unavailable in validated runtime configuration; use Signet/NIP-46 projection signing")
+	}
+	if !projection.Enabled {
+		return nil
+	}
+	if projection.SignetBunkerURI == "" {
+		return fmt.Errorf("config validation failed: loom.canonical_projection.signet_bunker_uri is required when loom.canonical_projection.enabled=true")
+	}
 	return nil
 }
 

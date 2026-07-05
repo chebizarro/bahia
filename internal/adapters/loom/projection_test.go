@@ -9,6 +9,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	cascadia "git.sharegap.net/cascadia/cascadia-nips/generated/go"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -19,6 +20,18 @@ type recordingCanonicalPublisher struct {
 func (p *recordingCanonicalPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
 	p.events = append(p.events, event)
 	return 1, nil
+}
+
+type recordingLoomPool struct {
+	recordingCanonicalPublisher
+}
+
+func (p *recordingLoomPool) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrAdapter.MergedSubscription, error) {
+	return nil, errors.New("unused in canonical projection tests")
+}
+
+func (p *recordingLoomPool) AuthenticateRelay(context.Context, string) error {
+	return nil
 }
 
 type recordingCanonicalSigner struct {
@@ -99,6 +112,24 @@ func tagValueForTest(tags nostr.Tags, key string) string {
 		}
 	}
 	return ""
+}
+
+func TestClientProjectCanonicalJobStateUsesConfiguredSigner(t *testing.T) {
+	pool := &recordingLoomPool{}
+	signer := &recordingCanonicalSigner{secret: nostrutil.GeneratePrivateKeyHex()}
+	client := &Client{pool: pool}
+	WithCanonicalSigner(signer)(client)
+
+	err := client.ProjectCanonicalJobState(context.Background(), &JobStatus{JobID: "job-client", Status: "running"}, "loom.status")
+	if err != nil {
+		t.Fatalf("ProjectCanonicalJobState() error = %v", err)
+	}
+	if signer.calls != 2 {
+		t.Fatalf("signer calls = %d, want 2", signer.calls)
+	}
+	if len(pool.events) != 2 {
+		t.Fatalf("published events = %d, want 2", len(pool.events))
+	}
 }
 
 func TestProjectCanonicalJobStateWithSignerRejectsMissingSigner(t *testing.T) {

@@ -81,6 +81,97 @@ func TestDefaults(t *testing.T) {
 	if cfg.WorkerPressure.MemoryWarningMinGB != 4 || cfg.WorkerPressure.DiskWarningMinGB != 40 || cfg.WorkerPressure.VRAMWarningMinGB != 4 {
 		t.Errorf("worker pressure defaults = %#v", cfg.WorkerPressure)
 	}
+	if cfg.Loom.CanonicalProjection.Enabled {
+		t.Error("expected Loom canonical projection disabled by default")
+	}
+	if cfg.Loom.CanonicalProjection.AllowRawKeyDev {
+		t.Error("expected Loom raw-key projection compatibility disabled by default")
+	}
+}
+
+func TestLoadLoomCanonicalProjectionConfigFromYAMLAndEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`mode: full
+loom:
+  canonical_projection:
+    enabled: true
+    signet_bunker_uri: " bunker://` + strings.Repeat("a", 64) + `?relay=wss://relay.example "
+    signet_client_secret_key: "` + strings.Repeat("b", 64) + `"
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	t.Setenv("BAHIA_LOOM_CANONICAL_PROJECTION_SIGNET_CLIENT_SECRET_KEY", strings.Repeat("c", 64))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	projection := cfg.Loom.CanonicalProjection
+	if !projection.Enabled {
+		t.Fatal("loom.canonical_projection.enabled = false")
+	}
+	if projection.SignetBunkerURI != "bunker://"+strings.Repeat("a", 64)+"?relay=wss://relay.example" {
+		t.Fatalf("signet_bunker_uri = %q", projection.SignetBunkerURI)
+	}
+	if projection.SignetClientSecretKey != strings.Repeat("c", 64) {
+		t.Fatalf("signet_client_secret_key = %q", projection.SignetClientSecretKey)
+	}
+}
+
+func TestValidateLoomCanonicalProjectionRawKeyGate(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "enabled requires signet by default",
+			mutate: func(cfg *Config) {
+				cfg.Loom.CanonicalProjection.Enabled = true
+			},
+			wantErr: "loom.canonical_projection.signet_bunker_uri is required",
+		},
+		{
+			name: "raw private key is unavailable in runtime config",
+			mutate: func(cfg *Config) {
+				cfg.Loom.CanonicalProjection.RawPrivateKey = strings.Repeat("d", 64)
+			},
+			wantErr: "raw_private_key is unavailable in validated runtime configuration",
+		},
+		{
+			name: "allow raw dev flag is unavailable in runtime config",
+			mutate: func(cfg *Config) {
+				cfg.Mode = "degraded"
+				cfg.Loom.CanonicalProjection.AllowRawKeyDev = true
+			},
+			wantErr: "allow_raw_key_dev is unavailable in validated runtime configuration",
+		},
+		{
+			name: "signet enabled is accepted in full mode",
+			mutate: func(cfg *Config) {
+				cfg.Loom.CanonicalProjection.Enabled = true
+				cfg.Loom.CanonicalProjection.SignetBunkerURI = "bunker://" + strings.Repeat("e", 64)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Defaults()
+			tt.mutate(cfg)
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
 }
 
 func TestAssistantLLMStreamingLoadsFromYAMLAndEnv(t *testing.T) {

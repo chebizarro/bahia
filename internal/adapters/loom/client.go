@@ -104,10 +104,11 @@ type loomRelayPool interface {
 }
 
 type Client struct {
-	pool         loomRelayPool
-	workerRepo   repository.WorkerRepository
-	privateKey   string
-	clientPubkey string
+	pool            loomRelayPool
+	workerRepo      repository.WorkerRepository
+	privateKey      string
+	clientPubkey    string
+	canonicalSigner CanonicalSigner
 
 	jobsMu           sync.RWMutex
 	submittedWorkers map[string]string
@@ -157,6 +158,31 @@ type ClientOption func(*Client)
 // WithWorkerRepo enables worker auto-selection from the catalog.
 func WithWorkerRepo(repo repository.WorkerRepository) ClientOption {
 	return func(c *Client) { c.workerRepo = repo }
+}
+
+// WithCanonicalSigner injects the signer used for canonical 30900 state and
+// 4903 audit projections. Production callers should pass the configured
+// Signet/NIP-46 client; raw-key signers are development-only compatibility.
+func WithCanonicalSigner(signer CanonicalSigner) ClientOption {
+	return func(c *Client) { c.canonicalSigner = signer }
+}
+
+// ProjectCanonicalStatus publishes the canonical projection for a Loom status
+// event through the configured signer.
+func (c *Client) ProjectCanonicalStatus(ctx context.Context, ev *nostr.Event) error {
+	return ProjectCanonicalStatusWithSigner(ctx, c.pool, c.canonicalSigner, ev)
+}
+
+// ProjectCanonicalResult publishes the canonical projection for a Loom result
+// event through the configured signer.
+func (c *Client) ProjectCanonicalResult(ctx context.Context, ev *nostr.Event) error {
+	return ProjectCanonicalResultWithSigner(ctx, c.pool, c.canonicalSigner, ev)
+}
+
+// ProjectCanonicalJobState publishes canonical state/audit for an already parsed
+// Loom job status through the configured signer.
+func (c *Client) ProjectCanonicalJobState(ctx context.Context, status *JobStatus, auditType string) error {
+	return ProjectCanonicalJobStateWithSigner(ctx, c.pool, c.canonicalSigner, status, auditType)
 }
 
 // SubmitJob submits a deployment job to Loom workers via a Kind 5100 job request event.

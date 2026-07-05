@@ -19,7 +19,17 @@
     {
       "id": "AC4",
       "statement": "Raw-key compatibility remains isolated behind an explicit adapter for development/migration callers.",
-      "verification": "Legacy ProjectCanonical* functions delegate through HexKeyCanonicalSigner."
+      "verification": "Legacy ProjectCanonical* functions delegate through HexKeyCanonicalSigner; validated runtime config rejects raw projection keys and allow_raw_key_dev so app projection signing uses Signet only."
+    },
+    {
+      "id": "AC5",
+      "statement": "When Loom canonical projection is enabled in production/default full mode, configuration requires Signet/NIP-46 bunker signing.",
+      "verification": "TestValidateLoomCanonicalProjectionRawKeyGate covers Signet-required behavior and rejects raw-key projection config in validated runtime configuration."
+    },
+    {
+      "id": "AC6",
+      "statement": "App startup injects the configured canonical signer into Loom client projection methods.",
+      "verification": "newLoomCanonicalProjectionSigner constructs Signet signer for configured projection and rejects enabled projection without Signet; TestClientProjectCanonicalJobStateUsesConfiguredSigner proves the Loom client uses its injected signer."
     }
   ]
 }

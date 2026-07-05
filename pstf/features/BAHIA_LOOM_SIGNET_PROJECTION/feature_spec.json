@@ -1,16 +1,21 @@
 {
   "feature_id": "BAHIA_LOOM_SIGNET_PROJECTION",
-  "title": "Signet-compatible signer path for Loom canonical projections",
-  "intent": "Bahia Loom canonical projection must not require raw private key signing in the projection core. It should accept a signer interface compatible with the existing Signet/NIP-46 client while preserving explicit raw-key compatibility for development and migration callers.",
+  "title": "Signet-backed signer path for Loom canonical projections",
+  "intent": "Bahia Loom canonical projection must not require raw private key signing in production projection paths. Projection signing should use a Signet/NIP-46-compatible CanonicalSigner, and raw-key compatibility must remain explicitly dev-gated.",
   "scope": [
     "internal/adapters/loom/projection.go",
-    "internal/adapters/loom/projection_test.go"
+    "internal/adapters/loom/client.go",
+    "internal/adapters/loom/projection_test.go",
+    "internal/config/config.go",
+    "internal/config/config_test.go",
+    "internal/app/app.go",
+    "internal/app/loom_canonical_projection_test.go",
+    "config.yaml"
   ],
-  "observed_behavior_before": "ProjectCanonicalStatus, ProjectCanonicalResult, and ProjectCanonicalJobState accepted only a raw private key string and directly called nostrutil.SignEventWithHexKey for both 30900 state and 4903 audit events.",
-  "intended_behavior": "Projection signing goes through CanonicalSigner.Sign(ctx, event). Existing Signet client shape satisfies this interface. Raw private key signing is isolated behind HexKeyCanonicalSigner compatibility wrappers. Missing or failing signers fail explicitly before publish.",
+  "observed_behavior_before": "ProjectCanonicalStatus, ProjectCanonicalResult, and ProjectCanonicalJobState originally accepted only a raw private key string. The signer-first projection API existed, but app/config did not construct or inject a Signet signer for Loom canonical projection and raw-key projection compatibility was not config-gated.",
+  "intended_behavior": "Projection signing goes through CanonicalSigner.Sign(ctx, event). App startup constructs a configured Signet/NIP-46 client for enabled Loom canonical projection and injects it into the Loom client. Raw private key projection signing is isolated behind HexKeyCanonicalSigner for direct development/migration API callers and is rejected by validated Bahia runtime configuration.",
   "out_of_scope": [
-    "Rewiring every production caller to inject Signet client configuration",
     "Changing Loom event kinds or relay publish semantics",
-    "Removing raw-key compatibility wrappers before all callers migrate"
+    "Removing raw-key compatibility wrappers used by development/migration callers"
   ]
 }
