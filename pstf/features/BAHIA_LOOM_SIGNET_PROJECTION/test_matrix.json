@@ -1,0 +1,11 @@
+{
+  "feature_id": "BAHIA_LOOM_SIGNET_PROJECTION",
+  "tests": [
+    {
+      "command": "go test ./internal/adapters/loom",
+      "covers": ["AC1", "AC2", "AC3", "AC4"],
+      "status": "passed",
+      "notes": "Focused package test validates signer-first projection path and existing Loom adapter tests."
+    }
+  ]
+}

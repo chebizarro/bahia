@@ -24,9 +24,35 @@ type CanonicalPublisher interface {
 	Publish(context.Context, nostr.Event) (int, error)
 }
 
+// CanonicalSigner is satisfied by Signet/NIP-46 clients and by the explicit
+// raw-key compatibility adapter below.
+type CanonicalSigner interface {
+	Sign(context.Context, *nostr.Event) error
+}
+
+// HexKeyCanonicalSigner adapts a configured hex private key to CanonicalSigner.
+// It is intended for development and migration compatibility; production callers
+// should pass a Signet/NIP-46 signer instead.
+type HexKeyCanonicalSigner struct {
+	PrivateKey string
+}
+
+func (s HexKeyCanonicalSigner) Sign(_ context.Context, event *nostr.Event) error {
+	if strings.TrimSpace(s.PrivateKey) == "" {
+		return fmt.Errorf("canonical Loom projection signer is not configured")
+	}
+	return nostrutil.SignEventWithHexKey(event, s.PrivateKey)
+}
+
 // ProjectCanonicalStatus maps a native Loom kind 30100 status event to Bahia's
 // canonical 30900 loom-job:<id> state plus a 4903 audit fact.
 func ProjectCanonicalStatus(ctx context.Context, publisher CanonicalPublisher, privateKey string, ev *nostr.Event) error {
+	return ProjectCanonicalStatusWithSigner(ctx, publisher, HexKeyCanonicalSigner{PrivateKey: privateKey}, ev)
+}
+
+// ProjectCanonicalStatusWithSigner maps a native Loom kind 30100 status event to
+// canonical state/audit events signed by the supplied Signet-compatible signer.
+func ProjectCanonicalStatusWithSigner(ctx context.Context, publisher CanonicalPublisher, signer CanonicalSigner, ev *nostr.Event) error {
 	if ev == nil {
 		return fmt.Errorf("loom status event is nil")
 	}
@@ -48,12 +74,18 @@ func ProjectCanonicalStatus(ctx context.Context, publisher CanonicalPublisher, p
 			status.Duration = &seconds
 		}
 	}
-	return ProjectCanonicalJobState(ctx, publisher, privateKey, status, "loom.status")
+	return ProjectCanonicalJobStateWithSigner(ctx, publisher, signer, status, "loom.status")
 }
 
 // ProjectCanonicalResult maps a native Loom kind 5101 result event to Bahia's
 // canonical 30900 loom-job:<id> state plus a 4903 audit fact.
 func ProjectCanonicalResult(ctx context.Context, publisher CanonicalPublisher, privateKey string, ev *nostr.Event) error {
+	return ProjectCanonicalResultWithSigner(ctx, publisher, HexKeyCanonicalSigner{PrivateKey: privateKey}, ev)
+}
+
+// ProjectCanonicalResultWithSigner maps a native Loom kind 5101 result event to
+// canonical state/audit events signed by the supplied Signet-compatible signer.
+func ProjectCanonicalResultWithSigner(ctx context.Context, publisher CanonicalPublisher, signer CanonicalSigner, ev *nostr.Event) error {
 	if ev == nil {
 		return fmt.Errorf("loom result event is nil")
 	}
@@ -61,17 +93,23 @@ func ProjectCanonicalResult(ctx context.Context, publisher CanonicalPublisher, p
 	if jobID == "" {
 		return fmt.Errorf("loom result event missing job id")
 	}
-	return ProjectCanonicalJobState(ctx, publisher, privateKey, parseJobResult(ev, jobID), "loom.result")
+	return ProjectCanonicalJobStateWithSigner(ctx, publisher, signer, parseJobResult(ev, jobID), "loom.result")
 }
 
 // ProjectCanonicalJobState publishes a replaceable 30900 state event with d-tag
-// loom-job:<id> and an append-only 4903 audit event. It is intentionally housed
-// in the adapter package so it can later move to cascadia-go/loom unchanged.
+// loom-job:<id> and an append-only 4903 audit event using the raw-key
+// compatibility adapter.
 func ProjectCanonicalJobState(ctx context.Context, publisher CanonicalPublisher, privateKey string, status *JobStatus, auditType string) error {
+	return ProjectCanonicalJobStateWithSigner(ctx, publisher, HexKeyCanonicalSigner{PrivateKey: privateKey}, status, auditType)
+}
+
+// ProjectCanonicalJobStateWithSigner publishes canonical Loom state/audit events
+// using a Signet-compatible signer.
+func ProjectCanonicalJobStateWithSigner(ctx context.Context, publisher CanonicalPublisher, signer CanonicalSigner, status *JobStatus, auditType string) error {
 	if publisher == nil {
 		return fmt.Errorf("canonical Loom publisher is not configured")
 	}
-	if strings.TrimSpace(privateKey) == "" {
+	if signer == nil {
 		return fmt.Errorf("canonical Loom projection signer is not configured")
 	}
 	if status == nil || strings.TrimSpace(status.JobID) == "" {
@@ -109,7 +147,7 @@ func ProjectCanonicalJobState(ctx context.Context, publisher CanonicalPublisher,
 		stateTags = append(stateTags, nostr.Tag{"worker", status.WorkerPubkey})
 	}
 	stateEvent := nostr.Event{Kind: nostr.Kind(cascadia.CAS_CP_STATE), CreatedAt: nostr.Now(), Tags: stateTags, Content: string(stateJSON)}
-	if err := nostrutil.SignEventWithHexKey(&stateEvent, privateKey); err != nil {
+	if err := signer.Sign(ctx, &stateEvent); err != nil {
 		return fmt.Errorf("sign Loom canonical state: %w", err)
 	}
 	if n, err := publisher.Publish(ctx, stateEvent); err != nil {
@@ -121,7 +159,7 @@ func ProjectCanonicalJobState(ctx context.Context, publisher CanonicalPublisher,
 	audit := map[string]any{"schema": "bahia.audit.v1", "type": auditType, "domain": CanonicalLoomDomain, "entity": CanonicalLoomEntity, "job_id": status.JobID, "status": status.Status, "state_d_tag": dTag, "recorded_at": now.Format(time.RFC3339Nano)}
 	auditJSON, _ := json.Marshal(audit)
 	auditEvent := nostr.Event{Kind: nostr.Kind(cascadia.CAS_AUDIT), CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", CanonicalLoomDomain}, {"entity", CanonicalLoomEntity}, {"type", auditType}, {"job", status.JobID}, {"state", dTag}, {"schema", "bahia.audit.v1"}}, Content: string(auditJSON)}
-	if err := nostrutil.SignEventWithHexKey(&auditEvent, privateKey); err != nil {
+	if err := signer.Sign(ctx, &auditEvent); err != nil {
 		return fmt.Errorf("sign Loom canonical audit: %w", err)
 	}
 	if n, err := publisher.Publish(ctx, auditEvent); err != nil {

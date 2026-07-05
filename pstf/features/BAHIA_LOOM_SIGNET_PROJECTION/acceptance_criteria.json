@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_LOOM_SIGNET_PROJECTION",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Loom canonical projection exposes signer-first functions that accept a Signet-compatible Sign(ctx, *nostr.Event) signer.",
+      "verification": "Compile-time use in internal/adapters/loom/projection.go and unit test TestProjectCanonicalJobStateWithSignerPublishesStateAndAudit."
+    },
+    {
+      "id": "AC2",
+      "statement": "State and audit events are signed through the supplied signer before publish.",
+      "verification": "Unit test asserts two signer calls, signed event IDs/signatures, and two published events."
+    },
+    {
+      "id": "AC3",
+      "statement": "Missing or failing signers fail explicitly and do not silently fall back to raw-key signing.",
+      "verification": "Unit tests cover nil signer and propagated signer errors."
+    },
+    {
+      "id": "AC4",
+      "statement": "Raw-key compatibility remains isolated behind an explicit adapter for development/migration callers.",
+      "verification": "Legacy ProjectCanonical* functions delegate through HexKeyCanonicalSigner."
+    }
+  ]
+}
