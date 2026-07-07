@@ -11,7 +11,30 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 )
+
+func TestCascadiaGeneratedKindAliasesStayCanonical(t *testing.T) {
+	if CASAudit != cascadia.CAS_AUDIT {
+		t.Fatalf("CASAudit = %d, want cascadia.CAS_AUDIT %d", CASAudit, cascadia.CAS_AUDIT)
+	}
+	if CASAudit != 4903 {
+		t.Fatalf("CASAudit = %d, want 4903", CASAudit)
+	}
+	if ContextVMMessage != cascadia.CAS_INTENT {
+		t.Fatalf("ContextVMMessage = %d, want cascadia.CAS_INTENT %d", ContextVMMessage, cascadia.CAS_INTENT)
+	}
+	if ContextVMMessage != 25910 {
+		t.Fatalf("ContextVMMessage = %d, want 25910", ContextVMMessage)
+	}
+	if SoulFactoryRuntimeCapability != cascadia.CAS_AGENT_CAPABILITY {
+		t.Fatalf("SoulFactoryRuntimeCapability = %d, want cascadia.CAS_AGENT_CAPABILITY %d", SoulFactoryRuntimeCapability, cascadia.CAS_AGENT_CAPABILITY)
+	}
+	if SoulFactoryRuntimeCapability != 30317 {
+		t.Fatalf("SoulFactoryRuntimeCapability = %d, want 30317", SoulFactoryRuntimeCapability)
+	}
+}
 
 func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 	repo := repositoryRoot(t)

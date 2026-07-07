@@ -276,6 +276,7 @@ func parseKindsGoConstants(t *testing.T) map[string]int {
 	cascadiaConstants := map[string]int{
 		"CAS_AUDIT":                             cascadia.CAS_AUDIT,
 		"CAS_AGENT_HEARTBEAT":                   cascadia.CAS_AGENT_HEARTBEAT,
+		"CAS_AGENT_CAPABILITY":                  cascadia.CAS_AGENT_CAPABILITY,
 		"CAS_CP_STATE":                          cascadia.CAS_CP_STATE,
 		"CAS_WORKER_AD":                         cascadia.CAS_WORKER_AD,
 		"CAS_INTENT":                            cascadia.CAS_INTENT,

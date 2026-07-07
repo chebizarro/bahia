@@ -192,7 +192,7 @@ const (
 	SoulFactoryProvisioningRequest = 5950
 	SoulFactoryProvisioningStatus  = 6950
 	SoulFactoryProvisioningResult  = 7950
-	SoulFactoryRuntimeCapability   = 30317
+	SoulFactoryRuntimeCapability   = cascadia.CAS_AGENT_CAPABILITY
 	SoulFactoryRuntimeControl      = 38384
 	SoulFactoryRuntimeResult       = 38386
 	SoulFactoryTemplate            = 31950

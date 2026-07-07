@@ -251,6 +251,30 @@ PSTF defect closeout:
 
 - `SFOM-D-001` moved to `resolved` with verification notes for Bead `bahia-j28b`.
 
+## M4 provisioning proof acceptance verification — 2026-07-07
+
+Scope for Bead `bahia-o9xtp`:
+
+- Verified the code-side SF-AC1 mint mechanism against `fleet-planning/docs/execution/pstf-acceptance.md` and the Soul Factory MVP plan.
+- Code path: `internal/app/soulfactory.go` wires the enabled app runtime to a real Signet client with `AllowMock: false`, `NewFullProvisioner`, and the OpenClaw runtime adapter.
+- Signet identity: `internal/adapters/signet/client.go` provisions agents via ContextVM kind `25910` (`cascadia.CAS_INTENT`) method `agent/provision` and records only `{pubkey, npub, bunker_uri}` on `AgentSoul`; no production `nsec` is stored on the soul or generated workspace config.
+- Eight-step provisioner: `internal/soulfactory/provisioner_full.go` runs generate → Signet → avatar → kind:0 profile → Qdrant → agent-memory → workspace → deploy/finalize. Avatar, Qdrant, agent-memory, Blossom, NIP-05, and workspace paths are optional and record skipped/failed non-fatal steps where configured as enrichment, while Signet/profile/runtime publish failures fail the provisioning path.
+- Runtime bind: when the resolved draft/runtime has a target, step 8 calls `executeRuntimeProvision`, which uses the runtime adapter to discover trusted `30317`, publish signed `38384`, require correlated `38386`, and apply runtime fields before final read-model publication.
+- Bahia registration: step 8 calls `BahiaIntegration.RegisterSoulAsService`, optional initial deployment intent from real runtime artifact metadata, and status sync before final `31951` publication.
+- Active soul publication: final authoritative `31951` is published only after immediately-known runtime and Bahia fields are populated; runtime failure coverage proves no final `31951`/success `7950` is emitted on bind failure.
+- Capability advertisement: `cmd/openclaw-soulfactory-sidecar` publishes `30317` capabilities with `schema=soulfactory-runtime-capability/v1`, `control_schema=soulfactory-runtime-control/v1`, runtime, methods, controller pubkeys, and relay hints; the runbook marks the live `max` sidecar + `relay.sharegap.net` verification as infra/operator work.
+- Canonical kind guardrails: `git.sharegap.net/cascadia/cascadia-go v0.2.1` is in `go.mod`; `internal/adapters/signet` uses `cascadia.CAS_INTENT`; `internal/kinds.CASAudit` uses `cascadia.CAS_AUDIT`; SoulFactory runtime capability constants now use `cascadia.CAS_AGENT_CAPABILITY` instead of raw `30317`. Added `TestCascadiaGeneratedKindAliasesStayCanonical` to catch `CAS_AUDIT`→`CAS_INTENT` alias regressions and `30317` raw/incorrect drift.
+- Memory step-6 disposition: the Bahia typed client calls `agent_register` + `memory_add`, but the fp-31 Go `agent-memory-mcp` service exposes `memory_task_start`, `memory_event`, `memory_task_complete`, `memory_search`, `memory_reflect`, and `memory_artifact` with D4 fail-closed gating. The seed endpoint is therefore not wire-compatible yet; app startup intentionally remains skip-clean with empty `agentmemory.Config{}`. Follow-up tracked as `bahia-lsxe8`.
+- Live e2e disposition: not faked in code verification. `docs/soul-factory-sidecar-runbook.md` remains the deploy-verification path for sidecar-on-`max`, real container start, and `31951` + `30317` on `relay.sharegap.net`.
+
+Focused verification commands for this pass:
+
+```text
+go test ./internal/kinds ./internal/domain ./internal/adapters/signet ./internal/soulfactory ./internal/app
+GOPRIVATE=git.sharegap.net/* go build ./...
+GOPRIVATE=git.sharegap.net/* go test ./...
+```
+
 ## Result
 
-Verified for Items 1, 2, 3, 4, and Bead bahia-j28b.
+Verified for Items 1, 2, 3, 4, Bead bahia-j28b, and the M4 code-side provisioning proof pass (`bahia-o9xtp`). Live sidecar-on-`max` relay verification remains infra/operator verification.

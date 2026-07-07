@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 )
 
@@ -24,7 +25,7 @@ const (
 	KindSoulAction          = 1950
 
 	// Runtime-facing SoulFactory control kinds (Swarmstr/Metiq-compatible aliases).
-	KindRuntimeCapability     = 30317
+	KindRuntimeCapability     = cascadia.CAS_AGENT_CAPABILITY
 	KindRuntimeControlRequest = 38384
 	KindRuntimeControlResult  = 38386
 
