@@ -91,7 +91,6 @@ func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing
 	assertFilterHasKinds(t, filter, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap)
 	assertFilterMissingKinds(t, filter,
 		nostr.KindCASControlState,
-		nostr.KindCASAudit,
 		nostr.KindNIP38Status,
 		nostr.KindHeartbeatObservation,
 		KindDeployRequest,

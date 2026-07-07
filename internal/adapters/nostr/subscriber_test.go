@@ -142,9 +142,7 @@ func (r *memoryNostrEventRepo) latestCreatedAt(kinds []int, authors []string) *t
 func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.T) {
 	expected := []int{
 		KindCASControlState,
-		KindCASAudit,
 		KindNIP38Status,
-		kinds.ContextVMServerAnnouncement,
 		kinds.ContextVMToolsList,
 		kinds.ContextVMResourcesList,
 		kinds.ContextVMResourceTemplatesList,

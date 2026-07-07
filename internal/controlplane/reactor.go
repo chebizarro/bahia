@@ -2171,12 +2171,10 @@ func canonicalReactorSubscriptionKinds() []int {
 func canonicalRuntimeReplayKinds() []int {
 	return []int{
 		nostrpool.KindCASControlState,
-		nostrpool.KindCASAudit,
 		nostrpool.KindNIP38Status,
 		kinds.ContextVMMessage,
 		kinds.ContextVMGiftWrap,
 		kinds.ContextVMEphemeralGiftWrap,
-		kinds.ContextVMServerAnnouncement,
 		kinds.ContextVMToolsList,
 		kinds.ContextVMResourcesList,
 		kinds.ContextVMResourceTemplatesList,

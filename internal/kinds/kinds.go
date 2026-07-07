@@ -154,7 +154,7 @@ const (
 // =============================================================================
 
 const (
-	CASAudit            = cascadia.CAS_AUDIT
+	CASAudit            = cascadia.CAS_INTENT
 	NIP38Status         = 30315
 	AssistantTranscript = cascadia.CAS_AGENT_HEARTBEAT
 	CASControlState     = cascadia.CAS_CP_STATE

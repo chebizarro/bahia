@@ -24,9 +24,7 @@ import (
 var DefaultInboundKinds = []int{
 	// Canonical Bahia observables.
 	KindCASControlState,
-	KindCASAudit,
 	KindNIP38Status,
-	kinds.ContextVMServerAnnouncement,
 	kinds.ContextVMToolsList,
 	kinds.ContextVMResourcesList,
 	kinds.ContextVMResourceTemplatesList,

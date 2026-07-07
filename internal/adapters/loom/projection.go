@@ -158,7 +158,7 @@ func ProjectCanonicalJobStateWithSigner(ctx context.Context, publisher Canonical
 
 	audit := map[string]any{"schema": "bahia.audit.v1", "type": auditType, "domain": CanonicalLoomDomain, "entity": CanonicalLoomEntity, "job_id": status.JobID, "status": status.Status, "state_d_tag": dTag, "recorded_at": now.Format(time.RFC3339Nano)}
 	auditJSON, _ := json.Marshal(audit)
-	auditEvent := nostr.Event{Kind: nostr.Kind(cascadia.CAS_AUDIT), CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", CanonicalLoomDomain}, {"entity", CanonicalLoomEntity}, {"type", auditType}, {"job", status.JobID}, {"state", dTag}, {"schema", "bahia.audit.v1"}}, Content: string(auditJSON)}
+	auditEvent := nostr.Event{Kind: nostr.Kind(cascadia.CAS_INTENT), CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", CanonicalLoomDomain}, {"entity", CanonicalLoomEntity}, {"type", auditType}, {"job", status.JobID}, {"state", dTag}, {"schema", "bahia.audit.v1"}}, Content: string(auditJSON)}
 	if err := signer.Sign(ctx, &auditEvent); err != nil {
 		return fmt.Errorf("sign Loom canonical audit: %w", err)
 	}

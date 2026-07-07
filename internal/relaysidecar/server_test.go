@@ -129,7 +129,7 @@ func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testin
 	}
 
 	canonicalFilter := nostr.Filter{Kinds: []nostr.Kind{
-		nostr.Kind(kinds.NIP38Status), nostr.Kind(kinds.AssistantTranscript), nostr.Kind(kinds.CASControlState), nostr.Kind(kinds.CASAudit),
+		nostr.Kind(kinds.NIP38Status), nostr.Kind(kinds.AssistantTranscript), nostr.Kind(kinds.CASControlState),
 		nostr.Kind(kinds.HeartbeatObservation),
 		nostr.Kind(kinds.ContinuityStatus),
 		nostr.Kind(kinds.DegradedModeActivation),
