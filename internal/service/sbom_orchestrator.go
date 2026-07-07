@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -22,7 +23,7 @@ import (
 
 const (
 	KindSBOMStatus = 30315
-	KindSBOMAudit  = 4903
+	KindSBOMAudit  = cascadia.CAS_AUDIT
 )
 
 type SBOMVerifiedPublisher interface {

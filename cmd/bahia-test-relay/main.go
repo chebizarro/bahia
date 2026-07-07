@@ -14,6 +14,7 @@ import (
 	"fiatjaf.com/nostr/eventstore/slicestore"
 	"fiatjaf.com/nostr/khatru"
 	"fiatjaf.com/nostr/nip44"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 )
 
 const serviceSecretHex = "1111111111111111111111111111111111111111111111111111111111111111"
@@ -21,7 +22,7 @@ const workerSecretHex = "2222222222222222222222222222222222222222222222222222222
 const operatorSecretHex = "3333333333333333333333333333333333333333333333333333333333333333"
 
 const (
-	kindAudit                   = 4903
+	kindAudit                   = cascadia.CAS_AUDIT
 	kindNIP59GiftWrap           = 1059
 	kindContextVMMessage        = 25910
 	kindNIP38Status             = 30315

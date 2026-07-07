@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -18,7 +19,7 @@ const (
 	CanonicalNIP90Feedback         = 7000
 	legacyHeartbeatObservation     = 30350
 	CanonicalCASCPState            = 30900
-	CanonicalCASAudit              = 4903
+	CanonicalCASAudit              = cascadia.CAS_AUDIT
 	CanonicalContextVMDiscovery    = 11316
 	CanonicalContextVMTools        = 11317
 	CanonicalContextVMResources    = 11318

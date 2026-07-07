@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	securityadapter "github.com/openagentsinc/bahia/internal/adapters/security"
@@ -27,7 +28,7 @@ const (
 	KindSecurityStatus  = 30315
 	KindSecuritySummary = 30900
 	KindSecurityFinding = 30078
-	KindSecurityAudit   = 4903
+	KindSecurityAudit   = cascadia.CAS_AUDIT
 
 	SecurityStatusSchema        = "bahia.status.security-scan.v1"
 	SecurityScanSummarySchema   = "bahia.security.scan-summary.v1"
