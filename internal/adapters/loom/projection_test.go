@@ -94,8 +94,11 @@ func TestProjectCanonicalJobStateWithSignerPublishesStateAndAudit(t *testing.T) 
 	}
 
 	audit := publisher.events[1]
-	if audit.Kind != nostr.Kind(cascadia.CAS_INTENT) {
-		t.Fatalf("audit kind = %d, want %d", audit.Kind, cascadia.CAS_INTENT)
+	if cascadia.CAS_AUDIT != 4903 {
+		t.Fatalf("cascadia.CAS_AUDIT = %d, want 4903", cascadia.CAS_AUDIT)
+	}
+	if audit.Kind != nostr.Kind(cascadia.CAS_AUDIT) {
+		t.Fatalf("audit kind = %d, want %d", audit.Kind, cascadia.CAS_AUDIT)
 	}
 	if tagValueForTest(audit.Tags, "type") != "loom.result" {
 		t.Fatalf("audit type tag = %q", tagValueForTest(audit.Tags, "type"))
