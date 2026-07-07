@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
-	cascadia "git.sharegap.net/cascadia/cascadia-nips/generated/go"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )

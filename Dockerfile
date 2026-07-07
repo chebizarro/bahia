@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Build stage
 FROM golang:1.26.3-alpine AS builder
 
@@ -5,8 +6,17 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 
+# Private-module resolution for git.sharegap.net (cascadia-go / cascadia-nips).
+# GOPRIVATE skips the public proxy + checksum DB for the fleet prefix; the git-auth
+# secret (a .netrc mounted via BuildKit, not baked into any layer) authenticates the
+# private Gitea. Build with:
+#   DOCKER_BUILDKIT=1 docker build --secret id=gitauth,src=$HOME/.netrc .
+# where ~/.netrc contains:  machine git.sharegap.net login <user> password <token>
+ENV GOPRIVATE=git.sharegap.net/*
+
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=secret,id=gitauth,target=/root/.netrc \
+    go mod download
 
 COPY . .
 

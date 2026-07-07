@@ -4,8 +4,8 @@ go 1.26.3
 
 require (
 	cuelang.org/go v0.11.0
-	git.sharegap.net/cascadia/cascadia-nips/generated/go v0.0.0
 	fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026
+	git.sharegap.net/cascadia/cascadia-go v0.1.0
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
 	github.com/go-chi/chi/v5 v5.2.1
@@ -25,9 +25,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
 )
-
-// Interim local replace until git.sharegap.net go-get metadata and subdir tag resolution are verified.
-replace git.sharegap.net/cascadia/cascadia-nips/generated/go => ../cascadia-nips/generated/go
 
 require (
 	cel.dev/expr v0.25.1 // indirect
@@ -50,6 +47,8 @@ require (
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
+	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29 // indirect
+	github.com/Microsoft/hcsshim v0.15.0-rc.1 // indirect
 	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/ProtonMail/go-crypto v1.4.0 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
@@ -116,6 +115,7 @@ require (
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
 	github.com/cockroachdb/apd/v3 v3.2.1 // indirect
 	github.com/coder/websocket v1.8.13 // indirect
+	github.com/containerd/cgroups/v3 v3.1.3 // indirect
 	github.com/containerd/containerd/api v1.11.1 // indirect
 	github.com/containerd/containerd/v2 v2.3.1 // indirect
 	github.com/containerd/continuity v0.5.0 // indirect
@@ -220,6 +220,7 @@ require (
 	github.com/moby/moby/api v1.54.2 // indirect
 	github.com/moby/moby/client v0.4.1 // indirect
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
+	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/signal v0.7.1 // indirect
 	github.com/moby/sys/user v0.4.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
@@ -244,6 +245,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/profile v1.7.0 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
+	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -291,6 +293,7 @@ require (
 	github.com/zclconf/go-cty v1.16.3 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.11 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.6.11 // indirect
+	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.39.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.68.0 // indirect
@@ -313,6 +316,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
+	gonum.org/v1/gonum v0.17.0 // indirect
 	google.golang.org/api v0.271.0 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect

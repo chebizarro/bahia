@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	cascadia "git.sharegap.net/cascadia/cascadia-nips/generated/go"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
