@@ -3224,7 +3224,7 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	}
 
 	contentJSON, _ := json.Marshal(content)
-	dTag := fmt.Sprintf("%s:%s", state.ServiceID, state.EnvironmentID)
+	dTag := fmt.Sprintf("service:%s", state.ServiceID)
 	tags := gonostr.Tags{
 		{"d", dTag},
 		{"service", state.ServiceID.String()},
@@ -3287,7 +3287,7 @@ func (p *Projector) publishStateTombstone(ctx context.Context, res events.Resour
 		"environment_id": envID.String(),
 		"updated_at":     formatTime(time.Now().UTC()),
 	})
-	dTag := fmt.Sprintf("%s:%s", serviceID, envID)
+	dTag := fmt.Sprintf("service:%s", serviceID)
 	tags := gonostr.Tags{
 		{"d", dTag},
 		{"service", serviceID.String()},

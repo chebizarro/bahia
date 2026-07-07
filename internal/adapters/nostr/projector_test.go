@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -764,6 +765,11 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 	assertOneSignedKind(t, sink, KindServiceRegistry)
 	assertOneSignedKind(t, sink, KindEnvironmentRegistry)
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
+	if got, want := eventKindInt(&stateEvent), cascadia.CAS_CP_STATE; got != want {
+		t.Fatalf("service state wire kind = %d, want %d", got, want)
+	}
+	assertTag(t, stateEvent, "d", "service:"+serviceID.String())
+	assertTag(t, stateEvent, "domain", "service")
 	assertTag(t, stateEvent, "service", serviceID.String())
 	assertTag(t, stateEvent, "environment", envID.String())
 	assertTag(t, stateEvent, "artifact", artifactID.String())

@@ -21,6 +21,7 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
 	"fiatjaf.com/nostr/nip59"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -43,8 +44,8 @@ const (
 	// AgentStatusSuspended is the suspended Signet agent state.
 	AgentStatusSuspended = "suspended"
 
-	signetKindContextVM = 25910
-	signetKindGiftWrap  = 1059
+	signetKindContextVM = cascadia.CAS_INTENT
+	signetKindGiftWrap  = cascadia.NIP59_GIFT_WRAP
 )
 
 // Client communicates with Signet via NIP-46.

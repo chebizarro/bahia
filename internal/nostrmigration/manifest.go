@@ -11,20 +11,20 @@ import (
 )
 
 const (
-	CanonicalContextVMMessage      = 25910
-	CanonicalCEP4GiftWrap          = 1059
-	CanonicalCEP19EphemeralWrap    = 21059
+	CanonicalContextVMMessage      = cascadia.CAS_INTENT
+	CanonicalCEP4GiftWrap          = cascadia.NIP59_GIFT_WRAP
+	CanonicalCEP19EphemeralWrap    = cascadia.NIP59_EPHEMERAL_GIFT_WRAP
 	CanonicalNIP09Delete           = 5
 	CanonicalNIP38OperationalState = 30315
 	CanonicalNIP90Feedback         = 7000
 	legacyHeartbeatObservation     = 30350
-	CanonicalCASCPState            = 30900
+	CanonicalCASCPState            = cascadia.CAS_CP_STATE
 	CanonicalCASAudit              = cascadia.CAS_AUDIT
-	CanonicalContextVMDiscovery    = 11316
-	CanonicalContextVMTools        = 11317
-	CanonicalContextVMResources    = 11318
-	CanonicalContextVMTemplates    = 11319
-	CanonicalContextVMPrompts      = 11320
+	CanonicalContextVMDiscovery    = cascadia.CTXVM_SERVER_ANNOUNCEMENT
+	CanonicalContextVMTools        = cascadia.CTXVM_TOOLS_ANNOUNCEMENT
+	CanonicalContextVMResources    = cascadia.CTXVM_RESOURCES_ANNOUNCEMENT
+	CanonicalContextVMTemplates    = cascadia.CTXVM_RESOURCE_TEMPLATES_ANNOUNCEMENT
+	CanonicalContextVMPrompts      = cascadia.CTXVM_PROMPTS_ANNOUNCEMENT
 	CanonicalNIP51RelaySet         = 30002
 	CanonicalNIP51AvailabilityList = 30004
 	CanonicalNIP78AppData          = 30078

@@ -6,15 +6,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 )
 
 // Operator assistant Nostr event kinds and schemas. Prompt and approval
 // mutation intents are carried by ContextVM JSON-RPC (kind 25910, optionally
 // wrapped by 1059/21059); durable assistant observables are projected here.
 const (
-	KindAssistantSessionState = 30900
+	KindAssistantSessionState = cascadia.CAS_CP_STATE
 	KindAssistantStatus       = 30315
-	KindAssistantTranscript   = 30316
+	KindAssistantTranscript   = cascadia.CAS_AGENT_HEARTBEAT
 
 	AssistantSessionSchema    = "bahia.assistant-session.v1"
 	AssistantStatusSchema     = "bahia.assistant-status.v1"

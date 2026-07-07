@@ -26,7 +26,7 @@ import (
 
 const (
 	KindSecurityStatus  = 30315
-	KindSecuritySummary = 30900
+	KindSecuritySummary = cascadia.CAS_CP_STATE
 	KindSecurityFinding = 30078
 	KindSecurityAudit   = cascadia.CAS_AUDIT
 
