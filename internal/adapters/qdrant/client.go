@@ -5,10 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -23,13 +21,8 @@ var ErrMissingAuth = errors.New("qdrant auth not configured")
 
 // Client communicates with Qdrant REST API through cascadia-go/qdrant.
 type Client struct {
-	baseURL     string
-	apiKey      string
-	authHeader  string
-	allowNoAuth bool
-	shared      *casqdrant.Client
-	httpClient  *http.Client
-	logger      *slog.Logger
+	shared *casqdrant.Client
+	logger *slog.Logger
 }
 
 // Config holds Qdrant client configuration.
@@ -65,64 +58,28 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 	}
 	httpClient := &http.Client{Timeout: config.Timeout}
 	return &Client{
-		baseURL:     config.URL,
-		apiKey:      config.APIKey,
-		authHeader:  config.AuthHeaderName,
-		allowNoAuth: config.AllowUnauthenticatedLocal,
 		shared: casqdrant.NewClient(casqdrant.Config{
-			URL:            config.URL,
-			APIKey:         config.APIKey,
-			AuthHeaderName: config.AuthHeaderName,
-			Timeout:        config.Timeout,
-			HTTPClient:     httpClient,
+			URL:                           config.URL,
+			APIKey:                        config.APIKey,
+			AuthHeaderName:                config.AuthHeaderName,
+			Timeout:                       config.Timeout,
+			HTTPClient:                    httpClient,
+			AllowUnauthenticatedLocalhost: config.AllowUnauthenticatedLocal,
 		}),
-		httpClient: httpClient,
-		logger:     logger.With("component", "qdrant"),
+		logger: logger.With("component", "qdrant"),
 	}
 }
 
 // Configured reports whether this client has an explicit Qdrant endpoint.
 func (c *Client) Configured() bool {
-	return c != nil && strings.TrimSpace(c.baseURL) != ""
+	return c != nil && c.shared.Configured()
 }
 
 func (c *Client) requireConfigured() error {
 	if !c.Configured() {
 		return ErrNotConfigured
 	}
-	if strings.TrimSpace(c.apiKey) == "" && !c.allowNoAuth {
-		return ErrMissingAuth
-	}
-	if strings.TrimSpace(c.apiKey) == "" && c.allowNoAuth && !isLocalQdrantEndpoint(c.baseURL) {
-		return fmt.Errorf("%w: unauthenticated mode is only allowed for localhost or loopback endpoints", ErrMissingAuth)
-	}
 	return nil
-}
-
-func isLocalQdrantEndpoint(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
-}
-
-func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	if err := c.requireConfigured(); err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.apiKey != "" {
-		req.Header.Set(c.authHeader, c.apiKey)
-	}
-	return req, nil
 }
 
 // CreateCollection creates a new vector collection.
@@ -140,23 +97,10 @@ func (c *Client) CreateCollection(ctx context.Context, name string, config Colle
 
 // CollectionExists checks if a collection exists.
 func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, fmt.Sprintf("/collections/%s", name), nil)
-	if err != nil {
+	if err := c.requireConfigured(); err != nil {
 		return false, err
 	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return false, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-	return true, nil
+	return c.shared.CollectionExists(ctx, name)
 }
 
 // DeleteCollection deletes a collection.
@@ -212,17 +156,9 @@ type SearchResult struct {
 
 // Health checks Qdrant connectivity.
 func (c *Client) Health(ctx context.Context) error {
-	req, err := c.newRequest(ctx, http.MethodGet, "/", nil)
-	if err != nil {
+	if err := c.requireConfigured(); err != nil {
 		return err
 	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
-	}
-	return nil
+	_, err := c.shared.Health(ctx)
+	return err
 }

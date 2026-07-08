@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -28,15 +29,12 @@ func TestClientConfiguredTrimsURL(t *testing.T) {
 	if !client.Configured() {
 		t.Fatal("explicit qdrant URL should configure client")
 	}
-	if client.baseURL != "http://localhost:6333" {
-		t.Fatalf("baseURL = %q, want trimmed URL", client.baseURL)
-	}
 }
 
 func TestClientConfiguredURLWithoutAuthFailsClosed(t *testing.T) {
 	client := NewClient(Config{URL: "http://localhost:6333"}, nil)
-	if err := client.Health(t.Context()); !errors.Is(err, ErrMissingAuth) {
-		t.Fatalf("Health() error = %v, want ErrMissingAuth", err)
+	if err := client.Health(t.Context()); err == nil || !strings.Contains(err.Error(), "api_key is required") {
+		t.Fatalf("Health() error = %v, want api_key required", err)
 	}
 }
 
@@ -49,8 +47,8 @@ func TestClientAllowsExplicitUnauthenticatedLocalMode(t *testing.T) {
 
 func TestClientRejectsUnauthenticatedRemoteMode(t *testing.T) {
 	client := NewClient(Config{URL: "https://qdrant.example.com", AllowUnauthenticatedLocal: true}, nil)
-	if err := client.requireConfigured(); !errors.Is(err, ErrMissingAuth) {
-		t.Fatalf("requireConfigured() error = %v, want ErrMissingAuth", err)
+	if err := client.Health(t.Context()); err == nil || !strings.Contains(err.Error(), "api_key is required") {
+		t.Fatalf("Health() error = %v, want api_key required", err)
 	}
 }
 
@@ -59,14 +57,15 @@ func TestClientAttachesAPIKeyHeaderToRequests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths[r.Method+" "+r.URL.Path] = r.Header.Get("api-key")
 		switch r.URL.Path {
-		case "/":
+		case "/healthz":
 			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`ok`))
 		case "/collections/agents":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"result":true}`))
 		case "/collections/agents/points":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"result":true}`))
+			_, _ = w.Write([]byte(`{"result":{"operation_id":1,"status":"completed"}}`))
 		case "/collections/agents/points/search":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"result":[]}`))

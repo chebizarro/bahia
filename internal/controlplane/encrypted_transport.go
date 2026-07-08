@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
+	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
@@ -148,13 +148,13 @@ type EncryptedRequestHandler func(ctx context.Context, request EncryptedRequest)
 // correlated results back to the requester.
 type EncryptedResponder struct {
 	publisher     NostrEventPublisher
-	signer        canonicalnostr.Signer
+	signer        casnostr.Signer
 	privateKey    string
 	servicePubkey string
 	logger        *zap.Logger
 }
 
-func NewEncryptedResponder(publisher NostrEventPublisher, signer canonicalnostr.Signer, privateKeyHex string, logger *zap.Logger) *EncryptedResponder {
+func NewEncryptedResponder(publisher NostrEventPublisher, signer casnostr.Signer, privateKeyHex string, logger *zap.Logger) *EncryptedResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -486,7 +486,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 			t.logger.Debug("ContextVM gift wrap not addressed to this service", zap.String("event_id", outer.ID.Hex()), zap.String("service_pubkey", t.responder.ServicePubkey()))
 			return
 		}
-		unwrapped, err := t.unwrapContextVMEvent(outer)
+		unwrapped, err := t.unwrapContextVMEvent(ctx, outer)
 		if err != nil {
 			t.logger.Warn("failed to unwrap ContextVM event", zap.String("event_id", outer.ID.Hex()), zap.Error(err))
 			return
@@ -558,10 +558,16 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 }
 
-func (t *EncryptedRequestTransport) unwrapContextVMEvent(event *nostr.Event) (*nostr.Event, error) {
+func (t *EncryptedRequestTransport) unwrapContextVMEvent(ctx context.Context, event *nostr.Event) (*nostr.Event, error) {
 	if t.responder == nil {
 		return nil, fmt.Errorf("ContextVM responder is not configured")
 	}
+	if event.Kind == KindContextVMGiftWrap {
+		return cascontextvm.Unwrap(ctx, t.responder.signer, event)
+	}
+	// cascadia-go v0.7.0 Wrap/Unwrap covers stored NIP-59 gift-wrap (1059).
+	// Bahia still accepts the local ephemeral 21059 policy surface until the lib
+	// grows an ephemeral wrapper option.
 	conversationKey, err := t.responder.conversationKey(event.PubKey.Hex())
 	if err != nil {
 		return nil, err
@@ -616,7 +622,7 @@ func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context,
 	}
 	publishEvent := responseEvent
 	if encrypted {
-		wrapped, err := t.wrapContextVMResponse(ctx, outer, request, responseEvent)
+		wrapped, err := t.wrapContextVMResponse(ctx, outer, request, payload)
 		if err != nil {
 			t.logger.Error("wrap ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 			return
@@ -633,10 +639,24 @@ func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context,
 	}
 }
 
-func (t *EncryptedRequestTransport) wrapContextVMResponse(_ context.Context, outer, request, response *nostr.Event) (*nostr.Event, error) {
-	content, err := json.Marshal(response)
+func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, outer, request *nostr.Event, payload any) (*nostr.Event, error) {
+	if outer == nil || outer.Kind != KindContextVMEphemeralWrap {
+		wrapped, _, err := cascontextvm.Wrap(ctx, t.responder.signer, request.PubKey.Hex(), payload)
+		return wrapped, err
+	}
+	// cascadia-go v0.7.0 Wrap/Unwrap covers stored NIP-59 gift-wrap (1059).
+	// Bahia keeps this local only for its ephemeral 21059 response path.
+	content, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ContextVM inner response: %w", err)
+	}
+	response := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, request.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
+	if err := SignGoNostrEvent(ctx, t.responder.signer, response); err != nil {
+		return nil, fmt.Errorf("sign ContextVM inner response: %w", err)
+	}
+	innerJSON, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ContextVM inner response event: %w", err)
 	}
 	wrapperPrivateKey := nostr.Generate()
 	wrapperPubkey := wrapperPrivateKey.Public()
@@ -644,15 +664,11 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(_ context.Context, out
 	if err != nil {
 		return nil, fmt.Errorf("generate ContextVM response wrapper conversation key: %w", err)
 	}
-	ciphertext, err := nip44.Encrypt(string(content), conversationKey)
+	ciphertext, err := nip44.Encrypt(string(innerJSON), conversationKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt ContextVM response: %w", err)
 	}
-	kind := KindContextVMGiftWrap
-	if outer != nil && outer.Kind == KindContextVMEphemeralWrap {
-		kind = KindContextVMEphemeralWrap
-	}
-	wrapped := &nostr.Event{Kind: nostr.Kind(kind), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, outer.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}}, Content: ciphertext}
+	wrapped := &nostr.Event{Kind: nostr.Kind(KindContextVMEphemeralWrap), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, outer.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}}, Content: ciphertext}
 	if err := wrapped.Sign(wrapperPrivateKey); err != nil {
 		return nil, fmt.Errorf("sign ContextVM gift wrap response: %w", err)
 	}
@@ -700,6 +716,9 @@ func (t *EncryptedRequestTransport) validContextVMWrapperPubkey(outer, inner *no
 	}
 	servicePubkey := t.responder.ServicePubkey()
 	outerPubkey := outer.PubKey.Hex()
+	if outer.Kind == KindContextVMGiftWrap {
+		return outerPubkey != servicePubkey
+	}
 	return outer.PubKey != inner.PubKey && outerPubkey != servicePubkey
 }
 

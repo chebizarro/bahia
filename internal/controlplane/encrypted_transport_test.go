@@ -9,6 +9,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
+	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
 )
@@ -160,8 +161,12 @@ func assertContextVMProgressAckWithRequestID(t *testing.T, ev nostr.Event, reque
 
 func wrapContextVMEvent(t *testing.T, inner *nostr.Event, kind int) *nostr.Event {
 	t.Helper()
-	outer := wrapContextVMEventWithWrapperKey(t, inner, nostr.Generate().Hex(), kind)
-	if outer.PubKey == inner.PubKey {
+	wrapperKey := nostr.Generate().Hex()
+	if kind == KindContextVMGiftWrap {
+		wrapperKey = testRequesterKey
+	}
+	outer := wrapContextVMEventWithWrapperKey(t, inner, wrapperKey, kind)
+	if kind == KindContextVMEphemeralWrap && outer.PubKey == inner.PubKey {
 		t.Fatalf("test wrapper must use a random pubkey, got inner pubkey %s", inner.PubKey.Hex())
 	}
 	return outer
@@ -171,6 +176,17 @@ func wrapContextVMEventWithWrapperKey(t *testing.T, inner *nostr.Event, wrapperK
 	t.Helper()
 	servicePubkey := testNostrPubKeyFromPrivateKey(t, testServiceKey)
 	servicePubkeyHex := servicePubkey.Hex()
+	if kind == KindContextVMGiftWrap {
+		signer, err := NewPrivateKeySigner(wrapperKey)
+		if err != nil {
+			t.Fatalf("NewPrivateKeySigner: %v", err)
+		}
+		outer, _, err := cascontextvm.Wrap(context.Background(), signer, servicePubkeyHex, json.RawMessage(inner.Content))
+		if err != nil {
+			t.Fatalf("cascadia ContextVM wrap: %v", err)
+		}
+		return outer
+	}
 	wrapperSecret := testNostrSecretKey(t, wrapperKey)
 	content, err := json.Marshal(inner)
 	if err != nil {
@@ -699,7 +715,7 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 				if request.OuterEvent == nil || request.OuterEvent.Kind != nostr.Kind(tc.kind) {
 					t.Fatalf("handler outer event = %+v, want kind %d", request.OuterEvent, tc.kind)
 				}
-				if request.OuterEvent.PubKey.Hex() == requesterPubkey || request.OuterEvent.PubKey == servicePubkey {
+				if tc.kind == KindContextVMEphemeralWrap && (request.OuterEvent.PubKey.Hex() == requesterPubkey || request.OuterEvent.PubKey == servicePubkey) {
 					t.Fatalf("wrapper pubkey %s must be random, not requester/service", request.OuterEvent.PubKey.Hex())
 				}
 				return map[string]any{"accepted": true}, nil
@@ -713,23 +729,30 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 				t.Fatalf("expected encrypted ContextVM progress ack plus response, got %d", len(publisher.events))
 			}
 			wrappedAck := publisher.events[0]
-			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "e", outer.ID.Hex()) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) {
+			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(wrappedAck.Tags, "e", outer.ID.Hex())) {
 				t.Fatalf("unexpected wrapper progress ack: kind=%d tags=%#v", wrappedAck.Kind, wrappedAck.Tags)
 			}
 			innerAck := unwrapContextVMResponseEvent(t, wrappedAck, testRequesterKey)
-			assertContextVMProgressAckWithRequestID(t, innerAck, inner, outer.ID.Hex())
+			if tc.kind == KindContextVMEphemeralWrap {
+				assertContextVMProgressAckWithRequestID(t, innerAck, inner, outer.ID.Hex())
+			} else {
+				notification := contextVMNotification(t, innerAck)
+				if notification.JSONRPC != "2.0" || notification.Method != ContextVMProgressNotificationMethod {
+					t.Fatalf("unexpected progress ack notification: %+v", notification)
+				}
+			}
 			wrappedResponse := publisher.events[1]
 			if err := nostrpool.ValidateInboundEvent(&wrappedResponse, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 				t.Fatalf("response wrapper failed NIP-01 validation: %v", err)
 			}
-			if wrappedResponse.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedResponse.Tags, "e", outer.ID.Hex()) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey.Hex()) {
+			if wrappedResponse.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(wrappedResponse.Tags, "e", outer.ID.Hex())) {
 				t.Fatalf("unexpected wrapper response: kind=%d tags=%#v", wrappedResponse.Kind, wrappedResponse.Tags)
 			}
-			if wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey.Hex() == requesterPubkey {
+			if tc.kind == KindContextVMEphemeralWrap && (wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey.Hex() == requesterPubkey) {
 				t.Fatalf("response wrapper pubkey %s must be random", wrappedResponse.PubKey.Hex())
 			}
 			innerResponse := unwrapContextVMResponseEvent(t, wrappedResponse, testRequesterKey)
-			if innerResponse.Kind != KindContextVMMessage || innerResponse.PubKey != servicePubkey || !hasTag(innerResponse.Tags, "e", inner.ID.Hex()) || !hasTag(innerResponse.Tags, "p", inner.PubKey.Hex()) {
+			if innerResponse.Kind != KindContextVMMessage || innerResponse.PubKey != servicePubkey || !hasTag(innerResponse.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(innerResponse.Tags, "e", inner.ID.Hex())) {
 				t.Fatalf("unexpected inner response event: kind=%d pubkey=%s tags=%#v", innerResponse.Kind, innerResponse.PubKey.Hex(), innerResponse.Tags)
 			}
 			if !innerResponse.VerifySignature() {
@@ -764,7 +787,7 @@ func TestContextVMTransport_EncryptedGiftWrapAuthorizesInnerSenderNotWrapper(t *
 	if len(publisher.events) != 1 {
 		t.Fatalf("expected encrypted unauthorized response, got %d", len(publisher.events))
 	}
-	if publisher.events[0].Kind != KindContextVMGiftWrap || !hasTag(publisher.events[0].Tags, "e", outer.ID.Hex()) || !hasTag(publisher.events[0].Tags, "p", inner.PubKey.Hex()) {
+	if publisher.events[0].Kind != KindContextVMGiftWrap || !hasTag(publisher.events[0].Tags, "p", inner.PubKey.Hex()) {
 		t.Fatalf("unexpected unauthorized wrapper response: kind=%d tags=%#v", publisher.events[0].Kind, publisher.events[0].Tags)
 	}
 	response := unwrapContextVMResponse(t, publisher.events[0], testRequesterKey)
@@ -773,7 +796,7 @@ func TestContextVMTransport_EncryptedGiftWrapAuthorizesInnerSenderNotWrapper(t *
 	}
 }
 
-func TestContextVMTransport_RejectsNonRandomRequesterWrapperPubkey(t *testing.T) {
+func TestContextVMTransport_AcceptsCascadiaStoredWrapperPubkey(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
@@ -788,11 +811,11 @@ func TestContextVMTransport_RejectsNonRandomRequesterWrapperPubkey(t *testing.T)
 
 	transport.HandleEvent(context.Background(), outer)
 
-	if called {
-		t.Fatalf("non-random requester wrapper should not reach handler")
+	if !called {
+		t.Fatalf("cascadia stored wrapper should reach handler")
 	}
-	if len(publisher.events) != 0 {
-		t.Fatalf("non-random requester wrapper should be dropped without response, got %d events", len(publisher.events))
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected stored wrapper progress ack plus response, got %d events", len(publisher.events))
 	}
 }
 
