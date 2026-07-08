@@ -12,6 +12,7 @@ import (
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
+	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
@@ -112,35 +113,18 @@ type ResultError struct {
 	Message string `json:"message"`
 }
 
-type ContextVMJSONRPCRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
+type ContextVMJSONRPCRequest = cascontextvm.Request
 
-type ContextVMJSONRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any             `json:"result,omitempty"`
-	Error   *JSONRPCError   `json:"error,omitempty"`
-}
+type ContextVMJSONRPCResponse = cascontextvm.Response
 
-type ContextVMJSONRPCNotification struct {
-	JSONRPC string `json:"jsonrpc"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
-}
+type ContextVMJSONRPCNotification = cascontextvm.Notification
 
 type ContextVMProgressParams struct {
 	RequestID string `json:"requestId"`
 	Status    string `json:"status"`
 }
 
-type JSONRPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
+type JSONRPCError = cascontextvm.Error
 
 type ContextVMRequest struct {
 	Event         *nostr.Event
@@ -534,22 +518,22 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	}
 	if !t.authorized(innerPubkey) {
 		t.logger.Warn("unauthorized ContextVM requester", zap.String("event_id", innerID), zap.String("requester_pubkey", innerPubkey))
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}})
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}})
 		return
 	}
 	var rpc ContextVMJSONRPCRequest
 	if err := json.Unmarshal([]byte(inner.Content), &rpc); err != nil {
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32700, Message: "parse error"}})
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(nil, cascontextvm.ParseErrorCode, "parse error"))
 		return
 	}
-	if rpc.JSONRPC != "2.0" || strings.TrimSpace(rpc.Method) == "" {
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Error: &JSONRPCError{Code: -32600, Message: "invalid request"}})
+	if rpc.JSONRPC != cascontextvm.JSONRPCVersion || strings.TrimSpace(rpc.Method) == "" {
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request"))
 		return
 	}
-	progressToken := contextVMProgressToken(rpc.Params)
+	progressToken := cascontextvm.ProgressToken(rpc.Params)
 	if progressToken != "" {
 		if cached, ok := t.cachedContextVMResponse(innerPubkey, progressToken); ok {
-			cached.ID = contextVMResponseID(rpc.ID)
+			cached.ID = cascontextvm.NewResponse(rpc.ID, nil).ID
 			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached)
 			return
 		}
@@ -557,7 +541,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	handler := t.contextVMHandlers[rpc.Method]
 	if handler == nil {
 		t.logger.Warn("ContextVM method not found", zap.String("event_id", innerID), zap.String("method", rpc.Method))
-		response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Error: &JSONRPCError{Code: -32601, Message: "method not found"}}
+		response := cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.MethodNotFoundCode, "method not found")
 		t.cacheContextVMResponse(innerPubkey, progressToken, response)
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 		return
@@ -565,7 +549,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	t.logger.Info("dispatching ContextVM request", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey", innerPubkey))
 	t.publishContextVMProgressAck(ctx, outer, inner, encrypted)
 	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
-	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Result: result}
+	response := cascontextvm.NewResponse(rpc.ID, result)
 	if err != nil {
 		response.Result = nil
 		response.Error = &JSONRPCError{Code: -32000, Message: err.Error()}
@@ -599,7 +583,7 @@ func (t *EncryptedRequestTransport) publishContextVMProgressAck(ctx context.Cont
 		requestID = outer.ID.Hex()
 	}
 	notification := ContextVMJSONRPCNotification{
-		JSONRPC: "2.0",
+		JSONRPC: cascontextvm.JSONRPCVersion,
 		Method:  ContextVMProgressNotificationMethod,
 		Params: ContextVMProgressParams{
 			RequestID: requestID,
@@ -720,26 +704,7 @@ func (t *EncryptedRequestTransport) validContextVMWrapperPubkey(outer, inner *no
 }
 
 func contextVMResponseID(id json.RawMessage) json.RawMessage {
-	if len(id) == 0 {
-		return json.RawMessage("null")
-	}
-	return id
-}
-
-func contextVMProgressToken(params json.RawMessage) string {
-	if len(params) == 0 {
-		return ""
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(params, &decoded); err != nil {
-		return ""
-	}
-	meta, ok := decoded["_meta"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	token, _ := meta["progressToken"].(string)
-	return strings.TrimSpace(token)
+	return cascontextvm.NewResponse(id, nil).ID
 }
 
 func (t *EncryptedRequestTransport) authorized(pubkey string) bool {

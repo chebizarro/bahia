@@ -1,10 +1,8 @@
-// Package qdrant provides a client for Qdrant vector database.
+// Package qdrant adapts Bahia's Qdrant interface to the shared cascadia-go client.
 package qdrant
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	casqdrant "git.sharegap.net/cascadia/cascadia-go/qdrant"
 )
 
 // ErrNotConfigured is returned when a Qdrant operation is attempted without an explicit URL.
@@ -21,39 +21,32 @@ var ErrNotConfigured = errors.New("qdrant client not configured")
 // ErrMissingAuth is returned when a Qdrant endpoint is configured without required auth.
 var ErrMissingAuth = errors.New("qdrant auth not configured")
 
-// Client communicates with Qdrant REST API.
+// Client communicates with Qdrant REST API through cascadia-go/qdrant.
 type Client struct {
 	baseURL     string
 	apiKey      string
 	authHeader  string
 	allowNoAuth bool
+	shared      *casqdrant.Client
 	httpClient  *http.Client
 	logger      *slog.Logger
 }
 
 // Config holds Qdrant client configuration.
 type Config struct {
-	URL                       string        // Qdrant REST API URL (e.g., http://localhost:6333)
-	Timeout                   time.Duration // Request timeout
-	APIKey                    string        // API key for secured Qdrant deployments
-	AuthHeaderName            string        // Header used for API key auth; defaults to "api-key"
-	AllowUnauthenticatedLocal bool          // Explicit local/dev escape hatch for unsecured Qdrant
+	URL                       string
+	Timeout                   time.Duration
+	APIKey                    string
+	AuthHeaderName            string
+	AllowUnauthenticatedLocal bool
 }
 
 // CollectionConfig holds collection creation parameters.
-type CollectionConfig struct {
-	VectorSize    int    // Vector dimension (e.g., 768 for nomic-embed-text)
-	Distance      string // "Cosine", "Euclid", or "Dot"
-	OnDiskPayload bool   // Store payload on disk
-}
+type CollectionConfig = casqdrant.CollectionConfig
 
 // DefaultCollectionConfig returns the default config for agent collections.
 func DefaultCollectionConfig() CollectionConfig {
-	return CollectionConfig{
-		VectorSize:    768, // nomic-embed-text dimension
-		Distance:      "Cosine",
-		OnDiskPayload: true,
-	}
+	return CollectionConfig{VectorSize: 768, Distance: "Cosine", OnDiskPayload: true}
 }
 
 // NewClient creates a new Qdrant client.
@@ -70,16 +63,21 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
-
+	httpClient := &http.Client{Timeout: config.Timeout}
 	return &Client{
 		baseURL:     config.URL,
 		apiKey:      config.APIKey,
 		authHeader:  config.AuthHeaderName,
 		allowNoAuth: config.AllowUnauthenticatedLocal,
-		httpClient: &http.Client{
-			Timeout: config.Timeout,
-		},
-		logger: logger.With("component", "qdrant"),
+		shared: casqdrant.NewClient(casqdrant.Config{
+			URL:            config.URL,
+			APIKey:         config.APIKey,
+			AuthHeaderName: config.AuthHeaderName,
+			Timeout:        config.Timeout,
+			HTTPClient:     httpClient,
+		}),
+		httpClient: httpClient,
+		logger:     logger.With("component", "qdrant"),
 	}
 }
 
@@ -132,60 +130,25 @@ func (c *Client) CreateCollection(ctx context.Context, name string, config Colle
 	if err := c.requireConfigured(); err != nil {
 		return err
 	}
-	c.logger.Info("creating Qdrant collection",
-		"name", name,
-		"vector_size", config.VectorSize,
-		"distance", config.Distance,
-	)
-
-	body := map[string]interface{}{
-		"vectors": map[string]interface{}{
-			"size":     config.VectorSize,
-			"distance": config.Distance,
-		},
-		"on_disk_payload": config.OnDiskPayload,
-	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := c.newRequest(ctx, "PUT", fmt.Sprintf("/collections/%s", name), bytes.NewReader(jsonBody))
-	if err != nil {
+	c.logger.Info("creating Qdrant collection", "name", name, "vector_size", config.VectorSize, "distance", config.Distance)
+	if err := c.shared.EnsureCollection(ctx, name, config); err != nil {
 		return err
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	// 200 = created, 409 = already exists (both are OK)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
-	}
-
 	c.logger.Info("Qdrant collection ready", "name", name)
 	return nil
 }
 
 // CollectionExists checks if a collection exists.
 func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error) {
-	req, err := c.newRequest(ctx, "GET", fmt.Sprintf("/collections/%s", name), nil)
+	req, err := c.newRequest(ctx, http.MethodGet, fmt.Sprintf("/collections/%s", name), nil)
 	if err != nil {
 		return false, err
 	}
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode == http.StatusNotFound {
 		return false, nil
 	}
@@ -193,7 +156,6 @@ func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error
 		body, _ := io.ReadAll(resp.Body)
 		return false, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
-
 	return true, nil
 }
 
@@ -203,24 +165,7 @@ func (c *Client) DeleteCollection(ctx context.Context, name string) error {
 		return err
 	}
 	c.logger.Info("deleting Qdrant collection", "name", name)
-
-	req, err := c.newRequest(ctx, "DELETE", fmt.Sprintf("/collections/%s", name), nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
+	return c.shared.DeleteCollection(ctx, name)
 }
 
 // UpsertPoints inserts or updates points in a collection.
@@ -228,32 +173,11 @@ func (c *Client) UpsertPoints(ctx context.Context, collection string, points []P
 	if err := c.requireConfigured(); err != nil {
 		return err
 	}
-	body := map[string]interface{}{
-		"points": points,
+	sharedPoints := make([]casqdrant.Point, 0, len(points))
+	for _, point := range points {
+		sharedPoints = append(sharedPoints, casqdrant.Point{ID: point.ID, Vector: point.Vector, Payload: point.Payload})
 	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := c.newRequest(ctx, "PUT", fmt.Sprintf("/collections/%s/points", collection), bytes.NewReader(jsonBody))
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
+	return c.shared.Upsert(ctx, collection, sharedPoints)
 }
 
 // Search performs a vector similarity search.
@@ -261,74 +185,44 @@ func (c *Client) Search(ctx context.Context, collection string, vector []float32
 	if err := c.requireConfigured(); err != nil {
 		return nil, err
 	}
-	body := map[string]interface{}{
-		"vector":       vector,
-		"limit":        limit,
-		"with_payload": true,
-	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := c.newRequest(ctx, "POST", fmt.Sprintf("/collections/%s/points/search", collection), bytes.NewReader(jsonBody))
+	results, err := c.shared.Search(ctx, collection, casqdrant.SearchRequest{Vector: vector, Limit: limit, WithPayload: true})
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+	out := make([]SearchResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, SearchResult{ID: fmt.Sprint(result.ID), Score: result.Score, Payload: result.Payload})
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var response struct {
-		Result []SearchResult `json:"result"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	return response.Result, nil
+	return out, nil
 }
 
 // Point represents a vector point with payload.
 type Point struct {
-	ID      string                 `json:"id"`
-	Vector  []float32              `json:"vector"`
-	Payload map[string]interface{} `json:"payload,omitempty"`
+	ID      string         `json:"id"`
+	Vector  []float32      `json:"vector"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // SearchResult represents a search result.
 type SearchResult struct {
-	ID      string                 `json:"id"`
-	Score   float32                `json:"score"`
-	Payload map[string]interface{} `json:"payload,omitempty"`
+	ID      string         `json:"id"`
+	Score   float32        `json:"score"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // Health checks Qdrant connectivity.
 func (c *Client) Health(ctx context.Context) error {
-	req, err := c.newRequest(ctx, "GET", "/", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/", nil)
 	if err != nil {
 		return err
 	}
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
-
 	return nil
 }
