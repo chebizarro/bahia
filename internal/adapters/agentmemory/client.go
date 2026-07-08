@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
@@ -22,6 +23,9 @@ type Client struct {
 	baseURL string
 	client  *mcpclient.Client
 	logger  *slog.Logger
+
+	mu      sync.Mutex
+	taskIDs map[string]string
 }
 
 // Config holds client configuration.
@@ -50,7 +54,8 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 			Timeout:     config.Timeout,
 			AuthHeaders: config.AuthHeaders,
 		}, componentLogger),
-		logger: componentLogger,
+		logger:  componentLogger,
+		taskIDs: make(map[string]string),
 	}
 }
 
@@ -66,25 +71,28 @@ func (c *Client) requireConfigured() error {
 	return nil
 }
 
-// RegisterAgent registers a new agent with the memory system.
+// RegisterAgent opens the agent's initial fleet-provisioning memory task.
 func (c *Client) RegisterAgent(ctx context.Context, agentID string, npub string, metadata map[string]interface{}) error {
-	c.logger.Info("registering agent with memory system",
+	c.logger.Info("starting agent memory task",
 		"agent_id", agentID,
 		"npub", npub,
 	)
 
-	params := map[string]interface{}{
-		"agent_id": agentID,
-		"npub":     npub,
+	goal := fmt.Sprintf("Seed non-personal fleet provisioning context for Soul Factory agent %s.", agentID)
+	result, err := c.callToolText(ctx, "memory_task_start", map[string]interface{}{
+		"agent": agentID,
+		"goal":  goal,
+	})
+	if err != nil {
+		return fmt.Errorf("start memory task: %w", err)
 	}
-	for k, v := range metadata {
-		params[k] = v
+	taskID := parseTaskID(result)
+	if taskID == "" {
+		return fmt.Errorf("start memory task: response did not include task_id")
 	}
-
-	if _, err := c.callTool(ctx, "agent_register", params); err != nil {
-		return fmt.Errorf("register agent: %w", err)
-	}
-
+	c.mu.Lock()
+	c.taskIDs[agentID] = taskID
+	c.mu.Unlock()
 	return nil
 }
 
@@ -95,16 +103,24 @@ func (c *Client) SeedMemory(ctx context.Context, agentID string, entries []Memor
 		"entries", len(entries),
 	)
 
+	taskID, err := c.taskID(ctx, agentID)
+	if err != nil {
+		return err
+	}
 	for _, entry := range entries {
 		params := map[string]interface{}{
-			"agent_id": agentID,
-			"type":     entry.Type,
-			"content":  entry.Content,
-			"metadata": entry.Metadata,
+			"task_id": taskID,
+			"agent":   agentID,
+			"action":  "soul_factory_seed",
+			"summary": entry.Content,
+			"detail": map[string]interface{}{
+				"type":     entry.Type,
+				"metadata": entry.Metadata,
+			},
 		}
 
-		if _, err := c.callTool(ctx, "memory_add", params); err != nil {
-			return fmt.Errorf("add memory entry: %w", err)
+		if _, err := c.callTool(ctx, "memory_event", params); err != nil {
+			return fmt.Errorf("record memory seed event: %w", err)
 		}
 	}
 
@@ -167,7 +183,57 @@ func (c *Client) GetAgentContext(ctx context.Context, agentID string) ([]MemoryE
 	return entries, nil
 }
 
+func (c *Client) taskID(ctx context.Context, agentID string) (string, error) {
+	c.mu.Lock()
+	taskID := c.taskIDs[agentID]
+	c.mu.Unlock()
+	if taskID != "" {
+		return taskID, nil
+	}
+	if err := c.RegisterAgent(ctx, agentID, "", nil); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	taskID = c.taskIDs[agentID]
+	c.mu.Unlock()
+	if taskID == "" {
+		return "", fmt.Errorf("memory task id missing for agent %s", agentID)
+	}
+	return taskID, nil
+}
+
+func parseTaskID(result string) string {
+	for _, line := range strings.Split(result, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && strings.TrimSpace(key) == "task_id" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func (c *Client) callTool(ctx context.Context, name string, params map[string]interface{}) (json.RawMessage, error) {
+	result, err := c.callToolResult(ctx, name, params)
+	if err != nil {
+		return nil, err
+	}
+	return result.ResultJSON(), nil
+}
+
+func (c *Client) callToolText(ctx context.Context, name string, params map[string]interface{}) (string, error) {
+	result, err := c.callToolResult(ctx, name, params)
+	if err != nil {
+		return "", err
+	}
+	for _, content := range result.Content {
+		if strings.TrimSpace(content.Text) != "" {
+			return content.Text, nil
+		}
+	}
+	return string(result.Raw), nil
+}
+
+func (c *Client) callToolResult(ctx context.Context, name string, params map[string]interface{}) (*mcpclient.CallToolResult, error) {
 	if err := c.requireConfigured(); err != nil {
 		return nil, err
 	}
@@ -185,7 +251,7 @@ func (c *Client) callTool(ctx context.Context, name string, params map[string]in
 	if result != nil && result.IsError {
 		return nil, fmt.Errorf("agent-memory tool %s returned an MCP error result", name)
 	}
-	return result.ResultJSON(), nil
+	return result, nil
 }
 
 // Health checks agent-memory connectivity.

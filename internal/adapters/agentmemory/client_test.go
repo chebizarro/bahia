@@ -47,8 +47,10 @@ func TestClientTypedHelpersUseMCPToolsCall(t *testing.T) {
 		tool := params["name"].(string)
 		called = append(called, tool)
 		switch tool {
-		case "agent_register", "memory_add":
-			writeAgentMemoryResult(t, w, req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": `{}`}}})
+		case "memory_task_start":
+			writeAgentMemoryResult(t, w, req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": "task_id: task-1\n\n## Recent work (warm memory)\nNo recent tasks."}}})
+		case "memory_event":
+			writeAgentMemoryResult(t, w, req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": "event recorded: event-1"}}})
 		case "context_get":
 			writeAgentMemoryResult(t, w, req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": `[{"type":"fact","content":"hello"}]`}}})
 		default:
@@ -71,7 +73,7 @@ func TestClientTypedHelpersUseMCPToolsCall(t *testing.T) {
 	if len(entries) != 1 || entries[0].Content != "hello" {
 		t.Fatalf("entries = %#v", entries)
 	}
-	want := []string{"agent_register", "memory_add", "context_get"}
+	want := []string{"memory_task_start", "memory_event", "context_get"}
 	if len(called) != len(want) {
 		t.Fatalf("called = %v", called)
 	}
