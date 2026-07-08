@@ -4,8 +4,8 @@ go 1.26.3
 
 require (
 	cuelang.org/go v0.11.0
-	fiatjaf.com/nostr v0.0.0-20260708011110-a7bfc0e9da62
-	git.sharegap.net/cascadia/cascadia-go v0.7.0
+	fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026
+	git.sharegap.net/cascadia/cascadia-go v0.7.1
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
 	github.com/go-chi/chi/v5 v5.2.1
@@ -328,5 +328,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace fiatjaf.com/nostr => ./third_party/nostr
