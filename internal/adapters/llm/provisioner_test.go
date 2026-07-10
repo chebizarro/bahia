@@ -136,3 +136,33 @@ func TestExternalAPIProvisionerNoopsProvisionAndProbes(t *testing.T) {
 		t.Fatalf("deprovision should be no-op: %v", err)
 	}
 }
+
+func TestExternalAPIProvisionerHealthIgnoresChatBudgetResponses(t *testing.T) {
+	var healthHits, chatHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			healthHits++
+			w.WriteHeader(http.StatusOK)
+		case "/v1/chat/completions":
+			chatHits++
+			http.Error(w, "budget exhausted", http.StatusPaymentRequired)
+		default:
+			t.Fatalf("unexpected probe path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := NewExternalAPIProvisioner(server.Client())
+	req := ProvisionCandidateRequest{Release: &domain.LLMRelease{ExternalBackend: &domain.LLMExternalBackendConfig{BaseURL: server.URL, HealthURL: server.URL + "/healthz"}}}
+	obs, err := p.Observe(t.Context(), req)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy {
+		t.Fatalf("expected /healthz to be authoritative despite chat budget responses: %#v", obs)
+	}
+	if healthHits != 1 || chatHits != 0 {
+		t.Fatalf("expected one health probe and no chat probes, health=%d chat=%d", healthHits, chatHits)
+	}
+}
