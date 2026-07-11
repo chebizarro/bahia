@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -362,8 +363,68 @@ type DecodedDNS struct{}
 type DecodedLLM struct{}
 type DecodedML struct{}
 type DecodedPackage struct{}
-type DecodedHiveCI struct{}
-type DecodedLoom struct{}
+
+type DecodedHiveCI struct {
+	WorkflowRun    *domain.HiveCIWorkflowRun    `json:"workflow_run,omitempty"`
+	WorkflowResult *domain.HiveCIWorkflowResult `json:"workflow_result,omitempty"`
+	QualityGate    *DecodedQualityGate          `json:"quality_gate,omitempty"`
+}
+
+type DecodedQualityGate struct {
+	ID            string         `json:"id"`
+	System        string         `json:"system"`
+	RunID         string         `json:"run_id,omitempty"`
+	Project       string         `json:"project,omitempty"`
+	Status        string         `json:"status"`
+	Result        string         `json:"result,omitempty"`
+	Reason        string         `json:"reason,omitempty"`
+	BlocksMerge   bool           `json:"blocks_merge"`
+	LogURL        string         `json:"log_url,omitempty"`
+	SourceEventID string         `json:"source_event_id"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	ObservedAt    time.Time      `json:"observed_at"`
+}
+
+type DecodedLoom struct {
+	JobStatus       *DecodedLoomJobStatus       `json:"job_status,omitempty"`
+	JobResult       *DecodedLoomJobResult       `json:"job_result,omitempty"`
+	JobCancellation *DecodedLoomJobCancellation `json:"job_cancellation,omitempty"`
+}
+
+type DecodedLoomJobStatus struct {
+	JobID         string    `json:"job_id"`
+	Status        string    `json:"status"`
+	Message       string    `json:"message,omitempty"`
+	Progress      *int      `json:"progress,omitempty"`
+	WorkerPubkey  string    `json:"worker_pubkey,omitempty"`
+	SourceEventID string    `json:"source_event_id"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type DecodedLoomJobResult struct {
+	JobID         string    `json:"job_id"`
+	Status        string    `json:"status"`
+	Success       bool      `json:"success"`
+	ExitCode      int       `json:"exit_code"`
+	Duration      int       `json:"duration"`
+	StdoutURL     string    `json:"stdout_url,omitempty"`
+	StderrURL     string    `json:"stderr_url,omitempty"`
+	ChangeToken   string    `json:"change_token,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	WorkerPubkey  string    `json:"worker_pubkey,omitempty"`
+	SourceEventID string    `json:"source_event_id"`
+	FinishedAt    time.Time `json:"finished_at"`
+}
+
+type DecodedLoomJobCancellation struct {
+	JobID           string    `json:"job_id"`
+	WorkerPubkey    string    `json:"worker_pubkey,omitempty"`
+	RequesterPubkey string    `json:"requester_pubkey,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+	SourceEventID   string    `json:"source_event_id"`
+	RequestedAt     time.Time `json:"requested_at"`
+}
+
 type DecodedAssistant struct{}
 type DecodedTool struct{}
 type DecodedAdoption struct{}
@@ -473,11 +534,11 @@ func (c *KindCatalog) registerRequiredGroupNoopDecoders() {
 }
 
 func (c *KindCatalog) registerOptionalProtocolDecoders() {
-	c.decoders[KindLoomJobStatusUpdate] = decodeNoopProjection("loom_live", 3, FamilyLoom)
-	c.decoders[KindLoomJobResult] = decodeNoopProjection("loom_live", 3, FamilyLoom)
-	c.decoders[KindLoomJobCancellation] = decodeNoopProjection("loom_live", 3, FamilyLoom)
-	c.decoders[KindHiveCIWorkflowRun] = decodeNoopProjection("hive_ci_live", 3, FamilyHiveCI)
-	c.decoders[KindHiveCIWorkflowResult] = decodeNoopProjection("hive_ci_live", 3, FamilyHiveCI)
+	c.decoders[KindLoomJobStatusUpdate] = decodeLoomJobStatusProjection
+	c.decoders[KindLoomJobResult] = decodeLoomJobResultProjection
+	c.decoders[KindLoomJobCancellation] = decodeLoomJobCancellationProjection
+	c.decoders[KindHiveCIWorkflowRun] = decodeHiveCIWorkflowRunProjection
+	c.decoders[KindHiveCIWorkflowResult] = decodeHiveCIWorkflowResultProjection
 	c.decoders[KindFIPSOverlayAdvert] = decodeNoopProjection("fips_snapshot", 3, FamilyFIPS)
 }
 
@@ -573,6 +634,250 @@ func decodeStateProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 	}
 	key := payload.ServiceID + ":" + payload.EnvironmentID
 	return baseDecoded(ev, FamilyState, key, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.State = &payload }), nil
+}
+
+func decodeLoomJobStatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	jobID, err := requiredTagLocal(ev.Tags, "d")
+	if err != nil {
+		jobID, err = requiredTagLocal(ev.Tags, "e")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job status: %w", err)
+	}
+	status, err := requiredTagLocal(ev.Tags, "status")
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job status: %w", err)
+	}
+	if !isLoomJobStatus(status) {
+		return nil, fmt.Errorf("decode Loom job status: invalid status %q", status)
+	}
+	var progress *int
+	if raw := tagValueLocal(ev.Tags, "progress"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("decode Loom job status progress %q: %w", raw, err)
+		}
+		progress = &parsed
+	}
+	payload := DecodedLoomJobStatus{
+		JobID:         jobID,
+		Status:        status,
+		Message:       strings.TrimSpace(ev.Content),
+		Progress:      progress,
+		WorkerPubkey:  eventPubKeyHex(ev),
+		SourceEventID: eventIDHex(ev),
+		UpdatedAt:     ev.CreatedAt.Time().UTC(),
+	}
+	return baseDecoded(ev, FamilyLoom, jobID, payload.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Group = "loom_live"
+		out.Tier = 3
+		out.Loom = &DecodedLoom{JobStatus: &payload}
+	}), nil
+}
+
+func decodeLoomJobResultProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	jobID, err := requiredTagLocal(ev.Tags, "e")
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job result: %w", err)
+	}
+	success, err := parseBoolTag(ev.Tags, "success")
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job result: %w", err)
+	}
+	exitCode, err := parseIntTag(ev.Tags, "exit_code")
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job result: %w", err)
+	}
+	duration, err := parseIntTag(ev.Tags, "duration")
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job result: %w", err)
+	}
+	status := "failed"
+	if success {
+		status = "completed"
+	}
+	payload := DecodedLoomJobResult{
+		JobID:         jobID,
+		Status:        status,
+		Success:       success,
+		ExitCode:      exitCode,
+		Duration:      duration,
+		StdoutURL:     tagValueLocal(ev.Tags, "stdout"),
+		StderrURL:     tagValueLocal(ev.Tags, "stderr"),
+		ChangeToken:   tagValueLocal(ev.Tags, "change"),
+		Error:         tagValueLocal(ev.Tags, "error"),
+		WorkerPubkey:  eventPubKeyHex(ev),
+		SourceEventID: eventIDHex(ev),
+		FinishedAt:    ev.CreatedAt.Time().UTC(),
+	}
+	return baseDecoded(ev, FamilyLoom, jobID, payload.FinishedAt, false, func(out *DecodedProjectionEvent) {
+		out.Group = "loom_live"
+		out.Tier = 3
+		out.Loom = &DecodedLoom{JobResult: &payload}
+	}), nil
+}
+
+func decodeLoomJobCancellationProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	jobID, err := requiredTagLocal(ev.Tags, "e")
+	if err != nil {
+		return nil, fmt.Errorf("decode Loom job cancellation: %w", err)
+	}
+	payload := DecodedLoomJobCancellation{
+		JobID:           jobID,
+		WorkerPubkey:    tagValueLocal(ev.Tags, "p"),
+		RequesterPubkey: eventPubKeyHex(ev),
+		Reason:          strings.TrimSpace(ev.Content),
+		SourceEventID:   eventIDHex(ev),
+		RequestedAt:     ev.CreatedAt.Time().UTC(),
+	}
+	return baseDecoded(ev, FamilyLoom, jobID, payload.RequestedAt, false, func(out *DecodedProjectionEvent) {
+		out.Group = "loom_live"
+		out.Tier = 3
+		out.Loom = &DecodedLoom{JobCancellation: &payload}
+	}), nil
+}
+
+func decodeHiveCIWorkflowRunProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	repoCoordinate, err := requiredTagLocal(ev.Tags, "a")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow run: %w", err)
+	}
+	commit, err := requiredTagLocal(ev.Tags, "commit")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow run: %w", err)
+	}
+	branch, err := requiredTagLocal(ev.Tags, "branch")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow run: %w", err)
+	}
+	workflow, err := requiredTagLocal(ev.Tags, "workflow")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow run: %w", err)
+	}
+	triggeredBy, err := requiredTagLocal(ev.Tags, "triggered-by")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow run: %w", err)
+	}
+	publisher, err := requiredTagLocal(ev.Tags, "publisher")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow run: %w", err)
+	}
+	run := domain.HiveCIWorkflowRun{
+		RunEventID:      eventIDHex(ev),
+		RepoCoordinate:  repoCoordinate,
+		CommitSHA:       commit,
+		Branch:          branch,
+		WorkflowPath:    workflow,
+		TriggerType:     tagValueLocal(ev.Tags, "trigger"),
+		TriggeredBy:     triggeredBy,
+		PublisherPubkey: publisher,
+		EventCreatedAt:  ev.CreatedAt.Time().UTC(),
+		ProcessingState: domain.HiveCIProcessingStatePendingResult,
+	}
+	gate := &DecodedQualityGate{
+		ID:            "hiveci:" + run.RunEventID,
+		System:        "hiveci",
+		RunID:         run.RunEventID,
+		Project:       repoCoordinate,
+		Status:        "running",
+		SourceEventID: run.RunEventID,
+		ObservedAt:    run.EventCreatedAt,
+		Metadata: map[string]any{
+			"commit_sha":    commit,
+			"branch":        branch,
+			"workflow_path": workflow,
+			"triggered_by":  triggeredBy,
+		},
+	}
+	return baseDecoded(ev, FamilyHiveCI, run.RunEventID, run.EventCreatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Group = "hive_ci_live"
+		out.Tier = 3
+		out.HiveCI = &DecodedHiveCI{WorkflowRun: &run, QualityGate: gate}
+	}), nil
+}
+
+func decodeHiveCIWorkflowResultProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	runEventID, err := requiredTagLocal(ev.Tags, "e")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow result: %w", err)
+	}
+	logURL, err := requiredTagLocal(ev.Tags, "log_url")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow result: %w", err)
+	}
+	status, err := requiredTagLocal(ev.Tags, "status")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow result: %w", err)
+	}
+	if status != "success" && status != "failure" {
+		return nil, fmt.Errorf("decode HiveCI workflow result: invalid status %q", status)
+	}
+	exitCode, err := parseIntTag(ev.Tags, "exit_code")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow result: %w", err)
+	}
+	duration, err := parseIntTag(ev.Tags, "duration")
+	if err != nil {
+		return nil, fmt.Errorf("decode HiveCI workflow result: %w", err)
+	}
+	type workflowResultContent struct {
+		ImageRepo   string `json:"image_repo"`
+		ImageTag    string `json:"image_tag"`
+		ImageDigest string `json:"image_digest"`
+	}
+	var content workflowResultContent
+	if strings.TrimSpace(ev.Content) != "" {
+		if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
+			return nil, fmt.Errorf("decode HiveCI workflow result content: %w", err)
+		}
+	}
+	imageRepo := firstNonBlank(tagValueLocal(ev.Tags, "image_repo"), content.ImageRepo)
+	imageTag := firstNonBlank(tagValueLocal(ev.Tags, "image_tag"), content.ImageTag)
+	imageDigest := firstNonBlank(tagValueLocal(ev.Tags, "image_digest"), content.ImageDigest)
+	result := domain.HiveCIWorkflowResult{
+		ResultEventID:   eventIDHex(ev),
+		RunEventID:      runEventID,
+		Status:          status,
+		ExitCode:        exitCode,
+		DurationSeconds: duration,
+		LogURL:          logURL,
+		Error:           tagValueLocal(ev.Tags, "error"),
+		ImageRepo:       imageRepo,
+		ImageTag:        imageTag,
+		ImageDigest:     imageDigest,
+		PublisherPubkey: eventPubKeyHex(ev),
+		EventCreatedAt:  ev.CreatedAt.Time().UTC(),
+		ProcessingState: domain.HiveCIProcessingStatePendingResult,
+	}
+	gateResult := "fail"
+	if status == "success" {
+		gateResult = "pass"
+	}
+	reason := firstNonBlank(result.Error, fmt.Sprintf("HiveCI workflow result %s", status))
+	gate := &DecodedQualityGate{
+		ID:            "hiveci:" + result.RunEventID,
+		System:        "hiveci",
+		RunID:         result.RunEventID,
+		Status:        "completed",
+		Result:        gateResult,
+		Reason:        reason,
+		BlocksMerge:   gateResult == "fail",
+		LogURL:        logURL,
+		SourceEventID: result.ResultEventID,
+		ObservedAt:    result.EventCreatedAt,
+		Metadata: map[string]any{
+			"exit_code":        exitCode,
+			"duration_seconds": duration,
+			"image_repo":       imageRepo,
+			"image_tag":        imageTag,
+			"image_digest":     imageDigest,
+		},
+	}
+	return baseDecoded(ev, FamilyHiveCI, result.RunEventID, result.EventCreatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Group = "hive_ci_live"
+		out.Tier = 3
+		out.HiveCI = &DecodedHiveCI{WorkflowResult: &result, QualityGate: gate}
+	}), nil
 }
 
 func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -830,6 +1135,50 @@ func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, u
 
 func continuityDTag(ev *gonostr.Event) string {
 	return firstNonBlank(tagValueLocal(ev.Tags, "d"), tagValueLocal(ev.Tags, "service"), tagValueLocal(ev.Tags, "worker"), eventIDHex(ev))
+}
+
+func requiredTagLocal(tags gonostr.Tags, key string) (string, error) {
+	value := strings.TrimSpace(tagValueLocal(tags, key))
+	if value == "" {
+		return "", fmt.Errorf("missing required tag %q", key)
+	}
+	return value, nil
+}
+
+func parseIntTag(tags gonostr.Tags, key string) (int, error) {
+	raw, err := requiredTagLocal(tags, key)
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("tag %q must be an integer: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func parseBoolTag(tags gonostr.Tags, key string) (bool, error) {
+	raw, err := requiredTagLocal(tags, key)
+	if err != nil {
+		return false, err
+	}
+	switch strings.ToLower(raw) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("tag %q must be true or false", key)
+	}
+}
+
+func isLoomJobStatus(status string) bool {
+	switch status {
+	case "queued", "running", "completed", "failed", "cancelled", "timeout":
+		return true
+	default:
+		return false
+	}
 }
 
 func tagValueLocal(tags gonostr.Tags, key string) string {

@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-up5fu",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "Kind 30100 Loom status events decode required job and status tags into a typed Loom job-status projection.",
+      "tests": ["TestCatalogDecodesLoomLiveEvents"]
+    },
+    {
+      "id": "AC-2",
+      "statement": "Kind 5101 Loom result events decode success, exit code, duration, artifact URLs, errors, and worker provenance into a typed Loom job-result projection.",
+      "tests": ["TestCatalogDecodesLoomLiveEvents"]
+    },
+    {
+      "id": "AC-3",
+      "statement": "Kind 5102 Loom cancellation events decode job correlation, requester, worker target, and reason into a typed Loom cancellation projection.",
+      "tests": ["TestCatalogDecodesLoomLiveEvents"]
+    }
+  ]
+}

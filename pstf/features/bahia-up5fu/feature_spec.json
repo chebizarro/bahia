@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-up5fu",
+  "title": "Loom live event projections",
+  "beads_issue": "bahia-up5fu",
+  "intent": "Bahia must decode Loom live job status, result, and cancellation events instead of treating them as no-op projections.",
+  "scope": [
+    "internal/adapters/nostr/catalog.go",
+    "internal/adapters/nostr/catalog_test.go"
+  ],
+  "event_sources": [
+    "loom-worker/src/nostr/service.ts",
+    "loom-worker/src/types/job.ts"
+  ],
+  "updated_at": "2026-07-11"
+}

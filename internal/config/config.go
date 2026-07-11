@@ -20,6 +20,7 @@ import (
 // Config is the top-level configuration for Bahia.
 type Config struct {
 	Mode           string                    `koanf:"mode" yaml:"mode"`
+	DevMode        bool                      `koanf:"dev_mode" yaml:"dev_mode"`
 	Server         ServerConfig              `koanf:"server"`
 	DB             DBConfig                  `koanf:"db"`
 	Harbor         HarborConfig              `koanf:"harbor"`
@@ -957,6 +958,8 @@ func Load(configPath string) (*Config, error) {
 			return "assistant.mcp.async_observation." + strings.TrimPrefix(key, "assistant_mcp_async_observation_")
 		}
 		switch key {
+		case "dev_mode":
+			return "dev_mode"
 		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key", "assistant_llm_streaming":
 			return key
 		}
@@ -1179,8 +1182,8 @@ func (c *Config) validateLoom() error {
 	if !projection.Enabled {
 		return nil
 	}
-	if projection.SignetBunkerURI == "" {
-		return fmt.Errorf("config validation failed: loom.canonical_projection.signet_bunker_uri is required when loom.canonical_projection.enabled=true")
+	if projection.SignetBunkerURI == "" && !c.DevMode {
+		return fmt.Errorf("config validation failed: loom.canonical_projection.signet_bunker_uri is required when loom.canonical_projection.enabled=true outside dev_mode")
 	}
 	return nil
 }
@@ -1973,8 +1976,8 @@ func (c *Config) validateSoulFactory() error {
 	if len(sf.Relays) == 0 {
 		return fmt.Errorf("config validation failed: soul_factory.relays requires at least one relay when soul_factory.enabled=true")
 	}
-	if sf.SignetBunkerURI == "" {
-		return fmt.Errorf("config validation failed: soul_factory.signet_bunker_uri is required when soul_factory.enabled=true")
+	if sf.SignetBunkerURI == "" && !c.DevMode {
+		return fmt.Errorf("config validation failed: soul_factory.signet_bunker_uri is required when soul_factory.enabled=true outside dev_mode")
 	}
 	authorized, err := normalizePubkeyList(sf.AuthorizedPubkeys)
 	if err != nil {

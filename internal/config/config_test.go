@@ -75,6 +75,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.SBOM.Cdxgen.BinaryPath != "cdxgen" {
 		t.Errorf("expected default cdxgen binary path cdxgen, got %q", cfg.SBOM.Cdxgen.BinaryPath)
 	}
+	if cfg.DevMode {
+		t.Error("expected dev_mode disabled by default")
+	}
 	if len(cfg.SoulFactory.Relays) != 0 || len(cfg.SoulFactory.AdditionalRelays) != 0 {
 		t.Errorf("expected default SoulFactory relays to be empty, got relays=%v additional=%v", cfg.SoulFactory.Relays, cfg.SoulFactory.AdditionalRelays)
 	}
@@ -86,6 +89,17 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Loom.CanonicalProjection.AllowRawKeyDev {
 		t.Error("expected Loom raw-key projection compatibility disabled by default")
+	}
+}
+
+func TestLoadDevModeFromEnv(t *testing.T) {
+	t.Setenv("BAHIA_DEV_MODE", "true")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.DevMode {
+		t.Fatal("BAHIA_DEV_MODE=true did not enable dev_mode")
 	}
 }
 
@@ -152,6 +166,13 @@ func TestValidateLoomCanonicalProjectionRawKeyGate(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.Loom.CanonicalProjection.Enabled = true
 				cfg.Loom.CanonicalProjection.SignetBunkerURI = "bunker://" + strings.Repeat("e", 64)
+			},
+		},
+		{
+			name: "dev mode permits missing signet for explicit local projection",
+			mutate: func(cfg *Config) {
+				cfg.DevMode = true
+				cfg.Loom.CanonicalProjection.Enabled = true
 			},
 		},
 	}

@@ -61,7 +61,8 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		BunkerURI:       sf.SignetBunkerURI,
 		Relays:          allRelays,
 		ClientSecretKey: sf.SignetClientSecretKey,
-		AllowMock:       false,
+		RequireReal:     !cfg.DevMode,
+		AllowMock:       cfg.DevMode,
 	}, slogLogger)
 	if err != nil {
 		return nil, fmt.Errorf("creating SoulFactory Signet client: %w", err)

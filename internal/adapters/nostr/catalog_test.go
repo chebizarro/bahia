@@ -180,6 +180,130 @@ func TestCatalogDecodesOnlyContinuityDomainNIP38StatusAsHeartbeat(t *testing.T) 
 	}
 }
 
+func TestCatalogDecodesLoomLiveEvents(t *testing.T) {
+	catalog := NewKindCatalog()
+
+	statusDecoder, ok := catalog.Decoder(KindLoomJobStatusUpdate)
+	if !ok {
+		t.Fatal("missing Loom status decoder")
+	}
+	statusEvent := &gonostr.Event{
+		ID:        gonostr.ID{1},
+		PubKey:    gonostr.PubKey{2},
+		Kind:      canonicalKind(KindLoomJobStatusUpdate),
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "job-1"}, {"e", "job-1"}, {"status", "running"}, {"progress", "42"}},
+		Content:   "building image",
+	}
+	status, err := statusDecoder(statusEvent)
+	if err != nil {
+		t.Fatalf("decode Loom status: %v", err)
+	}
+	if status.Family != FamilyLoom || status.Group != "loom_live" || status.Loom == nil || status.Loom.JobStatus == nil {
+		t.Fatalf("decoded Loom status as %#v", status)
+	}
+	if status.Loom.JobStatus.JobID != "job-1" || status.Loom.JobStatus.Status != "running" || status.Loom.JobStatus.Progress == nil || *status.Loom.JobStatus.Progress != 42 {
+		t.Fatalf("unexpected Loom status payload: %#v", status.Loom.JobStatus)
+	}
+
+	resultDecoder, ok := catalog.Decoder(KindLoomJobResult)
+	if !ok {
+		t.Fatal("missing Loom result decoder")
+	}
+	resultEvent := &gonostr.Event{
+		ID:        gonostr.ID{3},
+		PubKey:    gonostr.PubKey{4},
+		Kind:      canonicalKind(KindLoomJobResult),
+		CreatedAt: gonostr.Now(),
+		Tags: gonostr.Tags{
+			{"e", "job-1"}, {"success", "true"}, {"exit_code", "0"}, {"duration", "12"},
+			{"stdout", "https://blossom.example/stdout"}, {"stderr", "https://blossom.example/stderr"}, {"change", "sha256:abc"},
+		},
+	}
+	result, err := resultDecoder(resultEvent)
+	if err != nil {
+		t.Fatalf("decode Loom result: %v", err)
+	}
+	if result.Loom == nil || result.Loom.JobResult == nil || !result.Loom.JobResult.Success || result.Loom.JobResult.Status != "completed" {
+		t.Fatalf("unexpected Loom result payload: %#v", result)
+	}
+
+	cancelDecoder, ok := catalog.Decoder(KindLoomJobCancellation)
+	if !ok {
+		t.Fatal("missing Loom cancellation decoder")
+	}
+	cancelEvent := &gonostr.Event{
+		ID:        gonostr.ID{5},
+		PubKey:    gonostr.PubKey{6},
+		Kind:      canonicalKind(KindLoomJobCancellation),
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"e", "job-1"}, {"p", "worker-pubkey"}},
+		Content:   "operator requested cancellation",
+	}
+	cancel, err := cancelDecoder(cancelEvent)
+	if err != nil {
+		t.Fatalf("decode Loom cancellation: %v", err)
+	}
+	if cancel.Loom == nil || cancel.Loom.JobCancellation == nil || cancel.Loom.JobCancellation.WorkerPubkey != "worker-pubkey" {
+		t.Fatalf("unexpected Loom cancellation payload: %#v", cancel)
+	}
+}
+
+func TestCatalogDecodesHiveCIEventsIntoQualityGate(t *testing.T) {
+	catalog := NewKindCatalog()
+
+	runDecoder, ok := catalog.Decoder(KindHiveCIWorkflowRun)
+	if !ok {
+		t.Fatal("missing HiveCI run decoder")
+	}
+	runEvent := &gonostr.Event{
+		ID:        gonostr.ID{7},
+		PubKey:    gonostr.PubKey{8},
+		Kind:      canonicalKind(KindHiveCIWorkflowRun),
+		CreatedAt: gonostr.Now(),
+		Tags: gonostr.Tags{
+			{"a", "30618:repo-pubkey:app"}, {"commit", "abc123"}, {"branch", "main"},
+			{"workflow", ".github/workflows/ci.yml"}, {"triggered-by", "alice"}, {"publisher", "worker-pubkey"}, {"trigger", "push"},
+		},
+	}
+	run, err := runDecoder(runEvent)
+	if err != nil {
+		t.Fatalf("decode HiveCI run: %v", err)
+	}
+	if run.Family != FamilyHiveCI || run.Group != "hive_ci_live" || run.HiveCI == nil || run.HiveCI.WorkflowRun == nil || run.HiveCI.QualityGate == nil {
+		t.Fatalf("decoded HiveCI run as %#v", run)
+	}
+	if run.HiveCI.WorkflowRun.WorkflowPath != ".github/workflows/ci.yml" || run.HiveCI.QualityGate.Status != "running" {
+		t.Fatalf("unexpected HiveCI run payload: %#v", run.HiveCI)
+	}
+
+	resultDecoder, ok := catalog.Decoder(KindHiveCIWorkflowResult)
+	if !ok {
+		t.Fatal("missing HiveCI result decoder")
+	}
+	resultEvent := &gonostr.Event{
+		ID:        gonostr.ID{9},
+		PubKey:    gonostr.PubKey{10},
+		Kind:      canonicalKind(KindHiveCIWorkflowResult),
+		CreatedAt: gonostr.Now(),
+		Tags: gonostr.Tags{
+			{"e", "run-event-id"}, {"log_url", "https://ci.example/log"}, {"status", "failure"},
+			{"exit_code", "1"}, {"duration", "37"}, {"error", "unit tests failed"},
+		},
+		Content: `{"image_repo":"registry.example/app","image_tag":"main","image_digest":"sha256:def"}`,
+	}
+	result, err := resultDecoder(resultEvent)
+	if err != nil {
+		t.Fatalf("decode HiveCI result: %v", err)
+	}
+	if result.HiveCI == nil || result.HiveCI.WorkflowResult == nil || result.HiveCI.QualityGate == nil {
+		t.Fatalf("decoded HiveCI result as %#v", result)
+	}
+	if result.HiveCI.WorkflowResult.ImageDigest != "sha256:def" || result.HiveCI.QualityGate.Result != "fail" || !result.HiveCI.QualityGate.BlocksMerge {
+		t.Fatalf("unexpected HiveCI result projection: %#v", result.HiveCI)
+	}
+}
+
 func TestCatalogGroupsExcludeLegacyRuntimeKinds(t *testing.T) {
 	catalog := NewKindCatalog()
 	for _, group := range catalog.Groups {

@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-48ztb",
+  "test_runs": [
+    {
+      "command": "go test ./internal/adapters/signet ./internal/config ./internal/adapters/nostr ./internal/app ./internal/adapters/hiveci ./internal/adapters/loom",
+      "result": "pass",
+      "date": "2026-07-11"
+    },
+    {
+      "command": "go test ./...",
+      "result": "pass",
+      "date": "2026-07-11"
+    }
+  ],
+  "mapped_tests": [
+    "internal/adapters/signet: TestClient_RequireRealOverridesMockMode",
+    "internal/config: TestDefaults",
+    "internal/config: TestLoadDevModeFromEnv",
+    "internal/config: TestValidateLoomCanonicalProjectionRawKeyGate",
+    "internal/app: TestNewLoomCanonicalProjectionSignerRejectsEnabledProjectionWithoutSignet"
+  ]
+}

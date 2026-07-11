@@ -52,6 +52,20 @@ func TestClient_ConnectRequiresBunkerUnlessMockExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestClient_RequireRealOverridesMockMode(t *testing.T) {
+	client, err := NewClient(Config{RequireReal: true, AllowMock: true}, nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	err = client.Connect(context.Background())
+	if !errors.Is(err, ErrNoBunkerConfigured) {
+		t.Fatalf("Connect() error = %v, want ErrNoBunkerConfigured", err)
+	}
+	if client.IsMockMode() {
+		t.Fatal("RequireReal=true must not enter mock mode")
+	}
+}
+
 func TestClient_OperationsFailWhenNotConnected(t *testing.T) {
 	client, err := NewClient(Config{}, nil)
 	if err != nil {

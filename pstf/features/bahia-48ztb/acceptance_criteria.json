@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-48ztb",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "A Signet client configured with RequireReal=true returns a hard error when no bunker URI is configured, even if mock mode is otherwise allowed.",
+      "tests": ["TestClient_RequireRealOverridesMockMode"]
+    },
+    {
+      "id": "AC-2",
+      "statement": "dev_mode is disabled by default and can be enabled with BAHIA_DEV_MODE=true.",
+      "tests": ["TestDefaults", "TestLoadDevModeFromEnv"]
+    },
+    {
+      "id": "AC-3",
+      "statement": "Loom canonical projection and SoulFactory require a configured Signet bunker outside dev_mode, while dev_mode explicitly permits mock signing.",
+      "tests": ["TestValidateLoomCanonicalProjectionRawKeyGate", "TestNewLoomCanonicalProjectionSignerRejectsEnabledProjectionWithoutSignet"]
+    }
+  ]
+}

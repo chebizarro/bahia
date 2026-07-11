@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-up5fu",
+  "test_runs": [
+    {
+      "command": "go test ./internal/adapters/nostr",
+      "result": "pass",
+      "date": "2026-07-11"
+    },
+    {
+      "command": "go test ./...",
+      "result": "pass",
+      "date": "2026-07-11"
+    }
+  ],
+  "mapped_tests": [
+    "internal/adapters/nostr: TestCatalogDecodesLoomLiveEvents"
+  ]
+}

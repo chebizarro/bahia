@@ -55,6 +55,7 @@ type Client struct {
 	pool            *nostr.Pool
 	logger          *slog.Logger
 	clientSecretKey string // Ephemeral key for NIP-46 session
+	requireReal     bool   // Fail closed unless a real Signet bunker is configured and reachable
 	allowMock       bool   // Explicit test/dev-only mock signing mode
 
 	mu        sync.Mutex
@@ -79,7 +80,8 @@ type Config struct {
 	BunkerURI       string   // bunker://<pubkey>?relay=...&secret=...
 	Relays          []string // Backup relays if not in URI
 	ClientSecretKey string   // Optional: persistent client key (generated if empty)
-	AllowMock       bool     // Explicit test/dev-only mock mode; production defaults to fail-closed
+	RequireReal     bool     // When true, missing/unreachable bunker is a hard error
+	AllowMock       bool     // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
 }
 
 // NewClient creates a new Signet client.
@@ -100,6 +102,7 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		pool:            nostr.NewPool(),
 		logger:          logger.With("component", "signet"),
 		clientSecretKey: clientSK,
+		requireReal:     config.RequireReal,
 		allowMock:       config.AllowMock,
 		agents:          make(map[string]*AgentIdentity),
 	}
@@ -117,10 +120,10 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	if c.bunkerURI == "" {
-		if !c.allowMock {
+		if c.requireReal || !c.allowMock {
 			return ErrNoBunkerConfigured
 		}
-		c.logger.Warn("no bunker URI configured, running in explicit mock mode")
+		c.logger.Warn("no bunker URI configured, running in explicit dev/mock mode")
 		c.connected = true
 		return nil
 	}

@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-cx3ms",
+  "title": "HiveCI live event and quality-gate projections",
+  "beads_issue": "bahia-cx3ms",
+  "intent": "Bahia must decode HiveCI live workflow run/result events and expose a quality-gate projection that can represent running, pass, and fail outcomes.",
+  "scope": [
+    "internal/adapters/nostr/catalog.go",
+    "internal/adapters/nostr/catalog_test.go"
+  ],
+  "event_sources": [
+    "internal/adapters/hiveci/subscriber.go",
+    "pstf/src/lib/drift.ts"
+  ],
+  "updated_at": "2026-07-11"
+}

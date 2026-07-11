@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-cx3ms",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "HiveCI workflow-run events decode repo, commit, branch, workflow, trigger, publisher, and provenance into Bahia's HiveCI workflow-run domain model.",
+      "tests": ["TestCatalogDecodesHiveCIEventsIntoQualityGate"]
+    },
+    {
+      "id": "AC-2",
+      "statement": "HiveCI workflow-result events decode status, exit code, duration, log URL, image metadata, and errors into Bahia's HiveCI workflow-result domain model.",
+      "tests": ["TestCatalogDecodesHiveCIEventsIntoQualityGate"]
+    },
+    {
+      "id": "AC-3",
+      "statement": "HiveCI run/result projections include a quality-gate payload that marks running checks, passing checks, and merge-blocking failures.",
+      "tests": ["TestCatalogDecodesHiveCIEventsIntoQualityGate"]
+    }
+  ]
+}

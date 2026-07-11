@@ -2809,23 +2809,28 @@ func newLoomCanonicalProjectionSigner(ctx context.Context, cfg *config.Config, r
 		return nil, nil
 	}
 	projection := cfg.Loom.CanonicalProjection
-	if strings.TrimSpace(projection.SignetBunkerURI) != "" {
-		signetClient, err := signetAdapter.NewClient(signetAdapter.Config{
-			BunkerURI:       projection.SignetBunkerURI,
-			Relays:          relays,
-			ClientSecretKey: projection.SignetClientSecretKey,
-			AllowMock:       false,
-		}, slog.Default())
-		if err != nil {
-			return nil, fmt.Errorf("initialize Signet client: %w", err)
-		}
-		if err := signetClient.Connect(ctx); err != nil {
-			return nil, fmt.Errorf("connect Signet client: %w", err)
-		}
-		logger.Info("Loom canonical projection will use Signet/NIP-46 signer")
-		return signetClient, nil
+	if strings.TrimSpace(projection.SignetBunkerURI) == "" && !cfg.DevMode {
+		return nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
 	}
-	return nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
+	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{
+		BunkerURI:       projection.SignetBunkerURI,
+		Relays:          relays,
+		ClientSecretKey: projection.SignetClientSecretKey,
+		RequireReal:     !cfg.DevMode,
+		AllowMock:       cfg.DevMode,
+	}, slog.Default())
+	if err != nil {
+		return nil, fmt.Errorf("initialize Signet client: %w", err)
+	}
+	if err := signetClient.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connect Signet client: %w", err)
+	}
+	if signetClient.IsMockMode() {
+		logger.Warn("Loom canonical projection will use Signet dev/mock signer")
+	} else {
+		logger.Info("Loom canonical projection will use Signet/NIP-46 signer")
+	}
+	return signetClient, nil
 }
 
 func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) service.AssistantIdentity {
@@ -2835,11 +2840,11 @@ func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays 
 			identity.Pubkey = secret.Public().Hex()
 		}
 	}
-	if cfg == nil || (!cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
+	if cfg == nil || (!cfg.DevMode && !cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
 		return identity
 	}
 	slogLogger := slog.Default()
-	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, AllowMock: cfg.Assistant.SignetAllowMock}, slogLogger)
+	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock}, slogLogger)
 	if err != nil {
 		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
 		return identity

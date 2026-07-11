@@ -1,0 +1,14 @@
+{
+  "feature_id": "bahia-48ztb",
+  "title": "Fail-closed Signet client outside development mode",
+  "beads_issue": "bahia-48ztb",
+  "intent": "Bahia must not silently create local mock Signet identities in production paths when a real NIP-46 bunker is absent or unreachable.",
+  "scope": [
+    "internal/adapters/signet/client.go",
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "internal/app/soulfactory.go"
+  ],
+  "nostr_semantics": "Real Signet operation continues to use NIP-46 bunker connectivity; development mock signing is explicitly gated by dev_mode/BAHIA_DEV_MODE.",
+  "updated_at": "2026-07-11"
+}
