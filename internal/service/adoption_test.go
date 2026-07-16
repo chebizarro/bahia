@@ -346,7 +346,13 @@ func TestAdoptionServiceScanRedactsSensitiveEnvironmentAndLabels(t *testing.T) {
 	if _, ok := container.SafeEnvironment["DB_PASSWORD"]; ok {
 		t.Fatal("sensitive env DB_PASSWORD leaked into safe preview environment")
 	}
-	if !containsString(container.RedactedEnvironmentKeys, "DB_PASSWORD") || !containsString(container.RedactedEnvironmentKeys, "AWS_SECRET_ACCESS_KEY") || !containsString(container.RedactedEnvironmentKeys, "DATABASE_URL") {
+	if _, ok := container.SafeEnvironment["MINT_LND_REST_MACAROON"]; ok {
+		t.Fatal("sensitive env MINT_LND_REST_MACAROON leaked into safe preview environment")
+	}
+	if _, ok := container.SafeEnvironment["FLEET_CURATOR_BUNKER_URL"]; ok {
+		t.Fatal("sensitive env FLEET_CURATOR_BUNKER_URL leaked into safe preview environment")
+	}
+	if !containsString(container.RedactedEnvironmentKeys, "DB_PASSWORD") || !containsString(container.RedactedEnvironmentKeys, "AWS_SECRET_ACCESS_KEY") || !containsString(container.RedactedEnvironmentKeys, "DATABASE_URL") || !containsString(container.RedactedEnvironmentKeys, "MINT_LND_REST_MACAROON") || !containsString(container.RedactedEnvironmentKeys, "FLEET_CURATOR_BUNKER_URL") {
 		t.Fatalf("missing redacted env keys: %#v", container.RedactedEnvironmentKeys)
 	}
 	if _, ok := container.SafeLabels["com.example.secret-token"]; ok {
@@ -691,7 +697,7 @@ func newSensitiveAdoptionDockerServer(t *testing.T) *httptest.Server {
 				"Image":"sha256:secretimage",
 				"Config":{
 					"Image":"registry.example/secret-app:2.0.0",
-					"Env":["APP_ENV=prod","DB_PASSWORD=super-secret","AWS_SECRET_ACCESS_KEY=aws-secret","DATABASE_URL=postgres://user:pass@db/prod"],
+					"Env":["APP_ENV=prod","DB_PASSWORD=super-secret","AWS_SECRET_ACCESS_KEY=aws-secret","DATABASE_URL=postgres://user:pass@db/prod","MINT_LND_REST_MACAROON=hex-secret","FLEET_CURATOR_BUNKER_URL=bunker://pub?secret=secret"],
 					"Labels":{"com.example.owner":"platform","com.example.secret-token":"label-secret"},
 					"Cmd":["serve"]
 				},

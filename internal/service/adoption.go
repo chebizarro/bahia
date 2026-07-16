@@ -1200,7 +1200,7 @@ func isSensitiveEnvironmentKey(key string) bool {
 	if k == "" {
 		return false
 	}
-	for _, token := range []string{"PASSWORD", "PASSWD", "PASS", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT", "DATABASE_URL", "DB_URL", "REDIS_URL", "POSTGRES_DSN", "POSTGRES_URL", "MYSQL_DSN", "MYSQL_URL", "MONGODB_URI", "MONGO_URI", "AMQP_URL", "RABBITMQ_URL", "CONNECTION_STRING", "DSN"} {
+	for _, token := range []string{"PASSWORD", "PASSWD", "PASS", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT", "MACAROON", "BUNKER", "NSEC", "DATABASE_URL", "DB_URL", "REDIS_URL", "POSTGRES_DSN", "POSTGRES_URL", "MYSQL_DSN", "MYSQL_URL", "MONGODB_URI", "MONGO_URI", "AMQP_URL", "RABBITMQ_URL", "CONNECTION_STRING", "DSN"} {
 		if strings.Contains(k, token) {
 			return true
 		}
@@ -1218,7 +1218,7 @@ func isSensitiveLabelKey(key string) bool {
 	if k == "" {
 		return false
 	}
-	for _, token := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT"} {
+	for _, token := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT", "MACAROON", "BUNKER", "NSEC"} {
 		if strings.Contains(k, token) {
 			return true
 		}

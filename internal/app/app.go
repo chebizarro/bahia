@@ -1126,6 +1126,12 @@ func New(cfg *config.Config) (*App, error) {
 			RBAC:         auth.NewRBAC(orgMemberRepo),
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
+		controlplane.NewOperatorContextVMHandlers(controlplane.OperatorContextVMHandlersConfig{
+			Adoption:                       adoptionSvc,
+			RuntimeLifecycle:               runtimeLifecycleSvc,
+			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
+			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
+		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport)
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient)
