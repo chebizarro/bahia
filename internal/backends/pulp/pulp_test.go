@@ -2,6 +2,7 @@ package pulp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,14 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-func TestPulpEnsureRepositoryCreatesRepositoryAndDistributionWithTask(t *testing.T) {
+const (
+	repositoryUUID       = "11111111-1111-1111-1111-111111111111"
+	createTaskUUID       = "22222222-2222-2222-2222-222222222222"
+	distributionTaskUUID = "33333333-3333-3333-3333-333333333333"
+	artifactTaskUUID     = "44444444-4444-4444-4444-444444444444"
+)
+
+func TestPulpEnsureRepositoryCreatesRepositoryAndDistributionWithConfirmedTasks(t *testing.T) {
 	lookupCount := 0
 	var createdRepo, createdDistribution bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,23 +33,23 @@ func TestPulpEnsureRepositoryCreatesRepositoryAndDistributionWithTask(t *testing
 				io.WriteString(w, `{"count":0,"results":[]}`)
 				return
 			}
-			io.WriteString(w, `{"count":1,"results":[{"name":"file-npm","pulp_href":"/pulp/api/v3/repositories/file/file/file-npm/"}]}`)
+			io.WriteString(w, `{"count":1,"results":[{"name":"file-npm","pulp_href":"/pulp/api/v3/repositories/file/file/`+repositoryUUID+`/"}]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/pulp/api/v3/repositories/file/file/":
 			createdRepo = true
-			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"task":"/pulp/api/v3/tasks/1/"}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/pulp/api/v3/tasks/1/":
-			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"task":"/pulp/api/v3/tasks/`+createTaskUUID+`/"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/pulp/api/v3/tasks/"+createTaskUUID+"/":
 			io.WriteString(w, `{"state":"completed"}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/pulp/api/v3/distributions/file/file/":
 			createdDistribution = true
-			w.WriteHeader(http.StatusCreated)
+			io.WriteString(w, `{"task":"/pulp/api/v3/tasks/`+distributionTaskUUID+`/"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/pulp/api/v3/tasks/"+distributionTaskUUID+"/":
+			io.WriteString(w, `{"state":"completed"}`)
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
 	}))
 	defer server.Close()
-	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond})
+	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond, EnableCustomMutationAPI: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -49,19 +57,59 @@ func TestPulpEnsureRepositoryCreatesRepositoryAndDistributionWithTask(t *testing
 	if err != nil {
 		t.Fatalf("EnsureRepository: %v", err)
 	}
-	if lookupCount != 2 || !createdRepo || !createdDistribution || !obs.Exists {
+	if lookupCount != 2 || !createdRepo || !createdDistribution || !obs.Exists || obs.Metadata["repository_href"] != "/pulp/api/v3/repositories/file/file/"+repositoryUUID+"/" {
 		t.Fatalf("unexpected ensure state lookup=%d repo=%v dist=%v obs=%#v", lookupCount, createdRepo, createdDistribution, obs)
 	}
 }
 
-func TestPulpEnsureRepositoryPropagatesDistributionFailure(t *testing.T) {
-	lookupCount := 0
+func TestPulpEnsureRepositoryFailsWhenCreationIsNotConfirmed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/pulp/api/v3/repositories/file/file/":
-			lookupCount++
-			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"count":1,"results":[{"name":"file-npm","pulp_href":"/pulp/api/v3/repositories/file/file/file-npm/"}]}`)
+			io.WriteString(w, `{"count":0,"results":[]}`)
+		case r.Method == http.MethodPost:
+			io.WriteString(w, `{"task":"/pulp/api/v3/tasks/`+createTaskUUID+`/"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/pulp/api/v3/tasks/"+createTaskUUID+"/":
+			io.WriteString(w, `{"state":"completed"}`)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond, ConfirmationTimeout: 5 * time.Millisecond, EnableCustomMutationAPI: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := backend.EnsureRepository(context.Background(), testRepo()); err == nil || !strings.Contains(err.Error(), "was not confirmed") {
+		t.Fatalf("expected confirmation failure, got %v", err)
+	}
+}
+
+func TestPulpRejectsMalformedSuccessfulTaskResponse(t *testing.T) {
+	for _, body := range []string{`{"unexpected":true}`, `{not-json`} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusAccepted)
+				io.WriteString(w, body)
+			}))
+			defer server.Close()
+			backend, err := New(Config{BaseURL: server.URL, EnableCustomMutationAPI: true})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = backend.StoreArtifact(context.Background(), testRepo(), packagebackend.StoreArtifactRequest{Namespace: "scope", PackageName: "pkg", Version: "1.0.0", Filename: "pkg.tgz", Reader: strings.NewReader("artifact")})
+			if err == nil || (!strings.Contains(err.Error(), "did not include a task href") && !strings.Contains(err.Error(), "decode store pulp artifact response")) {
+				t.Fatalf("expected task confirmation error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestPulpEnsureRepositoryPropagatesDistributionFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/pulp/api/v3/repositories/file/file/":
+			io.WriteString(w, `{"count":1,"results":[{"name":"file-npm","pulp_href":"/pulp/api/v3/repositories/file/file/`+repositoryUUID+`/"}]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/pulp/api/v3/distributions/file/file/":
 			http.Error(w, "distribution failed", http.StatusInternalServerError)
 		default:
@@ -69,19 +117,54 @@ func TestPulpEnsureRepositoryPropagatesDistributionFailure(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond})
+	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond, EnableCustomMutationAPI: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if _, err := backend.EnsureRepository(context.Background(), testRepo()); err == nil || !strings.Contains(err.Error(), "distribution") {
 		t.Fatalf("expected distribution failure, got %v", err)
 	}
-	if lookupCount != 1 {
-		t.Fatalf("unexpected lookup count %d", lookupCount)
+}
+
+func TestPulpCapabilitiesFailClosedWithoutVerifiedCustomAPI(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	backend, err := New(Config{BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	caps := backend.Capabilities()
+	if caps.CanCreateRepository || caps.CanDeleteRepository || caps.CanStoreArtifact || caps.CanListArtifacts || caps.CanPromoteArtifact || caps.CanYankArtifact || caps.CanObserveDrift {
+		t.Fatalf("unverified Pulp capabilities were advertised: %#v", caps)
+	}
+	if _, err := backend.EnsureRepository(context.Background(), testRepo()); !errors.Is(err, ErrCustomMutationAPIUnavailable) {
+		t.Fatalf("EnsureRepository error = %v, want ErrCustomMutationAPIUnavailable", err)
 	}
 }
 
-func TestPulpStoreAndYankArtifactUseAdapterEndpoints(t *testing.T) {
+func TestPulpObserveArtifactDoesNotReuseExpectedChecksumAsObserved(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/pulp/content/file-npm/scope/pkg/1.0.0/pkg.tgz" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Length", "8")
+		io.WriteString(w, "artifact")
+	}))
+	defer server.Close()
+	backend, err := New(Config{BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	obs, err := backend.ObserveArtifact(context.Background(), testRepo(), domain.PackageArtifact{BackendPath: "scope/pkg/1.0.0/pkg.tgz", SHA256: strings.Repeat("a", 64)})
+	if err != nil {
+		t.Fatalf("ObserveArtifact: %v", err)
+	}
+	if !obs.Exists || obs.SHA256 != "" || backend.Capabilities().CanObserveDrift {
+		t.Fatalf("unexpected observation %#v caps=%#v", obs, backend.Capabilities())
+	}
+}
+
+func TestPulpStoreAndYankArtifactUseVerifiedCustomAdapterEndpoints(t *testing.T) {
 	var putPath, deletePath, putBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -89,13 +172,11 @@ func TestPulpStoreAndYankArtifactUseAdapterEndpoints(t *testing.T) {
 			putPath = r.URL.Path
 			body, _ := io.ReadAll(r.Body)
 			putBody = string(body)
-			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"task":"/pulp/api/v3/tasks/2/"}`)
+			io.WriteString(w, `{"task":"/pulp/api/v3/tasks/`+artifactTaskUUID+`/"}`)
 		case http.MethodGet:
-			if r.URL.Path != "/pulp/api/v3/tasks/2/" {
+			if r.URL.Path != "/pulp/api/v3/tasks/"+artifactTaskUUID+"/" {
 				t.Fatalf("unexpected task path %s", r.URL.Path)
 			}
-			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"state":"completed"}`)
 		case http.MethodDelete:
 			deletePath = r.URL.Path
@@ -105,7 +186,7 @@ func TestPulpStoreAndYankArtifactUseAdapterEndpoints(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond})
+	backend, err := New(Config{BaseURL: server.URL, TaskInterval: time.Millisecond, EnableCustomMutationAPI: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

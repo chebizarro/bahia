@@ -2,7 +2,11 @@ package packagebackend
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net"
+	"net/url"
+	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -39,7 +43,52 @@ type AuthConfig struct {
 }
 
 func (a AuthConfig) Configured() bool {
-	return a.BearerToken != "" || a.Username != "" || a.Password != ""
+	return strings.TrimSpace(a.BearerToken) != "" || strings.TrimSpace(a.Username) != "" || strings.TrimSpace(a.Password) != ""
+}
+
+// Validate rejects ambiguous or partial backend credentials.
+func (a AuthConfig) Validate() error {
+	token := strings.TrimSpace(a.BearerToken)
+	username := strings.TrimSpace(a.Username)
+	password := strings.TrimSpace(a.Password)
+	if token != "" && (username != "" || password != "") {
+		return fmt.Errorf("backend auth must use either bearer token or username/password, not both")
+	}
+	if (username == "") != (password == "") {
+		return fmt.Errorf("backend auth username and password must both be set")
+	}
+	return nil
+}
+
+// ValidateEndpoint validates an external backend endpoint. Plain HTTP is only
+// accepted for loopback test/development servers; remote integrations must use TLS.
+func ValidateEndpoint(raw, name string) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid %s: %w", name, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid %s: scheme must be http or https", name)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid %s: endpoint must contain only scheme, host, and optional base path", name)
+	}
+	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		return "", fmt.Errorf("invalid %s: remote backend endpoints must use https", name)
+	}
+	return raw, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 type Backend interface {

@@ -3,7 +3,9 @@ package pulp
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,34 +17,43 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+var ErrCustomMutationAPIUnavailable = errors.New("pulp custom mutation API is not enabled")
+
 // Config configures a Pulp file-plugin adapter. The concrete endpoints are kept
 // isolated here so package control-plane core logic remains backend-agnostic.
 type Config struct {
-	BaseURL       string
-	PublicBaseURL string
-	HTTPClient    *http.Client
-	Auth          packagebackend.AuthConfig
-	Secrets       map[string]string
-	TaskInterval  time.Duration
+	BaseURL             string
+	PublicBaseURL       string
+	HTTPClient          *http.Client
+	Auth                packagebackend.AuthConfig
+	Secrets             map[string]string
+	TaskInterval        time.Duration
+	ConfirmationTimeout time.Duration
+	// EnableCustomMutationAPI explicitly opts into the non-standard repository
+	// mutation endpoints. Production factory wiring leaves this false until a
+	// deployment has verified a compatible Pulp plugin/API version.
+	EnableCustomMutationAPI bool
 }
 
 // Backend implements packagebackend.Backend for Pulp file repositories.
 type Backend struct {
-	baseURL       string
-	publicBaseURL string
-	httpClient    *http.Client
-	auth          packagebackend.AuthConfig
-	secrets       map[string]string
-	taskInterval  time.Duration
+	baseURL             string
+	publicBaseURL       string
+	httpClient          *http.Client
+	auth                packagebackend.AuthConfig
+	secrets             map[string]string
+	taskInterval        time.Duration
+	confirmationTimeout time.Duration
+	customMutationAPI   bool
 }
 
 func New(cfg Config) (*Backend, error) {
-	base := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if base == "" {
-		return nil, fmt.Errorf("pulp base url is required")
+	base, err := packagebackend.ValidateEndpoint(cfg.BaseURL, "pulp base url")
+	if err != nil {
+		return nil, err
 	}
-	if _, err := url.ParseRequestURI(base); err != nil {
-		return nil, fmt.Errorf("invalid pulp base url: %w", err)
+	if err := cfg.Auth.Validate(); err != nil {
+		return nil, err
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -52,24 +63,42 @@ func New(cfg Config) (*Backend, error) {
 	if interval <= 0 {
 		interval = 10 * time.Millisecond
 	}
-	publicBase := strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	confirmationTimeout := cfg.ConfirmationTimeout
+	if confirmationTimeout <= 0 {
+		confirmationTimeout = 5 * time.Second
+	}
+	publicBase := strings.TrimSpace(cfg.PublicBaseURL)
 	if publicBase == "" {
 		publicBase = base + "/pulp/content"
+	} else {
+		publicBase, err = packagebackend.ValidateEndpoint(publicBase, "pulp public base url")
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &Backend{baseURL: base, publicBaseURL: publicBase, httpClient: client, auth: cfg.Auth, secrets: cfg.Secrets, taskInterval: interval}, nil
+	return &Backend{baseURL: base, publicBaseURL: publicBase, httpClient: client, auth: cfg.Auth, secrets: cfg.Secrets, taskInterval: interval, confirmationTimeout: confirmationTimeout, customMutationAPI: cfg.EnableCustomMutationAPI}, nil
 }
 
 func (b *Backend) Type() domain.PackageBackendType { return domain.PackageBackendPulp }
 
 func (b *Backend) Capabilities() packagebackend.Capabilities {
 	caps := packagebackend.CommonCapabilities()
-	// The skeleton Pulp adapter observes existence via HTTP but does not yet read
-	// independent backend checksums for byte-level drift.
+	caps.CanCreateRepository = b.customMutationAPI
+	caps.CanDeleteRepository = b.customMutationAPI
+	caps.CanStoreArtifact = b.customMutationAPI
+	caps.CanListArtifacts = b.customMutationAPI
+	caps.CanPromoteArtifact = b.customMutationAPI
+	caps.CanYankArtifact = b.customMutationAPI
+	// Pulp's standard APIs still need repository-version/content traversal plus
+	// artifact-detail lookup before an independent SHA-256 can be advertised.
 	caps.CanObserveDrift = false
 	return caps
 }
 
 func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepository) (packagebackend.RepositoryObservation, error) {
+	if !b.customMutationAPI {
+		return packagebackend.RepositoryObservation{}, ErrCustomMutationAPIUnavailable
+	}
 	name := backendRepoName(repo)
 	if name == "" {
 		return packagebackend.RepositoryObservation{}, fmt.Errorf("external repository name is required")
@@ -84,16 +113,16 @@ func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepos
 		if err != nil {
 			return packagebackend.RepositoryObservation{}, err
 		}
-		if err := b.acceptTaskOrSuccess(ctx, resp, "create pulp file repository"); err != nil {
+		if err := b.acceptTask(ctx, resp, "create pulp file repository"); err != nil {
 			return packagebackend.RepositoryObservation{}, err
 		}
-		_, repoHref, err = b.findRepository(ctx, name)
+		repoHref, err = b.confirmRepository(ctx, name)
 		if err != nil {
 			return packagebackend.RepositoryObservation{}, err
 		}
 	}
 	if repoHref == "" {
-		repoHref = "/pulp/api/v3/repositories/file/file/" + url.PathEscape(name) + "/"
+		return packagebackend.RepositoryObservation{}, fmt.Errorf("pulp repository %q exists without a server-provided href", name)
 	}
 	if err := b.ensureDistribution(ctx, name, repoHref); err != nil {
 		return packagebackend.RepositoryObservation{}, err
@@ -102,6 +131,9 @@ func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepos
 }
 
 func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepository, force bool) (packagebackend.RepositoryObservation, error) {
+	if !b.customMutationAPI {
+		return packagebackend.RepositoryObservation{}, ErrCustomMutationAPIUnavailable
+	}
 	name := backendRepoName(repo)
 	if !force {
 		items, err := b.ListArtifacts(ctx, repo)
@@ -116,11 +148,11 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent {
 		_ = resp.Body.Close()
 		return packagebackend.RepositoryObservation{Exists: false, PublicURL: b.repositoryURL(name)}, nil
 	}
-	if err := b.acceptTaskOrSuccess(ctx, resp, "delete pulp file repository"); err != nil {
+	if err := b.acceptTask(ctx, resp, "delete pulp file repository"); err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
 	return packagebackend.RepositoryObservation{Exists: false, PublicURL: b.repositoryURL(name)}, nil
@@ -136,6 +168,9 @@ func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepo
 }
 
 func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageRepository, req packagebackend.StoreArtifactRequest) (packagebackend.ArtifactObservation, error) {
+	if !b.customMutationAPI {
+		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
+	}
 	if req.Reader == nil {
 		return packagebackend.ArtifactObservation{}, fmt.Errorf("artifact reader is required")
 	}
@@ -148,7 +183,7 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	if err := b.acceptTaskOrSuccess(ctx, resp, "store pulp artifact"); err != nil {
+	if err := b.acceptTask(ctx, resp, "store pulp artifact"); err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
 	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, SHA256: req.SHA256, SizeBytes: req.SizeBytes}, nil
@@ -181,6 +216,9 @@ func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository
 }
 
 func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageRepository) ([]packagebackend.ArtifactObservation, error) {
+	if !b.customMutationAPI {
+		return nil, ErrCustomMutationAPIUnavailable
+	}
 	name := backendRepoName(repo)
 	resp, err := b.do(ctx, http.MethodGet, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/", nil, "")
 	if err != nil {
@@ -216,6 +254,9 @@ func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageReposito
 }
 
 func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.PackageRepository, targetRepo domain.PackageRepository, artifact domain.PackageArtifact, req packagebackend.PromoteArtifactRequest) (packagebackend.ArtifactObservation, error) {
+	if !b.customMutationAPI {
+		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
+	}
 	name := backendRepoName(targetRepo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
 	var err error
@@ -230,13 +271,16 @@ func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.Package
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	if err := b.acceptTaskOrSuccess(ctx, resp, "promote pulp artifact"); err != nil {
+	if err := b.acceptTask(ctx, resp, "promote pulp artifact"); err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
 	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes}, nil
 }
 
 func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact, reason string) (packagebackend.ArtifactObservation, error) {
+	if !b.customMutationAPI {
+		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
+	}
 	name := backendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
 	var err error
@@ -250,11 +294,11 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent {
 		_ = resp.Body.Close()
 		return packagebackend.ArtifactObservation{Exists: false, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, Yanked: true}, nil
 	}
-	if err := b.acceptTaskOrSuccess(ctx, resp, "yank pulp artifact"); err != nil {
+	if err := b.acceptTask(ctx, resp, "yank pulp artifact"); err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
 	return packagebackend.ArtifactObservation{Exists: false, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, Yanked: true}, nil
@@ -269,7 +313,10 @@ func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageReposi
 		return packagebackend.ArtifactObservation{}, err
 	}
 	defer stream.ReadCloser.Close()
-	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: artifact.DownloadURL, BackendPath: stream.BackendPath, SHA256: stream.SHA256, SizeBytes: stream.SizeBytes}, nil
+	// Existence and size are server-observed. SHA-256 is deliberately omitted:
+	// GetArtifact only has the control-plane's expected hash, not an independent
+	// Pulp checksum, so Capabilities.CanObserveDrift remains false.
+	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: artifact.DownloadURL, BackendPath: stream.BackendPath, SizeBytes: stream.SizeBytes}, nil
 }
 
 func (b *Backend) findRepository(ctx context.Context, name string) (bool, string, error) {
@@ -285,7 +332,7 @@ func (b *Backend) findRepository(ctx context.Context, name string) (bool, string
 		return false, "", responseError(resp, "find pulp repository")
 	}
 	var payload struct {
-		Count   int `json:"count"`
+		Count   *int `json:"count"`
 		Results []struct {
 			PulpHref string `json:"pulp_href"`
 			Name     string `json:"name"`
@@ -294,10 +341,57 @@ func (b *Backend) findRepository(ctx context.Context, name string) (bool, string
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return false, "", fmt.Errorf("decode pulp repository lookup: %w", err)
 	}
-	if payload.Count == 0 || len(payload.Results) == 0 {
+	if payload.Count == nil {
+		return false, "", fmt.Errorf("decode pulp repository lookup: response omitted count")
+	}
+	if *payload.Count == 0 {
+		if len(payload.Results) != 0 {
+			return false, "", fmt.Errorf("pulp repository lookup returned results with count zero")
+		}
 		return false, "", nil
 	}
-	return true, payload.Results[0].PulpHref, nil
+	var href string
+	for _, result := range payload.Results {
+		if result.Name != name {
+			continue
+		}
+		if href != "" {
+			return false, "", fmt.Errorf("pulp repository lookup returned multiple exact matches for %q", name)
+		}
+		normalized, err := validPulpPath(result.PulpHref, "/pulp/api/v3/repositories/file/file/", "repository href")
+		if err != nil {
+			return false, "", err
+		}
+		href = normalized
+	}
+	if href == "" {
+		return false, "", fmt.Errorf("pulp repository lookup count=%d contained no exact server-identified match for %q", *payload.Count, name)
+	}
+	return true, href, nil
+}
+
+func (b *Backend) confirmRepository(ctx context.Context, name string) (string, error) {
+	deadline := time.NewTimer(b.confirmationTimeout)
+	defer deadline.Stop()
+	for {
+		exists, href, err := b.findRepository(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		if exists && href != "" {
+			return href, nil
+		}
+		timer := time.NewTimer(b.taskInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-deadline.C:
+			timer.Stop()
+			return "", fmt.Errorf("pulp repository %q was not confirmed within %s", name, b.confirmationTimeout)
+		case <-timer.C:
+		}
+	}
 }
 
 func (b *Backend) ensureDistribution(ctx context.Context, name, repoHref string) error {
@@ -307,10 +401,11 @@ func (b *Backend) ensureDistribution(ctx context.Context, name, repoHref string)
 		return err
 	}
 	if resp.StatusCode == http.StatusConflict {
+		err := responseError(resp, "ensure pulp distribution (existing distribution was not verified)")
 		_ = resp.Body.Close()
-		return nil
+		return err
 	}
-	return b.acceptTaskOrSuccess(ctx, resp, "ensure pulp distribution")
+	return b.acceptTask(ctx, resp, "ensure pulp distribution")
 }
 
 func (b *Backend) postJSON(ctx context.Context, path string, payload any) (*http.Response, error) {
@@ -321,28 +416,40 @@ func (b *Backend) postJSON(ctx context.Context, path string, payload any) (*http
 	return b.do(ctx, http.MethodPost, path, bytes.NewReader(body), "application/json")
 }
 
-func (b *Backend) acceptTaskOrSuccess(ctx context.Context, resp *http.Response, action string) error {
+func (b *Backend) acceptTask(ctx context.Context, resp *http.Response, action string) error {
 	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		var payload struct {
-			Task     string `json:"task"`
-			TaskHref string `json:"task_href"`
-		}
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		if len(strings.TrimSpace(string(data))) == 0 {
-			return nil
-		}
-		_ = json.Unmarshal(data, &payload)
-		task := payload.Task
-		if task == "" {
-			task = payload.TaskHref
-		}
-		if task == "" {
-			return nil
-		}
-		return b.waitTask(ctx, task)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return responseError(resp, action)
 	}
-	return responseError(resp, action)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8193))
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", action, err)
+	}
+	if len(data) > 8192 {
+		return fmt.Errorf("%s response exceeded 8192 bytes", action)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return fmt.Errorf("%s returned success without a task confirmation", action)
+	}
+	var payload struct {
+		Task     string `json:"task"`
+		TaskHref string `json:"task_href"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("decode %s response: %w", action, err)
+	}
+	task := strings.TrimSpace(payload.Task)
+	if task == "" {
+		task = strings.TrimSpace(payload.TaskHref)
+	}
+	if task == "" {
+		return fmt.Errorf("%s response did not include a task href", action)
+	}
+	task, err = validPulpPath(task, "/pulp/api/v3/tasks/", "task href")
+	if err != nil {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	return b.waitTask(ctx, task)
 }
 
 func (b *Backend) waitTask(ctx context.Context, taskHref string) error {
@@ -366,11 +473,15 @@ func (b *Backend) waitTask(ctx context.Context, taskHref string) error {
 		if decodeErr != nil {
 			return fmt.Errorf("decode pulp task: %w", decodeErr)
 		}
-		switch strings.ToLower(payload.State) {
+		switch strings.ToLower(strings.TrimSpace(payload.State)) {
 		case "completed":
 			return nil
 		case "failed", "canceled", "cancelled":
 			return fmt.Errorf("pulp task %s ended in state %s: %v", taskHref, payload.State, payload.Error)
+		case "waiting", "running", "canceling", "cancelling":
+			// Poll until the task reaches a documented terminal state.
+		default:
+			return fmt.Errorf("pulp task %s returned unknown state %q", taskHref, payload.State)
 		}
 		timer := time.NewTimer(b.taskInterval)
 		select {
@@ -380,6 +491,33 @@ func (b *Backend) waitTask(ctx context.Context, taskHref string) error {
 		case <-timer.C:
 		}
 	}
+}
+
+func validPulpPath(raw, prefix, label string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("invalid pulp %s: %w", label, err)
+	}
+	if parsed.IsAbs() || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid pulp %s: must be a server-relative API path", label)
+	}
+	path := parsed.Path
+	if !strings.HasPrefix(path, prefix) {
+		return "", fmt.Errorf("invalid pulp %s %q: expected prefix %s", label, raw, prefix)
+	}
+	identifier := strings.Trim(strings.TrimPrefix(path, prefix), "/")
+	if strings.Contains(identifier, "/") || !validUUID(identifier) {
+		return "", fmt.Errorf("invalid pulp %s %q: expected UUID resource identifier", label, raw)
+	}
+	return prefix + identifier + "/", nil
+}
+
+func validUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	_, err := hex.DecodeString(strings.ReplaceAll(value, "-", ""))
+	return err == nil
 }
 
 func (b *Backend) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
