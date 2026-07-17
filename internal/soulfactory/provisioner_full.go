@@ -22,12 +22,18 @@ type workspaceInitializer interface {
 	InitWorkspace(context.Context, *domain.AgentSoul) (string, error)
 }
 
+type agentMemoryClient interface {
+	Configured() bool
+	RegisterAgent(context.Context, string, string, map[string]interface{}) error
+	SeedMemory(context.Context, string, []agentmemory.MemoryEntry) error
+}
+
 type FullProvisioner struct {
 	reactor          *Reactor
 	avatarGenerator  *llm.AvatarGenerator
 	blossomClient    *blossom.Client
 	qdrantClient     *qdrant.Client
-	agentMemory      *agentmemory.Client
+	agentMemory      agentMemoryClient
 	workspaceManager workspaceInitializer
 	nip05Manager     *NIP05Manager
 	bahiaIntegration *BahiaIntegration
@@ -199,24 +205,27 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	} else {
 		avatarResult, err := p.avatarGenerator.Generate(ctx, output.AvatarPrompt, resolved.AgentID)
 		if err != nil {
-			logger.Warn("avatar generation failed; continuing without avatar", "error", err)
 			p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-			// Continue without avatar - not fatal
-		} else {
-			stored, err := p.blossomClient.StoreAvatar(ctx, avatarResult.ImageData, avatarResult.ContentType, avatarResult.SourceURL)
-			if err != nil {
-				logger.Warn("avatar storage failed", "error", err)
-			} else {
-				soul.AvatarBlobHash = stored.Hash
-				soul.AvatarURL = stored.URL
-				soul.Assets.AvatarRef = stored.Ref
-				p.recordStep(run, domain.StepAvatar, domain.StepStatusComplete, map[string]interface{}{
-					"avatar_ref": stored.Ref,
-					"avatar_url": stored.URL,
-					"fallback":   stored.Fallback,
-				}, nil, time.Since(stepStart))
-			}
+			return nil, fmt.Errorf("generate avatar: %w", err)
 		}
+		if p.blossomClient == nil {
+			err := fmt.Errorf("avatar storage is not configured")
+			p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, err
+		}
+		stored, err := p.blossomClient.StoreAvatar(ctx, avatarResult.ImageData, avatarResult.ContentType, avatarResult.SourceURL)
+		if err != nil {
+			p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("store avatar: %w", err)
+		}
+		soul.AvatarBlobHash = stored.Hash
+		soul.AvatarURL = stored.URL
+		soul.Assets.AvatarRef = stored.Ref
+		p.recordStep(run, domain.StepAvatar, domain.StepStatusComplete, map[string]interface{}{
+			"avatar_ref": stored.Ref,
+			"avatar_url": stored.URL,
+			"fallback":   stored.Fallback,
+		}, nil, time.Since(stepStart))
 	}
 
 	// Step 4: Publish Nostr profile
@@ -254,9 +263,8 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	} else {
 		soul.QdrantCollection = resolved.AgentID
 		if err := p.qdrantClient.CreateCollection(ctx, soul.QdrantCollection, qdrant.DefaultCollectionConfig()); err != nil {
-			logger.Warn("Qdrant collection creation failed", "error", err)
 			p.recordStep(run, domain.StepQdrant, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-			// Continue - not fatal for basic operation
+			return nil, fmt.Errorf("create Qdrant collection: %w", err)
 		} else {
 			p.recordStep(run, domain.StepQdrant, domain.StepStatusComplete, map[string]interface{}{
 				"collection": soul.QdrantCollection,
@@ -281,14 +289,14 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 			"tier":   soul.Tier,
 			"status": "provisioning",
 		}); err != nil {
-			logger.Warn("agent memory registration failed", "error", err)
 			p.recordStep(run, domain.StepMemory, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-			// Continue - not fatal
+			return nil, fmt.Errorf("register agent memory: %w", err)
 		} else {
 			// Seed initial memories
 			entries := agentmemory.CreateInitialMemory(soul.AgentID, soul.Name, soul.Purpose, soul.SoulMD)
 			if err := p.agentMemory.SeedMemory(ctx, soul.AgentID, entries); err != nil {
-				logger.Warn("memory seeding failed", "error", err)
+				p.recordStep(run, domain.StepMemory, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+				return nil, fmt.Errorf("seed agent memory: %w", err)
 			}
 			p.recordStep(run, domain.StepMemory, domain.StepStatusComplete, map[string]interface{}{
 				"entries": len(entries),
@@ -311,9 +319,8 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	} else {
 		repoURL, err := p.workspaceManager.InitWorkspace(ctx, soul)
 		if err != nil {
-			logger.Warn("workspace initialization failed", "error", err)
 			p.recordStep(run, domain.StepWorkspace, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-			// Continue - not fatal
+			return nil, fmt.Errorf("initialize workspace: %w", err)
 		} else {
 			soul.WorkspaceRepoURL = repoURL
 			p.recordStep(run, domain.StepWorkspace, domain.StepStatusComplete, map[string]interface{}{
@@ -336,7 +343,8 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 		if err := p.nip05Manager.Register(ctx, soul.AgentID, soul.NostrPubkey, []string{
 			"wss://relay.sharegap.net",
 		}); err != nil {
-			logger.Warn("NIP-05 registration failed", "error", err)
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("NIP-05 registration: %w", err)
 		}
 	}
 
@@ -358,16 +366,11 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	if p.blossomClient != nil {
 		bd, err := p.blossomClient.Upload(ctx, soulJSON, "application/json")
 		if err != nil {
-			logger.Warn("soul snapshot upload failed", "error", err)
-		} else {
-			soul.SoulBlobHash = bd.SHA256
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("upload soul snapshot: %w", err)
 		}
+		soul.SoulBlobHash = bd.SHA256
 	}
-
-	// Mark soul as active
-	soul.Status = domain.SoulStatusActive
-	now := time.Now()
-	soul.ProvisionedAt = &now
 
 	var runtimeResult *RuntimeControlResultEnvelope
 	if resolved.Runtime.Target != "" {
@@ -385,28 +388,34 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 		logger.Info("registering with bahia deployment registry")
 		serviceID, err := p.bahiaIntegration.RegisterSoulAsService(ctx, soul)
 		if err != nil {
-			logger.Warn("bahia service registration failed", "error", err)
-		} else {
-			soul.BahiaServiceID = &serviceID
-
-			if _, err := p.bahiaIntegration.CreateInitialDeployment(ctx, soul, serviceID, runtimeResult); err != nil {
-				logger.Warn("bahia initial deployment failed", "error", err)
-			}
-
-			// Sync status
-			deployStatus, err := p.bahiaIntegration.SyncSoulStatus(ctx, soul)
-			if err != nil {
-				logger.Warn("bahia status sync failed", "error", err)
-			} else {
-				soul.DeployStatus = deployStatus
-			}
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("register Bahia service: %w", err)
 		}
+		soul.BahiaServiceID = &serviceID
+
+		if _, err := p.bahiaIntegration.CreateInitialDeployment(ctx, soul, serviceID, runtimeResult); err != nil {
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("create initial Bahia deployment: %w", err)
+		}
+
+		deployStatus, err := p.bahiaIntegration.SyncSoulStatus(ctx, soul)
+		if err != nil {
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("sync Bahia deployment status: %w", err)
+		}
+		soul.DeployStatus = deployStatus
 	}
+
+	// Only an entirely successful configured workflow may activate the soul.
+	soul.Status = domain.SoulStatusActive
+	now := time.Now()
+	soul.ProvisionedAt = &now
 
 	// Publish the final authoritative read model only after immediately-known
 	// runtime and Bahia fields have been populated.
 	logger.Info("publishing final soul event (kind:31951)")
 	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("publish soul: %w", err)
 	}
 

@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
+	"github.com/openagentsinc/bahia/internal/adapters/agentmemory"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -120,6 +124,78 @@ func TestFullProvisionerSkipsUnconfiguredOptionalSteps(t *testing.T) {
 		if wantSkipped[step.Name] && step.Status != domain.StepStatusSkipped {
 			t.Fatalf("step %s status = %s, want skipped", step.Name, step.Status)
 		}
+	}
+}
+
+type failingAgentMemory struct{ seedErr error }
+
+func (*failingAgentMemory) Configured() bool { return true }
+func (*failingAgentMemory) RegisterAgent(context.Context, string, string, map[string]interface{}) error {
+	return nil
+}
+func (m *failingAgentMemory) SeedMemory(context.Context, string, []agentmemory.MemoryEntry) error {
+	return m.seedErr
+}
+
+func TestFullProvisionerFailsMemoryStepWhenSeedingFails(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
+	full.agentMemory = &failingAgentMemory{seedErr: errors.New("memory store unavailable")}
+	run := &domain.ProvisioningRun{
+		ID:              domain.NewUUID(),
+		RequestID:       soulTestID("request-memory-failure").Hex(),
+		RequesterPubkey: signer.pubkey,
+		Steps:           []domain.ProvisioningStepResult{},
+	}
+
+	soul, err := full.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "agent", Name: "Agent", Brief: "brief", Tier: domain.SoulTierStandard}, run)
+	if err == nil || !strings.Contains(err.Error(), "seed agent memory") {
+		t.Fatalf("Provision() error = %v, want memory seed failure", err)
+	}
+	if soul != nil {
+		t.Fatalf("Provision() soul = %+v, want nil on failed memory step", soul)
+	}
+	last := run.Steps[len(run.Steps)-1]
+	if last.Name != domain.StepMemory || last.Status != domain.StepStatusFailed {
+		t.Fatalf("last step = %+v, want failed memory", last)
+	}
+}
+
+func TestFullProvisionerFailsDeployStepWhenNIP05RegistrationFails(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
+
+	invalidDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(invalidDir, []byte("file"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{NIP05: NIP05Config{
+		Domain:       "example.test",
+		WellKnownDir: invalidDir,
+	}}, nil)
+	run := &domain.ProvisioningRun{
+		ID:              domain.NewUUID(),
+		RequestID:       soulTestID("request-nip05-failure").Hex(),
+		RequesterPubkey: signer.pubkey,
+		Steps:           []domain.ProvisioningStepResult{},
+	}
+
+	soul, err := full.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "agent", Name: "Agent", Brief: "brief", Tier: domain.SoulTierStandard}, run)
+	if err == nil || !strings.Contains(err.Error(), "NIP-05 registration") {
+		t.Fatalf("Provision() error = %v, want NIP-05 registration failure", err)
+	}
+	if soul != nil {
+		t.Fatalf("Provision() soul = %+v, want nil on failed deploy step", soul)
+	}
+	if len(run.Steps) == 0 {
+		t.Fatal("Provision() recorded no steps")
+	}
+	last := run.Steps[len(run.Steps)-1]
+	if last.Name != domain.StepDeploy || last.Status != domain.StepStatusFailed {
+		t.Fatalf("last step = %+v, want failed deploy", last)
 	}
 }
 

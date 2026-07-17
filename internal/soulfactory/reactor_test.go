@@ -421,7 +421,7 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 	}
 }
 
-func TestOptionalIntegrationFailureIsRecordedWithoutFabricatedSuccess(t *testing.T) {
+func TestConfiguredIntegrationFailureStopsProvisioning(t *testing.T) {
 	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, newFakeSigner(t), slog.Default())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
@@ -435,31 +435,21 @@ func TestOptionalIntegrationFailureIsRecordedWithoutFabricatedSuccess(t *testing
 		Steps:           []domain.ProvisioningStepResult{},
 	}
 	soul, err := full.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "scout", Name: "Scout", Brief: "Handle incidents", Tier: domain.SoulTierStandard}, run)
-	if err != nil {
-		t.Fatalf("Provision() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "initialize workspace") {
+		t.Fatalf("Provision() error = %v, want workspace failure", err)
 	}
-	if soul.WorkspaceRepoURL != "" {
-		t.Fatalf("workspace repo url = %q, want empty after failure", soul.WorkspaceRepoURL)
+	if soul != nil {
+		t.Fatalf("Provision() soul = %+v, want nil", soul)
 	}
-	if len(run.Steps) != len(domain.ProvisioningSteps) {
-		t.Fatalf("run steps = %d, want %d", len(run.Steps), len(domain.ProvisioningSteps))
+	if len(run.Steps) != 7 {
+		t.Fatalf("run steps = %d, want workflow to stop at workspace", len(run.Steps))
 	}
 	workspaceStep := run.Steps[6]
-	if workspaceStep.Name != domain.StepWorkspace {
-		t.Fatalf("workspace step name = %s, want workspace", workspaceStep.Name)
+	if workspaceStep.Name != domain.StepWorkspace || workspaceStep.Status != domain.StepStatusFailed {
+		t.Fatalf("workspace step = %+v, want failed workspace", workspaceStep)
 	}
-	if workspaceStep.Status != domain.StepStatusFailed {
-		t.Fatalf("workspace step status = %s, want failed", workspaceStep.Status)
-	}
-	if workspaceStep.Error != "workspace remote down" {
-		t.Fatalf("workspace step error = %q, want workspace remote down", workspaceStep.Error)
-	}
-	if workspaceStep.Output != nil {
-		t.Fatalf("workspace step output = %+v, want nil on failure", workspaceStep.Output)
-	}
-	deployStep := run.Steps[7]
-	if deployStep.Name != domain.StepDeploy || deployStep.Status != domain.StepStatusComplete {
-		t.Fatalf("deploy step = %+v, want completed finalization", deployStep)
+	if workspaceStep.Error != "workspace remote down" || workspaceStep.Output != nil {
+		t.Fatalf("workspace step = %+v, want original error and no output", workspaceStep)
 	}
 }
 
