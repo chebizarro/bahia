@@ -3,7 +3,9 @@ package router_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -751,18 +753,22 @@ func assertDeprecatedMutationRouteRemoved(t *testing.T, method, path string, res
 
 const routerNIP98Key = "9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b"
 
-func makeRouterNIP98Header(t *testing.T, method, url string) string {
+func makeRouterNIP98Header(t *testing.T, method, url string, body ...[]byte) string {
 	t.Helper()
-	return makeRouterNIP98HeaderWithKey(t, routerNIP98Key, method, url)
+	return makeRouterNIP98HeaderWithKey(t, routerNIP98Key, method, url, body...)
 }
 
-func makeRouterNIP98HeaderWithKey(t *testing.T, privateKey, method, url string) string {
+func makeRouterNIP98HeaderWithKey(t *testing.T, privateKey, method, url string, body ...[]byte) string {
 	t.Helper()
 	ev := nostr.Event{
 		Kind:      nostr.Kind(27235),
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags:      nostr.Tags{{"u", url}, {"method", method}, {"nonce", uuid.NewString()}},
 		Content:   "",
+	}
+	if len(body) > 0 && len(body[0]) > 0 {
+		digest := sha256.Sum256(body[0])
+		ev.Tags = append(ev.Tags, nostr.Tag{"payload", hex.EncodeToString(digest[:])})
 	}
 	secret, err := nostr.SecretKeyFromHex(privateKey)
 	if err != nil {
@@ -865,12 +871,13 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 	defer srv.Close()
 
 	url := srv.URL + "/api/v1/mcp"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", makeRouterNIP98Header(t, http.MethodPost, url))
+	req.Header.Set("Authorization", makeRouterNIP98Header(t, http.MethodPost, url, body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("do request: %v", err)

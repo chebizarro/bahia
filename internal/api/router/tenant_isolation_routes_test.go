@@ -299,7 +299,7 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, fixture.aliceKey, tt.method, url))
+			req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, fixture.aliceKey, tt.method, url, []byte(tt.body)))
 			if tt.orgID != uuid.Nil {
 				req.Header.Set("X-Bahia-Org-ID", tt.orgID.String())
 			}
