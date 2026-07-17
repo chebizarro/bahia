@@ -622,8 +622,13 @@ func (h *TenantHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid invite ID")
 		return
 	}
+	orgID, err := uuid.Parse(r.URL.Query().Get("org_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "valid org_id is required")
+		return
+	}
 
-	invite, err := h.invites.GetByID(r.Context(), inviteID)
+	invite, err := h.invites.GetByID(r.Context(), orgID, inviteID)
 	if err == repository.ErrNotFound {
 		writeError(w, http.StatusNotFound, "invite not found")
 		return

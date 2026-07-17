@@ -104,3 +104,22 @@ func TestPgOrgInviteRepository_CreateNormalizesPubkeys(t *testing.T) {
 	require.Equal(t, "d4e5f6", invite.InvitedBy)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestPgOrgInviteRepository_GetByIDScopesOrganization(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgOrgInviteRepositoryWithDB(mock)
+	orgID := uuid.New()
+	inviteID := uuid.New()
+	mock.ExpectQuery("FROM org_invites WHERE org_id = \\$1 AND id = \\$2").
+		WithArgs(orgID, inviteID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "org_id", "pubkey", "role", "invited_by", "expires_at", "created_at"}))
+
+	invite, err := repo.GetByID(ctx, orgID, inviteID)
+	require.ErrorIs(t, err, ErrNotFound)
+	require.Nil(t, invite)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

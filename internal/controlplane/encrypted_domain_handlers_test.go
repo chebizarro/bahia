@@ -150,9 +150,9 @@ func (r *encryptedInviteRepo) Create(_ context.Context, invite *domain.OrgInvite
 	r.invites = append(r.invites, *invite)
 	return nil
 }
-func (r *encryptedInviteRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.OrgInvite, error) {
+func (r *encryptedInviteRepo) GetByID(_ context.Context, orgID, id uuid.UUID) (*domain.OrgInvite, error) {
 	for _, invite := range r.invites {
-		if invite.ID == id {
+		if invite.OrgID == orgID && invite.ID == id {
 			copy := invite
 			return &copy, nil
 		}

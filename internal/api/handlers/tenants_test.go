@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -55,11 +57,21 @@ func (r *testMemberRepo) UpdateRole(context.Context, uuid.UUID, string, domain.R
 }
 func (r *testMemberRepo) Remove(context.Context, uuid.UUID, string) error { return nil }
 
-type testInviteRepo struct{}
+type testInviteRepo struct {
+	lookupOrgID    uuid.UUID
+	lookupInviteID uuid.UUID
+	invite         *domain.OrgInvite
+}
 
 func (r *testInviteRepo) Create(context.Context, *domain.OrgInvite) error { return nil }
-func (r *testInviteRepo) GetByID(context.Context, uuid.UUID) (*domain.OrgInvite, error) {
-	return nil, repository.ErrNotFound
+func (r *testInviteRepo) GetByID(_ context.Context, orgID, inviteID uuid.UUID) (*domain.OrgInvite, error) {
+	r.lookupOrgID = orgID
+	r.lookupInviteID = inviteID
+	if r.invite == nil || r.invite.OrgID != orgID || r.invite.ID != inviteID {
+		return nil, repository.ErrNotFound
+	}
+	copy := *r.invite
+	return &copy, nil
 }
 func (r *testInviteRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.OrgInvite, error) {
 	return nil, nil
@@ -158,6 +170,32 @@ func TestCreateOrgBootstrapOwnerAllowlistForbiddenMessage(t *testing.T) {
 	errText, _ := resp["error"].(string)
 	if !strings.Contains(errText, "bootstrap owner pubkey") {
 		t.Fatalf("error message = %q, want bootstrap owner pubkey message", errText)
+	}
+}
+
+func TestAcceptInviteScopesLookupByOrganization(t *testing.T) {
+	orgID := uuid.New()
+	inviteID := uuid.New()
+	pubkey := strings.Repeat("a", 64)
+	invites := &testInviteRepo{invite: &domain.OrgInvite{
+		ID: inviteID, OrgID: orgID, Pubkey: pubkey, Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	h := NewTenantHandler(&testOrgRepo{}, &testMemberRepo{}, invites, nil, nil, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/invites/"+inviteID.String()+"/accept?org_id="+orgID.String(), nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", inviteID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), &auth.Principal{Method: auth.MethodNIP98, PubKey: pubkey}))
+	w := httptest.NewRecorder()
+
+	h.AcceptInvite(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if invites.lookupOrgID != orgID || invites.lookupInviteID != inviteID {
+		t.Fatalf("lookup = (%s, %s), want (%s, %s)", invites.lookupOrgID, invites.lookupInviteID, orgID, inviteID)
 	}
 }
 

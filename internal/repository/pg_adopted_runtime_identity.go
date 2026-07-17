@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,13 @@ func newPgAdoptedRuntimeIdentityRepositoryWithDB(db pgQueryer) *PgAdoptedRuntime
 }
 
 func (r *PgAdoptedRuntimeIdentityRepository) UpsertMany(ctx context.Context, identities []domain.AdoptedRuntimeIdentity) error {
+	if len(identities) == 0 {
+		return nil
+	}
+
+	prepared := make([]domain.AdoptedRuntimeIdentity, len(identities))
+	args := make([]any, 0, len(identities)*14)
+	var values strings.Builder
 	for i := range identities {
 		identity := identities[i]
 		if identity.ID == uuid.Nil {
@@ -40,13 +48,30 @@ func (r *PgAdoptedRuntimeIdentityRepository) UpsertMany(ctx context.Context, ide
 		if err != nil {
 			return err
 		}
-		_, err = r.pool.Exec(ctx, `
+		if i > 0 {
+			values.WriteString(", ")
+		}
+		values.WriteByte('(')
+		for column := 0; column < 14; column++ {
+			if column > 0 {
+				values.WriteString(", ")
+			}
+			fmt.Fprintf(&values, "$%d", len(args)+column+1)
+		}
+		values.WriteByte(')')
+		args = append(args,
+			identity.ID, identity.OrgID, identity.ServiceID, identity.EnvironmentID, identity.FingerprintKind, identity.Fingerprint,
+			identity.ContainerID, identity.ImageDigest, identity.EndpointRef, identity.HostAlias, identity.TargetName, composeJSON, identity.CreatedAt, identity.UpdatedAt,
+		)
+		prepared[i] = identity
+	}
+
+	query := `
 			INSERT INTO adopted_runtime_identity (
 				id, org_id, service_id, environment_id, fingerprint_kind, fingerprint,
 				container_id, image_digest, endpoint_ref, host_alias, target_name, compose, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-			ON CONFLICT (fingerprint) DO UPDATE SET
-				org_id = EXCLUDED.org_id,
+			) VALUES ` + values.String() + `
+			ON CONFLICT (org_id, fingerprint) DO UPDATE SET
 				service_id = EXCLUDED.service_id,
 				environment_id = EXCLUDED.environment_id,
 				fingerprint_kind = EXCLUDED.fingerprint_kind,
@@ -57,17 +82,17 @@ func (r *PgAdoptedRuntimeIdentityRepository) UpsertMany(ctx context.Context, ide
 				target_name = EXCLUDED.target_name,
 				compose = EXCLUDED.compose,
 				updated_at = EXCLUDED.updated_at
-		`, identity.ID, identity.OrgID, identity.ServiceID, identity.EnvironmentID, identity.FingerprintKind, identity.Fingerprint,
-			identity.ContainerID, identity.ImageDigest, identity.EndpointRef, identity.HostAlias, identity.TargetName, composeJSON, identity.CreatedAt, identity.UpdatedAt)
-		if err != nil {
-			return fmt.Errorf("upserting adopted runtime identity %q: %w", identity.Fingerprint, err)
-		}
-		identities[i] = identity
+		`
+	if _, err := r.pool.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("upserting %d adopted runtime identities atomically: %w", len(identities), err)
+	}
+	for i := range identities {
+		identities[i] = prepared[i]
 	}
 	return nil
 }
 
-func (r *PgAdoptedRuntimeIdentityRepository) FindByFingerprints(ctx context.Context, fingerprints []string) ([]domain.AdoptedRuntimeIdentity, error) {
+func (r *PgAdoptedRuntimeIdentityRepository) FindByFingerprints(ctx context.Context, orgID uuid.UUID, fingerprints []string) ([]domain.AdoptedRuntimeIdentity, error) {
 	if len(fingerprints) == 0 {
 		return nil, nil
 	}
@@ -75,9 +100,9 @@ func (r *PgAdoptedRuntimeIdentityRepository) FindByFingerprints(ctx context.Cont
 		SELECT id, org_id, service_id, environment_id, fingerprint_kind, fingerprint,
 		       container_id, image_digest, endpoint_ref, host_alias, target_name, compose, created_at, updated_at
 		FROM adopted_runtime_identity
-		WHERE fingerprint = ANY($1)
+		WHERE org_id = $1 AND fingerprint = ANY($2)
 		ORDER BY updated_at DESC
-	`, fingerprints)
+	`, orgID, fingerprints)
 	if err != nil {
 		return nil, fmt.Errorf("querying adopted runtime identities: %w", err)
 	}

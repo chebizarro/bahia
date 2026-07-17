@@ -303,6 +303,7 @@ func (h *EncryptedDomainHandlers) AcceptInvite(ctx context.Context, request Encr
 	}
 	var payload struct {
 		InviteID string `json:"invite_id"`
+		OrgID    string `json:"org_id"`
 	}
 	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
@@ -311,7 +312,11 @@ func (h *EncryptedDomainHandlers) AcceptInvite(ctx context.Context, request Encr
 	if err != nil {
 		return nil, err
 	}
-	invite, err := h.invites.GetByID(ctx, inviteID)
+	orgID, err := parseEncryptedUUID(payload.OrgID, "org ID")
+	if err != nil {
+		return nil, err
+	}
+	invite, err := h.invites.GetByID(ctx, orgID, inviteID)
 	if err == repository.ErrNotFound {
 		return nil, fmt.Errorf("invite not found")
 	}

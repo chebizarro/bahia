@@ -826,7 +826,7 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 
 func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, serviceRepo repository.ServiceRepository, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
 	if s.adoptedIdentities != nil {
-		identities, err := s.adoptedIdentities.FindByFingerprints(ctx, adoptedRuntimeFingerprints(target, discovered))
+		identities, err := s.adoptedIdentities.FindByFingerprints(ctx, orgID, adoptedRuntimeFingerprints(target, discovered))
 		if err != nil {
 			return nil, err
 		}

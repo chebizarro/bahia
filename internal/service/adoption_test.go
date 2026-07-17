@@ -805,15 +805,15 @@ func (m *mockAdoptedIdentityRepo) UpsertMany(_ context.Context, identities []dom
 		if identity.ID == uuid.Nil {
 			identity.ID = uuid.New()
 		}
-		m.identities[identity.Fingerprint] = identity
+		m.identities[identity.OrgID.String()+"/"+identity.Fingerprint] = identity
 	}
 	return nil
 }
 
-func (m *mockAdoptedIdentityRepo) FindByFingerprints(_ context.Context, fingerprints []string) ([]domain.AdoptedRuntimeIdentity, error) {
+func (m *mockAdoptedIdentityRepo) FindByFingerprints(_ context.Context, orgID uuid.UUID, fingerprints []string) ([]domain.AdoptedRuntimeIdentity, error) {
 	var out []domain.AdoptedRuntimeIdentity
 	for _, fingerprint := range fingerprints {
-		if identity, ok := m.identities[fingerprint]; ok {
+		if identity, ok := m.identities[orgID.String()+"/"+fingerprint]; ok {
 			out = append(out, identity)
 		}
 	}

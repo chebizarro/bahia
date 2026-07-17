@@ -36,7 +36,7 @@ type OrgMemberRepository interface {
 // OrgInviteRepository manages organization invite records.
 type OrgInviteRepository interface {
 	Create(ctx context.Context, invite *domain.OrgInvite) error
-	GetByID(ctx context.Context, id uuid.UUID) (*domain.OrgInvite, error)
+	GetByID(ctx context.Context, orgID, id uuid.UUID) (*domain.OrgInvite, error)
 	ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.OrgInvite, error)
 	ListByPubkey(ctx context.Context, pubkey string) ([]domain.OrgInvite, error)
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -309,11 +309,11 @@ func (r *PgOrgInviteRepository) Create(ctx context.Context, invite *domain.OrgIn
 	return err
 }
 
-func (r *PgOrgInviteRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.OrgInvite, error) {
+func (r *PgOrgInviteRepository) GetByID(ctx context.Context, orgID, id uuid.UUID) (*domain.OrgInvite, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, org_id, pubkey, role, invited_by, expires_at, created_at
-		FROM org_invites WHERE id = $1
-	`, id)
+		FROM org_invites WHERE org_id = $1 AND id = $2
+	`, orgID, id)
 
 	var inv domain.OrgInvite
 	err := row.Scan(&inv.ID, &inv.OrgID, &inv.Pubkey, &inv.Role, &inv.InvitedBy, &inv.ExpiresAt, &inv.CreatedAt)
