@@ -288,6 +288,9 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("publishing job request: %w", err)
 	}
+	if published == 0 {
+		return "", fmt.Errorf("publishing job request: no relay accepted event")
+	}
 	eventID := nostrutil.EventIDHex(&ev)
 	c.rememberSubmittedWorker(eventID, workerPubkey)
 
@@ -610,6 +613,9 @@ func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey 
 	published, err := c.pool.Publish(ctx, ev)
 	if err != nil {
 		return fmt.Errorf("publishing cancellation request: %w", err)
+	}
+	if published == 0 {
+		return fmt.Errorf("publishing cancellation request: no relay accepted event")
 	}
 
 	c.logger.Info("loom job cancellation sent",

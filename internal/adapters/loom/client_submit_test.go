@@ -13,10 +13,14 @@ import (
 
 type submitRelayPool struct {
 	published []nostr.Event
+	accepted  *int
 }
 
 func (p *submitRelayPool) Publish(_ context.Context, event nostr.Event) (int, error) {
 	p.published = append(p.published, event)
+	if p.accepted != nil {
+		return *p.accepted, nil
+	}
 	return 1, nil
 }
 
@@ -26,6 +30,28 @@ func (p *submitRelayPool) SubscribeAllWithEOSE(context.Context, []nostr.Filter) 
 
 func (p *submitRelayPool) AuthenticateRelay(context.Context, string) error {
 	panic("not used")
+}
+
+func TestSubmitAndCancelRejectZeroRelayAcceptance(t *testing.T) {
+	zero := 0
+	pool := &submitRelayPool{accepted: &zero}
+	client := &Client{
+		pool:             pool,
+		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		submittedWorkers: make(map[string]string),
+		logger:           zap.NewNop(),
+	}
+
+	eventID, err := client.SubmitJob(t.Context(), JobRequest{Service: "api"})
+	if err == nil || !strings.Contains(err.Error(), "no relay accepted") {
+		t.Fatalf("SubmitJob() = (%q, %v), want zero-relay error", eventID, err)
+	}
+	if eventID != "" || len(client.submittedWorkers) != 0 {
+		t.Fatalf("unaccepted job was recorded: event=%q workers=%#v", eventID, client.submittedWorkers)
+	}
+	if err := client.CancelJob(t.Context(), strings.Repeat("a", 64), ""); err == nil || !strings.Contains(err.Error(), "no relay accepted") {
+		t.Fatalf("CancelJob() error = %v, want zero-relay error", err)
+	}
 }
 
 func TestSubmitJob_SecretsWithoutResolvedWorkerFailClosed(t *testing.T) {
