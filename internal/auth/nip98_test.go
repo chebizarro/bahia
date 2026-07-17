@@ -1,10 +1,14 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,6 +154,57 @@ func TestNIP98_ReplayProtection(t *testing.T) {
 	}
 }
 
+func TestNIP98_ReplayProtectionIsSharedAcrossValidators(t *testing.T) {
+	store := newInMemoryNIP98ReplayStore()
+	v1 := NewNIP98Validator(DefaultNIP98Config(), store)
+	v2 := NewNIP98Validator(DefaultNIP98Config(), store)
+	url := "http://localhost:8080/api/v1/services"
+	token := encodeEvent(t, makeNIP98Event(t, http.MethodGet, url, time.Now()))
+
+	if _, err := v1.Validate(token, httptest.NewRequest(http.MethodGet, url, nil)); err != nil {
+		t.Fatalf("first validator: %v", err)
+	}
+	if _, err := v2.Validate(token, httptest.NewRequest(http.MethodGet, url, nil)); err == nil || !strings.Contains(err.Error(), "replay") {
+		t.Fatalf("second validator replay error = %v", err)
+	}
+}
+
+func TestNIP98_BindsAndRestoresBoundedRequestBody(t *testing.T) {
+	v := NewNIP98Validator(NIP98Config{MaxSkew: time.Minute, MaxBodyBytes: 32})
+	url := "http://localhost:8080/api/v1/services"
+	body := []byte(`{"name":"demo"}`)
+	ev := makeNIP98Event(t, http.MethodPost, url, time.Now())
+	digest := sha256.Sum256(body)
+	ev.Tags = append(ev.Tags, nostr.Tag{"payload", hex.EncodeToString(digest[:])})
+	if err := nostrutil.SignEventWithHexKey(&ev, testNIP98Key); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+
+	if _, err := v.Validate(encodeEvent(t, ev), req); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	restored, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(body) {
+		t.Fatalf("restored body = %q, want %q", restored, body)
+	}
+}
+
+func TestNIP98_RejectsBodyAboveConfiguredLimit(t *testing.T) {
+	v := NewNIP98Validator(NIP98Config{MaxSkew: time.Minute, MaxBodyBytes: 4})
+	url := "http://localhost:8080/api/v1/services"
+	ev := makeNIP98Event(t, http.MethodPost, url, time.Now())
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader("12345"))
+
+	_, err := v.Validate(encodeEvent(t, ev), req)
+	if err == nil || !strings.Contains(err.Error(), "exceeds NIP-98 limit") {
+		t.Fatalf("oversize error = %v", err)
+	}
+}
+
 func TestNIP98_InvalidBase64(t *testing.T) {
 	v := NewNIP98Validator(DefaultNIP98Config())
 	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/test", nil)
@@ -229,11 +284,12 @@ func TestNIP98_SeenCountAndPurge(t *testing.T) {
 	}
 
 	// Manually set all entries as expired and purge.
-	v.mu.Lock()
-	for id := range v.seen {
-		v.seen[id] = time.Now().Add(-time.Minute)
+	store := v.replays.(*inMemoryNIP98ReplayStore)
+	store.mu.Lock()
+	for id := range store.seen {
+		store.seen[id] = time.Now().Add(-time.Minute)
 	}
-	v.mu.Unlock()
+	store.mu.Unlock()
 
 	v.purgeExpired()
 	if v.SeenCount() != 0 {

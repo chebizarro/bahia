@@ -1204,7 +1204,11 @@ func New(cfg *config.Config) (*App, error) {
 	var nip98Validator *auth.NIP98Validator
 	var nip05Resolver *auth.NIP05Resolver
 	if cfg.Auth.Enabled {
-		nip98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config())
+		if dbAvailable {
+			nip98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config(), auth.NewPGNIP98ReplayStore(pool))
+		} else {
+			logger.Error("NIP-98 authentication unavailable without durable replay storage")
+		}
 		if len(cfg.Adoption.AllowedEmails) > 0 || len(cfg.DirectRuntime.AllowedEmails) > 0 || len(cfg.LLM.AllowedEmails) > 0 {
 			nip05Resolver = auth.NewNIP05Resolver()
 		}
