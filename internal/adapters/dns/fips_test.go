@@ -109,25 +109,22 @@ func TestFIPSBackendHealthFailsForMissingPath(t *testing.T) {
 	}
 }
 
-func TestFIPSBackendSyncZoneSkipsRecordsWithoutNPubOrFIPSAddress(t *testing.T) {
-	hostsPath := writeTestFIPSHosts(t, "")
+func TestFIPSBackendSyncZoneRejectsUnsupportedRecordsWithoutWriting(t *testing.T) {
+	const original = "# existing configuration\n"
+	hostsPath := writeTestFIPSHosts(t, original)
 	backend := NewFIPSBackend(hostsPath, zap.NewNop())
 	zone := testFIPSZone()
 	records := []domain.DNSRecord{
-		{Zone: zone.Name, Name: "api", FQDN: "api.prod.cascadia", Type: domain.DNSRecordTypeA, Value: "10.0.0.5", TTL: zone.TTL},
-		{Zone: zone.Name, Name: "external", FQDN: "external.prod.cascadia", Type: domain.DNSRecordTypeCNAME, Value: "example.com", TTL: zone.TTL},
 		{Zone: zone.Name, Name: "mesh", FQDN: "mesh.prod.cascadia", Type: domain.DNSRecordTypeAAAA, Value: "fd00::1", TTL: zone.TTL},
+		{Zone: zone.Name, Name: "api", FQDN: "api.prod.cascadia", Type: domain.DNSRecordTypeA, Value: "10.0.0.5", TTL: zone.TTL},
 	}
 
-	if err := backend.SyncZone(context.Background(), zone, records); err != nil {
-		t.Fatalf("sync zone: %v", err)
+	err := backend.SyncZone(context.Background(), zone, records)
+	if err == nil || !strings.Contains(err.Error(), "unsupported value") {
+		t.Fatalf("SyncZone error = %v, want unsupported value error", err)
 	}
-	content := readTestFIPSHosts(t, hostsPath)
-	if strings.Contains(content, "api.fips") || strings.Contains(content, "external.fips") {
-		t.Fatalf("non-FIPS records were not skipped:\n%s", content)
-	}
-	if !strings.Contains(content, "mesh.fips  fd00::1") {
-		t.Fatalf("expected FIPS address record to be written:\n%s", content)
+	if content := readTestFIPSHosts(t, hostsPath); content != original {
+		t.Fatalf("hosts file changed after rejected desired records:\n%s", content)
 	}
 }
 

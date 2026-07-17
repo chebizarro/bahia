@@ -15,9 +15,22 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// FilesystemBackend writes one deterministic JSON snapshot per DNS zone.
+// FilesystemActivator applies a written zone snapshot to an operational DNS server and returns only after activation is confirmed.
+type FilesystemActivator interface {
+	Activate(ctx context.Context, zone domain.DNSZone, snapshotPath string) error
+}
+
+// FilesystemActivateFunc adapts a function into a FilesystemActivator.
+type FilesystemActivateFunc func(ctx context.Context, zone domain.DNSZone, snapshotPath string) error
+
+func (f FilesystemActivateFunc) Activate(ctx context.Context, zone domain.DNSZone, snapshotPath string) error {
+	return f(ctx, zone, snapshotPath)
+}
+
+// FilesystemBackend writes one deterministic JSON snapshot per DNS zone and requires an activator before it can reconcile operational DNS.
 type FilesystemBackend struct {
-	RootDir string
+	RootDir   string
+	activator FilesystemActivator
 }
 
 type filesystemZonePayload struct {
@@ -26,9 +39,14 @@ type filesystemZonePayload struct {
 	Records []domain.DNSRecord `json:"records"`
 }
 
-// NewFilesystemBackend creates a filesystem DNS backend rooted at rootDir.
+// NewFilesystemBackend creates a snapshot-only filesystem DNS backend. Health and SyncZone fail closed until an operational activator is configured.
 func NewFilesystemBackend(rootDir string) *FilesystemBackend {
 	return &FilesystemBackend{RootDir: strings.TrimSpace(rootDir)}
+}
+
+// NewFilesystemBackendWithActivator creates a filesystem DNS backend that confirms snapshots are applied to an operational DNS server.
+func NewFilesystemBackendWithActivator(rootDir string, activator FilesystemActivator) *FilesystemBackend {
+	return &FilesystemBackend{RootDir: strings.TrimSpace(rootDir), activator: activator}
 }
 
 func (b *FilesystemBackend) BackendType() domain.DNSBackendType {
@@ -38,6 +56,9 @@ func (b *FilesystemBackend) BackendType() domain.DNSBackendType {
 func (b *FilesystemBackend) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if b == nil || b.activator == nil {
+		return fmt.Errorf("DNS filesystem backend requires an operational activator; snapshot-only mode cannot report healthy")
 	}
 	rootDir, err := b.rootDir()
 	if err != nil {
@@ -106,6 +127,9 @@ func (b *FilesystemBackend) SyncZone(ctx context.Context, zone domain.DNSZone, r
 	if err := domain.ValidateDNSZone(&zone); err != nil {
 		return err
 	}
+	if b == nil || b.activator == nil {
+		return fmt.Errorf("DNS filesystem backend requires an operational activator; refusing snapshot-only sync for zone %q", zone.Name)
+	}
 	rootDir, err := b.rootDir()
 	if err != nil {
 		return err
@@ -169,6 +193,9 @@ func (b *FilesystemBackend) SyncZone(ctx context.Context, zone domain.DNSZone, r
 		return fmt.Errorf("replace DNS zone snapshot %q: %w", path, err)
 	}
 	committed = true
+	if err := b.activator.Activate(ctx, zone, path); err != nil {
+		return fmt.Errorf("activate DNS filesystem snapshot for zone %q: %w", zone.Name, err)
+	}
 	return nil
 }
 

@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestStaticResolverRejectsDuplicateRefs(t *testing.T) {
-	backend := NewFilesystemBackend(t.TempDir())
+	backend := newOperationalFilesystemBackend(t.TempDir())
 	_, err := NewStaticResolver(
 		BackendRegistration{Ref: "primary", Backend: backend},
 		BackendRegistration{Ref: "primary", Backend: backend},
@@ -26,8 +27,8 @@ func TestStaticResolverRejectsDuplicateRefs(t *testing.T) {
 }
 
 func TestStaticResolverResolveAndRefs(t *testing.T) {
-	first := NewFilesystemBackend(t.TempDir())
-	second := NewFilesystemBackend(t.TempDir())
+	first := newOperationalFilesystemBackend(t.TempDir())
+	second := newOperationalFilesystemBackend(t.TempDir())
 	resolver, err := NewStaticResolver(
 		BackendRegistration{Ref: "z-secondary", Backend: second},
 		BackendRegistration{Ref: "a-primary", Backend: first},
@@ -49,8 +50,42 @@ func TestStaticResolverResolveAndRefs(t *testing.T) {
 	}
 }
 
+func newOperationalFilesystemBackend(rootDir string) *FilesystemBackend {
+	return NewFilesystemBackendWithActivator(rootDir, FilesystemActivateFunc(func(context.Context, domain.DNSZone, string) error {
+		return nil
+	}))
+}
+
+func TestFilesystemBackendSnapshotOnlyFailsClosed(t *testing.T) {
+	backend := &FilesystemBackend{RootDir: t.TempDir()}
+	if err := backend.Health(context.Background()); err == nil || !strings.Contains(err.Error(), "operational activator") {
+		t.Fatalf("Health error = %v, want missing activator error", err)
+	}
+	if err := backend.SyncZone(context.Background(), testZone(), nil); err == nil || !strings.Contains(err.Error(), "snapshot-only sync") {
+		t.Fatalf("SyncZone error = %v, want snapshot-only refusal", err)
+	}
+}
+
+func TestFilesystemBackendSyncRequiresConfirmedActivation(t *testing.T) {
+	rootDir := t.TempDir()
+	activationErr := errors.New("DNS server rejected snapshot")
+	backend := NewFilesystemBackendWithActivator(rootDir, FilesystemActivateFunc(func(_ context.Context, zone domain.DNSZone, path string) error {
+		if zone.Name != testZone().Name {
+			t.Fatalf("activation zone = %q, want %q", zone.Name, testZone().Name)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("snapshot unavailable during activation: %v", err)
+		}
+		return activationErr
+	}))
+	err := backend.SyncZone(context.Background(), testZone(), nil)
+	if !errors.Is(err, activationErr) {
+		t.Fatalf("SyncZone error = %v, want activation failure", err)
+	}
+}
+
 func TestFilesystemBackendHealth(t *testing.T) {
-	backend := NewFilesystemBackend(t.TempDir())
+	backend := newOperationalFilesystemBackend(t.TempDir())
 	if err := backend.Health(context.Background()); err != nil {
 		t.Fatalf("health failed: %v", err)
 	}
@@ -61,14 +96,14 @@ func TestFilesystemBackendHealthRejectsInvalidRoot(t *testing.T) {
 	if err := os.WriteFile(rootFile, []byte("not a directory"), 0o644); err != nil {
 		t.Fatalf("write root file: %v", err)
 	}
-	backend := NewFilesystemBackend(rootFile)
+	backend := newOperationalFilesystemBackend(rootFile)
 	if err := backend.Health(context.Background()); err == nil {
 		t.Fatal("expected health error for file root")
 	}
 }
 
 func TestFilesystemBackendListRecordsMissingFileReturnsEmptySet(t *testing.T) {
-	backend := NewFilesystemBackend(t.TempDir())
+	backend := newOperationalFilesystemBackend(t.TempDir())
 	records, err := backend.ListRecords(context.Background(), testZone())
 	if err != nil {
 		t.Fatalf("list records: %v", err)
@@ -79,7 +114,7 @@ func TestFilesystemBackendListRecordsMissingFileReturnsEmptySet(t *testing.T) {
 }
 
 func TestFilesystemBackendRoundTripsZoneSnapshot(t *testing.T) {
-	backend := NewFilesystemBackend(t.TempDir())
+	backend := newOperationalFilesystemBackend(t.TempDir())
 	zone := testZone()
 	want := []domain.DNSRecord{
 		{Zone: zone.Name, Name: "api", FQDN: "api.prod.cascadia", Type: domain.DNSRecordTypeA, Value: "10.0.0.8", TTL: 300, SourceCoordinate: "endpoint:service:api:prod"},
@@ -99,7 +134,7 @@ func TestFilesystemBackendRoundTripsZoneSnapshot(t *testing.T) {
 
 func TestFilesystemBackendSerializesSRVRecordFields(t *testing.T) {
 	rootDir := t.TempDir()
-	backend := NewFilesystemBackend(rootDir)
+	backend := newOperationalFilesystemBackend(rootDir)
 	zone := testZone()
 	port := 8080
 	priority := 10
@@ -129,7 +164,7 @@ func TestFilesystemBackendSerializesSRVRecordFields(t *testing.T) {
 
 func TestFilesystemBackendSyncIsDeterministicAndIdempotent(t *testing.T) {
 	rootDir := t.TempDir()
-	backend := NewFilesystemBackend(rootDir)
+	backend := newOperationalFilesystemBackend(rootDir)
 	zone := testZone()
 	records := []domain.DNSRecord{
 		{Zone: zone.Name, Name: "z", FQDN: "z.prod.cascadia", Type: domain.DNSRecordTypeCNAME, Value: "z.internal", TTL: 300, SourceCoordinate: "endpoint:service:z:prod"},
@@ -169,7 +204,7 @@ func TestFilesystemBackendSyncIsDeterministicAndIdempotent(t *testing.T) {
 }
 
 func TestFilesystemBackendAtomicOverwriteReplacesPriorSnapshot(t *testing.T) {
-	backend := NewFilesystemBackend(t.TempDir())
+	backend := newOperationalFilesystemBackend(t.TempDir())
 	zone := testZone()
 	oldRecords := []domain.DNSRecord{{Zone: zone.Name, Name: "old", FQDN: "old.prod.cascadia", Type: domain.DNSRecordTypeA, Value: "10.0.0.1", TTL: 300, SourceCoordinate: "endpoint:service:old:prod"}}
 	newRecords := []domain.DNSRecord{{Zone: zone.Name, Name: "new", FQDN: "new.prod.cascadia", Type: domain.DNSRecordTypeA, Value: "10.0.0.2", TTL: 300, SourceCoordinate: "endpoint:service:new:prod"}}

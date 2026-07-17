@@ -159,6 +159,10 @@ func (b *DnsmasqBackend) SyncZone(ctx context.Context, zone domain.DNSZone, reco
 	if err != nil {
 		return err
 	}
+	previousData, previousMode, previousExists, err := readPreviousDnsmasqConfig(path)
+	if err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(configDir, "."+dnsmasqSanitizeZoneFilename(zone.Name)+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create dnsmasq zone config temp file: %w", err)
@@ -193,9 +197,62 @@ func (b *DnsmasqBackend) SyncZone(ctx context.Context, zone domain.DNSZone, reco
 	}
 	committed = true
 	if err := b.executor().Run(ctx, b.reloadCommand); err != nil {
-		return fmt.Errorf("reload dnsmasq after syncing zone %q: %w", zone.Name, err)
+		reloadErr := fmt.Errorf("reload dnsmasq after syncing zone %q: %w", zone.Name, err)
+		if rollbackErr := restoreDnsmasqConfig(path, previousData, previousMode, previousExists); rollbackErr != nil {
+			return errors.Join(reloadErr, fmt.Errorf("restore previous dnsmasq config for zone %q: %w", zone.Name, rollbackErr))
+		}
+		if rollbackReloadErr := b.executor().Run(ctx, b.reloadCommand); rollbackReloadErr != nil {
+			return errors.Join(reloadErr, fmt.Errorf("reload dnsmasq after restoring zone %q: %w", zone.Name, rollbackReloadErr))
+		}
+		return reloadErr
 	}
 	return nil
+}
+
+func readPreviousDnsmasqConfig(path string) ([]byte, os.FileMode, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0o644, false, nil
+	}
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("read previous dnsmasq zone config %q: %w", path, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("stat previous dnsmasq zone config %q: %w", path, err)
+	}
+	return data, info.Mode().Perm(), true, nil
+}
+
+func restoreDnsmasqConfig(path string, data []byte, mode os.FileMode, existed bool) error {
+	if !existed {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".dnsmasq-rollback-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) //nolint:errcheck
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func (b *DnsmasqBackend) requiredConfigDir() (string, error) {

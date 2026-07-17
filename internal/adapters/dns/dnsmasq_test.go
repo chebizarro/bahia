@@ -15,11 +15,17 @@ import (
 type mockDnsmasqCommandExecutor struct {
 	commands []string
 	err      error
+	errs     []error
 }
 
 func (m *mockDnsmasqCommandExecutor) Run(ctx context.Context, command string) error {
 	m.commands = append(m.commands, command)
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(m.errs) > 0 {
+		err := m.errs[0]
+		m.errs = m.errs[1:]
 		return err
 	}
 	return m.err
@@ -190,18 +196,30 @@ func TestDnsmasqBackendHealthValidAndInvalidDirectories(t *testing.T) {
 	}
 }
 
-func TestDnsmasqBackendReloadFailureReturnsErrorAfterWritingFile(t *testing.T) {
+func TestDnsmasqBackendReloadFailureRestoresAndReloadsPreviousConfig(t *testing.T) {
 	rootDir := t.TempDir()
-	executor := &mockDnsmasqCommandExecutor{err: errors.New("reload failed")}
+	const previous = "# previous config\naddress=/old.prod.cascadia/10.0.0.9\n"
+	path := filepath.Join(rootDir, "bahia-prod-cascadia.conf")
+	if err := os.WriteFile(path, []byte(previous), 0o640); err != nil {
+		t.Fatalf("write previous config: %v", err)
+	}
+	executor := &mockDnsmasqCommandExecutor{errs: []error{errors.New("reload failed"), nil}}
 	backend := NewDnsmasqBackend(DnsmasqConfig{ConfigDir: rootDir, ReloadCommand: "reload"})
 	backend.commandExecutor = executor
 	zone := dnsmasqTestZone()
 	err := backend.SyncZone(context.Background(), zone, []domain.DNSRecord{{Zone: zone.Name, Name: "api", FQDN: "api.prod.cascadia", Type: domain.DNSRecordTypeA, Value: "10.0.0.1", TTL: 300}})
-	if err == nil {
-		t.Fatal("expected reload error")
+	if err == nil || !strings.Contains(err.Error(), "reload failed") {
+		t.Fatalf("SyncZone error = %v, want initial reload failure", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(rootDir, "bahia-prod-cascadia.conf")); statErr != nil {
-		t.Fatalf("expected conf file to be written before reload error: %v", statErr)
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read restored config: %v", readErr)
+	}
+	if string(content) != previous {
+		t.Fatalf("config after failed reload = %q, want previous %q", content, previous)
+	}
+	if !reflect.DeepEqual(executor.commands, []string{"reload", "reload"}) {
+		t.Fatalf("reload commands = %#v, want initial and rollback reload", executor.commands)
 	}
 }
 

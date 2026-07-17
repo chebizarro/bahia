@@ -207,7 +207,7 @@ func fipsHostsEntry(zone domain.DNSZone, record domain.DNSRecord) (string, strin
 	}
 	value := strings.TrimSpace(record.Value)
 	if !isFIPSHostsValue(value) {
-		return "", "", false, nil
+		return "", "", false, fmt.Errorf("DNS FIPS record %q has unsupported value %q: expected an npub or fd00::/8 address", record.FQDN, value)
 	}
 	hostname := fipsHostnameForRecord(zone, record)
 	if hostname == "" {
