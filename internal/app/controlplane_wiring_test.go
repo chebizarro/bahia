@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -151,7 +152,8 @@ func TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels(t *testing
 	require.NotNil(t, deps.BackupCommandPublisher)
 	require.Same(t, readModels, deps.BackupReadModels)
 	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
-	result, err := server.CallTool(context.Background(), "request_backup_run", map[string]interface{}{
+	ctx := auth.ContextWithPrincipal(context.Background(), auth.SystemPrincipal("controlplane-wiring-test"))
+	result, err := server.CallTool(ctx, "request_backup_run", map[string]interface{}{
 		"recipe":          "recipe:postgres:v1",
 		"idempotency_key": "backup-run:test",
 	})
