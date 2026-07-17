@@ -3,6 +3,7 @@ package nexus
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,43 +25,77 @@ type Config struct {
 	HTTPClient    *http.Client
 	Auth          packagebackend.AuthConfig
 	Secrets       map[string]string
+
+	// BlobStoreName is required before repository creation can be advertised or
+	// attempted. There is no portable Nexus blob-store default.
+	BlobStoreName string
+	// DisableStrictContentTypeValidation is an explicit opt-out; validation is on by default.
+	DisableStrictContentTypeValidation bool
+	// WritePolicy accepts ALLOW, ALLOW_ONCE, or DENY and defaults to ALLOW_ONCE.
+	WritePolicy string
 }
 
 // Backend implements packagebackend.Backend for Nexus raw repositories.
 type Backend struct {
-	baseURL       string
-	publicBaseURL string
-	httpClient    *http.Client
-	auth          packagebackend.AuthConfig
-	secrets       map[string]string
+	baseURL                     string
+	publicBaseURL               string
+	httpClient                  *http.Client
+	auth                        packagebackend.AuthConfig
+	secrets                     map[string]string
+	blobStoreName               string
+	strictContentTypeValidation bool
+	writePolicy                 string
 }
 
 func New(cfg Config) (*Backend, error) {
-	base := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if base == "" {
-		return nil, fmt.Errorf("nexus base url is required")
+	base, err := packagebackend.ValidateEndpoint(cfg.BaseURL, "nexus base url")
+	if err != nil {
+		return nil, err
 	}
-	if _, err := url.ParseRequestURI(base); err != nil {
-		return nil, fmt.Errorf("invalid nexus base url: %w", err)
+	if err := cfg.Auth.Validate(); err != nil {
+		return nil, err
 	}
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	publicBase := strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	publicBase := strings.TrimSpace(cfg.PublicBaseURL)
 	if publicBase == "" {
 		publicBase = base
+	} else {
+		publicBase, err = packagebackend.ValidateEndpoint(publicBase, "nexus public base url")
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &Backend{baseURL: base, publicBaseURL: publicBase, httpClient: client, auth: cfg.Auth, secrets: cfg.Secrets}, nil
+	writePolicy := strings.ToUpper(strings.TrimSpace(cfg.WritePolicy))
+	if writePolicy == "" {
+		writePolicy = "ALLOW_ONCE"
+	}
+	switch writePolicy {
+	case "ALLOW", "ALLOW_ONCE", "DENY":
+	default:
+		return nil, fmt.Errorf("invalid nexus write policy %q", cfg.WritePolicy)
+	}
+	return &Backend{
+		baseURL:                     base,
+		publicBaseURL:               publicBase,
+		httpClient:                  client,
+		auth:                        cfg.Auth,
+		secrets:                     cfg.Secrets,
+		blobStoreName:               strings.TrimSpace(cfg.BlobStoreName),
+		strictContentTypeValidation: !cfg.DisableStrictContentTypeValidation,
+		writePolicy:                 writePolicy,
+	}, nil
 }
 
 func (b *Backend) Type() domain.PackageBackendType { return domain.PackageBackendNexus }
 
 func (b *Backend) Capabilities() packagebackend.Capabilities {
 	caps := packagebackend.CommonCapabilities()
-	// The skeleton Nexus adapter observes existence via HTTP but does not yet read
-	// independent backend checksums for byte-level drift.
-	caps.CanObserveDrift = false
+	// Repository creation is unsafe until an operator selects an existing blob store.
+	caps.CanCreateRepository = b.blobStoreName != ""
+	caps.CanObserveDrift = true
 	return caps
 }
 
@@ -69,38 +104,120 @@ func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepos
 	if name == "" {
 		return packagebackend.RepositoryObservation{}, fmt.Errorf("external repository name is required")
 	}
-	resp, err := b.do(ctx, http.MethodGet, "/service/rest/v1/repositories/"+url.PathEscape(name), nil, "")
+	existing, found, err := b.getRepository(ctx, name)
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		_ = resp.Body.Close()
+	if found {
+		if err := b.verifyRepository(existing, name); err != nil {
+			return packagebackend.RepositoryObservation{}, err
+		}
 		return packagebackend.RepositoryObservation{Exists: true, PublicURL: b.repositoryURL(name)}, nil
 	}
-	if resp.StatusCode != http.StatusNotFound {
-		return packagebackend.RepositoryObservation{}, responseError(resp, "get nexus repository")
+	if b.blobStoreName == "" {
+		return packagebackend.RepositoryObservation{}, fmt.Errorf("nexus repository creation is unavailable: blob store name is not configured")
 	}
-	_ = resp.Body.Close()
 
 	payload := map[string]any{
 		"name":   name,
 		"online": true,
 		"storage": map[string]any{
-			"blobStoreName":               "default",
-			"strictContentTypeValidation": false,
-			"writePolicy":                 "allow_once",
+			"blobStoreName":               b.blobStoreName,
+			"strictContentTypeValidation": b.strictContentTypeValidation,
+			"writePolicy":                 b.writePolicy,
 		},
 	}
-	body, _ := json.Marshal(payload)
-	resp, err = b.do(ctx, http.MethodPost, "/service/rest/v1/repositories/raw/hosted", bytes.NewReader(body), "application/json")
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusConflict || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
-		return packagebackend.RepositoryObservation{Exists: true, PublicURL: b.repositoryURL(name)}, nil
+	resp, err := b.do(ctx, http.MethodPost, "/service/rest/v1/repositories/raw/hosted", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return packagebackend.RepositoryObservation{}, err
 	}
-	return packagebackend.RepositoryObservation{}, responseError(resp, "create nexus repository")
+	if resp.StatusCode != http.StatusConflict && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		err := responseError(resp, "create nexus repository")
+		_ = resp.Body.Close()
+		return packagebackend.RepositoryObservation{}, err
+	}
+	_ = resp.Body.Close()
+
+	// Both successful creates and conflicts must be confirmed against the desired
+	// server-observed repository state; a conflict alone proves nothing.
+	existing, found, err = b.getRepository(ctx, name)
+	if err != nil {
+		return packagebackend.RepositoryObservation{}, err
+	}
+	if !found {
+		return packagebackend.RepositoryObservation{}, fmt.Errorf("nexus repository creation was not confirmed by the server")
+	}
+	if err := b.verifyRepository(existing, name); err != nil {
+		return packagebackend.RepositoryObservation{}, err
+	}
+	return packagebackend.RepositoryObservation{Exists: true, PublicURL: b.repositoryURL(name)}, nil
+}
+
+type repositoryConfiguration struct {
+	Name    string `json:"name"`
+	Format  string `json:"format"`
+	Type    string `json:"type"`
+	Online  bool   `json:"online"`
+	Storage struct {
+		BlobStoreName               string `json:"blobStoreName"`
+		StrictContentTypeValidation bool   `json:"strictContentTypeValidation"`
+		WritePolicy                 string `json:"writePolicy"`
+	} `json:"storage"`
+}
+
+func (b *Backend) getRepository(ctx context.Context, name string) (repositoryConfiguration, bool, error) {
+	resp, err := b.do(ctx, http.MethodGet, "/service/rest/v1/repositories/"+url.PathEscape(name), nil, "")
+	if err != nil {
+		return repositoryConfiguration{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return repositoryConfiguration{}, false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return repositoryConfiguration{}, false, responseError(resp, "get nexus repository")
+	}
+	var repository repositoryConfiguration
+	if err := json.NewDecoder(resp.Body).Decode(&repository); err != nil {
+		return repositoryConfiguration{}, false, fmt.Errorf("decode nexus repository: %w", err)
+	}
+	return repository, true, nil
+}
+
+func (b *Backend) verifyRepository(repository repositoryConfiguration, name string) error {
+	if b.blobStoreName == "" {
+		return fmt.Errorf("cannot verify nexus repository %q policy: blob store name is not configured", name)
+	}
+	var mismatches []string
+	if repository.Name != name {
+		mismatches = append(mismatches, fmt.Sprintf("name=%q", repository.Name))
+	}
+	if !strings.EqualFold(repository.Format, "raw") {
+		mismatches = append(mismatches, fmt.Sprintf("format=%q", repository.Format))
+	}
+	if !strings.EqualFold(repository.Type, "hosted") {
+		mismatches = append(mismatches, fmt.Sprintf("type=%q", repository.Type))
+	}
+	if !repository.Online {
+		mismatches = append(mismatches, "online=false")
+	}
+	if repository.Storage.BlobStoreName != b.blobStoreName {
+		mismatches = append(mismatches, fmt.Sprintf("blobStoreName=%q", repository.Storage.BlobStoreName))
+	}
+	if repository.Storage.StrictContentTypeValidation != b.strictContentTypeValidation {
+		mismatches = append(mismatches, fmt.Sprintf("strictContentTypeValidation=%v", repository.Storage.StrictContentTypeValidation))
+	}
+	if !strings.EqualFold(repository.Storage.WritePolicy, b.writePolicy) {
+		mismatches = append(mismatches, fmt.Sprintf("writePolicy=%q", repository.Storage.WritePolicy))
+	}
+	if len(mismatches) > 0 {
+		return fmt.Errorf("nexus repository %q does not match configured policy: %s", name, strings.Join(mismatches, ", "))
+	}
+	return nil
 }
 
 func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepository, force bool) (packagebackend.RepositoryObservation, error) {
@@ -254,15 +371,82 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 }
 
 func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactObservation, error) {
-	stream, err := b.GetArtifact(ctx, repo, artifact)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return packagebackend.ArtifactObservation{Exists: false, DownloadURL: artifact.DownloadURL, BackendPath: artifact.BackendPath}, nil
+	name := backendRepoName(repo)
+	relPath := strings.TrimSpace(artifact.BackendPath)
+	var err error
+	if relPath == "" {
+		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
+		if err != nil {
+			return packagebackend.ArtifactObservation{}, err
 		}
+	}
+	assets, err := b.searchAssets(ctx, name, relPath)
+	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer stream.ReadCloser.Close()
-	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: artifact.DownloadURL, BackendPath: stream.BackendPath, SHA256: stream.SHA256, SizeBytes: stream.SizeBytes}, nil
+	var matched *packagebackend.ArtifactObservation
+	for i := range assets {
+		if assets[i].BackendPath != relPath {
+			continue
+		}
+		if matched != nil {
+			return packagebackend.ArtifactObservation{}, fmt.Errorf("nexus returned multiple assets for backend path %q", relPath)
+		}
+		matched = &assets[i]
+	}
+	if matched == nil {
+		return packagebackend.ArtifactObservation{Exists: false, DownloadURL: artifact.DownloadURL, BackendPath: relPath}, nil
+	}
+	if !validSHA256(matched.SHA256) {
+		return packagebackend.ArtifactObservation{}, fmt.Errorf("nexus asset %q did not provide a valid backend SHA-256", relPath)
+	}
+	return *matched, nil
+}
+
+func (b *Backend) searchAssets(ctx context.Context, repository, relPath string) ([]packagebackend.ArtifactObservation, error) {
+	path := "/service/rest/v1/search/assets?repository=" + url.QueryEscape(repository) + "&name=" + url.QueryEscape(relPath)
+	resp, err := b.do(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, responseError(resp, "observe nexus asset")
+	}
+	var payload struct {
+		Items []struct {
+			Path        string `json:"path"`
+			DownloadURL string `json:"downloadUrl"`
+			Checksum    struct {
+				SHA256 string `json:"sha256"`
+			} `json:"checksum"`
+			FileSize int64 `json:"fileSize"`
+		} `json:"items"`
+		ContinuationToken string `json:"continuationToken"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode nexus asset observation: %w", err)
+	}
+	if strings.TrimSpace(payload.ContinuationToken) != "" {
+		return nil, fmt.Errorf("nexus asset observation was paginated and therefore inconclusive")
+	}
+	out := make([]packagebackend.ArtifactObservation, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		out = append(out, packagebackend.ArtifactObservation{Exists: true, DownloadURL: item.DownloadURL, BackendPath: item.Path, SHA256: strings.ToLower(item.Checksum.SHA256), SizeBytes: item.FileSize})
+	}
+	return out, nil
+}
+
+func validSHA256(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (b *Backend) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
