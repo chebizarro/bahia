@@ -1,6 +1,14 @@
 package controlplane
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	gonostr "fiatjaf.com/nostr"
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
+)
 
 func TestReactorIsAuthorized(t *testing.T) {
 	t.Run("empty allowlist denies all", func(t *testing.T) {
@@ -19,6 +27,43 @@ func TestReactorIsAuthorized(t *testing.T) {
 			t.Fatal("expected non-configured pubkey to be rejected")
 		}
 	})
+}
+
+type continuityCapturePublisher struct {
+	events []events.Event
+}
+
+func (p *continuityCapturePublisher) Publish(_ context.Context, event events.Event) {
+	p.events = append(p.events, event)
+}
+func (*continuityCapturePublisher) Subscribe(events.EventType, events.Handler) {}
+
+func TestContinuityDefinitionsRejectUnauthorizedAuthorsBeforePublication(t *testing.T) {
+	publisher := &continuityCapturePublisher{}
+	reactor := NewReactor(
+		Config{AuthorizedPubkeys: []string{"operator"}},
+		nil,
+		nil,
+		nil,
+		nil,
+		WithEventPublisher(publisher),
+	)
+	event, err := nostradapter.EncodeContinuityProfileEvent(domain.ServiceContinuityProfile{
+		ServiceKey: "svc.api",
+		Profiles: map[domain.ContinuityMode]domain.ContinuityProfileSpec{
+			domain.ContinuityModeFull: {},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode continuity profile: %v", err)
+	}
+	event.ID = gonostr.ID{1}
+	event.PubKey = gonostr.PubKey{2}
+
+	reactor.handleContinuityProfileDefinition(context.Background(), &event)
+	if len(publisher.events) != 0 {
+		t.Fatalf("published %d events from unauthorized definition", len(publisher.events))
+	}
 }
 
 func TestReactorIsAuthorizedForScopedOperatorPaths(t *testing.T) {
