@@ -36,8 +36,14 @@ func NewBackupRetentionResponder(publisher backupResultPublisher, signer canonic
 }
 
 func (r *BackupRetentionResponder) PublishBackupRetentionStatus(ctx context.Context, run *domain.BackupRetentionRun, step, message string) error {
-	if r == nil || run == nil || strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup retention responder: %w", ErrResponderNotConfigured)
+	}
+	if run == nil {
+		return fmt.Errorf("backup retention: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
+		return fmt.Errorf("backup retention %s: %w", run.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRetention(run)
 	content := map[string]any{
@@ -61,8 +67,14 @@ func (r *BackupRetentionResponder) PublishBackupRetentionStatus(ctx context.Cont
 }
 
 func (r *BackupRetentionResponder) PublishBackupRetentionResult(ctx context.Context, run *domain.BackupRetentionRun, message string) error {
-	if r == nil || run == nil || strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup retention responder: %w", ErrResponderNotConfigured)
+	}
+	if run == nil {
+		return fmt.Errorf("backup retention: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
+		return fmt.Errorf("backup retention %s: %w", run.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRetention(run)
 	content := map[string]any{
@@ -90,16 +102,17 @@ func (r *BackupRetentionResponder) PublishBackupRetentionResult(ctx context.Cont
 
 func (r *BackupRetentionResponder) signPublishRecord(ctx context.Context, kind int, tags nostr.Tags, content, entityType string, entityID *uuid.UUID) (map[string]any, error) {
 	if r.publisher == nil || r.signer == nil {
-		return map[string]any{"kind": kind, "published": false, "error": "backup retention responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("backup retention responder publisher or signer is not configured")
+		return map[string]any{"kind": kind, "published": false, "error": "backup retention responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("%w: backup retention responder publisher or signer is not configured", ErrResponderNotConfigured)
 	}
 	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: content}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return map[string]any{"kind": kind, "published": false, "error": err.Error(), "recorded_at": time.Now().UTC().Format(time.RFC3339)}, err
 	}
 	results, err := r.publisher.PublishWithResults(ctx, *event)
-	summary := backupPublishSummary(kind, event, results, err)
+	publishErr := backupPublishResultError(results, err)
+	summary := backupPublishSummary(kind, event, results, publishErr)
 	r.record(ctx, event, entityType, entityID)
-	return summary, err
+	return summary, publishErr
 }
 
 func (r *BackupRetentionResponder) mergeRetentionPublishSummary(ctx context.Context, run *domain.BackupRetentionRun, key string, summary map[string]any) {

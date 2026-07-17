@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -50,12 +51,15 @@ func (r *LLMResponder) PublishError(ctx context.Context, intent *domain.LLMDeplo
 }
 
 func (r *LLMResponder) publish(ctx context.Context, progress bool, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, status, step, message string, cause error) error {
-	if r == nil || r.pool == nil || intent == nil {
-		return nil
+	if r == nil || r.pool == nil {
+		return fmt.Errorf("LLM responder: %w", ErrResponderNotConfigured)
+	}
+	if intent == nil {
+		return fmt.Errorf("LLM deployment intent: %w", ErrResponderInvalidInput)
 	}
 	requestEventID, requestPubkey := llmNostrCorrelation(intent)
 	if requestEventID == "" || requestPubkey == "" {
-		return nil
+		return fmt.Errorf("LLM deployment intent %s: %w", intent.ID, ErrResponderCorrelationMissing)
 	}
 	content := map[string]any{
 		"status":         status,
@@ -108,9 +112,12 @@ func (r *LLMResponder) publish(ctx context.Context, progress bool, intent *domai
 	if err := r.sign(ctx, ev); err != nil {
 		return err
 	}
-	_, err := r.pool.Publish(ctx, *ev)
+	published, err := r.pool.Publish(ctx, *ev)
 	if err != nil {
 		return err
+	}
+	if published == 0 {
+		return fmt.Errorf("LLM response: %w", ErrResponderNoRelayAccepted)
 	}
 	r.record(ctx, ev, intent)
 	return nil

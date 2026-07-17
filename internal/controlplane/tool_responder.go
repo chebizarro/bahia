@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -48,8 +49,11 @@ func (r *ToolResponder) PublishResult(ctx context.Context, requestEvent *nostr.E
 
 // PublishApprovalRequest publishes a ContextVM approval request to the operator.
 func (r *ToolResponder) PublishApprovalRequest(ctx context.Context, intent *domain.ToolProvisionIntent, operatorPubkey string) error {
-	if r == nil || r.publisher == nil || intent == nil || operatorPubkey == "" {
-		return nil
+	if r == nil || r.publisher == nil {
+		return fmt.Errorf("tool approval responder: %w", ErrResponderNotConfigured)
+	}
+	if intent == nil || operatorPubkey == "" {
+		return fmt.Errorf("tool approval request: %w", ErrResponderInvalidInput)
 	}
 	content := map[string]any{
 		"intent_id":       intent.ID.String(),
@@ -76,8 +80,14 @@ func (r *ToolResponder) PublishApprovalRequest(ctx context.Context, intent *doma
 }
 
 func (r *ToolResponder) publishReply(ctx context.Context, requestEvent *nostr.Event, intent *domain.ToolProvisionIntent, status, step, message, errMsg string) error {
-	if r == nil || r.publisher == nil || requestEvent == nil || intent == nil {
-		return nil
+	if r == nil || r.publisher == nil {
+		return fmt.Errorf("tool responder: %w", ErrResponderNotConfigured)
+	}
+	if requestEvent == nil || intent == nil {
+		return fmt.Errorf("tool response: %w", ErrResponderInvalidInput)
+	}
+	if requestEvent.ID == (nostr.ID{}) || requestEvent.PubKey == (nostr.PubKey{}) {
+		return fmt.Errorf("tool response: %w", ErrResponderCorrelationMissing)
 	}
 	content := map[string]any{
 		"status":         status,
@@ -109,8 +119,12 @@ func (r *ToolResponder) publishReply(ctx context.Context, requestEvent *nostr.Ev
 	if err := SignGoNostrEvent(ctx, r.signer, ev); err != nil {
 		return err
 	}
-	if _, err := r.publisher.Publish(ctx, *ev); err != nil {
+	published, err := r.publisher.Publish(ctx, *ev)
+	if err != nil {
 		return err
+	}
+	if published == 0 {
+		return fmt.Errorf("tool response: %w", ErrResponderNoRelayAccepted)
 	}
 	r.record(ctx, ev, "tool.provisioning.reply", &intent.ID)
 	return nil

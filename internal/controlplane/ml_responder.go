@@ -68,12 +68,15 @@ func (r *MLResponder) PublishError(ctx context.Context, intent *domain.MLDeploym
 }
 
 func (r *MLResponder) publishRecipe(ctx context.Context, recipe *domain.MLRecipe, run *domain.MLRecipeRun, status, message string, cause error) error {
-	if r == nil || r.pool == nil || run == nil {
-		return nil
+	if r == nil || r.pool == nil {
+		return fmt.Errorf("ML recipe responder: %w", ErrResponderNotConfigured)
+	}
+	if run == nil {
+		return fmt.Errorf("ML recipe run: %w", ErrResponderInvalidInput)
 	}
 	requestEventID, requestPubkey, _ := mlRecipeNostrCorrelation(run)
 	if requestEventID == "" || requestPubkey == "" {
-		return nil
+		return fmt.Errorf("ML recipe run %s: %w", run.ID, ErrResponderCorrelationMissing)
 	}
 	recipeCoord := metadataString(run.Metadata, "nostr_recipe_coord")
 	if recipeCoord == "" && recipe != nil {
@@ -110,20 +113,27 @@ func (r *MLResponder) publishRecipe(ctx context.Context, recipe *domain.MLRecipe
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return err
 	}
-	if _, err := r.pool.Publish(ctx, *event); err != nil {
+	published, err := r.pool.Publish(ctx, *event)
+	if err != nil {
 		return err
+	}
+	if published == 0 {
+		return fmt.Errorf("ML recipe response: %w", ErrResponderNoRelayAccepted)
 	}
 	r.recordRecipe(ctx, event, run)
 	return nil
 }
 
 func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIntent, run *domain.MLDeploymentRun, status, message string, cause error) error {
-	if r == nil || r.pool == nil || intent == nil {
-		return nil
+	if r == nil || r.pool == nil {
+		return fmt.Errorf("ML responder: %w", ErrResponderNotConfigured)
+	}
+	if intent == nil {
+		return fmt.Errorf("ML deployment intent: %w", ErrResponderInvalidInput)
 	}
 	requestEventID, requestPubkey, _ := mlNostrCorrelation(intent)
 	if requestEventID == "" || requestPubkey == "" {
-		return nil
+		return fmt.Errorf("ML deployment intent %s: %w", intent.ID, ErrResponderCorrelationMissing)
 	}
 	endpointCoord := metadataString(intent.Metadata, "nostr_endpoint_coord")
 	modelVersionCoord := metadataString(intent.Metadata, "nostr_model_version_coord")
@@ -194,8 +204,12 @@ func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIn
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return err
 	}
-	if _, err := r.pool.Publish(ctx, *event); err != nil {
+	published, err := r.pool.Publish(ctx, *event)
+	if err != nil {
 		return err
+	}
+	if published == 0 {
+		return fmt.Errorf("ML deployment response: %w", ErrResponderNoRelayAccepted)
 	}
 	r.record(ctx, event, intent)
 	return nil

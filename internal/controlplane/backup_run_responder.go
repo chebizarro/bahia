@@ -42,8 +42,14 @@ func NewBackupRunResponder(publisher backupResultPublisher, signer canonicalnost
 }
 
 func (r *BackupRunResponder) PublishBackupRunStatus(ctx context.Context, run *domain.BackupRun, step, message string) error {
-	if r == nil || run == nil || strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup run responder: %w", ErrResponderNotConfigured)
+	}
+	if run == nil {
+		return fmt.Errorf("backup run: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
+		return fmt.Errorf("backup run %s: %w", run.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRun(run)
 	content := map[string]any{
@@ -65,8 +71,14 @@ func (r *BackupRunResponder) PublishBackupRunStatus(ctx context.Context, run *do
 }
 
 func (r *BackupRunResponder) PublishBackupRunResult(ctx context.Context, run *domain.BackupRun, verification *domain.BackupVerificationRecord, message string) error {
-	if r == nil || run == nil || strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup run responder: %w", ErrResponderNotConfigured)
+	}
+	if run == nil {
+		return fmt.Errorf("backup run: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(run.RequestEventID) == "" || strings.TrimSpace(run.RequestedBy) == "" {
+		return fmt.Errorf("backup run %s: %w", run.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRun(run)
 	content := map[string]any{
@@ -149,16 +161,17 @@ func (r *BackupRunResponder) publishVerificationAttestation(ctx context.Context,
 
 func (r *BackupRunResponder) signPublishRecord(ctx context.Context, kind int, tags nostr.Tags, content, entityType string, entityID *uuid.UUID) (map[string]any, error) {
 	if r.publisher == nil || r.signer == nil {
-		return map[string]any{"kind": kind, "published": false, "error": "backup responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("backup responder publisher or signer is not configured")
+		return map[string]any{"kind": kind, "published": false, "error": "backup responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("%w: backup responder publisher or signer is not configured", ErrResponderNotConfigured)
 	}
 	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: content}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return map[string]any{"kind": kind, "published": false, "error": err.Error(), "recorded_at": time.Now().UTC().Format(time.RFC3339)}, err
 	}
 	results, err := r.publisher.PublishWithResults(ctx, *event)
-	summary := backupPublishSummary(kind, event, results, err)
+	publishErr := backupPublishResultError(results, err)
+	summary := backupPublishSummary(kind, event, results, publishErr)
 	r.record(ctx, event, entityType, entityID)
-	return summary, err
+	return summary, publishErr
 }
 
 func backupRunTags(run *domain.BackupRun, tags nostr.Tags) nostr.Tags {
@@ -197,6 +210,18 @@ func backupStatusForRun(run *domain.BackupRun) string {
 	default:
 		return "processing"
 	}
+}
+
+func backupPublishResultError(results []nostrpool.PublishResult, err error) error {
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		if result.Accepted || result.IsDuplicate() {
+			return nil
+		}
+	}
+	return ErrResponderNoRelayAccepted
 }
 
 func backupPublishSummary(kind int, event *nostr.Event, results []nostrpool.PublishResult, err error) map[string]any {

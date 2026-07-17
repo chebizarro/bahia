@@ -36,8 +36,14 @@ func NewBackupRestoreResponder(publisher backupResultPublisher, signer canonical
 }
 
 func (r *BackupRestoreResponder) PublishBackupRestoreStatus(ctx context.Context, restore *domain.BackupRestoreRun, step, message string) error {
-	if r == nil || restore == nil || strings.TrimSpace(restore.RequestEventID) == "" || strings.TrimSpace(restore.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup restore responder: %w", ErrResponderNotConfigured)
+	}
+	if restore == nil {
+		return fmt.Errorf("backup restore: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(restore.RequestEventID) == "" || strings.TrimSpace(restore.RequestedBy) == "" {
+		return fmt.Errorf("backup restore %s: %w", restore.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRestore(restore)
 	content := map[string]any{
@@ -62,8 +68,14 @@ func (r *BackupRestoreResponder) PublishBackupRestoreStatus(ctx context.Context,
 }
 
 func (r *BackupRestoreResponder) PublishBackupRestoreApprovalResult(ctx context.Context, restore *domain.BackupRestoreRun, approved bool, changed bool, message string) error {
-	if r == nil || restore == nil || strings.TrimSpace(restore.RequestEventID) == "" || strings.TrimSpace(restore.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup restore responder: %w", ErrResponderNotConfigured)
+	}
+	if restore == nil {
+		return fmt.Errorf("backup restore: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(restore.RequestEventID) == "" || strings.TrimSpace(restore.RequestedBy) == "" {
+		return fmt.Errorf("backup restore %s: %w", restore.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRestore(restore)
 	content := map[string]any{
@@ -96,8 +108,14 @@ func (r *BackupRestoreResponder) PublishBackupRestoreApprovalResult(ctx context.
 }
 
 func (r *BackupRestoreResponder) PublishBackupRestoreResult(ctx context.Context, restore *domain.BackupRestoreRun, message string) error {
-	if r == nil || restore == nil || strings.TrimSpace(restore.RequestEventID) == "" || strings.TrimSpace(restore.RequestedBy) == "" {
-		return nil
+	if r == nil {
+		return fmt.Errorf("backup restore responder: %w", ErrResponderNotConfigured)
+	}
+	if restore == nil {
+		return fmt.Errorf("backup restore: %w", ErrResponderInvalidInput)
+	}
+	if strings.TrimSpace(restore.RequestEventID) == "" || strings.TrimSpace(restore.RequestedBy) == "" {
+		return fmt.Errorf("backup restore %s: %w", restore.ID, ErrResponderCorrelationMissing)
 	}
 	status := backupStatusForRestore(restore)
 	content := map[string]any{
@@ -136,16 +154,17 @@ func (r *BackupRestoreResponder) PublishBackupRestoreResult(ctx context.Context,
 
 func (r *BackupRestoreResponder) signPublishRecord(ctx context.Context, kind int, tags nostr.Tags, content, entityType string, entityID *uuid.UUID) (map[string]any, error) {
 	if r.publisher == nil || r.signer == nil {
-		return map[string]any{"kind": kind, "published": false, "error": "backup restore responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("backup restore responder publisher or signer is not configured")
+		return map[string]any{"kind": kind, "published": false, "error": "backup restore responder publisher or signer is not configured", "recorded_at": time.Now().UTC().Format(time.RFC3339)}, fmt.Errorf("%w: backup restore responder publisher or signer is not configured", ErrResponderNotConfigured)
 	}
 	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: content}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
 		return map[string]any{"kind": kind, "published": false, "error": err.Error(), "recorded_at": time.Now().UTC().Format(time.RFC3339)}, err
 	}
 	results, err := r.publisher.PublishWithResults(ctx, *event)
-	summary := backupPublishSummary(kind, event, results, err)
+	publishErr := backupPublishResultError(results, err)
+	summary := backupPublishSummary(kind, event, results, publishErr)
 	r.record(ctx, event, entityType, entityID)
-	return summary, err
+	return summary, publishErr
 }
 
 func (r *BackupRestoreResponder) mergeRestorePublishSummary(ctx context.Context, restore *domain.BackupRestoreRun, key string, summary map[string]any) {
