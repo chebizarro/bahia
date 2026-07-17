@@ -3,6 +3,7 @@ package blossom
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -11,7 +12,13 @@ import (
 	"testing"
 )
 
-var tinyPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00}
+var tinyPNG = func() []byte {
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		panic(err)
+	}
+	return data
+}()
 
 func TestClientStoreAvatarReturnsBlossomRef(t *testing.T) {
 	h := sha256.Sum256(tinyPNG)
@@ -98,7 +105,7 @@ func TestClientResolveAvatarRefDirectURL(t *testing.T) {
 		t.Fatalf("expected direct URL preview to require opt-in")
 	}
 
-	preview, err := (*Client)(nil).ResolveAvatarRef(context.Background(), server.URL+"/avatar.png", AllowDirectAvatarPreviewURLs())
+	preview, err := (*Client)(nil).ResolveAvatarRef(context.Background(), server.URL+"/avatar.png", AllowDirectAvatarPreviewURLs(), WithAllowedAvatarPreviewOrigins(server.URL))
 	if err != nil {
 		t.Fatalf("ResolveAvatarRef() error = %v", err)
 	}
@@ -132,9 +139,26 @@ func TestClientResolveAvatarRefDirectURLSizeLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := (*Client)(nil).ResolveAvatarRef(context.Background(), server.URL+"/avatar.png", AllowDirectAvatarPreviewURLs(), WithMaxAvatarPreviewBytes(3))
+	_, err := (*Client)(nil).ResolveAvatarRef(context.Background(), server.URL+"/avatar.png", AllowDirectAvatarPreviewURLs(), WithAllowedAvatarPreviewOrigins(server.URL), WithMaxAvatarPreviewBytes(3))
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected size limit error, got %v", err)
+	}
+}
+
+func TestClientResolveAvatarRefRejectsPrivateURLWithoutAllowlist(t *testing.T) {
+	serverCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverCalled = true
+		_, _ = w.Write(tinyPNG)
+	}))
+	defer server.Close()
+
+	_, err := (*Client)(nil).ResolveAvatarRef(context.Background(), server.URL+"/avatar.png", AllowDirectAvatarPreviewURLs())
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("ResolveAvatarRef() error = %v, want private-address rejection", err)
+	}
+	if serverCalled {
+		t.Fatal("private avatar URL was fetched")
 	}
 }
 

@@ -107,6 +107,10 @@ func (c *Client) DownloadWithFallback(ctx context.Context, url string) ([]byte, 
 }
 
 func (c *Client) downloadFromServer(ctx context.Context, url string) ([]byte, error) {
+	return c.downloadFromServerWithLimit(ctx, url, 0)
+}
+
+func (c *Client) downloadFromServerWithLimit(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -117,7 +121,7 @@ func (c *Client) downloadFromServer(ctx context.Context, url string) ([]byte, er
 			}
 		}
 
-		data, err := c.doDownload(ctx, url)
+		data, err := c.doDownloadWithLimit(ctx, url, maxBytes)
 		if err != nil {
 			lastErr = err
 			continue
@@ -129,6 +133,10 @@ func (c *Client) downloadFromServer(ctx context.Context, url string) ([]byte, er
 }
 
 func (c *Client) doDownload(ctx context.Context, url string) ([]byte, error) {
+	return c.doDownloadWithLimit(ctx, url, 0)
+}
+
+func (c *Client) doDownloadWithLimit(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -147,25 +155,43 @@ func (c *Client) doDownload(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("blob not found: %s", url)
 	}
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	return io.ReadAll(resp.Body)
+	if maxBytes <= 0 {
+		return io.ReadAll(resp.Body)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("blob exceeds %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 // Exists checks if a blob exists on any configured server.
 func (c *Client) Exists(ctx context.Context, hash string) (bool, string, error) {
+	if len(c.servers) == 0 {
+		return false, "", fmt.Errorf("no Blossom servers configured")
+	}
+	var lastErr error
 	for _, server := range c.servers {
 		url := server + "/" + hash
 		exists, err := c.checkExists(ctx, url)
 		if err != nil {
+			lastErr = fmt.Errorf("checking %s: %w", server, err)
 			continue
 		}
 		if exists {
 			return true, server, nil
 		}
+	}
+	if lastErr != nil {
+		return false, "", fmt.Errorf("Blossom existence is indeterminate: %w", lastErr)
 	}
 	return false, "", nil
 }
@@ -182,5 +208,12 @@ func (c *Client) checkExists(ctx context.Context, url string) (bool, error) {
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode == http.StatusOK, nil
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("server returned %d", resp.StatusCode)
+	}
 }

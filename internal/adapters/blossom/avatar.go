@@ -1,10 +1,17 @@
 package blossom
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,6 +52,7 @@ type AvatarResolveOption func(*avatarResolveOptions)
 type avatarResolveOptions struct {
 	allowDirectURLs bool
 	maxBytes        int64
+	allowedOrigins  map[string]struct{}
 }
 
 // AllowDirectAvatarPreviewURLs allows ResolveAvatarRef to dereference HTTP(S)
@@ -52,6 +60,22 @@ type avatarResolveOptions struct {
 // do not need this option.
 func AllowDirectAvatarPreviewURLs() AvatarResolveOption {
 	return func(o *avatarResolveOptions) { o.allowDirectURLs = true }
+}
+
+// WithAllowedAvatarPreviewOrigins allows exact HTTP(S) origins for direct
+// previews. This is intended for explicitly configured generation/CDN origins,
+// including trusted private-network services.
+func WithAllowedAvatarPreviewOrigins(origins ...string) AvatarResolveOption {
+	return func(o *avatarResolveOptions) {
+		if o.allowedOrigins == nil {
+			o.allowedOrigins = make(map[string]struct{})
+		}
+		for _, origin := range origins {
+			if normalized, err := normalizeHTTPOrigin(origin); err == nil {
+				o.allowedOrigins[normalized] = struct{}{}
+			}
+		}
+	}
 }
 
 // WithMaxAvatarPreviewBytes sets a response body cap for direct URL previews.
@@ -124,11 +148,11 @@ func (c *Client) ResolveAvatarRef(ctx context.Context, ref string, opts ...Avata
 		if c == nil {
 			return nil, fmt.Errorf("Blossom client is required to resolve %s refs", AvatarRefPrefix)
 		}
-		data, err := c.DownloadByHash(ctx, hash)
+		data, contentType, err := c.downloadAvatarByHash(ctx, hash, resolveOpts.maxBytes)
 		if err != nil {
 			return nil, err
 		}
-		return &AvatarPreview{Ref: RefFromHash(hash), Hash: hash, ContentType: normalizeAvatarContentType("", data), Data: data}, nil
+		return &AvatarPreview{Ref: RefFromHash(hash), Hash: hash, ContentType: contentType, Data: data}, nil
 	}
 
 	if err := validateSHA256Hash(ref); err == nil {
@@ -136,20 +160,26 @@ func (c *Client) ResolveAvatarRef(ctx context.Context, ref string, opts ...Avata
 			return nil, fmt.Errorf("Blossom client is required to resolve raw hash avatar refs")
 		}
 		hash := strings.ToLower(ref)
-		data, err := c.DownloadByHash(ctx, hash)
+		data, contentType, err := c.downloadAvatarByHash(ctx, hash, resolveOpts.maxBytes)
 		if err != nil {
 			return nil, err
 		}
-		return &AvatarPreview{Ref: RefFromHash(hash), Hash: hash, ContentType: normalizeAvatarContentType("", data), Data: data}, nil
+		return &AvatarPreview{Ref: RefFromHash(hash), Hash: hash, ContentType: contentType, Data: data}, nil
 	}
 
 	if err := validateDirectURL(ref); err != nil {
-		return nil, fmt.Errorf("unsupported avatar ref %q: %w", ref, err)
+		origin, originErr := normalizeHTTPOrigin(ref)
+		if originErr != nil {
+			return nil, fmt.Errorf("unsupported avatar ref %q: %w", ref, err)
+		}
+		if _, ok := resolveOpts.allowedOrigins[origin]; !ok {
+			return nil, fmt.Errorf("unsupported avatar ref %q: %w", ref, err)
+		}
 	}
 	if !resolveOpts.allowDirectURLs {
 		return nil, fmt.Errorf("direct avatar URL preview requires explicit opt-in")
 	}
-	data, contentType, err := c.downloadAvatarURL(ctx, ref, resolveOpts.maxBytes)
+	data, contentType, err := c.downloadAvatarURL(ctx, ref, resolveOpts.maxBytes, resolveOpts.allowedOrigins)
 	if err != nil {
 		return nil, err
 	}
@@ -179,23 +209,23 @@ func (c *Client) avatarStoreResultFromDescriptor(bd *BlobDescriptor, data []byte
 		return nil, fmt.Errorf("empty Blossom upload descriptor")
 	}
 	hash := strings.ToLower(strings.TrimSpace(bd.SHA256))
-	if hash == "" {
-		hash = ComputeSHA256(data)
-	}
 	if err := validateSHA256Hash(hash); err != nil {
 		return nil, fmt.Errorf("invalid Blossom upload hash: %w", err)
 	}
+	if !VerifySHA256(data, hash) {
+		return nil, fmt.Errorf("Blossom upload hash does not match avatar bytes")
+	}
 	urlValue := strings.TrimSpace(bd.URL)
-	if urlValue == "" && len(c.servers) > 0 {
-		urlValue = strings.TrimRight(c.servers[0], "/") + "/" + hash
+	if urlValue == "" {
+		return nil, fmt.Errorf("Blossom upload descriptor URL is empty")
 	}
 	resultType := strings.TrimSpace(bd.Type)
 	if resultType == "" {
 		resultType = contentType
 	}
 	size := bd.Size
-	if size == 0 {
-		size = int64(len(data))
+	if size != int64(len(data)) {
+		return nil, fmt.Errorf("Blossom upload size %d does not match avatar size %d", size, len(data))
 	}
 	return &AvatarStoreResult{
 		Ref:         RefFromHash(hash),
@@ -206,10 +236,27 @@ func (c *Client) avatarStoreResultFromDescriptor(bd *BlobDescriptor, data []byte
 	}, nil
 }
 
-func (c *Client) downloadAvatarURL(ctx context.Context, rawURL string, maxBytes int64) ([]byte, string, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+func (c *Client) downloadAvatarURL(ctx context.Context, rawURL string, maxBytes int64, allowedOrigins map[string]struct{}) ([]byte, string, error) {
+	if err := validateOutboundAvatarURL(ctx, rawURL, allowedOrigins); err != nil {
+		return nil, "", err
+	}
+	baseClient := &http.Client{Timeout: 30 * time.Second}
 	if c != nil && c.httpClient != nil {
-		client = c.httpClient
+		baseClient = c.httpClient
+	}
+	client := *baseClient
+	originalRedirectCheck := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if err := validateOutboundAvatarURL(req.Context(), req.URL.String(), allowedOrigins); err != nil {
+			return fmt.Errorf("unsafe avatar preview redirect: %w", err)
+		}
+		if originalRedirectCheck != nil {
+			return originalRedirectCheck(req, via)
+		}
+		return nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -221,19 +268,71 @@ func (c *Client) downloadAvatarURL(ctx context.Context, rawURL string, maxBytes 
 		return nil, "", fmt.Errorf("fetching avatar preview: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return nil, "", fmt.Errorf("avatar preview returned %d: %s", resp.StatusCode, string(body))
 	}
-	limited := io.LimitReader(resp.Body, maxBytes+1)
-	data, err := io.ReadAll(limited)
+	return readAndValidateAvatar(resp.Body, resp.Header.Get("Content-Type"), maxBytes)
+}
+
+func (c *Client) downloadAvatarByHash(ctx context.Context, hash string, maxBytes int64) ([]byte, string, error) {
+	var lastErr error
+	for _, server := range c.servers {
+		data, err := c.downloadFromServerWithLimit(ctx, server+"/"+hash, maxBytes)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !VerifySHA256(data, hash) {
+			lastErr = fmt.Errorf("SHA-256 mismatch from %s", server)
+			continue
+		}
+		validated, contentType, err := validateAvatarBytes(data, "")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return validated, contentType, nil
+	}
+	return nil, "", fmt.Errorf("failed to download avatar %s from any Blossom server: %w", hash, lastErr)
+}
+
+func readAndValidateAvatar(reader io.Reader, contentType string, maxBytes int64) ([]byte, string, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("reading avatar preview: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
 		return nil, "", fmt.Errorf("avatar preview exceeds %d bytes", maxBytes)
 	}
-	return data, normalizeAvatarContentType(resp.Header.Get("Content-Type"), data), nil
+	return validateAvatarBytes(data, contentType)
+}
+
+func validateAvatarBytes(data []byte, contentType string) ([]byte, string, error) {
+	if len(data) == 0 {
+		return nil, "", errors.New("avatar image is empty")
+	}
+	declared := normalizeAvatarContentType(contentType, data)
+	detected := strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0])
+	allowed := func(value string) bool {
+		switch strings.ToLower(value) {
+		case "image/png", "image/jpeg", "image/gif":
+			return true
+		default:
+			return false
+		}
+	}
+	if !allowed(declared) || !allowed(detected) || !strings.EqualFold(declared, detected) {
+		return nil, "", fmt.Errorf("avatar content type %q does not match allowed detected type %q", declared, detected)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", fmt.Errorf("decode avatar image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > 4096 || config.Height > 4096 {
+		return nil, "", fmt.Errorf("avatar dimensions %dx%d are outside 1..4096", config.Width, config.Height)
+	}
+	return data, detected, nil
 }
 
 func normalizeAvatarContentType(contentType string, data []byte) string {
@@ -261,7 +360,69 @@ func validateDirectURL(rawURL string) error {
 	if parsed.Host == "" {
 		return fmt.Errorf("direct avatar URL must include a host")
 	}
+	if parsed.User != nil {
+		return fmt.Errorf("direct avatar URL must not include userinfo")
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return fmt.Errorf("direct avatar URL host is not allowed")
+	}
+	if ip := net.ParseIP(hostname); ip != nil && unsafeAvatarIP(ip) {
+		return fmt.Errorf("direct avatar URL IP is not allowed")
+	}
 	return nil
+}
+
+func validateOutboundAvatarURL(ctx context.Context, rawURL string, allowedOrigins map[string]struct{}) error {
+	if err := validateDirectURL(rawURL); err != nil {
+		parsed, parseErr := url.Parse(strings.TrimSpace(rawURL))
+		if parseErr != nil {
+			return err
+		}
+		origin, originErr := normalizeHTTPOrigin(parsed.Scheme + "://" + parsed.Host)
+		if originErr != nil {
+			return err
+		}
+		if _, ok := allowedOrigins[origin]; !ok {
+			return err
+		}
+	}
+	origin, err := normalizeHTTPOrigin(rawURL)
+	if err != nil {
+		return err
+	}
+	if _, ok := allowedOrigins[origin]; ok {
+		return nil
+	}
+	parsed, _ := url.Parse(rawURL)
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, parsed.Hostname())
+	if err != nil {
+		return fmt.Errorf("resolve avatar URL host: %w", err)
+	}
+	if len(addresses) == 0 {
+		return fmt.Errorf("avatar URL host resolved to no addresses")
+	}
+	for _, address := range addresses {
+		if unsafeAvatarIP(address.IP) {
+			return fmt.Errorf("avatar URL host resolves to a non-public address")
+		}
+	}
+	return nil
+}
+
+func normalizeHTTPOrigin(rawURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", err
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+		return "", fmt.Errorf("invalid HTTP(S) origin")
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
+}
+
+func unsafeAvatarIP(ip net.IP) bool {
+	return !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func validateSHA256Hash(hash string) error {

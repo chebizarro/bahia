@@ -163,30 +163,23 @@ func (c *Client) doUploadFile(ctx context.Context, url, path string, size int64,
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading upload response: %w", err)
+	}
+	if len(body) > 64*1024 {
+		return nil, fmt.Errorf("upload response exceeds 65536 bytes")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var bd BlobDescriptor
 	if err := json.Unmarshal(body, &bd); err != nil {
-		bd = BlobDescriptor{
-			URL:      strings.TrimSuffix(url, "/upload") + "/" + hash,
-			SHA256:   hash,
-			Size:     size,
-			Type:     req.Header.Get("Content-Type"),
-			Uploaded: time.Now(),
-		}
+		return nil, fmt.Errorf("decoding upload descriptor: %w", err)
 	}
-
-	if bd.SHA256 == "" {
-		bd.SHA256 = hash
-	}
-	if bd.Size == 0 {
-		bd.Size = size
-	}
-	if bd.URL == "" {
-		bd.URL = strings.TrimSuffix(url, "/upload") + "/" + hash
+	if err := validateUploadDescriptor(&bd, hash, size); err != nil {
+		return nil, err
 	}
 	if bd.Type == "" {
 		bd.Type = req.Header.Get("Content-Type")
@@ -222,7 +215,7 @@ func (c *Client) HeadByURL(ctx context.Context, url string) (*BlobHead, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return result, nil
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return result, nil
@@ -242,9 +235,9 @@ func (c *Client) OpenStreamByURL(ctx context.Context, url string) (*BlobStream, 
 	if err != nil {
 		return nil, fmt.Errorf("opening stream: %w", err)
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
 

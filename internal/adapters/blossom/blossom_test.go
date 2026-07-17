@@ -168,6 +168,7 @@ func TestClient_Upload_Fallback(t *testing.T) {
 		json.NewEncoder(w).Encode(BlobDescriptor{
 			URL:    goodServer.URL + "/" + hashStr,
 			SHA256: hashStr,
+			Size:   int64(len(data)),
 		})
 	}))
 	defer goodServer.Close()
@@ -183,6 +184,46 @@ func TestClient_Upload_Fallback(t *testing.T) {
 	}
 	if bd.URL != goodServer.URL+"/"+hashStr {
 		t.Errorf("URL = %s, want from good server", bd.URL)
+	}
+}
+
+func TestClient_UploadRejectsMalformedOrUnconfirmedResponse(t *testing.T) {
+	data := []byte("test content")
+	hash := ComputeSHA256(data)
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   func(serverURL string) string
+		want   string
+	}{
+		{name: "malformed", status: http.StatusOK, body: func(string) string { return "not-json" }, want: "decoding upload descriptor"},
+		{name: "wrong hash", status: http.StatusOK, body: func(serverURL string) string {
+			encoded, _ := json.Marshal(BlobDescriptor{URL: serverURL + "/" + strings.Repeat("0", 64), SHA256: strings.Repeat("0", 64), Size: int64(len(data))})
+			return string(encoded)
+		}, want: "does not match uploaded hash"},
+		{name: "redirect", status: http.StatusTemporaryRedirect, body: func(string) string { return "" }, want: "server returned 307"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status == http.StatusTemporaryRedirect {
+					w.Header().Set("Location", server.URL+"/elsewhere")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body(server.URL)))
+			}))
+			defer server.Close()
+
+			client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
+			client.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			descriptor, err := client.Upload(context.Background(), data, "text/plain")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Upload() = (%#v, %v), want error containing %q for hash %s", descriptor, err, tc.want, hash)
+			}
+			if descriptor != nil {
+				t.Fatalf("Upload() descriptor = %#v, want nil", descriptor)
+			}
+		})
 	}
 }
 
@@ -304,14 +345,31 @@ func TestClient_Exists(t *testing.T) {
 	}
 }
 
+func TestClient_ExistsReturnsIndeterminateOnServerFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
+
+	exists, foundServer, err := client.Exists(context.Background(), strings.Repeat("a", 64))
+	if err == nil || !strings.Contains(err.Error(), "indeterminate") {
+		t.Fatalf("Exists() = (%v, %q, %v), want indeterminate error", exists, foundServer, err)
+	}
+	if exists || foundServer != "" {
+		t.Fatalf("Exists() = (%v, %q), want false and empty server", exists, foundServer)
+	}
+}
+
 func TestClient_GetStats(t *testing.T) {
 	data := []byte("stats test")
 	hash := sha256.Sum256(data)
 	hashStr := hex.EncodeToString(hash[:])
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "PUT" {
-			json.NewEncoder(w).Encode(BlobDescriptor{SHA256: hashStr})
+			json.NewEncoder(w).Encode(BlobDescriptor{URL: server.URL + "/" + hashStr, SHA256: hashStr, Size: int64(len(data))})
 		} else {
 			w.Write(data)
 		}
@@ -489,6 +547,7 @@ func TestClient_Upload_WithAuth(t *testing.T) {
 		json.NewEncoder(w).Encode(BlobDescriptor{
 			URL:    server.URL + "/" + hashStr,
 			SHA256: hashStr,
+			Size:   int64(len(data)),
 		})
 	}))
 	defer server.Close()

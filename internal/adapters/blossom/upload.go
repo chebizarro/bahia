@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -133,24 +134,49 @@ func (c *Client) doUpload(ctx context.Context, url string, data []byte, contentT
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= 400 {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading upload response: %w", err)
+	}
+	if len(body) > 64*1024 {
+		return nil, fmt.Errorf("upload response exceeds 65536 bytes")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var bd BlobDescriptor
 	if err := json.Unmarshal(body, &bd); err != nil {
-		// If response isn't JSON, construct descriptor manually
-		bd = BlobDescriptor{
-			URL:      url[:len(url)-7] + "/" + hash, // Remove "/upload", add hash
-			SHA256:   hash,
-			Size:     int64(len(data)),
-			Uploaded: time.Now(),
-		}
+		return nil, fmt.Errorf("decoding upload descriptor: %w", err)
+	}
+	if err := validateUploadDescriptor(&bd, hash, int64(len(data))); err != nil {
+		return nil, err
 	}
 
 	return &bd, nil
+}
+
+func validateUploadDescriptor(bd *BlobDescriptor, hash string, size int64) error {
+	if bd == nil {
+		return fmt.Errorf("upload descriptor is empty")
+	}
+	if !strings.EqualFold(strings.TrimSpace(bd.SHA256), hash) {
+		return fmt.Errorf("upload descriptor SHA-256 %q does not match uploaded hash %q", bd.SHA256, hash)
+	}
+	if bd.Size != size {
+		return fmt.Errorf("upload descriptor size %d does not match uploaded size %d", bd.Size, size)
+	}
+	if strings.TrimSpace(bd.URL) == "" {
+		return fmt.Errorf("upload descriptor URL is empty")
+	}
+	_, descriptorHash, err := ParseBlossomURL(bd.URL)
+	if err != nil {
+		return fmt.Errorf("invalid upload descriptor URL: %w", err)
+	}
+	if !strings.EqualFold(descriptorHash, hash) {
+		return fmt.Errorf("upload descriptor URL hash %q does not match uploaded hash %q", descriptorHash, hash)
+	}
+	return nil
 }
 
 // createAuthHeader creates a Blossom BUD-11 authorization header (kind 24242).

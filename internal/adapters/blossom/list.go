@@ -138,7 +138,7 @@ func (c *Client) doList(ctx context.Context, url string) ([]BlobDescriptor, erro
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
 

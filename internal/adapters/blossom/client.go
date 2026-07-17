@@ -114,7 +114,7 @@ func (c *Client) checkServer(ctx context.Context, server string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
