@@ -203,6 +203,15 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		c.logger.Info("auto-selected worker", zap.String("pubkey", workerPubkey))
 	}
 
+	if len(job.Secrets) > 0 && workerPubkey == "" {
+		return "", fmt.Errorf("cannot deliver job secrets without a resolved worker pubkey")
+	}
+	if workerPubkey != "" {
+		if _, err := nostrutil.PubKeyFromHex(workerPubkey); err != nil {
+			return "", fmt.Errorf("invalid Loom worker pubkey: %w", err)
+		}
+	}
+
 	// Build the command. Default to "bash -c <deploy-script>".
 	cmd := job.Cmd
 	if cmd == "" {
