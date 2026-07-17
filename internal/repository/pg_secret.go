@@ -136,19 +136,40 @@ func (r *PgSecretRepository) ListEffective(ctx context.Context, serviceID, envID
 }
 
 func (r *PgSecretRepository) Update(ctx context.Context, s *domain.ServiceSecret) error {
-	_, err := r.pool.Exec(ctx, `
-		WITH updated AS (
+	if s == nil {
+		return fmt.Errorf("updating secret: secret is nil")
+	}
+	if s.Version <= 0 {
+		return fmt.Errorf("updating secret %s: expected version must be positive", s.ID)
+	}
+
+	var exists bool
+	var updatedVersion int
+	err := r.pool.QueryRow(ctx, `
+		WITH target AS (
+			SELECT 1 FROM service_secrets WHERE id = $3
+		), updated AS (
 			UPDATE service_secrets
 			SET encrypted_value = $1, encryption_method = $2, version = version + 1, updated_at = now()
-			WHERE id = $3
+			WHERE id = $3 AND version = $4
 			RETURNING id, version, encrypted_value, encryption_method, created_by, updated_at
+		), history AS (
+			INSERT INTO secret_versions (secret_id, version, encrypted_value, encryption_method, created_by, created_at)
+			SELECT id, version, encrypted_value, encryption_method, created_by, updated_at FROM updated
+			RETURNING version
 		)
-		INSERT INTO secret_versions (secret_id, version, encrypted_value, encryption_method, created_by, created_at)
-		SELECT id, version, encrypted_value, encryption_method, created_by, updated_at FROM updated
-	`, s.EncryptedValue, string(s.EncryptionMethod), s.ID)
+		SELECT EXISTS(SELECT 1 FROM target), COALESCE((SELECT version FROM history), 0)
+	`, s.EncryptedValue, string(s.EncryptionMethod), s.ID, s.Version).Scan(&exists, &updatedVersion)
 	if err != nil {
 		return fmt.Errorf("updating secret: %w", err)
 	}
+	if !exists {
+		return fmt.Errorf("updating secret %s: %w", s.ID, ErrNotFound)
+	}
+	if updatedVersion == 0 {
+		return fmt.Errorf("updating secret %s at version %d: %w", s.ID, s.Version, ErrConflict)
+	}
+	s.Version = updatedVersion
 	return nil
 }
 

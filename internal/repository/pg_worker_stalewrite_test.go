@@ -1,11 +1,34 @@
 package repository
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPgWorkerRepositoryUpsertReportsRejectedStaleAdvertisement(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := &PgWorkerRepository{pool: mock}
+	worker := staleGuardWorker("worker-pubkey", "stale", time.Now().UTC(), 10)
+	args := make([]any, 28)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
+	mock.ExpectExec("INSERT INTO workers").WithArgs(args...).WillReturnResult(pgxmock.NewResult("INSERT", 0))
+
+	err = repo.Upsert(context.Background(), &worker)
+	require.ErrorIs(t, err, ErrStaleWrite)
+	require.True(t, errors.Is(err, ErrStaleWrite))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestWorkerStaleWriteGuardSemanticsPreserveNewestAdvertisement(t *testing.T) {
 	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)

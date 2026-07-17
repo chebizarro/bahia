@@ -501,7 +501,7 @@ func (h *EncryptedRouteHandlers) UpdateSecret(ctx context.Context, request Encry
 	secret.EncryptionMethod = method
 	secret.UpdatedAt = time.Now().UTC()
 	if err := h.secrets.Update(ctx, secret); err != nil {
-		return nil, fmt.Errorf("failed to update secret")
+		return nil, fmt.Errorf("failed to update secret: %w", err)
 	}
 	if updated, _ := h.secrets.GetByID(ctx, secretID); updated != nil {
 		secret = updated

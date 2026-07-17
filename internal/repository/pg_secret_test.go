@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 	"time"
@@ -41,14 +42,66 @@ func TestPgSecretRepositoryUpdateWritesNextVersionRow(t *testing.T) {
 	}
 	defer mock.Close()
 	repo := newPgSecretRepositoryWithDB(mock)
-	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("new-ciphertext"), EncryptionMethod: domain.EncryptionNIP44}
+	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("new-ciphertext"), EncryptionMethod: domain.EncryptionNIP44, Version: 3}
 
-	mock.ExpectExec("WITH updated AS").
-		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery("WITH target AS").
+		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID, secret.Version).
+		WillReturnRows(pgxmock.NewRows([]string{"exists", "version"}).AddRow(true, 4))
 
 	if err := repo.Update(ctx, secret); err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+	if secret.Version != 4 {
+		t.Fatalf("Version = %d, want 4", secret.Version)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestPgSecretRepositoryUpdateRejectsStaleVersion(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock: %v", err)
+	}
+	defer mock.Close()
+	repo := newPgSecretRepositoryWithDB(mock)
+	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("stale"), EncryptionMethod: domain.EncryptionNIP44, Version: 2}
+
+	mock.ExpectQuery("WITH target AS").
+		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID, secret.Version).
+		WillReturnRows(pgxmock.NewRows([]string{"exists", "version"}).AddRow(true, 0))
+
+	err = repo.Update(ctx, secret)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Update error = %v, want ErrConflict", err)
+	}
+	if secret.Version != 2 {
+		t.Fatalf("Version mutated to %d after conflict", secret.Version)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestPgSecretRepositoryUpdateReportsMissingSecret(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock: %v", err)
+	}
+	defer mock.Close()
+	repo := newPgSecretRepositoryWithDB(mock)
+	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("missing"), EncryptionMethod: domain.EncryptionNIP44, Version: 1}
+
+	mock.ExpectQuery("WITH target AS").
+		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID, secret.Version).
+		WillReturnRows(pgxmock.NewRows([]string{"exists", "version"}).AddRow(false, 0))
+
+	err = repo.Update(ctx, secret)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update error = %v, want ErrNotFound", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

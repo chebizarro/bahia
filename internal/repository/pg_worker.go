@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -100,7 +101,7 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 		schedulingState = domain.WorkerSchedulingActive
 	}
 
-	_, err = r.pool.Exec(ctx, `
+	tag, err := r.pool.Exec(ctx, `
 		INSERT INTO workers (pubkey, name, description, architecture,
 		max_concurrent_jobs, current_queue_depth, software, pricing,
 			resources, accelerators, telemetry, pressure, ml_capabilities, capabilities, runtime_target,
@@ -140,6 +141,9 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 		w.LastAdvertisementAt, string(w.Status), string(schedulingState), w.SchedulingNote, standbyAssignmentsJSON, labelsJSON, schedulingStateProvided, standbyAssignmentsUpdate, labelsUpdate)
 	if err != nil {
 		return fmt.Errorf("upserting worker: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("worker %s advertisement at %s: %w", w.PubKey, w.LastAdvertisementAt.UTC().Format(time.RFC3339Nano), ErrStaleWrite)
 	}
 	return nil
 }
