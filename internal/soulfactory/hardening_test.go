@@ -2,6 +2,7 @@ package soulfactory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -163,6 +164,67 @@ func TestFullProvisionerFailsMemoryStepWhenSeedingFails(t *testing.T) {
 	}
 }
 
+func TestFullProvisionerRequiresExplicitNIP05Relays(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
+	wellKnownDir := t.TempDir()
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{NIP05: NIP05Config{
+		Domain:       "example.test",
+		WellKnownDir: wellKnownDir,
+	}}, nil)
+	run := &domain.ProvisioningRun{
+		ID:              domain.NewUUID(),
+		RequestID:       soulTestID("request-unset-nip05-relays").Hex(),
+		RequesterPubkey: signer.pubkey,
+		Steps:           []domain.ProvisioningStepResult{},
+	}
+
+	soul, err := full.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "agent", Name: "Agent", Brief: "brief", Tier: domain.SoulTierStandard}, run)
+	if err == nil || !strings.Contains(err.Error(), "soul_factory.nip05_relays") {
+		t.Fatalf("Provision() error = %v, want explicit NIP-05 relay configuration failure", err)
+	}
+	if soul != nil {
+		t.Fatalf("Provision() soul = %+v, want nil", soul)
+	}
+	if _, statErr := os.Stat(filepath.Join(wellKnownDir, "nostr.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("nostr.json stat error = %v, want no registration or hardcoded fallback", statErr)
+	}
+}
+
+func TestFullProvisionerAdvertisesOnlyConfiguredNIP05Relays(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
+	wellKnownDir := t.TempDir()
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{
+		NIP05:       NIP05Config{Domain: "example.test", WellKnownDir: wellKnownDir},
+		NIP05Relays: []string{" wss://identity.example ", "wss://identity.example"},
+	}, nil)
+	run := &domain.ProvisioningRun{
+		ID:              domain.NewUUID(),
+		RequestID:       soulTestID("request-configured-nip05-relays").Hex(),
+		RequesterPubkey: signer.pubkey,
+		Steps:           []domain.ProvisioningStepResult{},
+	}
+
+	if _, err := full.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "agent", Name: "Agent", Brief: "brief", Tier: domain.SoulTierStandard}, run); err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(wellKnownDir, "nostr.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(nostr.json) error = %v", err)
+	}
+	var registry NIP05JSON
+	if err := json.Unmarshal(data, &registry); err != nil {
+		t.Fatalf("Unmarshal(nostr.json) error = %v", err)
+	}
+	relays := registry.Relays[signer.pubkey]
+	if len(relays) != 1 || relays[0] != "wss://identity.example" {
+		t.Fatalf("advertised NIP-05 relays = %v, want only configured relay", relays)
+	}
+}
+
 func TestFullProvisionerFailsDeployStepWhenNIP05RegistrationFails(t *testing.T) {
 	signer := newFakeSigner(t)
 	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
@@ -172,10 +234,10 @@ func TestFullProvisionerFailsDeployStepWhenNIP05RegistrationFails(t *testing.T) 
 	if err := os.WriteFile(invalidDir, []byte("file"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	full := NewFullProvisioner(reactor, FullProvisionerConfig{NIP05: NIP05Config{
-		Domain:       "example.test",
-		WellKnownDir: invalidDir,
-	}}, nil)
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{
+		NIP05:       NIP05Config{Domain: "example.test", WellKnownDir: invalidDir},
+		NIP05Relays: []string{"wss://identity.example"},
+	}, nil)
 	run := &domain.ProvisioningRun{
 		ID:              domain.NewUUID(),
 		RequestID:       soulTestID("request-nip05-failure").Hex(),

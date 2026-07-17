@@ -36,6 +36,7 @@ type FullProvisioner struct {
 	agentMemory      agentMemoryClient
 	workspaceManager workspaceInitializer
 	nip05Manager     *NIP05Manager
+	nip05Relays      []string
 	bahiaIntegration *BahiaIntegration
 	runtimeAdapters  map[domain.RuntimeTarget]RuntimeAdapter
 	lookupSoul       func(context.Context, string) (*domain.AgentSoul, error)
@@ -43,12 +44,14 @@ type FullProvisioner struct {
 
 // FullProvisionerConfig holds all adapter configurations.
 type FullProvisionerConfig struct {
-	Blossom         blossom.Config
-	Qdrant          qdrant.Config
-	AgentMemory     agentmemory.Config
-	Avatar          llm.AvatarConfig
-	Workspace       WorkspaceConfig
-	NIP05           NIP05Config
+	Blossom     blossom.Config
+	Qdrant      qdrant.Config
+	AgentMemory agentmemory.Config
+	Avatar      llm.AvatarConfig
+	Workspace   WorkspaceConfig
+	NIP05       NIP05Config
+	// NIP05Relays are advertised for provisioned identities. They must be explicitly configured when NIP-05 is enabled.
+	NIP05Relays     []string
 	Bahia           BahiaIntegrationConfig
 	RuntimeAdapters map[domain.RuntimeTarget]RuntimeAdapter
 }
@@ -62,6 +65,7 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 		qdrantClient:     qdrant.NewClient(config.Qdrant, logger),
 		agentMemory:      agentmemory.NewClient(config.AgentMemory, logger),
 		bahiaIntegration: bahiaIntegration,
+		nip05Relays:      append([]string(nil), config.NIP05Relays...),
 		runtimeAdapters:  cloneRuntimeAdapters(config.RuntimeAdapters),
 		lookupSoul:       reactor.GetSoul,
 	}
@@ -340,9 +344,12 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	// Register NIP-05
 	if p.nip05Manager != nil {
-		if err := p.nip05Manager.Register(ctx, soul.AgentID, soul.NostrPubkey, []string{
-			"wss://relay.sharegap.net",
-		}); err != nil {
+		relays, err := explicitNIP05Relays(p.nip05Relays)
+		if err != nil {
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, err
+		}
+		if err := p.nip05Manager.Register(ctx, soul.AgentID, soul.NostrPubkey, relays); err != nil {
 			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 			return nil, fmt.Errorf("NIP-05 registration: %w", err)
 		}
@@ -590,6 +597,26 @@ func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nos
 		return fmt.Errorf("publish progress %s: %w", step, err)
 	}
 	return nil
+}
+
+func explicitNIP05Relays(configured []string) ([]string, error) {
+	relays := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, configuredRelay := range configured {
+		relay := strings.TrimSpace(configuredRelay)
+		if relay == "" {
+			continue
+		}
+		if _, ok := seen[relay]; ok {
+			continue
+		}
+		seen[relay] = struct{}{}
+		relays = append(relays, relay)
+	}
+	if len(relays) == 0 {
+		return nil, fmt.Errorf("NIP-05 relays are not configured; set soul_factory.nip05_relays explicitly")
+	}
+	return relays, nil
 }
 
 func cloneRuntimeAdapters(adapters map[domain.RuntimeTarget]RuntimeAdapter) map[domain.RuntimeTarget]RuntimeAdapter {
