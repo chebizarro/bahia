@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,7 @@ func TestDetectRegistry(t *testing.T) {
 		{"docker.io/myorg/myapp", RegistryDockerHub},
 		{"registry-1.docker.io/library/nginx", RegistryDockerHub},
 		{"index.docker.io/myorg/myapp", RegistryDockerHub},
-		{"nginx", RegistryDockerHub},     // bare image name
+		{"nginx", RegistryDockerHub},       // bare image name
 		{"myorg/myapp", RegistryDockerHub}, // no host defaults to Docker Hub
 		{"", RegistryDockerHub},            // empty defaults to Docker Hub
 
@@ -77,8 +78,10 @@ func TestNewInspector_GHCR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inspector == nil {
-		t.Fatal("expected non-nil inspector")
+	client := assertInspectorType(t, inspector, RegistryGHCR, ghcrRegistryURL)
+	auth, ok := client.auth.(*GHCRAuth)
+	if !ok || auth.pat != "test-pat" {
+		t.Fatalf("GHCR auth = %#v, want configured PAT auth", client.auth)
 	}
 }
 
@@ -88,9 +91,7 @@ func TestNewInspector_DockerHub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inspector == nil {
-		t.Fatal("expected non-nil inspector")
-	}
+	assertInspectorType(t, inspector, RegistryDockerHub, dockerHubRegistryURL)
 }
 
 func TestNewInspector_AutoDetect(t *testing.T) {
@@ -99,9 +100,7 @@ func TestNewInspector_AutoDetect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inspector == nil {
-		t.Fatal("expected non-nil inspector")
-	}
+	assertInspectorType(t, inspector, RegistryGHCR, ghcrRegistryURL)
 }
 
 func TestNewVerifier(t *testing.T) {
@@ -110,9 +109,11 @@ func TestNewVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if verifier == nil {
-		t.Fatal("expected non-nil verifier")
+	adapter, ok := verifier.(*VerifierAdapter)
+	if !ok {
+		t.Fatalf("verifier type = %T, want *VerifierAdapter", verifier)
 	}
+	assertInspectorType(t, adapter.Inspector, RegistryDockerHub, dockerHubRegistryURL)
 }
 
 func TestVerifierAdapter(t *testing.T) {
@@ -169,33 +170,67 @@ func TestInspectorForImage(t *testing.T) {
 	logger := zap.NewNop()
 
 	tests := []struct {
-		name  string
-		image string
-		ok    bool
+		name    string
+		image   string
+		want    RegistryType
+		wantURL string
 	}{
-		{"ghcr", "ghcr.io/myorg/myapp", true},
-		{"dockerhub", "docker.io/library/nginx", true},
-		{"generic", "registry.example.com/myorg/myapp", true},
-		{"no_host", "nginx", true}, // Docker Hub
+		{"ghcr", "ghcr.io/myorg/myapp", RegistryGHCR, ghcrRegistryURL},
+		{"dockerhub", "docker.io/library/nginx", RegistryDockerHub, dockerHubRegistryURL},
+		{"generic", "registry.example.com/myorg/myapp", RegistryOCI, "https://registry.example.com"},
+		{"no_host", "nginx", RegistryDockerHub, dockerHubRegistryURL},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inspector, err := InspectorForImage(tt.image, logger)
-			if tt.ok {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if inspector == nil {
-					t.Fatal("expected non-nil inspector")
-				}
-			} else {
-				if err == nil {
-					t.Fatal("expected error")
-				}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			assertInspectorType(t, inspector, tt.want, tt.wantURL)
 		})
 	}
+}
+
+func assertInspectorType(t *testing.T, inspector ImageInspector, want RegistryType, wantURL string) *OCIClient {
+	t.Helper()
+
+	var client *OCIClient
+	switch want {
+	case RegistryDockerHub:
+		dockerHub, ok := inspector.(*dockerHubClient)
+		if !ok {
+			t.Fatalf("inspector type = %T, want *dockerHubClient", inspector)
+		}
+		client = dockerHub.OCIClient
+		if _, ok := client.auth.(*DockerHubAuth); !ok {
+			t.Fatalf("Docker Hub auth type = %T, want *DockerHubAuth", client.auth)
+		}
+	case RegistryGHCR:
+		var ok bool
+		client, ok = inspector.(*OCIClient)
+		if !ok {
+			t.Fatalf("inspector type = %T, want *OCIClient", inspector)
+		}
+		if _, ok := client.auth.(*GHCRAuth); !ok {
+			t.Fatalf("GHCR auth type = %T, want *GHCRAuth", client.auth)
+		}
+	case RegistryOCI:
+		var ok bool
+		client, ok = inspector.(*OCIClient)
+		if !ok {
+			t.Fatalf("inspector type = %T, want *OCIClient", inspector)
+		}
+		if client.auth != nil {
+			t.Fatalf("generic OCI auth type = %T, want no token auth", client.auth)
+		}
+	default:
+		t.Fatalf("unsupported expected registry type %q", want)
+	}
+	if client.registryURL != wantURL {
+		t.Fatalf("registry URL = %q, want %q", client.registryURL, wantURL)
+	}
+	return client
 }
 
 func TestNormalizeDockerHubRepo(t *testing.T) {
@@ -312,6 +347,30 @@ func TestOCIClient_InspectImage(t *testing.T) {
 	}
 	if inspection.Annotations["org.opencontainers.image.source"] != "https://github.com/myorg/myapp" {
 		t.Errorf("annotations = %v", inspection.Annotations)
+	}
+}
+
+func TestOCIClient_InspectImageReturnsTypedAuthError(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			client := NewOCIClient(server.URL, zap.NewNop())
+			inspection, err := client.InspectImage(context.Background(), "private/app", "latest")
+			if inspection != nil {
+				t.Fatalf("inspection = %#v, want nil on authorization failure", inspection)
+			}
+			var authErr *RegistryAuthError
+			if !errors.As(err, &authErr) {
+				t.Fatalf("error = %v, want *RegistryAuthError", err)
+			}
+			if authErr.StatusCode != status || authErr.Repository != "private/app" {
+				t.Fatalf("auth error = %#v, want status %d and repository private/app", authErr, status)
+			}
+		})
 	}
 }
 

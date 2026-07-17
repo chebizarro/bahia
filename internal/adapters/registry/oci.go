@@ -16,12 +16,12 @@ import (
 // It handles token-based authentication via the standard WWW-Authenticate challenge flow,
 // and supports basic auth for registries like Harbor.
 type OCIClient struct {
-	registryURL   string // e.g. "https://ghcr.io" or "https://registry-1.docker.io"
-	httpClient    *http.Client
-	auth          AuthProvider // bearer token auth (GHCR, Docker Hub)
-	basicUser     string       // basic auth username (Harbor, private registries)
-	basicPass     string       // basic auth password
-	logger        *zap.Logger
+	registryURL string // e.g. "https://ghcr.io" or "https://registry-1.docker.io"
+	httpClient  *http.Client
+	auth        AuthProvider // bearer token auth (GHCR, Docker Hub)
+	basicUser   string       // basic auth username (Harbor, private registries)
+	basicPass   string       // basic auth password
+	logger      *zap.Logger
 }
 
 // AuthProvider obtains a bearer token for a given scope (repository:name:pull).
@@ -29,6 +29,19 @@ type AuthProvider interface {
 	// Token returns a bearer token for the given scope.
 	// scope is typically "repository:<name>:pull".
 	Token(ctx context.Context, scope string) (string, error)
+}
+
+// RegistryAuthError reports that a registry refused access to a repository.
+// It is distinct from a missing image so callers can fail closed or request
+// refreshed credentials instead of treating an outage as absence.
+type RegistryAuthError struct {
+	StatusCode int
+	Registry   string
+	Repository string
+}
+
+func (e *RegistryAuthError) Error() string {
+	return fmt.Sprintf("registry authorization failed for %s at %s (status %d)", e.Repository, e.Registry, e.StatusCode)
 }
 
 // OCIOption configures an OCIClient.
@@ -95,8 +108,11 @@ func (c *OCIClient) InspectImage(ctx context.Context, repo, reference string) (*
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnauthorized {
+	if resp.StatusCode == http.StatusNotFound {
 		return &ImageInspection{Exists: false}, nil
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, &RegistryAuthError{StatusCode: resp.StatusCode, Registry: c.registryURL, Repository: repo}
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
