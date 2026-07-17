@@ -621,5 +621,5 @@ func (r fakePackageRepo) ListNonTerminalIntents(context.Context, int) ([]domain.
 
 func testSPDXPayload(t *testing.T) []byte {
 	t.Helper()
-	return []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"fixture","creationInfo":{"created":"2026-06-13T00:00:00Z","creators":["Tool: test"]},"packages":[{"name":"pkg","SPDXID":"SPDXRef-Package-pkg","versionInfo":"1.0.0","supplier":"Organization: Acme","licenseConcluded":"MIT","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:generic/pkg@1.0.0"}]}],"relationships":[{"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-Package-pkg"}]}`)
+	return []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"fixture","documentNamespace":"https://bahia.test/spdx/fixture","creationInfo":{"created":"2026-06-13T00:00:00Z","creators":["Tool: test"]},"packages":[{"name":"pkg","SPDXID":"SPDXRef-Package-pkg","versionInfo":"1.0.0","supplier":"Organization: Acme","licenseConcluded":"MIT","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:generic/pkg@1.0.0"}]}],"relationships":[{"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-Package-pkg"}]}`)
 }

@@ -26,7 +26,7 @@ import (
 
 func TestSecurityScannerSBOMScanVerifiesHashQueriesOSVPersistsAndPublishes(t *testing.T) {
 	ctx := context.Background()
-	payload := []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"demo","packages":[{"name":"lodash","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]},{"name":"lodash","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]},{"name":"openssl","versionInfo":"3.0.0","externalRefs":[{"referenceCategory":"SECURITY","referenceType":"cpe23Type","referenceLocator":"cpe:2.3:a:openssl:openssl:3.0.0:*:*:*:*:*:*:*"}]}]}`)
+	payload := []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"demo","documentNamespace":"https://bahia.test/spdx/security-scan","packages":[{"name":"lodash","SPDXID":"SPDXRef-Package-lodash-1","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]},{"name":"lodash","SPDXID":"SPDXRef-Package-lodash-2","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]},{"name":"openssl","SPDXID":"SPDXRef-Package-openssl","versionInfo":"3.0.0","externalRefs":[{"referenceCategory":"SECURITY","referenceType":"cpe23Type","referenceLocator":"cpe:2.3:a:openssl:openssl:3.0.0:*:*:*:*:*:*:*"}]}]}`)
 	hash := sha256String(payload)
 	subject := domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: "artifact-1", Digest: "sha256:artifact"}
 	target, err := domain.NewSBOMSecurityTarget(subject, domain.SBOMFormatSPDX, hash, "sbom:ref:test")
@@ -121,7 +121,7 @@ func TestSecurityScannerCancelRunMarksTerminal(t *testing.T) {
 func TestSecurityScannerCompletionUpdatesCompatibilityAndDispatchesNewBreachOnly(t *testing.T) {
 	ctx := context.Background()
 	artifactID := uuid.New()
-	payload := []byte(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","name":"demo","packages":[{"name":"lodash","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]}]}`)
+	payload := []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"demo","documentNamespace":"https://bahia.test/spdx/security-completion","packages":[{"name":"lodash","SPDXID":"SPDXRef-Package-lodash","versionInfo":"4.17.21","externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/lodash@4.17.21"}]}]}`)
 	hash := sha256String(payload)
 	subject := domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: artifactID.String(), Digest: "sha256:artifact"}
 	target, err := domain.NewSBOMSecurityTarget(subject, domain.SBOMFormatSPDX, hash, "sbom:ref:test")

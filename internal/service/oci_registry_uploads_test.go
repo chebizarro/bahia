@@ -140,7 +140,7 @@ func newUploadService(t *testing.T) (*OCIRegistryService, *uploadRepoMock, *blob
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"url":"` + serverURL + `/blob","sha256":"abc"}`))
+		_, _ = w.Write([]byte(`{"url":"` + serverURL + `/ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","size":3}`))
 	}))
 	serverURL = ts.URL
 	t.Cleanup(ts.Close)
