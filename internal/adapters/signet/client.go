@@ -36,6 +36,8 @@ var (
 	ErrAgentSuspended = errors.New("signet agent is suspended")
 	// ErrInvalidEvent is returned when a nil Nostr event is passed for signing.
 	ErrInvalidEvent = errors.New("nostr event is nil")
+	// ErrAuthoritativeAgentListingUnsupported prevents volatile cache state from being presented as Signet truth.
+	ErrAuthoritativeAgentListingUnsupported = errors.New("authoritative Signet agent listing is unsupported")
 )
 
 const (
@@ -46,6 +48,9 @@ const (
 
 	signetKindContextVM = cascadia.CAS_INTENT
 	signetKindGiftWrap  = cascadia.NIP59_GIFT_WRAP
+
+	defaultConnectTimeout = 15 * time.Second
+	defaultSignTimeout    = 15 * time.Second
 )
 
 // Client communicates with Signet via NIP-46.
@@ -57,6 +62,8 @@ type Client struct {
 	clientSecretKey string // Ephemeral key for NIP-46 session
 	requireReal     bool   // Fail closed unless a real Signet bunker is configured and reachable
 	allowMock       bool   // Explicit test/dev-only mock signing mode
+	connectTimeout  time.Duration
+	signTimeout     time.Duration
 
 	mu        sync.Mutex
 	bunker    *nip46.BunkerClient // Active NIP-46 connection
@@ -77,17 +84,26 @@ type AgentIdentity struct {
 
 // Config holds Signet client configuration.
 type Config struct {
-	BunkerURI       string   // bunker://<pubkey>?relay=...&secret=...
-	Relays          []string // Backup relays if not in URI
-	ClientSecretKey string   // Optional: persistent client key (generated if empty)
-	RequireReal     bool     // When true, missing/unreachable bunker is a hard error
-	AllowMock       bool     // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
+	BunkerURI       string        // bunker://<pubkey>?relay=...&secret=...
+	Relays          []string      // Backup relays if not in URI
+	ClientSecretKey string        // Optional: persistent client key (generated if empty)
+	RequireReal     bool          // When true, missing/unreachable bunker is a hard error
+	AllowMock       bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
+	ConnectTimeout  time.Duration // Maximum duration for bunker connection and ping
+	SignTimeout     time.Duration // Maximum duration for NIP-46 signing operations
 }
 
 // NewClient creates a new Signet client.
 func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	if config.ConnectTimeout <= 0 {
+		config.ConnectTimeout = defaultConnectTimeout
+	}
+	if config.SignTimeout <= 0 {
+		config.SignTimeout = defaultSignTimeout
 	}
 
 	// Generate ephemeral client key if not provided
@@ -104,6 +120,8 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		clientSecretKey: clientSK,
 		requireReal:     config.RequireReal,
 		allowMock:       config.AllowMock,
+		connectTimeout:  config.ConnectTimeout,
+		signTimeout:     config.SignTimeout,
 		agents:          make(map[string]*AgentIdentity),
 	}
 
@@ -128,7 +146,11 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	c.logger.Info("connecting to Signet bunker", "uri", c.bunkerURI)
+	bunkerPubkey, relayHosts := bunkerLogDetails(c.bunkerURI)
+	c.logger.Info("connecting to Signet bunker", "bunker_pubkey", bunkerPubkey, "relay_hosts", relayHosts)
+
+	connectCtx, cancelConnect := context.WithTimeout(ctx, c.connectTimeout)
+	defer cancelConnect()
 
 	// Connect using the canonical NIP-46 implementation.
 	clientSecret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
@@ -137,7 +159,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	bunker, err := nip46.ConnectBunker(
-		ctx,
+		connectCtx,
 		clientSecret,
 		c.bunkerURI,
 		c.pool,
@@ -149,11 +171,8 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("connect to bunker: %w", err)
 	}
 
-	// Verify connection with ping
-	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := bunker.Ping(pingCtx); err != nil {
+	// Verify connection with ping under the same bounded connection deadline.
+	if err := bunker.Ping(connectCtx); err != nil {
 		return fmt.Errorf("bunker ping failed: %w", err)
 	}
 
@@ -289,8 +308,10 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 		return ErrNotConnected
 	}
 
-	// Use NIP-46 SignEvent
-	if err := bunker.SignEvent(ctx, event); err != nil {
+	// Use NIP-46 SignEvent under a client-enforced deadline.
+	signCtx, cancel := context.WithTimeout(ctx, c.signTimeout)
+	defer cancel()
+	if err := bunker.SignEvent(signCtx, event); err != nil {
 		return fmt.Errorf("bunker sign_event: %w", err)
 	}
 
@@ -335,8 +356,10 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		if err != nil {
 			return fmt.Errorf("decode Signet client secret key: %w", err)
 		}
+		connectCtx, cancel := context.WithTimeout(ctx, c.connectTimeout)
+		defer cancel()
 		bunker, err := nip46.ConnectBunker(
-			ctx,
+			connectCtx,
 			clientSecret,
 			identity.BunkerURI,
 			c.pool,
@@ -351,8 +374,10 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		c.mu.Unlock()
 	}
 
-	// Sign using agent's bunker connection
-	if err := identity.bunkerClient.SignEvent(ctx, event); err != nil {
+	// Sign using agent's bunker connection under a client-enforced deadline.
+	signCtx, cancel := context.WithTimeout(ctx, c.signTimeout)
+	defer cancel()
+	if err := identity.bunkerClient.SignEvent(signCtx, event); err != nil {
 		return fmt.Errorf("agent sign_event: %w", err)
 	}
 
@@ -495,8 +520,14 @@ func (c *Client) GetAgentStatus(ctx context.Context, pubkey string) (string, err
 	return resp.Status, nil
 }
 
-// ListAgents returns all agents managed by this client.
-func (c *Client) ListAgents(ctx context.Context) ([]*AgentIdentity, error) {
+// ListAgents refuses to present the volatile process cache as an authoritative
+// Signet inventory. Use ListCachedAgents when cache-only semantics are intended.
+func (c *Client) ListAgents(context.Context) ([]*AgentIdentity, error) {
+	return nil, ErrAuthoritativeAgentListingUnsupported
+}
+
+// ListCachedAgents returns only identities learned by this Client process.
+func (c *Client) ListCachedAgents() []*AgentIdentity {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -504,7 +535,7 @@ func (c *Client) ListAgents(ctx context.Context) ([]*AgentIdentity, error) {
 	for _, identity := range c.agents {
 		agents = append(agents, identity)
 	}
-	return agents, nil
+	return agents
 }
 
 // GetPublicKey returns the bunker's public key.
@@ -694,8 +725,14 @@ func (c *Client) SignNIP98(ctx context.Context, url, method string, payloadHash 
 		return "", fmt.Errorf("sign NIP-98: %w", err)
 	}
 
-	// Encode event as base64 for Authorization header
-	eventJSON, _ := json.Marshal(event)
+	return encodeNostrAuthorizationEvent(event)
+}
+
+func encodeNostrAuthorizationEvent(event any) (string, error) {
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return "", fmt.Errorf("marshal Nostr authorization event: %w", err)
+	}
 	encoded := base64.StdEncoding.EncodeToString(eventJSON)
 	return "Nostr " + encoded, nil
 }
@@ -817,6 +854,22 @@ func (c *Client) removeAgentByPubkey(pubkey string) bool {
 		}
 	}
 	return false
+}
+
+func bunkerLogDetails(rawURI string) (string, []string) {
+	pubkey, relays, _, err := ParseBunkerURI(rawURI)
+	if err != nil {
+		return "invalid", nil
+	}
+	hosts := make([]string, 0, len(relays))
+	for _, relay := range relays {
+		parsed, err := url.Parse(relay)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		hosts = append(hosts, parsed.Host)
+	}
+	return redactPubkey(pubkey), hosts
 }
 
 func redactPubkey(pubkey string) string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -133,12 +134,9 @@ func TestClient_ProvisionAgent_ExplicitMockMode(t *testing.T) {
 		t.Errorf("bunkerURI = %q, want identifiable mock-bunker URI", bunkerURI)
 	}
 
-	agents, err := client.ListAgents(ctx)
-	if err != nil {
-		t.Fatalf("ListAgents() error = %v", err)
-	}
+	agents := client.ListCachedAgents()
 	if len(agents) != 1 {
-		t.Fatalf("ListAgents() count = %d, want 1", len(agents))
+		t.Fatalf("ListCachedAgents() count = %d, want 1", len(agents))
 	}
 	if agents[0].AgentID != "test-agent" {
 		t.Errorf("agent ID = %s, want test-agent", agents[0].AgentID)
@@ -214,12 +212,9 @@ func TestClient_RevokeAgent_ExplicitMockMode(t *testing.T) {
 		t.Fatalf("RevokeAgent() error = %v", err)
 	}
 
-	agents, err := client.ListAgents(ctx)
-	if err != nil {
-		t.Fatalf("ListAgents() error = %v", err)
-	}
+	agents := client.ListCachedAgents()
 	if len(agents) != 0 {
-		t.Errorf("ListAgents() count = %d, want 0 after revocation", len(agents))
+		t.Errorf("ListCachedAgents() count = %d, want 0 after revocation", len(agents))
 	}
 	if err := client.SignAs(ctx, "test-agent", newTestEvent()); !errors.Is(err, ErrAgentNotFound) {
 		t.Errorf("SignAs() after revoke error = %v, want ErrAgentNotFound", err)
@@ -296,6 +291,61 @@ func TestClient_SignNIP98_ExplicitMockMode(t *testing.T) {
 
 	if !strings.HasPrefix(header, "Nostr ") {
 		t.Errorf("header = %q, want Nostr auth header", header)
+	}
+}
+
+func TestNewClientConfiguresOperationDeadlines(t *testing.T) {
+	client, err := NewClient(Config{ConnectTimeout: 2 * time.Second, SignTimeout: 3 * time.Second}, nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if client.connectTimeout != 2*time.Second || client.signTimeout != 3*time.Second {
+		t.Fatalf("operation timeouts = (%s, %s)", client.connectTimeout, client.signTimeout)
+	}
+	defaults, err := NewClient(Config{}, nil)
+	if err != nil {
+		t.Fatalf("NewClient(defaults) error = %v", err)
+	}
+	if defaults.connectTimeout <= 0 || defaults.signTimeout <= 0 {
+		t.Fatalf("default operation timeouts must be positive: (%s, %s)", defaults.connectTimeout, defaults.signTimeout)
+	}
+}
+
+func TestClientListAgentsIsExplicitlyCacheOnly(t *testing.T) {
+	client := newConnectedMockClient(t)
+	if _, _, _, err := client.ProvisionAgent(t.Context(), "agent-1", []int{1}); err != nil {
+		t.Fatalf("ProvisionAgent() error = %v", err)
+	}
+	agents, err := client.ListAgents(t.Context())
+	if !errors.Is(err, ErrAuthoritativeAgentListingUnsupported) || agents != nil {
+		t.Fatalf("ListAgents() = (%#v, %v), want unsupported error", agents, err)
+	}
+	cached := client.ListCachedAgents()
+	if len(cached) != 1 || cached[0].AgentID != "agent-1" {
+		t.Fatalf("ListCachedAgents() = %#v, want process-local agent", cached)
+	}
+}
+
+func TestEncodeNostrAuthorizationEventPropagatesMarshalError(t *testing.T) {
+	header, err := encodeNostrAuthorizationEvent(make(chan int))
+	if err == nil || !strings.Contains(err.Error(), "marshal Nostr authorization event") {
+		t.Fatalf("encodeNostrAuthorizationEvent() = (%q, %v), want marshal error", header, err)
+	}
+	if header != "" {
+		t.Fatalf("header = %q, want empty", header)
+	}
+}
+
+func TestBunkerLogDetailsExcludeSecretAndRelayQuery(t *testing.T) {
+	secret := "super-secret-token"
+	uri := "bunker://3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d?relay=wss://relay.example.com/path?token=relay-secret&secret=" + secret
+	pubkey, hosts := bunkerLogDetails(uri)
+	logged := pubkey + " " + strings.Join(hosts, ",")
+	if strings.Contains(logged, secret) || strings.Contains(logged, "relay-secret") || strings.Contains(logged, "bunker://") {
+		t.Fatalf("sanitized bunker log details leaked URI secret: %q", logged)
+	}
+	if pubkey == "" || len(hosts) != 1 || hosts[0] != "relay.example.com" {
+		t.Fatalf("unexpected bunker log details: pubkey=%q hosts=%v", pubkey, hosts)
 	}
 }
 
