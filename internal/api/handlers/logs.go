@@ -65,6 +65,9 @@ func NewLogHandlerWithResolver(
 //   - tail: number of lines from end (default: all)
 //   - stream: "stdout", "stderr", or "merged" (default: merged)
 func (h *LogHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	runID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
@@ -127,6 +130,9 @@ func (h *LogHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
 //   - tail: number of historical lines (default: 100)
 //   - follow: whether to stream continuously (default: false)
 func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service ID")

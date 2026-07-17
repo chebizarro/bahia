@@ -1,0 +1,2 @@
+-- Data repair is intentionally irreversible. Clearing repaired ownership on
+-- downgrade would recreate the tenant-isolation defect this migration fixes.

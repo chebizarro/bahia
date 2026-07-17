@@ -153,7 +153,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	buildH := handlers.NewBuildHandler(registry)
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
-	stateH := handlers.NewStateHandler(registry)
+	stateH := handlers.NewStateHandler(registry, deps.Services, deps.Environments)
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
@@ -231,19 +231,19 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}", deployH.GetRun)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "intentId"), true)).Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
 			if logsH != nil && deps.Blossom != nil {
-				r.With(tier2Gate).Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
 			}
 
 			// Live logs (read, SSE)
 			if logsH != nil && deps.RuntimeResolver != nil {
-				r.With(tier2Gate).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "id", "envId"), true)).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
 			}
 
 			// State (read)
-			r.With(tier2Gate).Get("/state", stateH.ListAll)
-			r.With(tier2Gate).Get("/state/drifted", stateH.ListDrifted)
-			r.With(tier2Gate).Get("/environments/{envId}/state", stateH.ListByEnvironment)
-			r.With(tier2Gate).Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state", stateH.ListAll)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state/drifted", stateH.ListDrifted)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "envId"), true)).Get("/environments/{envId}/state", stateH.ListByEnvironment)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
 
 			// Repository CI lookup (read)
 			r.With(tier3Gate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
@@ -302,8 +302,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// SBOM (read)
 			if deps.SBOMs != nil && deps.Artifacts != nil {
 				sbomH := handlers.NewSBOMReadHandler(deps.SBOMs, deps.Artifacts)
-				r.With(tier3Gate).Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
-				r.With(tier3Gate).Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
+				artifactRBAC := coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)
+				r.With(tier3Gate, artifactRBAC).Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
+				r.With(tier3Gate, artifactRBAC).Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
 				r.With(tier3Gate).Get("/sbom/search", sbomH.SearchPackages)
 			}
 
@@ -326,9 +327,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Notifications (read)
 			if deps.Notifications != nil && deps.Dispatcher != nil {
 				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				r.With(tier2Gate).Get("/notifications/channels", notifH.ListChannels)
-				r.With(tier2Gate).Get("/notifications/channels/{id}", notifH.GetChannel)
-				r.With(tier2Gate).Get("/notifications/log", notifH.ListLogs)
+				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/notifications/channels", notifH.ListChannels)
+				r.With(tier2Gate, notificationRBAC).Get("/notifications/channels/{id}", notifH.GetChannel)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/notifications/log", notifH.ListLogs)
 			}
 
 			// Tool provisioning (read)
@@ -401,7 +403,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// SBOM (write compatibility import)
 			if deps.SBOMs != nil && deps.Artifacts != nil && deps.SBOMImporter != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts, deps.SBOMImporter)
-				r.With(tier3Gate).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
 			}
 
 			// Signatures (write)
@@ -425,10 +427,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Notifications (write)
 			if deps.Notifications != nil && deps.Dispatcher != nil {
 				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				r.With(tier2Gate).Post("/notifications/channels", notifH.CreateChannel)
-				r.With(tier2Gate).Put("/notifications/channels/{id}", notifH.UpdateChannel)
-				r.With(tier2Gate).Delete("/notifications/channels/{id}", notifH.DeleteChannel)
-				r.With(tier2Gate).Post("/notifications/channels/{id}/test", notifH.TestChannel)
+				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/notifications/channels", notifH.CreateChannel)
+				r.With(tier2Gate, notificationRBAC).Put("/notifications/channels/{id}", notifH.UpdateChannel)
+				r.With(tier2Gate, notificationRBAC).Delete("/notifications/channels/{id}", notifH.DeleteChannel)
+				r.With(tier2Gate, notificationRBAC).Post("/notifications/channels/{id}/test", notifH.TestChannel)
 			}
 
 			// Tool provisioning (write)
@@ -677,6 +680,23 @@ func artifactOrgResolver(artifacts repository.ArtifactRepository, services repos
 			return uuid.Nil, middleware.ErrOrgContextNotFound
 		}
 		return svc.OrgID, nil
+	}
+}
+
+func notificationChannelOrgResolver(notifications repository.NotificationRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		channel, err := notifications.GetChannelByID(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if channel == nil || channel.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return channel.OrgID, nil
 	}
 }
 

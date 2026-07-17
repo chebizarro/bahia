@@ -41,6 +41,9 @@ func NewSBOMHandler(sboms repository.SBOMRepository, artifacts repository.Artifa
 // GetSBOM returns the SBOM for an artifact.
 // GET /artifacts/{id}/sbom
 func (h *SBOMHandler) GetSBOM(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact ID")
@@ -63,6 +66,9 @@ func (h *SBOMHandler) GetSBOM(w http.ResponseWriter, r *http.Request) {
 // GetSBOMPackages returns packages for an artifact's SBOM.
 // GET /artifacts/{id}/sbom/packages
 func (h *SBOMHandler) GetSBOMPackages(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact ID")
@@ -111,6 +117,9 @@ func (h *SBOMHandler) SearchPackages(w http.ResponseWriter, r *http.Request) {
 // IngestSBOM accepts an SBOM document through the REST compatibility path.
 // POST /artifacts/{id}/sbom
 func (h *SBOMHandler) IngestSBOM(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	if h.importer == nil {
 		writeError(w, http.StatusServiceUnavailable, "SBOM import service is not configured")
 		return

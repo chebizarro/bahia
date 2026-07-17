@@ -27,10 +27,11 @@ const (
 // NotificationChannel defines a destination for event notifications.
 type NotificationChannel struct {
 	ID          uuid.UUID      `json:"id"`
+	OrgID       uuid.UUID      `json:"org_id"`
 	Name        string         `json:"name"`
 	ChannelType ChannelType    `json:"channel_type"`
 	Config      map[string]any `json:"config"`       // type-specific config (url, pubkey, etc.)
-	EventFilter map[string]any `json:"event_filter"`  // which event types to send
+	EventFilter map[string]any `json:"event_filter"` // which event types to send
 	Enabled     bool           `json:"enabled"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
