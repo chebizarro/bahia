@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -30,10 +29,6 @@ type Wallet struct {
 	mints      []MintConfig
 	httpClient *http.Client
 	logger     *zap.Logger
-
-	mu       sync.RWMutex
-	balances map[string]int64   // mintURL -> balance in sats
-	proofs   map[string][]Proof // mintURL -> available proofs
 }
 
 // MintConfig configures a Cashu mint.
@@ -76,32 +71,16 @@ func NewWallet(mints []MintConfig, logger *zap.Logger) *Wallet {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		logger:   logger,
-		balances: make(map[string]int64),
-		proofs:   make(map[string][]Proof),
+		logger: logger,
 	}
 }
 
 // Initialize connects to configured mints and fetches initial state.
-func (w *Wallet) Initialize(ctx context.Context) error {
+func (w *Wallet) Initialize(context.Context) error {
 	if len(w.mints) == 0 {
 		return ErrNotConfigured
 	}
-	for _, mint := range w.mints {
-		info, err := w.getMintInfo(ctx, mint.URL)
-		if err != nil {
-			w.logger.Warn("failed to connect to mint",
-				zap.String("url", mint.URL),
-				zap.Error(err),
-			)
-			continue
-		}
-		w.logger.Info("connected to cashu mint",
-			zap.String("url", mint.URL),
-			zap.String("name", info.Name),
-		)
-	}
-	return nil
+	return fmt.Errorf("%w: balance, send, receive, swap, and proof verification are unavailable", ErrMintBackedFlowUnsupported)
 }
 
 // MintInfo contains information about a Cashu mint.
@@ -136,23 +115,19 @@ func (w *Wallet) getMintInfo(ctx context.Context, mintURL string) (*MintInfo, er
 	return &info, nil
 }
 
-// GetBalance returns the wallet balance for a specific mint.
-func (w *Wallet) GetBalance(mintURL string) int64 {
+// GetBalance fails explicitly because authoritative mint-backed proof state is unavailable.
+func (w *Wallet) GetBalance(mintURL string) (int64, error) {
 	mintURL = normalizeMintURL(mintURL)
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.balances[mintURL]
+	if !w.HasMint(mintURL) {
+		return 0, fmt.Errorf("%w: %s", ErrMintNotConfigured, mintURL)
+	}
+	return 0, ErrMintBackedFlowUnsupported
 }
 
-// GetAllBalances returns balances for all configured mints.
-func (w *Wallet) GetAllBalances() map[string]int64 {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	result := make(map[string]int64)
-	for k, v := range w.balances {
-		result[k] = v
-	}
-	return result
+// GetAllBalances fails explicitly because this adapter has no persistent,
+// mint-verified proof store.
+func (w *Wallet) GetAllBalances() (map[string]int64, error) {
+	return nil, ErrMintBackedFlowUnsupported
 }
 
 // CreatePaymentToken creates a Cashu token for the specified amount.
@@ -172,46 +147,7 @@ func (w *Wallet) CreatePaymentToken(ctx context.Context, mintURL string, amount 
 		return "", fmt.Errorf("recipient pubkey is required")
 	}
 
-	w.mu.RLock()
-	balance := w.balances[mintURL]
-	w.mu.RUnlock()
-	if balance < amount {
-		return "", fmt.Errorf("insufficient balance: have %d, need %d", balance, amount)
-	}
-
 	return "", ErrMintBackedFlowUnsupported
-}
-
-// selectProofs selects proofs to cover the requested amount.
-// Returns selected proofs and the remainder (excess amount).
-func (w *Wallet) selectProofs(mintURL string, amount int64) ([]Proof, int64, error) {
-	mintURL = normalizeMintURL(mintURL)
-	available := w.proofs[mintURL]
-	if len(available) == 0 {
-		return nil, 0, fmt.Errorf("no proofs available for mint %s", mintURL)
-	}
-
-	var selected []Proof
-	var total int64
-	var remaining []Proof
-
-	for _, p := range available {
-		if total < amount {
-			selected = append(selected, p)
-			total += p.Amount
-		} else {
-			remaining = append(remaining, p)
-		}
-	}
-
-	if total < amount {
-		return nil, 0, fmt.Errorf("insufficient proofs: have %d, need %d", total, amount)
-	}
-
-	// Update proofs
-	w.proofs[mintURL] = remaining
-
-	return selected, total - amount, nil
 }
 
 // ReceiveToken redeems a Cashu token and adds the proofs to the wallet.
@@ -223,21 +159,6 @@ func (w *Wallet) ReceiveToken(ctx context.Context, tokenString string) (int64, s
 		return 0, "", fmt.Errorf("token is required")
 	}
 	return 0, "", ErrMintBackedFlowUnsupported
-}
-
-// AddProofs adds proofs to the wallet (e.g., from a mint quote).
-func (w *Wallet) AddProofs(mintURL string, proofs []Proof) {
-	mintURL = normalizeMintURL(mintURL)
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	var total int64
-	for _, p := range proofs {
-		total += p.Amount
-	}
-
-	w.proofs[mintURL] = append(w.proofs[mintURL], proofs...)
-	w.balances[mintURL] += total
 }
 
 // CreateMintQuote requests a Lightning invoice from the mint for funding.
@@ -299,6 +220,30 @@ type MintQuote struct {
 	Amount  int64  `json:"amount"`
 	Expiry  int64  `json:"expiry"`
 	State   string `json:"state"` // UNPAID, PAID, ISSUED
+}
+
+// WalletCapabilities reports only capabilities implemented end-to-end.
+type WalletCapabilities struct {
+	MintInfo          bool   `json:"mint_info"`
+	MintQuote         bool   `json:"mint_quote"`
+	Balance           bool   `json:"balance"`
+	CreatePayment     bool   `json:"create_payment"`
+	ReceivePayment    bool   `json:"receive_payment"`
+	ProofVerification bool   `json:"proof_verification"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+}
+
+// Capabilities returns an honest description of this adapter's readiness.
+func (w *Wallet) Capabilities() WalletCapabilities {
+	return WalletCapabilities{
+		MintInfo:          true,
+		MintQuote:         true,
+		Balance:           false,
+		CreatePayment:     false,
+		ReceivePayment:    false,
+		ProofVerification: false,
+		UnavailableReason: ErrMintBackedFlowUnsupported.Error(),
+	}
 }
 
 // EstimateCost calculates the cost for a job based on worker pricing.
