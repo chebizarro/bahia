@@ -129,6 +129,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			AllowUnauthenticatedLocal: cfg.Qdrant.AllowUnauthenticatedLocal,
 		},
 		AgentMemory: agentmemory.Config{},
+		NIP05Relays: cfg.SoulFactory.NIP05Relays,
 		Workspace: soulfactory.WorkspaceConfig{
 			GiteaURL:              sf.WorkspaceGiteaURL,
 			TemplateDir:           sf.WorkspaceTemplateDir,
