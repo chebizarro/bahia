@@ -175,7 +175,7 @@ func (k *KubernetesRuntime) Deploy(ctx context.Context, serviceName, image strin
 		"--overwrite",
 	)
 	if _, err := k.runCommand(ctx, labelArgs...); err != nil {
-		k.logger.Warn("failed to apply bahia label", zap.Error(err))
+		return fmt.Errorf("applying bahia label: %w", err)
 	}
 
 	// Set environment variables if provided.
@@ -189,7 +189,7 @@ func (k *KubernetesRuntime) Deploy(ctx context.Context, serviceName, image strin
 		)
 		envArgs = append(envArgs, envPairs...)
 		if _, err := k.runCommand(ctx, envArgs...); err != nil {
-			k.logger.Warn("failed to set env vars", zap.Error(err))
+			return fmt.Errorf("setting deployment environment: %w", err)
 		}
 	}
 
@@ -198,7 +198,7 @@ func (k *KubernetesRuntime) Deploy(ctx context.Context, serviceName, image strin
 		fmt.Sprintf("deployment/%s", serviceName),
 	)
 	if _, err := k.runCommand(ctx, restartArgs...); err != nil {
-		k.logger.Warn("rollout restart failed", zap.Error(err))
+		return fmt.Errorf("restarting deployment rollout: %w", err)
 	}
 
 	k.logger.Info("kubernetes deployment updated",

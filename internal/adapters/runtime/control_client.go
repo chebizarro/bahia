@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -76,30 +78,52 @@ func (c *dockerEngineControlClient) EnsureVolumes(ctx context.Context, specs []d
 }
 
 func (c *dockerEngineControlClient) PullImage(ctx context.Context, image string) error {
-	url := fmt.Sprintf("%s/v1.44/images/create?fromImage=%s", c.observer.host, image)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	query := url.Values{"fromImage": []string{image}}
+	pullURL := fmt.Sprintf("%s/v1.44/images/create?%s", c.observer.host, query.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pullURL, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("creating docker pull request: %w", err)
 	}
 	if authHeader, ok := c.observer.registryAuthHeader(image); ok {
 		req.Header.Set("X-Registry-Auth", authHeader)
 	}
 	resp, err := c.observer.httpClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("executing docker pull: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("docker pull returned %d", resp.StatusCode)
 	}
-	// Drain response body (pull progress).
-	buf := make([]byte, 1024)
+
+	var progress struct {
+		Error       string `json:"error"`
+		ErrorDetail struct {
+			Message string `json:"message"`
+		} `json:"errorDetail"`
+	}
+	decoder := json.NewDecoder(resp.Body)
 	for {
-		if _, err := resp.Body.Read(buf); err != nil {
-			break
+		progress = struct {
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}{}
+		if err := decoder.Decode(&progress); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("decoding docker pull progress: %w", err)
+		}
+		message := strings.TrimSpace(progress.ErrorDetail.Message)
+		if message == "" {
+			message = strings.TrimSpace(progress.Error)
+		}
+		if message != "" {
+			return fmt.Errorf("docker pull failed: %s", message)
 		}
 	}
-	return nil
 }
 
 func (c *dockerEngineControlClient) StopContainer(ctx context.Context, containerID string) error {
