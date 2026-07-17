@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,8 +16,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
 )
 
-// ErrNotConfigured is returned when an operation is attempted without an explicit agent-memory URL.
-var ErrNotConfigured = errors.New("agent-memory client not configured")
+var (
+	// ErrNotConfigured is returned when an operation is attempted without an explicit agent-memory URL.
+	ErrNotConfigured = errors.New("agent-memory client not configured")
+	// ErrTaskIDStoreNotConfigured prevents restart-unsafe, process-only task identity.
+	ErrTaskIDStoreNotConfigured = errors.New("agent-memory durable task ID store not configured")
+)
 
 // Client communicates with agent-memory through the generic MCP client while
 // preserving Soul Factory's typed helper methods.
@@ -24,8 +30,8 @@ type Client struct {
 	client  *mcpclient.Client
 	logger  *slog.Logger
 
-	mu      sync.Mutex
-	taskIDs map[string]string
+	taskMu     sync.Mutex
+	taskIDFile string
 }
 
 // Config holds client configuration.
@@ -33,6 +39,7 @@ type Config struct {
 	URL         string            // MCP server URL (e.g., http://localhost:8282)
 	Timeout     time.Duration     // Request timeout
 	AuthHeaders map[string]string // Optional MCP HTTP auth headers
+	TaskIDFile  string            // Required durable JSON file for agent-to-task IDs
 }
 
 // NewClient creates a new agent-memory client.
@@ -54,8 +61,8 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 			Timeout:     config.Timeout,
 			AuthHeaders: config.AuthHeaders,
 		}, componentLogger),
-		logger:  componentLogger,
-		taskIDs: make(map[string]string),
+		logger:     componentLogger,
+		taskIDFile: strings.TrimSpace(config.TaskIDFile),
 	}
 }
 
@@ -73,26 +80,57 @@ func (c *Client) requireConfigured() error {
 
 // RegisterAgent opens the agent's initial fleet-provisioning memory task.
 func (c *Client) RegisterAgent(ctx context.Context, agentID string, npub string, metadata map[string]interface{}) error {
-	c.logger.Info("starting agent memory task",
-		"agent_id", agentID,
-		"npub", npub,
-	)
+	if err := c.requireConfigured(); err != nil {
+		return err
+	}
+	if c.taskIDFile == "" {
+		return ErrTaskIDStoreNotConfigured
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return errors.New("agent ID is required")
+	}
 
-	goal := fmt.Sprintf("Seed non-personal fleet provisioning context for Soul Factory agent %s.", agentID)
-	result, err := c.callToolText(ctx, "memory_task_start", map[string]interface{}{
-		"agent": agentID,
-		"goal":  goal,
+	c.taskMu.Lock()
+	defer c.taskMu.Unlock()
+	taskIDs, err := c.loadTaskIDs()
+	if err != nil {
+		return err
+	}
+	taskID := taskIDs[agentID]
+	if taskID == "" {
+		c.logger.Info("starting agent memory task", "agent_id", agentID, "npub", npub)
+		goal := fmt.Sprintf("Seed non-personal fleet provisioning context for Soul Factory agent %s.", agentID)
+		result, err := c.callToolText(ctx, "memory_task_start", map[string]interface{}{
+			"agent": agentID,
+			"goal":  goal,
+		})
+		if err != nil {
+			return fmt.Errorf("start memory task: %w", err)
+		}
+		taskID = parseTaskID(result)
+		if taskID == "" {
+			return fmt.Errorf("start memory task: response did not include task_id")
+		}
+		taskIDs[agentID] = taskID
+		if err := c.persistTaskIDs(taskIDs); err != nil {
+			return fmt.Errorf("persist memory task ID: %w", err)
+		}
+	}
+
+	_, err = c.callTool(ctx, "memory_event", map[string]interface{}{
+		"task_id": taskID,
+		"agent":   agentID,
+		"action":  "agent_identity_registered",
+		"summary": "Registered Soul Factory agent identity metadata.",
+		"detail": map[string]interface{}{
+			"npub":     strings.TrimSpace(npub),
+			"metadata": metadata,
+		},
 	})
 	if err != nil {
-		return fmt.Errorf("start memory task: %w", err)
+		return fmt.Errorf("record agent identity metadata: %w", err)
 	}
-	taskID := parseTaskID(result)
-	if taskID == "" {
-		return fmt.Errorf("start memory task: response did not include task_id")
-	}
-	c.mu.Lock()
-	c.taskIDs[agentID] = taskID
-	c.mu.Unlock()
 	return nil
 }
 
@@ -184,22 +222,83 @@ func (c *Client) GetAgentContext(ctx context.Context, agentID string) ([]MemoryE
 }
 
 func (c *Client) taskID(ctx context.Context, agentID string) (string, error) {
-	c.mu.Lock()
-	taskID := c.taskIDs[agentID]
-	c.mu.Unlock()
-	if taskID != "" {
+	if c.taskIDFile == "" {
+		return "", ErrTaskIDStoreNotConfigured
+	}
+	c.taskMu.Lock()
+	taskIDs, err := c.loadTaskIDs()
+	c.taskMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	if taskID := taskIDs[agentID]; taskID != "" {
 		return taskID, nil
 	}
 	if err := c.RegisterAgent(ctx, agentID, "", nil); err != nil {
 		return "", err
 	}
-	c.mu.Lock()
-	taskID = c.taskIDs[agentID]
-	c.mu.Unlock()
+	c.taskMu.Lock()
+	taskIDs, err = c.loadTaskIDs()
+	c.taskMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	taskID := taskIDs[agentID]
 	if taskID == "" {
 		return "", fmt.Errorf("memory task id missing for agent %s", agentID)
 	}
 	return taskID, nil
+}
+
+func (c *Client) loadTaskIDs() (map[string]string, error) {
+	data, err := os.ReadFile(c.taskIDFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return make(map[string]string), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read memory task ID store: %w", err)
+	}
+	var taskIDs map[string]string
+	if err := json.Unmarshal(data, &taskIDs); err != nil {
+		return nil, fmt.Errorf("decode memory task ID store: %w", err)
+	}
+	if taskIDs == nil {
+		taskIDs = make(map[string]string)
+	}
+	return taskIDs, nil
+}
+
+func (c *Client) persistTaskIDs(taskIDs map[string]string) error {
+	data, err := json.Marshal(taskIDs)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(c.taskIDFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".agent-memory-task-*.json")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, c.taskIDFile)
 }
 
 func parseTaskID(result string) string {
