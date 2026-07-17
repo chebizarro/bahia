@@ -565,6 +565,7 @@ func New(cfg *config.Config) (*App, error) {
 		placementSvc := service.NewLLMPlacementService(workerRepo, logger, service.WithLLMPlacementPressureThresholds(pressureThresholds))
 		coordOpts := []service.LLMProvisioningCoordinatorOption{
 			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
+			service.WithLLMPromotionLock(service.NewPGLLMPromotionLock(pool, logger)),
 		}
 		if controlPlaneSigner != nil && controlPlanePool != nil {
 			llmResponder = controlplane.NewLLMResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)
@@ -722,7 +723,7 @@ func New(cfg *config.Config) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create oci registry service: %w", err)
 		}
-		nip98Validator := auth.NewNIP98Validator(auth.DefaultNIP98Config())
+		nip98Validator := auth.NewNIP98Validator(auth.DefaultNIP98Config(), auth.NewPGNIP98ReplayStore(pool))
 		ociHandler = handlers.NewOCIRegistryHandler(ociSvc, nip98Validator, cfg.OCI)
 		bgManager.RegisterWithOptions(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger), RunnerTier(Tier3))
 		logger.Info("oci registry enabled", zap.String("host", cfg.OCI.PublicHost))

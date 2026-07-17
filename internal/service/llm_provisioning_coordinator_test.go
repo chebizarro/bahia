@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -181,6 +182,7 @@ type fakeCoordinatorProvisioner struct {
 	provisionRequests []llmadapter.ProvisionCandidateRequest
 	observeRequests   []llmadapter.ProvisionCandidateRequest
 	deprovisionCalls  []llmadapter.ProvisionCandidateRequest
+	deprovisionErr    error
 }
 
 func (p *fakeCoordinatorProvisioner) Provision(_ context.Context, req llmadapter.ProvisionCandidateRequest) (*llmadapter.ProvisionCandidateResult, error) {
@@ -208,13 +210,26 @@ func (p *fakeCoordinatorProvisioner) Observe(_ context.Context, req llmadapter.P
 
 func (p *fakeCoordinatorProvisioner) Deprovision(_ context.Context, req llmadapter.ProvisionCandidateRequest) error {
 	p.deprovisionCalls = append(p.deprovisionCalls, req)
-	return nil
+	return p.deprovisionErr
 }
 
 type fakeCoordinatorGateway struct {
 	upsertObs *llmadapter.GatewayRouteObservation
 	upsertErr error
 	calls     []llmadapter.GatewayRouteSpec
+}
+
+type fakeLLMPromotionLock struct {
+	calls  int
+	onLock func()
+}
+
+func (l *fakeLLMPromotionLock) Lock(context.Context, uuid.UUID, uuid.UUID) (func(), error) {
+	l.calls++
+	if l.onLock != nil {
+		l.onLock()
+	}
+	return func() {}, nil
 }
 
 func (g *fakeCoordinatorGateway) UpsertRoute(_ context.Context, _ string, spec llmadapter.GatewayRouteSpec) (*llmadapter.GatewayRouteObservation, error) {
@@ -260,7 +275,8 @@ func TestLLMProvisioningCoordinatorProcessOnceSuccessPublishesProgressAndComplet
 	gateway := &fakeCoordinatorGateway{upsertObs: &llmadapter.GatewayRouteObservation{RouteName: "drydock-review", PublicModel: "drydock.review", TargetURL: "http://worker.example.com:8000", Status: domain.GatewayRouteStatusSynced, GatewayConfigHash: "cfg-hash", Metadata: map[string]any{"gateway": "test"}}}
 	responder := &captureProvisioningResponder{}
 	placement := NewLLMPlacementService(&mockWorkerRepo{workers: []domain.Worker{llmWorker("pk-l40s", "T7920 L40S", 0, []domain.WorkerAccelerator{{Vendor: "nvidia", Model: "L40S", Count: 1, MemoryGB: 48}})}}, zap.NewNop())
-	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, placement, llmadapter.StaticProvisionerResolver{domain.LLMBackendKindVLLM: provisioner}, gateway, "", zap.NewNop(), WithLLMProvisioningResponder(responder))
+	promotionLock := &fakeLLMPromotionLock{}
+	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, placement, llmadapter.StaticProvisionerResolver{domain.LLMBackendKindVLLM: provisioner}, gateway, "", zap.NewNop(), WithLLMProvisioningResponder(responder), WithLLMPromotionLock(promotionLock))
 
 	if err := coordinator.ProcessOnce(ctx); err != nil {
 		t.Fatalf("process once: %v", err)
@@ -294,6 +310,55 @@ func TestLLMProvisioningCoordinatorProcessOnceSuccessPublishesProgressAndComplet
 	if len(provisioner.deprovisionCalls) != 0 {
 		t.Fatalf("expected no deprovision calls on success, got %d", len(provisioner.deprovisionCalls))
 	}
+	if promotionLock.calls != 1 {
+		t.Fatalf("promotion lock calls = %d, want 1", promotionLock.calls)
+	}
+}
+
+func TestLLMProvisioningCoordinatorRechecksDesiredIntentUnderPromotionLock(t *testing.T) {
+	ctx := context.Background()
+	routeID, releaseID, envID := uuid.New(), uuid.New(), uuid.New()
+	repos := newLLMRegistryFakes(routeID, releaseID, envID)
+	runs := newCoordinatorRunRepo()
+	registry := NewLLMRegistryService(repos.routes, repos.releases, repos.envs, repos.intents, runs, repos.obs, repos.states, nil, zap.NewNop())
+	intent := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: releaseID, EnvironmentID: envID, RequestedBy: "tester"}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	run := runs.seedQueued(intent.ID, routeID, releaseID, envID)
+	provisioner := &fakeCoordinatorProvisioner{
+		provisionResult: &llmadapter.ProvisionCandidateResult{BackendKind: domain.LLMBackendKindVLLM, BackendEndpoint: "http://worker:8000"},
+		observeResults:  []*llmadapter.BackendObservation{{HealthStatus: domain.HealthStatusHealthy}},
+		deprovisionErr:  errors.New("cleanup failed"),
+	}
+	gateway := &fakeCoordinatorGateway{}
+	placement := NewLLMPlacementService(&mockWorkerRepo{workers: []domain.Worker{llmWorker("worker", "worker", 0, []domain.WorkerAccelerator{{Vendor: "nvidia", Count: 1, MemoryGB: 48}})}}, zap.NewNop())
+	lock := &fakeLLMPromotionLock{onLock: func() {
+		state, err := repos.states.Get(ctx, routeID, envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		newerIntent := uuid.New()
+		state.DesiredIntentID = &newerIntent
+		if err := repos.states.Upsert(ctx, state); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, placement, llmadapter.StaticProvisionerResolver{domain.LLMBackendKindVLLM: provisioner}, gateway, "gateway", zap.NewNop(), WithLLMPromotionLock(lock))
+
+	err := coordinator.ProcessOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("superseded cleanup error = %v", err)
+	}
+	if len(gateway.calls) != 0 {
+		t.Fatalf("obsolete intent mutated gateway: %#v", gateway.calls)
+	}
+	if len(provisioner.deprovisionCalls) != 1 {
+		t.Fatalf("deprovision calls = %d, want 1", len(provisioner.deprovisionCalls))
+	}
+	if stored := runs.byID[run.ID]; stored == nil || stored.Status != domain.RunStatusCancelled {
+		t.Fatalf("superseded run = %#v, want cancelled", stored)
+	}
 }
 
 func TestLLMProvisioningCoordinatorProcessOnceIntentLoadFailureUsesQueuedRunCorrelationMetadata(t *testing.T) {
@@ -311,7 +376,7 @@ func TestLLMProvisioningCoordinatorProcessOnceIntentLoadFailureUsesQueuedRunCorr
 	runs.byID[run.ID].Metadata["nostr_request_pubkey"] = "pub-queued"
 	delete(repos.intents.byID, intent.ID)
 	responder := &captureProvisioningResponder{}
-	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, nil, nil, nil, "", zap.NewNop(), WithLLMProvisioningResponder(responder))
+	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, NewLLMPlacementService(&mockWorkerRepo{}, zap.NewNop()), llmadapter.StaticProvisionerResolver{}, &fakeCoordinatorGateway{}, "", zap.NewNop(), WithLLMProvisioningResponder(responder), WithLLMPromotionLock(&fakeLLMPromotionLock{}))
 
 	err := coordinator.ProcessOnce(ctx)
 	if err == nil {
@@ -342,7 +407,7 @@ func TestLLMProvisioningCoordinatorProcessOnceRouteLoadFailurePublishesTerminalE
 	run := runs.seedQueued(intent.ID, routeID, releaseID, envID)
 	delete(repos.releases.byID, releaseID)
 	responder := &captureProvisioningResponder{}
-	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, nil, nil, nil, "", zap.NewNop(), WithLLMProvisioningResponder(responder))
+	coordinator := NewLLMProvisioningCoordinator(registry, repos.envs, runs, NewLLMPlacementService(&mockWorkerRepo{}, zap.NewNop()), llmadapter.StaticProvisionerResolver{}, &fakeCoordinatorGateway{}, "", zap.NewNop(), WithLLMProvisioningResponder(responder), WithLLMPromotionLock(&fakeLLMPromotionLock{}))
 
 	err := coordinator.ProcessOnce(ctx)
 	if err == nil {

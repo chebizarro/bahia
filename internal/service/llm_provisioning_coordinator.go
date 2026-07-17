@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type LLMProvisioningCoordinator struct {
 	provisioners      llmadapter.ProvisionerResolver
 	gateway           llmadapter.GatewayRouteManager
 	gate              *LLMPromotionGate
+	promotionLock     LLMPromotionLocker
 	defaultGatewayRef string
 	responder         LLMProvisioningResponder
 	pollInterval      time.Duration
@@ -52,6 +54,10 @@ func WithLLMCoordinatorIntervals(pollInterval, staleRunTimeout time.Duration) LL
 
 func WithLLMProvisioningResponder(responder LLMProvisioningResponder) LLMProvisioningCoordinatorOption {
 	return func(c *LLMProvisioningCoordinator) { c.responder = responder }
+}
+
+func WithLLMPromotionLock(lock LLMPromotionLocker) LLMProvisioningCoordinatorOption {
+	return func(c *LLMProvisioningCoordinator) { c.promotionLock = lock }
 }
 
 func NewLLMProvisioningCoordinator(registry *LLMRegistryService, envs repository.EnvironmentRepository, runs repository.LLMDeploymentRunRepository, placement *LLMPlacementService, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, logger *zap.Logger, opts ...LLMProvisioningCoordinatorOption) *LLMProvisioningCoordinator {
@@ -89,6 +95,9 @@ func (c *LLMProvisioningCoordinator) validateDependencies() error {
 	}
 	if c.gate == nil {
 		return fmt.Errorf("LLMProvisioningCoordinator promotion gate is not configured")
+	}
+	if c.promotionLock == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator promotion lock is not configured")
 	}
 	return nil
 }
@@ -136,7 +145,9 @@ func (c *LLMProvisioningCoordinator) ProcessOnce(ctx context.Context) error {
 }
 
 func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain.LLMDeploymentRun) error {
-	_ = c.registry.MarkDeploymentRunCreated(ctx, run)
+	if err := c.registry.MarkDeploymentRunCreated(ctx, run); err != nil {
+		return c.failRun(ctx, run, nil, fmt.Errorf("record LLM deployment run creation for intent %s: %w", run.DeploymentIntentID, err), nil, llmadapter.ProvisionCandidateRequest{})
+	}
 	intent, err := c.registry.GetDeploymentIntent(ctx, run.DeploymentIntentID)
 	if err != nil {
 		return c.failRun(ctx, run, nil, fmt.Errorf("load intent: %w", err), nil, llmadapter.ProvisionCandidateRequest{})
@@ -168,7 +179,9 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 			mergeRunMetadata(run, map[string]any{"runtime_target": candidate.Worker.RuntimeTarget})
 		}
 	}
-	_ = c.runs.Update(ctx, run)
+	if err := c.runs.Update(ctx, run); err != nil {
+		return c.failRun(ctx, run, intent, fmt.Errorf("persist LLM placement: %w", err), nil, req)
+	}
 	c.publishStatus(ctx, intent, run, "placing_backend", "selected LLM backend placement")
 
 	c.publishStatus(ctx, intent, run, "provisioning_backend", "provisioning LLM backend")
@@ -192,14 +205,15 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 		return c.failRun(ctx, run, intent, err, provisioner, req)
 	}
 	if state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID {
-		_ = provisioner.Deprovision(ctx, req)
-		return c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusCancelled, nil)
+		return c.cancelSupersededRun(ctx, run, provisioner, req)
 	}
 
 	c.publishStatus(ctx, intent, run, "evaluating_gate", "evaluating LLM backend promotion gate")
 	gateResult, err := c.gate.Evaluate(ctx, provisioner, req, effectiveLLMGate(route, release))
 	mergeRunMetadata(run, map[string]any{"promotion_gate": gateResult})
-	_ = c.runs.Update(ctx, run)
+	if updateErr := c.runs.Update(ctx, run); updateErr != nil {
+		return c.failRun(ctx, run, intent, fmt.Errorf("persist LLM promotion gate result: %w", updateErr), provisioner, req)
+	}
 	if err != nil || gateResult == nil || !gateResult.Passed {
 		if err == nil {
 			err = fmt.Errorf("promotion gate failed")
@@ -213,9 +227,12 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	}
 	c.publishStatus(ctx, intent, run, "syncing_gateway", "syncing LLM gateway route")
 	spec := BuildLLMGatewayRouteSpec(route, result.BackendEndpoint)
-	gatewayObs, err := c.gateway.UpsertRoute(ctx, gatewayRef, spec)
+	gatewayObs, superseded, err := c.promoteGateway(ctx, intent, route.ID, env.ID, gatewayRef, spec)
 	if err != nil {
 		return c.failRun(ctx, run, intent, err, provisioner, req)
+	}
+	if superseded {
+		return c.cancelSupersededRun(ctx, run, provisioner, req)
 	}
 	backendObs, err := provisioner.Observe(ctx, req)
 	if err != nil {
@@ -240,19 +257,64 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 }
 
 func (c *LLMProvisioningCoordinator) failRun(ctx context.Context, run *domain.LLMDeploymentRun, intent *domain.LLMDeploymentIntent, cause error, provisioner llmadapter.Provisioner, req llmadapter.ProvisionCandidateRequest) error {
+	if cause == nil {
+		cause = fmt.Errorf("LLM deployment failed")
+	}
+	failure := cause
 	if provisioner != nil {
-		_ = provisioner.Deprovision(ctx, req)
+		if err := provisioner.Deprovision(ctx, req); err != nil {
+			failure = errors.Join(failure, fmt.Errorf("deprovision failed LLM candidate: %w", err))
+		}
 	}
 	correlationIntent := c.failureIntent(intent, run, req)
-	mergeRunMetadata(run, map[string]any{"error": cause.Error()})
-	_ = c.runs.Update(ctx, run)
+	mergeRunMetadata(run, map[string]any{"error": failure.Error()})
+	if err := c.runs.Update(ctx, run); err != nil {
+		failure = errors.Join(failure, fmt.Errorf("persist failed LLM run metadata: %w", err))
+	}
 	if correlationIntent != nil {
-		c.publishError(ctx, correlationIntent, run, "failed", cause)
+		c.publishError(ctx, correlationIntent, run, "failed", failure)
 	}
 	if err := c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusFailed, nil); err != nil {
-		return err
+		failure = errors.Join(failure, fmt.Errorf("complete failed LLM run: %w", err))
 	}
-	return cause
+	return failure
+}
+
+func (c *LLMProvisioningCoordinator) promoteGateway(ctx context.Context, intent *domain.LLMDeploymentIntent, routeID, environmentID uuid.UUID, gatewayRef string, spec llmadapter.GatewayRouteSpec) (*llmadapter.GatewayRouteObservation, bool, error) {
+	unlock, err := c.promotionLock.Lock(ctx, routeID, environmentID)
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire LLM promotion lock: %w", err)
+	}
+	if unlock == nil {
+		return nil, false, fmt.Errorf("acquire LLM promotion lock: locker returned no unlock function")
+	}
+	defer unlock()
+
+	state, err := c.registry.GetRouteState(ctx, routeID, environmentID)
+	if err != nil {
+		return nil, false, fmt.Errorf("recheck desired LLM intent under promotion lock: %w", err)
+	}
+	if state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID {
+		return nil, true, nil
+	}
+	observation, err := c.gateway.UpsertRoute(ctx, gatewayRef, spec)
+	if err != nil {
+		return nil, false, err
+	}
+	return observation, false, nil
+}
+
+func (c *LLMProvisioningCoordinator) cancelSupersededRun(ctx context.Context, run *domain.LLMDeploymentRun, provisioner llmadapter.Provisioner, req llmadapter.ProvisionCandidateRequest) error {
+	var cleanupErr error
+	if provisioner != nil {
+		if err := provisioner.Deprovision(ctx, req); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("deprovision superseded LLM candidate: %w", err))
+		}
+	}
+	if err := c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusCancelled, nil); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("persist superseded LLM run cancellation: %w", err))
+	}
+	return cleanupErr
 }
 
 func (c *LLMProvisioningCoordinator) failureIntent(intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, req llmadapter.ProvisionCandidateRequest) *domain.LLMDeploymentIntent {
