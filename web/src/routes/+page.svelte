@@ -624,7 +624,7 @@
   let costSummaryStatus = $derived(costSummaryError ? 'error' : costSummary.paymentCount > 0 ? 'warning' : 'success');
 </script>
 
-<div class="dashboard">
+<div class="dashboard" data-testid="dashboard-root">
   <h1>Dashboard</h1>
 
   {#if dashboardSyncing}

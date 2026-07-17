@@ -12,6 +12,7 @@ export class AppShellPage {
   }
 
   async expectVisible() {
-    await this.page.locator('body').waitFor({ state: 'visible' });
+    await this.page.getByRole('navigation', { name: 'Primary' }).waitFor({ state: 'visible' });
+    await this.page.locator('main').waitFor({ state: 'visible' });
   }
 }
