@@ -145,9 +145,13 @@ function parseSBOMReferenceEvent(event) {
 
 function parseSBOMAvailabilityEvent(event) {
   let content = {};
+  let parseError = null;
   try {
     content = JSON.parse(event.content || '{}');
-  } catch { /* ignore */ }
+  } catch (error) {
+    parseError = error?.message || 'Invalid SBOM availability JSON';
+    console.warn(`[sbom] Failed to parse availability event ${event.id}:`, error);
+  }
 
   return {
     id: event.id,
@@ -160,6 +164,7 @@ function parseSBOMAvailabilityEvent(event) {
     dTag: getDTag(event),
     created_at: event.created_at || 0,
     content,
+    parseError,
     nostr_event: event
   };
 }

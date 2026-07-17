@@ -4,12 +4,13 @@
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
+  import { toast } from '$lib/components/toast.js';
+  import { runSecurityRescan } from '$lib/security-rescan.js';
   import { SecurityIcon, ErrorIcon } from '$lib/icons/domain-icons.js';
   import {
     securityState,
     listSecurityFindings,
     listSecuritySchedules,
-    rescanSecurityTarget,
     computeSeverityCounts
   } from '$lib/stores/security.svelte.js';
 
@@ -116,14 +117,15 @@
 
   async function handleRescan(targetKeyHash) {
     rescanningHash = targetKeyHash;
-    try {
-      await rescanSecurityTarget(targetKeyHash);
-      await loadFindingsForScope();
-    } catch (err) {
-      console.error('Rescan failed:', err);
-    } finally {
-      rescanningHash = null;
+    const outcome = await runSecurityRescan(targetKeyHash);
+    if (outcome.ok) {
+      try {
+        await loadFindingsForScope();
+      } catch (error) {
+        toast.warning(`Rescan accepted, but findings refresh failed: ${error?.message || error}`);
+      }
     }
+    rescanningHash = null;
   }
 
   function severityVariant(sev) {

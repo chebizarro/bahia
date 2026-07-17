@@ -151,6 +151,21 @@ describe('controlplane collection cold-start cache', () => {
     expect(localStorage.getItem(LEGACY_SNAPSHOT_KEY)).toBeNull();
   });
 
+  it('warns when IndexedDB operations degrade to cache fallbacks', async () => {
+    const openError = new Error('storage denied');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failingAdapter = createIndexedDBCollectionCacheAdapter({
+      indexedDB: { open: vi.fn(() => { throw openError; }) }
+    });
+
+    await expect(failingAdapter.getAll()).resolves.toEqual([]);
+    await expect(failingAdapter.putMany([{ name: 'services', items: [] }])).resolves.toBe(false);
+    await expect(failingAdapter.delete('services')).resolves.toBe(false);
+
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledWith('[controlplane-cache] IndexedDB open failed:', openError);
+  });
+
   it('no-ops without throwing when IndexedDB is unavailable', async () => {
     const unavailableAdapter = createIndexedDBCollectionCacheAdapter({ indexedDB: undefined });
     collections.setControlplaneCacheStorageAdapter(unavailableAdapter);

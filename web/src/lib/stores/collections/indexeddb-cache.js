@@ -6,6 +6,10 @@ function defaultIndexedDB() {
   return typeof globalThis.indexedDB?.open === 'function' ? globalThis.indexedDB : null;
 }
 
+function warnCacheFailure(operation, error) {
+  console.warn(`[controlplane-cache] IndexedDB ${operation} failed:`, error || new Error('Unknown IndexedDB failure'));
+}
+
 function resolveRequest(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -35,7 +39,8 @@ async function openDatabase(indexedDBImpl) {
     let request;
     try {
       request = indexedDBImpl.open(CONTROLPLANE_CACHE_DB_NAME, CONTROLPLANE_CACHE_DB_VERSION);
-    } catch {
+    } catch (error) {
+      warnCacheFailure('open', error);
       settle(null);
       return;
     }
@@ -47,16 +52,22 @@ async function openDatabase(indexedDBImpl) {
       }
     };
     request.onsuccess = () => settle(request.result);
-    request.onerror = () => settle(null);
-    request.onblocked = () => settle(null);
+    request.onerror = () => {
+      warnCacheFailure('open', request.error);
+      settle(null);
+    };
+    request.onblocked = () => {
+      warnCacheFailure('open', new Error('IndexedDB open request was blocked'));
+      settle(null);
+    };
   });
 }
 
 function closeDatabase(db) {
   try {
     db?.close?.();
-  } catch {
-    // Closing a best-effort browser cache handle must not affect app startup.
+  } catch (error) {
+    warnCacheFailure('close', error);
   }
 }
 
@@ -72,7 +83,8 @@ export function createIndexedDBCollectionCacheAdapter({ indexedDB = defaultIndex
         const records = await resolveRequest(transaction.objectStore(CONTROLPLANE_COLLECTION_STORE).getAll());
         await transactionDone;
         return Array.isArray(records) ? records : [];
-      } catch {
+      } catch (error) {
+        warnCacheFailure('read', error);
         return [];
       } finally {
         closeDatabase(db);
@@ -94,7 +106,8 @@ export function createIndexedDBCollectionCacheAdapter({ indexedDB = defaultIndex
         }
         await transactionDone;
         return true;
-      } catch {
+      } catch (error) {
+        warnCacheFailure('write', error);
         return false;
       } finally {
         closeDatabase(db);
@@ -113,7 +126,8 @@ export function createIndexedDBCollectionCacheAdapter({ indexedDB = defaultIndex
         transaction.objectStore(CONTROLPLANE_COLLECTION_STORE).delete(name);
         await transactionDone;
         return true;
-      } catch {
+      } catch (error) {
+        warnCacheFailure('delete', error);
         return false;
       } finally {
         closeDatabase(db);

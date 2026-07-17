@@ -5,11 +5,11 @@
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
+  import { runSecurityRescan } from '$lib/security-rescan.js';
   import { SecurityIcon, ErrorIcon } from '$lib/icons/domain-icons.js';
   import {
     securityState,
     listSecurityFindings,
-    rescanSecurityTarget,
     computeSeverityCounts
   } from '$lib/stores/security.svelte.js';
 
@@ -41,13 +41,8 @@
   async function handleRescan() {
     if (!targetHash) return;
     rescanning = true;
-    try {
-      await rescanSecurityTarget(targetHash);
-    } catch (err) {
-      console.error('Rescan failed:', err);
-    } finally {
-      rescanning = false;
-    }
+    await runSecurityRescan(targetHash);
+    rescanning = false;
   }
 
   function severityVariant(sev) {
