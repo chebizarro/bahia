@@ -2,7 +2,9 @@ package rollout
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,13 +15,26 @@ import (
 	"go.uber.org/zap"
 )
 
+// TrafficState is the runtime-reported result of a traffic transition.
+type TrafficState struct {
+	TargetSlot    string
+	WeightPercent int
+}
+
+// TrafficController is an optional runtime capability for progressive traffic management.
+// Runtimes that do not implement it cannot safely run canary or blue/green traffic steps.
+type TrafficController interface {
+	ShiftTraffic(ctx context.Context, serviceName, targetSlot string, weightPercent int) (TrafficState, error)
+	SwitchTraffic(ctx context.Context, serviceName, fromSlot, toSlot string) (TrafficState, error)
+}
+
 // Executor drives rollout plans through their steps.
 type Executor struct {
-	repo        repository.RolloutPlanRepository
-	healthGate  *HealthGate
-	rt          runtime.Runtime
-	publisher   events.Publisher
-	logger      *zap.Logger
+	repo       repository.RolloutPlanRepository
+	healthGate *HealthGate
+	rt         runtime.Runtime
+	publisher  events.Publisher
+	logger     *zap.Logger
 }
 
 // NewExecutor creates a new rollout executor.
@@ -41,6 +56,10 @@ func NewExecutor(
 
 // CreateAndStart builds a rollout plan for the given strategy and begins execution.
 func (e *Executor) CreateAndStart(ctx context.Context, intentID uuid.UUID, strategy domain.DeployStrategy, serviceName, image string) (*domain.RolloutPlan, error) {
+	previousArtifact, err := e.captureArtifact(ctx, serviceName)
+	if err != nil {
+		return nil, fmt.Errorf("snapshotting previous deployment for rollback: %w", err)
+	}
 	plan, steps := BuildPlan(intentID, strategy)
 
 	if err := e.repo.CreatePlan(ctx, plan); err != nil {
@@ -68,13 +87,13 @@ func (e *Executor) CreateAndStart(ctx context.Context, intentID uuid.UUID, strat
 	})
 
 	// Execute steps sequentially.
-	go e.executeSteps(context.Background(), plan, steps, serviceName, image)
+	go e.executeSteps(context.Background(), plan, steps, serviceName, image, previousArtifact)
 
 	return plan, nil
 }
 
 // executeSteps runs through the rollout steps in order.
-func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, steps []domain.RolloutStep, serviceName, image string) {
+func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, steps []domain.RolloutStep, serviceName, image, previousArtifact string) {
 	for i := range steps {
 		step := &steps[i]
 
@@ -107,8 +126,12 @@ func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, s
 				zap.Error(err),
 			)
 
-			// Auto-rollback: undeploy the canary/green.
-			e.autoRollback(ctx, plan, serviceName)
+			if rollbackErr := e.autoRollback(ctx, plan, serviceName, previousArtifact); rollbackErr != nil {
+				e.logger.Error("rollout auto-rollback failed",
+					zap.String("plan_id", plan.ID.String()),
+					zap.Error(rollbackErr),
+				)
+			}
 			return
 		}
 
@@ -145,14 +168,21 @@ func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, s
 func (e *Executor) executeStep(ctx context.Context, step *domain.RolloutStep, serviceName, image string) error {
 	switch step.Action {
 	case domain.StepActionDeployCanary:
-		// Deploy canary instance alongside the existing deployment.
+		// Deploy the canary, then make its configured traffic weight real before passing the step.
 		canaryName := serviceName + "-canary"
-		return e.rt.Deploy(ctx, canaryName, image, runtime.DeployOptions{
+		if err := e.rt.Deploy(ctx, canaryName, image, runtime.DeployOptions{
 			Labels: map[string]string{
 				"bahia.service": serviceName,
 				"bahia.slot":    "canary",
 			},
-		})
+		}); err != nil {
+			return err
+		}
+		weight := 10
+		if configured, ok := step.Config["weight"].(float64); ok {
+			weight = int(configured)
+		}
+		return e.shiftTraffic(ctx, serviceName, "canary", weight)
 
 	case domain.StepActionDeployGreen:
 		// Deploy green instance alongside blue.
@@ -190,12 +220,12 @@ func (e *Executor) executeStep(ctx context.Context, step *domain.RolloutStep, se
 
 		// Store health result in step.
 		step.HealthResult = map[string]any{
-			"passed":          result.Passed,
-			"total_checks":    result.TotalChecks,
-			"healthy_checks":  result.HealthyChecks,
+			"passed":           result.Passed,
+			"total_checks":     result.TotalChecks,
+			"healthy_checks":   result.HealthyChecks,
 			"unhealthy_checks": result.UnhealthyChecks,
-			"last_health":     string(result.LastHealth),
-			"duration_ms":     result.Duration.Milliseconds(),
+			"last_health":      string(result.LastHealth),
+			"duration_ms":      result.Duration.Milliseconds(),
 		}
 		if result.Error != "" {
 			step.HealthResult["error"] = result.Error
@@ -207,25 +237,37 @@ func (e *Executor) executeStep(ctx context.Context, step *domain.RolloutStep, se
 		return nil
 
 	case domain.StepActionShiftTraffic:
-		// Traffic shifting is runtime-specific. Log the intent.
 		weight := 50
 		if w, ok := step.Config["weight"].(float64); ok {
 			weight = int(w)
 		}
-		e.logger.Info("traffic shift requested",
-			zap.String("service", serviceName),
-			zap.Int("weight_percent", weight),
-		)
-		// In a production system, this would configure a load balancer or service mesh.
-		return nil
+		if weight < 0 || weight > 100 {
+			return fmt.Errorf("invalid traffic weight %d", weight)
+		}
+		targetSlot := "canary"
+		if configured, ok := step.Config["target_slot"].(string); ok && strings.TrimSpace(configured) != "" {
+			targetSlot = strings.TrimSpace(configured)
+		}
+		return e.shiftTraffic(ctx, serviceName, targetSlot, weight)
 
 	case domain.StepActionSwitch:
-		// Blue-green switch: traffic goes to green.
-		e.logger.Info("blue-green switch",
-			zap.String("service", serviceName),
-			zap.Any("from", step.Config["from"]),
-			zap.Any("to", step.Config["to"]),
-		)
+		controller, err := e.trafficController()
+		if err != nil {
+			return err
+		}
+		from, _ := step.Config["from"].(string)
+		to, _ := step.Config["to"].(string)
+		from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+		if from == "" || to == "" {
+			return fmt.Errorf("blue/green switch requires non-empty from and to slots")
+		}
+		state, err := controller.SwitchTraffic(ctx, serviceName, from, to)
+		if err != nil {
+			return fmt.Errorf("switching traffic from %s to %s: %w", from, to, err)
+		}
+		if state.TargetSlot != to || state.WeightPercent != 100 {
+			return fmt.Errorf("traffic switch verification failed: requested %s, runtime reports %s at %d%%", to, state.TargetSlot, state.WeightPercent)
+		}
 		return nil
 
 	case domain.StepActionPromote:
@@ -236,42 +278,213 @@ func (e *Executor) executeStep(ctx context.Context, step *domain.RolloutStep, se
 		}); err != nil {
 			return fmt.Errorf("promoting deployment: %w", err)
 		}
-
-		// Cleanup canary/green slots.
-		_ = e.rt.Undeploy(ctx, serviceName+"-canary")
-		_ = e.rt.Undeploy(ctx, serviceName+"-green")
-		return nil
+		if fromSlot, ok := step.Config["from_slot"].(string); ok && strings.TrimSpace(fromSlot) != "" {
+			controller, err := e.trafficController()
+			if err != nil {
+				return fmt.Errorf("routing promoted primary: %w", err)
+			}
+			state, err := controller.SwitchTraffic(ctx, serviceName, strings.TrimSpace(fromSlot), "primary")
+			if err != nil {
+				return fmt.Errorf("routing promoted primary: %w", err)
+			}
+			if state.TargetSlot != "primary" || state.WeightPercent != 100 {
+				return fmt.Errorf("promoted traffic verification failed: runtime reports %s at %d%%", state.TargetSlot, state.WeightPercent)
+			}
+		}
+		return e.cleanupSlots(ctx, serviceName)
 
 	case domain.StepActionRollback:
-		// Remove canary/green and leave the original running.
-		_ = e.rt.Undeploy(ctx, serviceName+"-canary")
-		_ = e.rt.Undeploy(ctx, serviceName+"-green")
-		return nil
+		return e.cleanupSlots(ctx, serviceName)
 
 	default:
 		return fmt.Errorf("unknown step action: %s", step.Action)
 	}
 }
 
-func (e *Executor) autoRollback(ctx context.Context, plan *domain.RolloutPlan, serviceName string) {
-	// Undeploy canary/green slots.
-	_ = e.rt.Undeploy(ctx, serviceName+"-canary")
-	_ = e.rt.Undeploy(ctx, serviceName+"-green")
+func (e *Executor) autoRollback(ctx context.Context, plan *domain.RolloutPlan, serviceName, previousArtifact string) error {
+	rollbackErr := errors.Join(
+		e.restoreTraffic(ctx, plan.Strategy, serviceName),
+		e.restorePrimary(ctx, serviceName, previousArtifact),
+		e.cleanupSlots(ctx, serviceName),
+	)
+	if rollbackErr != nil {
+		return e.markRollbackFailed(ctx, plan, rollbackErr)
+	}
 
 	completed := time.Now().UTC()
 	plan.Status = domain.RolloutStatusRolledBack
 	plan.CompletedAt = &completed
-	_ = e.repo.UpdatePlan(ctx, plan)
+	if err := e.repo.UpdatePlan(ctx, plan); err != nil {
+		return e.markRollbackFailed(ctx, plan, fmt.Errorf("persisting rolled-back plan: %w", err))
+	}
 
 	e.publisher.Publish(ctx, events.Event{
 		Type:     "rollout.rolled_back",
 		EntityID: plan.ID.String(),
 	})
-
 	e.logger.Warn("rollout auto-rolled back",
 		zap.String("plan_id", plan.ID.String()),
 		zap.String("strategy", string(plan.Strategy)),
 	)
+	return nil
+}
+
+func (e *Executor) shiftTraffic(ctx context.Context, serviceName, targetSlot string, weight int) error {
+	if weight < 0 || weight > 100 {
+		return fmt.Errorf("invalid traffic weight %d", weight)
+	}
+	controller, err := e.trafficController()
+	if err != nil {
+		return err
+	}
+	state, err := controller.ShiftTraffic(ctx, serviceName, targetSlot, weight)
+	if err != nil {
+		return fmt.Errorf("shifting traffic to %s at %d%%: %w", targetSlot, weight, err)
+	}
+	if state.TargetSlot != targetSlot || state.WeightPercent != weight {
+		return fmt.Errorf("traffic shift verification failed: requested %s at %d%%, runtime reports %s at %d%%", targetSlot, weight, state.TargetSlot, state.WeightPercent)
+	}
+	return nil
+}
+
+func (e *Executor) trafficController() (TrafficController, error) {
+	controller, ok := e.rt.(TrafficController)
+	if !ok {
+		return nil, fmt.Errorf("runtime %s does not support verifiable traffic transitions", e.rt.Type())
+	}
+	return controller, nil
+}
+
+func (e *Executor) restoreTraffic(ctx context.Context, strategy domain.DeployStrategy, serviceName string) error {
+	if strategy == domain.DeployStrategyReplace {
+		return nil
+	}
+	controller, err := e.trafficController()
+	if err != nil {
+		return fmt.Errorf("restoring traffic: %w", err)
+	}
+	var state TrafficState
+	switch strategy {
+	case domain.DeployStrategyCanary:
+		state, err = controller.ShiftTraffic(ctx, serviceName, "canary", 0)
+		if err == nil && (state.TargetSlot != "canary" || state.WeightPercent != 0) {
+			err = fmt.Errorf("runtime reports %s at %d%%", state.TargetSlot, state.WeightPercent)
+		}
+	case domain.DeployStrategyBlueGreen:
+		state, err = controller.SwitchTraffic(ctx, serviceName, "green", "blue")
+		if err == nil && (state.TargetSlot != "blue" || state.WeightPercent != 100) {
+			err = fmt.Errorf("runtime reports %s at %d%%", state.TargetSlot, state.WeightPercent)
+		}
+	default:
+		return fmt.Errorf("unsupported rollback strategy %s", strategy)
+	}
+	if err != nil {
+		return fmt.Errorf("restoring traffic for %s rollout: %w", strategy, err)
+	}
+	return nil
+}
+
+func (e *Executor) captureArtifact(ctx context.Context, serviceName string) (string, error) {
+	obs, err := e.healthGate.observer.Observe(ctx, uuid.Nil, uuid.Nil, serviceName)
+	if err != nil {
+		return "", err
+	}
+	if obs == nil {
+		return "", fmt.Errorf("runtime returned no observation")
+	}
+	if obs.HealthStatus == domain.HealthStatusStopped {
+		return "", nil
+	}
+	return observedArtifact(obs), nil
+}
+
+func (e *Executor) restorePrimary(ctx context.Context, serviceName, previousArtifact string) error {
+	if previousArtifact == "" {
+		if err := e.rt.Undeploy(ctx, serviceName); err != nil {
+			return fmt.Errorf("removing newly-created primary deployment: %w", err)
+		}
+		obs, err := e.healthGate.observer.Observe(ctx, uuid.Nil, uuid.Nil, serviceName)
+		if err != nil {
+			return fmt.Errorf("verifying primary removal: %w", err)
+		}
+		if obs == nil || obs.HealthStatus != domain.HealthStatusStopped {
+			return fmt.Errorf("verifying primary removal: runtime still reports a deployment")
+		}
+		return nil
+	}
+
+	obs, observeErr := e.healthGate.observer.Observe(ctx, uuid.Nil, uuid.Nil, serviceName)
+	if observeErr != nil || obs == nil || observedArtifact(obs) != previousArtifact || obs.HealthStatus != domain.HealthStatusHealthy {
+		if err := e.rt.Deploy(ctx, serviceName, previousArtifact, runtime.DeployOptions{
+			Labels:     map[string]string{"bahia.service": serviceName, "bahia.rollback": "true"},
+			PullAlways: true,
+		}); err != nil {
+			return fmt.Errorf("restoring previous primary artifact %s: %w", previousArtifact, err)
+		}
+		obs, observeErr = e.healthGate.observer.Observe(ctx, uuid.Nil, uuid.Nil, serviceName)
+	}
+	if observeErr != nil {
+		return fmt.Errorf("verifying restored primary: %w", observeErr)
+	}
+	if obs == nil {
+		return fmt.Errorf("verifying restored primary: runtime returned no observation")
+	}
+	if actual := observedArtifact(obs); actual != previousArtifact {
+		return fmt.Errorf("verifying restored primary: expected %s, observed %s", previousArtifact, actual)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy {
+		return fmt.Errorf("verifying restored primary: health is %s", obs.HealthStatus)
+	}
+	return nil
+}
+
+func observedArtifact(obs *domain.RuntimeObservation) string {
+	if obs == nil {
+		return ""
+	}
+	repo := strings.TrimSpace(obs.ObservedImageRepo)
+	digest := strings.TrimSpace(obs.ObservedImageDigest)
+	if digest == "" || strings.Contains(repo, "@") {
+		return repo
+	}
+	if lastSlash, lastColon := strings.LastIndex(repo, "/"), strings.LastIndex(repo, ":"); lastColon > lastSlash {
+		repo = repo[:lastColon]
+	}
+	if repo == "" {
+		return digest
+	}
+	return repo + "@" + digest
+}
+
+func (e *Executor) cleanupSlots(ctx context.Context, serviceName string) error {
+	return errors.Join(
+		wrapRuntimeError("undeploying canary slot", e.rt.Undeploy(ctx, serviceName+"-canary")),
+		wrapRuntimeError("undeploying green slot", e.rt.Undeploy(ctx, serviceName+"-green")),
+	)
+}
+
+func wrapRuntimeError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (e *Executor) markRollbackFailed(ctx context.Context, plan *domain.RolloutPlan, cause error) error {
+	completed := time.Now().UTC()
+	plan.Status = domain.RolloutStatusFailed
+	plan.CompletedAt = &completed
+	persistErr := e.repo.UpdatePlan(ctx, plan)
+	resultErr := cause
+	if persistErr != nil {
+		resultErr = errors.Join(cause, fmt.Errorf("persisting rollback failure: %w", persistErr))
+	}
+	e.publisher.Publish(ctx, events.Event{
+		Type:     "rollout.rollback_failed",
+		EntityID: plan.ID.String(),
+		Data:     map[string]string{"error": resultErr.Error()},
+	})
+	return resultErr
 }
 
 // GetPlanStatus returns the current plan and its steps.

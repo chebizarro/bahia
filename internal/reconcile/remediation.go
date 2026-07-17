@@ -2,6 +2,10 @@ package reconcile
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +59,7 @@ type Remediator struct {
 	services     repository.ServiceRepository
 	environments repository.EnvironmentRepository
 	artifacts    repository.ArtifactRepository
+	intents      repository.DeploymentIntentRepository
 	state        repository.EnvironmentServiceStateRepository
 	rt           runtime.Runtime
 	publisher    events.Publisher
@@ -62,6 +67,14 @@ type Remediator struct {
 
 	mu     sync.Mutex
 	states map[string]*remediationState // keyed by "serviceID:envID"
+}
+
+// RemediatorOption adds optional remediation dependencies.
+type RemediatorOption func(*Remediator)
+
+// WithRemediationIntentHistory enables rollback target resolution from successful deployment history.
+func WithRemediationIntentHistory(intents repository.DeploymentIntentRepository) RemediatorOption {
+	return func(r *Remediator) { r.intents = intents }
 }
 
 // NewRemediator creates a new Remediator.
@@ -73,8 +86,9 @@ func NewRemediator(
 	rt runtime.Runtime,
 	publisher events.Publisher,
 	logger *zap.Logger,
+	opts ...RemediatorOption,
 ) *Remediator {
-	return &Remediator{
+	r := &Remediator{
 		services:     services,
 		environments: environments,
 		artifacts:    artifacts,
@@ -84,6 +98,12 @@ func NewRemediator(
 		logger:       logger,
 		states:       make(map[string]*remediationState),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	return r
 }
 
 // OnDriftDetected is called when drift is detected.
@@ -267,7 +287,7 @@ func (r *Remediator) remediate(ctx context.Context, serviceID, envID uuid.UUID, 
 	case ActionRedeploy:
 		remediateErr = r.redeploy(ctx, serviceID, envID, svc)
 	case ActionRollback:
-		remediateErr = r.rollback(ctx, serviceID, envID, svc.RuntimeTargetName())
+		remediateErr = r.rollback(ctx, serviceID, envID, svc)
 	default:
 		r.logger.Warn("unknown remediation action", zap.String("action", string(action)))
 		return nil
@@ -335,17 +355,133 @@ func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, s
 	return r.rt.Deploy(ctx, serviceName, image, opts)
 }
 
-func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) error {
-	// For rollback, we'd ideally deploy the previous known-good artifact.
-	// For now, we'll just undeploy the canary/green slots and let the original run.
-	_ = r.rt.Undeploy(ctx, serviceName+"-canary")
-	_ = r.rt.Undeploy(ctx, serviceName+"-green")
+func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service) error {
+	if r.intents == nil || r.state == nil || r.artifacts == nil || r.rt == nil {
+		return fmt.Errorf("rollback requires deployment intent history, state, artifact, and runtime dependencies")
+	}
+	if svc == nil {
+		return fmt.Errorf("rollback service is nil")
+	}
 
-	r.logger.Info("rollback: removed canary/green deployments",
+	st, err := r.state.Get(ctx, serviceID, envID)
+	if err != nil {
+		return fmt.Errorf("loading current deployment state: %w", err)
+	}
+	if st == nil || st.DesiredArtifactID == nil {
+		return fmt.Errorf("current deployment state has no desired artifact")
+	}
+
+	intents, err := r.intents.ListByServiceEnv(ctx, serviceID, envID, 50, 0)
+	if err != nil {
+		return fmt.Errorf("listing deployment history: %w", err)
+	}
+	sort.SliceStable(intents, func(i, j int) bool { return intents[i].CreatedAt.After(intents[j].CreatedAt) })
+	var target *domain.DeploymentIntent
+	for i := range intents {
+		intent := &intents[i]
+		if intent.Status == domain.IntentStatusDeployed && intent.ArtifactID != *st.DesiredArtifactID {
+			target = intent
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("no previous successfully deployed artifact to roll back to")
+	}
+
+	artifact, err := r.artifacts.GetByID(ctx, target.ArtifactID)
+	if err != nil {
+		return fmt.Errorf("loading rollback artifact: %w", err)
+	}
+	if artifact == nil {
+		return fmt.Errorf("rollback artifact %s no longer exists", target.ArtifactID)
+	}
+	image := artifactImage(artifact)
+	if image == "" {
+		return fmt.Errorf("rollback artifact %s has no deployable image", target.ArtifactID)
+	}
+
+	serviceName := svc.RuntimeTargetName()
+	opts := deployOptionsFromAdoptedConfig(svc)
+	if opts.Labels == nil {
+		opts.Labels = map[string]string{}
+	}
+	opts.Labels["bahia.service"] = svc.Name
+	opts.Labels["bahia.remediation"] = "rollback"
+	opts.PullAlways = true
+	if err := r.rt.Deploy(ctx, serviceName, image, opts); err != nil {
+		return fmt.Errorf("deploying rollback artifact: %w", err)
+	}
+
+	obs, err := r.rt.Observe(ctx, serviceID, envID, serviceName)
+	if err != nil {
+		return fmt.Errorf("verifying rollback deployment: %w", err)
+	}
+	if obs == nil || !artifactMatchesObservation(artifact, obs) {
+		return fmt.Errorf("verifying rollback deployment: runtime does not report artifact %s", image)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy {
+		return fmt.Errorf("verifying rollback deployment: health is %s", obs.HealthStatus)
+	}
+	if err := errors.Join(
+		wrapRemediationError("undeploying canary slot", r.rt.Undeploy(ctx, serviceName+"-canary")),
+		wrapRemediationError("undeploying green slot", r.rt.Undeploy(ctx, serviceName+"-green")),
+	); err != nil {
+		return err
+	}
+
+	currentIntentID := st.DesiredIntentID
+	st.DesiredArtifactID = &target.ArtifactID
+	st.DesiredIntentID = &target.ID
+	st.DesiredRuntimeState = target.DesiredState
+	st.DesiredHash = target.DesiredHash
+	st.DriftStatus = domain.DriftStatusInSync
+	now := time.Now().UTC()
+	st.LastReconciledAt = &now
+	if err := r.state.Upsert(ctx, st); err != nil {
+		return fmt.Errorf("persisting rollback state: %w", err)
+	}
+	if currentIntentID != nil {
+		if err := r.intents.UpdateStatus(ctx, *currentIntentID, domain.IntentStatusRolledBack); err != nil {
+			return fmt.Errorf("marking replaced intent rolled back: %w", err)
+		}
+	}
+
+	r.logger.Info("rollback restored previous artifact",
 		zap.String("service", serviceName),
+		zap.String("artifact_id", target.ArtifactID.String()),
+		zap.String("image", image),
 	)
-
 	return nil
+}
+
+func artifactImage(artifact *domain.Artifact) string {
+	if artifact == nil || strings.TrimSpace(artifact.ImageRepo) == "" {
+		return ""
+	}
+	if strings.TrimSpace(artifact.ImageDigest) != "" {
+		return artifact.ImageRepo + "@" + artifact.ImageDigest
+	}
+	if strings.TrimSpace(artifact.ImageTag) != "" {
+		return artifact.ImageRepo + ":" + artifact.ImageTag
+	}
+	return artifact.ImageRepo
+}
+
+func artifactMatchesObservation(artifact *domain.Artifact, obs *domain.RuntimeObservation) bool {
+	if artifact == nil || obs == nil {
+		return false
+	}
+	if artifact.ImageDigest != "" {
+		return strings.TrimSpace(obs.ObservedImageDigest) == strings.TrimSpace(artifact.ImageDigest)
+	}
+	return strings.TrimSpace(obs.ObservedImageRepo) == artifactImage(artifact)
+}
+
+func wrapRemediationError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func deployOptionsFromAdoptedConfig(svc *domain.Service) runtime.DeployOptions {

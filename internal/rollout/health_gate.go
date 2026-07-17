@@ -28,13 +28,13 @@ func NewHealthGate(observer runtime.Observer, logger *zap.Logger) *HealthGate {
 
 // HealthCheckResult captures the outcome of a health gate evaluation.
 type HealthCheckResult struct {
-	Passed           bool              `json:"passed"`
-	TotalChecks      int               `json:"total_checks"`
-	HealthyChecks    int               `json:"healthy_checks"`
-	UnhealthyChecks  int               `json:"unhealthy_checks"`
-	LastHealth       domain.HealthStatus `json:"last_health"`
-	Duration         time.Duration     `json:"duration"`
-	Error            string            `json:"error,omitempty"`
+	Passed          bool                `json:"passed"`
+	TotalChecks     int                 `json:"total_checks"`
+	HealthyChecks   int                 `json:"healthy_checks"`
+	UnhealthyChecks int                 `json:"unhealthy_checks"`
+	LastHealth      domain.HealthStatus `json:"last_health"`
+	Duration        time.Duration       `json:"duration"`
+	Error           string              `json:"error,omitempty"`
 }
 
 // Check runs health polling for the configured duration.
@@ -77,6 +77,12 @@ func (g *HealthGate) Check(ctx context.Context, serviceID, envID uuid.UUID, serv
 				consecutiveHealthy = 0
 				result.UnhealthyChecks++
 				result.TotalChecks++
+				result.Error = err.Error()
+				if consecutiveUnhealthy >= cfg.FailureThreshold {
+					result.Duration = time.Since(start)
+					result.Error = fmt.Sprintf("failed after %d consecutive observation errors: %v", consecutiveUnhealthy, err)
+					return result, nil
+				}
 				continue
 			}
 

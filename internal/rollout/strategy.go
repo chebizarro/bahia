@@ -60,7 +60,8 @@ func buildCanarySteps(planID uuid.UUID) []domain.RolloutStep {
 			Action: domain.StepActionObserve,
 			Status: domain.StepStatusPending,
 			Config: map[string]any{
-				"duration_seconds": 60,
+				"duration_seconds":  60,
+				"target_slot":       "canary",
 				"success_threshold": 3,
 				"failure_threshold": 2,
 			},
@@ -76,7 +77,8 @@ func buildCanarySteps(planID uuid.UUID) []domain.RolloutStep {
 			Action: domain.StepActionObserve,
 			Status: domain.StepStatusPending,
 			Config: map[string]any{
-				"duration_seconds": 120,
+				"duration_seconds":  120,
+				"target_slot":       "canary",
 				"success_threshold": 3,
 				"failure_threshold": 2,
 			},
@@ -85,7 +87,7 @@ func buildCanarySteps(planID uuid.UUID) []domain.RolloutStep {
 			ID: uuid.New(), RolloutPlanID: planID, StepOrder: 4,
 			Action: domain.StepActionPromote,
 			Status: domain.StepStatusPending,
-			Config: map[string]any{"weight": 100},
+			Config: map[string]any{"weight": 100, "from_slot": "canary"},
 		},
 	}
 }
@@ -109,8 +111,8 @@ func buildBlueGreenSteps(planID uuid.UUID) []domain.RolloutStep {
 			Action: domain.StepActionObserve,
 			Status: domain.StepStatusPending,
 			Config: map[string]any{
-				"duration_seconds": 60,
-				"target_slot":     "green",
+				"duration_seconds":  60,
+				"target_slot":       "green",
 				"success_threshold": 3,
 				"failure_threshold": 2,
 			},
@@ -126,7 +128,7 @@ func buildBlueGreenSteps(planID uuid.UUID) []domain.RolloutStep {
 			Action: domain.StepActionObserve,
 			Status: domain.StepStatusPending,
 			Config: map[string]any{
-				"duration_seconds": 30,
+				"duration_seconds":  30,
 				"success_threshold": 2,
 				"failure_threshold": 1,
 			},
@@ -135,7 +137,7 @@ func buildBlueGreenSteps(planID uuid.UUID) []domain.RolloutStep {
 			ID: uuid.New(), RolloutPlanID: planID, StepOrder: 4,
 			Action: domain.StepActionPromote,
 			Status: domain.StepStatusPending,
-			Config: map[string]any{"cleanup_slot": "blue"},
+			Config: map[string]any{"cleanup_slot": "blue", "from_slot": "green"},
 		},
 	}
 }

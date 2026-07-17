@@ -159,6 +159,50 @@ func (m *mockArtifactRepo) GetByImageRepoDigest(_ context.Context, imageRepo, im
 	return nil, nil
 }
 
+type mockIntentRepo struct {
+	intents  map[uuid.UUID]*domain.DeploymentIntent
+	statuses map[uuid.UUID]domain.DeploymentIntentStatus
+}
+
+func (m *mockIntentRepo) Create(_ context.Context, intent *domain.DeploymentIntent) error {
+	if m.intents == nil {
+		m.intents = map[uuid.UUID]*domain.DeploymentIntent{}
+	}
+	m.intents[intent.ID] = intent
+	return nil
+}
+func (m *mockIntentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentIntent, error) {
+	return m.intents[id], nil
+}
+func (m *mockIntentRepo) GetByHiveResultEventID(context.Context, string) (*domain.DeploymentIntent, error) {
+	return nil, nil
+}
+func (m *mockIntentRepo) ListByServiceEnv(_ context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
+	var result []domain.DeploymentIntent
+	for _, intent := range m.intents {
+		if intent.ServiceID == serviceID && intent.EnvironmentID == envID {
+			result = append(result, *intent)
+		}
+	}
+	return result, nil
+}
+func (m *mockIntentRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error {
+	if m.statuses == nil {
+		m.statuses = map[uuid.UUID]domain.DeploymentIntentStatus{}
+	}
+	m.statuses[id] = status
+	if intent := m.intents[id]; intent != nil {
+		intent.Status = status
+	}
+	return nil
+}
+func (*mockIntentRepo) UpdateApproval(context.Context, uuid.UUID, domain.ApprovalStatus) error {
+	return nil
+}
+func (*mockIntentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.DesiredServiceSpec, string) error {
+	return nil
+}
+
 type mockStateRepo struct {
 	states map[string]*domain.EnvironmentServiceState
 }
@@ -246,6 +290,9 @@ func (m *mockRuntime) Deploy(_ context.Context, serviceName, image string, opts 
 	}
 	m.deployed = append(m.deployed, serviceName+":"+image)
 	m.deployedOpts = append(m.deployedOpts, opts)
+	if at := strings.LastIndex(image, "@"); at >= 0 {
+		m.observeDigest = image[at+1:]
+	}
 	return nil
 }
 
@@ -470,14 +517,13 @@ func TestRemediator_RedeployPreservesAdoptedRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestRemediator_OnHealthFailure_Rollback(t *testing.T) {
+func TestRemediatorRollbackFailsClosedWithoutPriorArtifactHistory(t *testing.T) {
 	serviceID := uuid.New()
 	envID := uuid.New()
 
 	svcRepo := &mockServiceRepo{services: map[uuid.UUID]*domain.Service{
 		serviceID: {ID: serviceID, Name: "web"},
 	}}
-
 	envRepo := &mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{
 		envID: {
 			ID:   envID,
@@ -490,37 +536,68 @@ func TestRemediator_OnHealthFailure_Rollback(t *testing.T) {
 			},
 		},
 	}}
-
 	rt := &mockRuntime{}
 	pub := &mockPublisher{}
-
 	r := NewRemediator(svcRepo, envRepo, nil, nil, rt, pub, zap.NewNop())
 
-	err := r.OnHealthFailure(context.Background(), serviceID, envID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := r.OnHealthFailure(context.Background(), serviceID, envID); err == nil {
+		t.Fatal("rollback returned success without prior artifact history")
 	}
-
-	rt.mu.Lock()
-	// Rollback should undeploy canary and green.
-	canaryFound := false
-	greenFound := false
-	for _, name := range rt.undeployed {
-		if name == "web-canary" {
-			canaryFound = true
-		}
-		if name == "web-green" {
-			greenFound = true
+	for _, event := range pub.events {
+		if event.Type == "remediation.completed" {
+			t.Fatal("remediation.completed published without restoring an artifact")
 		}
 	}
-	rt.mu.Unlock()
+}
 
-	if !canaryFound {
-		t.Error("expected web-canary to be undeployed")
+func TestRemediatorRollbackRestoresPriorDeployedArtifactAndState(t *testing.T) {
+	serviceID, envID := uuid.New(), uuid.New()
+	currentArtifactID, priorArtifactID := uuid.New(), uuid.New()
+	currentIntentID, priorIntentID := uuid.New(), uuid.New()
+	now := time.Now().UTC()
+
+	svcRepo := &mockServiceRepo{services: map[uuid.UUID]*domain.Service{
+		serviceID: {ID: serviceID, Name: "web"},
+	}}
+	envRepo := &mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{
+		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"auto_remediation": map[string]any{"enabled": true, "on_health_failure": "rollback"}}},
+	}}
+	artifactRepo := &mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{
+		priorArtifactID: {ID: priorArtifactID, ServiceID: serviceID, ImageRepo: "registry.example/web", ImageDigest: "sha256:prior"},
+	}}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		stateMapKey(serviceID, envID): {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &currentArtifactID, DesiredIntentID: &currentIntentID},
+	}}
+	intentRepo := &mockIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
+		currentIntentID: {ID: currentIntentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: currentArtifactID, Status: domain.IntentStatusDeployed, CreatedAt: now},
+		priorIntentID:   {ID: priorIntentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: priorArtifactID, Status: domain.IntentStatusDeployed, CreatedAt: now.Add(-time.Hour)},
+	}}
+	rt := &mockRuntime{observeDigest: "sha256:broken"}
+	pub := &mockPublisher{}
+	r := NewRemediator(svcRepo, envRepo, artifactRepo, stateRepo, rt, pub, zap.NewNop(), WithRemediationIntentHistory(intentRepo))
+
+	if err := r.OnHealthFailure(t.Context(), serviceID, envID); err != nil {
+		t.Fatalf("OnHealthFailure() error = %v", err)
 	}
-	if !greenFound {
-		t.Error("expected web-green to be undeployed")
+	if len(rt.deployed) != 1 || rt.deployed[0] != "web:registry.example/web@sha256:prior" {
+		t.Fatalf("rollback deployments = %#v", rt.deployed)
 	}
+	state := stateRepo.states[stateMapKey(serviceID, envID)]
+	if state.DesiredArtifactID == nil || *state.DesiredArtifactID != priorArtifactID || state.DesiredIntentID == nil || *state.DesiredIntentID != priorIntentID {
+		t.Fatalf("rollback state = %+v", state)
+	}
+	if intentRepo.statuses[currentIntentID] != domain.IntentStatusRolledBack {
+		t.Fatalf("current intent status = %s, want rolled_back", intentRepo.statuses[currentIntentID])
+	}
+	if len(rt.undeployed) != 2 {
+		t.Fatalf("rollback cleanup calls = %#v", rt.undeployed)
+	}
+	for _, event := range pub.events {
+		if event.Type == "remediation.completed" {
+			return
+		}
+	}
+	t.Fatal("remediation.completed was not published after verified restoration")
 }
 
 func TestRemediator_MaxRetries(t *testing.T) {
