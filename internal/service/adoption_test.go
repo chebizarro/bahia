@@ -364,7 +364,7 @@ func TestAdoptionServiceImportStoresSensitiveEnvironmentAsSecrets(t *testing.T) 
 
 	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
 	secretRepo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("test-import-key")
+	encryptor, err := secretsAdapter.NewEncryptor("4444444444444444444444444444444444444444444444444444444444444444")
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}

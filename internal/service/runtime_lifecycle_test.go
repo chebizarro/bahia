@@ -62,7 +62,7 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
 	secretRepo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("test-runtime-key")
+	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
 	secretRepo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("test-runtime-key")
+	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}

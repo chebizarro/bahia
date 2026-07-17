@@ -107,7 +107,7 @@ func (r *testSecretRepo) DeleteByName(_ context.Context, serviceID uuid.UUID, en
 func newTestMCPSecretServer(t *testing.T) (*Server, *testSecretRepo, *secrets.Encryptor) {
 	t.Helper()
 	repo := newTestSecretRepo()
-	encryptor, err := secrets.NewEncryptor("mcp-secret-test-key")
+	encryptor, err := secrets.NewEncryptor("3333333333333333333333333333333333333333333333333333333333333333")
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}

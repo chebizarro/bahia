@@ -51,7 +51,7 @@ func TestCallToolRejectsCrossTenantSecretMutation(t *testing.T) {
 		t.Run(tool, func(t *testing.T) {
 			server, serviceRepo := newTestMCPServiceServer()
 			secretRepo := newTestSecretRepo()
-			encryptor, err := secrets.NewEncryptor("mcp-authorization-test-key")
+			encryptor, err := secrets.NewEncryptor("2222222222222222222222222222222222222222222222222222222222222222")
 			if err != nil {
 				t.Fatalf("NewEncryptor() error = %v", err)
 			}

@@ -17,7 +17,7 @@ import (
 
 func TestSecretHandlerCreateAttributesAuthenticatedPrincipal(t *testing.T) {
 	repo := &recordingSecretRepo{}
-	encryptor, err := secrets.NewEncryptor("test-secret-key")
+	encryptor, err := secrets.NewEncryptor("1111111111111111111111111111111111111111111111111111111111111111")
 	if err != nil {
 		t.Fatalf("NewEncryptor() error = %v", err)
 	}
@@ -52,7 +52,7 @@ func TestSecretHandlerCreateAttributesAuthenticatedPrincipal(t *testing.T) {
 
 func TestSecretHandlerCreateFailsClosedWithoutAuthenticatedPrincipal(t *testing.T) {
 	repo := &recordingSecretRepo{}
-	encryptor, err := secrets.NewEncryptor("test-secret-key")
+	encryptor, err := secrets.NewEncryptor("1111111111111111111111111111111111111111111111111111111111111111")
 	if err != nil {
 		t.Fatalf("NewEncryptor() error = %v", err)
 	}
