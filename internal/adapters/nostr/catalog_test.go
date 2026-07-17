@@ -2,7 +2,6 @@ package nostr
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	gonostr "fiatjaf.com/nostr"
@@ -68,19 +67,30 @@ func TestAllKindsReturnsUniqueSortedValues(t *testing.T) {
 
 func TestAllKindsHaveImplementedDecoders(t *testing.T) {
 	catalog := NewKindCatalog()
-	var notImplemented []int
 	for _, kind := range catalog.AllKinds() {
 		decoder, ok := catalog.Decoder(kind)
 		if !ok {
 			t.Fatalf("missing decoder for kind %d", kind)
 		}
-		_, err := decoder(requiredDecoderFixture(kind))
-		if err != nil && strings.Contains(err.Error(), "not yet implemented") {
-			notImplemented = append(notImplemented, kind)
+		decoded, err := decoder(requiredDecoderFixture(kind))
+		if err != nil {
+			t.Fatalf("kind %d decoder returned error for its required fixture: %v", kind, err)
 		}
-	}
-	if len(notImplemented) > 0 {
-		t.Fatalf("catalog kinds with default decoderNotImplemented: %v", notImplemented)
+		if decoded == nil {
+			t.Fatalf("kind %d decoder returned nil without error", kind)
+		}
+		if decoded.Kind != kind {
+			t.Fatalf("kind %d decoder returned kind %d", kind, decoded.Kind)
+		}
+		if decoded.Family == "" {
+			t.Fatalf("kind %d decoder returned empty projection family", kind)
+		}
+		if decoded.DTag == "" {
+			t.Fatalf("kind %d decoder returned empty d tag", kind)
+		}
+		if decoded.Timestamp.IsZero() {
+			t.Fatalf("kind %d decoder returned zero timestamp", kind)
+		}
 	}
 }
 
@@ -486,6 +496,7 @@ func reactorKindCoverage() []int {
 func requiredDecoderFixture(kind int) *gonostr.Event {
 	tags := gonostr.Tags{
 		{"d", "test-dtag"},
+		{"e", "event-1"},
 		{"service", "svc.api"},
 		{"environment", "env-prod"},
 		{"artifact", "artifact-1"},
@@ -517,6 +528,19 @@ func requiredDecoderFixture(kind int) *gonostr.Event {
 	case KindFailoverRequest, KindRecoveryRequest:
 		ev.Tags = gonostr.Tags{{"d", "request-key"}, {"service", "svc.api"}, {"target", "worker-pubkey"}, {"profile", "full"}}
 		ev.Content = ""
+	case KindLoomJobStatusUpdate:
+		ev.Tags = gonostr.Tags{{"d", "job-1"}, {"e", "job-1"}, {"status", "running"}, {"progress", "42"}}
+		ev.Content = "building image"
+	case KindLoomJobResult:
+		ev.Tags = gonostr.Tags{{"e", "job-1"}, {"success", "true"}, {"exit_code", "0"}, {"duration", "12"}}
+	case KindLoomJobCancellation:
+		ev.Tags = gonostr.Tags{{"e", "job-1"}, {"p", "worker-pubkey"}}
+		ev.Content = "operator requested cancellation"
+	case KindHiveCIWorkflowRun:
+		ev.Tags = gonostr.Tags{{"a", "30618:repo-pubkey:app"}, {"commit", "abc123"}, {"branch", "main"}, {"workflow", ".github/workflows/ci.yml"}, {"triggered-by", "alice"}, {"publisher", "worker-pubkey"}, {"trigger", "push"}}
+	case KindHiveCIWorkflowResult:
+		ev.Tags = gonostr.Tags{{"e", "run-event-id"}, {"log_url", "https://ci.example/log"}, {"status", "failure"}, {"exit_code", "1"}, {"duration", "37"}, {"error", "unit tests failed"}}
+		ev.Content = `{"image_repo":"registry.example/app","image_tag":"main","image_digest":"sha256:def"}`
 	}
 	return ev
 }

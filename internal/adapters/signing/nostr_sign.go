@@ -3,6 +3,7 @@ package signing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 // NostrSignatureKind is the custom Nostr event kind for artifact attestations.
 // Using replaceable parameterized event (3xxxx range) so each pubkey+artifact is unique.
 const NostrSignatureKind = 31200
+
+// ErrNostrPullVerificationUnavailable indicates that the pull-based SignatureVerifier contract cannot query event-backed attestations.
+// Callers must use the subscribed persistence pipeline or VerifyEvent and must not interpret this as a successful empty verification.
+var ErrNostrPullVerificationUnavailable = errors.New("Nostr signature pull verification is unavailable; verify subscribed attestation events with VerifyEvent")
 
 // NostrArtifactAttestation is the expected content structure of a kind 31200 event.
 type NostrArtifactAttestation struct {
@@ -125,14 +130,16 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 	return sig, nil
 }
 
-// VerifySignatures implements SignatureVerifier by checking if the artifact
-// has matching Nostr attestation events. This is a no-op for now — Nostr
-// signatures are verified reactively when events arrive, not proactively.
-// The processor.go handler calls VerifyEvent when it receives kind 31200 events.
-func (v *NostrVerifier) VerifySignatures(_ context.Context, _ *domain.Artifact) ([]domain.ArtifactSignature, error) {
-	// Nostr signatures are event-driven, not pull-based.
-	// They arrive via the subscriber → processor pipeline.
-	return nil, nil
+// VerifySignatures fails closed because this verifier has no persisted event query dependency.
+// Nostr attestations must be supplied by the subscribed event pipeline and checked with VerifyEvent.
+func (v *NostrVerifier) VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if artifact == nil {
+		return nil, fmt.Errorf("artifact is required: %w", ErrNostrPullVerificationUnavailable)
+	}
+	return nil, ErrNostrPullVerificationUnavailable
 }
 
 // Compile-time interface check.

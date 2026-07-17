@@ -3,6 +3,7 @@ package signing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	gonostr "fiatjaf.com/nostr"
@@ -182,13 +183,13 @@ func TestNostrVerifier_WrongKind(t *testing.T) {
 	}
 }
 
-func TestNostrVerifier_VerifySignatures_ReturnsNil(t *testing.T) {
+func TestNostrVerifier_VerifySignaturesFailsClosed(t *testing.T) {
 	verifier := NewNostrVerifier(nil, zap.NewNop())
 	sigs, err := verifier.VerifySignatures(context.Background(), &domain.Artifact{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if sigs != nil {
-		t.Error("expected nil sigs from VerifySignatures")
+		t.Fatalf("signatures = %#v, want nil on unavailable verification", sigs)
+	}
+	if !errors.Is(err, ErrNostrPullVerificationUnavailable) {
+		t.Fatalf("error = %v, want ErrNostrPullVerificationUnavailable", err)
 	}
 }
