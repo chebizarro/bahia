@@ -18,8 +18,8 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("expected default port 8080, got %d", cfg.Server.Port)
 	}
 
-	if cfg.Server.Host != "0.0.0.0" {
-		t.Errorf("expected default host 0.0.0.0, got %s", cfg.Server.Host)
+	if cfg.Server.Host != "127.0.0.1" {
+		t.Errorf("expected default host 127.0.0.1, got %s", cfg.Server.Host)
 	}
 
 	if cfg.DB.Host != "localhost" {
@@ -30,8 +30,12 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("expected default DB port 5432, got %d", cfg.DB.Port)
 	}
 
-	if cfg.DB.SSLMode != "disable" {
-		t.Errorf("expected default SSL mode disable, got %s", cfg.DB.SSLMode)
+	if cfg.DB.Password != "" {
+		t.Error("expected default DB password to be empty")
+	}
+
+	if cfg.DB.SSLMode != "require" {
+		t.Errorf("expected default SSL mode require, got %s", cfg.DB.SSLMode)
 	}
 
 	if cfg.Reconcile.Interval != 60*time.Second {
@@ -60,8 +64,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.Nostr.Sidecar.Enabled {
 		t.Error("expected relay sidecar disabled by default")
 	}
-	if cfg.Nostr.Sidecar.ListenAddr != "0.0.0.0:3334" {
+	if cfg.Nostr.Sidecar.ListenAddr != "127.0.0.1:3334" {
 		t.Errorf("default sidecar ListenAddr = %q", cfg.Nostr.Sidecar.ListenAddr)
+	}
+	if len(cfg.Nostr.ContextVMRelays) != 0 {
+		t.Errorf("expected no default ContextVM relays, got %v", cfg.Nostr.ContextVMRelays)
 	}
 	if cfg.Nostr.Sidecar.MaxQueryLimit != 500 {
 		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
@@ -78,8 +85,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.DevMode {
 		t.Error("expected dev_mode disabled by default")
 	}
-	if len(cfg.SoulFactory.Relays) != 0 || len(cfg.SoulFactory.AdditionalRelays) != 0 {
-		t.Errorf("expected default SoulFactory relays to be empty, got relays=%v additional=%v", cfg.SoulFactory.Relays, cfg.SoulFactory.AdditionalRelays)
+	if len(cfg.SoulFactory.Relays) != 0 || len(cfg.SoulFactory.AdditionalRelays) != 0 || len(cfg.SoulFactory.NIP05Relays) != 0 {
+		t.Errorf("expected default SoulFactory relays to be empty, got relays=%v additional=%v nip05=%v", cfg.SoulFactory.Relays, cfg.SoulFactory.AdditionalRelays, cfg.SoulFactory.NIP05Relays)
+	}
+	if len(cfg.OCI.AllowAnonymousPullCIDRs) != 0 || len(cfg.OCI.ServiceAccounts) != 0 {
+		t.Errorf("expected no default OCI trust grants, got cidrs=%v service_accounts=%v", cfg.OCI.AllowAnonymousPullCIDRs, cfg.OCI.ServiceAccounts)
 	}
 	if cfg.WorkerPressure.MemoryWarningMinGB != 4 || cfg.WorkerPressure.DiskWarningMinGB != 40 || cfg.WorkerPressure.VRAMWarningMinGB != 4 {
 		t.Errorf("worker pressure defaults = %#v", cfg.WorkerPressure)
@@ -89,6 +99,61 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Loom.CanonicalProjection.AllowRawKeyDev {
 		t.Error("expected Loom raw-key projection compatibility disabled by default")
+	}
+}
+
+func TestValidateRejectsInsecureProductionConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "wildcard server bind",
+			mutate: func(cfg *Config) {
+				cfg.Server.Host = "0.0.0.0"
+				cfg.Auth.Enabled = true
+			},
+			wantErr: "server.host must not be a wildcard",
+		},
+		{
+			name: "auth disabled on non-loopback listener",
+			mutate: func(cfg *Config) {
+				cfg.Server.Host = "192.0.2.10"
+				cfg.Auth.Enabled = false
+			},
+			wantErr: "auth.enabled=true is required for a non-loopback server.host",
+		},
+		{
+			name:    "bundled database password",
+			mutate:  func(cfg *Config) { cfg.DB.Password = "bahia" },
+			wantErr: "db.password must not use the bundled default",
+		},
+		{
+			name:    "database TLS disabled",
+			mutate:  func(cfg *Config) { cfg.DB.SSLMode = "disable" },
+			wantErr: "db.sslmode must require TLS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Defaults()
+			tt.mutate(cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	cfg := Defaults()
+	cfg.DevMode = true
+	cfg.Server.Host = "0.0.0.0"
+	cfg.Auth.Enabled = false
+	cfg.DB.Password = "bahia"
+	cfg.DB.SSLMode = "disable"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit dev_mode should permit local insecure compatibility: %v", err)
 	}
 }
 
@@ -695,6 +760,8 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
     - "wss://relay.example"
   additional_relays:
     - "wss://private.example"
+  nip05_relays:
+    - "wss://identity.example"
   authorized_pubkeys:
     - "` + authorized + `"
   soul_factory_pubkey: "` + controller + `"
@@ -726,6 +793,9 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	}
 	if got := cfg.SoulFactory.AdditionalRelays; len(got) != 1 || got[0] != "wss://private.example" {
 		t.Fatalf("SoulFactory additional relays = %v", got)
+	}
+	if got := cfg.SoulFactory.NIP05Relays; len(got) != 1 || got[0] != "wss://identity.example" {
+		t.Fatalf("SoulFactory NIP-05 relays = %v", got)
 	}
 	if cfg.SoulFactory.SoulFactoryPubkey != controller {
 		t.Fatalf("SoulFactory pubkey = %q", cfg.SoulFactory.SoulFactoryPubkey)
@@ -1024,7 +1094,7 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
     enabled: true
     listen_addr: "127.0.0.1:3334"
     public_url: "ws://localhost:3000/relay"
-    backend_url: "ws://relay:3334"
+    backend_url: "wss://relay.example:3334"
     data_dir: "/tmp/bahia-relay"
     mirror_external: false
     event_retention: 168h
@@ -1049,7 +1119,7 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	if cfg.Nostr.Sidecar.EventRetention != 168*time.Hour {
 		t.Errorf("EventRetention = %s", cfg.Nostr.Sidecar.EventRetention)
 	}
-	if cfg.Nostr.Sidecar.BackendURL != "ws://relay:3334" {
+	if cfg.Nostr.Sidecar.BackendURL != "wss://relay.example:3334" {
 		t.Errorf("BackendURL = %q", cfg.Nostr.Sidecar.BackendURL)
 	}
 	if got := cfg.Nostr.BrowserRelays; len(got) != 1 || got[0] != "ws://localhost:3000/relay" {
@@ -1512,11 +1582,55 @@ func assertStringSlice(t *testing.T, got, want []string) {
 }
 
 func TestRelaySidecarValidation(t *testing.T) {
+	t.Run("requires public URL", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Nostr.Sidecar.Enabled = true
+		cfg.Nostr.Sidecar.PublicURL = ""
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.sidecar.public_url") {
+			t.Fatalf("validate error = %v, want public_url requirement", err)
+		}
+	})
+
+	t.Run("rejects plaintext external URLs", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Nostr.Sidecar.Enabled = true
+		cfg.Nostr.Sidecar.BackendURL = "ws://relay.example:3334"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.sidecar.backend_url") {
+			t.Fatalf("validate error = %v, want secure backend URL requirement", err)
+		}
+	})
+
+	t.Run("rejects legacy wildcard plaintext sidecar", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Nostr.Sidecar.Enabled = true
+		cfg.Nostr.Sidecar.ListenAddr = "0.0.0.0:3334"
+		cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3334"
+		cfg.Nostr.Sidecar.BackendURL = "ws://localhost:3334"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "must use wss when listen_addr is non-loopback") {
+			t.Fatalf("validate error = %v, want wildcard plaintext rejection", err)
+		}
+	})
+
+	t.Run("accepts TLS external URLs", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Nostr.Sidecar.Enabled = true
+		cfg.Nostr.Sidecar.PublicURL = "wss://relay.example"
+		cfg.Nostr.Sidecar.BackendURL = "wss://relay.example"
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate error = %v", err)
+		}
+	})
+}
+
+func TestOCIRejectsBundledServiceAccountHash(t *testing.T) {
 	cfg := Defaults()
-	cfg.Nostr.Sidecar.Enabled = true
-	cfg.Nostr.Sidecar.PublicURL = ""
-	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.sidecar.public_url") {
-		t.Fatalf("validate error = %v, want public_url requirement", err)
+	cfg.DevMode = true // the globally shared credential is unsafe even in development
+	cfg.OCI.ServiceAccounts = []OCIServiceAccountConfig{{
+		Username:     "hive-ci",
+		PasswordHash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "bundled password hash") {
+		t.Fatalf("Validate() error = %v, want bundled password hash rejection", err)
 	}
 }
 

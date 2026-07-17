@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -154,6 +155,7 @@ type SoulFactoryConfig struct {
 	Enabled                       bool          `koanf:"enabled" yaml:"enabled"`
 	Relays                        []string      `koanf:"relays" yaml:"relays"`
 	AdditionalRelays              []string      `koanf:"additional_relays" yaml:"additional_relays"`
+	NIP05Relays                   []string      `koanf:"nip05_relays" yaml:"nip05_relays"`
 	AuthorizedPubkeys             []string      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
 	SoulFactoryPubkey             string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
 	SignetBunkerURI               string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
@@ -713,7 +715,7 @@ func Defaults() *Config {
 	return &Config{
 		Mode: "full",
 		Server: ServerConfig{
-			Host:            "0.0.0.0",
+			Host:            "127.0.0.1",
 			Port:            8080,
 			ReadTimeout:     30 * time.Second,
 			WriteTimeout:    30 * time.Second,
@@ -723,9 +725,9 @@ func Defaults() *Config {
 			Host:            "localhost",
 			Port:            5432,
 			User:            "bahia",
-			Password:        "bahia",
+			Password:        "",
 			Name:            "bahia",
-			SSLMode:         "disable",
+			SSLMode:         "require",
 			MaxOpenConns:    25,
 			MaxIdleConns:    5,
 			ConnMaxLifetime: 5 * time.Minute,
@@ -740,11 +742,7 @@ func Defaults() *Config {
 			PollInterval: 10 * time.Second,
 		},
 		Nostr: NostrConfig{
-			ContextVMRelays: []string{
-				"wss://relay.contextvm.org",
-				"wss://relay2.contextvm.org",
-				"wss://cvm.otherstuff.ai",
-			},
+			ContextVMRelays:            []string{},
 			PublishEnabled:             true,
 			RelayAuthUnavailablePolicy: RelayAuthUnavailableExcludeAndFail,
 			RelayQuorum: RelayQuorumConfig{
@@ -754,9 +752,9 @@ func Defaults() *Config {
 			},
 			Sidecar: RelaySidecarConfig{
 				Enabled:          false,
-				ListenAddr:       "0.0.0.0:3334",
-				PublicURL:        "ws://localhost:3334",
-				BackendURL:       "ws://localhost:3334",
+				ListenAddr:       "127.0.0.1:3334",
+				PublicURL:        "ws://127.0.0.1:3334",
+				BackendURL:       "ws://127.0.0.1:3334",
 				DataDir:          "./data/relay-sidecar",
 				MirrorExternal:   false,
 				EventRetention:   7 * 24 * time.Hour,
@@ -830,6 +828,7 @@ func Defaults() *Config {
 			Enabled:          false,
 			Relays:           []string{},
 			AdditionalRelays: []string{},
+			NIP05Relays:      []string{},
 			StartupTimeout:   15 * time.Second,
 			LLMTimeout:       120 * time.Second,
 		},
@@ -870,15 +869,8 @@ func Defaults() *Config {
 			Enabled:                 false,
 			SpoolDir:                "/tmp/bahia-oci-spool",
 			UploadExpiry:            24 * time.Hour,
-			AllowAnonymousPullCIDRs: []string{"192.168.40.0/24"},
-			ServiceAccounts: []OCIServiceAccountConfig{
-				{
-					Username:     "hive-ci",
-					PasswordHash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
-					Permissions:  []string{"pull", "push"},
-					RepoPrefixes: []string{"cascadia/"},
-				},
-			},
+			AllowAnonymousPullCIDRs: []string{},
+			ServiceAccounts:         []OCIServiceAccountConfig{},
 		},
 		HiveCI: HiveCIConfig{
 			Enabled:            false,
@@ -1045,6 +1037,9 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("config validation failed: mode must be one of full, degraded, emergency")
 	}
+	if err := c.validateProductionSecurity(); err != nil {
+		return err
+	}
 
 	if c.Adoption.Enabled {
 		if !c.Auth.Enabled {
@@ -1164,6 +1159,36 @@ func (c *Config) validate() error {
 	}
 	c.Auth.BootstrapOwnerPubkeys = bootstrapOwners
 
+	return nil
+}
+
+const bundledOCIServiceAccountHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
+func (c *Config) validateProductionSecurity() error {
+	c.Server.Host = strings.TrimSpace(c.Server.Host)
+	c.DB.SSLMode = strings.ToLower(strings.TrimSpace(c.DB.SSLMode))
+	for i, account := range c.OCI.ServiceAccounts {
+		if strings.TrimSpace(account.PasswordHash) == bundledOCIServiceAccountHash {
+			return fmt.Errorf("config validation failed: oci.service_accounts[%d] uses the bundled password hash; configure an operator-generated credential", i)
+		}
+	}
+	if c.DevMode {
+		return nil
+	}
+	if isWildcardHost(c.Server.Host) {
+		return fmt.Errorf("config validation failed: server.host must not be a wildcard outside dev_mode; configure an explicit interface address")
+	}
+	if !isLoopbackHost(c.Server.Host) && !c.Auth.Enabled {
+		return fmt.Errorf("config validation failed: auth.enabled=true is required for a non-loopback server.host outside dev_mode")
+	}
+	if strings.TrimSpace(c.DB.Password) == "bahia" {
+		return fmt.Errorf("config validation failed: db.password must not use the bundled default outside dev_mode")
+	}
+	switch c.DB.SSLMode {
+	case "require", "verify-ca", "verify-full":
+	default:
+		return fmt.Errorf("config validation failed: db.sslmode must require TLS outside dev_mode (require, verify-ca, or verify-full)")
+	}
 	return nil
 }
 
@@ -1954,6 +1979,12 @@ func (c *Config) validateSoulFactory() error {
 	sf := &c.SoulFactory
 	sf.Relays = normalizeRelayList(sf.Relays)
 	sf.AdditionalRelays = normalizeRelayList(sf.AdditionalRelays)
+	sf.NIP05Relays = normalizeRelayList(sf.NIP05Relays)
+	for i, relay := range sf.NIP05Relays {
+		if err := validateWebsocketRelayURL(relay); err != nil {
+			return fmt.Errorf("config validation failed: soul_factory.nip05_relays[%d]: %w", i, err)
+		}
+	}
 	sf.SoulFactoryPubkey = strings.ToLower(strings.TrimSpace(sf.SoulFactoryPubkey))
 	sf.SignetBunkerURI = strings.TrimSpace(sf.SignetBunkerURI)
 	sf.SignetClientSecretKey = strings.TrimSpace(sf.SignetClientSecretKey)
@@ -2246,11 +2277,38 @@ func validateHTTPManagementURL(raw string) error {
 }
 
 func isLoopbackHost(host string) bool {
-	switch strings.ToLower(strings.TrimSpace(host)) {
-	case "localhost", "127.0.0.1", "::1":
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
 		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isWildcardHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
+}
+
+func validateSidecarWebsocketURL(raw string, allowInsecureDev bool) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("must be an absolute ws/wss URL")
+	}
+	switch parsed.Scheme {
+	case "wss":
+		return nil
+	case "ws":
+		if allowInsecureDev || isLoopbackHost(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("plaintext ws is allowed only for localhost or loopback targets outside dev_mode; use wss")
 	default:
-		return false
+		return fmt.Errorf("scheme must be ws or wss")
 	}
 }
 
@@ -2264,6 +2322,25 @@ func (c *Config) validateRelaySidecar() error {
 	}
 	if strings.TrimSpace(sidecar.PublicURL) == "" {
 		return fmt.Errorf("config validation failed: nostr.sidecar.public_url is required when sidecar is enabled")
+	}
+	if strings.TrimSpace(sidecar.BackendURL) == "" {
+		return fmt.Errorf("config validation failed: nostr.sidecar.backend_url is required when sidecar is enabled")
+	}
+	if err := validateSidecarWebsocketURL(sidecar.PublicURL, c.DevMode); err != nil {
+		return fmt.Errorf("config validation failed: nostr.sidecar.public_url: %w", err)
+	}
+	if err := validateSidecarWebsocketURL(sidecar.BackendURL, c.DevMode); err != nil {
+		return fmt.Errorf("config validation failed: nostr.sidecar.backend_url: %w", err)
+	}
+	listenHost, _, err := net.SplitHostPort(strings.TrimSpace(sidecar.ListenAddr))
+	if err != nil {
+		return fmt.Errorf("config validation failed: nostr.sidecar.listen_addr must be host:port: %w", err)
+	}
+	if !c.DevMode && !isLoopbackHost(listenHost) {
+		publicURL, _ := url.Parse(sidecar.PublicURL)
+		if publicURL.Scheme != "wss" {
+			return fmt.Errorf("config validation failed: nostr.sidecar.public_url must use wss when listen_addr is non-loopback outside dev_mode")
+		}
 	}
 	if strings.TrimSpace(sidecar.DataDir) == "" {
 		return fmt.Errorf("config validation failed: nostr.sidecar.data_dir is required when sidecar is enabled")
