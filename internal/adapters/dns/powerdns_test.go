@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -43,6 +44,37 @@ func powerDNSTestZone() domain.DNSZone {
 	return domain.DNSZone{Name: "prod.cascadia", Visibility: domain.ZoneVisibilityInternal, BackendRef: "powerdns-main", TTL: 300}
 }
 
+func TestNewPowerDNSBackendUsesBoundedTLSSafeClient(t *testing.T) {
+	backend, err := NewPowerDNSBackend(PowerDNSConfig{APIURL: "https://powerdns.example", APIKey: "secret"})
+	if err != nil {
+		t.Fatalf("NewPowerDNSBackend returned error: %v", err)
+	}
+	client, ok := backend.http.(*http.Client)
+	if !ok {
+		t.Fatalf("HTTP client type = %T, want *http.Client", backend.http)
+	}
+	if client.Timeout <= 0 {
+		t.Fatalf("HTTP client timeout = %s, want positive timeout", client.Timeout)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		t.Fatalf("HTTP transport = %#v, want TLS-configured *http.Transport", client.Transport)
+	}
+	if transport.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("TLS minimum = %d, want TLS 1.2 or newer", transport.TLSClientConfig.MinVersion)
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("TLS certificate verification must not be disabled")
+	}
+}
+
+func TestNewPowerDNSBackendRejectsCleartextByDefault(t *testing.T) {
+	_, err := NewPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.example", APIKey: "secret"})
+	if err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
+		t.Fatalf("error = %v, want HTTPS requirement", err)
+	}
+}
+
 func TestPowerDNSRRsetSerializationAndDeserialization(t *testing.T) {
 	zone := powerDNSTestZone()
 	rrset, err := powerDNSRRsetFromRecord(zone, domain.DNSRecord{Zone: zone.Name, Name: "drydock-review", Type: domain.DNSRecordTypeA, Value: "10.0.1.44", TTL: 120})
@@ -81,7 +113,7 @@ func TestPowerDNSSyncZoneBuildsReplaceAndDeleteRRsets(t *testing.T) {
 		powerDNSTestResponse(http.StatusOK, `{"rrsets":[{"name":"old.prod.cascadia.","type":"A","ttl":300,"records":[{"content":"10.0.1.10","disabled":false}]},{"name":"keep.prod.cascadia.","type":"A","ttl":300,"records":[{"content":"10.0.1.11","disabled":false}]}]}`),
 		powerDNSTestResponse(http.StatusNoContent, ""),
 	}}
-	backend, err := newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret"}, client)
+	backend, err := newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret", AllowInsecureHTTP: true}, client)
 	if err != nil {
 		t.Fatalf("newPowerDNSBackend returned error: %v", err)
 	}
@@ -125,7 +157,7 @@ func TestPowerDNSListRecordsParsesResponseFormat(t *testing.T) {
 	client := &mockPowerDNSHTTP{responses: []*http.Response{
 		powerDNSTestResponse(http.StatusOK, `{"rrsets":[{"name":"drydock-review.prod.cascadia.","type":"A","ttl":300,"records":[{"content":"10.0.1.44","disabled":false},{"content":"10.0.1.45","disabled":true}]},{"name":"api.prod.cascadia.","type":"CNAME","ttl":60,"records":[{"content":"drydock-review.prod.cascadia.","disabled":false}]},{"name":"ignored.prod.cascadia.","type":"MX","ttl":300,"records":[{"content":"mail.prod.cascadia.","disabled":false}]}]}`),
 	}}
-	backend, err := newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret", ServerID: "primary"}, client)
+	backend, err := newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret", AllowInsecureHTTP: true, ServerID: "primary"}, client)
 	if err != nil {
 		t.Fatalf("newPowerDNSBackend returned error: %v", err)
 	}
@@ -149,7 +181,7 @@ func TestPowerDNSListRecordsParsesResponseFormat(t *testing.T) {
 
 func TestPowerDNSHealthSuccessAndFailure(t *testing.T) {
 	successClient := &mockPowerDNSHTTP{responses: []*http.Response{powerDNSTestResponse(http.StatusOK, `{"id":"localhost"}`)}}
-	backend, err := newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret"}, successClient)
+	backend, err := newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret", AllowInsecureHTTP: true}, successClient)
 	if err != nil {
 		t.Fatalf("newPowerDNSBackend returned error: %v", err)
 	}
@@ -161,7 +193,7 @@ func TestPowerDNSHealthSuccessAndFailure(t *testing.T) {
 	}
 
 	failureClient := &mockPowerDNSHTTP{responses: []*http.Response{powerDNSTestResponse(http.StatusUnauthorized, `{"error":"unauthorized"}`)}}
-	backend, err = newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret"}, failureClient)
+	backend, err = newPowerDNSBackend(PowerDNSConfig{APIURL: "http://powerdns.local:8081", APIKey: "secret", AllowInsecureHTTP: true}, failureClient)
 	if err != nil {
 		t.Fatalf("newPowerDNSBackend returned error: %v", err)
 	}

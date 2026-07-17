@@ -12,15 +12,20 @@ import (
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/httpclient"
 )
 
-const defaultPowerDNSServerID = "localhost"
+const (
+	defaultPowerDNSServerID = "localhost"
+	maxPowerDNSResponseBody = 4 << 20
+)
 
 // PowerDNSConfig contains PowerDNS HTTP API connection settings.
 type PowerDNSConfig struct {
-	APIURL   string
-	APIKey   string
-	ServerID string
+	APIURL            string
+	APIKey            string
+	ServerID          string
+	AllowInsecureHTTP bool
 }
 
 // PowerDNSBackend reconciles DNS zone snapshots through the PowerDNS HTTP API.
@@ -58,7 +63,7 @@ type powerDNSPatchRequest struct {
 
 // NewPowerDNSBackend creates a PowerDNS HTTP API backend.
 func NewPowerDNSBackend(cfg PowerDNSConfig) (*PowerDNSBackend, error) {
-	return newPowerDNSBackend(cfg, http.DefaultClient)
+	return newPowerDNSBackend(cfg, httpclient.New(httpclient.DefaultTimeout))
 }
 
 func newPowerDNSBackend(cfg PowerDNSConfig, client powerDNSHTTP) (*PowerDNSBackend, error) {
@@ -69,6 +74,15 @@ func newPowerDNSBackend(cfg PowerDNSConfig, client powerDNSHTTP) (*PowerDNSBacke
 	parsed, err := url.Parse(apiURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("PowerDNS API URL must be a valid URL")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "https":
+	case "http":
+		if !cfg.AllowInsecureHTTP {
+			return nil, fmt.Errorf("PowerDNS API URL must use HTTPS unless insecure HTTP is explicitly enabled")
+		}
+	default:
+		return nil, fmt.Errorf("PowerDNS API URL must use HTTP or HTTPS")
 	}
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiKey == "" {
@@ -118,8 +132,12 @@ func (b *PowerDNSBackend) ListRecords(ctx context.Context, zone domain.DNSZone) 
 	if err := expectPowerDNSSuccess(resp); err != nil {
 		return nil, fmt.Errorf("list PowerDNS zone %q records: %w", zone.Name, err)
 	}
+	body, err := readBoundedPowerDNSBody(resp.Body, maxPowerDNSResponseBody)
+	if err != nil {
+		return nil, fmt.Errorf("read PowerDNS zone %q response: %w", zone.Name, err)
+	}
 	var payload powerDNSZoneResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("decode PowerDNS zone %q response: %w", zone.Name, err)
 	}
 	return powerDNSRecordsFromRRsets(zone, payload.RRsets)
@@ -312,6 +330,17 @@ func powerDNSRecordsFromRRsets(zone domain.DNSZone, rrsets []powerDNSRRset) ([]d
 		}
 	}
 	return sortedRecords(records), nil
+}
+
+func readBoundedPowerDNSBody(body io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return data, nil
 }
 
 func expectPowerDNSSuccess(resp *http.Response) error {

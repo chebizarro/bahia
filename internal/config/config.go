@@ -123,18 +123,19 @@ type DNSZoneConfig struct {
 
 // DNSBackendConfig describes one DNS backend connector.
 type DNSBackendConfig struct {
-	Type                 string        `koanf:"type"`
-	RootDir              string        `koanf:"root_dir"`
-	EtcdEndpoints        []string      `koanf:"etcd_endpoints"`
-	EtcdPrefix           string        `koanf:"etcd_prefix"`
-	EtcdDialTimeout      time.Duration `koanf:"etcd_dial_timeout"`
-	PowerDNSAPIURL       string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
-	PowerDNSAPIKey       string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key"`
-	PowerDNSServerID     string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
-	DnsmasqConfigDir     string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
-	DnsmasqReloadCommand string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command"`
-	DnsmasqFilePrefix    string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix"`
-	HostsPath            string        `koanf:"hosts_path" yaml:"hosts_path"`
+	Type                      string        `koanf:"type"`
+	RootDir                   string        `koanf:"root_dir"`
+	EtcdEndpoints             []string      `koanf:"etcd_endpoints"`
+	EtcdPrefix                string        `koanf:"etcd_prefix"`
+	EtcdDialTimeout           time.Duration `koanf:"etcd_dial_timeout"`
+	PowerDNSAPIURL            string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
+	PowerDNSAPIKey            string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key"`
+	PowerDNSServerID          string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
+	PowerDNSAllowInsecureHTTP bool          `koanf:"powerdns_allow_insecure_http" yaml:"powerdns_allow_insecure_http"`
+	DnsmasqConfigDir          string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
+	DnsmasqReloadCommand      string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command"`
+	DnsmasqFilePrefix         string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix"`
+	HostsPath                 string        `koanf:"hosts_path" yaml:"hosts_path"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
@@ -1893,6 +1894,15 @@ func (c *Config) validateDNS() error {
 			parsed, err := url.Parse(backend.PowerDNSAPIURL)
 			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 				return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_url must be a valid URL", name)
+			}
+			switch strings.ToLower(parsed.Scheme) {
+			case "https":
+			case "http":
+				if !backend.PowerDNSAllowInsecureHTTP {
+					return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_url must use HTTPS unless powerdns_allow_insecure_http is explicitly enabled", name)
+				}
+			default:
+				return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_url must use HTTP or HTTPS", name)
 			}
 			if backend.PowerDNSAPIKey == "" {
 				return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_key is required for powerdns", name)

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/openagentsinc/bahia/internal/httpclient"
 	"go.uber.org/zap"
 )
 
@@ -15,13 +17,15 @@ const (
 	dockerHubRegistryURL = "https://registry-1.docker.io"
 	dockerHubAuthURL     = "https://auth.docker.io/token"
 	dockerHubService     = "registry.docker.io"
+	maxRegistryAuthBody  = 1 << 20
 )
 
 // DockerHubAuth provides token authentication for Docker Hub.
 // Supports both anonymous and credential-based authentication.
 type DockerHubAuth struct {
-	username string
-	password string // password or PAT
+	username   string
+	password   string // password or PAT
+	httpClient *http.Client
 
 	mu    sync.Mutex
 	cache map[string]*tokenEntry
@@ -30,10 +34,15 @@ type DockerHubAuth struct {
 // NewDockerHubAuth creates a Docker Hub auth provider.
 // If username/password are empty, anonymous authentication is used (rate-limited).
 func NewDockerHubAuth(username, password string) *DockerHubAuth {
+	return newDockerHubAuth(username, password, nil)
+}
+
+func newDockerHubAuth(username, password string, client *http.Client) *DockerHubAuth {
 	return &DockerHubAuth{
-		username: username,
-		password: password,
-		cache:    make(map[string]*tokenEntry),
+		username:   username,
+		password:   password,
+		httpClient: httpclient.Harden(client, httpclient.DefaultTimeout),
+		cache:      make(map[string]*tokenEntry),
 	}
 }
 
@@ -62,7 +71,7 @@ func (a *DockerHubAuth) Token(ctx context.Context, scope string) (string, error)
 		req.SetBasicAuth(a.username, a.password)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("requesting Docker Hub token: %w", err)
 	}
@@ -72,11 +81,18 @@ func (a *DockerHubAuth) Token(ctx context.Context, scope string) (string, error)
 		return "", fmt.Errorf("Docker Hub token endpoint returned %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryAuthBody+1))
+	if err != nil {
+		return "", fmt.Errorf("reading Docker Hub token response: %w", err)
+	}
+	if len(body) > maxRegistryAuthBody {
+		return "", fmt.Errorf("Docker Hub token response exceeds %d bytes", maxRegistryAuthBody)
+	}
 	var result struct {
 		Token     string `json:"token"`
 		ExpiresIn int    `json:"expires_in"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("decoding Docker Hub token response: %w", err)
 	}
 
@@ -136,11 +152,9 @@ func (d *dockerHubClient) GetReferrers(ctx context.Context, repo, digest string)
 
 // NewDockerHubClient creates an OCI client configured for Docker Hub.
 func NewDockerHubClient(username, password string, logger *zap.Logger, opts ...OCIOption) ImageInspector {
-	auth := NewDockerHubAuth(username, password)
-	allOpts := append([]OCIOption{WithAuth(auth)}, opts...)
-	return &dockerHubClient{
-		OCIClient: NewOCIClient(dockerHubRegistryURL, logger, allOpts...),
-	}
+	ociClient := NewOCIClient(dockerHubRegistryURL, logger, opts...)
+	ociClient.auth = newDockerHubAuth(username, password, ociClient.httpClient)
+	return &dockerHubClient{OCIClient: ociClient}
 }
 
 // Compile-time interface checks.

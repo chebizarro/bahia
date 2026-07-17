@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/openagentsinc/bahia/internal/httpclient"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +21,8 @@ const (
 // GHCRAuth provides token authentication for GitHub Container Registry.
 // Supports both anonymous and PAT-based authentication.
 type GHCRAuth struct {
-	pat string // personal access token (empty for anonymous)
+	pat        string // personal access token (empty for anonymous)
+	httpClient *http.Client
 
 	mu    sync.Mutex
 	cache map[string]*tokenEntry
@@ -33,9 +36,14 @@ type tokenEntry struct {
 // NewGHCRAuth creates a GHCR auth provider.
 // If pat is empty, anonymous authentication is used (public repos only).
 func NewGHCRAuth(pat string) *GHCRAuth {
+	return newGHCRAuth(pat, nil)
+}
+
+func newGHCRAuth(pat string, client *http.Client) *GHCRAuth {
 	return &GHCRAuth{
-		pat:   pat,
-		cache: make(map[string]*tokenEntry),
+		pat:        pat,
+		httpClient: httpclient.Harden(client, httpclient.DefaultTimeout),
+		cache:      make(map[string]*tokenEntry),
 	}
 }
 
@@ -63,7 +71,7 @@ func (a *GHCRAuth) Token(ctx context.Context, scope string) (string, error) {
 		req.SetBasicAuth("_token", a.pat)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("requesting GHCR token: %w", err)
 	}
@@ -73,11 +81,18 @@ func (a *GHCRAuth) Token(ctx context.Context, scope string) (string, error) {
 		return "", fmt.Errorf("GHCR token endpoint returned %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryAuthBody+1))
+	if err != nil {
+		return "", fmt.Errorf("reading GHCR token response: %w", err)
+	}
+	if len(body) > maxRegistryAuthBody {
+		return "", fmt.Errorf("GHCR token response exceeds %d bytes", maxRegistryAuthBody)
+	}
 	var result struct {
 		Token     string `json:"token"`
 		ExpiresIn int    `json:"expires_in"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("decoding GHCR token response: %w", err)
 	}
 
@@ -100,9 +115,9 @@ func (a *GHCRAuth) Token(ctx context.Context, scope string) (string, error) {
 // NewGHCRClient creates an OCI client configured for GitHub Container Registry.
 // pat can be empty for public repository access.
 func NewGHCRClient(pat string, logger *zap.Logger, opts ...OCIOption) *OCIClient {
-	auth := NewGHCRAuth(pat)
-	allOpts := append([]OCIOption{WithAuth(auth)}, opts...)
-	return NewOCIClient(ghcrRegistryURL, logger, allOpts...)
+	client := NewOCIClient(ghcrRegistryURL, logger, opts...)
+	client.auth = newGHCRAuth(pat, client.httpClient)
+	return client
 }
 
 // Compile-time interface check.

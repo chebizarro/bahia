@@ -1,6 +1,7 @@
 package mcpclient
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,27 @@ import (
 	"testing"
 	"time"
 )
+
+func TestNewClientHardensInjectedHTTPClient(t *testing.T) {
+	injected := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec -- proves hardening removes the unsafe test input
+	client := NewClient(Config{Name: "fixture", URL: "https://mcp.example", Timeout: -time.Second, HTTPClient: injected}, nil)
+	if client.httpClient == injected {
+		t.Fatal("injected HTTP client was mutated instead of cloned")
+	}
+	if client.httpClient.Timeout <= 0 {
+		t.Fatalf("timeout = %s, want positive timeout", client.httpClient.Timeout)
+	}
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		t.Fatalf("transport = %#v, want TLS-configured *http.Transport", client.httpClient.Transport)
+	}
+	if transport.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("TLS minimum = %d, want TLS 1.2 or newer", transport.TLSClientConfig.MinVersion)
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("TLS certificate verification remains disabled")
+	}
+}
 
 func TestClientInitializeListAndCallWithAuthAndPrefix(t *testing.T) {
 	var methods []string

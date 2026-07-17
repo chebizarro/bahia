@@ -14,9 +14,14 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/openagentsinc/bahia/internal/httpclient"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout     = 30 * time.Second
+	maxMCPResponseBody = 4 << 20
+)
 
 // ErrNotConfigured is returned when a client operation is attempted without a URL.
 var ErrNotConfigured = errors.New("mcp client not configured")
@@ -111,16 +116,13 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 	name := strings.TrimSpace(config.Name)
 	endpoint := normalizeEndpoint(config.URL)
 	prefix := strings.TrimSpace(config.ToolPrefix)
-	if config.Timeout == 0 {
+	if config.Timeout <= 0 {
 		config.Timeout = defaultTimeout
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	httpClient := config.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: config.Timeout}
-	}
+	httpClient := httpclient.Harden(config.HTTPClient, config.Timeout)
 	headers := make(map[string]string, len(config.AuthHeaders))
 	for key, value := range config.AuthHeaders {
 		key = strings.TrimSpace(key)
@@ -287,9 +289,12 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 		return nil, fmt.Errorf("send %s request: %w", method, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPResponseBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s response: %w", method, err)
+	}
+	if len(body) > maxMCPResponseBody {
+		return nil, fmt.Errorf("read %s response: body exceeds %d bytes", method, maxMCPResponseBody)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("MCP HTTP error %d for %s: %s", resp.StatusCode, method, string(body))

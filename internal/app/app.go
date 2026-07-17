@@ -2147,7 +2147,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		case string(domain.DNSBackendTypePowerDNS):
-			backend, err := dnsAdapter.NewPowerDNSBackend(dnsAdapter.PowerDNSConfig{APIURL: backendConfig.PowerDNSAPIURL, APIKey: backendConfig.PowerDNSAPIKey, ServerID: backendConfig.PowerDNSServerID})
+			backend, err := dnsAdapter.NewPowerDNSBackend(dnsAdapter.PowerDNSConfig{APIURL: backendConfig.PowerDNSAPIURL, APIKey: backendConfig.PowerDNSAPIKey, ServerID: backendConfig.PowerDNSServerID, AllowInsecureHTTP: backendConfig.PowerDNSAllowInsecureHTTP})
 			if err != nil {
 				return nil, nil, fmt.Errorf("configuring DNS PowerDNS backend %q: %w", ref, err)
 			}
