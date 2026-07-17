@@ -6,14 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/events"
 
 	"github.com/google/uuid"
@@ -23,9 +26,12 @@ import (
 
 // mockNotificationRepo is an in-memory NotificationRepository.
 type mockNotificationRepo struct {
-	mu       sync.Mutex
-	channels []domain.NotificationChannel
-	logs     []domain.NotificationLog
+	mu              sync.Mutex
+	channels        []domain.NotificationChannel
+	logs            []domain.NotificationLog
+	createLogErr    error
+	updateLogErr    error
+	listChannelsErr error
 }
 
 func (m *mockNotificationRepo) CreateChannel(_ context.Context, ch *domain.NotificationChannel) error {
@@ -52,6 +58,9 @@ func (m *mockNotificationRepo) GetChannelByID(_ context.Context, id uuid.UUID) (
 func (m *mockNotificationRepo) ListChannels(_ context.Context, enabledOnly bool) ([]domain.NotificationChannel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.listChannelsErr != nil {
+		return nil, m.listChannelsErr
+	}
 	var result []domain.NotificationChannel
 	for _, ch := range m.channels {
 		if enabledOnly && !ch.Enabled {
@@ -89,6 +98,9 @@ func (m *mockNotificationRepo) DeleteChannel(_ context.Context, id uuid.UUID) er
 func (m *mockNotificationRepo) CreateLog(_ context.Context, log *domain.NotificationLog) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.createLogErr != nil {
+		return m.createLogErr
+	}
 	m.logs = append(m.logs, *log)
 	return nil
 }
@@ -96,6 +108,9 @@ func (m *mockNotificationRepo) CreateLog(_ context.Context, log *domain.Notifica
 func (m *mockNotificationRepo) UpdateLog(_ context.Context, log *domain.NotificationLog) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.updateLogErr != nil {
+		return m.updateLogErr
+	}
 	for i, existing := range m.logs {
 		if existing.ID == log.ID {
 			m.logs[i] = *log
@@ -313,6 +328,66 @@ func TestDispatcher_FailedDelivery(t *testing.T) {
 	}
 	if repo.logs[0].Status != domain.NotificationStatusRetrying {
 		t.Errorf("expected retrying status, got %s", repo.logs[0].Status)
+	}
+}
+
+func TestDispatcherReturnsSendAndPersistenceFailures(t *testing.T) {
+	persistErr := errors.New("notification log unavailable")
+	repo := &mockNotificationRepo{updateLogErr: persistErr}
+	sender := &mockSender{failNext: true}
+	repo.channels = append(repo.channels, domain.NotificationChannel{
+		ID: uuid.New(), Name: "failing", ChannelType: domain.ChannelTypeWebhook, Enabled: true,
+	})
+	d := NewDispatcher(repo, zap.NewNop())
+	d.RegisterSender(domain.ChannelTypeWebhook, sender)
+
+	err := d.Dispatch(context.Background(), "test", map[string]any{})
+	if err == nil {
+		t.Fatal("Dispatch returned nil, want joined send and persistence failure")
+	}
+	if !strings.Contains(err.Error(), "mock send failure") || !errors.Is(err, persistErr) {
+		t.Fatalf("Dispatch error = %v, want send and persistence failures", err)
+	}
+}
+
+func TestDispatcherDoesNotSendWhenLogCreationFails(t *testing.T) {
+	persistErr := errors.New("cannot create log")
+	repo := &mockNotificationRepo{createLogErr: persistErr}
+	sender := &mockSender{}
+	repo.channels = append(repo.channels, domain.NotificationChannel{
+		ID: uuid.New(), Name: "untracked", ChannelType: domain.ChannelTypeWebhook, Enabled: true,
+	})
+	d := NewDispatcher(repo, zap.NewNop())
+	d.RegisterSender(domain.ChannelTypeWebhook, sender)
+
+	err := d.Dispatch(context.Background(), "test", map[string]any{})
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("Dispatch error = %v, want log creation failure", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent %d untracked notifications", len(sender.sent))
+	}
+}
+
+func TestNostrDMSenderRejectsZeroRelayPublication(t *testing.T) {
+	privateKey := strings.Repeat("1", 64)
+	secret, err := nostr.SecretKeyFromHex(privateKey)
+	if err != nil {
+		t.Fatalf("parse recipient secret key: %v", err)
+	}
+	recipient := secret.Public().Hex()
+	sender := &NostrDMSender{
+		privateKey: privateKey,
+		logger:     zap.NewNop(),
+		publish: func(context.Context, nostr.Event) (int, error) {
+			return 0, nil
+		},
+	}
+	channel := &domain.NotificationChannel{Name: "dm", Config: map[string]any{"pubkey": recipient}}
+
+	err = sender.Send(context.Background(), channel, "test", map[string]any{"ok": true})
+	if err == nil || !strings.Contains(err.Error(), "no relay accepted") {
+		t.Fatalf("Send error = %v, want zero-relay failure", err)
 	}
 }
 

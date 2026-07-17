@@ -52,7 +52,7 @@ type ToolProvisioningResponder interface {
 }
 
 type ToolProvisioningDispatcher interface {
-	Dispatch(ctx context.Context, eventType string, payload map[string]any)
+	Dispatch(ctx context.Context, eventType string, payload map[string]any) error
 }
 
 func NewToolProvisioningCoordinator(repo repository.ToolProvisioningRepository, serviceRepo repository.ServiceRepository, envRepo repository.EnvironmentRepository, securityService *ToolSecurityService, builder *build.DockerBuilder, rt runtime.Runtime, responder ToolProvisioningResponder, dispatcher ToolProvisioningDispatcher, logger *zap.Logger, cfg ToolProvisioningConfig) *ToolProvisioningCoordinator {

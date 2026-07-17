@@ -2,10 +2,12 @@ package events
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestInProcessPublisher(t *testing.T) {
@@ -70,6 +72,36 @@ func TestInProcessPublisherMultipleHandlers(t *testing.T) {
 
 	if count != 3 {
 		t.Errorf("expected 3 handler calls, got %d", count)
+	}
+}
+
+func TestInProcessPublisherRetriesAndLogsHandlerFailures(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	pub := NewInProcessPublisher(zap.New(core))
+	attempts := 0
+	done := make(chan struct{})
+	sentinel := errors.New("temporary handler failure")
+
+	pub.SubscribeWithError(EventBuildRegistered, func(context.Context, Event) error {
+		attempts++
+		if attempts < 3 {
+			return sentinel
+		}
+		close(done)
+		return nil
+	})
+	pub.Publish(context.Background(), Event{Type: EventBuildRegistered, EntityID: "build-123"})
+	<-done
+
+	if attempts != 3 {
+		t.Fatalf("handler attempts = %d, want 3", attempts)
+	}
+	entries := logs.FilterMessage("event handler failed").All()
+	if len(entries) != 2 {
+		t.Fatalf("failure log count = %d, want 2", len(entries))
+	}
+	if entries[0].ContextMap()["entity_id"] != "build-123" {
+		t.Fatalf("failure log missing entity ID: %+v", entries[0].ContextMap())
 	}
 }
 

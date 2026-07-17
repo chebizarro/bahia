@@ -85,6 +85,14 @@ type Event struct {
 // Handler is a function that processes an event.
 type Handler func(ctx context.Context, e Event)
 
+// ErrorHandler reports delivery failure so the in-process publisher can retry it.
+type ErrorHandler func(ctx context.Context, e Event) error
+
+// ErrorSubscriber is implemented by publishers that support observable, retryable handlers.
+type ErrorSubscriber interface {
+	SubscribeWithError(eventType EventType, handler ErrorHandler)
+}
+
 // Publisher publishes events to subscribers.
 type Publisher interface {
 	Publish(ctx context.Context, e Event)
@@ -94,14 +102,17 @@ type Publisher interface {
 // InProcessPublisher is an in-memory event publisher.
 type InProcessPublisher struct {
 	mu       sync.RWMutex
-	handlers map[EventType][]Handler
+	handlers map[EventType][]ErrorHandler
 	logger   *zap.Logger
 }
 
 // NewInProcessPublisher creates a new InProcessPublisher.
 func NewInProcessPublisher(logger *zap.Logger) *InProcessPublisher {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &InProcessPublisher{
-		handlers: make(map[EventType][]Handler),
+		handlers: make(map[EventType][]ErrorHandler),
 		logger:   logger,
 	}
 }
@@ -134,7 +145,21 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 					)
 				}
 			}()
-			h(handlerCtx, e)
+			const maxAttempts = 3
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
+				if err := h(handlerCtx, e); err != nil {
+					p.logger.Error("event handler failed",
+						zap.String("event_type", string(e.Type)),
+						zap.String("entity_id", e.EntityID),
+						zap.Int("attempt", attempt),
+						zap.Error(err),
+					)
+					if attempt < maxAttempts && handlerCtx.Err() == nil {
+						continue
+					}
+				}
+				break
+			}
 		}()
 	}
 
@@ -148,6 +173,14 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 
 // Subscribe registers a handler for a specific event type.
 func (p *InProcessPublisher) Subscribe(eventType EventType, handler Handler) {
+	p.SubscribeWithError(eventType, func(ctx context.Context, event Event) error {
+		handler(ctx, event)
+		return nil
+	})
+}
+
+// SubscribeWithError registers a handler whose failures are logged and retried.
+func (p *InProcessPublisher) SubscribeWithError(eventType EventType, handler ErrorHandler) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.handlers[eventType] = append(p.handlers[eventType], handler)
@@ -156,5 +189,6 @@ func (p *InProcessPublisher) Subscribe(eventType EventType, handler Handler) {
 // NoopPublisher is a publisher that does nothing. Useful for testing.
 type NoopPublisher struct{}
 
-func (n *NoopPublisher) Publish(_ context.Context, _ Event) {}
-func (n *NoopPublisher) Subscribe(_ EventType, _ Handler)   {}
+func (n *NoopPublisher) Publish(_ context.Context, _ Event)             {}
+func (n *NoopPublisher) Subscribe(_ EventType, _ Handler)               {}
+func (n *NoopPublisher) SubscribeWithError(_ EventType, _ ErrorHandler) {}

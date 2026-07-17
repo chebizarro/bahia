@@ -17,6 +17,7 @@ import (
 // NostrDMSender delivers notifications as NIP-44 encrypted direct messages.
 type NostrDMSender struct {
 	relayPool  *nostrAdapter.RelayPool
+	publish    func(context.Context, nostr.Event) (int, error)
 	privateKey string
 	logger     *zap.Logger
 }
@@ -24,8 +25,16 @@ type NostrDMSender struct {
 // NewNostrDMSender creates a new Nostr DM sender.
 // privateKey is Bahia's Nostr private key (hex).
 func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logger *zap.Logger) *NostrDMSender {
+	var publish func(context.Context, nostr.Event) (int, error)
+	if relayPool != nil {
+		publish = relayPool.Publish
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &NostrDMSender{
 		relayPool:  relayPool,
+		publish:    publish,
 		privateKey: privateKey,
 		logger:     logger,
 	}
@@ -35,6 +44,15 @@ func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logg
 // Config keys:
 //   - "pubkey" (required): recipient's Nostr public key (hex)
 func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) error {
+	if s == nil || s.publish == nil {
+		return fmt.Errorf("nostr DM relay publisher is not configured")
+	}
+	if s.privateKey == "" {
+		return fmt.Errorf("nostr DM private key is not configured")
+	}
+	if ch == nil {
+		return fmt.Errorf("nostr DM channel is required")
+	}
 	recipientPubkey, ok := ch.Config["pubkey"].(string)
 	if !ok || recipientPubkey == "" {
 		return fmt.Errorf("nostr_dm channel %q missing pubkey config", ch.Name)
@@ -72,9 +90,12 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 	}
 
 	// Publish to relays via the pool.
-	published, err := s.relayPool.Publish(ctx, ev)
+	published, err := s.publish(ctx, ev)
 	if err != nil {
 		return fmt.Errorf("publishing DM: %w", err)
+	}
+	if published == 0 {
+		return fmt.Errorf("publishing DM: no relay accepted the event")
 	}
 
 	s.logger.Info("nostr DM notification sent",

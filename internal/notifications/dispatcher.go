@@ -3,6 +3,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -55,39 +56,51 @@ func (d *Dispatcher) SetupSubscriptions(pub events.Publisher) {
 		events.EventSecurityPolicyBreached,
 	}
 
+	errorSubscriber, supportsErrors := pub.(events.ErrorSubscriber)
 	for _, et := range eventTypes {
 		et := et // capture
-		pub.Subscribe(et, func(ctx context.Context, e events.Event) {
-			d.dispatch(ctx, string(et), map[string]any{
+		handler := func(ctx context.Context, e events.Event) error {
+			return d.dispatch(ctx, string(et), map[string]any{
 				"event_type": string(et),
 				"entity_id":  e.EntityID,
 				"data":       e.Data,
 				"timestamp":  time.Now().UTC().Format(time.RFC3339),
 			})
+		}
+		if supportsErrors {
+			errorSubscriber.SubscribeWithError(et, handler)
+			continue
+		}
+		pub.Subscribe(et, func(ctx context.Context, e events.Event) {
+			if err := handler(ctx, e); err != nil {
+				d.logger.Error("notification event dispatch failed", zap.Error(err))
+			}
 		})
 	}
 }
 
 // dispatch sends a notification to all matching enabled channels.
-func (d *Dispatcher) dispatch(ctx context.Context, eventType string, payload map[string]any) {
+func (d *Dispatcher) dispatch(ctx context.Context, eventType string, payload map[string]any) error {
 	channels, err := d.repo.ListChannels(ctx, true) // enabled only
 	if err != nil {
-		d.logger.Error("failed to list notification channels", zap.Error(err))
-		return
+		return fmt.Errorf("listing notification channels: %w", err)
 	}
 
+	var dispatchErrors []error
 	for _, ch := range channels {
 		if !ch.MatchesEvent(eventType) {
 			continue
 		}
-
-		_ = d.sendToChannel(ctx, &ch, eventType, payload)
+		if err := d.sendToChannel(ctx, &ch, eventType, payload); err != nil {
+			dispatchErrors = append(dispatchErrors, fmt.Errorf("channel %s: %w", ch.Name, err))
+		}
 	}
+	return errors.Join(dispatchErrors...)
 }
 
 // Dispatch sends a notification to all matching channels (public API for manual triggers).
-func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, payload map[string]any) {
-	d.dispatch(ctx, eventType, payload)
+func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, payload map[string]any) error {
+	return d.dispatch(ctx, eventType, payload)
 }
 
 // DispatchToChannel sends a notification directly to one channel, bypassing event filters.
@@ -117,15 +130,14 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 		EventType: eventType,
 		Payload:   payload,
 		Status:    domain.NotificationStatusPending,
-		Attempts:  0,
+		Attempts:  1,
 	}
 
 	if err := d.repo.CreateLog(ctx, logEntry); err != nil {
-		d.logger.Error("failed to create notification log", zap.Error(err))
+		return fmt.Errorf("creating notification log: %w", err)
 	}
 
 	// Attempt delivery.
-	logEntry.Attempts = 1
 	if err := sender.Send(ctx, ch, eventType, payload); err != nil {
 		logEntry.Status = domain.NotificationStatusRetrying
 		logEntry.LastError = err.Error()
@@ -134,8 +146,8 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 			zap.String("event", eventType),
 			zap.Error(err),
 		)
-		_ = d.repo.UpdateLog(ctx, logEntry)
-		return err
+		updateErr := d.repo.UpdateLog(ctx, logEntry)
+		return errors.Join(err, wrapNotificationLogError("recording failed delivery", updateErr))
 	} else {
 		logEntry.Status = domain.NotificationStatusSent
 		d.logger.Debug("notification sent",
@@ -144,11 +156,20 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 		)
 	}
 
-	_ = d.repo.UpdateLog(ctx, logEntry)
+	if err := d.repo.UpdateLog(ctx, logEntry); err != nil {
+		return fmt.Errorf("finalizing delivered notification log: %w", err)
+	}
 	return nil
 }
 
 // RetryFailed retries failed/pending notifications up to maxAttempts.
+func wrapNotificationLogError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 func (d *Dispatcher) RetryFailed(ctx context.Context, maxAttempts int) (int, error) {
 	logs, err := d.repo.ListRetryable(ctx, maxAttempts)
 	if err != nil {
@@ -156,30 +177,43 @@ func (d *Dispatcher) RetryFailed(ctx context.Context, maxAttempts int) (int, err
 	}
 
 	retried := 0
+	var retryErrors []error
 	for _, logEntry := range logs {
 		ch, err := d.repo.GetChannelByID(ctx, logEntry.ChannelID)
-		if err != nil || ch == nil || !ch.Enabled {
+		if err != nil {
+			retryErrors = append(retryErrors, fmt.Errorf("loading channel %s: %w", logEntry.ChannelID, err))
+			continue
+		}
+		if ch == nil || !ch.Enabled {
+			retryErrors = append(retryErrors, fmt.Errorf("channel %s unavailable for retry", logEntry.ChannelID))
 			continue
 		}
 
 		sender, ok := d.senders[ch.ChannelType]
 		if !ok {
+			retryErrors = append(retryErrors, fmt.Errorf("no sender registered for channel type %s", ch.ChannelType))
 			continue
 		}
 
 		logEntry.Attempts++
-		if err := sender.Send(ctx, ch, logEntry.EventType, logEntry.Payload); err != nil {
-			logEntry.LastError = err.Error()
+		sendErr := sender.Send(ctx, ch, logEntry.EventType, logEntry.Payload)
+		if sendErr != nil {
+			logEntry.LastError = sendErr.Error()
+			logEntry.Status = domain.NotificationStatusRetrying
 			if logEntry.Attempts >= maxAttempts {
 				logEntry.Status = domain.NotificationStatusFailed
 			}
 		} else {
 			logEntry.Status = domain.NotificationStatusSent
 			logEntry.LastError = ""
-			retried++
 		}
-		_ = d.repo.UpdateLog(ctx, &logEntry)
+		updateErr := d.repo.UpdateLog(ctx, &logEntry)
+		if sendErr != nil || updateErr != nil {
+			retryErrors = append(retryErrors, errors.Join(sendErr, wrapNotificationLogError("updating retry log", updateErr)))
+			continue
+		}
+		retried++
 	}
 
-	return retried, nil
+	return retried, errors.Join(retryErrors...)
 }
