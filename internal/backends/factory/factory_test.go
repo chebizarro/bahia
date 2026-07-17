@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/backends/filesystem_mock"
 	"github.com/openagentsinc/bahia/internal/backends/nexus"
 	"github.com/openagentsinc/bahia/internal/backends/pulp"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -24,6 +26,25 @@ func (m mapResolver) ResolveSecret(_ context.Context, ref string) (string, error
 		return "", fmt.Errorf("missing secret %s", ref)
 	}
 	return value, nil
+}
+
+func TestProductionFactoryRejectsFilesystemMockButDirectTestsCanUseIt(t *testing.T) {
+	cfg := config.PackageBackendConfig{Type: string(domain.PackageBackendFilesystemMock), RootDir: t.TempDir()}
+	backend, err := BuildBackend(cfg)
+	if backend != nil {
+		t.Fatalf("production factory backend = %T, want nil", backend)
+	}
+	if !errors.Is(err, filesystem_mock.ErrProductionSelection) {
+		t.Fatalf("production factory error = %v, want ErrProductionSelection", err)
+	}
+
+	direct, err := filesystem_mock.New(filesystem_mock.Config{RootDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("direct test backend construction failed: %v", err)
+	}
+	if direct.Type() != domain.PackageBackendFilesystemMock {
+		t.Fatalf("direct backend type = %q, want filesystem_mock", direct.Type())
+	}
 }
 
 func TestBuildBackendRejectsSecretRefsWithoutResolver(t *testing.T) {

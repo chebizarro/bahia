@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -19,6 +20,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/backends/packagebackend"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+// ErrProductionSelection is returned when the production backend factory is asked to construct filesystem_mock.
+// Tests may still construct this backend directly with New.
+var ErrProductionSelection = errors.New("filesystem_mock is test/development-only and cannot be selected by the production package backend factory")
 
 // Config configures the deterministic local filesystem package backend.
 type Config struct {

@@ -75,7 +75,7 @@ func BuildBackendWithSecrets(ctx context.Context, cfg config.PackageBackendConfi
 	client := &http.Client{Timeout: cfg.Timeout, Transport: transport}
 	switch domain.PackageBackendType(strings.TrimSpace(cfg.Type)) {
 	case domain.PackageBackendFilesystemMock:
-		return filesystem_mock.New(filesystem_mock.Config{RootDir: cfg.RootDir, PublicBaseURL: cfg.PublicBaseURL})
+		return nil, filesystem_mock.ErrProductionSelection
 	case domain.PackageBackendNexus:
 		return nexus.New(nexus.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic})
 	case domain.PackageBackendPulp:
