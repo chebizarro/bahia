@@ -125,8 +125,19 @@ func (r *PgSBOMRepository) CreateManifest(ctx context.Context, manifest *domain.
 }
 
 // ProjectManifest stores a manifest, its packages, and artifact compatibility rows when applicable.
-func (r *PgSBOMRepository) UpdateCompatibilityVulnerabilityCounts(ctx context.Context, artifactID uuid.UUID, payloadSHA256 string, counts domain.SecuritySeverityCounts, total int) error {
-	cmd, err := r.pool.Exec(ctx, `
+func (r *PgSBOMRepository) UpdateCompatibilityVulnerabilityCounts(ctx context.Context, artifactID uuid.UUID, payloadSHA256 string, counts domain.SecuritySeverityCounts, total int) (err error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning SBOM compatibility count update: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(context.Background())
+		}
+	}()
+
+	cmd, err := tx.Exec(ctx, `
 		UPDATE artifact_sboms
 		SET vulnerability_count = $3, critical_count = $4, high_count = $5
 		WHERE artifact_id = $1 AND raw_hash = $2
@@ -137,7 +148,7 @@ func (r *PgSBOMRepository) UpdateCompatibilityVulnerabilityCounts(ctx context.Co
 	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("updating artifact SBOM compatibility counts for %s/%s: %w", artifactID, payloadSHA256, ErrNotFound)
 	}
-	_, err = r.pool.Exec(ctx, `
+	cmd, err = tx.Exec(ctx, `
 		UPDATE sbom_manifests
 		SET vulnerability_count = $3, critical_count = $4, high_count = $5, updated_at = $6
 		WHERE subject_type = 'artifact' AND subject_id = $1 AND payload_sha256 = $2
@@ -145,6 +156,13 @@ func (r *PgSBOMRepository) UpdateCompatibilityVulnerabilityCounts(ctx context.Co
 	if err != nil {
 		return fmt.Errorf("updating SBOM manifest compatibility counts: %w", err)
 	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("updating SBOM manifest compatibility counts for %s/%s: %w", artifactID, payloadSHA256, ErrNotFound)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing SBOM compatibility count update: %w", err)
+	}
+	committed = true
 	return nil
 }
 

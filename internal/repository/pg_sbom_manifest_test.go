@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -114,13 +115,38 @@ func TestPgSBOMRepository_UpdateCompatibilityVulnerabilityCounts(t *testing.T) {
 	artifactID := uuid.New()
 	payload := strings.Repeat("a", 64)
 	counts := domain.SecuritySeverityCounts{Critical: 1, High: 2, Moderate: 3}
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE artifact_sboms").
 		WithArgs(artifactID, payload, 6, 1, 2).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec("UPDATE sbom_manifests").
 		WithArgs(artifactID.String(), payload, 6, 1, 2, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 	require.NoError(t, repo.UpdateCompatibilityVulnerabilityCounts(context.Background(), artifactID, payload, counts, 6))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSBOMRepository_UpdateCompatibilityVulnerabilityCountsRollsBackOnCanonicalFailure(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := &PgSBOMRepository{pool: mock}
+	artifactID := uuid.New()
+	payload := strings.Repeat("b", 64)
+	counts := domain.SecuritySeverityCounts{Critical: 1}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE artifact_sboms").
+		WithArgs(artifactID, payload, 1, 1, 0).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("UPDATE sbom_manifests").
+		WithArgs(artifactID.String(), payload, 1, 1, 0, pgxmock.AnyArg()).
+		WillReturnError(errors.New("canonical projection failed"))
+	mock.ExpectRollback()
+
+	err = repo.UpdateCompatibilityVulnerabilityCounts(context.Background(), artifactID, payload, counts, 1)
+	require.ErrorContains(t, err, "canonical projection failed")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -15,6 +15,7 @@ import (
 
 // PgHiveCIRepository implements HiveCIRepository using PostgreSQL.
 type hiveCIDB interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -29,8 +30,33 @@ func NewPgHiveCIRepository(pool *pgxpool.Pool) *PgHiveCIRepository {
 	return &PgHiveCIRepository{pool: pool}
 }
 
+func (r *PgHiveCIRepository) withProjectionTx(ctx context.Context, fn func(pgx.Tx) error) (err error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning hiveci projection transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if rollbackErr := tx.Rollback(context.Background()); rollbackErr != nil && rollbackErr != pgx.ErrTxClosed && err == nil {
+			err = fmt.Errorf("rolling back hiveci projection transaction: %w", rollbackErr)
+		}
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing hiveci projection transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func (r *PgHiveCIRepository) UpsertWorkflowRun(ctx context.Context, run domain.HiveCIWorkflowRun) error {
-	_, err := r.pool.Exec(ctx, `
+	return r.withProjectionTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
 		INSERT INTO hiveci_workflow_runs
 			(run_event_id, repo_coordinate, commit_sha, branch, workflow_path, trigger_type,
 			 triggered_by, publisher_pubkey, processing_state, processing_error, event_created_at, created_at, updated_at)
@@ -39,21 +65,21 @@ func (r *PgHiveCIRepository) UpsertWorkflowRun(ctx context.Context, run domain.H
 			 COALESCE(NULLIF($9, ''), 'pending_result'), NULLIF($10, ''), $11, now(), now())
 		ON CONFLICT (run_event_id) DO NOTHING
 	`, run.RunEventID, run.RepoCoordinate, run.CommitSHA, run.Branch, run.WorkflowPath, run.TriggerType,
-		run.TriggeredBy, run.PublisherPubkey, string(run.ProcessingState), run.ProcessingError, run.EventCreatedAt)
-	if err != nil {
-		return fmt.Errorf("upserting hiveci workflow run: %w", err)
-	}
+			run.TriggeredBy, run.PublisherPubkey, string(run.ProcessingState), run.ProcessingError, run.EventCreatedAt)
+		if err != nil {
+			return fmt.Errorf("upserting hiveci workflow run: %w", err)
+		}
 
-	_, err = r.pool.Exec(ctx, `
-		UPDATE hiveci_workflow_results
-		SET processing_state = 'pending_result', updated_at = now()
-		WHERE run_event_id = $1 AND processing_state = 'pending_run'
-	`, run.RunEventID)
-	if err != nil {
-		return fmt.Errorf("updating hiveci result state after run upsert: %w", err)
-	}
-
-	return nil
+		_, err = tx.Exec(ctx, `
+			UPDATE hiveci_workflow_results
+			SET processing_state = 'pending_result', updated_at = now()
+			WHERE run_event_id = $1 AND processing_state = 'pending_run'
+		`, run.RunEventID)
+		if err != nil {
+			return fmt.Errorf("updating hiveci result state after run upsert: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *PgHiveCIRepository) UpsertWorkflowResult(ctx context.Context, result domain.HiveCIWorkflowResult) error {
@@ -62,7 +88,8 @@ func (r *PgHiveCIRepository) UpsertWorkflowResult(ctx context.Context, result do
 		state = domain.HiveCIProcessingStatePendingRun
 	}
 
-	_, err := r.pool.Exec(ctx, `
+	return r.withProjectionTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
 		INSERT INTO hiveci_workflow_results
 			(result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,
 				error, image_repo, image_tag, image_digest, publisher_pubkey, processing_state, processing_error,
@@ -72,24 +99,24 @@ func (r *PgHiveCIRepository) UpsertWorkflowResult(ctx context.Context, result do
 				$11, $12, NULLIF($13, ''), 0, NULL, $14, now(), now())
 		ON CONFLICT (result_event_id) DO NOTHING
 	`, result.ResultEventID, result.RunEventID, result.Status, result.ExitCode, result.DurationSeconds,
-		result.LogURL, result.Error, result.ImageRepo, result.ImageTag, result.ImageDigest,
-		result.PublisherPubkey, string(state), result.ProcessingError, result.EventCreatedAt)
-	if err != nil {
-		return fmt.Errorf("upserting hiveci workflow result: %w", err)
-	}
+			result.LogURL, result.Error, result.ImageRepo, result.ImageTag, result.ImageDigest,
+			result.PublisherPubkey, string(state), result.ProcessingError, result.EventCreatedAt)
+		if err != nil {
+			return fmt.Errorf("upserting hiveci workflow result: %w", err)
+		}
 
-	_, err = r.pool.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 		UPDATE hiveci_workflow_results r
 		SET processing_state = 'pending_result', updated_at = now()
 		WHERE r.run_event_id = $1
 		  AND r.processing_state = 'pending_run'
 		  AND EXISTS (SELECT 1 FROM hiveci_workflow_runs w WHERE w.run_event_id = r.run_event_id)
 	`, result.RunEventID)
-	if err != nil {
-		return fmt.Errorf("updating hiveci result state after result upsert: %w", err)
-	}
-
-	return nil
+		if err != nil {
+			return fmt.Errorf("updating hiveci result state after result upsert: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *PgHiveCIRepository) GetRunByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowRun, error) {

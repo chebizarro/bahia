@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -228,6 +229,31 @@ func TestPgHiveCIRepository_InvalidResultStateTransition(t *testing.T) {
 	}
 }
 
+func TestPgHiveCIRepository_UpsertWorkflowResultRollsBackProjectionOnSecondWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new mock pool: %v", err)
+	}
+	defer mock.Close()
+	repo := &PgHiveCIRepository{pool: mock}
+	result := domain.HiveCIWorkflowResult{ResultEventID: "res-rollback", RunEventID: "run-rollback", EventCreatedAt: time.Now().UTC()}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO hiveci_workflow_results").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
+	mock.ExpectExec("UPDATE hiveci_workflow_results r").WithArgs("run-rollback").WillReturnError(errors.New("projection update failed"))
+	mock.ExpectRollback()
+
+	if err := repo.UpsertWorkflowResult(ctx, result); err == nil {
+		t.Fatal("UpsertWorkflowResult returned nil, want projection error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestPgHiveCIRepository_UpsertIdempotency(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()
@@ -249,14 +275,18 @@ func TestPgHiveCIRepository_UpsertIdempotency(t *testing.T) {
 		EventCreatedAt:  now,
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_runs").
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results").WithArgs("run-1").WillReturnResult(pgconn.NewCommandTag("UPDATE 0"))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_runs").
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results").WithArgs("run-1").WillReturnResult(pgconn.NewCommandTag("UPDATE 0"))
+	mock.ExpectCommit()
 	if err := repo.UpsertWorkflowRun(ctx, run); err != nil {
 		t.Fatalf("first run upsert: %v", err)
 	}
@@ -274,14 +304,18 @@ func TestPgHiveCIRepository_UpsertIdempotency(t *testing.T) {
 		EventCreatedAt:  now,
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_results").
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results r").WithArgs("run-1").WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_results").
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results r").WithArgs("run-1").WillReturnResult(pgconn.NewCommandTag("UPDATE 0"))
+	mock.ExpectCommit()
 	if err := repo.UpsertWorkflowResult(ctx, result); err != nil {
 		t.Fatalf("first result upsert: %v", err)
 	}
