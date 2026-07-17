@@ -96,8 +96,12 @@ func (r *testHiveRepo) GetRunByEventID(_ context.Context, eventID string) (*doma
 	}
 	return &run, nil
 }
-func (r *testHiveRepo) GetResultByEventID(_ context.Context, _ string) (*domain.HiveCIWorkflowResult, error) {
-	return nil, nil
+func (r *testHiveRepo) GetResultByEventID(_ context.Context, eventID string) (*domain.HiveCIWorkflowResult, error) {
+	result, ok := r.results[eventID]
+	if !ok {
+		return nil, nil
+	}
+	return &result, nil
 }
 func (r *testHiveRepo) ListPendingResults(_ context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
@@ -342,5 +346,40 @@ func TestWorkflowResultContentMetadataAndCallbackUsesResultID(t *testing.T) {
 	}
 	if called != resultID {
 		t.Fatalf("expected callback with result id, got %q", called)
+	}
+}
+
+func TestWorkflowResultReplaySkipsTerminalResult(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	runID := "run-terminal-replay"
+	repo.runs[runID] = domain.HiveCIWorkflowRun{
+		RunEventID:      runID,
+		PublisherPubkey: publisher,
+		EventCreatedAt:  now,
+	}
+	ev := signedHiveCIEvent(t, kindWorkflowResult, now, nostr.Tags{
+		{"e", runID}, {"log_url", "https://b.test/log"}, {"status", "success"}, {"exit_code", "0"}, {"duration", "12"},
+	})
+	resultID := nostrutil.EventIDHex(ev)
+	repo.results[resultID] = domain.HiveCIWorkflowResult{
+		ResultEventID:   resultID,
+		RunEventID:      runID,
+		ProcessingState: domain.HiveCIProcessingStateFailed,
+		RetryCount:      10,
+	}
+	called := false
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), func(context.Context, string) {
+		called = true
+	})
+
+	s.handleWorkflowResult(context.Background(), ev)
+
+	if called {
+		t.Fatal("terminal replay must not invoke the bridge callback")
+	}
+	if got := repo.results[resultID]; got.ProcessingState != domain.HiveCIProcessingStateFailed || got.RetryCount != 10 {
+		t.Fatalf("terminal replay mutated persisted result: %+v", got)
 	}
 }

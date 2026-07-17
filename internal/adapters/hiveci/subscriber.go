@@ -293,6 +293,18 @@ func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID, exp
 
 func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) {
 	eventID := nostrutil.EventIDHex(ev)
+	existing, err := s.repo.GetResultByEventID(ctx, eventID)
+	if err != nil {
+		s.logger.Warn("failed to load existing hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
+		return
+	}
+	if existing != nil && isTerminalHiveCIResultState(existing.ProcessingState) {
+		s.logger.Debug("ignoring replayed terminal hiveci workflow result",
+			zap.String("event_id", eventID),
+			zap.String("processing_state", string(existing.ProcessingState)),
+		)
+		return
+	}
 	pubkey := nostrutil.EventPubKeyHex(ev)
 	runEventID, err := requiredTag(ev, "e")
 	if err != nil {
@@ -398,6 +410,17 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		s.onResult(ctx, result.ResultEventID)
 	}
 	s.logger.Info("hiveci workflow result ingested", zap.String("run_event_id", runEventID), zap.String("result_event_id", eventID), zap.String("status", status), zap.String("processing_state", string(processingState)))
+}
+
+func isTerminalHiveCIResultState(state domain.HiveCIProcessingState) bool {
+	switch state {
+	case domain.HiveCIProcessingStateProcessed,
+		domain.HiveCIProcessingStateRejected,
+		domain.HiveCIProcessingStateFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func requiredTag(ev *nostr.Event, key string) (string, error) {
