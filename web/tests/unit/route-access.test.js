@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { canAccessRoute, getRouteAccess, routeAccessConfig } from '../../src/lib/auth/route-access.js';
 
 describe('route access', () => {
@@ -7,12 +7,19 @@ describe('route access', () => {
     delete window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS;
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('marks signer-first protected routes and REST compatibility contracts', () => {
     expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
     expect(routeAccessConfig.protectedPrefixes).toContain('/fleet-health');
     expect(routeAccessConfig.protectedPrefixes).toContain('/settings');
     expect(routeAccessConfig.compatibilityRequirements).toMatchObject({ '/orgs': true });
+    expect(Object.keys(routeAccessConfig.roleRequirements).sort()).toEqual(
+      [...routeAccessConfig.protectedPrefixes].sort()
+    );
     expect(getRouteAccess('/souls')).toMatchObject({
       pathname: '/souls',
       protectedRoute: true,
@@ -83,7 +90,23 @@ describe('route access', () => {
     });
   });
 
-  it('applies route role and compatibility overrides when present', () => {
+  it('ignores mutable E2E authorization globals outside development builds', () => {
+    vi.stubEnv('DEV', false);
+    window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = { '/settings': ['admin'] };
+    window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS = { '/settings': true };
+
+    expect(getRouteAccess('/settings')).toMatchObject({
+      requiredRoles: [],
+      requiresRestCompatibility: false
+    });
+    expect(canAccessRoute({
+      pathname: '/settings',
+      authState: {},
+      isAuthenticated: true
+    })).toMatchObject({ authorized: true, roleAuthorized: true, compatibilityAuthorized: true });
+  });
+
+  it('applies route role and compatibility overrides in development tests', () => {
     window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = {
       '/llm/admin': ['operator']
     };

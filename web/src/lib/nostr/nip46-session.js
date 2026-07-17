@@ -4,9 +4,6 @@ import { decryptNip44, encryptNip44 } from './nip46-crypto.js';
 
 function getProviderSigner(provider) {
   if (provider && typeof provider.signEvent === 'function') return provider;
-  if (typeof window !== 'undefined' && window?.nostr && typeof window.nostr.signEvent === 'function') {
-    return window.nostr;
-  }
   return null;
 }
 
@@ -36,14 +33,14 @@ export async function connectNip46(uriOrSession) {
 
   await invokeConnect(provider, session);
 
-  let pubkey = null;
-  if (typeof provider.getPublicKey === 'function') {
-    pubkey = await provider.getPublicKey();
-  } else if (typeof window !== 'undefined' && window?.nostr && typeof window.nostr.getPublicKey === 'function') {
-    pubkey = await window.nostr.getPublicKey();
+  if (typeof provider.getPublicKey !== 'function') {
+    throw new Error('NIP-46 provider does not expose getPublicKey()');
   }
-
+  const pubkey = await provider.getPublicKey();
   if (!isValidHexPubkey(pubkey)) throw new Error('NIP-46 signer did not provide a valid public key');
+  if (pubkey.toLowerCase() !== session.signerPubkey.toLowerCase()) {
+    throw new Error('NIP-46 signer public key does not match the requested session');
+  }
 
   let relays = {};
   if (typeof provider.getRelays === 'function') {
@@ -77,7 +74,6 @@ export function getNip46Signer() {
   return {
     getPublicKey: async () => {
       if (typeof provider.getPublicKey === 'function') return provider.getPublicKey();
-      if (typeof signer.getPublicKey === 'function') return signer.getPublicKey();
       throw new Error('NIP-46 signer getPublicKey() is unavailable');
     },
     signEvent: (event) => signer.signEvent(event),

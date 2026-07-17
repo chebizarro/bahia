@@ -15,30 +15,32 @@ const PROTECTED_PREFIXES = [
   '/settings'
 ];
 
-// Route-level RBAC hooks. Empty arrays mean "any authenticated user".
-const ROUTE_ROLE_REQUIREMENTS = {};
+// Route authorization is intentionally authentication-only in the browser. Bahia's
+// signed-event and HTTP contracts remain the authoritative authorization boundary;
+// listing each protected prefix makes that policy explicit instead of looking unfinished.
+const ROUTE_ROLE_REQUIREMENTS = Object.fromEntries(
+  PROTECTED_PREFIXES.map((prefix) => [prefix, []])
+);
 
 // Routes that still require REST compatibility in the signer-first migration.
 const ROUTE_COMPATIBILITY_REQUIREMENTS = {
   '/orgs': true
 };
 
+function developmentOverride(name) {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return null;
+  const override = window[name];
+  return override && typeof override === 'object' ? override : null;
+}
+
 function getRoleRequirements() {
-  const overrides = typeof window !== 'undefined' ? window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS : null;
-  if (!overrides || typeof overrides !== 'object') return ROUTE_ROLE_REQUIREMENTS;
-  return {
-    ...ROUTE_ROLE_REQUIREMENTS,
-    ...overrides
-  };
+  const overrides = developmentOverride('__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS');
+  return overrides ? { ...ROUTE_ROLE_REQUIREMENTS, ...overrides } : ROUTE_ROLE_REQUIREMENTS;
 }
 
 function getCompatibilityRequirements() {
-  const overrides = typeof window !== 'undefined' ? window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS : null;
-  if (!overrides || typeof overrides !== 'object') return ROUTE_COMPATIBILITY_REQUIREMENTS;
-  return {
-    ...ROUTE_COMPATIBILITY_REQUIREMENTS,
-    ...overrides
-  };
+  const overrides = developmentOverride('__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS');
+  return overrides ? { ...ROUTE_COMPATIBILITY_REQUIREMENTS, ...overrides } : ROUTE_COMPATIBILITY_REQUIREMENTS;
 }
 
 function toRoleSet(authState = {}) {

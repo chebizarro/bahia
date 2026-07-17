@@ -74,11 +74,42 @@ describe('NIP-46 Utilities', () => {
       };
       global.window.nostr = { nip46: provider };
 
-      const result = await nip46Module.connectNip46(`nostrconnect://${'a'.repeat(64)}?relay=wss://relay.one&secret=shh`);
+      const result = await nip46Module.connectNip46(`nostrconnect://${'b'.repeat(64)}?relay=wss://relay.one&secret=shh`);
 
       expect(provider.connect).toHaveBeenCalled();
       expect(result.pubkey).toBe('b'.repeat(64));
       expect(result.relays).toEqual({ 'wss://relay.one': { read: true, write: true } });
+    });
+
+    it('rejects a provider identity that does not match the requested signer', async () => {
+      const provider = {
+        connect: vi.fn().mockResolvedValue(),
+        getPublicKey: vi.fn().mockResolvedValue('b'.repeat(64)),
+        signEvent: vi.fn()
+      };
+      global.window.nostr = { nip46: provider };
+
+      await expect(nip46Module.connectNip46(
+        `nostrconnect://${'a'.repeat(64)}?relay=wss://relay.one&secret=shh`
+      )).rejects.toThrow('does not match the requested session');
+    });
+
+    it('never falls back to the top-level NIP-07 signer', async () => {
+      const nip07GetPublicKey = vi.fn().mockResolvedValue('a'.repeat(64));
+      const nip07SignEvent = vi.fn();
+      const provider = { connect: vi.fn().mockResolvedValue() };
+      global.window.nostr = {
+        getPublicKey: nip07GetPublicKey,
+        signEvent: nip07SignEvent,
+        nip46: provider
+      };
+
+      await expect(nip46Module.connectNip46(
+        `nostrconnect://${'a'.repeat(64)}?relay=wss://relay.one&secret=shh`
+      )).rejects.toThrow('does not expose getPublicKey');
+      expect(() => nip46Module.getNip46Signer()).toThrow('NIP-46 signer API is unavailable');
+      expect(nip07GetPublicKey).not.toHaveBeenCalled();
+      expect(nip07SignEvent).not.toHaveBeenCalled();
     });
   });
 });

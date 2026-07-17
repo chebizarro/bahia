@@ -177,7 +177,10 @@ describe('Auth Store', () => {
     });
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { token: 'test-token', expires_at: new Date(Date.now() + 3600000).toISOString() } })
+      status: 200,
+      statusText: 'OK',
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({ data: [] })
     });
     // Dynamically import auth module to get fresh state
     authModule = await import('../../src/lib/stores/auth.js');
@@ -209,6 +212,7 @@ describe('Auth Store', () => {
         lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
       };
       localStorage.setItem('bahia_auth_session', JSON.stringify(session));
+      nip07Module.getPublicKey.mockResolvedValue(session.pubkey);
       
       await authModule.initializeAuth();
       
@@ -255,6 +259,7 @@ describe('Auth Store', () => {
         nip44: true
       };
       nip07Module.getCapabilities.mockReturnValue(capabilities);
+      nip07Module.getPublicKey.mockResolvedValue(session.pubkey);
       
       await authModule.initializeAuth();
       
@@ -271,11 +276,7 @@ describe('Auth Store', () => {
         lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
       }));
 
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { features: { direct_nostr_http_auth: false } } })
-      });
+      nip07Module.getPublicKey.mockResolvedValue('d'.repeat(64));
 
       await authModule.initializeAuth();
 
@@ -283,6 +284,21 @@ describe('Auth Store', () => {
       expect(authModule.authState.error).toBeNull();
       expect(authModule.authState.compatibility.restNip98Ready).toBe(false);
       expect(authModule.authState.compatibility.restNip98LastError).toContain('not enabled');
+    });
+
+    it('rejects and clears a persisted NIP-07 session that the signer does not control', async () => {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
+        pubkey: 'b'.repeat(64),
+        relays: {},
+        authMethod: 'nip07'
+      }));
+      nip07Module.getPublicKey.mockResolvedValue('a'.repeat(64));
+
+      await authModule.initializeAuth();
+
+      expect(authModule.authState.status).toBe('unauthenticated');
+      expect(authModule.authState.pubkey).toBeNull();
+      expect(localStorage.getItem('bahia_auth_session')).toBeNull();
     });
 
     it('should handle invalid session data gracefully', async () => {
@@ -438,7 +454,7 @@ describe('Auth Store', () => {
       expect(requestedRelays).not.toContain('wss://bahia.sharegap.net/relay');
     });
 
-    it('should handle login failure and preserve existing session if any', async () => {
+    it('does not resurrect an existing session after an explicit login failure', async () => {
       // Set up existing session
       const existingSession = {
         pubkey: 'f'.repeat(64),
@@ -454,9 +470,10 @@ describe('Auth Store', () => {
       
       const state = authModule.authState;
       
-      // Should restore previous session
-      expect(state.status).toBe('authenticated');
-      expect(state.pubkey).toBe(existingSession.pubkey);
+      expect(state.status).toBe('error');
+      expect(state.pubkey).toBeNull();
+      expect(state.error).toBe('User denied');
+      expect(localStorage.getItem('bahia_auth_session')).toBeNull();
     });
 
     it('should set error status on login failure with no previous session', async () => {
@@ -490,8 +507,10 @@ describe('Auth Store', () => {
       const signedEvent = { id: 'event-id', sig: 'signature', pubkey: 'a'.repeat(64), kind: 27235, tags: [] };
       nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, ...signedEvent, tags: event.tags }));
       systemStoreMock.info = { features: { direct_nostr_http_auth: true } };
-      global.fetch.mockResolvedValueOnce({
+      global.fetch.mockResolvedValue({
         ok: true,
+        status: 200,
+        statusText: 'OK',
         headers: new Map([['content-type', 'application/json']]),
         json: async () => ({ data: [] })
       });
@@ -505,10 +524,41 @@ describe('Auth Store', () => {
       expect(authModule.authState.compatibility.restNip98Ready).toBe(true);
       expect(authModule.authState.compatibility.restNip98LastError).toBeNull();
       expect(localStorage.getItem('bahia_token')).toBeNull();
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/orgs', expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Nostr /) })
+      }));
       expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
       expect(global.fetch).toHaveBeenLastCalledWith('/api/v1/blossom/servers', expect.objectContaining({
         headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Nostr /) })
       }));
+    });
+
+    it('keeps NIP-98 readiness false when the signed backend probe is rejected', async () => {
+      nip07Module.signEvent.mockImplementation(async (event) => ({
+        ...event,
+        id: 'probe-event-id',
+        sig: 'probe-signature'
+      }));
+      systemStoreMock.info = { features: { direct_nostr_http_auth: true } };
+      global.fetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ error: 'NIP-98 rejected' })
+      });
+
+      await authModule.login();
+
+      expect(authModule.authState.status).toBe('authenticated');
+      expect(authModule.authState.backendAuthenticated).toBe(false);
+      expect(authModule.authState.directNip98Ready).toBe(false);
+      expect(authModule.authState.compatibility).toMatchObject({
+        restNip98Advertised: true,
+        restNip98Ready: false,
+        restNip98LastError: 'NIP-98 rejected'
+      });
     });
 
     it('does not fall back to JWT exchange when direct NIP-98 is unavailable', async () => {
@@ -586,6 +636,25 @@ describe('Auth Store', () => {
       const stored = JSON.parse(localStorage.getItem('bahia_auth_session'));
       expect(stored.authMethod).toBe('nip46');
       expect(stored.nip46.uri).toContain('nostrconnect://');
+    });
+
+    it('does not resurrect a persisted session after NIP-46 connection failure', async () => {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
+        pubkey: 'f'.repeat(64),
+        authMethod: 'nip07',
+        relays: {}
+      }));
+      nip46Module.connectNip46.mockRejectedValueOnce(new Error('remote signer rejected'));
+
+      await expect(authModule.loginWithNostrConnect(
+        `nostrconnect://${'9'.repeat(64)}?relay=wss://relay.nip46.test&secret=secret`
+      )).rejects.toThrow('remote signer rejected');
+
+      expect(authModule.authState.status).toBe('error');
+      expect(authModule.authState.pubkey).toBeNull();
+      expect(authModule.authState.error).toBe('remote signer rejected');
+      expect(localStorage.getItem('bahia_auth_session')).toBeNull();
+      expect(nip46Module.disconnectNip46).toHaveBeenCalled();
     });
 
     it('should reconnect persisted NIP-46 session on initialize', async () => {
