@@ -14,13 +14,14 @@ import (
 type InMemoryNostrEventRepository struct {
 	mu      sync.RWMutex
 	records map[string]NostrEventRecord
+	cursors map[string]NostrMigrationCursor
 }
 
 var _ NostrEventRepository = (*InMemoryNostrEventRepository)(nil)
 
 // NewInMemoryNostrEventRepository creates an empty in-memory Nostr event repository.
 func NewInMemoryNostrEventRepository() *InMemoryNostrEventRepository {
-	return &InMemoryNostrEventRepository{records: make(map[string]NostrEventRecord)}
+	return &InMemoryNostrEventRepository{records: make(map[string]NostrEventRecord), cursors: make(map[string]NostrMigrationCursor)}
 }
 
 // Record stores rec by ID. Duplicate IDs are accepted idempotently and reported as inserted=false.
@@ -122,6 +123,10 @@ func (r *InMemoryNostrEventRepository) ListByKind(_ context.Context, kind int, l
 
 // ListByKinds returns the oldest events for any of kinds so migrations process deterministically.
 func (r *InMemoryNostrEventRepository) ListByKinds(_ context.Context, kinds []int, limit int) ([]NostrEventRecord, error) {
+	return r.ListByKindsPage(context.Background(), kinds, nil, limit)
+}
+
+func (r *InMemoryNostrEventRepository) ListByKindsPage(_ context.Context, kinds []int, after *NostrMigrationCursor, limit int) ([]NostrEventRecord, error) {
 	if len(kinds) == 0 {
 		return nil, nil
 	}
@@ -135,6 +140,9 @@ func (r *InMemoryNostrEventRepository) ListByKinds(_ context.Context, kinds []in
 	records := make([]NostrEventRecord, 0)
 	for _, rec := range r.records {
 		if _, ok := kindSet[rec.Kind]; ok {
+			if after != nil && (rec.CreatedAt.Before(after.CreatedAt) || (rec.CreatedAt.Equal(after.CreatedAt) && rec.ID <= after.EventID)) {
+				continue
+			}
 			records = append(records, cloneNostrEventRecord(&rec))
 		}
 	}
@@ -145,6 +153,27 @@ func (r *InMemoryNostrEventRepository) ListByKinds(_ context.Context, kinds []in
 		return records[i].CreatedAt.Before(records[j].CreatedAt)
 	})
 	return limitNostrEventRecords(records, limit), nil
+}
+
+func (r *InMemoryNostrEventRepository) GetMigrationCursor(_ context.Context, name string) (*NostrMigrationCursor, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cursor, ok := r.cursors[name]
+	if !ok {
+		return nil, nil
+	}
+	copy := cursor
+	return &copy, nil
+}
+
+func (r *InMemoryNostrEventRepository) SaveMigrationCursor(_ context.Context, cursor NostrMigrationCursor) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.cursors[cursor.Name]
+	if !ok || existing.CreatedAt.Before(cursor.CreatedAt) || (existing.CreatedAt.Equal(cursor.CreatedAt) && existing.EventID < cursor.EventID) {
+		r.cursors[cursor.Name] = cursor
+	}
+	return nil
 }
 
 // FindByTag returns events containing tagName=tagValue, optionally restricted by kind.

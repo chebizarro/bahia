@@ -27,6 +27,13 @@ type NostrEventRecord struct {
 	EntityID   *uuid.UUID
 }
 
+// NostrMigrationCursor is a durable keyset cursor for deterministic migrations.
+type NostrMigrationCursor struct {
+	Name      string
+	CreatedAt time.Time
+	EventID   string
+}
+
 // NostrEventRepository manages the nostr_events audit trail.
 type NostrEventRepository interface {
 	// Record inserts rec idempotently. It returns true only when the row was newly inserted.
@@ -34,6 +41,9 @@ type NostrEventRepository interface {
 	GetByID(ctx context.Context, id string) (*NostrEventRecord, error)
 	ListByKind(ctx context.Context, kind int, limit int) ([]NostrEventRecord, error)
 	ListByKinds(ctx context.Context, kinds []int, limit int) ([]NostrEventRecord, error)
+	ListByKindsPage(ctx context.Context, kinds []int, after *NostrMigrationCursor, limit int) ([]NostrEventRecord, error)
+	GetMigrationCursor(ctx context.Context, name string) (*NostrMigrationCursor, error)
+	SaveMigrationCursor(ctx context.Context, cursor NostrMigrationCursor) error
 	FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]NostrEventRecord, error)
 	ListByEntity(ctx context.Context, entityType string, entityID uuid.UUID, limit int) ([]NostrEventRecord, error)
 	LatestCreatedAtForKinds(ctx context.Context, kinds []int) (*time.Time, error)
@@ -128,18 +138,56 @@ func (r *PgNostrEventRepository) ListByKind(ctx context.Context, kind int, limit
 
 // ListByKinds returns the most recent events for any of kinds.
 func (r *PgNostrEventRepository) ListByKinds(ctx context.Context, kinds []int, limit int) ([]NostrEventRecord, error) {
+	return r.ListByKindsPage(ctx, kinds, nil, limit)
+}
+
+// ListByKindsPage returns a deterministic keyset page after the supplied cursor.
+func (r *PgNostrEventRepository) ListByKindsPage(ctx context.Context, kinds []int, after *NostrMigrationCursor, limit int) ([]NostrEventRecord, error) {
 	if len(kinds) == 0 {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = ANY($1) ORDER BY created_at ASC, id ASC LIMIT $2`, kinds, limit)
+	query := `SELECT ` + nostrEventColumns + ` FROM nostr_events WHERE kind = ANY($1)`
+	args := []any{kinds}
+	if after != nil {
+		query += ` AND (created_at, id) > ($2, $3)`
+		args = append(args, after.CreatedAt, after.EventID)
+	}
+	query += ` ORDER BY created_at ASC, id ASC LIMIT $` + fmt.Sprint(len(args)+1)
+	args = append(args, limit)
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing nostr events by kinds: %w", err)
 	}
 	defer rows.Close()
 	return scanNostrEventRows(rows)
+}
+
+func (r *PgNostrEventRepository) GetMigrationCursor(ctx context.Context, name string) (*NostrMigrationCursor, error) {
+	cursor := &NostrMigrationCursor{Name: name}
+	err := r.pool.QueryRow(ctx, `SELECT created_at, event_id FROM nostr_migration_cursors WHERE name = $1`, name).Scan(&cursor.CreatedAt, &cursor.EventID)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying nostr migration cursor %q: %w", name, err)
+	}
+	return cursor, nil
+}
+
+func (r *PgNostrEventRepository) SaveMigrationCursor(ctx context.Context, cursor NostrMigrationCursor) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO nostr_migration_cursors (name, created_at, event_id, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (name) DO UPDATE SET created_at = EXCLUDED.created_at, event_id = EXCLUDED.event_id, updated_at = NOW()
+		WHERE (nostr_migration_cursors.created_at, nostr_migration_cursors.event_id) < (EXCLUDED.created_at, EXCLUDED.event_id)
+	`, cursor.Name, cursor.CreatedAt, cursor.EventID)
+	if err != nil {
+		return fmt.Errorf("saving nostr migration cursor %q: %w", cursor.Name, err)
+	}
+	return nil
 }
 
 // FindByTag returns events containing tagName=tagValue, optionally restricted by kind.

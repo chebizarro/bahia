@@ -3,6 +3,7 @@ package nostrmigration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -23,16 +24,26 @@ type captureMigrationPublisher struct {
 type fakeMigrationSubscriber struct {
 	filters [][]gonostr.Filter
 	events  []*gonostr.Event
+	pages   [][]*gonostr.Event
 }
 
 func (s *fakeMigrationSubscriber) SubscribeAllWithEOSE(_ context.Context, filters []gonostr.Filter) (*nostrAdapter.MergedSubscription, error) {
 	s.filters = append(s.filters, filters)
+	page := s.events
+	if len(s.pages) > 0 {
+		index := len(s.filters) - 1
+		if index < len(s.pages) {
+			page = s.pages[index]
+		} else {
+			page = nil
+		}
+	}
 	events := make(chan *gonostr.Event)
 	eose := make(chan struct{})
 	go func() {
 		defer close(events)
 		defer close(eose)
-		for _, ev := range s.events {
+		for _, ev := range page {
 			events <- ev
 		}
 	}()
@@ -78,7 +89,7 @@ func TestRunnerSkipsAlreadyMigratedLegacyRecord(t *testing.T) {
 	legacy := legacyRecord(t, "legacy-1", kinds.ServiceState, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, legacy)
 	require.NoError(t, err)
-	tags, err := json.Marshal(gonostr.Tags{{"migrated-from", legacy.ID}})
+	tags, err := json.Marshal(gonostr.Tags{{"migrated-from", legacy.ID}, {"migration", migrationID}})
 	require.NoError(t, err)
 	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "canonical-existing", Kind: CanonicalCASCPState, Tags: tags, CreatedAt: time.Unix(101, 0).UTC()})
 	require.NoError(t, err)
@@ -86,6 +97,78 @@ func TestRunnerSkipsAlreadyMigratedLegacyRecord(t *testing.T) {
 
 	require.NoError(t, NewRunner(repo, publisher, nil, Config{PrivateKey: deterministicPrivateKey(t)}, zap.NewNop()).Run(ctx))
 	require.Empty(t, publisher.events)
+}
+
+func TestRunnerPaginatesAllLocalRecordsAndPersistsCursor(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	for i := 0; i < 5; i++ {
+		_, err := repo.Record(ctx, legacyRecord(t, fmt.Sprintf("legacy-%d", i), kinds.DeployRequest, time.Unix(int64(100+i), 0).UTC()))
+		require.NoError(t, err)
+	}
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{Accepted: true}}}
+	runner := NewRunner(repo, publisher, nil, Config{PrivateKey: deterministicPrivateKey(t), LocalBatchLimit: 2}, zap.NewNop())
+
+	require.NoError(t, runner.Run(ctx))
+	require.Len(t, publisher.events, 5)
+	cursor, err := repo.GetMigrationCursor(ctx, localCursorName)
+	require.NoError(t, err)
+	require.NotNil(t, cursor)
+	require.Equal(t, "legacy-4", cursor.EventID)
+
+	secondPublisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{Accepted: true}}}
+	require.NoError(t, NewRunner(repo, secondPublisher, nil, Config{PrivateKey: deterministicPrivateKey(t), LocalBatchLimit: 2}, zap.NewNop()).Run(ctx))
+	require.Empty(t, secondPublisher.events)
+}
+
+func TestBuildCanonicalEventTranslatesLegacyObjectIntoContextVMParams(t *testing.T) {
+	rec := *legacyRecord(t, "legacy-translate", kinds.DeployRequest, time.Unix(100, 0).UTC())
+	rec.Content = `{"service_id":"svc-1","replicas":2}`
+	disp, ok := ResolveDisposition(rec.Kind, rec.Tags, rec.Content)
+	require.True(t, ok)
+
+	ev, err := BuildCanonicalEvent(rec, disp)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &payload))
+	params := payload["params"].(map[string]any)
+	require.Equal(t, "svc-1", params["service_id"])
+	require.Equal(t, float64(2), params["replicas"])
+	require.NotContains(t, params, "content")
+	require.Contains(t, tagValues(ev.Tags, "migration"), migrationID)
+}
+
+func TestRunnerRegeneratesLegacyV1MigrationOutput(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	legacy := legacyRecord(t, "legacy-v1", kinds.DeployRequest, time.Unix(100, 0).UTC())
+	_, err := repo.Record(ctx, legacy)
+	require.NoError(t, err)
+	tags, err := json.Marshal(gonostr.Tags{{"migrated-from", legacy.ID}, {"migration", "bahia-nostr-native-v1"}})
+	require.NoError(t, err)
+	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "bad-v1", Kind: CanonicalContextVMMessage, Tags: tags, CreatedAt: time.Unix(101, 0).UTC()})
+	require.NoError(t, err)
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{Accepted: true}}}
+
+	require.NoError(t, NewRunner(repo, publisher, nil, Config{PrivateKey: deterministicPrivateKey(t)}, zap.NewNop()).Run(ctx))
+	require.Len(t, publisher.events, 1)
+	require.Contains(t, tagValues(publisher.events[0].Tags, "migration"), migrationID)
+}
+
+func TestRunnerPaginatesRelayBackfillWindows(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	newest := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(300, 0).UTC())
+	middle := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(200, 0).UTC())
+	oldest := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
+	subscriber := &fakeMigrationSubscriber{pages: [][]*gonostr.Event{{newest, middle}, {oldest}}}
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{Accepted: true}}}
+	runner := NewRunner(repo, publisher, subscriber, Config{PrivateKey: deterministicPrivateKey(t), RelayBackfill: true, BackfillLimit: 2}, zap.NewNop())
+
+	require.NoError(t, runner.Run(ctx))
+	require.Len(t, subscriber.filters, 2)
+	require.NotZero(t, subscriber.filters[1][0].Until)
+	require.Len(t, publisher.events, 3)
 }
 
 func TestRunnerFailsWhenPublishOutcomeIsNotAcceptedOrDuplicate(t *testing.T) {

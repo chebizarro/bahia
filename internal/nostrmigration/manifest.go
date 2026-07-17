@@ -69,7 +69,7 @@ func (d Disposition) Tags(legacyEventID string) [][]string {
 	tags := [][]string{
 		{"migrated-from", legacyEventID},
 		{"legacy-kind", fmt.Sprint(d.LegacyKind)},
-		{"migration", "bahia-nostr-native-v1"},
+		{"migration", migrationID},
 		{"schema", d.Schema},
 		{"domain", d.Domain},
 		{"layer", string(d.Layer)},

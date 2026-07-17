@@ -18,8 +18,16 @@ import (
 type EventRepository interface {
 	Record(context.Context, *repository.NostrEventRecord) (bool, error)
 	ListByKinds(context.Context, []int, int) ([]repository.NostrEventRecord, error)
+	ListByKindsPage(context.Context, []int, *repository.NostrMigrationCursor, int) ([]repository.NostrEventRecord, error)
+	GetMigrationCursor(context.Context, string) (*repository.NostrMigrationCursor, error)
+	SaveMigrationCursor(context.Context, repository.NostrMigrationCursor) error
 	FindByTag(context.Context, string, string, []int, int) ([]repository.NostrEventRecord, error)
 }
+
+const (
+	localCursorName = "bahia-nostr-native-v2-local"
+	migrationID     = "bahia-nostr-native-v2"
+)
 
 type RelaySubscriber interface {
 	SubscribeAllWithEOSE(context.Context, []gonostr.Filter) (*nostrAdapter.MergedSubscription, error)
@@ -109,45 +117,79 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) migrateLocal(ctx context.Context, summary *Summary) error {
-	records, err := r.repo.ListByKinds(ctx, LegacyKinds(), r.config.LocalBatchLimit)
+	cursor, err := r.repo.GetMigrationCursor(ctx, localCursorName)
 	if err != nil {
-		return fmt.Errorf("list local legacy nostr records: %w", err)
+		return fmt.Errorf("load local nostr migration cursor: %w", err)
 	}
-	for i := range records {
-		summary.LocalScanned++
-		if err := r.migrateRecord(ctx, records[i], summary); err != nil {
-			return err
+	for {
+		records, err := r.repo.ListByKindsPage(ctx, LegacyKinds(), cursor, r.config.LocalBatchLimit)
+		if err != nil {
+			return fmt.Errorf("list local legacy nostr records page: %w", err)
+		}
+		if len(records) == 0 {
+			return nil
+		}
+		for i := range records {
+			summary.LocalScanned++
+			if err := r.migrateRecord(ctx, records[i], summary); err != nil {
+				return err
+			}
+			cursor = &repository.NostrMigrationCursor{Name: localCursorName, CreatedAt: records[i].CreatedAt, EventID: records[i].ID}
+			if !r.config.DryRun {
+				if err := r.repo.SaveMigrationCursor(ctx, *cursor); err != nil {
+					return fmt.Errorf("save local nostr migration cursor after %s: %w", records[i].ID, err)
+				}
+			}
 		}
 	}
-	return nil
 }
 
 func (r *Runner) migrateRelayBackfill(ctx context.Context, summary *Summary) error {
+	until := r.config.BackfillUntil
+	for {
+		count, oldest, err := r.migrateRelayPage(ctx, summary, until)
+		if err != nil {
+			return err
+		}
+		if count < r.config.BackfillLimit || oldest == nil {
+			return nil
+		}
+		nextUntil := oldest.Add(-time.Second)
+		if r.config.BackfillSince != nil && nextUntil.Before(r.config.BackfillSince.UTC()) {
+			return nil
+		}
+		until = &nextUntil
+	}
+}
+
+func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *time.Time) (int, *time.Time, error) {
 	filter := gonostr.Filter{Kinds: nostrutil.KindsFromInts(LegacyKinds()), Limit: r.config.BackfillLimit}
 	if r.config.BackfillSince != nil {
 		filter.Since = gonostr.Timestamp(r.config.BackfillSince.Unix())
 	}
-	if r.config.BackfillUntil != nil {
-		filter.Until = gonostr.Timestamp(r.config.BackfillUntil.Unix())
+	if until != nil {
+		filter.Until = gonostr.Timestamp(until.Unix())
 	}
 	backfillCtx, cancel := context.WithTimeout(ctx, r.config.BackfillTimeout)
 	defer cancel()
 	merged, err := r.subscriber.SubscribeAllWithEOSE(backfillCtx, []gonostr.Filter{filter})
 	if err != nil {
-		return fmt.Errorf("subscribe relay migration backfill: %w", err)
+		return 0, nil, fmt.Errorf("subscribe relay migration backfill: %w", err)
 	}
 	defer merged.Close()
+	count := 0
+	var oldest *time.Time
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return count, oldest, ctx.Err()
 		case <-backfillCtx.Done():
-			return fmt.Errorf("relay migration backfill did not reach EOSE: %w", backfillCtx.Err())
+			return count, oldest, fmt.Errorf("relay migration backfill did not reach EOSE: %w", backfillCtx.Err())
 		case <-merged.EndOfStoredEvents:
-			return nil
+			return count, oldest, nil
 		case closed, ok := <-merged.Closed:
 			if ok {
-				return fmt.Errorf("relay migration backfill closed by %s subscription %s: %s", closed.RelayURL, closed.SubscriptionID, closed.Reason)
+				return count, oldest, fmt.Errorf("relay migration backfill closed by %s subscription %s: %s", closed.RelayURL, closed.SubscriptionID, closed.Reason)
 			}
 		case ev, ok := <-merged.Events:
 			if !ok {
@@ -156,19 +198,24 @@ func (r *Runner) migrateRelayBackfill(ctx context.Context, summary *Summary) err
 			if ev == nil {
 				continue
 			}
-			if err := validateRelayBackfillEvent(ev, time.Now().UTC(), r.config.BackfillSince, r.config.BackfillUntil); err != nil {
-				return fmt.Errorf("validate relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
+			if err := validateRelayBackfillEvent(ev, time.Now().UTC(), r.config.BackfillSince, until); err != nil {
+				return count, oldest, fmt.Errorf("validate relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
+			}
+			count++
+			createdAt := ev.CreatedAt.Time().UTC()
+			if oldest == nil || createdAt.Before(*oldest) {
+				oldest = &createdAt
 			}
 			rec, err := recordFromEvent(ev)
 			if err != nil {
-				return err
+				return count, oldest, err
 			}
 			if _, err := r.repo.Record(ctx, rec); err != nil {
-				return fmt.Errorf("record relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
+				return count, oldest, fmt.Errorf("record relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
 			}
 			summary.RelayScanned++
 			if err := r.migrateRecord(ctx, *rec, summary); err != nil {
-				return err
+				return count, oldest, err
 			}
 		}
 	}
@@ -179,11 +226,11 @@ func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRec
 	if !ok {
 		return nil
 	}
-	existing, err := r.repo.FindByTag(ctx, "migrated-from", rec.ID, []int{disp.CanonicalKind}, 1)
+	existing, err := r.repo.FindByTag(ctx, "migrated-from", rec.ID, []int{disp.CanonicalKind}, 50)
 	if err != nil {
 		return fmt.Errorf("detect existing migration output for %s: %w", rec.ID, err)
 	}
-	if len(existing) > 0 {
+	if hasCurrentMigration(existing) {
 		summary.SkippedExisting++
 		return nil
 	}
@@ -225,21 +272,24 @@ func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRec
 }
 
 func BuildCanonicalEvent(rec repository.NostrEventRecord, disp Disposition) (*gonostr.Event, error) {
-	payload := map[string]any{
-		"migration": "bahia-nostr-native-v1",
-		"legacy_event": map[string]any{
-			"id":         rec.ID,
-			"kind":       rec.Kind,
-			"pubkey":     rec.PubKey,
-			"content":    rec.Content,
-			"created_at": rec.CreatedAt.UTC().Format(time.RFC3339),
-		},
+	translated, err := translatedLegacyContent(rec)
+	if err != nil {
+		return nil, err
 	}
+	metadata := map[string]any{"id": rec.ID, "kind": rec.Kind, "pubkey": rec.PubKey, "created_at": rec.CreatedAt.UTC().Format(time.RFC3339), "version": migrationID}
+	payload := translatedObject(translated)
+	payload["schema"] = disp.Schema
+	payload["_migration"] = metadata
 	if disp.Method != "" {
+		params := translatedObject(translated)
+		params["legacy_event_id"] = rec.ID
+		params["legacy_kind"] = rec.Kind
+		params["_meta"] = map[string]any{"progressToken": "migration-" + rec.ID, "migration": metadata, "schema": disp.Schema}
+		payload = map[string]any{}
 		payload["jsonrpc"] = "2.0"
 		payload["id"] = "migration-" + rec.ID
 		payload["method"] = disp.Method
-		payload["params"] = map[string]any{"legacy_event_id": rec.ID, "legacy_kind": rec.Kind, "content": rec.Content, "_meta": map[string]any{"progressToken": "migration-" + rec.ID}}
+		payload["params"] = params
 	}
 	content, err := json.Marshal(payload)
 	if err != nil {
@@ -266,6 +316,42 @@ func BuildCanonicalEvent(rec repository.NostrEventRecord, disp Disposition) (*go
 		eventTags = append(eventTags, gonostr.Tag(tag))
 	}
 	return &gonostr.Event{Kind: gonostr.Kind(disp.CanonicalKind), CreatedAt: gonostr.Timestamp(createdAt.Unix()), Tags: eventTags, Content: string(content)}, nil
+}
+
+func translatedLegacyContent(rec repository.NostrEventRecord) (any, error) {
+	var translated any
+	decoder := json.NewDecoder(strings.NewReader(rec.Content))
+	decoder.UseNumber()
+	if err := decoder.Decode(&translated); err != nil {
+		return nil, fmt.Errorf("translate legacy content for %s: %w", rec.ID, err)
+	}
+	return translated, nil
+}
+
+func translatedObject(value any) map[string]any {
+	if object, ok := value.(map[string]any); ok {
+		out := make(map[string]any, len(object)+2)
+		for key, item := range object {
+			out[key] = item
+		}
+		return out
+	}
+	return map[string]any{"data": value}
+}
+
+func hasCurrentMigration(records []repository.NostrEventRecord) bool {
+	for _, rec := range records {
+		var tags [][]string
+		if json.Unmarshal(rec.Tags, &tags) != nil {
+			continue
+		}
+		for _, tag := range tags {
+			if len(tag) >= 2 && tag[0] == "migration" && tag[1] == migrationID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func verifyPublish(outcomes []PublishOutcome) (accepted bool, duplicate bool) {
