@@ -6,9 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +35,7 @@ const (
 	minAvatarDimension  = 64
 	maxAvatarDimension  = 2048
 	avatarDimensionStep = 8
+	maxAvatarImageBytes = 10 * 1024 * 1024
 )
 
 // AvatarProgressStage identifies a generation lifecycle step.
@@ -339,31 +345,37 @@ func (g *AvatarGenerator) GenerateWithSpec(ctx context.Context, spec domain.Soul
 	g.logger.Info("generating avatar", "provider", req.Provider, "prompt_length", len(req.Prompt), "style_preset", req.StylePreset)
 	emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressDispatching, Percent: 10, Message: "dispatching avatar generation to provider"})
 
-	terminalSent := false
 	result, err := provider.GenerateAvatar(ctx, req, func(event AvatarProgressEvent) {
+		// Providers report intermediate progress only. Terminal truth is emitted
+		// here after the returned image has been validated.
+		if event.Stage == AvatarProgressCompleted || event.Stage == AvatarProgressFailed {
+			return
+		}
 		if event.Provider == "" {
 			event.Provider = req.Provider
-		}
-		if event.Stage == AvatarProgressCompleted || event.Stage == AvatarProgressFailed {
-			if terminalSent {
-				return
-			}
-			terminalSent = true
 		}
 		emitAvatarProgress(progress, event)
 	})
 	if err != nil {
-		if !terminalSent {
-			emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressFailed, Percent: 100, Error: err.Error()})
-		}
+		emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressFailed, Percent: 100, Error: err.Error()})
 		return nil, err
 	}
-	if result != nil && result.Provider == "" {
+	if result == nil {
+		err := errors.New("avatar provider returned no result")
+		emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressFailed, Percent: 100, Error: err.Error()})
+		return nil, err
+	}
+	contentType, err := validateAvatarImage(result.ImageData, result.ContentType)
+	if err != nil {
+		err = fmt.Errorf("invalid avatar provider result: %w", err)
+		emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressFailed, Percent: 100, Error: err.Error()})
+		return nil, err
+	}
+	result.ContentType = contentType
+	if result.Provider == "" {
 		result.Provider = req.Provider
 	}
-	if !terminalSent {
-		emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressCompleted, Percent: 100, Message: "avatar generation complete", Result: result})
-	}
+	emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressCompleted, Percent: 100, Message: "avatar generation complete", Result: result})
 	return result, nil
 }
 
@@ -544,23 +556,37 @@ func (p *FluxComfyUIAvatarProvider) GenerateAvatar(ctx context.Context, req Avat
 		return &AvatarResult{ImageData: imageData, ContentType: imageContentType, Seed: apiResp.Seed, Provider: p.Name(), SourceURL: imageURL}, nil
 	}
 
-	imageData, err := io.ReadAll(resp.Body)
+	imageData, contentType, err := readBoundedAvatarImage(resp.Body, contentType)
 	if err != nil {
 		return nil, fmt.Errorf("read image: %w", err)
-	}
-	if contentType == "" {
-		contentType = "image/png"
 	}
 	return &AvatarResult{ImageData: imageData, ContentType: contentType, Seed: req.Seed, Provider: p.Name()}, nil
 }
 
-func (p *FluxComfyUIAvatarProvider) fetchImage(ctx context.Context, url string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (p *FluxComfyUIAvatarProvider) fetchImage(ctx context.Context, rawURL string) ([]byte, string, error) {
+	if err := validateProviderImageURL(rawURL, p.baseURL); err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
 
-	resp, err := p.httpClient.Do(req)
+	client := *p.httpClient
+	originalRedirectCheck := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if err := validateProviderImageURL(req.URL.String(), p.baseURL); err != nil {
+			return fmt.Errorf("unsafe avatar image redirect: %w", err)
+		}
+		if originalRedirectCheck != nil {
+			return originalRedirectCheck(req, via)
+		}
+		return nil
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -569,12 +595,7 @@ func (p *FluxComfyUIAvatarProvider) fetchImage(ctx context.Context, url string) 
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("image fetch error %d", resp.StatusCode)
 	}
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "image/png"
-	}
-	imageData, err := io.ReadAll(resp.Body)
-	return imageData, contentType, err
+	return readBoundedAvatarImage(resp.Body, resp.Header.Get("Content-Type"))
 }
 
 // UnavailableAvatarProvider reserves a registry slot for a provider whose concrete
@@ -599,6 +620,80 @@ func (p UnavailableAvatarProvider) Available() (bool, string) {
 func (p UnavailableAvatarProvider) GenerateAvatar(context.Context, AvatarGenerationRequest, AvatarProgressFunc) (*AvatarResult, error) {
 	_, reason := p.Available()
 	return nil, errors.New(reason)
+}
+
+func validateProviderImageURL(rawURL, providerBaseURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("parse avatar image URL: %w", err)
+	}
+	base, err := url.Parse(strings.TrimSpace(providerBaseURL))
+	if err != nil {
+		return fmt.Errorf("parse avatar provider URL: %w", err)
+	}
+	if parsed.User != nil {
+		return errors.New("avatar image URL must not include userinfo")
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("avatar image URL must be an absolute HTTP(S) URL")
+	}
+	if !strings.EqualFold(parsed.Scheme, base.Scheme) || !strings.EqualFold(parsed.Host, base.Host) {
+		return fmt.Errorf("avatar image URL origin %q is not the configured provider origin %q", parsed.Scheme+"://"+parsed.Host, base.Scheme+"://"+base.Host)
+	}
+	return nil
+}
+
+func readBoundedAvatarImage(reader io.Reader, contentType string) ([]byte, string, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxAvatarImageBytes+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) > maxAvatarImageBytes {
+		return nil, "", fmt.Errorf("avatar image exceeds %d bytes", maxAvatarImageBytes)
+	}
+	normalizedType, err := validateAvatarImage(data, contentType)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, normalizedType, nil
+}
+
+func validateAvatarImage(data []byte, contentType string) (string, error) {
+	if len(data) == 0 {
+		return "", errors.New("avatar image is empty")
+	}
+	if len(data) > maxAvatarImageBytes {
+		return "", fmt.Errorf("avatar image exceeds %d bytes", maxAvatarImageBytes)
+	}
+
+	declaredType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	detectedType := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	allowed := func(value string) bool {
+		switch value {
+		case "image/png", "image/jpeg", "image/gif":
+			return true
+		default:
+			return false
+		}
+	}
+	if declaredType != "" && !allowed(declaredType) {
+		return "", fmt.Errorf("avatar content type %q is not allowed", declaredType)
+	}
+	if !allowed(detectedType) {
+		return "", fmt.Errorf("detected avatar content type %q is not allowed", detectedType)
+	}
+	if declaredType != "" && declaredType != detectedType {
+		return "", fmt.Errorf("avatar content type %q does not match detected type %q", declaredType, detectedType)
+	}
+
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("decode avatar image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > maxAvatarDimension || config.Height > maxAvatarDimension {
+		return "", fmt.Errorf("decoded avatar dimensions %dx%d are outside 1..%d", config.Width, config.Height, maxAvatarDimension)
+	}
+	return detectedType, nil
 }
 
 func validateAvatarDimensions(width, height int) error {

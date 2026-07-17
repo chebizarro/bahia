@@ -210,9 +210,7 @@ func (g *SoulGenerator) parseOutput(response string) (*domain.SoulGeneratorOutpu
 	// Parse JSON
 	var output domain.SoulGeneratorOutput
 	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
-		// If JSON parsing fails, try to extract content manually
-		g.logger.Warn("failed to parse JSON, using fallback", "error", err)
-		return g.fallbackParse(response)
+		return nil, fmt.Errorf("parse LLM soul output as JSON: %w", err)
 	}
 
 	// Validate required fields
@@ -221,23 +219,6 @@ func (g *SoulGenerator) parseOutput(response string) (*domain.SoulGeneratorOutpu
 	}
 
 	return &output, nil
-}
-
-// fallbackParse attempts to extract content when JSON parsing fails.
-func (g *SoulGenerator) fallbackParse(response string) (*domain.SoulGeneratorOutput, error) {
-	// Create a basic output from the response
-	output := &domain.SoulGeneratorOutput{
-		SoulMD:       response,
-		IdentityMD:   "",
-		AllowedKinds: []int{0, 1, 4}, // Basic defaults
-		ToolGrants: []domain.ToolGrant{
-			{MCPServer: "agent-memory", Scopes: []string{"read", "write"}},
-		},
-		AvatarPrompt:    "Friendly robot avatar",
-		PersonalityTags: []string{"helpful", "reliable"},
-	}
-
-	return output, nil
 }
 
 // System prompt for soul generation

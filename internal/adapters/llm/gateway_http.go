@@ -77,15 +77,19 @@ func (m *HTTPGatewayRouteManager) UpsertRoute(ctx context.Context, gatewayRef st
 	if err != nil {
 		return nil, err
 	}
-	obs, err := decodeGatewayObservation(respBody, spec)
+	obs, err := decodeGatewayObservation(respBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gateway route upsert was not confirmed: %w", err)
 	}
+	if obs.RouteName != spec.RouteName {
+		return nil, fmt.Errorf("gateway route upsert acknowledgement named %q, want %q", obs.RouteName, spec.RouteName)
+	}
+	expectedHash := spec.ManagedConfigHash()
 	if obs.GatewayConfigHash == "" {
-		obs.GatewayConfigHash = spec.ManagedConfigHash()
+		return nil, fmt.Errorf("gateway route upsert acknowledgement omitted observed config hash")
 	}
-	if obs.Status == "" || obs.Status == domain.GatewayRouteStatusUnknown {
-		obs.Status = domain.GatewayRouteStatusSynced
+	if obs.GatewayConfigHash != expectedHash {
+		return nil, fmt.Errorf("gateway route upsert observed config hash %q, want %q", obs.GatewayConfigHash, expectedHash)
 	}
 	return obs, nil
 }
@@ -102,11 +106,14 @@ func (m *HTTPGatewayRouteManager) GetRoute(ctx context.Context, gatewayRef, rout
 		}
 		return nil, err
 	}
-	obs, err := decodeGatewayObservation(respBody, GatewayRouteSpec{RouteName: routeName})
-	if obs != nil && (obs.Status == "" || obs.Status == domain.GatewayRouteStatusUnknown) {
-		obs.Status = domain.GatewayRouteStatusSynced
+	obs, err := decodeGatewayObservation(respBody)
+	if err != nil {
+		return nil, fmt.Errorf("decode gateway route %q observation: %w", routeName, err)
 	}
-	return obs, err
+	if obs.RouteName != routeName {
+		return nil, fmt.Errorf("gateway route observation named %q, want %q", obs.RouteName, routeName)
+	}
+	return obs, nil
 }
 
 func (m *HTTPGatewayRouteManager) DeleteRoute(ctx context.Context, gatewayRef, routeName string) error {
@@ -199,18 +206,10 @@ func validateGatewayEndpoint(ref string, ep GatewayHTTPEndpointConfig) error {
 	return nil
 }
 
-func decodeGatewayObservation(body []byte, fallback GatewayRouteSpec) (*GatewayRouteObservation, error) {
-	obs := &GatewayRouteObservation{
-		RouteName:   fallback.RouteName,
-		PublicModel: fallback.PublicModel,
-		Path:        fallback.CanonicalPath(),
-		TargetURL:   fallback.TargetURL,
-		Status:      domain.GatewayRouteStatusUnknown,
-	}
+func decodeGatewayObservation(body []byte) (*GatewayRouteObservation, error) {
+	obs := &GatewayRouteObservation{Status: domain.GatewayRouteStatusUnknown}
 	if len(strings.TrimSpace(string(body))) == 0 {
-		obs.Status = domain.GatewayRouteStatusSynced
-		obs.GatewayConfigHash = fallback.ManagedConfigHash()
-		return obs, nil
+		return nil, fmt.Errorf("empty gateway route observation")
 	}
 
 	var raw json.RawMessage = append([]byte(nil), body...)
@@ -232,20 +231,17 @@ func decodeGatewayObservation(body []byte, fallback GatewayRouteSpec) (*GatewayR
 	if envelope.Route != nil {
 		*obs = *envelope.Route
 	} else {
-		obs.RouteName = firstNonEmpty(envelope.RouteName, envelope.Name, obs.RouteName)
-		obs.PublicModel = firstNonEmpty(envelope.PublicModel, obs.PublicModel)
-		obs.Path = firstNonEmpty(envelope.Path, obs.Path)
-		obs.TargetURL = firstNonEmpty(envelope.TargetURL, obs.TargetURL)
+		obs.RouteName = firstNonEmpty(envelope.RouteName, envelope.Name)
+		obs.PublicModel = envelope.PublicModel
+		obs.Path = envelope.Path
+		obs.TargetURL = envelope.TargetURL
 		obs.Status = envelope.Status
 		obs.GatewayConfigHash = firstNonEmpty(envelope.GatewayConfigHash, envelope.ConfigHash)
 		obs.Metadata = envelope.Metadata
 	}
 	obs.ObservedRaw = raw
-	if obs.Path == "" {
-		obs.Path = fallback.CanonicalPath()
-	}
-	if obs.GatewayConfigHash == "" && fallback.TargetURL != "" {
-		obs.GatewayConfigHash = fallback.ManagedConfigHash()
+	if strings.TrimSpace(obs.RouteName) == "" {
+		return nil, fmt.Errorf("gateway route observation omitted route identity")
 	}
 	if obs.Status == "" {
 		obs.Status = domain.GatewayRouteStatusUnknown

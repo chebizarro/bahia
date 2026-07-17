@@ -4,8 +4,39 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestHTTPGatewayRouteManagerRejectsUnconfirmedUpsert(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "empty", body: "", want: "empty gateway route observation"},
+		{name: "missing hash", body: string([]byte{123, 34, 114, 111, 117, 116, 101, 95, 110, 97, 109, 101, 34, 58, 34, 99, 104, 97, 116, 34, 125}), want: "omitted observed config hash"},
+		{name: "missing identity", body: string([]byte{123, 34, 103, 97, 116, 101, 119, 97, 121, 95, 99, 111, 110, 102, 105, 103, 95, 104, 97, 115, 104, 34, 58, 34, 104, 97, 115, 104, 34, 125}), want: "omitted route identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			manager := NewHTTPGatewayRouteManager(GatewayHTTPConfig{Endpoints: map[string]GatewayHTTPEndpointConfig{
+				"local": {Type: "http", BaseURL: server.URL},
+			}}, server.Client())
+
+			obs, err := manager.UpsertRoute(t.Context(), "local", GatewayRouteSpec{RouteName: "chat", TargetURL: "http://backend:8000"})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("UpsertRoute() = (%#v, %v), want error containing %q", obs, err, tc.want)
+			}
+			if obs != nil {
+				t.Fatalf("UpsertRoute() observation = %#v, want nil", obs)
+			}
+		})
+	}
+}
 
 func TestHTTPGatewayRouteManagerUpsertGetDelete(t *testing.T) {
 	var seenAuth string
@@ -61,7 +92,7 @@ func TestHTTPGatewayRouteManagerUpsertGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get route: %v", err)
 	}
-	if got.RouteName != "chat" || got.TargetURL != "http://backend:8000" || got.Status != "synced" {
+	if got.RouteName != "chat" || got.TargetURL != "http://backend:8000" || got.Status != "unknown" || got.GatewayConfigHash != "" {
 		t.Fatalf("unexpected get observation: %#v", got)
 	}
 	if err := manager.DeleteRoute(t.Context(), "local", "chat"); err != nil {

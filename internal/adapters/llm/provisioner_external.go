@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+var ErrExternalLifecycleUnmanaged = errors.New("external LLM backend lifecycle is unmanaged")
 
 // ExternalAPIProvisioner represents externally managed LLM providers.
 type ExternalAPIProvisioner struct {
@@ -23,17 +26,27 @@ func NewExternalAPIProvisioner(client *http.Client) *ExternalAPIProvisioner {
 	return &ExternalAPIProvisioner{httpClient: client}
 }
 
-func (p *ExternalAPIProvisioner) Provision(_ context.Context, req ProvisionCandidateRequest) (*ProvisionCandidateResult, error) {
+func (p *ExternalAPIProvisioner) Provision(ctx context.Context, req ProvisionCandidateRequest) (*ProvisionCandidateResult, error) {
 	cfg, err := externalBackendConfig(req)
 	if err != nil {
 		return nil, err
+	}
+	observation, err := p.Observe(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("observe externally managed backend before attachment: %w", err)
+	}
+	if observation.HealthStatus != domain.HealthStatusHealthy {
+		return nil, fmt.Errorf("cannot attach unhealthy externally managed backend %q", cfg.BaseURL)
 	}
 	return &ProvisionCandidateResult{
 		BackendKind:     domain.LLMBackendKindExternalAPI,
 		BackendEndpoint: strings.TrimRight(cfg.BaseURL, "/"),
 		TargetName:      targetNameFor(req),
 		Metadata: map[string]any{
-			"external": true,
+			"external":                  true,
+			"lifecycle_mode":            "unmanaged_attachment",
+			"provider_resource_created": false,
+			"health_verified":           true,
 		},
 	}, nil
 }
@@ -72,8 +85,12 @@ func (p *ExternalAPIProvisioner) Observe(ctx context.Context, req ProvisionCandi
 	}, nil
 }
 
-func (p *ExternalAPIProvisioner) Deprovision(context.Context, ProvisionCandidateRequest) error {
-	return nil
+func (p *ExternalAPIProvisioner) Deprovision(_ context.Context, req ProvisionCandidateRequest) error {
+	cfg, err := externalBackendConfig(req)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: Bahia cannot delete provider resource at %s", ErrExternalLifecycleUnmanaged, cfg.BaseURL)
 }
 
 func externalBackendConfig(req ProvisionCandidateRequest) (*domain.LLMExternalBackendConfig, error) {

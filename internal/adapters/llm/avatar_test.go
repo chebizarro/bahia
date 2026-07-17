@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,14 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+var validTinyPNG = func() []byte {
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		panic(err)
+	}
+	return data
+}()
 
 type fakeAvatarProvider struct {
 	name string
@@ -22,7 +31,7 @@ func (f *fakeAvatarProvider) Name() string { return f.name }
 func (f *fakeAvatarProvider) GenerateAvatar(_ context.Context, req AvatarGenerationRequest, progress AvatarProgressFunc) (*AvatarResult, error) {
 	f.got = req
 	progress(AvatarProgressEvent{Stage: AvatarProgressSubmitted, Percent: 40, Message: "fake provider started"})
-	return &AvatarResult{ImageData: []byte("fake-image"), ContentType: "image/png", Seed: req.Seed}, nil
+	return &AvatarResult{ImageData: validTinyPNG, ContentType: "image/png", Seed: req.Seed}, nil
 }
 
 func TestFluxComfyUIProviderExpandsPresetAndReportsProgress(t *testing.T) {
@@ -50,7 +59,7 @@ func TestFluxComfyUIProviderExpandsPresetAndReportsProgress(t *testing.T) {
 			})
 		case "/image.png":
 			w.Header().Set("Content-Type", "image/png")
-			_, _ = w.Write([]byte("png-data"))
+			_, _ = w.Write(validTinyPNG)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -70,7 +79,7 @@ func TestFluxComfyUIProviderExpandsPresetAndReportsProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateWithSpec: %v", err)
 	}
-	if string(result.ImageData) != "png-data" || result.ContentType != "image/png" || result.Seed != "provider-seed" || result.Provider != AvatarProviderFluxComfyUI {
+	if string(result.ImageData) != string(validTinyPNG) || result.ContentType != "image/png" || result.Seed != "provider-seed" || result.Provider != AvatarProviderFluxComfyUI {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	if !strings.Contains(seen.Prompt, "Pixel art style avatar") || !strings.Contains(seen.Prompt, "owl analyst") {
@@ -101,7 +110,7 @@ func TestAvatarProviderRegistryDispatchesBySpecProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateWithSpec: %v", err)
 	}
-	if result.Provider != "test-provider" || string(result.ImageData) != "fake-image" {
+	if result.Provider != "test-provider" || string(result.ImageData) != string(validTinyPNG) {
 		t.Fatalf("unexpected dispatch result: %#v", result)
 	}
 	if fake.got.Provider != "test-provider" || fake.got.Seed != "seed-1" {
@@ -247,6 +256,73 @@ func TestAvatarGeneratorNoProvidersConfiguredFailsClosed(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no avatar providers configured") {
 		t.Fatalf("GenerateWithSpec() error = %v, want no providers configured", err)
 	}
+}
+
+func TestAvatarGeneratorRejectsNilAndEmptyProviderResults(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result *AvatarResult
+		want   string
+	}{
+		{name: "nil", result: nil, want: "returned no result"},
+		{name: "empty", result: &AvatarResult{ContentType: "image/png"}, want: "avatar image is empty"},
+		{name: "invalid image", result: &AvatarResult{ImageData: []byte("not-an-image"), ContentType: "image/png"}, want: "not allowed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			generator := NewAvatarGenerator(AvatarConfig{}, nil)
+			provider := staticAvatarProvider{name: "invalid-provider", result: tc.result}
+			if err := generator.RegisterProvider(provider); err != nil {
+				t.Fatalf("register provider: %v", err)
+			}
+			var events []AvatarProgressEvent
+			result, err := generator.GenerateWithSpec(t.Context(), domain.SoulAvatarGenerationSpec{Prompt: "owl", Provider: provider.name}, func(event AvatarProgressEvent) {
+				events = append(events, event)
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("GenerateWithSpec() = (%#v, %v), want error containing %q", result, err, tc.want)
+			}
+			if result != nil {
+				t.Fatalf("GenerateWithSpec() result = %#v, want nil", result)
+			}
+			if len(events) == 0 || events[len(events)-1].Stage != AvatarProgressFailed {
+				t.Fatalf("terminal event = %#v, want failed", events)
+			}
+		})
+	}
+}
+
+func TestFluxComfyUIProviderRejectsCrossOriginImageURL(t *testing.T) {
+	attackerCalled := false
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attackerCalled = true
+		_, _ = w.Write(validTinyPNG)
+	}))
+	defer attacker.Close()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"image_url": attacker.URL + "/avatar.png"})
+	}))
+	defer providerServer.Close()
+
+	generator := NewAvatarGenerator(AvatarConfig{LemmyURL: providerServer.URL}, nil)
+	_, err := generator.Generate(t.Context(), "owl", "seed")
+	if err == nil || !strings.Contains(err.Error(), "configured provider origin") {
+		t.Fatalf("Generate() error = %v, want cross-origin rejection", err)
+	}
+	if attackerCalled {
+		t.Fatal("cross-origin image URL was fetched")
+	}
+}
+
+type staticAvatarProvider struct {
+	name   string
+	result *AvatarResult
+}
+
+func (p staticAvatarProvider) Name() string { return p.name }
+func (p staticAvatarProvider) GenerateAvatar(context.Context, AvatarGenerationRequest, AvatarProgressFunc) (*AvatarResult, error) {
+	return p.result, nil
 }
 
 func TestAvatarGeneratorUnconfiguredProviderFailsBeforeRequest(t *testing.T) {

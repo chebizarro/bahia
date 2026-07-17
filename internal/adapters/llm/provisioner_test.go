@@ -2,10 +2,12 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,7 +112,7 @@ func mustAtoi(s string) int {
 	return n
 }
 
-func TestExternalAPIProvisionerNoopsProvisionAndProbes(t *testing.T) {
+func TestExternalAPIProvisionerAttachesHealthyUnmanagedBackend(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -125,6 +127,9 @@ func TestExternalAPIProvisionerNoopsProvisionAndProbes(t *testing.T) {
 	if result.BackendKind != domain.LLMBackendKindExternalAPI || result.BackendEndpoint != server.URL {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+	if result.Metadata["lifecycle_mode"] != "unmanaged_attachment" || result.Metadata["provider_resource_created"] != false || result.Metadata["health_verified"] != true {
+		t.Fatalf("external lifecycle metadata is not explicit: %#v", result.Metadata)
+	}
 	obs, err := p.Observe(t.Context(), req)
 	if err != nil {
 		t.Fatalf("observe: %v", err)
@@ -132,8 +137,25 @@ func TestExternalAPIProvisionerNoopsProvisionAndProbes(t *testing.T) {
 	if obs.HealthStatus != domain.HealthStatusHealthy {
 		t.Fatalf("expected healthy external observation: %#v", obs)
 	}
-	if err := p.Deprovision(t.Context(), req); err != nil {
-		t.Fatalf("deprovision should be no-op: %v", err)
+	if err := p.Deprovision(t.Context(), req); !errors.Is(err, ErrExternalLifecycleUnmanaged) {
+		t.Fatalf("deprovision error = %v, want ErrExternalLifecycleUnmanaged", err)
+	}
+}
+
+func TestExternalAPIProvisionerRejectsUnhealthyAttachment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	p := NewExternalAPIProvisioner(server.Client())
+	req := ProvisionCandidateRequest{Release: &domain.LLMRelease{ExternalBackend: &domain.LLMExternalBackendConfig{BaseURL: server.URL, HealthURL: server.URL + "/health"}}}
+
+	result, err := p.Provision(t.Context(), req)
+	if err == nil || !strings.Contains(err.Error(), "cannot attach unhealthy") {
+		t.Fatalf("Provision() = (%#v, %v), want unhealthy attachment error", result, err)
+	}
+	if result != nil {
+		t.Fatalf("Provision() result = %#v, want nil", result)
 	}
 }
 
