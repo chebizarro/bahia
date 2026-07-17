@@ -184,7 +184,7 @@ func TestGetTools_IncludesPaymentTools(t *testing.T) {
 func TestCallTool_EstimateCost(t *testing.T) {
 	server, _, runID, workerPubkey := newTestMCPPaymentServer(t)
 
-	result, err := server.CallTool(context.Background(), "bahia_estimate_cost", map[string]interface{}{
+	result, err := server.CallTool(authorizedMCPContext(), "bahia_estimate_cost", map[string]interface{}{
 		"run_id":                  runID.String(),
 		"estimated_duration_secs": float64(120),
 	})
@@ -209,7 +209,7 @@ func TestCallTool_EstimateCost(t *testing.T) {
 
 func TestCallTool_GetRunCostAndPaymentHistory(t *testing.T) {
 	server, paymentRepo, runID, workerPubkey := newTestMCPPaymentServer(t)
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 
 	if err := paymentRepo.Create(ctx, &domain.PaymentRecord{
 		DeploymentRunID: runID,
@@ -285,7 +285,7 @@ func TestCallTool_GetRunCostAndPaymentHistory(t *testing.T) {
 func TestCallTool_PaymentsValidationAndConfiguration(t *testing.T) {
 	server, _, runID, _ := newTestMCPPaymentServer(t)
 
-	invalidID, err := server.CallTool(context.Background(), "bahia_estimate_cost", map[string]interface{}{
+	invalidID, err := server.CallTool(authorizedMCPContext(), "bahia_estimate_cost", map[string]interface{}{
 		"run_id": "not-a-uuid",
 	})
 	if err != nil {
@@ -295,7 +295,7 @@ func TestCallTool_PaymentsValidationAndConfiguration(t *testing.T) {
 		t.Fatalf("expected invalid run_id error, got %#v", invalidID)
 	}
 
-	missingWorker, err := server.CallTool(context.Background(), "bahia_get_payment_history", map[string]interface{}{})
+	missingWorker, err := server.CallTool(authorizedMCPContext(), "bahia_get_payment_history", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("missing worker call err: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestCallTool_PaymentsValidationAndConfiguration(t *testing.T) {
 	}
 
 	unconfigured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	missingService, err := unconfigured.CallTool(context.Background(), "bahia_get_run_cost", map[string]interface{}{
+	missingService, err := unconfigured.CallTool(authorizedMCPContext(), "bahia_get_run_cost", map[string]interface{}{
 		"run_id": runID.String(),
 	})
 	if err != nil {

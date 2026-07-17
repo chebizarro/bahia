@@ -132,7 +132,7 @@ func TestCallTool_GetRunLogs_TailAndStreams(t *testing.T) {
 		domain.RunStatusSucceeded,
 	)
 
-	result, err := server.CallTool(context.Background(), "bahia_get_run_logs", map[string]interface{}{
+	result, err := server.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": runID.String(),
 		"tail":   float64(1),
 		"stream": "stdout",
@@ -160,7 +160,7 @@ func TestCallTool_GetRunLogs_TailAndStreams(t *testing.T) {
 		t.Fatalf("exit_code = %v, want 0", payload["exit_code"])
 	}
 
-	mergedResult, err := server.CallTool(context.Background(), "bahia_get_run_logs", map[string]interface{}{
+	mergedResult, err := server.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": runID.String(),
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func TestCallTool_GetRunLogs_TailAndStreams(t *testing.T) {
 func TestCallTool_GetRunLogs_ValidationAndConfiguration(t *testing.T) {
 	server, runID := newTestMCPRunLogServer(t, "ok", "warn", domain.RunStatusSucceeded)
 
-	invalidID, err := server.CallTool(context.Background(), "bahia_get_run_logs", map[string]interface{}{
+	invalidID, err := server.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": "not-a-uuid",
 	})
 	if err != nil {
@@ -189,7 +189,7 @@ func TestCallTool_GetRunLogs_ValidationAndConfiguration(t *testing.T) {
 		t.Fatalf("expected invalid run_id error, got %#v", invalidID)
 	}
 
-	invalidStream, err := server.CallTool(context.Background(), "bahia_get_run_logs", map[string]interface{}{
+	invalidStream, err := server.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": runID.String(),
 		"stream": "combined",
 	})
@@ -201,7 +201,7 @@ func TestCallTool_GetRunLogs_ValidationAndConfiguration(t *testing.T) {
 	}
 
 	unconfigured := NewServerWithOptions(server.registry, zap.NewNop(), ServerDeps{})
-	missingService, err := unconfigured.CallTool(context.Background(), "bahia_get_run_logs", map[string]interface{}{
+	missingService, err := unconfigured.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": runID.String(),
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func TestCallTool_GetRunLogs_ValidationAndConfiguration(t *testing.T) {
 func TestCallTool_GetRunLogs_RejectsNonTerminalRun(t *testing.T) {
 	server, runID := newTestMCPRunLogServer(t, "ok", "warn", domain.RunStatusRunning)
 
-	result, err := server.CallTool(context.Background(), "bahia_get_run_logs", map[string]interface{}{
+	result, err := server.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": runID.String(),
 	})
 	if err != nil {

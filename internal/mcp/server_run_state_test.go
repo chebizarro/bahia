@@ -183,7 +183,7 @@ func (r *testRuntimeStateRepo) ListDrifted(_ context.Context) ([]domain.Environm
 }
 
 func (r *testRuntimeStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
-	return r.ListAll(context.Background())
+	return r.ListAll(authorizedMCPContext())
 }
 
 func (r *testRuntimeStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
@@ -242,7 +242,7 @@ func TestGetTools_IncludesRunStateAndIntentTools(t *testing.T) {
 }
 
 func TestCallTool_RunLifecycle(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, intentRepo, runRepo, _, stateRepo := newTestMCPRunStateServer()
 	serviceID := uuid.New()
 	envID := uuid.New()
@@ -344,7 +344,7 @@ func TestCallTool_RunLifecycle(t *testing.T) {
 }
 
 func TestCallTool_ListAndGetIntents(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, intentRepo, _, _, _ := newTestMCPRunStateServer()
 	serviceID := uuid.New()
 	envID := uuid.New()
@@ -424,7 +424,7 @@ func TestCallTool_ListAndGetIntents(t *testing.T) {
 }
 
 func TestCallTool_RuntimeStateAndObservationHandlers(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, _, _, observationRepo, stateRepo := newTestMCPRunStateServer()
 	serviceID := uuid.New()
 	envID := uuid.New()

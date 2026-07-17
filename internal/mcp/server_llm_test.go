@@ -199,7 +199,7 @@ func TestGetTools_IncludesLLMTools(t *testing.T) {
 }
 
 func TestCallTool_LLMRouteReleaseToolsPublishCanonicalNostrRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	publisher := &captureLLMCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
 	routeID := uuid.New()
@@ -254,7 +254,7 @@ func TestCallTool_LLMRouteReleaseToolsPublishCanonicalNostrRequests(t *testing.T
 }
 
 func TestCallTool_LLMUpdateRoutePersistsRegistryMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, routeRepo, _ := newTestLLMRegistryServer()
 	route := &domain.LLMRoute{ID: uuid.New(), Name: "chat", Description: "before"}
 	if err := routeRepo.Create(ctx, route); err != nil {
@@ -277,7 +277,7 @@ func TestCallTool_LLMUpdateRoutePersistsRegistryMetadata(t *testing.T) {
 }
 
 func TestCallTool_LLMAsyncToolsPublishCanonicalNostrRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	publisher := &captureLLMCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
 	routeID := uuid.New()

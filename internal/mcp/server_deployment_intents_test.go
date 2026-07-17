@@ -164,7 +164,7 @@ func (m *testDeploymentStateRepo) ListDrifted(_ context.Context) ([]domain.Envir
 }
 
 func (m *testDeploymentStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
-	return m.ListAll(context.Background())
+	return m.ListAll(authorizedMCPContext())
 }
 
 func (m *testDeploymentStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
@@ -314,7 +314,7 @@ func TestGetTools_IncludesDeploymentWorkflowTools(t *testing.T) {
 }
 
 func TestCallTool_DeployAndCreateIntent_CreateDeploymentIntent(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 
 	for _, toolName := range []string{"bahia_deploy", "bahia_create_intent"} {
 		t.Run(toolName, func(t *testing.T) {
@@ -355,7 +355,7 @@ func TestCallTool_DeployAndCreateIntent_CreateDeploymentIntent(t *testing.T) {
 }
 
 func TestCallTool_ApprovalAndRejectionFlows(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 
 	for _, tc := range []struct {
 		name     string
@@ -392,7 +392,7 @@ func TestCallTool_ApprovalAndRejectionFlows(t *testing.T) {
 }
 
 func TestCallTool_Rollback_CreatesRollbackIntent(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	fixture := newTestMCPDeploymentServer(t, false)
 
 	result, err := fixture.server.CallTool(ctx, "bahia_rollback", map[string]interface{}{
@@ -419,7 +419,7 @@ func TestCallTool_Rollback_CreatesRollbackIntent(t *testing.T) {
 }
 
 func TestCallTool_GetDeploymentStatus(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	fixture := newTestMCPDeploymentServer(t, false)
 	artifactID := uuid.New()
 	intentID := uuid.New()

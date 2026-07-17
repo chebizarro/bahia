@@ -91,7 +91,7 @@ func newTestMCPSignatureServer(t *testing.T, verifier SignatureVerifier) (*Serve
 
 	artifactID := uuid.New()
 	artifactRepo := newTestArtifactRepo()
-	if err := artifactRepo.Create(context.Background(), &domain.Artifact{
+	if err := artifactRepo.Create(authorizedMCPContext(), &domain.Artifact{
 		ID:          artifactID,
 		BuildID:     uuid.New(),
 		ServiceID:   uuid.New(),
@@ -147,7 +147,7 @@ func TestGetTools_IncludesSignatureTools(t *testing.T) {
 }
 
 func TestCallTool_SignatureListingStatusAndGet(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, sigRepo, artifactID := newTestMCPSignatureServer(t, &testMCPSignatureVerifier{})
 	now := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
 	verifiedID := uuid.New()
@@ -222,7 +222,7 @@ func TestCallTool_SignatureListingStatusAndGet(t *testing.T) {
 }
 
 func TestCallTool_VerifySignaturesStoresDiscoveredRecords(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	now := time.Date(2026, 5, 2, 11, 0, 0, 0, time.UTC)
 	verifier := &testMCPSignatureVerifier{
 		signatures: []domain.ArtifactSignature{
@@ -261,7 +261,7 @@ func TestCallTool_VerifySignaturesStoresDiscoveredRecords(t *testing.T) {
 }
 
 func TestCallTool_SignatureValidationAndConfigurationErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 
 	server := NewServer(nil, zap.NewNop())
 	res, err := server.CallTool(ctx, "bahia_list_signatures", map[string]interface{}{"artifact_id": uuid.New().String()})

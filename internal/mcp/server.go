@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	adapterSBOM "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -57,6 +59,8 @@ type Server struct {
 	signVerifier         SignatureVerifier
 	toolProvisioning     repository.ToolProvisioningRepository
 	dnsEndpoints         DNSEndpointLister
+	authorizedPubkeys    []string
+	rbac                 *auth.RBAC
 }
 
 // Config holds MCP server configuration.
@@ -96,6 +100,11 @@ type ServerDeps struct {
 	WorkerReadModels             *service.WorkerReadModelService
 	BackupReadModels             BackupReadModelRepository
 	DNSEndpoints                 DNSEndpointLister
+	// AuthorizedPubkeys is the explicit operator allowlist for external MCP callers.
+	// An empty allowlist denies all non-system callers.
+	AuthorizedPubkeys []string
+	// RBAC is required for tenant-scoped authorization such as secret access.
+	RBAC *auth.RBAC
 }
 
 // SignatureVerifier verifies signatures for an artifact.
@@ -203,6 +212,8 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		signVerifier:         deps.SignVerifier,
 		toolProvisioning:     deps.ToolProvisioning,
 		dnsEndpoints:         deps.DNSEndpoints,
+		authorizedPubkeys:    normalizePubkeys(deps.AuthorizedPubkeys),
+		rbac:                 deps.RBAC,
 	}
 }
 
@@ -1764,8 +1775,75 @@ func signerFirstMCPMutationUnavailable(toolName, method string) *ToolResult {
 	return errorResult(fmt.Sprintf("%s is no longer available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
 }
 
+func normalizePubkeys(pubkeys []string) []string {
+	normalized := make([]string, 0, len(pubkeys))
+	for _, pubkey := range pubkeys {
+		pubkey = strings.ToLower(strings.TrimSpace(pubkey))
+		if pubkey != "" && !slices.Contains(normalized, pubkey) {
+			normalized = append(normalized, pubkey)
+		}
+	}
+	return normalized
+}
+
+func (s *Server) authorizeToolCall(ctx context.Context, name string) *ToolResult {
+	principal := auth.GetPrincipal(ctx)
+	if principal == nil || !principal.IsAuthenticated() {
+		s.logger.Warn("unauthenticated MCP tool call rejected", zap.String("tool", name))
+		return errorResult("authentication required")
+	}
+
+	// System callers are trusted only when they explicitly carry the admin role.
+	// External callers must match the same fail-closed operator allowlist model used
+	// by the control-plane reactor.
+	if principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin)) {
+		return nil
+	}
+	pubkey := strings.ToLower(strings.TrimSpace(principal.PubKey))
+	if pubkey == "" || !slices.Contains(s.authorizedPubkeys, pubkey) {
+		s.logger.Warn("unauthorized MCP tool call rejected",
+			zap.String("tool", name),
+			zap.String("subject", principal.Subject),
+			zap.String("pubkey", principal.PubKey),
+		)
+		return errorResult("access denied")
+	}
+	return nil
+}
+
+func (s *Server) authorizeSecretPermission(ctx context.Context, serviceID uuid.UUID, permission domain.Permission) *ToolResult {
+	principal := auth.GetPrincipal(ctx)
+	if principal != nil && principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin)) {
+		return nil
+	}
+	if principal == nil || !principal.IsAuthenticated() {
+		return errorResult("authentication required")
+	}
+	if s.registry == nil || s.rbac == nil {
+		return errorResult("secret authorization is not configured")
+	}
+
+	svc, err := s.registry.GetService(ctx, serviceID)
+	if err != nil || svc == nil || svc.OrgID == uuid.Nil {
+		return errorResult("secret owner not found")
+	}
+	if err := s.rbac.CheckPermission(ctx, principal, svc.OrgID, permission); err != nil {
+		s.logger.Warn("tenant secret access rejected",
+			zap.String("service_id", serviceID.String()),
+			zap.String("org_id", svc.OrgID.String()),
+			zap.String("subject", principal.Subject),
+			zap.String("permission", string(permission)),
+		)
+		return errorResult("access denied")
+	}
+	return nil
+}
+
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
+	if denied := s.authorizeToolCall(ctx, name); denied != nil {
+		return denied, nil
+	}
 
 	if isBackupToolName(name) {
 		return s.handleBackupTool(ctx, name, arguments)
@@ -3408,6 +3486,9 @@ func (s *Server) handleCreateSecret(ctx context.Context, args map[string]interfa
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
 	}
+	if denied := s.authorizeSecretPermission(ctx, serviceID, domain.PermWriteSecrets); denied != nil {
+		return denied, nil
+	}
 
 	var envID *uuid.UUID
 	if envIDStr != "" {
@@ -3483,6 +3564,9 @@ func (s *Server) handleUpdateSecret(ctx context.Context, args map[string]interfa
 	if existing == nil {
 		return errorResult("secret not found"), nil
 	}
+	if denied := s.authorizeSecretPermission(ctx, existing.ServiceID, domain.PermWriteSecrets); denied != nil {
+		return denied, nil
+	}
 
 	// Encrypt the new value
 	encryptedValue, err := s.encryptor.Encrypt(value, domain.EncryptionAES256)
@@ -3523,6 +3607,17 @@ func (s *Server) handleDeleteSecret(ctx context.Context, args map[string]interfa
 	secretID, err := uuid.Parse(secretIDStr)
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid secret_id: %v", err)), nil
+	}
+
+	existing, err := s.secretsRepo.GetByID(ctx, secretID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get secret: %v", err)), nil
+	}
+	if existing == nil {
+		return errorResult("secret not found"), nil
+	}
+	if denied := s.authorizeSecretPermission(ctx, existing.ServiceID, domain.PermWriteSecrets); denied != nil {
+		return denied, nil
 	}
 
 	if err := s.secretsRepo.Delete(ctx, secretID); err != nil {

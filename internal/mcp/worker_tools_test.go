@@ -80,7 +80,7 @@ func TestGetToolsIncludesWorkerManagementAndReadModelTools(t *testing.T) {
 func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *testing.T) {
 	publisher := &captureWorkerCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{WorkerCommandPublisher: publisher})
-	res, err := server.CallTool(context.Background(), "bahia_worker_drain", map[string]interface{}{"worker_pubkey": "worker-pubkey", "reason": "kernel upgrade", "idempotency_key": "drain:1"})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_worker_drain", map[string]interface{}{"worker_pubkey": "worker-pubkey", "reason": "kernel upgrade", "idempotency_key": "drain:1"})
 	if err != nil {
 		t.Fatalf("drain call: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *te
 		t.Fatalf("expected canonical CAS read model kind: %#v", readKinds)
 	}
 
-	labelsRes, err := server.CallTool(context.Background(), "bahia_worker_labels_update", map[string]interface{}{"worker_pubkey": "worker-pubkey", "idempotency_key": "labels:1", "labels": map[string]interface{}{"role": "inference"}})
+	labelsRes, err := server.CallTool(authorizedMCPContext(), "bahia_worker_labels_update", map[string]interface{}{"worker_pubkey": "worker-pubkey", "idempotency_key": "labels:1", "labels": map[string]interface{}{"role": "inference"}})
 	if err != nil || labelsRes.IsError {
 		t.Fatalf("labels result=%#v err=%v", labelsRes, err)
 	}
@@ -114,7 +114,7 @@ func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *te
 
 func TestWorkerMutatingToolsRequirePublisher(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	res, err := server.CallTool(context.Background(), "bahia_worker_cordon", map[string]interface{}{"worker_pubkey": "worker"})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_worker_cordon", map[string]interface{}{"worker_pubkey": "worker"})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}

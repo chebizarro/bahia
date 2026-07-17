@@ -150,7 +150,7 @@ func TestGetTools_IncludesSBOMTools(t *testing.T) {
 }
 
 func TestCallTool_IngestGetListAndSearchSBOM(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, repo, artifactID := newTestMCPSBOMServer()
 	sbomData := `{
 		"bomFormat": "CycloneDX",
@@ -254,7 +254,7 @@ func TestCallTool_IngestGetListAndSearchSBOM(t *testing.T) {
 }
 
 func TestCallTool_SBOMValidationAndConfigurationErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, _, artifactID := newTestMCPSBOMServer()
 
 	missingData, err := server.CallTool(ctx, "bahia_ingest_sbom", map[string]interface{}{"artifact_id": artifactID.String()})

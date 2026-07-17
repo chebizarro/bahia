@@ -210,7 +210,7 @@ func TestGetTools_IncludesPolicyCRUDAndEvaluate(t *testing.T) {
 }
 
 func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, repo := newTestMCPPolicyServer()
 	envID := uuid.New()
 	policyID := uuid.New()
@@ -237,7 +237,7 @@ func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
 }
 
 func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	publisher := &capturePolicyCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{PolicyCommandPublisher: publisher})
 	envID := uuid.New()
@@ -290,7 +290,7 @@ func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
 }
 
 func TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	publisher := &captureToolApprovalCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{ToolApprovalCommandPublisher: publisher})
 	intentID := uuid.New()
@@ -319,7 +319,7 @@ func TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses(t *testing.T)
 func TestCallTool_GetPolicy_Validation(t *testing.T) {
 	server, _ := newTestMCPPolicyServer()
 
-	res, err := server.CallTool(context.Background(), "bahia_get_policy", map[string]interface{}{"policy_id": "not-a-uuid"})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_get_policy", map[string]interface{}{"policy_id": "not-a-uuid"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestCallTool_GetPolicy_Validation(t *testing.T) {
 
 func TestCallTool_GetPolicy_NotConfigured(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	res, err := server.CallTool(context.Background(), "bahia_get_policy", map[string]interface{}{"policy_id": uuid.New().String()})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_get_policy", map[string]interface{}{"policy_id": uuid.New().String()})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

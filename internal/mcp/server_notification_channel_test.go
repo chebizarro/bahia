@@ -176,7 +176,7 @@ func TestGetTools_IncludesNotificationChannelCRUDAndTest(t *testing.T) {
 }
 
 func TestCallTool_NotificationChannelCRUDAndTest(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, repo, sender := newTestMCPNotificationServer()
 
 	createRes, err := server.CallTool(ctx, "bahia_create_notification_channel", map[string]interface{}{
@@ -297,7 +297,7 @@ func TestCallTool_NotificationChannelCRUDAndTest(t *testing.T) {
 }
 
 func TestCallTool_NotificationChannelValidation(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, _, _ := newTestMCPNotificationServer()
 
 	result, err := server.CallTool(ctx, "bahia_create_notification_channel", map[string]interface{}{
@@ -346,7 +346,7 @@ func TestGetTools_IncludesNotificationLogHandlers(t *testing.T) {
 }
 
 func TestCallTool_NotificationLogListAndMarkRead(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, repo, _ := newTestMCPNotificationServer()
 	channelID := uuid.New()
 	pendingDeployID := uuid.New()
@@ -465,7 +465,7 @@ func TestCallTool_NotificationLogListAndMarkRead(t *testing.T) {
 }
 
 func TestCallTool_NotificationLogUnsupportedAndValidation(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, _, _ := newTestMCPNotificationServer()
 
 	result, err := server.CallTool(ctx, "bahia_get_notification", map[string]interface{}{"notification_id": uuid.New().String()})

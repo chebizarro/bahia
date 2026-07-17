@@ -52,7 +52,7 @@ func TestDNSAssistantAsyncToolsPublishRequestsAndReturnCorrelation(t *testing.T)
 	}
 
 	for _, tc := range calls {
-		res, err := server.CallTool(context.Background(), tc.tool, tc.args)
+		res, err := server.CallTool(authorizedMCPContext(), tc.tool, tc.args)
 		if err != nil {
 			t.Fatalf("%s returned error: %v", tc.tool, err)
 		}
@@ -81,7 +81,7 @@ func TestDNSAssistantAsyncToolsPublishRequestsAndReturnCorrelation(t *testing.T)
 
 func TestDNSAssistantAsyncToolsRequirePublisherAndIdempotencyKey(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	res, err := server.CallTool(context.Background(), "bahia_assistant_dns_drift_remediate", map[string]interface{}{"zone": "prod.example", "idempotency_key": "dns:1"})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_assistant_dns_drift_remediate", map[string]interface{}{"zone": "prod.example", "idempotency_key": "dns:1"})
 	if err != nil {
 		t.Fatalf("CallTool returned error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDNSAssistantAsyncToolsRequirePublisherAndIdempotencyKey(t *testing.T) {
 	}
 
 	configured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{DNSCommandPublisher: &captureDNSCommandPublisher{}})
-	res, err = configured.CallTool(context.Background(), "bahia_assistant_dns_drift_remediate", map[string]interface{}{"zone": "prod.example"})
+	res, err = configured.CallTool(authorizedMCPContext(), "bahia_assistant_dns_drift_remediate", map[string]interface{}{"zone": "prod.example"})
 	if err != nil {
 		t.Fatalf("CallTool returned error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestDNSReadOnlyToolsListEndpointsAndDrift(t *testing.T) {
 		}, nil
 	})})
 
-	endpointsRes, err := server.CallTool(context.Background(), "bahia_assistant_dns_list_endpoints", map[string]interface{}{"limit": float64(2)})
+	endpointsRes, err := server.CallTool(authorizedMCPContext(), "bahia_assistant_dns_list_endpoints", map[string]interface{}{"limit": float64(2)})
 	if err != nil || endpointsRes.IsError {
 		t.Fatalf("list endpoints result=%#v err=%v", endpointsRes, err)
 	}
@@ -124,7 +124,7 @@ func TestDNSReadOnlyToolsListEndpointsAndDrift(t *testing.T) {
 		t.Fatalf("unexpected endpoints response: %#v", endpoints)
 	}
 
-	driftRes, err := server.CallTool(context.Background(), "bahia_dns_list_drift", map[string]interface{}{"limit": float64(1)})
+	driftRes, err := server.CallTool(authorizedMCPContext(), "bahia_dns_list_drift", map[string]interface{}{"limit": float64(1)})
 	if err != nil || driftRes.IsError {
 		t.Fatalf("list drift result=%#v err=%v", driftRes, err)
 	}

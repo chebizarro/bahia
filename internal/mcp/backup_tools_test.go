@@ -88,7 +88,7 @@ func TestGetToolsIncludesBackupTools(t *testing.T) {
 }
 
 func TestBackupMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	publisher := &captureBackupCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupCommandPublisher: publisher})
 	repoID := uuid.New()
@@ -141,7 +141,7 @@ func TestBackupMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.
 
 func TestBackupMutatingToolsRequirePublisher(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	res, err := server.CallTool(context.Background(), "request_backup_run", map[string]interface{}{"recipe": "postgres:v1"})
+	res, err := server.CallTool(authorizedMCPContext(), "request_backup_run", map[string]interface{}{"recipe": "postgres:v1"})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestBackupMutatingToolsRequirePublisher(t *testing.T) {
 
 func TestBackupMutatingToolsRequireIdempotencyKeyWhenPublisherConfigured(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupCommandPublisher: &captureBackupCommandPublisher{}})
-	res, err := server.CallTool(context.Background(), "request_backup_run", map[string]interface{}{"recipe": "postgres:v1"})
+	res, err := server.CallTool(authorizedMCPContext(), "request_backup_run", map[string]interface{}{"recipe": "postgres:v1"})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}
@@ -293,7 +293,7 @@ func (m *memoryBackupReadModels) GetBackupVerificationByRunID(_ context.Context,
 }
 
 func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	repoID := uuid.New()
 	policyID := uuid.New()
 	recipeID := uuid.New()
@@ -390,7 +390,7 @@ func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
 
 func TestBackupReadModelToolsRequireRepository(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	res, err := server.CallTool(context.Background(), "list_backup_repositories", map[string]interface{}{})
+	res, err := server.CallTool(authorizedMCPContext(), "list_backup_repositories", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}

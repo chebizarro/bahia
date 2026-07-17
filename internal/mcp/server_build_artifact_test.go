@@ -188,7 +188,7 @@ func TestGetTools_IncludesBuildArtifactRegister(t *testing.T) {
 }
 
 func TestCallTool_RegisterBuild_AndRegisterArtifact(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server := newTestMCPBuildArtifactServer()
 	serviceID := uuid.New().String()
 
@@ -235,7 +235,7 @@ func TestCallTool_RegisterBuild_AndRegisterArtifact(t *testing.T) {
 }
 
 func TestCallTool_RegisterBuildAndArtifact_ValidationErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server := newTestMCPBuildArtifactServer()
 
 	buildRes, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
@@ -267,7 +267,7 @@ func TestCallTool_RegisterBuildAndArtifact_ValidationErrors(t *testing.T) {
 }
 
 func TestCallTool_UpdateBuildStatus(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server := newTestMCPBuildArtifactServer()
 	serviceID := uuid.New().String()
 
@@ -303,7 +303,7 @@ func TestCallTool_UpdateBuildStatus(t *testing.T) {
 }
 
 func TestCallTool_UpdateBuildStatus_ValidationErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server := newTestMCPBuildArtifactServer()
 
 	res, err := server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{

@@ -143,7 +143,7 @@ func TestGetTools_IncludesSecretCRUD(t *testing.T) {
 }
 
 func TestCallTool_SecretCRUD(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, repo, encryptor := newTestMCPSecretServer(t)
 	serviceID := uuid.New()
 	envID := uuid.New()
@@ -233,7 +233,7 @@ func TestCallTool_SecretCRUD(t *testing.T) {
 }
 
 func TestCallTool_SecretValidationAndConfiguration(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	configured, _, _ := newTestMCPSecretServer(t)
 
 	result, err := configured.CallTool(ctx, "bahia_create_secret", map[string]interface{}{
@@ -295,7 +295,7 @@ func TestGetTools_IncludesWorkerQueriesAndPricing(t *testing.T) {
 }
 
 func TestCallTool_WorkerQueriesAndPricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, repo := newTestMCPWorkerServer()
 	now := time.Now().UTC()
 
@@ -376,7 +376,7 @@ func TestCallTool_WorkerQueriesAndPricing(t *testing.T) {
 }
 
 func TestCallTool_WorkerValidationAndConfiguration(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, _ := newTestMCPWorkerServer()
 
 	result, err := server.CallTool(ctx, "bahia_get_worker", map[string]interface{}{})

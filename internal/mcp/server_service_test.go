@@ -124,7 +124,7 @@ func newTestMCPServiceServer() (*Server, *testServiceRepo) {
 }
 
 func TestCallTool_ServiceListGetAndMutationsDeprecated(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, svcRepo := newTestMCPServiceServer()
 	serviceID := uuid.New()
 	svcRepo.services[serviceID] = &domain.Service{
@@ -200,7 +200,7 @@ func TestCallTool_ServiceListGetAndMutationsDeprecated(t *testing.T) {
 
 func assertSignerFirstMutationError(t *testing.T, server *Server, tool string, args map[string]interface{}) {
 	t.Helper()
-	result, err := server.CallTool(context.Background(), tool, args)
+	result, err := server.CallTool(authorizedMCPContext(), tool, args)
 	if err != nil {
 		t.Fatalf("%s call err: %v", tool, err)
 	}

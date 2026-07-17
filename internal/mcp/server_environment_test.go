@@ -92,7 +92,7 @@ func newTestMCPEnvironmentServer() (*Server, *testEnvironmentRepo) {
 }
 
 func TestCallTool_EnvironmentListGetAndMutationsDeprecated(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	server, envRepo := newTestMCPEnvironmentServer()
 	envID := uuid.New()
 	envRepo.environments[envID] = &domain.Environment{

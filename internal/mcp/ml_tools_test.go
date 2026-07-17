@@ -60,7 +60,7 @@ func TestGetToolsIncludesMLTools(t *testing.T) {
 }
 
 func TestMLMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
-	ctx := context.Background()
+	ctx := authorizedMCPContext()
 	publisher := &captureMLCommandPublisher{}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{MLCommandPublisher: publisher})
 
@@ -96,7 +96,7 @@ func TestMLMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
 
 func TestMLMutatingToolsRequirePublisher(t *testing.T) {
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	res, err := server.CallTool(context.Background(), "bahia_ml_deploy", map[string]interface{}{})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_ml_deploy", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}

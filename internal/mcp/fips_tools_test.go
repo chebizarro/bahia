@@ -49,7 +49,7 @@ func TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers(t *testing.T) {
 		},
 	})
 
-	res, err := server.CallTool(context.Background(), "bahia_fips_list_mesh_nodes", map[string]interface{}{})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_fips_list_mesh_nodes", map[string]interface{}{})
 	if err != nil || res.IsError {
 		t.Fatalf("list mesh nodes result=%#v err=%v", res, err)
 	}
@@ -85,7 +85,7 @@ func TestFIPSMeshStatusEmptyStateReturnsEmptyStatus(t *testing.T) {
 		}),
 	})
 
-	res, err := server.CallTool(context.Background(), "bahia_fips_mesh_status", map[string]interface{}{})
+	res, err := server.CallTool(authorizedMCPContext(), "bahia_fips_mesh_status", map[string]interface{}{})
 	if err != nil || res.IsError {
 		t.Fatalf("mesh status result=%#v err=%v", res, err)
 	}
@@ -117,7 +117,7 @@ func TestFIPSResourcesListIncludesOnlyMeshResources(t *testing.T) {
 		}),
 	})
 
-	resources, err := server.GetResources(context.Background())
+	resources, err := server.GetResources(authorizedMCPContext())
 	if err != nil {
 		t.Fatalf("GetResources returned error: %v", err)
 	}
