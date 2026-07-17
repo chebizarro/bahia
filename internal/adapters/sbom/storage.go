@@ -3,6 +3,7 @@ package sbom
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -49,6 +50,9 @@ func NewStorageResolver(
 	packageBackend PackageBackendClient,
 	logger *slog.Logger,
 ) *StorageResolver {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	return &StorageResolver{
 		blossom:        blossom,
 		ociClient:      ociClient,
@@ -197,10 +201,32 @@ func (r *StorageResolver) storeToBlossom(ctx context.Context, data []byte, forma
 	if err != nil {
 		return nil, fmt.Errorf("uploading to Blossom: %w", err)
 	}
+	if desc == nil {
+		return nil, fmt.Errorf("uploading to Blossom: empty blob descriptor")
+	}
+
+	expectedHash := hashData(data)
+	descriptorHash, err := validateSHA256Hex(desc.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Blossom descriptor hash: %w", err)
+	}
+	if !strings.EqualFold(descriptorHash, expectedHash) {
+		return nil, fmt.Errorf("Blossom descriptor hash %s does not match uploaded payload SHA-256 %s", descriptorHash, expectedHash)
+	}
+	urlHash, err := extractBlossomHash(desc.URL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Blossom descriptor URL: %w", err)
+	}
+	if !strings.EqualFold(urlHash, expectedHash) {
+		return nil, fmt.Errorf("Blossom descriptor URL hash %s does not match uploaded payload SHA-256 %s", urlHash, expectedHash)
+	}
+	if desc.Size != int64(len(data)) {
+		return nil, fmt.Errorf("Blossom descriptor size %d does not match uploaded payload size %d", desc.Size, len(data))
+	}
 
 	r.logger.Debug("stored SBOM to Blossom",
 		slog.String("url", desc.URL),
-		slog.String("sha256", desc.SHA256),
+		slog.String("sha256", expectedHash),
 	)
 
 	return &StoreResult{
@@ -209,7 +235,7 @@ func (r *StorageResolver) storeToBlossom(ctx context.Context, data []byte, forma
 			URI:       desc.URL,
 			MediaType: mediaType,
 		},
-		Hash: desc.SHA256,
+		Hash: expectedHash,
 	}, nil
 }
 
@@ -228,12 +254,17 @@ func extractBlossomHash(uri string) (string, error) {
 		hashPart = hashPart[:dot]
 	}
 
-	// Validate it looks like a SHA256 hash (64 hex chars).
-	if len(hashPart) != 64 {
-		return "", fmt.Errorf("invalid hash length: %d", len(hashPart))
-	}
+	return validateSHA256Hex(hashPart)
+}
 
-	return hashPart, nil
+func validateSHA256Hex(value string) (string, error) {
+	if len(value) != 64 {
+		return "", fmt.Errorf("invalid hash length: %d", len(value))
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", fmt.Errorf("invalid SHA-256 hex: %w", err)
+	}
+	return strings.ToLower(value), nil
 }
 
 // ResolveAndVerify fetches and verifies an SBOM against its attestation.

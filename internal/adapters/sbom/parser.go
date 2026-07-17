@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -165,6 +166,7 @@ type spdxDocument struct {
 }
 
 type spdxPackage struct {
+	SPDXID           string            `json:"SPDXID"`
 	Name             string            `json:"name"`
 	VersionInfo      string            `json:"versionInfo"`
 	PackageFileName  string            `json:"packageFileName"`
@@ -183,6 +185,9 @@ func parseSPDX(data []byte) (*parsedDocument, error) {
 	var doc spdxDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing SPDX JSON: %w", err)
+	}
+	if err := validateSPDXDocument(doc); err != nil {
+		return nil, err
 	}
 
 	result := &parsedDocument{
@@ -261,6 +266,9 @@ func parseCycloneDX(data []byte) (*parsedDocument, error) {
 	if err := json.Unmarshal(data, &bom); err != nil {
 		return nil, fmt.Errorf("parsing CycloneDX JSON: %w", err)
 	}
+	if err := validateCycloneDXDocument(bom); err != nil {
+		return nil, err
+	}
 
 	// Count vulnerabilities by severity.
 	var vulnCount, criticalCount, highCount int
@@ -312,6 +320,58 @@ func parseCycloneDX(data []byte) (*parsedDocument, error) {
 	}
 
 	return result, nil
+}
+
+func validateSPDXDocument(doc spdxDocument) error {
+	switch doc.SPDXVersion {
+	case "SPDX-2.1", "SPDX-2.2", "SPDX-2.3":
+	default:
+		return fmt.Errorf("unsupported SPDX version %q", doc.SPDXVersion)
+	}
+	if doc.DataLicense != "CC0-1.0" {
+		return fmt.Errorf("invalid SPDX dataLicense %q: want CC0-1.0", doc.DataLicense)
+	}
+	if doc.SPDXID != "SPDXRef-DOCUMENT" {
+		return fmt.Errorf("invalid SPDX document ID %q: want SPDXRef-DOCUMENT", doc.SPDXID)
+	}
+	if strings.TrimSpace(doc.Name) == "" {
+		return fmt.Errorf("SPDX document name is required")
+	}
+	if strings.TrimSpace(doc.DocumentNamespace) == "" {
+		return fmt.Errorf("SPDX document namespace is required")
+	}
+	for i, pkg := range doc.Packages {
+		if strings.TrimSpace(pkg.SPDXID) == "" {
+			return fmt.Errorf("SPDX package %d ID is required", i)
+		}
+		if strings.TrimSpace(pkg.Name) == "" {
+			return fmt.Errorf("SPDX package %d name is required", i)
+		}
+	}
+	return nil
+}
+
+func validateCycloneDXDocument(bom cyclonedxBOM) error {
+	if bom.BOMFormat != "CycloneDX" {
+		return fmt.Errorf("invalid CycloneDX bomFormat %q", bom.BOMFormat)
+	}
+	switch bom.SpecVersion {
+	case "1.3", "1.4", "1.5", "1.6":
+	default:
+		return fmt.Errorf("unsupported CycloneDX specVersion %q", bom.SpecVersion)
+	}
+	if bom.Version < 1 {
+		return fmt.Errorf("CycloneDX version must be at least 1")
+	}
+	for i, component := range bom.Components {
+		if strings.TrimSpace(component.Type) == "" {
+			return fmt.Errorf("CycloneDX component %d type is required", i)
+		}
+		if strings.TrimSpace(component.Name) == "" {
+			return fmt.Errorf("CycloneDX component %d name is required", i)
+		}
+	}
+	return nil
 }
 
 // ecosystemFromPURL extracts the package ecosystem from a PURL.

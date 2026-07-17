@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
@@ -86,6 +87,49 @@ func TestStorageResolver_StoreToBlossom(t *testing.T) {
 	}
 }
 
+type descriptorBlossomClient struct {
+	descriptor *blossom.BlobDescriptor
+}
+
+func (c *descriptorBlossomClient) Download(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected download")
+}
+
+func (c *descriptorBlossomClient) Upload(context.Context, []byte, string) (*blossom.BlobDescriptor, error) {
+	return c.descriptor, nil
+}
+
+func TestStorageResolver_StoreToBlossomValidatesDescriptor(t *testing.T) {
+	data := []byte(`{"spdxVersion":"SPDX-2.3"}`)
+	hash := hashData(data)
+	tests := []struct {
+		name string
+		desc *blossom.BlobDescriptor
+	}{
+		{name: "nil descriptor", desc: nil},
+		{name: "non-hex hash", desc: &blossom.BlobDescriptor{SHA256: strings.Repeat("z", 64), URL: "https://blossom.example.com/" + hash, Size: int64(len(data))}},
+		{name: "hash mismatch", desc: &blossom.BlobDescriptor{SHA256: strings.Repeat("0", 64), URL: "https://blossom.example.com/" + hash, Size: int64(len(data))}},
+		{name: "URL hash mismatch", desc: &blossom.BlobDescriptor{SHA256: hash, URL: "https://blossom.example.com/" + strings.Repeat("0", 64), Size: int64(len(data))}},
+		{name: "size mismatch", desc: &blossom.BlobDescriptor{SHA256: hash, URL: "https://blossom.example.com/" + hash, Size: int64(len(data) + 1)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := NewStorageResolver(&descriptorBlossomClient{descriptor: tt.desc}, nil, nil, nil)
+			if _, err := resolver.Store(context.Background(), StoreInput{Data: data, Format: domain.SBOMFormatSPDX, BackendType: domain.SBOMStorageBlossom}); err == nil {
+				t.Fatal("Store succeeded with invalid Blossom descriptor")
+			}
+		})
+	}
+}
+
+func TestStorageResolver_NilLoggerUsesNoOpLogger(t *testing.T) {
+	resolver := NewStorageResolver(&MockBlossomClient{Blobs: make(map[string][]byte)}, nil, nil, nil)
+	if _, err := resolver.Store(context.Background(), StoreInput{Data: []byte(`{"bomFormat":"CycloneDX"}`), Format: domain.SBOMFormatCycloneDX, BackendType: domain.SBOMStorageBlossom}); err != nil {
+		t.Fatalf("Store with nil logger failed: %v", err)
+	}
+}
+
 func TestStorageResolver_ResolveAndVerify(t *testing.T) {
 	sbomData := []byte(`{"spdxVersion": "SPDX-2.3"}`)
 	mockBlossom := &MockBlossomClient{Blobs: make(map[string][]byte)}
@@ -147,6 +191,11 @@ func TestExtractBlossomHash(t *testing.T) {
 		{
 			name:    "invalid - too short",
 			uri:     "https://blossom.example.com/abc123",
+			wantErr: true,
+		},
+		{
+			name:    "invalid - non-hex",
+			uri:     "https://blossom.example.com/" + strings.Repeat("z", 64),
 			wantErr: true,
 		},
 		{

@@ -17,6 +17,7 @@ func TestParse_SPDX(t *testing.T) {
 		DocumentNamespace: "https://example.com/test",
 		Packages: []spdxPackage{
 			{
+				SPDXID:           "SPDXRef-Package-lodash",
 				Name:             "lodash",
 				VersionInfo:      "4.17.21",
 				LicenseConcluded: "MIT",
@@ -25,6 +26,7 @@ func TestParse_SPDX(t *testing.T) {
 				},
 			},
 			{
+				SPDXID:          "SPDXRef-Package-express",
 				Name:            "express",
 				VersionInfo:     "4.18.2",
 				LicenseDeclared: "MIT",
@@ -97,6 +99,7 @@ func TestParseManifest_SPDX(t *testing.T) {
 		DocumentNamespace: "https://example.com/repo",
 		Packages: []spdxPackage{
 			{
+				SPDXID:           "SPDXRef-Package-cobra",
 				Name:             "cobra",
 				VersionInfo:      "1.8.0",
 				LicenseConcluded: "Apache-2.0",
@@ -148,7 +151,7 @@ func TestParseManifest_CycloneDX(t *testing.T) {
 		SpecVersion: "1.5",
 		Version:     1,
 		Components: []cyclonedxComponent{
-			{Name: "requests", Version: "2.31.0", PURL: "pkg:pypi/requests@2.31.0"},
+			{Type: "library", Name: "requests", Version: "2.31.0", PURL: "pkg:pypi/requests@2.31.0"},
 		},
 		Vulnerabilities: []cyclonedxVuln{
 			{ID: "CVE-2024-0001", Ratings: []struct {
@@ -258,6 +261,28 @@ func TestParse_CycloneDX(t *testing.T) {
 	}
 	if result.Packages[0].License != "Apache-2.0" {
 		t.Errorf("package[0].license = %q, want Apache-2.0", result.Packages[0].License)
+	}
+}
+
+func TestParse_RejectsStructurallyInvalidDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "unsupported SPDX version", data: `{"spdxVersion":"garbage","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"bad","documentNamespace":"https://example.com/bad"}`},
+		{name: "SPDX missing document identity", data: `{"spdxVersion":"SPDX-2.3","packages":[]}`},
+		{name: "SPDX package missing ID", data: `{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"bad","documentNamespace":"https://example.com/bad","packages":[{"name":"pkg"}]}`},
+		{name: "CycloneDX missing schema version", data: `{"bomFormat":"CycloneDX"}`},
+		{name: "unsupported CycloneDX version", data: `{"bomFormat":"CycloneDX","specVersion":"9.9","version":1}`},
+		{name: "CycloneDX component missing type", data: `{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"name":"pkg"}]}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tt.data), uuid.New()); err == nil {
+				t.Fatal("Parse succeeded for structurally invalid SBOM")
+			}
+		})
 	}
 }
 
