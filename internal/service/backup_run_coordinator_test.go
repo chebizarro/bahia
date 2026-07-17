@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -34,6 +35,25 @@ func TestBackupRunCoordinatorProcessOnceCompletesSnapshotWithoutVerification(t *
 	require.Equal(t, []string{"snapshotting"}, responder.statusSteps)
 	require.Len(t, responder.results, 1)
 	require.Nil(t, responder.results[0].verification)
+}
+
+func TestBackupRunCoordinatorReconcilesExecutedCheckpointWithoutSnapshotRerun(t *testing.T) {
+	ctx := context.Background()
+	registry, repo, run := backupCoordinatorFixture(t, false)
+	checkpoint, created, err := repo.StartBackupOperation(ctx, repository.BackupOperationSnapshot, run.ID, uuid.New())
+	require.NoError(t, err)
+	require.True(t, created)
+	result, err := json.Marshal(&BackupSnapshotResult{SnapshotID: "snap-checkpoint", Evidence: map[string]any{"durable": true}})
+	require.NoError(t, err)
+	require.NoError(t, repo.MarkBackupOperationExecuted(ctx, repository.BackupOperationSnapshot, run.ID, checkpoint.Token, result))
+	backend := &recordingBackupBackend{snapshot: &BackupSnapshotResult{SnapshotID: "must-not-run"}}
+	coordinator := NewBackupRunCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRunHealthCheck(false))
+
+	require.NoError(t, coordinator.ProcessBackupRun(ctx, run.ID))
+	stored, err := repo.GetBackupRun(ctx, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, "snap-checkpoint", stored.SnapshotID)
+	require.NotContains(t, backend.calls, "snapshot")
 }
 
 func TestBackupRunCoordinatorVerificationRequiredSucceedsRestoreEligible(t *testing.T) {
@@ -203,10 +223,11 @@ type memoryBackupControlPlaneRepository struct {
 	restores      map[uuid.UUID]*domain.BackupRestoreRun
 	retentions    map[uuid.UUID]*domain.BackupRetentionRun
 	verifications map[uuid.UUID]*domain.BackupVerificationRecord
+	checkpoints   map[string]*repository.BackupOperationCheckpoint
 }
 
 func newMemoryBackupControlPlaneRepository() *memoryBackupControlPlaneRepository {
-	return &memoryBackupControlPlaneRepository{recipes: map[uuid.UUID]*domain.BackupRecipe{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, definitions: map[uuid.UUID]*domain.BackupDefinition{}, runs: map[uuid.UUID]*domain.BackupRun{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, retentions: map[uuid.UUID]*domain.BackupRetentionRun{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}}
+	return &memoryBackupControlPlaneRepository{recipes: map[uuid.UUID]*domain.BackupRecipe{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, definitions: map[uuid.UUID]*domain.BackupDefinition{}, runs: map[uuid.UUID]*domain.BackupRun{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, retentions: map[uuid.UUID]*domain.BackupRetentionRun{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}, checkpoints: map[string]*repository.BackupOperationCheckpoint{}}
 }
 
 func (r *memoryBackupControlPlaneRepository) UpsertBackupRecipe(_ context.Context, recipe *domain.BackupRecipe) error {
@@ -674,6 +695,35 @@ func (r *memoryBackupControlPlaneRepository) GetBackupVerificationByRunID(_ cont
 		}
 	}
 	return nil, nil
+}
+
+func (r *memoryBackupControlPlaneRepository) StartBackupOperation(_ context.Context, operationType string, operationID, token uuid.UUID) (*repository.BackupOperationCheckpoint, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := operationType + "/" + operationID.String()
+	if existing := r.checkpoints[key]; existing != nil {
+		copy := *existing
+		copy.Result = append(json.RawMessage(nil), existing.Result...)
+		return &copy, false, nil
+	}
+	checkpoint := &repository.BackupOperationCheckpoint{OperationType: operationType, OperationID: operationID, Token: token, Status: repository.BackupCheckpointExecuting, CreatedAt: time.Now().UTC()}
+	r.checkpoints[key] = checkpoint
+	copy := *checkpoint
+	return &copy, true, nil
+}
+
+func (r *memoryBackupControlPlaneRepository) MarkBackupOperationExecuted(_ context.Context, operationType string, operationID, token uuid.UUID, result json.RawMessage) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	checkpoint := r.checkpoints[operationType+"/"+operationID.String()]
+	if checkpoint == nil || checkpoint.Token != token || checkpoint.Status != repository.BackupCheckpointExecuting {
+		return repository.ErrConflict
+	}
+	now := time.Now().UTC()
+	checkpoint.Status = repository.BackupCheckpointExecuted
+	checkpoint.Result = append(json.RawMessage(nil), result...)
+	checkpoint.ExecutedAt = &now
+	return nil
 }
 
 func setBackupTestTimes(createdAt, updatedAt *time.Time) {

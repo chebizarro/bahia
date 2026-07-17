@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -85,6 +87,7 @@ type BackupRunCoordinator struct {
 
 // BackupRunQueueRepository provides durable queue and lease-recovery primitives for backup runs.
 type BackupRunQueueRepository interface {
+	repository.BackupOperationCheckpointRepository
 	ClaimNextQueuedBackupRun(ctx context.Context) (*domain.BackupRun, error)
 	RequeueStaleBackupRuns(ctx context.Context, olderThan time.Duration) (int, error)
 }
@@ -253,18 +256,40 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 	if !run.SnapshotCreated || strings.TrimSpace(run.SnapshotID) == "" {
 		c.publishStatus(ctx, run, "snapshotting", "creating backup snapshot")
 		var snapshot *BackupSnapshotResult
-		if err := c.withRunHeartbeat(ctx, run.ID, func() error {
-			var snapshotErr error
-			snapshot, snapshotErr = snapshotBackend.CreateSnapshot(ctx, BackupSnapshotRequest{Run: run, Recipe: recipe, Repository: repo, Policy: policy})
-			return snapshotErr
-		}); err != nil {
-			if contextCancellationErr(ctx, err) {
-				return err
+		checkpoint, created, err := c.queue.StartBackupOperation(ctx, repository.BackupOperationSnapshot, run.ID, uuid.New())
+		if err != nil {
+			return err
+		}
+		if !created {
+			if checkpoint.Status != repository.BackupCheckpointExecuted {
+				return fmt.Errorf("snapshot operation %s has an indeterminate executing checkpoint; refusing to re-run", run.ID)
 			}
-			return c.completeFailed(ctx, run, nil, "snapshotting", err)
+			if err := json.Unmarshal(checkpoint.Result, &snapshot); err != nil {
+				return fmt.Errorf("decode executed snapshot checkpoint for %s: %w", run.ID, err)
+			}
+		} else {
+			if err := c.withRunHeartbeat(ctx, run.ID, func() error {
+				var snapshotErr error
+				snapshot, snapshotErr = snapshotBackend.CreateSnapshot(ctx, BackupSnapshotRequest{Run: run, Recipe: recipe, Repository: repo, Policy: policy})
+				return snapshotErr
+			}); err != nil {
+				if contextCancellationErr(ctx, err) {
+					return err
+				}
+				return c.completeFailed(ctx, run, nil, "snapshotting", err)
+			}
 		}
 		if snapshot == nil || strings.TrimSpace(snapshot.SnapshotID) == "" {
 			return c.completeFailed(ctx, run, nil, "snapshotting", fmt.Errorf("%w: backup backend returned no snapshot id", ErrBackupBackendExecution))
+		}
+		if created {
+			resultJSON, err := json.Marshal(snapshot)
+			if err != nil {
+				return fmt.Errorf("encode snapshot checkpoint result: %w", err)
+			}
+			if err := c.queue.MarkBackupOperationExecuted(ctx, repository.BackupOperationSnapshot, run.ID, checkpoint.Token, resultJSON); err != nil {
+				return err
+			}
 		}
 		run.SnapshotCreated = true
 		run.SnapshotID = strings.TrimSpace(snapshot.SnapshotID)

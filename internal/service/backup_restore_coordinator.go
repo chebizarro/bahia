@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -22,6 +24,7 @@ type BackupRestoreResponder interface {
 
 // BackupRestoreQueueRepository provides durable queue and lease-recovery primitives for restore runs.
 type BackupRestoreQueueRepository interface {
+	repository.BackupOperationCheckpointRepository
 	ClaimNextQueuedBackupRestore(ctx context.Context) (*domain.BackupRestoreRun, error)
 	RequeueStaleBackupRestores(ctx context.Context, olderThan time.Duration) (int, error)
 }
@@ -208,18 +211,40 @@ func (c *BackupRestoreCoordinator) processBackupRestoreLocked(ctx context.Contex
 		return err
 	}
 	var result *BackupRestoreResult
-	if err := c.withRestoreHeartbeat(ctx, restore.ID, func() error {
-		var restoreErr error
-		result, restoreErr = restoreBackend.Restore(ctx, BackupRestoreRequest{Run: restore, SourceRun: sourceRun, Recipe: recipe, Repository: repo, Policy: policy})
-		return restoreErr
-	}); err != nil {
-		if contextCancellationErr(ctx, err) {
-			return err
+	checkpoint, created, err := c.queue.StartBackupOperation(ctx, repository.BackupOperationRestore, restore.ID, uuid.New())
+	if err != nil {
+		return err
+	}
+	if !created {
+		if checkpoint.Status != repository.BackupCheckpointExecuted {
+			return fmt.Errorf("restore operation %s has an indeterminate executing checkpoint; refusing to re-run", restore.ID)
 		}
-		return c.completeFailed(ctx, restore, "restoring", err)
+		if err := json.Unmarshal(checkpoint.Result, &result); err != nil {
+			return fmt.Errorf("decode executed restore checkpoint for %s: %w", restore.ID, err)
+		}
+	} else {
+		if err := c.withRestoreHeartbeat(ctx, restore.ID, func() error {
+			var restoreErr error
+			result, restoreErr = restoreBackend.Restore(ctx, BackupRestoreRequest{Run: restore, SourceRun: sourceRun, Recipe: recipe, Repository: repo, Policy: policy})
+			return restoreErr
+		}); err != nil {
+			if contextCancellationErr(ctx, err) {
+				return err
+			}
+			return c.completeFailed(ctx, restore, "restoring", err)
+		}
 	}
 	if result == nil {
 		return c.completeFailed(ctx, restore, "restoring", fmt.Errorf("%w: backup backend returned no restore result", ErrBackupBackendExecution))
+	}
+	if created {
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("encode restore checkpoint result: %w", err)
+		}
+		if err := c.queue.MarkBackupOperationExecuted(ctx, repository.BackupOperationRestore, restore.ID, checkpoint.Token, resultJSON); err != nil {
+			return err
+		}
 	}
 	completed, err := c.registry.CompleteBackupRestore(ctx, restore.ID, result, nil)
 	if err != nil {

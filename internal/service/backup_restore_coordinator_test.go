@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,6 +29,26 @@ func TestBackupRestoreCoordinatorProcessOnceCompletesApprovedRestore(t *testing.
 	require.Equal(t, []string{"health", "restore"}, backend.calls)
 	require.Equal(t, []string{"restoring"}, responder.statusSteps)
 	require.Len(t, responder.results, 1)
+}
+
+func TestBackupRestoreCoordinatorReconcilesExecutedCheckpointWithoutRestoreRerun(t *testing.T) {
+	ctx := context.Background()
+	registry, repo, restore := backupRestoreCoordinatorFixture(t, nil)
+	checkpoint, created, err := repo.StartBackupOperation(ctx, repository.BackupOperationRestore, restore.ID, uuid.New())
+	require.NoError(t, err)
+	require.True(t, created)
+	result, err := json.Marshal(&BackupRestoreResult{Evidence: map[string]any{"restored": true}})
+	require.NoError(t, err)
+	require.NoError(t, repo.MarkBackupOperationExecuted(ctx, repository.BackupOperationRestore, restore.ID, checkpoint.Token, result))
+	backend := &recordingRestoreBackend{result: &BackupRestoreResult{Evidence: map[string]any{"must_not_run": true}}}
+	coordinator := NewBackupRestoreCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRestoreHealthCheck(false))
+
+	require.NoError(t, coordinator.ProcessBackupRestore(ctx, restore.ID))
+	stored, err := repo.GetBackupRestore(ctx, restore.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.RunStatusSucceeded, stored.Status)
+	require.Equal(t, map[string]any{"restored": true}, stored.Evidence)
+	require.NotContains(t, backend.calls, "restore")
 }
 
 func TestBackupRestoreCoordinatorRejectedRestoreNeverExecutesBackend(t *testing.T) {
