@@ -50,7 +50,7 @@ func (r *auditSecretRepo) DeleteByName(context.Context, uuid.UUID, *uuid.UUID, s
 }
 
 func TestResolverResolveSecretWithAuditRecordsVersionedAccess(t *testing.T) {
-	encryptor, err := NewEncryptor("test-secret-key")
+	encryptor, err := NewEncryptor(testPrivateKey)
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestResolverResolveSecretWithAuditRecordsVersionedAccess(t *testing.T) {
 }
 
 func TestResolverResolveSecretWithAuditAuditsDecryptFailureWithoutPlaintext(t *testing.T) {
-	encryptor, err := NewEncryptor("test-secret-key")
+	encryptor, err := NewEncryptor(testPrivateKey)
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}

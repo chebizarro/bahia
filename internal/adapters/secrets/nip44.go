@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,10 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"golang.org/x/crypto/hkdf"
 )
+
+var ErrEmptyNIP44Plaintext = errors.New("NIP-44 plaintext must not be empty")
 
 // Encryptor encrypts and decrypts secret values using the configured method.
 type Encryptor struct {
@@ -23,18 +27,36 @@ type Encryptor struct {
 }
 
 // NewEncryptor creates a new Encryptor with the given Nostr private key.
-// The AES key is derived from the private key via SHA-256.
 func NewEncryptor(nostrPrivateKey string) (*Encryptor, error) {
 	nostrPrivateKey = strings.TrimSpace(nostrPrivateKey)
 	if nostrPrivateKey == "" {
 		return nil, errors.New("nostr private key is required for secret encryption")
 	}
 
-	// Derive AES-256 key from the Nostr private key via SHA-256.
-	hash := sha256.Sum256([]byte(nostrPrivateKey))
+	keyMaterial, err := hex.DecodeString(nostrPrivateKey)
+	if err != nil || len(keyMaterial) != 32 {
+		return nil, errors.New("nostr private key must be a 32-byte hex-encoded secp256k1 key")
+	}
+	if _, err := nostrutil.PublicKeyHexFromPrivateKeyHex(nostrPrivateKey); err != nil {
+		return nil, fmt.Errorf("invalid nostr private key: %w", err)
+	}
+
+	// Derive an encryption-only key with explicit domain separation. This avoids
+	// reusing SHA-256(privateKey) directly across the identity and data-key domains.
+	aesKey := make([]byte, 32)
+	reader := hkdf.New(
+		sha256.New,
+		keyMaterial,
+		[]byte("bahia/secrets/aes-256-gcm/hkdf-sha256/v1"),
+		[]byte("service-secret-data-key"),
+	)
+	if _, err := io.ReadFull(reader, aesKey); err != nil {
+		return nil, fmt.Errorf("deriving AES encryption key: %w", err)
+	}
+
 	return &Encryptor{
 		privateKey: nostrPrivateKey,
-		aesKey:     hash[:],
+		aesKey:     aesKey,
 	}, nil
 }
 
@@ -92,8 +114,16 @@ func (e *Encryptor) ReEncryptForWorker(ciphertext []byte, method domain.Encrypti
 // --- NIP-44 encryption (self-encryption: Bahia encrypts to its own pubkey) ---
 
 func (e *Encryptor) encryptNIP44(plaintext string) ([]byte, error) {
+	if plaintext == "" {
+		return nil, ErrEmptyNIP44Plaintext
+	}
+
 	// Self-encryption: use a conversation key with Bahia's derived public key.
-	conversationKey, err := nostrutil.NIP44ConversationKey(e.publicKey(), e.privateKey)
+	pubkey, err := e.publicKey()
+	if err != nil {
+		return nil, fmt.Errorf("deriving self public key: %w", err)
+	}
+	conversationKey, err := nostrutil.NIP44ConversationKey(pubkey, e.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("generating self conversation key: %w", err)
 	}
@@ -107,7 +137,11 @@ func (e *Encryptor) encryptNIP44(plaintext string) ([]byte, error) {
 }
 
 func (e *Encryptor) decryptNIP44(ciphertext []byte) (string, error) {
-	conversationKey, err := nostrutil.NIP44ConversationKey(e.publicKey(), e.privateKey)
+	pubkey, err := e.publicKey()
+	if err != nil {
+		return "", fmt.Errorf("deriving self public key: %w", err)
+	}
+	conversationKey, err := nostrutil.NIP44ConversationKey(pubkey, e.privateKey)
 	if err != nil {
 		return "", fmt.Errorf("generating self conversation key: %w", err)
 	}
@@ -121,12 +155,12 @@ func (e *Encryptor) decryptNIP44(ciphertext []byte) (string, error) {
 }
 
 // publicKey derives the public key from the private key.
-func (e *Encryptor) publicKey() string {
+func (e *Encryptor) publicKey() (string, error) {
 	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(e.privateKey)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("deriving nostr public key: %w", err)
 	}
-	return pubkey
+	return pubkey, nil
 }
 
 // --- AES-256-GCM encryption ---

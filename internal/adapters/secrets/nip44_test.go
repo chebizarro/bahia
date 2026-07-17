@@ -1,6 +1,9 @@
 package secrets
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -67,8 +70,8 @@ func TestAES256_DifferentCiphertexts(t *testing.T) {
 }
 
 func TestAES256_WrongKeyFails(t *testing.T) {
-	enc1 := mustNewEncryptor(t, "key1key1key1key1key1key1key1key1key1key1key1key1key1key1key1key1")
-	enc2 := mustNewEncryptor(t, "key2key2key2key2key2key2key2key2key2key2key2key2key2key2key2key2")
+	enc1 := mustNewEncryptor(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	enc2 := mustNewEncryptor(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 	ct, err := enc1.Encrypt("secret", domain.EncryptionAES256)
 	if err != nil {
@@ -123,6 +126,10 @@ func TestNewEncryptor(t *testing.T) {
 	}
 	if len(enc.aesKey) != 32 {
 		t.Errorf("expected 32-byte AES key, got %d", len(enc.aesKey))
+	}
+	legacyKey := sha256.Sum256([]byte(testPrivateKey))
+	if bytes.Equal(enc.aesKey, legacyKey[:]) {
+		t.Fatal("AES key must not be a direct SHA-256 of the identity key")
 	}
 }
 
@@ -194,19 +201,12 @@ func TestNIP44_WrongKeyCannotDecrypt(t *testing.T) {
 
 func TestNIP44_EmptyPlaintext(t *testing.T) {
 	enc := mustNewEncryptor(t, testPrivateKey)
-	// NIP-44 may reject empty plaintext depending on implementation;
-	// verify it either round-trips or returns a clear error.
 	ct, err := enc.Encrypt("", domain.EncryptionNIP44)
-	if err != nil {
-		// Empty plaintext rejection is acceptable.
-		t.Skipf("NIP-44 rejects empty plaintext: %v", err)
+	if !errors.Is(err, ErrEmptyNIP44Plaintext) {
+		t.Fatalf("Encrypt empty error = %v, want ErrEmptyNIP44Plaintext", err)
 	}
-	pt, err := enc.Decrypt(ct, domain.EncryptionNIP44)
-	if err != nil {
-		t.Fatalf("NIP-44 decrypt empty: %v", err)
-	}
-	if pt != "" {
-		t.Errorf("expected empty string, got %q", pt)
+	if ct != nil {
+		t.Fatalf("Encrypt empty ciphertext = %q, want nil", ct)
 	}
 }
 
@@ -243,7 +243,10 @@ func TestNIP44_ReEncryptForWorker(t *testing.T) {
 	// Re-encrypt for a "worker" (using a different key as the worker pubkey).
 	workerPrivKey := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	workerEnc := mustNewEncryptor(t, workerPrivKey)
-	workerPubKey := workerEnc.publicKey()
+	workerPubKey, err := workerEnc.publicKey()
+	if err != nil {
+		t.Fatalf("worker public key: %v", err)
+	}
 
 	reEncrypted, err := enc.ReEncryptForWorker(ct, domain.EncryptionNIP44, workerPubKey)
 	if err != nil {
@@ -254,7 +257,10 @@ func TestNIP44_ReEncryptForWorker(t *testing.T) {
 	}
 
 	// The worker should be able to decrypt using a conversation key with Bahia's pubkey.
-	bahiaPubKey := enc.publicKey()
+	bahiaPubKey, err := enc.publicKey()
+	if err != nil {
+		t.Fatalf("bahia public key: %v", err)
+	}
 	conversationKey, err := workerEnc.nip44ConversationKeyWith(bahiaPubKey)
 	if err != nil {
 		t.Fatalf("worker conversation key: %v", err)
@@ -296,9 +302,16 @@ func TestNIP44_LargePayload(t *testing.T) {
 // the new code. Operators who stored NIP-44 encrypted secrets before this
 // migration must re-encrypt them. AES-256 secrets are unaffected.
 
-func TestNewEncryptorRejectsBlankKey(t *testing.T) {
-	if enc, err := NewEncryptor("   "); err == nil || enc != nil {
-		t.Fatalf("NewEncryptor blank key = (%v, %v), want nil encryptor and error", enc, err)
+func TestNewEncryptorRejectsInvalidKeys(t *testing.T) {
+	for _, key := range []string{
+		"   ",
+		"not-hex",
+		"aa",
+		"0000000000000000000000000000000000000000000000000000000000000000",
+	} {
+		if enc, err := NewEncryptor(key); err == nil || enc != nil {
+			t.Errorf("NewEncryptor(%q) = (%v, %v), want nil encryptor and error", key, enc, err)
+		}
 	}
 }
 
