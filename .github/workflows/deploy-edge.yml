@@ -76,11 +76,20 @@ jobs:
           test -w "$CONTROLPLANE_ROOT/backups"
 
       - name: Build local Bahia image
+        env:
+          GITEA_USERNAME: ${{ secrets.GITEA_USERNAME }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
         run: |
           set -euo pipefail
 
           tag="github-${GITHUB_SHA::7}"
+          : "${GITEA_USERNAME:?GITEA_USERNAME is required}"
+          : "${GITEA_TOKEN:?GITEA_TOKEN is required}"
+          umask 077
+          printf 'machine git.sharegap.net login %s password %s\n' \
+            "$GITEA_USERNAME" "$GITEA_TOKEN" > "$RUNNER_TEMP/gitauth.netrc"
           docker build \
+            --secret id=gitauth,src="$RUNNER_TEMP/gitauth.netrc" \
             --build-arg GOPROXY="https://proxy.golang.org,$ATHENS_PROXY" \
             --build-arg GONOSUMDB="git.sharegap.net/cascadia/*" \
             --build-arg VERSION_BASE=0.1.0 \
