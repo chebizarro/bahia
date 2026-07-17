@@ -178,6 +178,22 @@ type SBOMAttestation struct {
 	PredicateType SBOMAttestationType `json:"predicateType"`
 	// Predicate contains the SBOM reference metadata (not the full SBOM).
 	Predicate SBOMPredicate `json:"predicate"`
+	// Envelope binds the statement above to one or more DSSE signatures.
+	Envelope *DSSEEnvelope `json:"envelope,omitempty"`
+}
+
+// DSSEEnvelope is a Dead Simple Signing Envelope for an attestation statement.
+type DSSEEnvelope struct {
+	PayloadType string          `json:"payloadType"`
+	Payload     string          `json:"payload"`
+	Signatures  []DSSESignature `json:"signatures"`
+}
+
+// DSSESignature is one signature over a DSSE pre-authentication encoding. For
+// SBOM attestations KeyID is the signing Nostr service public key in hex.
+type DSSESignature struct {
+	KeyID string `json:"keyid"`
+	Sig   string `json:"sig"`
 }
 
 // AttestationSubject identifies an artifact by name and digest.

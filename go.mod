@@ -8,6 +8,7 @@ require (
 	git.sharegap.net/cascadia/cascadia-go v0.7.1
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
+	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/docker/cli v29.6.1+incompatible
 	github.com/docker/compose/v5 v5.3.1
 	github.com/go-chi/chi/v5 v5.2.1
@@ -104,7 +105,6 @@ require (
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/sevenzip v1.6.1 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
-	github.com/btcsuite/btcd/btcec/v2 v2.3.4 // indirect
 	github.com/btcsuite/btcd/btcutil v1.1.5 // indirect
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0 // indirect
 	github.com/buger/goterm v1.0.4 // indirect

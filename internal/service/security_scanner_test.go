@@ -221,6 +221,10 @@ func TestSecuritySBOMReferencesFromEventAcceptsActualInTotoReference(t *testing.
 			Digest: map[string]string{"sha256": strings.Repeat("b", 64)},
 		},
 	}
+	secret := nostr.MustSecretKeyFromHex("1111111111111111111111111111111111111111111111111111111111111111")
+	attestationSigner, err := sbomadapter.NewNostrDSSESigner(secret.Hex())
+	require.NoError(t, err)
+	require.NoError(t, sbomadapter.SignAttestation(context.Background(), att, attestationSigner))
 	content, err := json.Marshal(att)
 	require.NoError(t, err)
 	ev := &nostr.Event{
@@ -233,6 +237,7 @@ func TestSecuritySBOMReferencesFromEventAcceptsActualInTotoReference(t *testing.
 		},
 		Content: string(content),
 	}
+	require.NoError(t, ev.Sign(secret))
 
 	refs, err := securitySBOMReferencesFromEvent(ev)
 

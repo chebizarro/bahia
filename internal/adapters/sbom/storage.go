@@ -269,6 +269,9 @@ func validateSHA256Hex(value string) (string, error) {
 
 // ResolveAndVerify fetches and verifies an SBOM against its attestation.
 func (r *StorageResolver) ResolveAndVerify(ctx context.Context, att *domain.SBOMAttestation, input ResolveInput) ([]byte, error) {
+	if err := VerifyAttestationSignature(att, ""); err != nil {
+		return nil, fmt.Errorf("verify SBOM attestation signature: %w", err)
+	}
 	data, err := r.Resolve(ctx, input)
 	if err != nil {
 		return nil, err

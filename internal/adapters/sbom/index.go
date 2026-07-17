@@ -124,6 +124,9 @@ func BuildSBOMReferenceEvent(input BuildSBOMReferenceEventInput) (*nostr.Event, 
 	if input.Attestation == nil {
 		return nil, "", fmt.Errorf("attestation is required")
 	}
+	if err := VerifyAttestationSignature(input.Attestation, ""); err != nil {
+		return nil, "", fmt.Errorf("attestation signature verification failed: %w", err)
+	}
 	if err := validateSBOMSubject(input.Subject); err != nil {
 		return nil, "", err
 	}
@@ -505,11 +508,23 @@ func ParseIndexFromEvent(ev *nostr.Event) (*domain.SBOMIndex, error) {
 
 // ParseAttestationFromEvent parses an SBOM attestation from a Nostr event.
 func ParseAttestationFromEvent(ev *nostr.Event) (*domain.SBOMAttestation, error) {
+	if ev == nil {
+		return nil, fmt.Errorf("attestation event is required")
+	}
 	if int(ev.Kind) != KindSBOMAttestation {
 		return nil, fmt.Errorf("invalid event kind: %d", ev.Kind)
 	}
-
-	return ParseAttestation([]byte(ev.Content))
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return nil, fmt.Errorf("invalid SBOM attestation event signature")
+	}
+	att, err := ParseAttestation([]byte(ev.Content))
+	if err != nil {
+		return nil, err
+	}
+	if err := VerifyAttestationSignature(att, ev.PubKey.Hex()); err != nil {
+		return nil, fmt.Errorf("attestation signer does not match event publisher: %w", err)
+	}
+	return att, nil
 }
 
 // FilterForArtifactSBOMs returns a Nostr filter for finding canonical SBOM availability lists for an artifact.

@@ -1,9 +1,12 @@
 package sbom
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -331,6 +334,10 @@ func TestSerializeAndParseAttestation(t *testing.T) {
 		},
 	}
 
+	signer := testNostrDSSESigner(t)
+	if err := SignAttestation(context.Background(), original, signer); err != nil {
+		t.Fatalf("SignAttestation failed: %v", err)
+	}
 	data, err := SerializeAttestation(original)
 	if err != nil {
 		t.Fatalf("SerializeAttestation failed: %v", err)
@@ -350,6 +357,50 @@ func TestSerializeAndParseAttestation(t *testing.T) {
 	if len(parsed.Subject) != len(original.Subject) {
 		t.Errorf("Subject length mismatch: got %d, want %d", len(parsed.Subject), len(original.Subject))
 	}
+}
+
+func TestParseAttestationRejectsUnsigned(t *testing.T) {
+	unsigned := &domain.SBOMAttestation{Type: InTotoStatementType}
+	data, err := SerializeAttestation(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ParseAttestation(data)
+	if err == nil || !strings.Contains(err.Error(), "unsigned") {
+		t.Fatalf("ParseAttestation error = %v, want unsigned rejection", err)
+	}
+}
+
+func TestSignedAttestationVerifiesAndRejectsTampering(t *testing.T) {
+	att := &domain.SBOMAttestation{
+		Type:          InTotoStatementType,
+		Subject:       []domain.AttestationSubject{{Name: "artifact", Digest: map[string]string{"sha256": testSHA256A}}},
+		PredicateType: domain.AttestationTypeSPDX,
+		Predicate:     domain.SBOMPredicate{Format: domain.SBOMFormatSPDX, Digest: map[string]string{"sha256": testSHA256B}},
+	}
+	signer := testNostrDSSESigner(t)
+	if err := SignAttestation(context.Background(), att, signer); err != nil {
+		t.Fatalf("SignAttestation error = %v", err)
+	}
+	if err := VerifyAttestationSignature(att, signer.KeyID()); err != nil {
+		t.Fatalf("VerifyAttestationSignature error = %v", err)
+	}
+	if err := VerifyAttestationSignature(att, nostr.Generate().Public().Hex()); err == nil {
+		t.Fatal("signature verified for an untrusted service pubkey")
+	}
+	att.Predicate.Digest["sha256"] = testSHA256A
+	if err := VerifyAttestationSignature(att, signer.KeyID()); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("tampered verification error = %v, want payload mismatch", err)
+	}
+}
+
+func testNostrDSSESigner(t *testing.T) *NostrDSSESigner {
+	t.Helper()
+	signer, err := NewNostrDSSESigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
 }
 
 func TestMediaTypeForFormat(t *testing.T) {

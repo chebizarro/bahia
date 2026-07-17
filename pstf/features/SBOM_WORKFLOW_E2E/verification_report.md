@@ -225,3 +225,28 @@ cd web && npm run lint
 ```
 
 Result: PASS on 2026-06-14.
+
+## Signed DSSE attestations — 2026-07-17
+
+- `domain.SBOMAttestation` now carries a DSSE envelope with the exact in-toto statement payload and BIP-340 signature metadata.
+- The SBOM orchestrator signs DSSE pre-authentication encoding with Bahia's configured Nostr service key before building or publishing a `30078` reference; no new or generated production key material is introduced.
+- `BuildSBOMReferenceEvent`, `ParseAttestation`, `ParseAttestationFromEvent`, and `StorageResolver.ResolveAndVerify` reject unsigned or tampered statements. Relay reads additionally require the DSSE key ID/signature to match the cryptographically verified Nostr event publisher.
+- Snapshot republishing signs reconstructed statements with the projector's existing configured service key.
+- Regression tests cover unsigned rejection, valid signed verification, statement tampering, untrusted keys, event-publisher binding, and orchestrator publication of a verifiable DSSE envelope.
+
+Targeted verification:
+
+```bash
+go test ./internal/domain ./internal/adapters/sbom ./internal/adapters/nostr ./internal/service ./internal/app
+```
+
+Result: PASS on 2026-07-17.
+
+Full quality gate:
+
+```bash
+go build ./...
+go test ./...
+```
+
+Result: PASS on 2026-07-17.

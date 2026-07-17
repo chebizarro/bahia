@@ -306,14 +306,15 @@ func firstNonEmptySBOMLocator(values ...string) string {
 }
 
 type SBOMOrchestrator struct {
-	Generators *sbomadapter.GeneratorRegistry
-	Storage    *sbomadapter.StorageResolver
-	Repo       repository.SBOMManifestRepository
-	Publisher  SBOMVerifiedPublisher
-	Subscriber SBOMAvailabilitySubscriber
-	Resolver   SBOMSubjectResolver
-	Pubkey     string
-	Logger     *zap.Logger
+	Generators        *sbomadapter.GeneratorRegistry
+	Storage           *sbomadapter.StorageResolver
+	Repo              repository.SBOMManifestRepository
+	Publisher         SBOMVerifiedPublisher
+	Subscriber        SBOMAvailabilitySubscriber
+	Resolver          SBOMSubjectResolver
+	AttestationSigner sbomadapter.AttestationSigner
+	Pubkey            string
+	Logger            *zap.Logger
 
 	mu      sync.Mutex
 	results map[string]SBOMRunResult
@@ -321,14 +322,15 @@ type SBOMOrchestrator struct {
 }
 
 type SBOMOrchestratorConfig struct {
-	Generators *sbomadapter.GeneratorRegistry
-	Storage    *sbomadapter.StorageResolver
-	Repo       repository.SBOMManifestRepository
-	Publisher  SBOMVerifiedPublisher
-	Subscriber SBOMAvailabilitySubscriber
-	Resolver   SBOMSubjectResolver
-	Pubkey     string
-	Logger     *zap.Logger
+	Generators        *sbomadapter.GeneratorRegistry
+	Storage           *sbomadapter.StorageResolver
+	Repo              repository.SBOMManifestRepository
+	Publisher         SBOMVerifiedPublisher
+	Subscriber        SBOMAvailabilitySubscriber
+	Resolver          SBOMSubjectResolver
+	AttestationSigner sbomadapter.AttestationSigner
+	Pubkey            string
+	Logger            *zap.Logger
 }
 
 func NewSBOMOrchestrator(cfg SBOMOrchestratorConfig) *SBOMOrchestrator {
@@ -336,7 +338,7 @@ func NewSBOMOrchestrator(cfg SBOMOrchestratorConfig) *SBOMOrchestrator {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &SBOMOrchestrator{Generators: cfg.Generators, Storage: cfg.Storage, Repo: cfg.Repo, Publisher: cfg.Publisher, Subscriber: cfg.Subscriber, Resolver: cfg.Resolver, Pubkey: strings.TrimSpace(cfg.Pubkey), Logger: logger.Named("sbom-orchestrator"), results: map[string]SBOMRunResult{}, locks: map[string]*sync.Mutex{}}
+	return &SBOMOrchestrator{Generators: cfg.Generators, Storage: cfg.Storage, Repo: cfg.Repo, Publisher: cfg.Publisher, Subscriber: cfg.Subscriber, Resolver: cfg.Resolver, AttestationSigner: cfg.AttestationSigner, Pubkey: strings.TrimSpace(cfg.Pubkey), Logger: logger.Named("sbom-orchestrator"), results: map[string]SBOMRunResult{}, locks: map[string]*sync.Mutex{}}
 }
 
 func (s *SBOMOrchestrator) Generate(ctx context.Context, req SBOMGenerateRequest) (*SBOMRunResult, error) {
@@ -625,6 +627,12 @@ func (s *SBOMOrchestrator) processOne(ctx context.Context, statusD string, item 
 	if err != nil {
 		return nil, nil, domain.SBOMIndexEntry{}, "", err
 	}
+	if err := sbomadapter.SignAttestation(ctx, att, s.AttestationSigner); err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("sign SBOM attestation: %w", err)
+	}
+	if err := sbomadapter.VerifyAttestationSignature(att, s.Pubkey); err != nil {
+		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("verify SBOM attestation signature: %w", err)
+	}
 	if !sbomadapter.VerifySBOMSubjectDigest(att, item.Subject) || !sbomadapter.VerifyPayloadDigest(att, item.Payload) {
 		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("SBOM attestation verification failed")
 	}
@@ -703,7 +711,7 @@ func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event,
 }
 
 func (s *SBOMOrchestrator) validateRuntimeConfigured() error {
-	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Subscriber == nil || s.Pubkey == "" {
+	if s == nil || s.Storage == nil || s.Repo == nil || s.Publisher == nil || s.Subscriber == nil || s.AttestationSigner == nil || s.Pubkey == "" {
 		return fmt.Errorf("SBOM orchestrator is not fully configured")
 	}
 	return nil

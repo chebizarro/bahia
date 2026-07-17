@@ -118,6 +118,8 @@ bahia artifacts get art-456 -o json
 
 Bahia supports real SBOM generation and import for artifact subjects. The canonical workflow stores exact SBOM payload bytes on Blossom, publishes a `30078` NIP-78 SBOM reference event, then publishes/replaces a complete `30004` NIP-51 availability list for the artifact subject. Historical `30079` SBOM index events are read-only compatibility data and are not used for new publication.
 
+Each `30078` reference contains a DSSE envelope over the exact in-toto statement. Bahia signs the DSSE pre-authentication encoding with its configured Nostr service key, rejects unsigned or tampered references before publication, and requires the DSSE signer to match the verified Nostr event publisher when reading a reference. Payload resolution also rejects unsigned attestations before fetching or accepting SBOM bytes.
+
 ### Generating or importing SBOMs
 
 Signer-first generation and import use ContextVM methods over kind `25910`:

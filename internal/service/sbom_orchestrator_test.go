@@ -53,6 +53,20 @@ func TestSBOMOrchestratorGeneratePublishesProjectsAndAudits(t *testing.T) {
 	if publisher.containsKind(sbomadapter.KindLegacySBOMIndex) {
 		t.Fatalf("legacy 30079 publication observed")
 	}
+	var verifiedReference bool
+	for i := range publisher.events {
+		if int(publisher.events[i].Kind) != sbomadapter.KindSBOMReference {
+			continue
+		}
+		att, err := sbomadapter.ParseAttestationFromEvent(&publisher.events[i])
+		if err != nil {
+			t.Fatalf("published SBOM reference signature verification failed: %v", err)
+		}
+		verifiedReference = att.Envelope != nil && len(att.Envelope.Signatures) > 0
+	}
+	if !verifiedReference {
+		t.Fatal("published SBOM reference did not contain a verified DSSE signature")
+	}
 
 	cached, err := orchestrator.Generate(ctx, SBOMGenerateRequest{IDempotencyKey: "run-1", Subject: manifest.Subject, Source: sbomadapter.SourceRequest{Kind: sbomadapter.SourceKindDirectory, Locator: "/tmp/source"}, Formats: []domain.SBOMFormat{domain.SBOMFormatSPDX}, Generator: sbomadapter.GeneratorSyft})
 	if err != nil {
@@ -332,7 +346,11 @@ func newTestSBOMOrchestrator(t *testing.T, publisher *fakeSBOMPublisher, subscri
 	if subscriber == nil {
 		subscriber = &fakeSBOMAvailabilitySubscriber{messages: []SBOMAvailabilitySubscriptionMessage{{EOSE: true}}}
 	}
-	return NewSBOMOrchestrator(SBOMOrchestratorConfig{Generators: registry, Storage: sbomadapter.NewStorageResolver(&sbomadapter.MockBlossomClient{Blobs: map[string][]byte{}}, nil, nil, slog.Default()), Repo: repo, Publisher: publisher, Subscriber: subscriber, Pubkey: publisher.signer.Public().Hex()})
+	attestationSigner, err := sbomadapter.NewNostrDSSESigner(publisher.signer.Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewSBOMOrchestrator(SBOMOrchestratorConfig{Generators: registry, Storage: sbomadapter.NewStorageResolver(&sbomadapter.MockBlossomClient{Blobs: map[string][]byte{}}, nil, nil, slog.Default()), Repo: repo, Publisher: publisher, Subscriber: subscriber, AttestationSigner: attestationSigner, Pubkey: publisher.signer.Public().Hex()})
 }
 
 type fakeGenerator struct {

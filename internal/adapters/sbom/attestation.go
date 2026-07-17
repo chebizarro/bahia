@@ -146,6 +146,9 @@ func ParseAttestation(data []byte) (*domain.SBOMAttestation, error) {
 	if att.Type != InTotoStatementType {
 		return nil, fmt.Errorf("invalid attestation type: %s", att.Type)
 	}
+	if err := VerifyAttestationSignature(&att, ""); err != nil {
+		return nil, fmt.Errorf("verify attestation signature: %w", err)
+	}
 	return &att, nil
 }
 

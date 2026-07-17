@@ -90,7 +90,7 @@ func testSubject() domain.SBOMSubject {
 }
 
 func testAttestation() *domain.SBOMAttestation {
-	return &domain.SBOMAttestation{
+	att := &domain.SBOMAttestation{
 		Type: InTotoStatementType,
 		Subject: []domain.AttestationSubject{
 			{Name: "test-image:v1", Digest: map[string]string{"sha256": testSHA256A}},
@@ -111,6 +111,14 @@ func testAttestation() *domain.SBOMAttestation {
 			NTIA: &domain.NTIACompliance{IsCompliant: true},
 		},
 	}
+	signer, err := NewNostrDSSESigner(testSBOMPrivateKey)
+	if err != nil {
+		panic(err)
+	}
+	if err := SignAttestation(context.Background(), att, signer); err != nil {
+		panic(err)
+	}
+	return att
 }
 
 func TestBuildSBOMReferenceEvent(t *testing.T) {
@@ -160,6 +168,37 @@ func TestBuildSBOMReferenceEvent(t *testing.T) {
 	var parsedAtt domain.SBOMAttestation
 	if err := json.Unmarshal([]byte(ev.Content), &parsedAtt); err != nil {
 		t.Fatalf("Failed to parse event content: %v", err)
+	}
+}
+
+func TestBuildSBOMReferenceEventRejectsUnsignedAttestation(t *testing.T) {
+	att := testAttestation()
+	att.Envelope = nil
+	_, _, err := BuildSBOMReferenceEvent(BuildSBOMReferenceEventInput{Subject: testSubject(), Attestation: att})
+	if err == nil || !strings.Contains(err.Error(), "unsigned") {
+		t.Fatalf("BuildSBOMReferenceEvent error = %v, want unsigned rejection", err)
+	}
+}
+
+func TestParseAttestationFromEventBindsDSSESignerToPublisher(t *testing.T) {
+	ev, _, err := BuildSBOMReferenceEvent(BuildSBOMReferenceEventInput{Subject: testSubject(), Attestation: testAttestation()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := nostr.MustSecretKeyFromHex(testSBOMPrivateKey)
+	if err := ev.Sign(secret); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAttestationFromEvent(ev); err != nil {
+		t.Fatalf("ParseAttestationFromEvent error = %v", err)
+	}
+
+	otherSecret := nostr.Generate()
+	if err := ev.Sign(otherSecret); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAttestationFromEvent(ev); err == nil || !strings.Contains(err.Error(), "does not match event publisher") {
+		t.Fatalf("ParseAttestationFromEvent error = %v, want signer binding rejection", err)
 	}
 }
 

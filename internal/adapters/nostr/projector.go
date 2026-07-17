@@ -1866,6 +1866,11 @@ func (p *Projector) publishSBOMSnapshots(ctx context.Context) (int, int) {
 		p.logger.Warn("derive SBOM projection pubkey failed", zap.Error(err))
 		return 0, 0
 	}
+	attestationSigner, err := sbom.NewNostrDSSESigner(p.privateKey)
+	if err != nil {
+		p.logger.Warn("configure SBOM projection attestation signer failed", zap.Error(err))
+		return 0, 0
+	}
 
 	// Publish 30078 reference events and collect entries grouped by subject for availability lists.
 	type subjectKey struct {
@@ -1913,6 +1918,11 @@ func (p *Projector) publishSBOMSnapshots(ctx context.Context) (int, int) {
 			},
 		}
 
+		if err := sbom.SignAttestation(ctx, att, attestationSigner); err != nil {
+			p.logger.Warn("sign SBOM reference attestation for projection failed",
+				zap.String("manifest_id", m.ID.String()), zap.Error(err))
+			continue
+		}
 		createdAt := m.CreatedAt
 		ev, _, err := sbom.BuildSBOMReferenceEvent(sbom.BuildSBOMReferenceEventInput{
 			Subject:     m.Subject,

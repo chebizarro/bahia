@@ -697,12 +697,17 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
 		sbomControlPlanePublisher := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
+		attestationSigner, err := sbomAdapter.NewNostrDSSESigner(cfg.Nostr.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("configure SBOM attestation signer: %w", err)
+		}
 		sbomOrchestrator = service.NewSBOMOrchestrator(service.SBOMOrchestratorConfig{
-			Generators: generatorRegistry,
-			Storage:    sbomStorageResolver,
-			Repo:       sbomManifestRepo,
-			Publisher:  sbomPublishAdapter{publisher: sbomControlPlanePublisher},
-			Subscriber: sbomAvailabilityRelaySubscriber{pool: controlPlanePool},
+			Generators:        generatorRegistry,
+			Storage:           sbomStorageResolver,
+			Repo:              sbomManifestRepo,
+			Publisher:         sbomPublishAdapter{publisher: sbomControlPlanePublisher},
+			Subscriber:        sbomAvailabilityRelaySubscriber{pool: controlPlanePool},
+			AttestationSigner: attestationSigner,
 			Resolver: service.SBOMSubjectResolver{
 				Artifacts:   artifactRepo,
 				Deployments: intentRepo,
