@@ -41,9 +41,6 @@ type NostrEventRepository interface {
 	GetByID(ctx context.Context, id string) (*NostrEventRecord, error)
 	ListByKind(ctx context.Context, kind int, limit int) ([]NostrEventRecord, error)
 	ListByKinds(ctx context.Context, kinds []int, limit int) ([]NostrEventRecord, error)
-	ListByKindsPage(ctx context.Context, kinds []int, after *NostrMigrationCursor, limit int) ([]NostrEventRecord, error)
-	GetMigrationCursor(ctx context.Context, name string) (*NostrMigrationCursor, error)
-	SaveMigrationCursor(ctx context.Context, cursor NostrMigrationCursor) error
 	FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]NostrEventRecord, error)
 	ListByEntity(ctx context.Context, entityType string, entityID uuid.UUID, limit int) ([]NostrEventRecord, error)
 	LatestCreatedAtForKinds(ctx context.Context, kinds []int) (*time.Time, error)

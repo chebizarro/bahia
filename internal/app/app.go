@@ -454,7 +454,11 @@ func New(cfg *config.Config) (*App, error) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
 	})
-	migrationRunner := nostrmigration.NewRunner(nostrEventRepo, migrationRelayPublisher{pool: relayPool}, relayPool, nostrmigration.Config{
+	migrationEventRepo, ok := nostrEventRepo.(nostrmigration.EventRepository)
+	if !ok {
+		return nil, fmt.Errorf("nostr event repository does not support durable migration cursors")
+	}
+	migrationRunner := nostrmigration.NewRunner(migrationEventRepo, migrationRelayPublisher{pool: relayPool}, relayPool, nostrmigration.Config{
 		PrivateKey:    cfg.Nostr.PrivateKey,
 		RelayBackfill: len(relayURLs) > 0 && strings.TrimSpace(cfg.Nostr.PrivateKey) != "",
 	}, logger)
