@@ -143,12 +143,28 @@ func NewBackupRunCoordinator(registry *BackupRegistryService, backendResolver Ba
 	return c
 }
 
+func (c *BackupRunCoordinator) validateDependencies() error {
+	if c == nil {
+		return fmt.Errorf("BackupRunCoordinator is nil")
+	}
+	if c.registry == nil {
+		return fmt.Errorf("BackupRunCoordinator registry is not configured")
+	}
+	if c.queue == nil {
+		return fmt.Errorf("BackupRunCoordinator queue is not configured")
+	}
+	if c.backendResolver == nil {
+		return fmt.Errorf("BackupRunCoordinator backend resolver is not configured")
+	}
+	return nil
+}
+
 func (c *BackupRunCoordinator) Name() string { return "backup-run-recovery" }
 
 // Run performs durable worker recovery for stored backup work. It does not poll for Nostr messages.
 func (c *BackupRunCoordinator) Run(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.queue == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	c.runRecoveryOnce(ctx)
 	ticker := time.NewTicker(c.config.RecoveryPollInterval)
@@ -171,8 +187,8 @@ func (c *BackupRunCoordinator) runRecoveryOnce(ctx context.Context) {
 
 // ProcessOnce performs one stale-lease recovery and queued-run claim/process cycle.
 func (c *BackupRunCoordinator) ProcessOnce(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.queue == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	if c.config.StaleRunTimeout > 0 {
 		if n, err := c.queue.RequeueStaleBackupRuns(ctx, c.config.StaleRunTimeout); err != nil {

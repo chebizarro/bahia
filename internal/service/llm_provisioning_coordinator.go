@@ -65,11 +65,39 @@ func NewLLMProvisioningCoordinator(registry *LLMRegistryService, envs repository
 	return c
 }
 
+func (c *LLMProvisioningCoordinator) validateDependencies() error {
+	if c == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator is nil")
+	}
+	if c.registry == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator registry is not configured")
+	}
+	if c.environments == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator environment repository is not configured")
+	}
+	if c.runs == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator run repository is not configured")
+	}
+	if c.placement == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator placement is not configured")
+	}
+	if c.provisioners == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator provisioner resolver is not configured")
+	}
+	if c.gateway == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator gateway is not configured")
+	}
+	if c.gate == nil {
+		return fmt.Errorf("LLMProvisioningCoordinator promotion gate is not configured")
+	}
+	return nil
+}
+
 func (c *LLMProvisioningCoordinator) Name() string { return "llm-provisioning-coordinator" }
 
 func (c *LLMProvisioningCoordinator) Run(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.runs == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	ticker := time.NewTicker(c.pollInterval)
 	defer ticker.Stop()
@@ -87,6 +115,9 @@ func (c *LLMProvisioningCoordinator) Run(ctx context.Context) error {
 
 // ProcessOnce performs one queue/create/claim/process cycle. It is exposed for focused tests.
 func (c *LLMProvisioningCoordinator) ProcessOnce(ctx context.Context) error {
+	if err := c.validateDependencies(); err != nil {
+		return err
+	}
 	if c.staleRunTimeout > 0 {
 		if n, err := c.runs.RequeueStaleRunning(ctx, c.staleRunTimeout); err != nil {
 			return err

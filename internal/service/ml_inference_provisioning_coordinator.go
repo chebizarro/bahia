@@ -183,14 +183,36 @@ func NewMLInferenceProvisioningCoordinator(registry *MLRegistryService, placemen
 	return c
 }
 
+func (c *MLInferenceProvisioningCoordinator) validateDependencies() error {
+	if c == nil {
+		return fmt.Errorf("MLInferenceProvisioningCoordinator is nil")
+	}
+	if c.registry == nil {
+		return fmt.Errorf("MLInferenceProvisioningCoordinator registry is not configured")
+	}
+	if c.queue == nil {
+		return fmt.Errorf("MLInferenceProvisioningCoordinator queue is not configured")
+	}
+	if c.placement == nil {
+		return fmt.Errorf("MLInferenceProvisioningCoordinator placement is not configured")
+	}
+	if c.provenance == nil {
+		return fmt.Errorf("MLInferenceProvisioningCoordinator provenance is not configured")
+	}
+	if c.provisioners == nil {
+		return fmt.Errorf("MLInferenceProvisioningCoordinator provisioner resolver is not configured")
+	}
+	return nil
+}
+
 func (c *MLInferenceProvisioningCoordinator) Name() string {
 	return "ml-inference-provisioning-recovery"
 }
 
 // Run performs explicit durable recovery for stored ML deployment work.
 func (c *MLInferenceProvisioningCoordinator) Run(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.queue == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	c.runRecoveryOnce(ctx)
 	ticker := time.NewTicker(c.config.RecoveryPollInterval)
@@ -213,8 +235,8 @@ func (c *MLInferenceProvisioningCoordinator) runRecoveryOnce(ctx context.Context
 
 // ProcessOnce performs one stale-recovery, queue, claim, and process cycle. It is exposed for focused tests.
 func (c *MLInferenceProvisioningCoordinator) ProcessOnce(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.queue == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	if c.config.StaleRunTimeout > 0 {
 		if n, err := c.queue.RequeueStaleMLDeploymentRuns(ctx, c.config.StaleRunTimeout); err != nil {

@@ -186,12 +186,28 @@ func NewMLRecipeCoordinator(registry *MLRegistryService, dispatcher MLRecipeJobD
 	return c
 }
 
+func (c *MLRecipeCoordinator) validateDependencies() error {
+	if c == nil {
+		return fmt.Errorf("MLRecipeCoordinator is nil")
+	}
+	if c.registry == nil {
+		return fmt.Errorf("MLRecipeCoordinator registry is not configured")
+	}
+	if c.queue == nil {
+		return fmt.Errorf("MLRecipeCoordinator queue is not configured")
+	}
+	if c.dispatcher == nil {
+		return fmt.Errorf("MLRecipeCoordinator dispatcher is not configured")
+	}
+	return nil
+}
+
 func (c *MLRecipeCoordinator) Name() string { return "ml-recipe-recovery" }
 
 // Run performs explicit durable recovery for stored recipe work. It does not poll for Nostr messages.
 func (c *MLRecipeCoordinator) Run(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.queue == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	c.runRecoveryOnce(ctx)
 	ticker := time.NewTicker(c.config.RecoveryPollInterval)
@@ -214,8 +230,8 @@ func (c *MLRecipeCoordinator) runRecoveryOnce(ctx context.Context) {
 
 // ProcessOnce performs one stale-lease recovery and queued-run claim/process cycle.
 func (c *MLRecipeCoordinator) ProcessOnce(ctx context.Context) error {
-	if c == nil || c.registry == nil || c.queue == nil {
-		return nil
+	if err := c.validateDependencies(); err != nil {
+		return err
 	}
 	if c.config.StaleRunTimeout > 0 {
 		if n, err := c.queue.RequeueStaleMLRecipeRuns(ctx, c.config.StaleRunTimeout); err != nil {
