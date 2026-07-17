@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"regexp"
@@ -24,8 +25,7 @@ var (
 	serverURL                     string
 	outputFormat                  string
 	apiClient                     *client.Client
-	nostrNsec                     string
-	nostrPrivateKey               string
+	nostrKeyFile                  string
 	operatorRelays                []string
 	operatorBootstrapRelays       []string
 	operatorServicePubkey         string
@@ -55,8 +55,7 @@ func newRootCommand() *cobra.Command {
 
 	rootCmd.PersistentFlags().StringVar(&serverURL, "server", getEnvOrDefault("BAHIA_SERVER", "http://localhost:8080"), "Bahia server URL")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
-	rootCmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "Nostr secret key (nsec) for NIP-98 auth and signer-first operator requests")
-	rootCmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "Nostr private key hex for NIP-98 auth and signer-first operator requests")
+	rootCmd.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "Read the Nostr private key from this file (use - for stdin; env BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
@@ -101,7 +100,7 @@ func authCommands() *cobra.Command {
 				return err
 			}
 			if provider == nil {
-				return fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY")
+				return fmt.Errorf("provide --nostr-key-file, BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY")
 			}
 			pubkey, err := provider.PublicKey()
 			if err != nil {
@@ -1118,34 +1117,72 @@ func resolveNIP98Provider(cmd *cobra.Command) (*client.NIP98PrivateKeyProvider, 
 	return client.NewNIP98PrivateKeyProvider(key)
 }
 
-func resolveNostrPrivateKeyInput(cmd *cobra.Command) (string, error) {
-	flagNsec := strings.TrimSpace(nostrNsec)
-	flagPrivateKey := strings.TrimSpace(nostrPrivateKey)
+const maxNostrPrivateKeyInputBytes = 4096
 
+func resolveNostrPrivateKeyInput(cmd *cobra.Command) (string, error) {
 	if cmd != nil && cmd.Root() != nil {
 		flags := cmd.Root().PersistentFlags()
-		if flags != nil {
-			flagNsecChanged := flags.Changed("nsec")
-			flagPrivateKeyChanged := flags.Changed("privkey")
-			if flagNsecChanged || flagPrivateKeyChanged {
-				if flagNsecChanged && flagPrivateKeyChanged {
-					return "", fmt.Errorf("specify only one of --nsec or --privkey")
-				}
-				if flagNsecChanged {
-					return flagNsec, nil
-				}
-				return flagPrivateKey, nil
+		if flags != nil && flags.Changed("nostr-key-file") {
+			path := strings.TrimSpace(nostrKeyFile)
+			if path == "" {
+				return "", fmt.Errorf("--nostr-key-file requires a file path or - for stdin")
 			}
+			return readNostrPrivateKeyInput(cmd, path)
 		}
 	}
 
+	envKeyFile := strings.TrimSpace(os.Getenv("BAHIA_NOSTR_KEY_FILE"))
 	envNsec := strings.TrimSpace(os.Getenv("BAHIA_NOSTR_NSEC"))
 	envPrivateKey := strings.TrimSpace(os.Getenv("BAHIA_NOSTR_PRIVATE_KEY"))
-	if envNsec != "" && envPrivateKey != "" {
-		return "", fmt.Errorf("specify only one of BAHIA_NOSTR_NSEC or BAHIA_NOSTR_PRIVATE_KEY")
+	configured := 0
+	for _, value := range []string{envKeyFile, envNsec, envPrivateKey} {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured > 1 {
+		return "", fmt.Errorf("specify only one of BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY")
+	}
+	if envKeyFile != "" {
+		return readNostrPrivateKeyInput(cmd, envKeyFile)
 	}
 	if envNsec != "" {
 		return envNsec, nil
 	}
 	return envPrivateKey, nil
+}
+
+func readNostrPrivateKeyInput(cmd *cobra.Command, path string) (string, error) {
+	var (
+		reader io.Reader
+		close  func() error
+	)
+	if path == "-" {
+		if cmd == nil {
+			return "", fmt.Errorf("stdin key input requires a command context")
+		}
+		reader = cmd.InOrStdin()
+	} else {
+		file, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("open Nostr private key file: %w", err)
+		}
+		reader = file
+		close = file.Close
+	}
+	if close != nil {
+		defer close() //nolint:errcheck
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, maxNostrPrivateKeyInputBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read Nostr private key: %w", err)
+	}
+	if len(data) > maxNostrPrivateKeyInputBytes {
+		return "", fmt.Errorf("Nostr private key input exceeds %d bytes", maxNostrPrivateKeyInputBytes)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("Nostr private key input is empty")
+	}
+	return key, nil
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -159,11 +161,8 @@ func TestPolicyCreateUsesSignerFirstOperatorClient(t *testing.T) {
 	key := nostr.Generate().Hex()
 	cmd := newOperatorFlagTestCommand(t)
 	cmd.SetContext(context.Background())
-	nostrPrivateKey = key
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", key)
 	operatorRelays = []string{"wss://relay.example"}
-	if err := cmd.Root().PersistentFlags().Set("privkey", key); err != nil {
-		t.Fatalf("set privkey: %v", err)
-	}
 	if err := cmd.Root().PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
 		t.Fatalf("set relay: %v", err)
 	}
@@ -219,8 +218,12 @@ func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
 	})
 	defer restoreFactory()
 
+	keyFile := filepath.Join(t.TempDir(), "nostr.key")
+	if err := os.WriteFile(keyFile, []byte(key), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
 	cmd := newRootCommand()
-	cmd.SetArgs([]string{"--privkey", key, "--relay", "wss://relay.example", "--service-pubkey", servicePubkey, "services", "actions", "restart", "--service", "svc", "--environment", "env"})
+	cmd.SetArgs([]string{"--nostr-key-file", keyFile, "--relay", "wss://relay.example", "--service-pubkey", servicePubkey, "services", "actions", "restart", "--service", "svc", "--environment", "env"})
 	if err := cmd.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext() error = %v", err)
 	}
@@ -401,8 +404,7 @@ func newOperatorFlagTestCommand(t *testing.T) *cobra.Command {
 	root.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", "", "")
 	root.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "")
 	root.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", false, "")
-	root.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "")
-	root.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "")
+	root.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "")
 	cmd := &cobra.Command{Use: "test"}
 	root.AddCommand(cmd)
 	return cmd
@@ -425,8 +427,7 @@ func resetOperatorGlobals(t *testing.T) {
 	serverURL = ""
 	outputFormat = "table"
 	apiClient = nil
-	nostrNsec = ""
-	nostrPrivateKey = ""
+	nostrKeyFile = ""
 	operatorRelays = nil
 	operatorBootstrapRelays = nil
 	operatorServicePubkey = ""
@@ -437,14 +438,14 @@ func resetOperatorGlobals(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_SERVICE_PUBKEY", "")
 	t.Setenv("BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS", "")
 	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
+	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	t.Cleanup(func() {
 		serverURL = ""
 		outputFormat = "table"
 		apiClient = nil
-		nostrNsec = ""
-		nostrPrivateKey = ""
+		nostrKeyFile = ""
 		operatorRelays = nil
 		operatorBootstrapRelays = nil
 		operatorServicePubkey = ""

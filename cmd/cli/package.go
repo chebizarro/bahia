@@ -381,7 +381,7 @@ func buildCLIPackageClient(cmd *cobra.Command) (cliPackageClient, error) {
 		return nil, err
 	}
 	if strings.TrimSpace(key) == "" {
-		return nil, fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for package commands")
+		return nil, fmt.Errorf("provide --nostr-key-file, BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for package commands")
 	}
 	relays, err := resolveOperatorRelays(cmd)
 	if err != nil {

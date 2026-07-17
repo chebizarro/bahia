@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -43,7 +44,7 @@ func (s cliSigner) Sign(_ context.Context, event *nostr.Event) error {
 func main() {
 	var args repeatedFlag
 	relays := flag.String("relays", env("SOULFACTORY_RELAYS", ""), "comma-separated OpenClaw runtime/control relays for capability, request, and result events; not ngit repository publication relays")
-	privateKey := flag.String("private-key", env("OPENCLAW_SOULFACTORY_PRIVATE_KEY", ""), "OpenClaw sidecar Nostr private key (hex or nsec)")
+	privateKeyFile := flag.String("private-key-file", env("OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE", ""), "file containing the OpenClaw sidecar Nostr private key (env OPENCLAW_SOULFACTORY_PRIVATE_KEY remains supported)")
 	trustedControllers := flag.String("trusted-controller-pubkeys", env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "comma-separated trusted SoulFactory controller pubkeys")
 	identifier := flag.String("identifier", env("OPENCLAW_SOULFACTORY_IDENTIFIER", "openclaw-soulfactory-sidecar"), "kind:30317 d-tag identifier")
 	command := flag.String("command", env("OPENCLAW_SOULFACTORY_COMMAND", ""), "local OpenClaw control command; receives invocation JSON on stdin and returns outcome JSON on stdout")
@@ -62,7 +63,11 @@ func main() {
 	if strings.TrimSpace(*command) == "" {
 		fatalf("-command or OPENCLAW_SOULFACTORY_COMMAND is required so the owned sidecar can drive a local OpenClaw control surface")
 	}
-	normalizedKey, err := pkgclient.NormalizeNostrPrivateKey(*privateKey)
+	privateKey, err := loadPrivateKey(*privateKeyFile, env("OPENCLAW_SOULFACTORY_PRIVATE_KEY", ""))
+	if err != nil {
+		fatalf("load private key: %v", err)
+	}
+	normalizedKey, err := pkgclient.NormalizeNostrPrivateKey(privateKey)
 	if err != nil {
 		fatalf("invalid private key: %v", err)
 	}
@@ -114,6 +119,36 @@ func main() {
 	if err := sidecar.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fatalf("sidecar stopped: %v", err)
 	}
+}
+
+const maxPrivateKeyFileBytes = 4096
+
+func loadPrivateKey(path, environmentValue string) (string, error) {
+	path = strings.TrimSpace(path)
+	environmentValue = strings.TrimSpace(environmentValue)
+	if path != "" && environmentValue != "" {
+		return "", fmt.Errorf("configure only one of -private-key-file or OPENCLAW_SOULFACTORY_PRIVATE_KEY")
+	}
+	if path == "" {
+		return environmentValue, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close() //nolint:errcheck
+	data, err := io.ReadAll(io.LimitReader(file, maxPrivateKeyFileBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxPrivateKeyFileBytes {
+		return "", fmt.Errorf("private key file exceeds %d bytes", maxPrivateKeyFileBytes)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("private key file is empty")
+	}
+	return key, nil
 }
 
 func env(key, fallback string) string {

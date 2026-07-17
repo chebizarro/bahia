@@ -392,7 +392,7 @@ func buildCLISoulFactoryClient(cmd *cobra.Command) (cliSoulFactoryClient, error)
 		return nil, err
 	}
 	if strings.TrimSpace(key) == "" {
-		return nil, fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first Soul Factory requests")
+		return nil, fmt.Errorf("provide --nostr-key-file, BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first Soul Factory requests")
 	}
 	relays, err := resolveOperatorRelays(cmd)
 	if err != nil {

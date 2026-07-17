@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -57,45 +60,69 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 	}
 }
 
-func TestResolveNostrPrivateKeyInputPrecedence(t *testing.T) {
+func TestRootCommandDoesNotExposeRawPrivateKeyFlags(t *testing.T) {
 	resetNostrKeyGlobals(t)
-	envKey := nostr.Generate().Hex()
-	flagKey := nostr.Generate().Hex()
-	t.Setenv("BAHIA_NOSTR_NSEC", envKey)
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
-
-	cmd := newAuthFlagTestCommand()
-	if err := cmd.PersistentFlags().Set("privkey", flagKey); err != nil {
-		t.Fatalf("set privkey flag: %v", err)
+	flags := newRootCommand().PersistentFlags()
+	if flags.Lookup("nsec") != nil || flags.Lookup("privkey") != nil {
+		t.Fatal("raw Nostr private-key flags must not be registered")
 	}
-	got, err := resolveNostrPrivateKeyInput(cmd)
-	if err != nil {
-		t.Fatalf("resolveNostrPrivateKeyInput() error = %v", err)
-	}
-	if got != flagKey {
-		t.Fatalf("key = %q, want flag key", got)
+	if flags.Lookup("nostr-key-file") == nil {
+		t.Fatal("nostr-key-file flag is missing")
 	}
 }
 
-func TestResolveNostrPrivateKeyInputRejectsAmbiguousFlags(t *testing.T) {
+func TestResolveNostrPrivateKeyInputFromFileAndStdin(t *testing.T) {
 	resetNostrKeyGlobals(t)
+	key := nostr.Generate().Hex()
+	path := filepath.Join(t.TempDir(), "nostr.key")
+	if err := os.WriteFile(path, []byte("  "+key+"\n"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
 	cmd := newAuthFlagTestCommand()
-	if err := cmd.PersistentFlags().Set("nsec", nostr.Generate().Hex()); err != nil {
-		t.Fatalf("set nsec flag: %v", err)
+	if err := cmd.PersistentFlags().Set("nostr-key-file", path); err != nil {
+		t.Fatalf("set nostr-key-file flag: %v", err)
 	}
-	if err := cmd.PersistentFlags().Set("privkey", nostr.Generate().Hex()); err != nil {
-		t.Fatalf("set privkey flag: %v", err)
+	got, err := resolveNostrPrivateKeyInput(cmd)
+	if err != nil {
+		t.Fatalf("resolveNostrPrivateKeyInput() file error = %v", err)
 	}
-	if _, err := resolveNostrPrivateKeyInput(cmd); err == nil {
-		t.Fatal("expected ambiguous flag error")
+	if got != key {
+		t.Fatalf("file key = %q, want configured key", got)
+	}
+
+	cmd = newAuthFlagTestCommand()
+	cmd.SetIn(strings.NewReader(key + "\n"))
+	if err := cmd.PersistentFlags().Set("nostr-key-file", "-"); err != nil {
+		t.Fatalf("set stdin key flag: %v", err)
+	}
+	got, err = resolveNostrPrivateKeyInput(cmd)
+	if err != nil {
+		t.Fatalf("resolveNostrPrivateKeyInput() stdin error = %v", err)
+	}
+	if got != key {
+		t.Fatalf("stdin key = %q, want configured key", got)
+	}
+}
+
+func TestResolveNostrPrivateKeyInputRejectsAmbiguousEnvironment(t *testing.T) {
+	resetNostrKeyGlobals(t)
+	t.Setenv("BAHIA_NOSTR_NSEC", nostr.Generate().Hex())
+	t.Setenv("BAHIA_NOSTR_KEY_FILE", filepath.Join(t.TempDir(), "nostr.key"))
+	if _, err := resolveNostrPrivateKeyInput(newAuthFlagTestCommand()); err == nil {
+		t.Fatal("expected ambiguous key source error")
 	}
 }
 
 func TestResolveNIP98ProviderValidatesKey(t *testing.T) {
 	resetNostrKeyGlobals(t)
+	path := filepath.Join(t.TempDir(), "nostr.key")
+	if err := os.WriteFile(path, []byte("not-a-key"), 0o600); err != nil {
+		t.Fatalf("write invalid key file: %v", err)
+	}
 	cmd := newAuthFlagTestCommand()
-	if err := cmd.PersistentFlags().Set("privkey", "not-a-key"); err != nil {
-		t.Fatalf("set privkey flag: %v", err)
+	if err := cmd.PersistentFlags().Set("nostr-key-file", path); err != nil {
+		t.Fatalf("set nostr-key-file flag: %v", err)
 	}
 	if _, err := resolveNIP98Provider(cmd); err == nil {
 		t.Fatal("expected invalid key error")
@@ -103,9 +130,7 @@ func TestResolveNIP98ProviderValidatesKey(t *testing.T) {
 
 	cmd = newAuthFlagTestCommand()
 	key := nostr.Generate().Hex()
-	if err := cmd.PersistentFlags().Set("privkey", key); err != nil {
-		t.Fatalf("set privkey flag: %v", err)
-	}
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", key)
 	provider, err := resolveNIP98Provider(cmd)
 	if err != nil {
 		t.Fatalf("resolveNIP98Provider() error = %v", err)
@@ -193,17 +218,17 @@ func findDirectChild(cmd *cobra.Command, name string) *cobra.Command {
 
 func newAuthFlagTestCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "test"}
-	cmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "")
-	cmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "")
+	cmd.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "")
 	return cmd
 }
 
 func resetNostrKeyGlobals(t *testing.T) {
 	t.Helper()
-	nostrNsec = ""
-	nostrPrivateKey = ""
+	nostrKeyFile = ""
+	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
+	t.Setenv("BAHIA_NOSTR_NSEC", "")
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	t.Cleanup(func() {
-		nostrNsec = ""
-		nostrPrivateKey = ""
+		nostrKeyFile = ""
 	})
 }

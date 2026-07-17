@@ -128,7 +128,7 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: err}
 	}
 	if strings.TrimSpace(key) == "" {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first operator requests")}
+		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("provide --nostr-key-file, BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first operator requests")}
 	}
 	relays, err := resolveOperatorRelays(cmd)
 	if err != nil {
