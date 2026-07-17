@@ -15,8 +15,15 @@ import (
 type RuntimeExecutionMode string
 
 const (
-	ExecutionModeCLI       RuntimeExecutionMode = "cli"
+	// ExecutionModeCLI executes through the docker compose / docker-compose /
+	// podman-compose CLI compatibility path.
+	ExecutionModeCLI RuntimeExecutionMode = "cli"
+	// ExecutionModeEngineAPI mutates runtime resources directly through the
+	// Docker-compatible Engine API.
 	ExecutionModeEngineAPI RuntimeExecutionMode = "engine_api"
+	// ExecutionModeSDK executes Compose in-process through the embedded
+	// Docker Compose v5 Go SDK (no CLI shell-out; talks to the Engine API).
+	ExecutionModeSDK RuntimeExecutionMode = "sdk"
 )
 
 // RuntimeControlClient is the narrow common seam for runtime execution

@@ -18,14 +18,28 @@ import (
 	"go.uber.org/zap"
 )
 
-// ComposeRuntime implements Runtime using Docker Compose CLI.
+// ComposeRuntime implements Runtime using Docker Compose. Mutating apply
+// executes either through the Compose CLI compatibility path
+// (execution_mode: cli) or in-process through the embedded Compose v5 Go SDK
+// (execution_mode: sdk).
 type ComposeRuntime struct {
 	projectDir      string // working directory with docker-compose.yml
 	dockerHost      string // optional DOCKER_HOST override for compose commands
 	dockerTLSEnv    []string
+	endpoint        config.RuntimeEndpointConfig // server-managed endpoint (TLS material for the SDK path)
 	ownershipConfig ComposeOwnershipConfig
 	binary          string // "docker-compose" or "docker compose"
+	executionMode   RuntimeExecutionMode // cli (default) or sdk
 	logger          *zap.Logger
+}
+
+// ExecutionMode reports how this runtime executes mutating Compose
+// operations. Empty defaults to CLI compatibility mode.
+func (r *ComposeRuntime) ExecutionMode() RuntimeExecutionMode {
+	if r.executionMode == "" {
+		return ExecutionModeCLI
+	}
+	return r.executionMode
 }
 
 // NewComposeRuntime creates a new Docker Compose runtime.
@@ -48,13 +62,53 @@ func NewComposeRuntimeWithDockerHost(projectDir, dockerHost string, logger *zap.
 // NewComposeRuntimeWithEndpoint creates a Docker Compose runtime bound to a
 // server-managed Docker endpoint, including CLI TLS environment wiring.
 func NewComposeRuntimeWithEndpoint(projectDir string, endpoint config.RuntimeEndpointConfig, logger *zap.Logger) (*ComposeRuntime, error) {
+	return newComposeRuntimeWithEndpointForMode(projectDir, endpoint, ExecutionModeCLI, logger)
+}
+
+// newComposeRuntimeWithEndpointForMode creates a Compose runtime whose TLS
+// wiring matches the execution mode. The CLI path requires the Docker CLI
+// DOCKER_CERT_PATH convention (ca.pem/cert.pem/key.pem in one directory); the
+// SDK path consumes the endpoint's certificate file paths directly, so only
+// coherence of the TLS material is validated.
+func newComposeRuntimeWithEndpointForMode(projectDir string, endpoint config.RuntimeEndpointConfig, mode RuntimeExecutionMode, logger *zap.Logger) (*ComposeRuntime, error) {
 	r := NewComposeRuntimeWithDockerHost(projectDir, strings.TrimSpace(endpoint.DockerHost), logger)
+	r.endpoint = endpoint
+	r.executionMode = mode
+	if mode == ExecutionModeSDK {
+		if err := validateEndpointTLSMaterial(endpoint); err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
 	tlsEnv, err := composeDockerTLSEnv(endpoint)
 	if err != nil {
 		return nil, err
 	}
 	r.dockerTLSEnv = tlsEnv
 	return r, nil
+}
+
+// validateEndpointTLSMaterial checks TLS endpoint configuration coherence for
+// the SDK execution path without imposing the DOCKER_CERT_PATH naming and
+// shared-directory restrictions required by the CLI path.
+func validateEndpointTLSMaterial(endpoint config.RuntimeEndpointConfig) error {
+	if !dockerEndpointUsesTLS(endpoint) {
+		return nil
+	}
+	certFile := strings.TrimSpace(endpoint.ClientCertFile)
+	keyFile := strings.TrimSpace(endpoint.ClientKeyFile)
+	if (certFile == "") != (keyFile == "") {
+		return fmt.Errorf("docker endpoint client_cert_file and client_key_file must be configured together")
+	}
+	for _, file := range []string{strings.TrimSpace(endpoint.CACertFile), certFile, keyFile} {
+		if file == "" {
+			continue
+		}
+		if _, err := os.Stat(file); err != nil {
+			return fmt.Errorf("checking docker cert file %q: %w", file, err)
+		}
+	}
+	return nil
 }
 
 // detectComposeBinary checks if "docker compose" (v2) or "docker-compose" (v1) is available.

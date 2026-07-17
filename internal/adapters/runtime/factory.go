@@ -17,7 +17,7 @@ type RuntimeConfig struct {
 	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
 	BahiaOwned    *bool  // Explicit operator assertion that compose_dir is Bahia-owned
-	ExecutionMode string // "engine_api" or "cli"; compose requires explicit "cli"
+	ExecutionMode string // "engine_api", "cli", or "sdk"; compose requires explicit "cli" or "sdk"
 	Endpoint      config.RuntimeEndpointConfig
 	RegistryAuth  *RegistryAuthConfig
 	KubeContext   string // Kubernetes context name
@@ -53,14 +53,15 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		if dir == "" {
 			return nil, fmt.Errorf("compose_dir is required for compose runtime")
 		}
-		if normalizeRuntimeExecutionMode(cfg.ExecutionMode) != ExecutionModeCLI {
-			return nil, fmt.Errorf("compose runtime requires execution_mode %q because Compose control uses explicit CLI compatibility mode", ExecutionModeCLI)
+		mode := normalizeRuntimeExecutionMode(cfg.ExecutionMode)
+		if mode != ExecutionModeCLI && mode != ExecutionModeSDK {
+			return nil, fmt.Errorf("compose runtime requires explicit execution_mode %q (CLI compatibility mode) or %q (embedded Compose SDK)", ExecutionModeCLI, ExecutionModeSDK)
 		}
 		endpoint := cfg.Endpoint
 		if strings.TrimSpace(endpoint.DockerHost) == "" {
 			endpoint.DockerHost = cfg.DockerHost
 		}
-		rt, err := NewComposeRuntimeWithEndpoint(dir, endpoint, logger)
+		rt, err := newComposeRuntimeWithEndpointForMode(dir, endpoint, mode, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -179,6 +180,8 @@ func normalizeRuntimeExecutionMode(mode string) RuntimeExecutionMode {
 		return ExecutionModeCLI
 	case string(ExecutionModeEngineAPI):
 		return ExecutionModeEngineAPI
+	case string(ExecutionModeSDK):
+		return ExecutionModeSDK
 	default:
 		return ""
 	}

@@ -56,7 +56,8 @@ type ComposeDesiredStateApplier struct {
 
 // NewComposeDesiredStateApplier creates a new applier wired to the given
 // Compose runtime. It uses the production command runner for staging
-// validation and Compose CLI execution.
+// validation, and selects the Compose executor (CLI compatibility mode or
+// embedded Compose SDK) from the runtime's configured execution mode.
 func NewComposeDesiredStateApplier(rt *ComposeRuntime, logger *zap.Logger) *ComposeDesiredStateApplier {
 	runner := &execCommandRunner{}
 	return &ComposeDesiredStateApplier{
@@ -64,9 +65,19 @@ func NewComposeDesiredStateApplier(rt *ComposeRuntime, logger *zap.Logger) *Comp
 		renderer: NewComposeRenderer(),
 		staging:  NewComposeStagingManager(logger),
 		runner:   runner,
-		executor: NewCLIComposeExecutor(rt, runner, logger),
+		executor: newComposeExecutor(rt, runner, logger),
 		logger:   logger,
 	}
+}
+
+// newComposeExecutor selects the Compose executor for the runtime's
+// configured execution mode: the embedded Compose v5 SDK for
+// execution_mode=sdk, the CLI compatibility path otherwise.
+func newComposeExecutor(rt *ComposeRuntime, runner CommandRunner, logger *zap.Logger) ComposeExecutor {
+	if rt != nil && rt.ExecutionMode() == ExecutionModeSDK {
+		return NewSDKComposeExecutor(rt, logger)
+	}
+	return NewCLIComposeExecutor(rt, runner, logger)
 }
 
 // NewComposeDesiredStateApplierWithRunner creates an applier with a custom
@@ -77,7 +88,7 @@ func NewComposeDesiredStateApplierWithRunner(rt *ComposeRuntime, runner CommandR
 		renderer: NewComposeRenderer(),
 		staging:  NewComposeStagingManagerWithRunner(logger, runner),
 		runner:   runner,
-		executor: NewCLIComposeExecutor(rt, runner, logger),
+		executor: newComposeExecutor(rt, runner, logger),
 		logger:   logger,
 	}
 }

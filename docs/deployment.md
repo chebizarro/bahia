@@ -125,7 +125,8 @@ runtime:
 
   default:
     type: compose
-    # Compose control is explicit CLI compatibility mode.
+    # Compose control mode: "cli" (compose CLI compatibility) or "sdk"
+    # (embedded Compose v5 Go SDK, in-process over the Engine API).
     execution_mode: cli
     docker_host: unix:///var/run/docker.sock
     compose_dir: /srv/bahia/compose/default
@@ -162,10 +163,13 @@ Runtime apply results report `execution_mode`:
 
 - `engine_api`: Docker and Podman control clients mutate runtime resources directly through the Docker-compatible Engine API.
 - `cli`: Compose control executes through the configured `docker compose`/`docker-compose` CLI compatibility path.
+- `sdk`: Compose desired-state apply executes in-process through the embedded Docker Compose v5 Go SDK (`github.com/docker/compose/v5`), talking to the Docker Engine API directly with the same semantics as the CLI path (`config -q`, `up -d --remove-orphans`, `--pull`, `--no-deps`). Scope: `sdk` currently governs desired-state apply (validate/up). Observation (`compose ps`) and the legacy per-service deploy path still execute through the compose CLI, so the compose CLI must remain available on the host for those operations.
 
-Compose compatibility mode is not implicit. Any Compose runtime target must set `execution_mode: cli` (or `BAHIA_RUNTIME__...__EXECUTION_MODE=cli`). Docker and Podman use `engine_api`; operators should not configure Compose as an Engine API target because Compose project convergence is CLI-backed.
+Compose control mode is not implicit. Any Docker Compose runtime target must set `execution_mode: cli` or `execution_mode: sdk` (or `BAHIA_RUNTIME__...__EXECUTION_MODE=cli|sdk`). Docker and Podman use `engine_api`. Podman Compose targets support only `execution_mode: cli`, because `podman-compose` is a separate implementation the embedded SDK does not drive.
 
-In desired-state apply, Compose business logic remains above the CLI transport. Bahia selects the target deployment unit, renders the unit-owned full Compose project into that unit's `compose_dir`, enforces the Compose ownership gate for that directory before writing, validates the staged render through the Compose executor control seam, and then applies the full project with `up -d --remove-orphans`. The desired-state path does not use per-service image environment substitution, service-scoped `up`, or unconditional `--force-recreate`.
+The `sdk` mode uses the endpoint's Docker host and TLS material directly (individual `ca_cert_file`/`client_cert_file`/`client_key_file` paths); it does not depend on the `DOCKER_CERT_PATH` directory convention required by the CLI path.
+
+In desired-state apply, Compose business logic remains above the execution transport (CLI or SDK). Bahia selects the target deployment unit, renders the unit-owned full Compose project into that unit's `compose_dir`, enforces the Compose ownership gate for that directory before writing, validates the staged render through the Compose executor control seam, and then applies the full project with `up -d --remove-orphans`. The desired-state path does not use per-service image environment substitution, service-scoped `up`, or unconditional `--force-recreate`.
 
 Compose ownership is recordable per runtime target with `bahia_owned`. Set `bahia_owned: true` only after an operator has confirmed the directory is dedicated to Bahia authoritative generation. `bahia_owned: false` or an unset value does not grant ownership; Bahia will still allow the target if the directory contains a valid `.bahia/render-state.json` marker written by prior Bahia rendering. Unknown, missing, malformed, or operator-authored directories are blocked before staging or file writes. Checked-in staging/production examples record `bahia_owned: false`, so rollout remains blocked until an operator confirms ownership or Bahia has written a valid marker.
 

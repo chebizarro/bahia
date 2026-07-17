@@ -197,6 +197,60 @@ func TestNewRuntime_ComposeRequiresExplicitCLIExecutionMode(t *testing.T) {
 	}
 }
 
+func TestNewRuntime_ComposeRejectsEngineAPIExecutionMode(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project", ExecutionMode: "engine_api"}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error for engine_api compose execution_mode")
+	}
+	if !contains(err.Error(), "execution_mode") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestNewRuntime_ComposeAcceptsSDKExecutionMode(t *testing.T) {
+	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project", ExecutionMode: "sdk"}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	compose, ok := rt.(*ComposeRuntime)
+	if !ok {
+		t.Fatalf("expected *ComposeRuntime, got %T", rt)
+	}
+	if compose.ExecutionMode() != ExecutionModeSDK {
+		t.Errorf("execution mode = %q, want %q", compose.ExecutionMode(), ExecutionModeSDK)
+	}
+}
+
+func TestNewRuntime_ComposeCLIExecutionModeDefaultsExecutor(t *testing.T) {
+	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project", ExecutionMode: "cli"}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	compose, ok := rt.(*ComposeRuntime)
+	if !ok {
+		t.Fatalf("expected *ComposeRuntime, got %T", rt)
+	}
+	if compose.ExecutionMode() != ExecutionModeCLI {
+		t.Errorf("execution mode = %q, want %q", compose.ExecutionMode(), ExecutionModeCLI)
+	}
+}
+
+func TestNewRuntime_PodmanComposeRejectsSDKExecutionMode(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{Type: "podman", ComposeDir: "/tmp/project", ExecutionMode: "sdk"}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error for podman compose with sdk execution_mode")
+	}
+	if !contains(err.Error(), "execution_mode") || !contains(err.Error(), "cli") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestNormalizeRuntimeExecutionMode_SDK(t *testing.T) {
+	if got := normalizeRuntimeExecutionMode(" SDK "); got != ExecutionModeSDK {
+		t.Errorf("normalizeRuntimeExecutionMode(\" SDK \") = %q, want %q", got, ExecutionModeSDK)
+	}
+}
+
 func TestNewObserver(t *testing.T) {
 	logger := zap.NewNop()
 	obs, err := NewObserver(RuntimeConfig{Type: "docker"}, logger)
