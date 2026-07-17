@@ -1,9 +1,7 @@
 <script>
   import Badge from '$lib/components/Badge.svelte';
   import {
-    ConfiguredIcon,
     ErrorIcon,
-    PendingIcon,
     RepositoryIcon,
     SuccessIcon
   } from '$lib/icons/domain-icons.js';
@@ -28,11 +26,6 @@
   const description = $derived(repository?.description || '');
   const url = $derived(repository?.primaryUrl || '');
 
-  const ciState = $derived(repository?.ci?.state || 'unsupported');
-  const ciLookup = $derived(repository?.ci?.lookup);
-  const latestResult = $derived(ciLookup?.latest_result);
-  const latestRun = $derived(ciLookup?.latest_run);
-  const linkedServiceCount = $derived(ciLookup?.linked_services?.length || 0);
 </script>
 
 <button
@@ -57,33 +50,9 @@
     {:else if disabled && disabledReason}
       <p class="repo-warning">{disabledReason}</p>
     {/if}
-    {#if showCi && ciState !== 'unsupported'}
+    {#if showCi}
       <div class="ci-status">
-        {#if ciState === 'loading'}
-          <span class="ci-badge loading">Loading CI...</span>
-        {:else if ciState === 'error'}
-          <span class="ci-badge error">CI unavailable</span>
-        {:else if ciState === 'empty'}
-          <span class="ci-badge empty">No CI activity</span>
-        {:else if ciState === 'ready'}
-          {#if latestResult}
-            <span class="ci-badge" class:success={latestResult.status === 'success'} class:failure={latestResult.status === 'failure'}>
-              {#if latestResult.status === 'success'}
-                <SuccessIcon size={14} strokeWidth={2} ariaHidden="true" />
-              {:else}
-                <ErrorIcon size={14} strokeWidth={2} ariaHidden="true" />
-              {/if}
-              {latestResult.status}
-            </span>
-          {:else if latestRun}
-            <span class="ci-badge pending"><PendingIcon size={14} strokeWidth={1.75} ariaHidden="true" /> Run observed</span>
-          {:else}
-            <span class="ci-badge configured"><ConfiguredIcon size={14} strokeWidth={1.75} ariaHidden="true" /> Configured</span>
-          {/if}
-          {#if linkedServiceCount > 0}
-            <span class="ci-linked">{linkedServiceCount} service{linkedServiceCount > 1 ? 's' : ''}</span>
-          {/if}
-        {/if}
+        <span class="ci-badge unavailable"><ErrorIcon size={14} strokeWidth={2} ariaHidden="true" /> CI status unavailable</span>
       </div>
     {/if}
   </div>
@@ -200,17 +169,7 @@
     font-weight: 500;
   }
 
-  .ci-badge.loading { background: var(--bg); color: var(--text-muted); }
-  .ci-badge.error { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-  .ci-badge.empty { background: var(--bg); color: var(--text-muted); }
-  .ci-badge.success { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
-  .ci-badge.failure { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
-  .ci-badge.pending { background: rgba(234, 179, 8, 0.15); color: #eab308; }
-  .ci-badge.configured { background: rgba(99, 102, 241, 0.15); color: var(--primary); }
-
-  .ci-linked {
-    color: var(--text-muted);
-  }
+  .ci-badge.unavailable { background: var(--bg); color: var(--text-muted); }
 
   .check {
     width: 24px;

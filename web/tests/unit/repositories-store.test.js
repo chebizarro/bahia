@@ -35,7 +35,7 @@ describe('repositories store', () => {
     store = await import('$lib/stores/repositories.svelte.js');
   });
 
-  it('loads repositories through advertised NIP-34 relays and marks CI as public read-model only', async () => {
+  it('loads repositories through advertised NIP-34 relays without fabricating CI state', async () => {
     const repos = [
       { displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha', primaryUrl: 'https://github.com/org/alpha' },
       { displayName: 'Beta', repoCoordinate: 'github.com/org/beta', primaryUrl: 'https://github.com/org/beta' }
@@ -52,11 +52,10 @@ describe('repositories store', () => {
     });
     expect(store.meta.relayUrls).toEqual(['wss://nip34.example', 'wss://nip34-backup.example']);
     expect(result).toHaveLength(2);
-
-    await Promise.resolve();
-
-    expect(store.repositories[0].ci.state).toBe('empty');
-    expect(store.repositories[1].ci.state).toBe('empty');
+    expect(store.repositories[0]).not.toHaveProperty('ci');
+    expect(store.repositories[1]).not.toHaveProperty('ci');
+    expect(store).not.toHaveProperty('enrichRepositoriesWithCI');
+    expect(store).not.toHaveProperty('ensureRepositoryConnection');
   });
 
   it('does not reload for same normalized authors and relay policy unless forced', async () => {
@@ -135,22 +134,18 @@ describe('repositories store', () => {
     });
   });
 
-  it('sets unsupported CI state when repositories have no coordinates', async () => {
-    const repoList = [{ displayName: 'Local repo' }];
+  it('rejects a failed refresh while retaining stale data only in reactive state', async () => {
+    nostrModule.fetchRepositories.mockResolvedValueOnce([{ displayName: 'Alpha' }]);
+    await store.loadRepositories({ force: true });
+    const loadedAt = store.meta.lastLoadedAt;
 
-    await store.enrichRepositoriesWithCI(repoList);
+    nostrModule.fetchRepositories.mockRejectedValueOnce(new Error('relay unavailable'));
 
-    expect(repoList[0].ci).toEqual({ state: 'unsupported', lookup: null, error: null });
-  });
-
-  it('keeps public repository cards on read-model CI state only', async () => {
-    const repoList = [{ displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha' }];
-
-    await store.enrichRepositoriesWithCI(repoList);
-
-    expect(store.ciError.value).toBe(null);
-    expect(repoList[0].ci).toEqual({ state: 'empty', lookup: null, error: null });
-    expect(store.ciLoading.value).toBe(false);
+    await expect(store.loadRepositories({ force: true })).rejects.toThrow('relay unavailable');
+    expect(store.repositories).toEqual([{ displayName: 'Alpha' }]);
+    expect(store.error.value).toBe('relay unavailable');
+    expect(store.meta.lastLoadedAt).toBe(loadedAt);
+    expect(store.loading.list).toBe(false);
   });
 
   it('filters repositories by text and requirePrimaryUrl option', () => {

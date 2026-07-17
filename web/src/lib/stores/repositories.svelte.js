@@ -17,11 +17,6 @@ export const meta = $state({
   relayUrls: []
 });
 
-// CI enrichment state
-export const ciMeta = $state({ requestSeq: 0, lastLoadedAt: null });
-export const ciLoading = $state({ value: false });
-export const ciError = $state({ value: null });
-
 function normalizeAuthors(authors) {
   if (!Array.isArray(authors) || authors.length === 0) {
     return null;
@@ -81,12 +76,6 @@ function sameAuthors(a, b) {
   return left.every((value, idx) => value === right[idx]);
 }
 
-export async function ensureRepositoryConnection() {
-  // Do NOT call nostr.connect() here. Passing user NIP-07 relay URLs replaces the
-  // singleton's relay list and closes Bahia control-plane sockets as a side-effect.
-  // The singleton's connection lifecycle is managed globally by bootstrap / Settings.
-}
-
 export async function loadRepositories({ authors = null, force = false } = {}) {
   const normalizedAuthors = normalizeAuthors(authors);
   const relayUrls = await resolveRepositoryRelays();
@@ -102,7 +91,6 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
   error.value = null;
 
   try {
-    await ensureRepositoryConnection();
     const fetched = await fetchRepositories({ authors: normalizedAuthors, relayUrls });
 
     if (meta.requestSeq !== nextSeq) {
@@ -116,40 +104,16 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
     meta.authors = normalizedAuthors;
     meta.relayUrls = relayUrls;
 
-    // Trigger CI enrichment (non-blocking)
-    const repos = [...repositories];
-    enrichRepositoriesWithCI(repos).then(() => {
-      repositories.length = 0;
-      repositories.push(...repos);
-    });
-
     return repositories;
   } catch (err) {
     if (meta.requestSeq === nextSeq) {
       error.value = err?.message || 'Failed to load repositories';
     }
-    return repositories;
+    throw err;
   } finally {
     if (meta.requestSeq === nextSeq) {
       loading.list = false;
     }
-  }
-}
-
-export async function enrichRepositoriesWithCI(repoList) {
-  const currentSeq = ciMeta.requestSeq + 1;
-  ciMeta.requestSeq = currentSeq;
-  ciLoading.value = false;
-  ciError.value = null;
-
-  repoList.forEach(r => {
-    r.ci = r.repoCoordinate
-      ? { state: 'empty', lookup: null, error: null }
-      : { state: 'unsupported', lookup: null, error: null };
-  });
-
-  if (ciMeta.requestSeq === currentSeq) {
-    ciMeta.lastLoadedAt = Date.now();
   }
 }
 
