@@ -12,8 +12,21 @@ jobs:
   go:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      GOPRIVATE: git.sharegap.net/*
     steps:
       - uses: actions/checkout@v5
+      - name: Configure private module authentication
+        env:
+          GITEA_USERNAME: ${{ secrets.GITEA_USERNAME }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${GITEA_USERNAME:?GITEA_USERNAME is required}"
+          : "${GITEA_TOKEN:?GITEA_TOKEN is required}"
+          umask 077
+          printf 'machine git.sharegap.net login %s password %s\n' \
+            "$GITEA_USERNAME" "$GITEA_TOKEN" > "$HOME/.netrc"
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
