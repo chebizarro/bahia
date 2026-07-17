@@ -3,12 +3,25 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otlpmetricgrpc "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	otlpmetrichttp "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	otlptracehttp "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -24,10 +37,14 @@ type Config struct {
 
 // Provider manages telemetry lifecycle.
 type Provider struct {
-	config  Config
-	logger  *zap.Logger
-	metrics *Metrics
-	mu      sync.Mutex
+	config         Config
+	logger         *zap.Logger
+	metrics        *Metrics
+	tracerProvider *sdktrace.TracerProvider
+	meterProvider  *sdkmetric.MeterProvider
+	setupErr       error
+	shutdownOnce   sync.Once
+	shutdownErr    error
 }
 
 // Metrics collects application-level counters and gauges.
@@ -115,6 +132,9 @@ func NewMetrics() *Metrics {
 // Setup initializes telemetry with the given configuration.
 // Returns a Provider that can be used to record metrics and shut down cleanly.
 func Setup(cfg Config, logger *zap.Logger) *Provider {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	p := &Provider{
 		config:  cfg,
 		logger:  logger,
@@ -131,19 +151,26 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 		serviceName = "bahia"
 	}
 
-	// OTLP exporters are not wired yet. This provider currently offers
-	// in-process metrics collection surfaced via /metrics only.
-	if cfg.OTLPEndpoint != "" {
-		logger.Warn("telemetry OTLP endpoint configured but exporters are not implemented; endpoint will be ignored",
-			zap.String("otlp_endpoint", cfg.OTLPEndpoint),
-		)
+	exportMode := "prometheus"
+	if strings.TrimSpace(cfg.OTLPEndpoint) != "" {
+		tracerProvider, meterProvider, err := configureOTLP(context.Background(), cfg, serviceName)
+		if err != nil {
+			p.setupErr = fmt.Errorf("configuring OTLP telemetry: %w", err)
+			logger.Error("telemetry OTLP initialization failed", zap.Error(p.setupErr))
+		} else {
+			p.tracerProvider = tracerProvider
+			p.meterProvider = meterProvider
+			otel.SetTracerProvider(tracerProvider)
+			otel.SetMeterProvider(meterProvider)
+			exportMode = "prometheus+otlp"
+		}
 	}
 
 	logger.Info("telemetry initialized",
 		zap.String("service", serviceName),
 		zap.String("version", cfg.ServiceVersion),
 		zap.String("environment", cfg.Environment),
-		zap.String("export_mode", "manual_metrics_only"),
+		zap.String("export_mode", exportMode),
 	)
 
 	return p
@@ -154,10 +181,124 @@ func (p *Provider) GetMetrics() *Metrics {
 	return p.metrics
 }
 
-// Shutdown cleanly shuts down telemetry exporters.
+// TracerProvider returns the configured OTLP tracer provider, or nil when OTLP is disabled or failed to initialize.
+func (p *Provider) TracerProvider() trace.TracerProvider {
+	if p.tracerProvider == nil {
+		return nil
+	}
+	return p.tracerProvider
+}
+
+// MeterProvider returns the configured OTLP meter provider, or nil when OTLP is disabled or failed to initialize.
+func (p *Provider) MeterProvider() metric.MeterProvider {
+	if p.meterProvider == nil {
+		return nil
+	}
+	return p.meterProvider
+}
+
+// Err reports any exporter initialization failure retained by Setup.
+func (p *Provider) Err() error {
+	return p.setupErr
+}
+
+// Shutdown flushes and shuts down all configured telemetry exporters exactly once.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	p.logger.Info("telemetry shutdown complete")
-	return nil
+	p.shutdownOnce.Do(func() {
+		var shutdownErrors []error
+		if p.meterProvider != nil {
+			if err := p.meterProvider.Shutdown(ctx); err != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("shutting down OTLP metrics: %w", err))
+			}
+		}
+		if p.tracerProvider != nil {
+			if err := p.tracerProvider.Shutdown(ctx); err != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("shutting down OTLP traces: %w", err))
+			}
+		}
+		if p.setupErr != nil {
+			shutdownErrors = append(shutdownErrors, p.setupErr)
+		}
+		p.shutdownErr = errors.Join(shutdownErrors...)
+		p.logger.Info("telemetry shutdown complete", zap.Error(p.shutdownErr))
+	})
+	return p.shutdownErr
+}
+
+func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktrace.TracerProvider, *sdkmetric.MeterProvider, error) {
+	res := resource.NewSchemaless(
+		attribute.String("service.name", serviceName),
+		attribute.String("service.version", cfg.ServiceVersion),
+		attribute.String("deployment.environment.name", cfg.Environment),
+	)
+
+	protocol := strings.ToLower(strings.TrimSpace(cfg.OTLPProtocol))
+	if protocol == "" {
+		protocol = "grpc"
+	}
+
+	var (
+		traceExporter  sdktrace.SpanExporter
+		metricExporter sdkmetric.Exporter
+		err            error
+	)
+	switch protocol {
+	case "grpc":
+		endpoint, insecure := normalizeGRPCEndpoint(cfg.OTLPEndpoint)
+		traceOptions := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
+		metricOptions := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(endpoint)}
+		if insecure {
+			traceOptions = append(traceOptions, otlptracegrpc.WithInsecure())
+			metricOptions = append(metricOptions, otlpmetricgrpc.WithInsecure())
+		}
+		traceExporter, err = otlptracegrpc.New(ctx, traceOptions...)
+		if err == nil {
+			metricExporter, err = otlpmetricgrpc.New(ctx, metricOptions...)
+		}
+	case "http":
+		traceOptions, metricOptions := httpExporterOptions(cfg.OTLPEndpoint)
+		traceExporter, err = otlptracehttp.New(ctx, traceOptions...)
+		if err == nil {
+			metricExporter, err = otlpmetrichttp.New(ctx, metricOptions...)
+		}
+	default:
+		return nil, nil, fmt.Errorf("unsupported OTLP protocol %q", cfg.OTLPProtocol)
+	}
+	if err != nil {
+		if traceExporter != nil {
+			_ = traceExporter.Shutdown(ctx)
+		}
+		return nil, nil, err
+	}
+
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExporter), sdktrace.WithResource(res))
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+		sdkmetric.WithResource(res),
+	)
+	return tracerProvider, meterProvider, nil
+}
+
+func normalizeGRPCEndpoint(endpoint string) (string, bool) {
+	endpoint = strings.TrimSpace(endpoint)
+	switch {
+	case strings.HasPrefix(endpoint, "http://"):
+		return strings.TrimPrefix(endpoint, "http://"), true
+	case strings.HasPrefix(endpoint, "https://"):
+		return strings.TrimPrefix(endpoint, "https://"), false
+	default:
+		return endpoint, true
+	}
+}
+
+func httpExporterOptions(endpoint string) ([]otlptracehttp.Option, []otlpmetrichttp.Option) {
+	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return []otlptracehttp.Option{otlptracehttp.WithEndpointURL(endpoint + "/v1/traces")},
+			[]otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(endpoint + "/v1/metrics")}
+	}
+	return []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithInsecure()},
+		[]otlpmetrichttp.Option{otlpmetrichttp.WithEndpoint(endpoint), otlpmetrichttp.WithInsecure()}
 }
 
 // --- HTTP Metrics ---

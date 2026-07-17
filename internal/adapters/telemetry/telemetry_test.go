@@ -1,8 +1,11 @@
 package telemetry
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,9 +28,8 @@ func TestSetup_Disabled(t *testing.T) {
 func TestSetup_Enabled(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := Config{
-		Enabled:      true,
-		ServiceName:  "test-service",
-		OTLPEndpoint: "localhost:4317",
+		Enabled:     true,
+		ServiceName: "test-service",
 	}
 
 	p := Setup(cfg, logger)
@@ -40,8 +42,69 @@ func TestSetup_Enabled(t *testing.T) {
 	if p.config.ServiceName != "test-service" {
 		t.Fatalf("expected service name to be preserved, got %q", p.config.ServiceName)
 	}
-	if p.config.OTLPEndpoint != "localhost:4317" {
-		t.Fatalf("expected OTLP endpoint to be preserved, got %q", p.config.OTLPEndpoint)
+}
+
+func TestSetup_OTLPHTTPExportsAndShutdown(t *testing.T) {
+	var mu sync.Mutex
+	requests := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests[r.URL.Path]++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider := Setup(Config{
+		Enabled:        true,
+		ServiceName:    "test-service",
+		ServiceVersion: "1.2.3",
+		Environment:    "test",
+		OTLPEndpoint:   server.URL,
+		OTLPProtocol:   "http",
+	}, zap.NewNop())
+	if err := provider.Err(); err != nil {
+		t.Fatalf("Setup error: %v", err)
+	}
+	if provider.TracerProvider() == nil || provider.MeterProvider() == nil {
+		t.Fatal("expected configured trace and metric providers")
+	}
+
+	_, span := provider.TracerProvider().Tracer("telemetry-test").Start(context.Background(), "exported-span")
+	span.End()
+	counter, err := provider.MeterProvider().Meter("telemetry-test").Int64Counter("test.counter")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	counter.Add(context.Background(), 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown error: %v", err)
+	}
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("second Shutdown error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if requests["/v1/traces"] == 0 {
+		t.Fatalf("trace export requests = %#v, want /v1/traces", requests)
+	}
+	if requests["/v1/metrics"] == 0 {
+		t.Fatalf("metric export requests = %#v, want /v1/metrics", requests)
+	}
+}
+
+func TestSetup_UnsupportedOTLPProtocolIsObservable(t *testing.T) {
+	provider := Setup(Config{Enabled: true, OTLPEndpoint: "collector:4317", OTLPProtocol: "bogus"}, zap.NewNop())
+	if provider.Err() == nil {
+		t.Fatal("expected OTLP setup error")
+	}
+	if err := provider.Shutdown(context.Background()); err == nil {
+		t.Fatal("expected Shutdown to return retained setup error")
 	}
 }
 
