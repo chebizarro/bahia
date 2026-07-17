@@ -32,17 +32,20 @@ func NewPgPaymentRecordRepository(pool *pgxpool.Pool) *PgPaymentRepository {
 
 // Create inserts a new payment record.
 func (r *PgPaymentRepository) Create(ctx context.Context, p *domain.PaymentRecord) error {
+	if p == nil {
+		return fmt.Errorf("creating payment: payment is nil")
+	}
+	metadataJSON, err := json.Marshal(p.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshaling payment metadata: %w", err)
+	}
+
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
 	}
 	now := time.Now()
 	p.CreatedAt = now
 	p.UpdatedAt = now
-
-	metadataJSON, err := json.Marshal(p.Metadata)
-	if err != nil {
-		metadataJSON = []byte("{}")
-	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO payments (
