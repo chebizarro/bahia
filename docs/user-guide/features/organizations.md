@@ -25,24 +25,12 @@ The Organizations web route is protected by signer-first authentication and curr
 ### CLI
 
 ```bash
-bahia orgs create \
-  --name "acme-corp" \
-  --display-name "ACME Corporation"
+bahia orgs create acme-corp --display-name "ACME Corporation"
 ```
 
-### MCP Tool (Encrypted)
+### Encrypted request/result flow
 
-Organization operations use encrypted Nostr:
-
-```json
-{
-  "tool": "bahia_org_create",
-  "arguments": {
-    "name": "acme-corp",
-    "display_name": "ACME Corporation"
-  }
-}
-```
+Bahia does not currently expose `bahia_org_*` MCP tools. Organization operations use encrypted Nostr request/result messages instead.
 
 ## Organization Roles
 
@@ -50,13 +38,13 @@ Organization operations use encrypted Nostr:
 |------|-------------|
 | **owner** | Full access, can delete org, manage all members |
 | **admin** | Manage members, settings, all resources |
-| **editor** | Create/modify services, deployments, etc. |
+| **deployer** | Create and manage deployment-related resources |
 | **viewer** | Read-only access to org resources |
 
 ### Role Hierarchy
 
 ```
-owner > admin > editor > viewer
+owner > admin > deployer > viewer
 ```
 
 Higher roles inherit all lower role permissions.
@@ -74,38 +62,21 @@ Higher roles inherit all lower role permissions.
 
 **Via CLI:**
 ```bash
-bahia orgs invite acme-corp \
-  --pubkey "npub1newmember..." \
-  --role editor
+bahia orgs members add org-123 npub1newmember... --role deployer
 ```
 
 ### Accepting Invites
 
-Members must accept invites:
-
-**Via Web UI:**
-1. Go to **My Invites** (in user menu)
-2. Review invite details
-3. Click **Accept** or **Decline**
-
-**Via CLI:**
-```bash
-bahia orgs invites accept invite-123
-```
+Members can accept pending encrypted invites from the Organizations page in the web UI. The current CLI does not expose an `orgs invites` subcommand.
 
 ### Updating Member Roles
 
-```bash
-bahia orgs members update acme-corp \
-  --pubkey "npub1member..." \
-  --role admin
-```
+The current CLI does not expose a dedicated member-role update subcommand. Role changes should use the encrypted web flow or the underlying encrypted request/result operations.
 
 ### Removing Members
 
 ```bash
-bahia orgs members remove acme-corp \
-  --pubkey "npub1member..."
+bahia orgs members remove org-123 npub1member...
 ```
 
 ## Viewing Organizations
@@ -133,10 +104,7 @@ bahia orgs list
 bahia orgs get acme-corp
 
 # List members
-bahia orgs members list acme-corp
-
-# List your invites
-bahia orgs invites list
+bahia orgs members list org-123
 ```
 
 ## Organization Resources
@@ -148,15 +116,16 @@ Resources can be scoped to organizations:
 ```bash
 bahia services create \
   --name "payment-api" \
-  --org-id "org-123"
+  --artifact-repo "ghcr.io/company/payment-api"
 ```
 
 ### Environments
 
 ```bash
 bahia environments create \
-  --name "Production" \
-  --org-id "org-123"
+  --name "production" \
+  --strategy replace \
+  --protected
 ```
 
 ### Policies
@@ -181,8 +150,8 @@ Policy creation is signer-first. Publish a ContextVM `policy/create` command sco
 | Action | Required Role |
 |--------|---------------|
 | View resources | viewer+ |
-| Create services | editor+ |
-| Deploy | editor+ |
+| Create services | deployer+ |
+| Deploy | deployer+ |
 | Manage policies | admin+ (`policies:write`) |
 | Manage LLM routes | admin+ (`llm_routes:write`) |
 | Manage members | admin+ |
@@ -190,31 +159,13 @@ Policy creation is signer-first. Publish a ContextVM `policy/create` command sco
 
 ## Deleting Organizations
 
-Only owners can delete organizations:
-
-### Web UI
-
-1. Go to org **Settings**
-2. Scroll to **Danger Zone**
-3. Click **Delete Organization**
-4. Confirm deletion
-
-### CLI
-
-```bash
-bahia orgs delete acme-corp
-```
-
-**Warning**: Deleting an org:
-- Removes all org-scoped resources
-- Revokes all member access
-- Cannot be undone
+Organization deletion is part of the encrypted request/result facade. The current CLI does not expose `bahia orgs delete`, so use the authenticated web flow or the underlying encrypted `orgs.delete` operation when your deployment enables it.
 
 ## Encrypted Request/Result Facade
 
 Organization operations use the **encrypted request/result facade** over Nostr events (`5980` requests and `7980` terminal results):
 
-- The browser signs and encrypts a scoped org operation such as `orgs.create`, `orgs.list`, or `orgs.delete`.
+- The browser signs and encrypts a scoped org operation such as `orgs.create`, `orgs.list`, `orgs.detail`, `orgs.create_invite`, `orgs.accept_invite`, `orgs.update_member_role`, or `orgs.remove_member`.
 - Bahia decrypts the request, validates the requester, applies RBAC/repository changes, and publishes an encrypted terminal result correlated to the request event id.
 - Member lists, invites, and org CRUD responses are not public Nostr read models; durable org state remains repository-backed and is returned only through encrypted request/result responses.
 - The UI treats relay `OK`, `AUTH`, `CLOSED`, and encrypted terminal result outcomes according to the shared request/result lifecycle contract.

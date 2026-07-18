@@ -57,9 +57,9 @@ curl -X POST http://localhost:8080/mcp \
 |------|-------------|
 | `bahia_list_services` | List all services |
 | `bahia_get_service` | Get service details |
-| `bahia_service_create` | Create a service |
-| `bahia_service_update` | Update a service |
-| `bahia_service_delete` | Delete a service |
+| `bahia_create_service` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `service/create` |
+| `bahia_update_service` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `service/update` |
+| `bahia_delete_service` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `service/delete` |
 
 ### Environment Tools
 
@@ -67,7 +67,7 @@ curl -X POST http://localhost:8080/mcp \
 |------|-------------|
 | `bahia_list_environments` | List environments |
 | `bahia_get_environment` | Get environment details |
-| `bahia_environment_create` | Create environment |
+| `bahia_create_environment` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `environment/create` |
 
 ### Deployment Tools
 
@@ -101,34 +101,31 @@ curl -X POST http://localhost:8080/mcp \
 | Tool | Description |
 |------|-------------|
 | `bahia_llm_list_routes` | List LLM routes |
-| `bahia_llm_get_route` | Get route details |
-| `bahia_llm_route_create` | Create LLM route |
-| `bahia_llm_release_register` | Register release |
+| `bahia_llm_create_route` | Create LLM route |
+| `bahia_llm_update_route` | Update LLM route metadata |
+| `bahia_llm_register_release` | Register release |
+| `bahia_llm_list_routes` | List LLM routes |
+| `bahia_llm_list_releases` | List releases for a route |
 | `bahia_llm_deploy` | Deploy LLM release |
-| `bahia_llm_approve` | Approve deployment |
-| `bahia_llm_rollback` | Rollback LLM route |
-| `bahia_llm_list_state` | List LLM state |
+| `bahia_llm_approve_deployment` | Approve deployment |
+| `bahia_llm_reject_deployment` | Reject deployment |
+| `bahia_llm_rollback` | Roll back an LLM route deployment |
 
 ### ML Tools
 
 | Tool | Description |
 |------|-------------|
-| `bahia_ml_model_import` | Import ML model |
-| `bahia_ml_recipe_run` | Run ML recipe |
-| `bahia_ml_inference_deploy` | Deploy inference |
-| `bahia_ml_inference_rollback` | Rollback inference |
-| `bahia_ml_list_models` | List models |
-| `bahia_ml_list_endpoints` | List endpoints |
+| `bahia_ml_import_model` | Import ML model |
+| `bahia_ml_run_recipe` | Run ML recipe |
+| `bahia_ml_deploy` | Deploy inference |
+| `bahia_ml_rollback` | Roll back inference |
+| `bahia_ml_list_state` | List ML inference endpoint state |
+| `bahia_ml_get_state` | Get ML inference endpoint state |
+| `bahia_ml_get_provenance` | Get ML artifact provenance edges |
 
-### Soul Factory Tools
+### Soul Factory operations
 
-| Tool | Description |
-|------|-------------|
-| `soul_factory_list_souls` | List souls |
-| `soul_factory_get_soul` | Get soul details |
-| `soul_factory_provision` | Provision new soul |
-| `soul_factory_action` | Lifecycle action |
-| `soul_factory_regenerate` | Regenerate soul |
+Soul Factory does not currently expose `soul_factory_*` MCP tools. Use the signer-first Nostr and CLI flows documented in [Souls](features/souls.md).
 
 ### Worker Tools
 
@@ -137,7 +134,7 @@ curl -X POST http://localhost:8080/mcp \
 | `bahia_list_workers` | List workers from canonical read models (`30900`/`30078`) | read-only resource |
 | `bahia_get_worker` | Get worker details from canonical read models | read-only resource |
 | `bahia_worker_drain` | Drain worker | `worker/drain` |
-| `bahia_worker_resume` | Resume worker | `worker/undrain` |
+| `bahia_worker_undrain` | Resume worker | `worker/undrain` |
 | `bahia_worker_cordon` | Cordon worker | `worker/cordon` |
 | `bahia_worker_uncordon` | Uncordon worker | `worker/uncordon` |
 
@@ -145,20 +142,20 @@ curl -X POST http://localhost:8080/mcp \
 
 | Tool | Description |
 |------|-------------|
-| `bahia_backup_definition_apply` | Apply backup def |
-| `bahia_backup_policy_apply` | Apply backup policy |
-| `bahia_backup_run` | Trigger backup |
-| `bahia_backup_verify` | Verify backup |
-| `bahia_backup_restore` | Restore backup |
+| `apply_backup_definition` / `bahia_apply_backup_definition` | Apply backup definition |
+| `apply_backup_policy` / `bahia_apply_backup_policy` | Apply backup policy |
+| `request_backup_run` / `bahia_request_backup_run` | Trigger backup |
+| `request_backup_verification` / `bahia_request_backup_verification` | Verify backup |
+| `request_backup_restore` / `bahia_request_backup_restore` | Restore backup |
 
 ### DNS Tools
 
 | Tool | Description |
 |------|-------------|
-| `bahia_dns_list_zones` | List DNS zones |
 | `bahia_dns_list_endpoints` | List DNS endpoints |
-| `bahia_dns_zone_create` | Create zone |
-| `bahia_dns_policy_apply` | Apply DNS policy |
+| `bahia_dns_list_drift` | List DNS endpoint drift |
+| `bahia_assistant_dns_zone_create` | Create zone |
+| `bahia_assistant_dns_policy_apply` | Apply DNS policy |
 
 ### Package Tools
 
@@ -166,10 +163,13 @@ curl -X POST http://localhost:8080/mcp \
 |------|-------------|
 | `bahia_package_repository_apply` | Apply repository |
 | `bahia_package_repository_delete` | Delete repository |
-| `bahia_package_publish` | Publish package |
+| `bahia_package_upload` | Upload package artifact |
 | `bahia_package_promote` | Promote package |
 | `bahia_package_yank` | Yank package |
 | `bahia_package_drift_detect` | Detect drift |
+| `bahia_package_list` | List package repositories or artifacts |
+| `bahia_package_get` | Get a package repository or artifact |
+| `bahia_package_status` | Get package intent or promotion status |
 
 ### Policy Tools
 
@@ -215,7 +215,7 @@ Mutation responses acknowledge intent only. Follow Security observables (`30315`
 |------|-------------|
 | `bahia_estimate_cost` | Estimate run cost |
 | `bahia_get_run_cost` | Get actual cost |
-| `bahia_payment_history` | Get history (encrypted) |
+| `bahia_get_payment_history` | Get history (encrypted) |
 
 ### Notification Tools
 
@@ -227,14 +227,9 @@ Mutation responses acknowledge intent only. Follow Security observables (`30315`
 | `bahia_delete_notification_channel` | Delete channel |
 | `bahia_test_notification_channel` | Test channel |
 
-### Organization Tools
+### Organization operations
 
-| Tool | Description |
-|------|-------------|
-| `bahia_org_list` | List orgs (encrypted) |
-| `bahia_org_create` | Create org (encrypted) |
-| `bahia_org_detail` | Get org detail |
-| `bahia_org_invite` | Create invite |
+Bahia does not currently expose `bahia_org_*` MCP tools. Organization management uses the encrypted request/result facade over Nostr (`5980` requests and `7980` terminal results), as described in [Organizations](features/organizations.md).
 
 ## Tool Invocation
 

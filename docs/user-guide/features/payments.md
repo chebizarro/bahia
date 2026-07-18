@@ -4,6 +4,8 @@
 
 ## Overview
 
+Payments documentation currently covers the web and MCP surfaces. Bahia does not currently register a top-level `bahia payments` CLI command.
+
 Payment features include:
 - **Cost estimation** — Predict deployment costs
 - **Usage tracking** — Record actual consumption
@@ -46,12 +48,7 @@ paid_at: "2024-01-15T10:30:00Z"
 
 ### Before Deployment
 
-```bash
-bahia payments estimate \
-  --service-id svc-123 \
-  --environment-id env-456 \
-  --artifact-id art-789
-```
+Use the web UI or the `bahia_estimate_cost` MCP tool. The current CLI does not register `bahia payments estimate`.
 
 ### MCP Tool
 
@@ -92,11 +89,7 @@ bahia payments estimate \
 
 ### Run Cost
 
-After deployment:
-
-```bash
-bahia payments cost run-789
-```
+After deployment, use the web UI or the `bahia_get_run_cost` MCP tool. The current CLI does not register `bahia payments cost`.
 
 ### Web UI
 
@@ -117,19 +110,6 @@ bahia payments cost run-789
 
 ## Payment History
 
-### CLI
-
-```bash
-# All history
-bahia payments history
-
-# By worker
-bahia payments history --worker npub1worker...
-
-# Recent
-bahia payments history --limit 20
-```
-
 ### Web UI
 
 Navigate to **Payments** in the sidebar:
@@ -143,7 +123,7 @@ Payment history is sensitive — accessed via encrypted request:
 
 ```json
 {
-  "tool": "bahia_payment_history",
+  "tool": "bahia_get_payment_history",
   "arguments": {
     "worker": "npub1worker...",
     "limit": 50
@@ -155,9 +135,7 @@ Payment history is sensitive — accessed via encrypted request:
 
 ### Viewing Worker Pricing
 
-```bash
-bahia workers pricing npub1worker...
-```
+Worker pricing is currently exposed through the web UI and payment/read-model surfaces; the current CLI does not register `bahia workers pricing`.
 
 ### Pricing Models
 
@@ -218,13 +196,15 @@ Fixed per-run costs:
 
 Bahia primarily uses **sats** (satoshis):
 - 1 sat = 0.00000001 BTC
-- Payments via Lightning Network or Cashu
+- Lightning-oriented pricing/history surfaces are documented here
+- Cashu mint-backed token flows are not currently implemented and enabling them fails configuration validation
 
 ## Encrypted Operations
 
 Payment data is sensitive:
-- History accessed via encrypted Nostr (5980/7980)
-- Requires NIP-44 capable signer
+- History is accessed via encrypted Nostr (`5980` requests / `7980` terminal results)
+- Requires a NIP-44 capable signer
+- Requires Bahia discovery to advertise `features.encrypted_nostr_requests` so browser-safe relays and the backend encrypted transport are available
 - Not published to public relays
 
 ## Best Practices

@@ -4,6 +4,8 @@
 
 ## Overview
 
+LLM Routes are feature-gated and disabled by default unless Bahia is configured with `BAHIA_LLM_ENABLED=true`.
+
 LLM Routes provide:
 - **Model registry** — Track LLM versions and configurations
 - **Release management** — Immutable versioned releases
@@ -43,13 +45,13 @@ Deploying a release to an environment makes it live.
 
 ### Web UI and CLI
 
-LLM route creation is a signer-first ContextVM operation. Clients publish `llm/route-create` as Nostr kind `25910`, usually inside encrypted `1059`/`21059` when the payload is sensitive, and follow canonical observables for durable truth. Transitional REST `POST /api/v1/llm/routes` is available when a control-plane command publisher is configured; it requires an org-scoped caller with `llm_routes:write`, publishes the signed `llm/route-create` command, verifies relay `OK` acceptance, and returns a `202` command receipt rather than a synchronous route domain object.
+LLM route creation is a signer-first ContextVM operation. Clients publish `llm/route-create` as Nostr kind `25910`, usually inside encrypted `1059`/`21059` when the payload is sensitive, and follow canonical observables for durable truth. Transitional REST `POST /api/v1/llm/routes` is available only when LLM is enabled, operational REST is enabled, authentication is enabled, a non-empty operator allowlist is configured, and a control-plane command publisher is configured. Even then it publishes the signed `llm/route-create` command, verifies relay `OK` acceptance, and returns a `202` command receipt rather than a synchronous route domain object.
 
 ### MCP Tool
 
 ```json
 {
-  "tool": "bahia_llm_route_create",
+  "tool": "bahia_llm_create_route",
   "arguments": {
     "name": "gpt4-proxy",
     "model_family": "openai"
@@ -77,7 +79,7 @@ LLM release registration is a signer-first ContextVM operation. Use `llm/release
 
 ```json
 {
-  "tool": "bahia_llm_release_register",
+  "tool": "bahia_llm_register_release",
   "arguments": {
     "route_id": "route-123",
     "version": "v1.2.0",
@@ -99,14 +101,7 @@ LLM release registration is a signer-first ContextVM operation. Use `llm/release
 4. Choose environment
 5. Click **Create Deployment**
 
-### CLI
-
-```bash
-bahia llm deploy \
-  --route-id route-123 \
-  --release-id release-456 \
-  --environment production
-```
+The current CLI does not register a top-level `bahia llm` command. Use the web UI, MCP tools, or signer-first Nostr flows instead.
 
 ### MCP Tool
 
@@ -149,12 +144,7 @@ If the environment requires approval:
 2. Review deployment details
 3. Click **Approve** or **Reject**
 
-### CLI
-
-```bash
-bahia llm approve intent-123
-bahia llm reject intent-123 --reason "Config issue"
-```
+The current CLI does not register `bahia llm approve` or `bahia llm reject`. Use the web UI, MCP tools, or signer-first Nostr approval/rejection flows instead.
 
 ### Nostr
 
@@ -168,13 +158,7 @@ Publish a ContextVM `llm/approve` or `llm/reject` request and follow canonical o
 2. Find previous successful deployment
 3. Click **Rollback to this release**
 
-### CLI
-
-```bash
-bahia llm rollback \
-  --route-id route-123 \
-  --environment production
-```
+The current CLI does not register a top-level `bahia llm rollback` command. Use the web UI, MCP tools, or signer-first Nostr flows instead.
 
 ### MCP Tool
 
@@ -190,25 +174,7 @@ bahia llm rollback \
 
 ## Viewing LLM State
 
-### Current State
-
-```bash
-bahia llm state list
-bahia llm state list --environment production
-```
-
-### Drifted Routes
-
-```bash
-bahia llm state drifted
-```
-
-### Route Detail
-
-```bash
-bahia llm routes get route-123
-bahia llm releases list --route-id route-123
-```
+Use the web UI, MCP tools, and canonical Nostr observables for current LLM route state. The current CLI does not register `bahia llm state`, `bahia llm routes`, or `bahia llm releases` commands.
 
 ## Canonical Observables
 

@@ -79,11 +79,8 @@ Click a worker to see:
 # List workers
 bahia workers list
 
-# Get worker details
-bahia workers get npub1worker...
-
-# Check worker pricing
-bahia workers pricing npub1worker...
+# Show worker details
+bahia workers show npub1worker...
 ```
 
 ### MCP Tool
@@ -127,13 +124,7 @@ deployment:
 
 ## Worker Pricing
 
-Workers can have pricing for task execution:
-
-### Viewing Pricing
-
-```bash
-bahia workers pricing npub1worker...
-```
+Workers can have pricing for task execution. The current CLI does not register `bahia workers pricing`; view pricing through the web UI and payment/read-model surfaces.
 
 ```yaml
 pricing:
@@ -145,14 +136,7 @@ pricing:
 
 ### Cost Estimation
 
-Before deployment:
-
-```bash
-bahia payments estimate \
-  --service-id svc-123 \
-  --environment-id env-456 \
-  --worker-pubkey npub1worker...
-```
+Before deployment, use the web UI or the `bahia_estimate_cost` MCP tool to compare worker-sensitive deployment costs.
 
 ## Worker Registration
 
@@ -209,7 +193,7 @@ Workers publish capability announcements:
 
 ```json
 {
-  "tool": "bahia_worker_resume",
+  "tool": "bahia_worker_undrain",
   "arguments": {
     "worker_pubkey": "npub1worker..."
   }

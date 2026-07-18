@@ -162,16 +162,18 @@ A **service** represents an application you want to deploy.
 ```bash
 bahia services create \
   --name "my-api" \
-  --repository "https://github.com/org/my-api"
+  --artifact-repo "ghcr.io/org/my-api"
 ```
+
+This CLI mutation path is transitional and deprecated; the canonical production path is the signer-first Nostr control plane.
 
 **Via MCP:**
 ```json
 {
-  "tool": "bahia_service_create",
+  "tool": "bahia_create_service",
   "arguments": {
     "name": "my-api",
-    "repository": "https://github.com/org/my-api"
+    "artifact_repo": "ghcr.io/org/my-api"
   }
 }
 ```

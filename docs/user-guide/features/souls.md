@@ -88,19 +88,9 @@ bahia souls provision reviewer \
   --follow
 ```
 
-### MCP Tool
+### Signer-first control plane
 
-```json
-{
-  "tool": "soul_factory_provision",
-  "arguments": {
-    "agent_id": "scout",
-    "name": "Scout",
-    "template": "31950:pubkey:research-agent",
-    "tier": "standard"
-  }
-}
-```
+Bahia does not currently expose `soul_factory_*` MCP tools. Provisioning flows use the web UI, the `bahia souls` CLI, or signer-first Nostr control-plane operations.
 
 ## Provisioning Steps
 
@@ -143,25 +133,9 @@ bahia souls get scout
 bahia souls get scout -o yaml
 ```
 
-### MCP Tool
+### CLI and web views
 
-```json
-{
-  "tool": "soul_factory_list_souls",
-  "arguments": {
-    "status": "active"
-  }
-}
-```
-
-```json
-{
-  "tool": "soul_factory_get_soul",
-  "arguments": {
-    "agent_id": "scout"
-  }
-}
-```
+Use the Soul Gallery in the web UI or the `bahia souls list` / `bahia souls get` CLI commands to inspect souls. Bahia does not currently expose `soul_factory_list_souls` or `soul_factory_get_soul` MCP tools.
 
 ## Lifecycle Actions
 
@@ -173,16 +147,7 @@ Temporarily disable a soul:
 bahia souls suspend scout --reason "Maintenance"
 ```
 
-```json
-{
-  "tool": "soul_factory_action",
-  "arguments": {
-    "agent_id": "scout",
-    "action": "suspend",
-    "reason": "Maintenance"
-  }
-}
-```
+Suspend/resume/revoke/redeploy/regenerate operations currently use the web UI, the `bahia souls` CLI, or signer-first Nostr flows rather than `soul_factory_action` MCP tools.
 
 ### Resume
 
@@ -283,19 +248,7 @@ The Bahia sidecar relay accepts the SoulFactory event family above as open inter
 
 ## Agent Self-Provisioning
 
-Agents can provision other agents:
-
-```json
-{
-  "tool": "soul_factory_provision",
-  "arguments": {
-    "agent_id": "sub-agent",
-    "name": "Sub Agent",
-    "brief": "A specialized agent for specific tasks",
-    "tier": "lightweight"
-  }
-}
-```
+Agents can provision other agents through the signer-first Soul Factory flow. Use the same web, CLI, or Nostr provisioning surfaces described above; Bahia does not currently expose a `soul_factory_provision` MCP tool.
 
 ## Configuration
 
@@ -345,10 +298,7 @@ Provisioning requires configured requester pubkeys in `soul_factory.authorized_p
 
 ### Provisioning Fails at Signet
 
-Check bunker connectivity:
-```bash
-bahia auth login --nip46 "bunker://..."
-```
+Check bunker connectivity and the configured bunker URI/private-key inputs used by your deployment. The current CLI does not register `bahia auth login`.
 
 ### Avatar Generation Fails
 

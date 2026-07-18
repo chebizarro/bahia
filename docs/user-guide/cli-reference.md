@@ -1,6 +1,6 @@
 # CLI Reference
 
-The `bahia` CLI provides command-line access to all Bahia operations.
+The `bahia` CLI provides command-line access to Bahia’s current HTTP-compatible read surfaces plus signer-first operator commands.
 
 ## Installation
 
@@ -20,52 +20,57 @@ make build
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BAHIA_API_URL` | API server URL | `http://localhost:8080` |
-| `BAHIA_NOSTR_RELAYS` | Comma-separated final relay URLs for operator/ContextVM transport; takes precedence over bootstrap discovery | unset |
-| `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Comma-separated bootstrap relay seeds used only for trusted operator relay discovery when `BAHIA_NOSTR_RELAYS` and `--relay` are absent | unset |
-| `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey for signer-first routing; also accepted as single-service discovery trust | unset |
-| `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for operator bootstrap discovery, evaluated in configured order | unset |
-| `BAHIA_AUTH_ENABLED` | Enable authentication | `false` |
-| `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow HTTP fallback | `false` |
-
-### Config File
-
-```yaml
-# ~/.bahia/config.yaml
-api_url: "https://bahia.example.com"
-relays:
-  - "wss://relay.example.com"
-auth:
-  enabled: true
-```
+| `BAHIA_SERVER` | Bahia server URL | `http://localhost:8080` |
+| `BAHIA_NOSTR_KEY_FILE` | File containing the Nostr private key used for signer-first operations | unset |
+| `BAHIA_NOSTR_NSEC` | Nostr private key in `nsec` form | unset |
+| `BAHIA_NOSTR_PRIVATE_KEY` | Raw Nostr private key hex | unset |
+| `BAHIA_NOSTR_RELAYS` | Comma-separated final relay URLs for signer-first operator transport | unset |
+| `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Comma-separated bootstrap relay seeds used only when final relay sources are absent | unset |
+| `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey for signer-first routing and single-service discovery trust | unset |
+| `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for bootstrap discovery | unset |
+| `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow explicit HTTP compatibility fallback before any relay accepts the request | `false` |
 
 ## Authentication
 
-### NIP-07 (Browser Extension)
+The CLI does not implement interactive `login` commands. The only built-in auth helper is:
 
 ```bash
-# Authenticate with browser extension
-bahia auth login --nip07
+bahia auth inspect
 ```
 
-### NIP-46 (Remote Signer)
-
-```bash
-# Connect to bunker
-bahia auth login --nip46 "bunker://pubkey@relay?secret=..."
-```
-
-### Verify Auth
-
-```bash
-bahia auth status
-```
+Use `--nostr-key-file`, `BAHIA_NOSTR_KEY_FILE`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY` when a signer-first command needs a private key.
 
 ## Nostr-native transport
 
-The CLI uses ContextVM JSON-RPC methods over Nostr kind `25910`, normally wrapped with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) when encrypted transport is available. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs. Legacy Bahia request kinds are not production CLI transport; they are retained only as startup migration/test fixtures.
+Signer-first CLI mutations use ContextVM JSON-RPC methods over Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) when encrypted transport is available. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
-Operator relay resolution is deterministic and ordered: explicit `--relay` values are final and highest priority, `BAHIA_NOSTR_RELAYS` is second, and trusted bootstrap discovery is used only when both final relay sources are absent. Discovery requires at least one bootstrap relay (`--bootstrap-relay` or `BAHIA_NOSTR_BOOTSTRAP_RELAYS`) and at least one trusted service pubkey (`--trusted-service-pubkey`, `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS`, or single-service `--service-pubkey` / `BAHIA_NOSTR_SERVICE_PUBKEY`). The CLI queries trusted service-authored NIP-51 `30002` relay sets until EOSE; the bounded discovery wait is a fail-closed transport guard, not a completion signal, so relay sets are never selected before EOSE. Selection prefers `d=bahia-contextvm-v1` across trusted services, falls back to `d=bahia-browser-v1` only when no usable ContextVM relay set is present, and resolves multiple trusted service pubkeys by configured order with latest-wins only within the same service pubkey and `d` tag. If relay `OK`, `CLOSED`, or `AUTH` outcomes leave no usable relay after a signed ContextVM event is accepted, the CLI reports the relay failure rather than falling back to REST unless the explicit HTTP fallback is still in a pre-acceptance failure path.
+Operator relay resolution is deterministic and ordered:
+
+1. Explicit `--relay` values are final and highest priority.
+2. `BAHIA_NOSTR_RELAYS` is next.
+3. Trusted bootstrap discovery is used only when both final relay sources are absent.
+
+Trusted bootstrap discovery requires at least one bootstrap relay (`--bootstrap-relay` or `BAHIA_NOSTR_BOOTSTRAP_RELAYS`) and at least one trusted service pubkey (`--trusted-service-pubkey`, `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS`, or `--service-pubkey` / `BAHIA_NOSTR_SERVICE_PUBKEY`).
+
+## Registered command groups
+
+The current top-level CLI command groups are:
+
+- `auth`
+- `services`
+- `environments`
+- `state`
+- `deployments`
+- `adopt`
+- `workers`
+- `logs`
+- `policies`
+- `secrets`
+- `orgs`
+- `package`
+- `souls`
+
+Bahia does **not** currently register top-level `llm`, `payments`, `artifacts`, `builds`, or `notifications` CLI commands.
 
 ## Commands
 
@@ -76,21 +81,19 @@ Operator relay resolution is deterministic and ordered: explicit `--relay` value
 bahia services list
 bahia services list -o json
 
-# Get service
-bahia services get payment-api
+# Get service by ID
+bahia services get svc-123
 bahia services get svc-123 -o yaml
 
-# Create service
+# Transitional create command (deprecated; signer-first mutations are the canonical path)
 bahia services create \
   --name "payment-api" \
-  --repository "https://github.com/company/payment-api"
+  --artifact-repo "ghcr.io/company/payment-api"
 
-# Update service
-bahia services update payment-api \
-  --description "Updated description"
-
-# Delete service
-bahia services delete payment-api
+# Direct runtime lifecycle actions
+bahia services actions deploy --service svc-123 --environment env-456 --artifact art-789
+bahia services actions restart --service svc-123 --environment env-456
+bahia services actions stop --service svc-123 --environment env-456
 ```
 
 ### Environments
@@ -99,101 +102,37 @@ bahia services delete payment-api
 # List environments
 bahia environments list
 
-# Get environment
-bahia environments get production
+# Get environment by ID
+bahia environments get env-456
 
-# Create environment
+# Transitional create command (deprecated; signer-first mutations are the canonical path)
 bahia environments create \
-  --name "Production" \
-  --slug "production"
-
-# Update environment
-bahia environments update production \
-  --requires-approval true
-
-# Delete environment
-bahia environments delete staging
+  --name "production" \
+  --strategy replace \
+  --protected
 ```
 
 ### Deployments
 
-Deployment intent creation and rollback publish signed ContextVM JSON-RPC events (`service/deploy`, `service/rollback`) with the configured operator signer and relay set. Relay `OK` acceptance is required before the command reports success. Legacy REST-backed mutation paths and legacy request-kind publication are not production runtime behavior.
-
 ```bash
-# Submit deployment intent (signer-first)
-bahia --privkey $BAHIA_NOSTR_PRIVATE_KEY --relay wss://relay.example \
-  deployments deploy --service svc-123 --environment env-456 --artifact art-789
+# Submit signer-first deployment intent
+bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
 
-# Submit rollback intent (signer-first)
-bahia --privkey $BAHIA_NOSTR_PRIVATE_KEY --relay wss://relay.example \
-  deployments rollback --service svc-123 --environment env-456
-
-# List intents
-bahia deployments list
-bahia deployments list --service payment-api
-
-# Get intent
-bahia deployments get intent-123
-
-# List runs
-bahia deployments runs list
-bahia deployments runs get run-456
-
-# View logs
-bahia deployments logs run-456 --tail 100
+# Submit signer-first rollback intent
+bahia deployments rollback --service svc-123 --environment env-456
 ```
 
 ### State
 
 ```bash
-# List state
+# List desired/observed state
 bahia state list
 bahia state list --environment production
 bahia state list --service payment-api
 
-# Drifted services
+# Show drifted services
 bahia state drifted
 bahia state drifted --environment production
-```
-
-### Direct Runtime Actions
-
-Direct runtime deploy/restart/stop REST endpoints have been removed. The CLI surface is ContextVM methods `service/deploy`, `service/restart`, and `service/stop`; production CLI paths do not publish legacy runtime request kinds.
-
-### Artifacts
-
-Artifact registration is a ContextVM Nostr operation. Legacy REST-backed artifact registration command paths are not production CLI mutation transport.
-
-```bash
-# List artifacts
-bahia artifacts list --service-id svc-123
-
-# Get artifact
-bahia artifacts get art-456
-
-# SBOM
-bahia artifacts sbom art-456
-bahia artifacts sbom art-456 --packages
-
-# Signatures
-bahia artifacts signatures art-456
-bahia artifacts verify art-456
-```
-
-### Builds
-
-```bash
-# List builds
-bahia builds list --service-id svc-123
-
-# Get build
-bahia builds get build-123
-
-# Register build
-bahia builds register \
-  --service-id svc-123 \
-  --workflow-id "ci-run-456" \
-  --commit-sha "abc123"
 ```
 
 ### Workers
@@ -202,74 +141,120 @@ bahia builds register \
 # List workers
 bahia workers list
 
-# Get worker
-bahia workers get npub1worker...
+# Show worker detail
+bahia workers show npub1worker...
+```
 
-# Pricing
-bahia workers pricing npub1worker...
+### Logs
+
+```bash
+# Fetch run logs
+bahia logs run run-456 --tail 100
+
+# Stream live logs for a service/environment
+bahia logs live svc-123 env-456
 ```
 
 ### Policies
 
-Policy mutations are signer-first public Nostr operations. `bahia policies create` publishes signed `PolicyCreate` (`5986`) with the configured operator signer, verifies relay `OK` acceptance, and prints the result/read-model kinds to follow. Policy reads (`list`, `get`) remain read-only and may use durable projections/server read models. Legacy REST-backed policy mutation command paths are not production CLI mutation transport.
-
 ```bash
-# List policies (read-only)
+# Read policies
 bahia policies list
-
-# Get policy (read-only)
 bahia policies get require-sbom
 
-# Create policy (signer-first 5986)
-bahia --privkey $BAHIA_NOSTR_PRIVATE_KEY --relay wss://relay.example \
-  policies create \
+# Create a signer-first policy
+bahia policies create \
   --name require-sbom \
   --rules '[{"type":"require_sbom"}]' \
   --enforcement block \
   --idempotency-key policy-create-require-sbom
 ```
 
-### LLM Routes
+### Secrets
 
 ```bash
-# List routes
-bahia llm routes list
+# List secrets for a service
+bahia secrets list svc-123
 
-# Get route
-bahia llm routes get gpt4-proxy
+# Set a secret
+bahia secrets set svc-123 DATABASE_URL postgres://example
 
-# Releases
-bahia llm releases list --route-id route-123
-
-# Deploy
-bahia llm deploy \
-  --route-id route-123 \
-  --release-id release-456 \
-  --environment production
-
-# Approve
-bahia llm approve intent-123
-
-# Rollback
-bahia llm rollback \
-  --route-id route-123 \
-  --environment production
-
-# State
-bahia llm state list
-bahia llm state drifted
+# Delete a secret
+bahia secrets delete svc-123 secret-456
 ```
 
-LLM route creation and release registration are ContextVM Nostr operations. Legacy request kinds such as `5971`/`5972` are startup migration inventory only and are not production CLI mutation transport.
+### Organizations
+
+```bash
+# List organizations
+bahia orgs list
+
+# Get organization by ID or name
+bahia orgs get acme-corp
+
+# Create an organization
+bahia orgs create acme-corp --display-name "ACME Corporation"
+
+# List members
+bahia orgs members list org-123
+
+# Add a member
+bahia orgs members add org-123 npub1member... --role deployer
+
+# Remove a member
+bahia orgs members remove org-123 npub1member...
+```
+
+### Package repositories and artifacts
+
+```bash
+# Create or update a package repository
+bahia package repo apply \
+  --name libs \
+  --format npm \
+  --backend-ref nexus-main \
+  --backend-type nexus
+
+# Delete a package repository
+bahia package repo delete --name libs
+
+# Upload an artifact
+bahia package upload \
+  --repository libs \
+  --package widgets \
+  --version 1.0.0 \
+  --file ./dist/widgets-1.0.0.tgz
+
+# Promote an artifact
+bahia package promote \
+  --source-repository libs \
+  --target-repository production \
+  --package widgets \
+  --version 1.0.0 \
+  --filename widgets-1.0.0.tgz
+
+# Yank an artifact
+bahia package yank \
+  --repository production \
+  --package widgets \
+  --version 1.0.0 \
+  --filename widgets-1.0.0.tgz \
+  --reason "security issue"
+
+# Trigger drift detection
+bahia package drift --repository production
+```
 
 ### Souls
+
+Soul Factory is feature-gated and disabled by default unless Bahia is configured with `BAHIA_SOUL_FACTORY_ENABLED=true`.
 
 ```bash
 # List souls
 bahia souls list
 bahia souls list --status active
 
-# Get soul
+# Get soul details
 bahia souls get scout
 
 # Provision
@@ -277,10 +262,6 @@ bahia souls provision scout \
   --template "31950:pubkey:research-agent" \
   --tier standard \
   --follow
-
-bahia souls provision codebot \
-  --brief "A code review specialist" \
-  --tier heavy
 
 # Lifecycle
 bahia souls suspend scout --reason "Maintenance"
@@ -294,65 +275,17 @@ bahia souls templates list
 bahia souls templates get research-agent
 ```
 
-### Notifications
-
-```bash
-# List channels
-bahia notifications channels list
-
-# Get channel
-bahia notifications channels get channel-123
-
-# Create channel
-bahia notifications channels create \
-  --name "Deploy Alerts" \
-  --type webhook \
-  --config url="https://hooks.example.com/bahia"
-
-# Update channel
-bahia notifications channels update channel-123 \
-  --events deployment.completed,deployment.failed
-
-# Delete channel
-bahia notifications channels delete channel-123
-
-# Test channel
-bahia notifications channels test channel-123
-
-# Logs
-bahia notifications log --limit 50
-```
-
 ### Adoption
 
 ```bash
 # Scan for containers
-bahia adopt scan \
-  --target name=prod,endpoint_ref=prod-docker
+bahia adopt scan --target name=prod,endpoint_ref=prod-docker
 
 # Import discovered containers
-bahia adopt import \
-  --target name=prod,endpoint_ref=prod-docker \
-  --all
+bahia adopt import --target name=prod,endpoint_ref=prod-docker --all
 ```
 
-### Payments
-
-```bash
-# Estimate cost
-bahia payments estimate \
-  --service-id svc-123 \
-  --environment-id env-456
-
-# Get run cost
-bahia payments cost run-789
-
-# Payment history
-bahia payments history
-bahia payments history --worker npub1worker...
-```
-
-## Output Formats
+## Output formats
 
 ```bash
 # Table (default)
@@ -362,21 +295,21 @@ bahia services list
 bahia services list -o json
 
 # YAML
-bahia services get payment-api -o yaml
+bahia services get svc-123 -o yaml
 ```
 
-## Global Flags
+## Global flags
 
 | Flag | Description |
 |------|-------------|
-| `--api-url` | Override API URL |
+| `--server` | Override Bahia server URL |
+| `--nostr-key-file` | Read the Nostr private key from a file (use `-` for stdin) |
 | `--relay` | Specify final operator relay (repeatable; highest priority) |
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
-| `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable; evaluated in configured order) |
-| `--http-fallback` | Allow HTTP fallback |
-| `-o, --output` | Output format (table, json, yaml) |
-| `-v, --verbose` | Verbose output |
+| `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
+| `--http-fallback` | Allow explicit HTTP compatibility fallback before any relay accepts the request |
+| `-o, --output` | Output format (`table`, `json`, `yaml`) |
 | `--help` | Show help |
 
 ## Related

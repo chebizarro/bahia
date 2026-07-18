@@ -136,16 +136,7 @@ Click a deployment to see:
 
 ### CLI
 
-```bash
-# List recent deployments
-bahia deployments list
-
-# Get deployment details
-bahia deployments get intent-123
-
-# View run logs
-bahia deployments logs run-456
-```
+The current CLI does not register `bahia deployments list`, `bahia deployments get`, or `bahia deployments logs` commands. Use `bahia state list` / `bahia state drifted` for current state views and `bahia logs run <run-id>` for run logs.
 
 ### Nostr Subscriptions
 
@@ -187,10 +178,10 @@ Publish a ContextVM approval request:
 ```json
 {
   "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"approve-intent-123\",\"method\":\"deployment/approve\",\"params\":{\"intent_id\":\"intent-123\",\"approved\":true,\"_meta\":{\"progressToken\":\"approve-intent-123\"}}}",
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"approve-intent-123\",\"method\":\"approval/approve\",\"params\":{\"intent_id\":\"intent-123\",\"approved\":true,\"_meta\":{\"progressToken\":\"approve-intent-123\"}}}",
   "tags": [
     ["p", "<bahia-service-pubkey>"],
-    ["method", "deployment/approve"],
+    ["method", "approval/approve"],
     ["intent", "intent-123"]
   ]
 }
@@ -263,7 +254,7 @@ Deployment runs capture logs:
 ### CLI
 
 ```bash
-bahia deployments logs run-456 --tail 100
+bahia logs run run-456 --tail 100
 ```
 
 ### MCP Tool
@@ -281,13 +272,7 @@ Logs are accessed via encrypted request (sensitive data):
 
 ## Deployment History
 
-View deployment history for a service:
-
-```bash
-bahia deployments list --service payment-api --limit 20
-```
-
-Or in the web UI on the service detail page.
+Use the service detail page and the Deployments UI for deployment history. The current CLI does not register `bahia deployments list` history commands.
 
 ## Canonical Observables
 

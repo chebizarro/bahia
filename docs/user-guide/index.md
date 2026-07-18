@@ -33,7 +33,7 @@ The same documentation corpus is available in three places:
 - **Contextual help**: Product routes with matching guides expose a route-specific docs action, and the assistant composer shows a dismissible documentation reference such as `docs:features-services` before you send a prompt.
 - **MCP**: AI agents can discover docs with `bahia_docs_list`, read topics with `bahia_docs_read`, or read `bahia://docs/<topic>` resources.
 
-All three paths read from `docs/user-guide/**/*.md`; do not duplicate user-facing docs in route code or assistant prompts.
+The relay-published docs catalog is built from Bahia’s user-guide content. Keep `docs/user-guide/**/*.md` authoritative and do not duplicate user-facing docs in route code or assistant prompts.
 
 ### Getting Started
 - [Getting Started](getting-started.md) — Installation, first deployment, initial setup
@@ -51,13 +51,13 @@ All three paths read from `docs/user-guide/**/*.md`; do not duplicate user-facin
 | [Artifacts](features/artifacts.md) | Container images and build outputs |
 | [Notifications](features/notifications.md) | Alert channels (webhook, email, Slack, Nostr) |
 | [Organizations](features/organizations.md) | Team management and access control |
-| [LLM Routes](features/llm-routes.md) | Manage and deploy LLM inference endpoints |
+| [LLM Routes](features/llm-routes.md) | Manage and deploy LLM inference endpoints (feature-gated; disabled by default) |
 | [ML Models](features/ml-models.md) | AI/ML model registry, recipes, and inference |
-| [Souls](features/souls.md) | AI agent provisioning with Soul Factory |
+| [Souls](features/souls.md) | AI agent provisioning with Soul Factory (feature-gated; disabled by default) |
 | [Workers](features/workers.md) | Loom workers for deployment execution |
 | [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
 | [Backup](features/backup.md) | Backup definitions, policies, and recovery |
-| [DNS](features/dns.md) | DNS zone and endpoint management |
+| [DNS](features/dns.md) | DNS zone and endpoint management (feature-gated; disabled by default) |
 | [Packages](features/packages.md) | Package repository management |
 | [Policies](features/policies.md) | Deployment approval and SBOM policies |
 | [Security](features/security.md) | OSV vulnerability scanning dashboard |
@@ -86,8 +86,8 @@ All three paths read from `docs/user-guide/**/*.md`; do not duplicate user-facin
 
 ```
 ┌─────────────────┐     ┌──────────────────────────────┐
-│ Browser / CLI   │────▶│ ContextVM discovery + NIP-51 │
-│ / MCP Agent     │     │ 11316-11320 + relay sets     │
+│ Browser / CLI   │────▶│ ContextVM discovery (11316-11320) │
+│ / MCP Agent     │     │ + NIP-51 relay sets (30002)      │
 └────────┬────────┘     └──────────────┬───────────────┘
          │                              │
          │ signed requests              │ relay discovery

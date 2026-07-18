@@ -14,7 +14,7 @@ All scan operations use encrypted ContextVM methods (`security/scan`, `security/
 
 ## Dashboard
 
-Navigate to **Security** in the sidebar (under Operations) to access the dashboard.
+Navigate to **Security** in the sidebar (under Operations) to access the dashboard. The page loads schedule-derived scopes first, then loads findings for the currently selected target or run scope.
 
 ### Severity Summary
 
@@ -29,7 +29,7 @@ When findings exist, the top of the page shows colored summary cards with counts
 
 ### Findings Tab
 
-The default tab shows a table of all vulnerability findings with:
+The Findings tab shows a table of vulnerability findings for the currently selected target or run scope, with:
 
 - **OSV ID** — the OSV database identifier (e.g., `GHSA-xxxx-yyyy`)
 - **CVE** — the CVE identifier when available
