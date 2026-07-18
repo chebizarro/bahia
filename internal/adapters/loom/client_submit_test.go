@@ -140,3 +140,46 @@ func TestSubmitJob_SecretsAreEncryptedForResolvedWorkerBeforePublish(t *testing.
 		t.Fatalf("secret tag was not encrypted: %q", encrypted)
 	}
 }
+
+func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
+	pool := &submitRelayPool{}
+	client := &Client{
+		pool:             pool,
+		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		submittedWorkers: make(map[string]string),
+		logger:           zap.NewNop(),
+	}
+
+	_, err := client.SubmitJob(context.Background(), JobRequest{
+		Cmd: "ci/workflow-run",
+		Params: map[string]string{
+			"repo":     "https://git.sharegap.net/cascadia/loom-worker.git",
+			"ref":      "main",
+			"workflow": ".github/workflows/package-deb.yaml",
+			"payment":  "forged-payment",
+			"p":        strings.Repeat("f", 64),
+			"secret":   "forged-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitJob() error = %v", err)
+	}
+	if len(pool.published) != 1 {
+		t.Fatalf("published events = %d, want 1", len(pool.published))
+	}
+	event := pool.published[0]
+	for key, want := range map[string]string{
+		"repo":     "https://git.sharegap.net/cascadia/loom-worker.git",
+		"ref":      "main",
+		"workflow": ".github/workflows/package-deb.yaml",
+	} {
+		if got := getTagValue(event.Tags, key); got != want {
+			t.Fatalf("%s tag = %q, want %q", key, got, want)
+		}
+	}
+	for _, forbidden := range []string{"payment", "p", "secret"} {
+		if got := getTagValue(event.Tags, forbidden); got != "" {
+			t.Fatalf("forbidden %s tag projected as %q", forbidden, got)
+		}
+	}
+}

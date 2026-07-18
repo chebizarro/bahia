@@ -14,6 +14,7 @@ package loom
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -279,6 +280,27 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		argsTag := nostr.Tag{"args"}
 		argsTag = append(argsTag, args...)
 		tags = append(tags, argsTag)
+	}
+
+	// Project the bounded Loom profile parameters into request tags. ContextVM
+	// callers use this for profile-specific inputs such as the Hive-CI repository
+	// and workflow. Keep the accepted keys explicit so callers cannot forge
+	// routing, payment, or secret tags through the generic Params map.
+	allowedParams := map[string]struct{}{
+		"actor": {}, "event": {}, "input": {}, "job": {}, "method": {},
+		"ref": {}, "repo": {}, "workflow": {},
+	}
+	paramKeys := make([]string, 0, len(job.Params))
+	for key := range job.Params {
+		if _, ok := allowedParams[key]; ok {
+			paramKeys = append(paramKeys, key)
+		}
+	}
+	sort.Strings(paramKeys)
+	for _, key := range paramKeys {
+		if value := strings.TrimSpace(job.Params[key]); value != "" {
+			tags = append(tags, nostr.Tag{key, value})
+		}
 	}
 
 	// Target worker.
