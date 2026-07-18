@@ -149,30 +149,57 @@ func (c *Client) Connect(ctx context.Context) error {
 	bunkerPubkey, relayHosts := bunkerLogDetails(c.bunkerURI)
 	c.logger.Info("connecting to Signet bunker", "bunker_pubkey", bunkerPubkey, "relay_hosts", relayHosts)
 
-	connectCtx, cancelConnect := context.WithTimeout(ctx, c.connectTimeout)
-	defer cancelConnect()
-
 	// Connect using the canonical NIP-46 implementation.
 	clientSecret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
 	if err != nil {
 		return fmt.Errorf("decode Signet client secret key: %w", err)
 	}
 
-	bunker, err := nip46.ConnectBunker(
-		connectCtx,
-		clientSecret,
-		c.bunkerURI,
-		c.pool,
-		func(authURL string) {
-			c.logger.Info("bunker auth required", "url", authURL)
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("connect to bunker: %w", err)
+	// ConnectBunker retains its context for the response subscription. A
+	// short-lived timeout context here makes the initial handshake succeed and
+	// then silently cancels every later RPC. Keep the caller's application
+	// context for that subscription, while bounding the handshake externally.
+	type connectResult struct {
+		bunker *nip46.BunkerClient
+		err    error
+	}
+	connectCtx, cancelConnect := context.WithCancel(ctx)
+	resultCh := make(chan connectResult, 1)
+	go func() {
+		bunker, err := nip46.ConnectBunker(
+			connectCtx,
+			clientSecret,
+			c.bunkerURI,
+			c.pool,
+			func(authURL string) {
+				c.logger.Info("bunker auth required", "url", authURL)
+			},
+		)
+		resultCh <- connectResult{bunker: bunker, err: err}
+	}()
+
+	var bunker *nip46.BunkerClient
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			cancelConnect()
+			return fmt.Errorf("connect to bunker: %w", result.err)
+		}
+		bunker = result.bunker
+	case <-time.After(c.connectTimeout):
+		cancelConnect()
+		return fmt.Errorf("connect to bunker: %w", context.DeadlineExceeded)
+	case <-ctx.Done():
+		cancelConnect()
+		return fmt.Errorf("connect to bunker: %w", ctx.Err())
 	}
 
-	// Verify connection with ping under the same bounded connection deadline.
-	if err := bunker.Ping(connectCtx); err != nil {
+	// Verify connection with a bounded request without cancelling the long-lived
+	// response subscription established above.
+	pingCtx, cancelPing := context.WithTimeout(ctx, c.connectTimeout)
+	defer cancelPing()
+	if err := bunker.Ping(pingCtx); err != nil {
+		cancelConnect()
 		return fmt.Errorf("bunker ping failed: %w", err)
 	}
 
