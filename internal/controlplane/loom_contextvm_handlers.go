@@ -56,6 +56,9 @@ type loomCancelContextVMPayload struct {
 }
 
 func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequest) (any, error) {
+	if !h.client.CanonicalProjectionReady() {
+		return nil, fmt.Errorf("canonical Loom projection is not configured")
+	}
 	var payload loomSubmitContextVMPayload
 	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid loom submit params: %w", err)
@@ -85,6 +88,7 @@ func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequ
 	if err != nil {
 		return nil, err
 	}
+	h.client.StartCanonicalProjection(jobID)
 	return map[string]any{
 		"status":       "accepted",
 		"schema":       ContextVMLoomSchema,

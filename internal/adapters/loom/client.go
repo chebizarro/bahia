@@ -185,6 +185,52 @@ func (c *Client) ProjectCanonicalJobState(ctx context.Context, status *JobStatus
 	return ProjectCanonicalJobStateWithSigner(ctx, c.pool, c.canonicalSigner, status, auditType)
 }
 
+// CanonicalProjectionReady reports whether terminal Loom work can be projected
+// onto the fleet-canonical 30900 state and 4903 audit surface. ContextVM submit
+// handlers use this as a fail-closed preflight before publishing kind 5100.
+func (c *Client) CanonicalProjectionReady() bool {
+	return c != nil && c.canonicalSigner != nil
+}
+
+// StartCanonicalProjection follows a submitted native Loom job in the
+// background and projects every validated status plus the terminal result to
+// the canonical state/audit surface. The poll owns its context so returning the
+// ContextVM response does not cancel result collection.
+func (c *Client) StartCanonicalProjection(jobEventID string) {
+	if !c.CanonicalProjectionReady() {
+		c.logger.Error("cannot start Loom canonical projection: signer is not configured",
+			zap.String("job_id", jobEventID))
+		return
+	}
+	go func() {
+		ctx := context.Background()
+		var projectionErr error
+		result, err := c.PollJobStatus(ctx, jobEventID, func(status *JobStatus) {
+			if projectionErr != nil {
+				return
+			}
+			projectionErr = c.ProjectCanonicalJobState(ctx, status, "loom.status")
+		})
+		if err != nil {
+			c.logger.Error("Loom canonical projection poll failed",
+				zap.String("job_id", jobEventID), zap.Error(err))
+			return
+		}
+		if projectionErr != nil {
+			c.logger.Error("Loom canonical status projection failed",
+				zap.String("job_id", jobEventID), zap.Error(projectionErr))
+			return
+		}
+		if err := c.ProjectCanonicalJobState(ctx, result, "loom.result"); err != nil {
+			c.logger.Error("Loom canonical result projection failed",
+				zap.String("job_id", jobEventID), zap.Error(err))
+			return
+		}
+		c.logger.Info("Loom terminal result projected to canonical state and audit",
+			zap.String("job_id", jobEventID), zap.String("status", result.Status))
+	}()
+}
+
 // SubmitJob submits a deployment job to Loom workers via a Kind 5100 job request event.
 // If no WorkerPubkey is set and a workerRepo is available, auto-selects an online worker.
 func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) {

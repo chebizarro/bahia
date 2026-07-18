@@ -149,3 +149,14 @@ func TestProjectCanonicalJobStateWithSignerPropagatesSignerError(t *testing.T) {
 		t.Fatalf("error = %v, want wrapped %v", err, want)
 	}
 }
+
+func TestCanonicalProjectionReadyFailsClosedWithoutSigner(t *testing.T) {
+	client := &Client{}
+	if client.CanonicalProjectionReady() {
+		t.Fatal("CanonicalProjectionReady() = true without signer")
+	}
+	WithCanonicalSigner(&recordingCanonicalSigner{})(client)
+	if !client.CanonicalProjectionReady() {
+		t.Fatal("CanonicalProjectionReady() = false with signer")
+	}
+}
