@@ -894,6 +894,23 @@ func New(cfg *config.Config) (*App, error) {
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		workerCommandPublisher = controlplane.NewWorkerCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
+
+	// Fleet hygiene (Swabbie, fp-jan): periodic dry-run scans + Tier-1
+	// convergence via the per-host maintenance driver.
+	if cfg.Hygiene.Enabled {
+		if controlPlaneSigner == nil || controlPlanePool == nil || len(controlPlaneRelays) == 0 {
+			logger.Warn("hygiene reconciler enabled but control-plane Nostr publishing is not configured; skipping")
+		} else if hygienePolicy, err := loadHygienePolicy(cfg.Hygiene.PolicyPath); err != nil {
+			return nil, fmt.Errorf("load hygiene policy: %w", err)
+		} else {
+			maintenancePublisher := controlplane.NewMaintenanceCommandPublisher(controlPlanePool, controlPlaneSigner)
+			hygieneReconciler, err := reconcile.NewHygieneReconciler(hygienePolicy, cfg.Hygiene.Workers, maintenancePublisher, nil, telemetryProvider.GetMetrics(), cfg.Hygiene.Interval, logger)
+			if err != nil {
+				return nil, fmt.Errorf("hygiene reconciler: %w", err)
+			}
+			bgManager.RegisterWithOptions(hygieneReconciler, RunnerTier(Tier3), RunnerRequired(false))
+		}
+	}
 	mcpDeps := mcp.ServerDeps{
 		LogService:               runLogService,
 		Payments:                 paymentSvc,

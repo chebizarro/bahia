@@ -43,6 +43,7 @@ type Config struct {
 	Telemetry      TelemetryConfig           `koanf:"telemetry"`
 	WorkerPressure WorkerPressureConfig      `koanf:"worker_pressure"`
 	WorkerCleanup  WorkerCleanupConfig       `koanf:"worker_cleanup"`
+	Hygiene        HygieneConfig             `koanf:"hygiene" yaml:"hygiene"`
 	Notifications  NotificationsConfig       `koanf:"notifications"`
 	Registry       RegistryAdapterConfig     `koanf:"registry"`
 	LLM            LLMControlplaneConfig     `koanf:"llm"`
@@ -65,6 +66,18 @@ type SBOMCdxgenConfig struct {
 }
 
 // WorkerPressureConfig controls Bahia-owned worker pressure and dynamic admission thresholds.
+// HygieneConfig controls the fleet hygiene (Swabbie) reconciler (fp-jan).
+// The policy document itself is a versioned JSON file validated against
+// schemas/hygiene_policy.json.
+type HygieneConfig struct {
+	Enabled    bool          `koanf:"enabled" yaml:"enabled"`
+	PolicyPath string        `koanf:"policy_path" yaml:"policy_path"`
+	Interval   time.Duration `koanf:"interval" yaml:"interval"`
+	// Workers lists maintenance-driver worker pubkeys to reconcile when
+	// the policy document does not itself target specific workers.
+	Workers []string `koanf:"workers" yaml:"workers"`
+}
+
 type WorkerPressureConfig struct {
 	MemoryWarningMinGB  int     `koanf:"memory_warning_min_gb" yaml:"memory_warning_min_gb"`
 	MemoryWarningRatio  float64 `koanf:"memory_warning_min_ratio" yaml:"memory_warning_min_ratio"`

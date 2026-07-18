@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bahia.openagents.com/schemas/hygiene_policy.json",
+  "title": "Fleet Hygiene Policy",
+  "description": "Declarative, versioned fleet hygiene policy (epic fp-jan / Swabbie). Bahia holds the policy; per-host maintenance drivers enforce the projected subset. Safety invariants: quarantine-not-delete, dry-run-first, protected paths never touched, Tier-2 actions (relocate/purge) never automatic.",
+  "type": "object",
+  "required": ["schema_version", "id", "scan_roots", "protected_paths"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "hygiene/v1" },
+    "id": { "type": "string", "minLength": 1, "description": "Stable policy identifier" },
+    "enabled": { "type": "boolean", "default": false },
+    "workers": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+      "description": "Worker pubkeys this policy targets; empty = all configured maintenance workers"
+    },
+    "scan_roots": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^/" },
+      "description": "Absolute directories the janitor may scan"
+    },
+    "protected_paths": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^/" },
+      "description": "Absolute paths never scanned, quarantined, or purged (keys, Signet store, private corpus, backup domain)"
+    },
+    "quarantine_dir": { "type": "string", "pattern": "^/", "description": "Quarantine holding area (default /var/quarantine)" },
+    "retention_days": { "type": "integer", "minimum": 1, "default": 14, "description": "Minimum quarantine residency before purge is possible" },
+    "backup_domain": { "type": "string", "pattern": "^/", "description": "Where backups belong; misplaced backups are relocated here, never deleted" },
+    "backup_globs": { "type": "array", "items": { "type": "string" } },
+    "cruft_globs": { "type": "array", "items": { "type": "string" } },
+    "canonical_clones": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^/" },
+      "description": "git origin URL -> canonical checkout path; a clone is a duplicate only when its canonical copy is verified"
+    },
+    "gc_commands": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "string" } },
+      "description": "Safe reclamation commands (default: docker image/volume/builder prune)"
+    },
+    "method_acl": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } },
+      "description": "Per-method requester allowlists for tier-gated methods (maintenance/purge, maintenance/relocate -> Majordomo)"
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disk_used_pct": { "type": "number", "minimum": 1, "maximum": 100, "default": 85 },
+        "inode_used_pct": { "type": "number", "minimum": 1, "maximum": 100, "default": 90 }
+      }
+    },
+    "auto_quarantine": { "type": "boolean", "default": false, "description": "Tier-1: automatically quarantine unblocked dup-clone/cruft candidates (reversible)" },
+    "auto_gc": { "type": "boolean", "default": false, "description": "Tier-1: automatically run gc when a pressure threshold breaches" }
+  }
+}

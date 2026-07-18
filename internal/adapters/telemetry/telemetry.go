@@ -60,6 +60,12 @@ type Metrics struct {
 	DeploymentsTotal   map[string]int64 // key: service:env:status
 	DriftDetectedTotal int64
 
+	// Fleet hygiene metrics (fp-jan / Swabbie)
+	HygieneScansTotal           int64
+	HygieneCandidatesTotal      map[string]int64 // key: class
+	HygieneActionsTotal         map[string]int64 // key: method:status
+	HygienePressureBreachesTotal int64
+
 	// Adoption/direct-runtime operational metrics
 	AdoptionScansTotal          map[string]int64 // key: status
 	AdoptionScanDurations       []float64        // in seconds
@@ -126,6 +132,8 @@ func NewMetrics() *Metrics {
 		LoomJobsTotal:         make(map[string]int64),
 		CashuPaymentsTotal:    make(map[string]int64),
 		CashuWalletBalance:    make(map[string]int64),
+		HygieneCandidatesTotal: make(map[string]int64),
+		HygieneActionsTotal:    make(map[string]int64),
 	}
 }
 
@@ -337,6 +345,34 @@ func (m *Metrics) RecordDriftDetected() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.DriftDetectedTotal++
+}
+
+// RecordHygieneScan counts a hygiene dry-run scan issued to a worker.
+func (m *Metrics) RecordHygieneScan() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.HygieneScansTotal++
+}
+
+// RecordHygieneCandidates counts scan candidates by class.
+func (m *Metrics) RecordHygieneCandidates(class string, count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.HygieneCandidatesTotal[class] += int64(count)
+}
+
+// RecordHygieneAction counts a maintenance intent by method and status.
+func (m *Metrics) RecordHygieneAction(method, status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.HygieneActionsTotal[method+":"+status]++
+}
+
+// RecordHygienePressureBreach counts a pressure-threshold breach.
+func (m *Metrics) RecordHygienePressureBreach() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.HygienePressureBreachesTotal++
 }
 
 // RecordAdoptionScan records an adoption scan operation. It stores only
@@ -574,6 +610,28 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintln(w, "# HELP bahia_drift_detected_total Total drift detections")
 		fmt.Fprintln(w, "# TYPE bahia_drift_detected_total counter")
 		fmt.Fprintf(w, "bahia_drift_detected_total %d\n", m.DriftDetectedTotal)
+
+		fmt.Fprintln(w, "# HELP bahia_hygiene_scans_total Total hygiene dry-run scans issued")
+		fmt.Fprintln(w, "# TYPE bahia_hygiene_scans_total counter")
+		fmt.Fprintf(w, "bahia_hygiene_scans_total %d\n", m.HygieneScansTotal)
+		fmt.Fprintln(w, "# HELP bahia_hygiene_candidates_total Hygiene scan candidates by class")
+		fmt.Fprintln(w, "# TYPE bahia_hygiene_candidates_total counter")
+		for class, count := range m.HygieneCandidatesTotal {
+			fmt.Fprintf(w, "bahia_hygiene_candidates_total{class=%q} %d\n", class, count)
+		}
+		fmt.Fprintln(w, "# HELP bahia_hygiene_actions_total Hygiene maintenance intents by method and status")
+		fmt.Fprintln(w, "# TYPE bahia_hygiene_actions_total counter")
+		for key, count := range m.HygieneActionsTotal {
+			parts := strings.SplitN(key, ":", 2)
+			status := ""
+			if len(parts) == 2 {
+				status = parts[1]
+			}
+			fmt.Fprintf(w, "bahia_hygiene_actions_total{method=%q,status=%q} %d\n", parts[0], status, count)
+		}
+		fmt.Fprintln(w, "# HELP bahia_hygiene_pressure_breaches_total Pressure threshold breaches (disk>85%% / inode)")
+		fmt.Fprintln(w, "# TYPE bahia_hygiene_pressure_breaches_total counter")
+		fmt.Fprintf(w, "bahia_hygiene_pressure_breaches_total %d\n", m.HygienePressureBreachesTotal)
 
 		// Adoption/direct-runtime operational metrics
 		fmt.Fprintln(w, "# HELP bahia_adoption_scans_total Adoption scan requests by status")
