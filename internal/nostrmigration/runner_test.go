@@ -138,6 +138,24 @@ func TestBuildCanonicalEventTranslatesLegacyObjectIntoContextVMParams(t *testing
 	require.Contains(t, tagValues(ev.Tags, "migration"), migrationID)
 }
 
+func TestBuildCanonicalEventTranslatesLegacyResultIntoContextVMResponse(t *testing.T) {
+	rec := *legacyRecord(t, "legacy-result", kinds.DeploymentResult, time.Unix(100, 0).UTC())
+	rec.Content = `{"service_id":"svc-1","ok":true}`
+	disp, ok := ResolveDisposition(rec.Kind, rec.Tags, rec.Content)
+	require.True(t, ok)
+
+	ev, err := BuildCanonicalEvent(rec, disp)
+	require.NoError(t, err)
+	require.Equal(t, gonostr.Kind(CanonicalContextVMMessage), ev.Kind)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &payload))
+	require.Equal(t, "2.0", payload["jsonrpc"])
+	require.Equal(t, "migration-"+rec.ID, payload["id"])
+	result := payload["result"].(map[string]any)
+	require.Equal(t, "svc-1", result["service_id"])
+	require.Equal(t, true, result["ok"])
+}
+
 func TestRunnerRegeneratesLegacyV1MigrationOutput(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewInMemoryNostrEventRepository()
@@ -242,7 +260,7 @@ func TestRunnerDryRunDoesNotPublishOrRecordCanonicalEvent(t *testing.T) {
 
 	require.NoError(t, NewRunner(repo, publisher, nil, Config{PrivateKey: deterministicPrivateKey(t), DryRun: true}, zap.NewNop()).Run(ctx))
 	require.Empty(t, publisher.events)
-	found, err := repo.FindByTag(ctx, "migrated-from", legacy.ID, []int{CanonicalNIP90Feedback}, 10)
+	found, err := repo.FindByTag(ctx, "migrated-from", legacy.ID, []int{CanonicalContextVMMessage}, 10)
 	require.NoError(t, err)
 	require.Empty(t, found)
 }

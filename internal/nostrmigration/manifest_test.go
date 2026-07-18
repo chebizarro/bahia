@@ -60,6 +60,14 @@ func TestManifestCanonicalTargets(t *testing.T) {
 	require.Equal(t, CanonicalContextVMMessage, deploy.CanonicalKind)
 	require.Equal(t, "service/deploy", deploy.Method)
 
+	status, ok := Lookup(kinds.DeploymentStatus)
+	require.True(t, ok)
+	require.Equal(t, cascadia.NIP38_USER_STATUS, status.CanonicalKind)
+
+	result, ok := Lookup(kinds.DeploymentResult)
+	require.True(t, ok)
+	require.Equal(t, cascadia.CAS_INTENT, result.CanonicalKind)
+
 	serviceDelete, ok := Lookup(kinds.ServiceDelete)
 	require.True(t, ok)
 	require.Equal(t, CanonicalNIP09Delete, serviceDelete.CanonicalKind)
@@ -282,6 +290,7 @@ func parseKindsGoConstants(t *testing.T) map[string]int {
 		"CAS_INTENT":                            cascadia.CAS_INTENT,
 		"NIP59_GIFT_WRAP":                       cascadia.NIP59_GIFT_WRAP,
 		"NIP59_EPHEMERAL_GIFT_WRAP":             cascadia.NIP59_EPHEMERAL_GIFT_WRAP,
+		"NIP38_USER_STATUS":                     cascadia.NIP38_USER_STATUS,
 		"CTXVM_SERVER_ANNOUNCEMENT":             cascadia.CTXVM_SERVER_ANNOUNCEMENT,
 		"CTXVM_TOOLS_ANNOUNCEMENT":              cascadia.CTXVM_TOOLS_ANNOUNCEMENT,
 		"CTXVM_RESOURCES_ANNOUNCEMENT":          cascadia.CTXVM_RESOURCES_ANNOUNCEMENT,

@@ -15,8 +15,7 @@ const (
 	CanonicalCEP4GiftWrap          = cascadia.NIP59_GIFT_WRAP
 	CanonicalCEP19EphemeralWrap    = cascadia.NIP59_EPHEMERAL_GIFT_WRAP
 	CanonicalNIP09Delete           = 5
-	CanonicalNIP38OperationalState = 30315
-	CanonicalNIP90Feedback         = 7000
+	CanonicalNIP38OperationalState = cascadia.NIP38_USER_STATUS
 	legacyHeartbeatObservation     = 30350
 	CanonicalCASCPState            = cascadia.CAS_CP_STATE
 	CanonicalCASAudit              = cascadia.CAS_AUDIT
@@ -284,13 +283,13 @@ func buildManifest() map[int]Disposition {
 		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalNIP09Delete, Layer: LayerIntent, Domain: domain, Operation: op, Schema: "bahia.delete." + domain + ".v1", DTagPrefix: domain, Delete: true}
 	}
 	addStatus := func(kind int, domain string) {
-		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalNIP90Feedback, Layer: LayerObservable, Domain: domain, Operation: "progress", Schema: "bahia.feedback." + domain + ".v1", DTagPrefix: domain}
+		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalNIP38OperationalState, Layer: LayerObservable, Domain: domain, Operation: "progress", Schema: "bahia.feedback." + domain + ".v1", DTagPrefix: "cascadia:" + domain}
 	}
 	addOperational := func(kind int, domain string) {
 		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalNIP38OperationalState, Layer: LayerObservable, Domain: domain, Operation: "status", Schema: "bahia.status." + domain + ".v1", DTagPrefix: "cascadia:" + domain}
 	}
 	addResult := func(kind int, domain string) {
-		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalNIP90Feedback, Layer: LayerObservable, Domain: domain, Operation: "result", Schema: "bahia.result." + domain + ".v1", DTagPrefix: domain}
+		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalContextVMMessage, Layer: LayerObservable, Domain: domain, Operation: "result", Schema: "bahia.result." + domain + ".v1", DTagPrefix: domain}
 	}
 	addState := func(kind int, domain, schema string) {
 		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalCASCPState, Layer: LayerState, Domain: domain, Operation: "state", Schema: schema, DTagPrefix: domain}

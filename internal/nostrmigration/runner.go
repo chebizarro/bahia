@@ -290,6 +290,16 @@ func BuildCanonicalEvent(rec repository.NostrEventRecord, disp Disposition) (*go
 		payload["id"] = "migration-" + rec.ID
 		payload["method"] = disp.Method
 		payload["params"] = params
+	} else if disp.CanonicalKind == CanonicalContextVMMessage && disp.Operation == "result" {
+		result := translatedObject(translated)
+		result["legacy_event_id"] = rec.ID
+		result["legacy_kind"] = rec.Kind
+		result["_migration"] = metadata
+		payload = map[string]any{
+			"jsonrpc": "2.0",
+			"id":      "migration-" + rec.ID,
+			"result":  result,
+		}
 	}
 	content, err := json.Marshal(payload)
 	if err != nil {

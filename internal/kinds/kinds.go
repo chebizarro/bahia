@@ -155,7 +155,7 @@ const (
 
 const (
 	CASAudit            = cascadia.CAS_AUDIT
-	NIP38Status         = 30315
+	NIP38Status         = cascadia.NIP38_USER_STATUS
 	AssistantTranscript = cascadia.CAS_AGENT_HEARTBEAT
 	CASControlState     = cascadia.CAS_CP_STATE
 )
@@ -233,7 +233,7 @@ const (
 	// HeartbeatObservation is a semantic alias for NIP-38 operational status kind 30315.
 	// Continuity heartbeat observations are disambiguated with #domain=continuity
 	// plus heartbeat schema/d/worker tags; 30350 is not a production heartbeat kind.
-	HeartbeatObservation   = 30315
+	HeartbeatObservation   = cascadia.NIP38_USER_STATUS
 	ContinuityStatus       = 30351
 	DegradedModeActivation = 30352
 	RecoveryProgress       = 30353

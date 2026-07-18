@@ -34,6 +34,12 @@ func TestCascadiaGeneratedKindAliasesStayCanonical(t *testing.T) {
 	if SoulFactoryRuntimeCapability != 30317 {
 		t.Fatalf("SoulFactoryRuntimeCapability = %d, want 30317", SoulFactoryRuntimeCapability)
 	}
+	if NIP38Status != cascadia.NIP38_USER_STATUS || HeartbeatObservation != cascadia.NIP38_USER_STATUS {
+		t.Fatalf("NIP-38 aliases = (%d, %d), want cascadia.NIP38_USER_STATUS %d", NIP38Status, HeartbeatObservation, cascadia.NIP38_USER_STATUS)
+	}
+	if CASControlState != cascadia.CAS_CP_STATE {
+		t.Fatalf("CASControlState = %d, want cascadia.CAS_CP_STATE %d", CASControlState, cascadia.CAS_CP_STATE)
+	}
 }
 
 func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
