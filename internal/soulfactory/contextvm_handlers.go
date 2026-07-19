@@ -19,8 +19,8 @@ const (
 
 // RegisterContextVMHandlers exposes Soul Factory mutations on Bahia's canonical
 // kind:25910 transport. The ContextVM response acknowledges dispatch only;
-// provisioning progress and terminal truth remain relay-backed Soul Factory
-// events until their canonical 30900 projection is enabled.
+// provisioning progress and terminal truth are additionally projected as
+// canonical 30900 state and 4903 audit events by the reactor.
 func RegisterContextVMHandlers(transport *controlplane.EncryptedRequestTransport, reactor *Reactor) {
 	if transport == nil || reactor == nil {
 		return

@@ -361,7 +361,10 @@ func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign status event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.provisioningPublicationRelays())
+	if err := r.publish(ctx, event, r.provisioningPublicationRelays()); err != nil {
+		return err
+	}
+	return r.publishCanonicalProvisioningObservable(ctx, requestEvent, event)
 }
 
 // publishResult publishes a kind:7950 success result event.
@@ -375,7 +378,10 @@ func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign result event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.provisioningPublicationRelays())
+	if err := r.publish(ctx, event, r.provisioningPublicationRelays()); err != nil {
+		return err
+	}
+	return r.publishCanonicalProvisioningObservable(ctx, requestEvent, event)
 }
 
 func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Event, action *domain.SoulAction, message string) error {
@@ -400,7 +406,10 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 		return fmt.Errorf("sign error event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.provisioningPublicationRelays())
+	if err := r.publish(ctx, event, r.provisioningPublicationRelays()); err != nil {
+		return err
+	}
+	return r.publishCanonicalProvisioningObservable(ctx, requestEvent, event)
 }
 
 // publishSoul publishes a kind:31951 agent soul event.

@@ -46,7 +46,7 @@ SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle A
 3. Bahia publishes correlated `6950` progress, sends scoped `38384` runtime-control events to trusted OpenClaw runtimes, validates `38386` results, publishes the final `31951` Soul read model, and publishes terminal `7950`.
 4. Clients subscribe to scoped `6950`, `7950`, and `31951` events for durable progress/completion. Relay `OK` verifies event acceptance, not runtime completion.
 
-REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed ContextVM requests and scoped Nostr subscriptions instead of HTTP create/provision/suspend/resume calls. A ContextVM acknowledgment is not terminal completion; follow correlated lifecycle events and the forthcoming canonical `30900`/`4903` projections.
+REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed ContextVM requests and scoped Nostr subscriptions instead of HTTP create/provision/suspend/resume calls. A ContextVM acknowledgment is not terminal completion; provisioning clients follow `30900` state at `soul-factory:provisioning:<request-event-id>` and matching `4903` audit facts, with existing correlated lifecycle events retained during contraction.
 
 ## Migrating Existing Deployments to the New Kinds
 

@@ -86,7 +86,7 @@ Methods follow `<domain>/<operation>`:
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
 
-`soul-factory/provision` and `soul-factory/action` are the canonical mutation entry points for new Soul Factory clients. During the staged migration Bahia adapts each verified request into the existing event-driven Soul Factory reactor, retaining the original `25910` event id for correlation. The response acknowledges acceptance only; lifecycle observables remain the completion source until durable `30900` state and `4903` audit projection are enabled.
+`soul-factory/provision` and `soul-factory/action` are the canonical mutation entry points for new Soul Factory clients. During the staged migration Bahia adapts each verified request into the existing event-driven Soul Factory reactor, retaining the original `25910` event id for correlation. The response acknowledges acceptance only. Provisioning progress and terminal outcomes produce canonical `30900` state (`d=soul-factory:provisioning:<request-event-id>`, schema `bahia.state.soul-factory-provisioning.v1`) plus append-only `4903` audit facts. Action projection remains staged.
 
 JSON-RPC responses acknowledge request handling. Long-running completion comes from canonical observable events.
 

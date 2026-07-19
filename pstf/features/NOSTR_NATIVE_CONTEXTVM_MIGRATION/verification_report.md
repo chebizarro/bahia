@@ -118,12 +118,13 @@ Implemented behavior:
 - Registered `soul-factory/provision` and `soul-factory/action` on Bahia's existing verified ContextVM transport.
 - Adapted accepted requests into the existing event-driven Soul Factory reactor through its established parsers and handlers; no REST, polling, or fake completion path was introduced.
 - Preserved the original signed `25910` event id, author, and timestamp for lifecycle correlation.
-- Returned an immediate acceptance acknowledgment only; existing correlated lifecycle events remain the completion source for this staged slice.
+- Returned an immediate acceptance acknowledgment only; existing correlated lifecycle events remain available during contraction.
+- Projected ContextVM provisioning progress and terminal outcomes onto replaceable `30900` state at `soul-factory:provisioning:<request-event-id>` plus append-only `4903` audit facts, signed by the configured Soul Factory signer.
 - Kept malformed params fail-closed before reactor dispatch.
 
 Verification:
 
 - PASS: `GOFLAGS=-buildvcs=false go test ./internal/soulfactory ./internal/controlplane ./internal/app -count=1` in the Go 1.26 build container.
-- PASS: focused adapter tests cover provisioning correlation, action tag projection, parser compatibility, and malformed-param rejection.
+- PASS: focused adapter/projection tests cover provisioning correlation, action tag projection, parser compatibility, malformed-param rejection, signed `30900`/`4903` publication, and direct-interop isolation.
 
-Remaining `fp-30` work is explicitly staged: project durable Soul Factory state and audit truth onto canonical `30900` and `4903`, migrate browser/CLI publishers and subscribers, contract direct request-kind ingress, and complete the max sidecar deployment proof.
+Remaining `fp-30` work is explicitly staged: project lifecycle actions and authoritative Soul read models onto canonical `30900`/`4903`, migrate browser/CLI publishers and subscribers, contract direct request-kind ingress, and complete the max sidecar deployment proof.
