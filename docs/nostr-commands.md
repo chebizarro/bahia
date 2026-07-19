@@ -40,6 +40,9 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 | `assistant` | `prompt`, `approve`, `cancel` |
 | `ci` | `workflow-run`, `cancel`, `retry` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
+| `soul-factory` | `provision`, `action` |
+
+Soul Factory clients should submit new mutation intent through `soul-factory/provision` and `soul-factory/action`. Bahia validates those requests through the existing Soul Factory domain parsers and preserves the original `25910` event id as the correlation id while the staged reactor continues to emit its established lifecycle events. The JSON-RPC response is acceptance only; clients must observe the correlated lifecycle events and, as the migration completes, canonical `30900` state and `4903` audit facts for durable truth.
 
 ## Example: Deploy Service
 
@@ -287,4 +290,3 @@ These families are retained only for migration manifests, historical conversion 
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no canonical live runtime path |
-

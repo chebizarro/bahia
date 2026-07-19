@@ -1169,6 +1169,7 @@ func New(cfg *config.Config) (*App, error) {
 			bgManager.RegisterWithOptions(sbomAsyncRunner, RunnerTier(Tier2))
 		}
 		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner)
+		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
 	}

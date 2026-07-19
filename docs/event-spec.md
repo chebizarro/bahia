@@ -84,6 +84,9 @@ Methods follow `<domain>/<operation>`:
 | `assistant` | `prompt`, `approve`, `cancel` |
 | `ci` | `workflow-run`, `cancel`, `retry` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
+| `soul-factory` | `provision`, `action` |
+
+`soul-factory/provision` and `soul-factory/action` are the canonical mutation entry points for new Soul Factory clients. During the staged migration Bahia adapts each verified request into the existing event-driven Soul Factory reactor, retaining the original `25910` event id for correlation. The response acknowledges acceptance only; lifecycle observables remain the completion source until durable `30900` state and `4903` audit projection are enabled.
 
 JSON-RPC responses acknowledge request handling. Long-running completion comes from canonical observable events.
 
@@ -326,4 +329,3 @@ This is idempotent and safe to run every startup. If the migration fails because
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |
-

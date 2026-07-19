@@ -238,7 +238,7 @@ bahia souls templates get research-agent
 Soul creation is signer-first and event-driven:
 
 1. The browser/operator signs a `31952` Soul draft containing the desired identity, runtime target, relay policy, permissions, workspace, assets, and `spec_hash`.
-2. The browser/operator signs a `5950` provisioning request with tags such as `agent-id`, `draft`, `draft-event`, `spec-hash`, `runtime`, `runtime-pubkey`, `capability`, `method=soulfactory.provision`, and `request-kind=5950`. The JSON content uses `schema=soulfactory-provisioning/v1`.
+2. The browser/operator signs a ContextVM `25910` request using `soul-factory/provision`; params use the existing `soulfactory-provisioning/v1` schema. Bahia preserves the request event id for correlation and adapts the request into the staged SoulFactory reactor. Existing `5950` publishers remain supported as lifecycle interop during contraction.
 3. Bahia SoulFactory publishes `6950` progress, sends scoped runtime control kind `38384` events to OpenClaw, validates correlated `38386` runtime results, publishes final `31951`, and then publishes terminal `7950`.
 4. Clients subscribe to the correlated Nostr events for durable truth. A ContextVM or MCP acknowledgment is not completion.
 

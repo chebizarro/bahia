@@ -39,14 +39,14 @@ Bahia clients now separate private mutation intent from public observable truth.
 
 ### SoulFactory/OpenClaw provisioning
 
-SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle API:
+SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle API. New mutation clients publish ContextVM `25910` requests using `soul-factory/provision` or `soul-factory/action`; Bahia retains the original request event id as the lifecycle correlation id.
 
 1. Operators publish signed `31952` Soul drafts.
-2. Operators publish signed `5950` provisioning requests tagged with `draft`, `draft-event`, `spec-hash`, runtime/capability tags, `method=soulfactory.provision`, and `request-kind=5950`; content uses `schema=soulfactory-provisioning/v1`.
+2. Operators publish signed `25910` `soul-factory/provision` requests whose params contain the existing provisioning schema. Bahia validates them with the SoulFactory parser and adapts them into the staged reactor without changing their correlation identity. Existing signed `5950` requests remain lifecycle interop during contraction.
 3. Bahia publishes correlated `6950` progress, sends scoped `38384` runtime-control events to trusted OpenClaw runtimes, validates `38386` results, publishes the final `31951` Soul read model, and publishes terminal `7950`.
 4. Clients subscribe to scoped `6950`, `7950`, and `31951` events for durable progress/completion. Relay `OK` verifies event acceptance, not runtime completion.
 
-REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed Nostr events and subscriptions instead of HTTP create/provision/suspend/resume calls.
+REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed ContextVM requests and scoped Nostr subscriptions instead of HTTP create/provision/suspend/resume calls. A ContextVM acknowledgment is not terminal completion; follow correlated lifecycle events and the forthcoming canonical `30900`/`4903` projections.
 
 ## Migrating Existing Deployments to the New Kinds
 

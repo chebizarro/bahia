@@ -108,3 +108,22 @@ Verification for this pass:
 - PASS: static stale production-kind grep over updated user/agent/operator docs returned only migration/historical-labelled occurrences.
 - PASS: static search confirmed no conflict markers remain in `docs/protocol-compatibility.md`.
 - PASS: markdown link sanity check for updated docs found no broken relative `.md` links.
+
+## Soul Factory ContextVM adapter checkpoint — fp-30 — 2026-07-19
+
+Observed behavior before this checkpoint: Soul Factory provisioning and lifecycle mutations entered Bahia only through domain-specific request kinds even though ContextVM `25910` is the canonical mutation transport for new control-plane clients.
+
+Implemented behavior:
+
+- Registered `soul-factory/provision` and `soul-factory/action` on Bahia's existing verified ContextVM transport.
+- Adapted accepted requests into the existing event-driven Soul Factory reactor through its established parsers and handlers; no REST, polling, or fake completion path was introduced.
+- Preserved the original signed `25910` event id, author, and timestamp for lifecycle correlation.
+- Returned an immediate acceptance acknowledgment only; existing correlated lifecycle events remain the completion source for this staged slice.
+- Kept malformed params fail-closed before reactor dispatch.
+
+Verification:
+
+- PASS: `GOFLAGS=-buildvcs=false go test ./internal/soulfactory ./internal/controlplane ./internal/app -count=1` in the Go 1.26 build container.
+- PASS: focused adapter tests cover provisioning correlation, action tag projection, parser compatibility, and malformed-param rejection.
+
+Remaining `fp-30` work is explicitly staged: project durable Soul Factory state and audit truth onto canonical `30900` and `4903`, migrate browser/CLI publishers and subscribers, contract direct request-kind ingress, and complete the max sidecar deployment proof.

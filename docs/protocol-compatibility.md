@@ -56,7 +56,7 @@ For the canonical control-plane contract, prefer:
 
 ### 1. ContextVM over Nostr
 
-ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy`, `worker/cordon`, `dns/zone-create`, `backup/run`, `ml/recipe-run`, `adoption/import`, and Security methods such as `security/scan` and `security/rescan`.
+ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy`, `worker/cordon`, `dns/zone-create`, `backup/run`, `ml/recipe-run`, `adoption/import`, Security methods such as `security/scan` and `security/rescan`, and Soul Factory methods `soul-factory/provision` and `soul-factory/action`.
 
 Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`). The verified inner ContextVM event pubkey is the authorization subject after unwrap.
 
@@ -87,7 +87,7 @@ The Bahia service key also publishes an advisory NIP-65 kind `10002` relay list.
 
 NIP-34 repository announcement discovery uses `nostr.nip34_relays` when configured. Repository branch/state lookups then use the selected repository announcement's own `relays` tag values for scoped `30618` filters before falling back to global Bahia read relays. The sidecar policy accepts NIP-22 comments (`1111`) plus NIP-34 kinds `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618` as open interop data so deployments may advertise the sidecar as a NIP-34 relay without CLOSED rejections for repository collaboration events.
 
-SoulFactory uses direct Nostr events rather than REST lifecycle endpoints. The sidecar policy accepts SoulFactory kinds `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` as open interop data so `/souls/new`, lifecycle views, the Bahia SoulFactory reactor, and OpenClaw runtime sidecars can publish, read, and correlate templates, drafts, souls, provisioning/action requests, progress, runtime capabilities, runtime-control requests, and terminal results without relay CLOSED rejections. These kinds are not Bahia legacy control-plane kinds and are not migration inputs.
+SoulFactory uses Nostr rather than REST lifecycle endpoints. New mutation clients use ContextVM `soul-factory/provision` and `soul-factory/action`; Bahia preserves the original `25910` event id while adapting accepted requests into the existing event-driven reactor. The sidecar policy continues to accept SoulFactory kinds `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` as staged lifecycle interop so `/souls/new`, lifecycle views, the reactor, and OpenClaw runtime sidecars can correlate templates, drafts, souls, progress, runtime capabilities, runtime-control requests, and terminal results without relay CLOSED rejections. The ContextVM response is not completion; durable `30900` state and `4903` audit projection remain the migration target.
 
 NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured, and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
 
@@ -180,4 +180,3 @@ Clients and agents should:
 6. Treat ContextVM responses as acknowledgments, not durable long-running completion.
 7. Avoid REST polling and legacy-kind subscriptions for runtime truth, including legacy SBOM kind `30079`.
 8. Treat desired-state metadata as optional and sanitized; never expect public relay events to expose secret plaintext, generated Compose env-file contents, or raw Docker endpoint credentials.
-
