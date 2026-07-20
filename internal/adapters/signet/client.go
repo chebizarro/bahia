@@ -678,7 +678,11 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	responses := c.pool.SubscribeMany(responseCtx, relayURLs, nostr.Filter{
 		Kinds: []nostr.Kind{signetKindGiftWrap},
 		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
-		Since: nostr.Now() - 60,
+		// NIP-59 deliberately backdates gift-wrap timestamps (go-nostr uses a
+		// window of up to ten hours). Correlation by the private JSON-RPC id
+		// below makes a wider history window safe and prevents a freshly
+		// published Signet response from being filtered out as "old".
+		Since: nostr.Now() - 12*60*60,
 	}, nostr.SubscriptionOptions{Label: "signet-mgmt"})
 
 	publishCtx, cancelPublish := context.WithTimeout(ctx, 10*time.Second)
