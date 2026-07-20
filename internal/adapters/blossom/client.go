@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -49,11 +50,35 @@ var ErrAuthHeader = errors.New("blossom auth header preparation failed")
 
 // BlobDescriptor describes an uploaded blob.
 type BlobDescriptor struct {
-	URL      string    `json:"url"`
-	SHA256   string    `json:"sha256"`
-	Size     int64     `json:"size"`
-	Type     string    `json:"type"`
-	Uploaded time.Time `json:"uploaded"`
+	URL      string           `json:"url"`
+	SHA256   string           `json:"sha256"`
+	Size     int64            `json:"size"`
+	Type     string           `json:"type"`
+	Uploaded BlossomTimestamp `json:"uploaded"`
+}
+
+// BlossomTimestamp accepts both the BUD-02 Unix timestamp used by Blossom
+// servers and the RFC 3339 form emitted by older Bahia test/fallback paths.
+type BlossomTimestamp struct{ time.Time }
+
+func (t *BlossomTimestamp) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		t.Time = time.Time{}
+		return nil
+	}
+	if len(data) > 0 && data[0] == '"' {
+		return json.Unmarshal(data, &t.Time)
+	}
+	var seconds int64
+	if err := json.Unmarshal(data, &seconds); err != nil {
+		return err
+	}
+	t.Time = time.Unix(seconds, 0).UTC()
+	return nil
+}
+
+func (t BlossomTimestamp) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.Time)
 }
 
 // NewClient creates a new Blossom client.

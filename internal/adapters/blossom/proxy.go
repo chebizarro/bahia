@@ -76,7 +76,7 @@ func (c *Client) UploadFile(ctx context.Context, path, contentType, expectedHash
 			SHA256:   hash,
 			Size:     size,
 			Type:     contentType,
-			Uploaded: time.Now(),
+			Uploaded: BlossomTimestamp{Time: time.Now()},
 		}, nil
 	}
 

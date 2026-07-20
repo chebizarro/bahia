@@ -131,7 +131,7 @@ func TestClient_Upload(t *testing.T) {
 			URL:      server.URL + "/" + hashStr,
 			SHA256:   hashStr,
 			Size:     int64(len(data)),
-			Uploaded: time.Now(),
+			Uploaded: BlossomTimestamp{Time: time.Now()},
 		})
 	}))
 	defer server.Close()
@@ -224,6 +224,16 @@ func TestClient_UploadRejectsMalformedOrUnconfirmedResponse(t *testing.T) {
 				t.Fatalf("Upload() descriptor = %#v, want nil", descriptor)
 			}
 		})
+	}
+}
+
+func TestBlossomTimestampAcceptsUnixSeconds(t *testing.T) {
+	var timestamp BlossomTimestamp
+	if err := json.Unmarshal([]byte(`1784513500`), &timestamp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := timestamp.Unix(); got != 1784513500 {
+		t.Fatalf("Unix() = %d, want 1784513500", got)
 	}
 }
 
