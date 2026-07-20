@@ -13,6 +13,7 @@
   import {
     emptyStateMessage,
     filterSouls,
+    unresolvedDrafts,
     SOUL_STATUS_FILTERS
   } from './page-model.js';
   import {
@@ -30,6 +31,7 @@
   let search = $state('');
 
   let filteredSouls = $derived(filterSouls(souls, filter, search));
+  let savedDrafts = $derived(unresolvedDrafts(drafts, souls));
   
   $effect(() => {
     subscribeToSoulFactoryUpdates();
@@ -66,14 +68,14 @@
   </div>
 
   <!-- Saved drafts -->
-  {#if drafts.length > 0}
+  {#if savedDrafts.length > 0}
     <section class="drafts-section">
       <div class="drafts-header">
         <h2><SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Saved drafts</h2>
         <p>Signed 31952 drafts you can resume and provision later.</p>
       </div>
       <div class="drafts-list">
-        {#each drafts as draft (draft.agentId || draft.id)}
+        {#each savedDrafts as draft (draft.agentId || draft.id)}
           <div class="draft-row">
             <div class="draft-info">
               <strong>{draft.name || draft.agentId || 'Untitled draft'}</strong>

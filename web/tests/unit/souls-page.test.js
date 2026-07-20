@@ -3,7 +3,9 @@ import {
   SOUL_STATUS_FILTERS,
   capabilityLabel,
   capabilityRef,
+  capabilityMatchesRef,
   compatibleCapabilities,
+  unresolvedDrafts,
   emptyStateMessage,
   filterSouls,
   formatKindList,
@@ -70,5 +72,12 @@ describe('souls page model', () => {
     expect(compatibleCapabilities(capabilities, 'soulfactory.provision')).toEqual([capabilities[0]]);
     expect(capabilityRef(capabilities[0])).toBe('30317:pk:openclaw');
     expect(capabilityLabel(capabilities[0])).toContain('openclaw');
+    expect(capabilityMatchesRef(capabilities[0], 'cap-1')).toBe(true);
+    expect(capabilityMatchesRef(capabilities[0], '30317:pk:openclaw')).toBe(true);
+  });
+
+  it('keeps only drafts that do not have a provisioned soul', () => {
+    const drafts = [{ agentId: 'scout' }, { agentId: 'pending' }];
+    expect(unresolvedDrafts(drafts, [{ agentId: 'scout', status: 'active' }])).toEqual([{ agentId: 'pending' }]);
   });
 });

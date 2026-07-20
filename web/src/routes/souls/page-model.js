@@ -90,6 +90,17 @@ export function capabilityRef(capability) {
   return capability?.coordinate || capability?.id || '';
 }
 
+export function capabilityMatchesRef(capability, ref = '') {
+  const candidate = String(ref || '').trim();
+  if (!capability || !candidate) return false;
+  return candidate === capability.coordinate || candidate === capability.id;
+}
+
+export function unresolvedDrafts(drafts = [], souls = []) {
+  const provisionedAgentIds = new Set((souls || []).map((soul) => soul?.agentId).filter(Boolean));
+  return (drafts || []).filter((draft) => !provisionedAgentIds.has(draft?.agentId));
+}
+
 export function capabilityLabel(capability) {
   if (!capability) return 'Unavailable runtime';
   const runtime = capability.runtime || 'unknown';

@@ -30,6 +30,7 @@
   import {
     capabilityLabel,
     capabilityRef,
+    capabilityMatchesRef,
     compatibleCapabilities,
     formatKindList,
     formatToolGrantList,
@@ -109,7 +110,7 @@
   let authError = $derived(authState.error);
   let userPubkey = $derived(authState.pubkey);
   let runtimeChoices = $derived(compatibleCapabilities(runtimeCapabilities, SOUL_RUNTIME_METHODS.PROVISION));
-  let selectedCapability = $derived(runtimeChoices.find((capability) => capabilityRef(capability) === selectedCapabilityRef) || null);
+  let selectedCapability = $derived(runtimeChoices.find((capability) => capabilityMatchesRef(capability, selectedCapabilityRef)) || null);
   let showAdvanced = $derived(disclosureMode === 'advanced');
   let activeTabIndex = $derived(customizationTabs.findIndex((tab) => tab.id === activeTab));
   let previewDraftContent = $derived(buildDraftContent());
