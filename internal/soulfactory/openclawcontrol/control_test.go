@@ -222,9 +222,108 @@ func TestCommandFailurePersistsFailedAuditState(t *testing.T) {
 	}
 }
 
+func TestUpdateReplacesResolvedSpecAndRefreshesIdentity(t *testing.T) {
+	root := t.TempDir()
+	runner := &recordingRunner{}
+	executor := newTestExecutor(t, root, false, runner)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-update", "sha256:old")), "running")
+	runner.calls = nil
+
+	params := map[string]interface{}{
+		"previous_spec_hash": "sha256:old",
+		"new_spec_hash":      "sha256:new",
+		"update_mode":        "replace",
+		"resolved_spec": map[string]interface{}{
+			"identity":     map[string]interface{}{"name": "Alice Updated", "purpose": "Operate updated audited tasks"},
+			"permissions":  map[string]interface{}{"allowed_kinds": []interface{}{1.0, 30317.0}},
+			"relay_policy": map[string]interface{}{"control": []interface{}{"wss://relay.example"}},
+			"workspace":    map[string]interface{}{"mode": "generated"},
+			"assets":       map[string]interface{}{},
+		},
+	}
+	update := testInvocation(soulfactory.RuntimeMethodUpdate, "agent-update", "sha256:new", params)
+	outcome := executor.Execute(t.Context(), update)
+	assertSuccess(t, outcome, "running")
+	state := readStateForTest(t, root, "agent-update")
+	if state.SpecHash != "sha256:new" || state.LastMethod != soulfactory.RuntimeMethodUpdate {
+		t.Fatalf("updated state = %+v", state)
+	}
+	identity, err := os.ReadFile(filepath.Join(root, "agents", "agent-update", "workspace", "IDENTITY.md"))
+	if err != nil || !strings.Contains(string(identity), "Alice Updated") {
+		t.Fatalf("updated identity = %q, err=%v", identity, err)
+	}
+	if len(runner.calls) != 1 || !containsArgSequence(runner.calls[0].args, "agents", "set-identity") {
+		t.Fatalf("update command calls = %+v", runner.calls)
+	}
+	replay := executor.Execute(t.Context(), update)
+	assertSuccess(t, replay, "running")
+	if len(runner.calls) != 1 {
+		t.Fatalf("replayed update executed another command: %+v", runner.calls)
+	}
+}
+
+func TestUpdateRejectsStalePreviousSpecHash(t *testing.T) {
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, true, nil)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-update", "sha256:current")), "running")
+	outcome := executor.Execute(t.Context(), testInvocation(soulfactory.RuntimeMethodUpdate, "agent-update", "sha256:new", map[string]interface{}{
+		"previous_spec_hash": "sha256:stale",
+		"new_spec_hash":      "sha256:new",
+		"update_mode":        "replace",
+		"resolved_spec":      map[string]interface{}{"identity": map[string]interface{}{"name": "Updated"}},
+	}))
+	if outcome.Status != StatusRejected || outcome.Error == nil || outcome.Error.Code != ErrorSpecHashMismatch {
+		t.Fatalf("stale update outcome = %+v", outcome)
+	}
+}
+
+func TestUpdateMergeAppliesPatchToCanonicalPriorSpec(t *testing.T) {
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, true, nil)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-merge", "sha256:old")), "running")
+
+	outcome := executor.Execute(t.Context(), testInvocation(soulfactory.RuntimeMethodUpdate, "agent-merge", "sha256:new", map[string]interface{}{
+		"previous_spec_hash": "sha256:old",
+		"new_spec_hash":      "sha256:new",
+		"update_mode":        "merge",
+		"patch": map[string]interface{}{
+			"identity": map[string]interface{}{"name": "Merged Alice"},
+		},
+	}))
+	assertSuccess(t, outcome, "running")
+	identity, err := os.ReadFile(filepath.Join(root, "agents", "agent-merge", "workspace", "IDENTITY.md"))
+	if err != nil || !strings.Contains(string(identity), "Merged Alice") || !strings.Contains(string(identity), "Operate audited OpenClaw tasks") {
+		t.Fatalf("merged identity = %q, err=%v", identity, err)
+	}
+	provenance, ok, err := readJSONFile[map[string]interface{}](filepath.Join(root, "agents", "agent-merge", "workspace", ".openclaw", "soulfactory.json"))
+	if err != nil || !ok {
+		t.Fatalf("read provenance: ok=%v err=%v", ok, err)
+	}
+	params, _ := provenance["params"].(map[string]interface{})
+	mergedIdentity, _ := params["identity"].(map[string]interface{})
+	if mergedIdentity["name"] != "Merged Alice" || mergedIdentity["purpose"] != "Operate audited OpenClaw tasks" {
+		t.Fatalf("canonical merged params = %+v", params)
+	}
+}
+
+func TestUpdateRejectsInvalidMode(t *testing.T) {
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, true, nil)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-update", "sha256:old")), "running")
+	outcome := executor.Execute(t.Context(), testInvocation(soulfactory.RuntimeMethodUpdate, "agent-update", "sha256:new", map[string]interface{}{
+		"previous_spec_hash": "sha256:old",
+		"new_spec_hash":      "sha256:new",
+		"update_mode":        "restart",
+		"resolved_spec":      map[string]interface{}{"identity": map[string]interface{}{"name": "Updated"}},
+	}))
+	if outcome.Status != StatusRejected || outcome.Error == nil || outcome.Error.Code != ErrorMissingRequired {
+		t.Fatalf("invalid update mode outcome = %+v", outcome)
+	}
+}
+
 func TestUnsupportedMethodRejected(t *testing.T) {
 	executor := newTestExecutor(t, t.TempDir(), true, nil)
-	outcome := executor.Execute(t.Context(), testInvocation(soulfactory.RuntimeMethodUpdate, "agent-alice", "sha256:spec", map[string]interface{}{}))
+	outcome := executor.Execute(t.Context(), testInvocation("soulfactory.unsupported", "agent-alice", "sha256:spec", map[string]interface{}{}))
 	if outcome.Status != StatusRejected || outcome.Error == nil || outcome.Error.Code != ErrorUnsupportedMethod {
 		t.Fatalf("unsupported method outcome = %+v", outcome)
 	}

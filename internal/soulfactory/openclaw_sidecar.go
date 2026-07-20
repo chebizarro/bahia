@@ -47,6 +47,7 @@ var openClawSoulFactoryMethods = []string{
 
 var openClawCommandDriverDefaultMethods = []string{
 	RuntimeMethodProvision,
+	RuntimeMethodUpdate,
 	RuntimeMethodPersonaUpdate,
 	RuntimeMethodRevoke,
 }

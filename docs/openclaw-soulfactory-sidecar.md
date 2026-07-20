@@ -54,7 +54,7 @@ Requests for other SoulFactory runtime-control methods are rejected with `unsupp
 }
 ```
 
-The packaged `openclaw-soulfactory-control` wrapper currently implements `soulfactory.provision`, `soulfactory.persona.update`, and `soulfactory.revoke`. It can run in dry-run mode for verification, or target an existing containerized OpenClaw gateway with `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and `OPENCLAW_SOULFACTORY_CONTAINER=<container>`. It does not expose or depend on a REST SoulFactory lifecycle API and does not launch a persistent bare-metal OpenClaw runtime.
+The packaged `openclaw-soulfactory-control` wrapper currently implements `soulfactory.provision`, `soulfactory.update`, `soulfactory.persona.update`, and `soulfactory.revoke`. It can run in dry-run mode for verification, or target an existing containerized OpenClaw gateway with `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and `OPENCLAW_SOULFACTORY_CONTAINER=<container>`. It does not expose or depend on a REST SoulFactory lifecycle API and does not launch a persistent bare-metal OpenClaw runtime.
 
 The sidecar advertises and accepts the methods returned by its driver. With `OpenClawCommandDriver`, operators may override the advertised/accepted method list with `-methods` or `OPENCLAW_SOULFACTORY_METHODS`; only configure methods that the command really implements. The command also receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH` environment variables for routing convenience.
 
@@ -70,7 +70,7 @@ openclaw-soulfactory-sidecar \
   -control-relays wss://relay.example \
   -idempotency-store ~/.cache/bahia/openclaw-soulfactory-sidecar-idempotency.json \
   -command /usr/local/bin/openclaw-soulfactory-control \
-  -methods soulfactory.provision,soulfactory.persona.update,soulfactory.revoke
+  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
 ```
 
 `openclaw-soulfactory-sidecar` and `openclaw-soulfactory-control` are built by `make build`, by the focused `make build-openclaw-soulfactory-sidecar` and `make build-openclaw-soulfactory-control` targets, and into `/usr/local/bin/` in the Bahia Docker image.

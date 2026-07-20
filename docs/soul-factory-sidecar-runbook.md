@@ -33,7 +33,7 @@ Use existing-container Docker mode and confirm the `openclaw` CLI is present. If
 Required control methods:
 
 ```text
-soulfactory.provision,soulfactory.persona.update,soulfactory.revoke
+soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
 ```
 
 ## 4. Start the sidecar on the fleet relay
@@ -43,7 +43,7 @@ Run the sidecar with the reactor Signet/controller pubkey as the only trusted co
 ```bash
 /opt/bahia/soulfactory/openclaw-soulfactory-sidecar \
   -command /opt/bahia/soulfactory/openclaw-soulfactory-control \
-  -methods soulfactory.provision,soulfactory.persona.update,soulfactory.revoke \
+  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke \
   -trusted-controller-pubkeys '<reactor-signet-pubkey>' \
   -relays wss://relay.sharegap.net \
   -control-relays wss://relay.sharegap.net

@@ -173,6 +173,8 @@ func (e *Executor) Execute(ctx context.Context, invocation soulfactory.OpenClawC
 	switch invocation.Method {
 	case soulfactory.RuntimeMethodProvision:
 		return e.provision(ctx, invocation)
+	case soulfactory.RuntimeMethodUpdate:
+		return e.update(ctx, invocation)
 	case soulfactory.RuntimeMethodPersonaUpdate:
 		return e.personaUpdate(invocation)
 	case soulfactory.RuntimeMethodRevoke:
@@ -180,6 +182,151 @@ func (e *Executor) Execute(ctx context.Context, invocation soulfactory.OpenClawC
 	default:
 		return rejected(ErrorUnsupportedMethod, "SoulFactory method is not supported by openclaw-soulfactory-control", false, map[string]interface{}{"method": invocation.Method})
 	}
+}
+
+func (e *Executor) update(ctx context.Context, invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {
+	paths := e.paths(invocation.AgentID)
+	state, ok, err := readJSONFile[State](paths.State)
+	if err != nil {
+		return failed(ErrorExecutionFailed, "read OpenClaw agent state: "+err.Error(), true, nil)
+	}
+	if !ok || state.State == "revoked" {
+		return rejected(ErrorMissingRequired, "update requires existing non-revoked OpenClaw agent state", false, nil)
+	}
+	if replay, replayed := e.replayOutcome(invocation, paths, state); replayed {
+		return replay
+	}
+
+	previousSpecHash, _ := invocation.Params["previous_spec_hash"].(string)
+	newSpecHash, _ := invocation.Params["new_spec_hash"].(string)
+	previousSpecHash = strings.TrimSpace(previousSpecHash)
+	newSpecHash = strings.TrimSpace(newSpecHash)
+	if previousSpecHash == "" || newSpecHash == "" {
+		return rejected(ErrorMissingRequired, "update requires previous_spec_hash and new_spec_hash", false, nil)
+	}
+	if previousSpecHash != state.SpecHash {
+		return rejected(ErrorSpecHashMismatch, "update previous_spec_hash does not match local state", false, map[string]interface{}{
+			"existing_spec_hash": state.SpecHash,
+			"previous_spec_hash": previousSpecHash,
+		})
+	}
+	if strings.TrimSpace(invocation.SpecHash) != newSpecHash {
+		return rejected(ErrorSpecHashMismatch, "update new_spec_hash does not match the requested soul spec_hash", false, map[string]interface{}{
+			"requested_spec_hash": invocation.SpecHash,
+			"new_spec_hash":       newSpecHash,
+		})
+	}
+	updateMode, _ := invocation.Params["update_mode"].(string)
+	updateMode = strings.TrimSpace(updateMode)
+	if updateMode != "merge" && updateMode != "replace" {
+		return rejected(ErrorMissingRequired, "update_mode must be merge or replace", false, nil)
+	}
+	provenance, _, err := readJSONFile[map[string]interface{}](paths.Provenance)
+	if err != nil {
+		return failed(ErrorExecutionFailed, "read provenance: "+err.Error(), true, nil)
+	}
+	if provenance == nil {
+		provenance = map[string]interface{}{}
+	}
+	resolvedSpec, updateError := resolveUpdateSpec(invocation.Params, updateMode, provenance)
+	if updateError != nil {
+		return updateError
+	}
+	identity, ok := resolvedSpec["identity"].(map[string]interface{})
+	if !ok {
+		return rejected(ErrorMissingRequired, "OpenClaw update resolved_spec requires identity", false, nil)
+	}
+	persona, hasPersona := resolvedSpec["persona"]
+	updatedInvocation := invocation
+	updatedInvocation.SpecHash = newSpecHash
+	if err := atomicWriteFile(paths.IdentityFile, []byte(renderIdentity(updatedInvocation, identity)), 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write updated IDENTITY.md: "+err.Error(), true, nil)
+	}
+	if err := atomicWriteFile(paths.SoulFile, []byte(renderSoul(updatedInvocation, identity, persona, hasPersona)), 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write updated SOUL.md: "+err.Error(), true, nil)
+	}
+	if err := atomicWriteFile(paths.AgentsFile, []byte(renderAgents(updatedInvocation, "")), 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write updated AGENTS.md: "+err.Error(), true, nil)
+	}
+	provenance["spec_hash"] = newSpecHash
+	provenance["params"] = resolvedSpec
+	provenance["last_update"] = map[string]interface{}{
+		"method":             invocation.Method,
+		"previous_spec_hash": previousSpecHash,
+		"new_spec_hash":      newSpecHash,
+		"update_mode":        updateMode,
+		"resolved_spec":      resolvedSpec,
+	}
+	if err := atomicWriteJSON(paths.Provenance, provenance, 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write provenance: "+err.Error(), true, nil)
+	}
+	if !e.config.DryRun {
+		if outcome := e.runOpenClaw(ctx, e.containerArgs("agents", "set-identity", "--agent", invocation.AgentID, "--identity-file", paths.IdentityFile, "--json")...); outcome != nil {
+			state.State = "failed"
+			state.LastReason = errorMessage(outcome)
+			state.UpdatedAt = e.config.Now().Unix()
+			state.LastMethod = invocation.Method
+			return e.persistFailure(invocation, outcome, state, paths)
+		}
+	}
+	state.SpecHash = newSpecHash
+	state.State = "running"
+	state.UpdatedAt = e.config.Now().Unix()
+	state.LastMethod = invocation.Method
+	state.LastReason = ""
+	outcome := success(e.resultFromState(state, state.UpdatedAt))
+	if err := e.persistInvocationOutcome(invocation, outcome, state, paths); err != nil {
+		return failed(ErrorExecutionFailed, err.Error(), true, nil)
+	}
+	return outcome
+}
+
+func resolveUpdateSpec(params map[string]interface{}, updateMode string, provenance map[string]interface{}) (map[string]interface{}, *soulfactory.OpenClawControlOutcome) {
+	if updateMode == "replace" {
+		resolvedSpec, ok := params["resolved_spec"].(map[string]interface{})
+		if !ok {
+			return nil, rejected(ErrorMissingRequired, "replace update requires resolved_spec", false, nil)
+		}
+		return cloneObject(resolvedSpec), nil
+	}
+	patch, ok := params["patch"].(map[string]interface{})
+	if !ok {
+		return nil, rejected(ErrorMissingRequired, "merge update requires patch", false, nil)
+	}
+	base, ok := provenance["params"].(map[string]interface{})
+	if !ok {
+		return nil, rejected(ErrorMissingRequired, "merge update requires canonical prior resolved spec", false, nil)
+	}
+	return mergeObjects(cloneObject(base), patch), nil
+}
+
+func cloneObject(value map[string]interface{}) map[string]interface{} {
+	cloned := make(map[string]interface{}, len(value))
+	for key, item := range value {
+		if child, ok := item.(map[string]interface{}); ok {
+			cloned[key] = cloneObject(child)
+			continue
+		}
+		cloned[key] = item
+	}
+	return cloned
+}
+
+func mergeObjects(base, patch map[string]interface{}) map[string]interface{} {
+	for key, item := range patch {
+		patchChild, patchIsObject := item.(map[string]interface{})
+		baseChild, baseIsObject := base[key].(map[string]interface{})
+		if patchIsObject && baseIsObject {
+			base[key] = mergeObjects(cloneObject(baseChild), patchChild)
+			continue
+		}
+		if patchIsObject {
+			base[key] = cloneObject(patchChild)
+			continue
+		}
+		base[key] = item
+	}
+	return base
 }
 
 func resolveConfig(config Config) (Config, error) {

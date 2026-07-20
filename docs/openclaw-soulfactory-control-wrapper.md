@@ -10,11 +10,12 @@ The packaged wrapper currently supports exactly these runtime-control methods:
 
 ```text
 soulfactory.provision
+soulfactory.update
 soulfactory.persona.update
 soulfactory.revoke
 ```
 
-Any other method, including `soulfactory.update`, `soulfactory.suspend`, `soulfactory.resume`, and `soulfactory.redeploy`, is rejected with a structured `unsupported_method` outcome by the wrapper unless a different command implementation is explicitly configured. The sidecar command driver also defaults to the same conservative method set, so unsupported methods are not advertised by default.
+Any other method, including `soulfactory.suspend`, `soulfactory.resume`, and `soulfactory.redeploy`, is rejected with a structured `unsupported_method` outcome by the wrapper unless a different command implementation is explicitly configured. The sidecar command driver also defaults to the same conservative method set, so unsupported methods are not advertised by default. `soulfactory.update` applies optimistic spec-hash checks and accepts either `update_mode=replace` with `resolved_spec`, or `update_mode=merge` with a patch over the persisted canonical prior spec.
 
 The wrapper supports two execution modes:
 
@@ -26,6 +27,7 @@ The wrapper supports two execution modes:
 ## Goals
 
 - Provision or bind an OpenClaw isolated agent from a SoulFactory runtime control request.
+- Apply a complete or merge-patched desired spec to an existing managed agent.
 - Persist enough local state for deterministic idempotent replay and safe revoke decisions.
 - Update generated persona/system prompt files for an existing OpenClaw soul.
 - Revoke an existing OpenClaw soul by unbinding routes and optionally deleting the workspace.
@@ -135,7 +137,7 @@ The sidecar's command-driver method advertisement can be configured with `-metho
 ```bash
 openclaw-soulfactory-sidecar \
   -command /usr/local/bin/openclaw-soulfactory-control \
-  -methods soulfactory.provision,soulfactory.persona.update,soulfactory.revoke
+  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
 ```
 
 ## Local state layout
