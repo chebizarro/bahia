@@ -138,16 +138,35 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	}
 
 	stepStart := time.Now()
-	output, err := p.reactor.generator.Generate(ctx, domain.SoulGeneratorInput{
-		Template: resolved.Template,
-		AgentID:  resolved.AgentID,
-		Name:     resolved.Name,
-		Brief:    resolved.Brief,
-		Tier:     resolved.Tier,
-	})
-	if err != nil {
-		p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-		return nil, fmt.Errorf("generate soul: %w", err)
+	var output *domain.SoulGeneratorOutput
+	if resolved.Draft != nil {
+		// A signed draft is the authoritative, reproducible soul snapshot. Do
+		// not send it back through an LLM: that can alter approved content and
+		// makes deterministic provisioning depend on model availability.
+		draft := resolved.Draft.Content.MigrateToLatest()
+		avatarPrompt := ""
+		if draft.Avatar.Generation != nil {
+			avatarPrompt = draft.Avatar.Generation.Prompt
+		}
+		output = &domain.SoulGeneratorOutput{
+			SoulMD:       draft.SoulMD,
+			IdentityMD:   draft.IdentityMD,
+			AllowedKinds: append([]int{}, draft.Permissions.AllowedKinds...),
+			ToolGrants:   append([]domain.ToolGrant{}, draft.Permissions.ToolGrants...),
+			AvatarPrompt: avatarPrompt,
+		}
+	} else {
+		output, err = p.reactor.generator.Generate(ctx, domain.SoulGeneratorInput{
+			Template: resolved.Template,
+			AgentID:  resolved.AgentID,
+			Name:     resolved.Name,
+			Brief:    resolved.Brief,
+			Tier:     resolved.Tier,
+		})
+		if err != nil {
+			p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("generate soul: %w", err)
+		}
 	}
 
 	soul.SoulMD = output.SoulMD

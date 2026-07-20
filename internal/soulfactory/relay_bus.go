@@ -250,7 +250,22 @@ func (b *SoulFactoryRelayBus) Query(ctx context.Context, filters []nostr.Filter)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-sub.EndOfStoredEvents:
-			return out, nil
+			// Event delivery and EOSE use separate channels. The relay worker
+			// dispatches historical events before marking EOSE, but both channels
+			// can be ready when this query wakes up. Drain the already-dispatched
+			// events before completing the query so a buffered final event is not
+			// lost to select's random ready-case choice.
+			for {
+				select {
+				case ev, ok := <-sub.Events:
+					if !ok {
+						return out, nil
+					}
+					out = append(out, ev)
+				default:
+					return out, nil
+				}
+			}
 		case ev, ok := <-sub.Events:
 			if !ok {
 				return out, nil
@@ -332,6 +347,7 @@ func (b *SoulFactoryRelayBus) consumeRelaySubscription(ctx context.Context, endp
 		select {
 		case _, ok := <-eose:
 			if ok || eose != nil {
+				drainRelayEvents(events, dispatch)
 				markEOSE()
 				eosed = true
 			}
@@ -351,6 +367,7 @@ func (b *SoulFactoryRelayBus) consumeRelaySubscription(ctx context.Context, endp
 			return b.handleRelayClosed(ctx, endpoint, reason, eosed)
 		case _, ok := <-eose:
 			if ok || eose != nil {
+				drainRelayEvents(events, dispatch)
 				markEOSE()
 				eosed = true
 			}
@@ -370,6 +387,24 @@ func (b *SoulFactoryRelayBus) consumeRelaySubscription(ctx context.Context, endp
 		}
 	}
 	return true, false, eosed
+}
+
+// drainRelayEvents preserves the NIP-01 ordering guarantee when an endpoint
+// exposes events and EOSE on separate channels. Both may be ready at once even
+// though the endpoint observed the events first. Dispatch everything already
+// queued before publishing merged EOSE to query callers.
+func drainRelayEvents(events <-chan *nostr.Event, dispatch func(*nostr.Event)) {
+	for events != nil {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			dispatch(ev)
+		default:
+			return
+		}
+	}
 }
 
 func (b *SoulFactoryRelayBus) handleRelayClosed(ctx context.Context, endpoint relayBusEndpoint, reason string, eosed bool) (reissue bool, authReissue bool, eoseSeen bool) {
@@ -572,23 +607,50 @@ func newGoNostrRelaySubscription(ctx context.Context, cancel context.CancelFunc,
 		sub := sub
 		go func() {
 			defer wg.Done()
-			for event := range sub.Events {
-				event := event
+			events := sub.Events
+			eose := sub.EndOfStoredEvents
+			for events != nil {
 				select {
-				case s.events <- &event:
+				case event, ok := <-events:
+					if !ok {
+						return
+					}
+					select {
+					case s.events <- &event:
+					case <-ctx.Done():
+						return
+					}
+				case <-eose:
+					// The upstream library exposes events and EOSE separately.
+					// Drain events already queued upstream before forwarding EOSE,
+					// then keep this same goroutine for realtime delivery.
+					for {
+						select {
+						case event, ok := <-events:
+							if !ok {
+								events = nil
+								break
+							}
+							select {
+							case s.events <- &event:
+							case <-ctx.Done():
+								return
+							}
+						default:
+							eose = nil
+						}
+						if eose == nil || events == nil {
+							break
+						}
+					}
+					select {
+					case eoseObserved <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
 				case <-ctx.Done():
 					return
 				}
-			}
-		}()
-		go func() {
-			select {
-			case <-sub.EndOfStoredEvents:
-				select {
-				case eoseObserved <- struct{}{}:
-				case <-ctx.Done():
-				}
-			case <-ctx.Done():
 			}
 		}()
 		go func() {

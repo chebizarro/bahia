@@ -671,6 +671,16 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		return fmt.Errorf("gift-wrap Signet management request: %w", err)
 	}
 
+	// Subscribe before publishing. Signet can answer immediately, and creating
+	// the response subscription afterwards loses that reply on fast relays.
+	responseCtx, cancelResponse := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelResponse()
+	responses := c.pool.SubscribeMany(responseCtx, relayURLs, nostr.Filter{
+		Kinds: []nostr.Kind{signetKindGiftWrap},
+		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
+		Since: nostr.Now() - 60,
+	}, nostr.SubscriptionOptions{Label: "signet-mgmt"})
+
 	publishCtx, cancelPublish := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelPublish()
 	published := 0
@@ -689,13 +699,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		return fmt.Errorf("publish Signet management intent: no relay accepted event")
 	}
 
-	responseCtx, cancelResponse := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelResponse()
-	for relayEvent := range c.pool.SubscribeMany(responseCtx, relayURLs, nostr.Filter{
-		Kinds: []nostr.Kind{signetKindGiftWrap},
-		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
-		Since: nostr.Now() - 60,
-	}, nostr.SubscriptionOptions{Label: "signet-mgmt"}) {
+	for relayEvent := range responses {
 		rumor, err := nip59.GiftUnwrap(relayEvent.Event, func(otherPubkey nostr.PubKey, ciphertext string) (string, error) {
 			conversationKey, err := nip44.GenerateConversationKey(otherPubkey, clientSK)
 			if err != nil {

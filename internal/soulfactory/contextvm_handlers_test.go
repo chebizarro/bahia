@@ -1,6 +1,7 @@
 package soulfactory
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -10,6 +11,20 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+func TestContextVMWorkflowContextOutlivesRequestCancellation(t *testing.T) {
+	type contextKey string
+	requestCtx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey("request"), "fp31"))
+	workflowCtx := contextVMWorkflowContext(requestCtx)
+	cancel()
+
+	if err := workflowCtx.Err(); err != nil {
+		t.Fatalf("workflow context inherited request cancellation: %v", err)
+	}
+	if got := workflowCtx.Value(contextKey("request")); got != "fp31" {
+		t.Fatalf("workflow context value = %v, want fp31", got)
+	}
+}
 
 func TestContextVMProvisioningAdapterPreservesCanonicalCorrelation(t *testing.T) {
 	request := contextVMTestRequest(t, ContextVMMethodProvision, `{"agent_id":"ravel","brief":"A careful fleet reviewer","tier":"standard"}`)

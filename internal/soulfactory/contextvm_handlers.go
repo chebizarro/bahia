@@ -39,7 +39,7 @@ func (a contextVMAdapter) provision(ctx context.Context, request controlplane.Co
 	if err != nil {
 		return nil, err
 	}
-	a.reactor.handleEvent(ctx, event)
+	a.reactor.handleEvent(contextVMWorkflowContext(ctx), event)
 	return contextVMAck(request, event), nil
 }
 
@@ -48,8 +48,19 @@ func (a contextVMAdapter) action(ctx context.Context, request controlplane.Conte
 	if err != nil {
 		return nil, err
 	}
-	a.reactor.handleEvent(ctx, event)
+	a.reactor.handleEvent(contextVMWorkflowContext(ctx), event)
 	return contextVMAck(request, event), nil
+}
+
+// ContextVM handlers acknowledge dispatch before the asynchronous Soul Factory
+// workflow completes. Preserve request-scoped values, but detach cancellation
+// and deadlines so returning the JSON-RPC acknowledgement cannot terminate the
+// provision/action workflow that handleEvent starts in a goroutine.
+func contextVMWorkflowContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }
 
 func contextVMProvisioningEvent(request controlplane.ContextVMRequest) (*nostr.Event, error) {

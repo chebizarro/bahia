@@ -204,6 +204,38 @@ func TestRelayBusEOSETransitionsToRealtimeWithoutClosingEvents(t *testing.T) {
 	}
 }
 
+func TestRelayBusQueryDrainsHistoricalEventBufferedBeforeEOSE(t *testing.T) {
+	signer := newFakeSigner(t)
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	result := make(chan []*nostr.Event, 1)
+	errs := make(chan error, 1)
+	go func() {
+		events, queryErr := bus.Query(t.Context(), []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(31952)}}})
+		result <- events
+		errs <- queryErr
+	}()
+	mustReceiveFilters(t, endpoint.subscribeCalls)
+
+	historical := signedRelayBusEvent(t, signer, 31952, "draft")
+	subscription.events <- historical
+	close(subscription.eose)
+
+	if queryErr := <-errs; queryErr != nil {
+		t.Fatalf("Query() error = %v", queryErr)
+	}
+	events := <-result
+	if len(events) != 1 || events[0].ID != historical.ID {
+		t.Fatalf("Query() events = %#v, want buffered historical event %s", events, historical.ID)
+	}
+}
+
 func TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *testing.T) {
 	signer := newFakeSigner(t)
 	healthy := newFakeRelayEndpoint("wss://healthy.example")

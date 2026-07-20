@@ -579,10 +579,12 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		TemplateRef: "31950:template-author:agent-template",
 		CreatedBy:   signer.pubkey,
 		Content: domain.SoulDraftContent{
-			Brief:    "Draft purpose",
-			SpecHash: "sha256:draft",
-			Identity: domain.SoulIdentitySpec{Name: "Draft Scout", Purpose: "Draft purpose", Tier: domain.SoulTierStandard},
-			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey", CapabilityRef: "draft-capability"},
+			Brief:      "Draft purpose",
+			SpecHash:   "sha256:draft",
+			SoulMD:     "# Draft Scout\n\nDeterministic approved soul.",
+			IdentityMD: "# Identity\n\nA careful draft-backed scout.",
+			Identity:   domain.SoulIdentitySpec{Name: "Draft Scout", Purpose: "Draft purpose", Tier: domain.SoulTierStandard},
+			Runtime:    domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey", CapabilityRef: "draft-capability"},
 			Permissions: domain.SoulPermissionSpec{
 				AllowedKinds:   []int{domain.KindSoulAction},
 				ToolGrants:     []domain.ToolGrant{{MCPServer: "draft-tool", Scopes: []string{"use"}}},
@@ -626,12 +628,8 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 	)
 	reactor.handleProvisioningRequest(t.Context(), request)
 
-	if len(generator.inputs) != 1 {
-		t.Fatalf("generator inputs = %d, want 1", len(generator.inputs))
-	}
-	input := generator.inputs[0]
-	if input.Template == nil || input.Template.Identifier != "agent-template" || input.Name != "Inline Scout" || input.Brief != "Inline purpose" || input.Tier != domain.SoulTierHeavy {
-		t.Fatalf("generator input not resolved from template+draft+inline: %+v", input)
+	if len(generator.inputs) != 0 {
+		t.Fatalf("generator inputs = %d, want 0 for authoritative draft", len(generator.inputs))
 	}
 	if len(runtime.requests) != 1 {
 		t.Fatalf("runtime requests = %d, want 1", len(runtime.requests))
@@ -649,6 +647,9 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		t.Fatalf("soul event count = %d, want exactly one final 31951", len(soulEvents))
 	}
 	soulEvent := soulEvents[0]
+	if soulEvent.Content != draft.Content.SoulMD {
+		t.Fatalf("final soul content = %q, want authoritative draft %q", soulEvent.Content, draft.Content.SoulMD)
+	}
 	for tagName, want := range map[string]string{
 		"name":            "Inline Scout",
 		"tier":            string(domain.SoulTierHeavy),

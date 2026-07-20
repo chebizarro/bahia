@@ -104,6 +104,7 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	require.NotNil(t, app.SoulFactory)
 	require.True(t, appHasRunner(app, "soulfactory"))
 	require.True(t, signer.connected)
+	require.NoError(t, signer.connectCtx.Err(), "SoulFactory signer connection must outlive startup")
 	require.Equal(t, domain.RuntimeTargetOpenClaw, adapterConfig.Target)
 	require.Equal(t, signer.pubkey, adapterConfig.ControllerPubkey)
 	require.Equal(t, []string{"wss://relay.example", "wss://private.example"}, adapterConfig.Relays)
@@ -316,10 +317,11 @@ func startupTestConfig(mode Mode) *config.Config {
 }
 
 type fakeSoulFactorySigner struct {
-	secret    string
-	pubkey    string
-	connected bool
-	closed    bool
+	secret     string
+	pubkey     string
+	connected  bool
+	closed     bool
+	connectCtx context.Context
 }
 
 func newFakeSoulFactorySigner(t *testing.T) *fakeSoulFactorySigner {
@@ -328,8 +330,9 @@ func newFakeSoulFactorySigner(t *testing.T) *fakeSoulFactorySigner {
 	return &fakeSoulFactorySigner{secret: secret.Hex(), pubkey: secret.Public().Hex()}
 }
 
-func (s *fakeSoulFactorySigner) Connect(context.Context) error {
+func (s *fakeSoulFactorySigner) Connect(ctx context.Context) error {
 	s.connected = true
+	s.connectCtx = ctx
 	return nil
 }
 

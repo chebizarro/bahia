@@ -61,6 +61,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		BunkerURI:       sf.SignetBunkerURI,
 		Relays:          allRelays,
 		ClientSecretKey: sf.SignetClientSecretKey,
+		ConnectTimeout:  sf.StartupTimeout,
 		RequireReal:     !cfg.DevMode,
 		AllowMock:       cfg.DevMode,
 	}, slogLogger)
@@ -70,7 +71,10 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 	closeSigner := func() error { return signer.Close() }
 	startupCtx, cancelStartup := context.WithTimeout(ctx, sf.StartupTimeout)
 	defer cancelStartup()
-	if err := signer.Connect(startupCtx); err != nil {
+	// The NIP-46 client retains its Connect context for the lifetime of its
+	// response subscription. Its own ConnectTimeout bounds the handshake; pass
+	// the application context here so the subscription survives startup.
+	if err := signer.Connect(ctx); err != nil {
 		_ = closeSigner()
 		return nil, fmt.Errorf("connecting SoulFactory Signet client: %w", err)
 	}
