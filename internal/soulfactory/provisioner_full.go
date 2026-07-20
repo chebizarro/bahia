@@ -379,7 +379,6 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 		"id":            soul.AgentID,
 		"npub":          soul.NostrNpub,
 		"pubkey":        soul.NostrPubkey,
-		"bunker_uri":    soul.BunkerURI,
 		"avatar_url":    soul.AvatarURL,
 		"qdrant":        soul.QdrantCollection,
 		"workspace":     soul.WorkspaceRepoURL,

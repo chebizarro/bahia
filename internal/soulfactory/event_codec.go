@@ -787,7 +787,9 @@ func BuildAgentSoulEvent(soul *domain.AgentSoul) *nostr.Event {
 		{tagNpub, soul.NostrNpub},
 	}
 	appendTag(&tags, tagNIP05, soul.NIP05)
-	appendTag(&tags, tagBunker, soul.BunkerURI)
+	// Bunker URIs contain one-time connection secrets. They belong only in
+	// the agent's private runtime handoff and must never enter a public Soul
+	// read-model event.
 	appendTag(&tags, tagAvatar, soul.AvatarURL)
 	appendTag(&tags, tagSoulBlob, soul.SoulBlobHash)
 	appendTag(&tags, tagQdrant, soul.QdrantCollection)
