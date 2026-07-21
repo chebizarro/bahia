@@ -65,6 +65,17 @@ const (
 	tagWorkspace          = "workspace"
 )
 
+func contextVMParamsOrContent(content []byte) []byte {
+	var envelope struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Params  json.RawMessage `json:"params"`
+	}
+	if json.Unmarshal(content, &envelope) == nil && envelope.JSONRPC == "2.0" && len(envelope.Params) > 0 {
+		return envelope.Params
+	}
+	return content
+}
+
 // ParseProvisioningRequestEvent extracts a domain provisioning request from a
 // kind:5950 event. It accepts both the legacy tag + {brief} shape and additive
 // draft/spec-hash fields introduced for runtime-aware provisioning.
@@ -107,6 +118,7 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 	}
 
 	if strings.TrimSpace(event.Content) != "" {
+		contentBytes := contextVMParamsOrContent([]byte(event.Content))
 		var content struct {
 			AgentID      string                 `json:"agent_id"`
 			Name         string                 `json:"name"`
@@ -118,7 +130,7 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 			Runtime      domain.SoulRuntimeSpec `json:"runtime"`
 			Brief        string                 `json:"brief"`
 		}
-		if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+		if err := json.Unmarshal(contentBytes, &content); err != nil {
 			return nil, fmt.Errorf("parse provisioning content: %w", err)
 		}
 		req.AgentID = firstNonEmpty(req.AgentID, content.AgentID)
@@ -193,6 +205,7 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 	}
 
 	if strings.TrimSpace(event.Content) != "" {
+		contentBytes := contextVMParamsOrContent([]byte(event.Content))
 		var content struct {
 			Brief            string                 `json:"brief"`
 			NewBrief         string                 `json:"new_brief"`
@@ -203,7 +216,7 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 			PreviousSpecHash string                 `json:"previous_spec_hash"`
 			Patch            map[string]interface{} `json:"patch"`
 		}
-		if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+		if err := json.Unmarshal(contentBytes, &content); err != nil {
 			return nil, fmt.Errorf("parse action content: %w", err)
 		}
 		action.NewBrief = firstNonEmpty(content.NewBrief, content.Brief, action.NewBrief)

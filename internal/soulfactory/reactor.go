@@ -155,76 +155,25 @@ func (r *Reactor) lifecycle() *LifecycleHandler {
 
 // Run starts the reactor and blocks until context is cancelled.
 func (r *Reactor) Run(ctx context.Context) error {
-	r.logger.Info("starting soul factory reactor",
-		"relays", r.config.Relays,
-		"additional_relays", r.config.AdditionalRelays,
-	)
-
-	// Subscribe to provisioning requests and actions
-	now := nostr.Now()
-	filters := []nostr.Filter{
-		{
-			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
-			Since: now,
-		},
-		{
-			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
-			Since: now,
-		},
-	}
-
-	bus := r.relayBus
-	if bus == nil {
-		allRelays := normalizeSoulRelays(append(append([]string{}, r.config.Relays...), r.config.AdditionalRelays...))
-		if len(allRelays) == 0 {
-			return fmt.Errorf("at least one Soul Factory relay is required")
-		}
-		var err error
-		bus, err = NewSoulFactoryRelayBus(allRelays, WithRelayBusSigner(r.signer), WithRelayBusLogger(r.logger))
-		if err != nil {
-			return err
-		}
-	}
-
-	sub, err := bus.SubscribeAllWithEOSE(ctx, filters)
-	if err != nil {
-		return err
-	}
-	defer sub.Close()
-	eose := sub.EndOfStoredEvents
-
-	for {
-		select {
-		case <-ctx.Done():
-			r.logger.Info("reactor shutting down")
-			return ctx.Err()
-
-		case <-eose:
-			r.logger.Info("soul factory request backfill complete; processing realtime events")
-			eose = nil
-
-		case ev, ok := <-sub.Events:
-			if !ok {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return ErrSoulFactoryUnavailable
-			}
-
-			r.handleEvent(ctx, ev)
-		}
-	}
+	r.logger.Info("starting soul factory canonical ContextVM worker")
+	<-ctx.Done()
+	r.logger.Info("reactor shutting down")
+	return ctx.Err()
 }
 
 // handleEvent dispatches events to the appropriate handler.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
-	switch event.Kind {
-	case nostr.Kind(domain.KindProvisioningRequest):
+	if event.Kind != nostr.Kind(domain.KindProvisioningRequest) {
+		r.logger.Warn("unexpected event kind", "kind", event.Kind)
+		return
+	}
+	switch tagValue(event.Tags, "method") {
+	case ContextVMMethodProvision:
 		go r.handleProvisioningRequest(ctx, event)
-	case nostr.Kind(domain.KindSoulAction):
+	case ContextVMMethodAction:
 		go r.handleSoulAction(ctx, event)
 	default:
-		r.logger.Warn("unexpected event kind", "kind", event.Kind)
+		r.logger.Warn("unexpected Soul Factory ContextVM method", "method", tagValue(event.Tags, "method"))
 	}
 }
 

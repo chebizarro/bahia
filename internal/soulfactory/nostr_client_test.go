@@ -67,7 +67,7 @@ func TestNostrClientPublishProvisionRequestMatchesBrowserEventShape(t *testing.T
 		tagName:          "Scout",
 		tagTier:          string(domain.SoulTierHeavy),
 		"method":         RuntimeMethodProvision,
-		tagRequestKind:   "5950",
+		tagRequestKind:   "25910",
 		tagTemplate:      "31950:template-author:scout",
 		tagDraft:         "31952:draft-author:scout",
 		tagDraftEvent:    "draft-event-id",
@@ -88,9 +88,18 @@ func TestNostrClientPublishProvisionRequestMatchesBrowserEventShape(t *testing.T
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		t.Fatalf("content JSON error = %v", err)
 	}
+	if got := content["jsonrpc"]; got != "2.0" {
+		t.Fatalf("jsonrpc = %v, want 2.0", got)
+	}
+	if got := content["method"]; got != ContextVMMethodProvision {
+		t.Fatalf("method = %v, want %s", got, ContextVMMethodProvision)
+	}
+	params, ok := content["params"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("params missing from ContextVM envelope: %s", event.Content)
+	}
 	for key, want := range map[string]string{
 		"schema":         "soulfactory-provisioning/v1",
-		"method":         RuntimeMethodProvision,
 		"agent_id":       "scout",
 		"name":           "Scout",
 		"tier":           string(domain.SoulTierHeavy),
@@ -100,11 +109,11 @@ func TestNostrClientPublishProvisionRequestMatchesBrowserEventShape(t *testing.T
 		"spec_hash":      "sha256:spec",
 		"brief":          "Map operator state",
 	} {
-		if got, _ := content[key].(string); got != want {
+		if got, _ := params[key].(string); got != want {
 			t.Fatalf("content[%s] = %q, want %q in %s", key, got, want, event.Content)
 		}
 	}
-	if _, ok := content["requested_at"].(float64); !ok {
+	if _, ok := params["requested_at"].(float64); !ok {
 		t.Fatalf("content requested_at missing or non-numeric: %s", event.Content)
 	}
 

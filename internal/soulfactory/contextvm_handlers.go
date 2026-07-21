@@ -39,7 +39,7 @@ func (a contextVMAdapter) provision(ctx context.Context, request controlplane.Co
 	if err != nil {
 		return nil, err
 	}
-	a.reactor.handleEvent(contextVMWorkflowContext(ctx), event)
+	go a.reactor.handleProvisioningRequest(contextVMWorkflowContext(ctx), event)
 	return contextVMAck(request, event), nil
 }
 
@@ -48,7 +48,7 @@ func (a contextVMAdapter) action(ctx context.Context, request controlplane.Conte
 	if err != nil {
 		return nil, err
 	}
-	a.reactor.handleEvent(contextVMWorkflowContext(ctx), event)
+	go a.reactor.handleSoulAction(contextVMWorkflowContext(ctx), event)
 	return contextVMAck(request, event), nil
 }
 

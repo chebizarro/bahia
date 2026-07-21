@@ -19,18 +19,17 @@ const (
 	KindSoulTemplate        = 31950
 	KindAgentSoul           = 31951
 	KindSoulDraft           = 31952
-	KindProvisioningRequest = 5950
-	KindProvisioningStatus  = 6950
-	KindProvisioningResult  = 7950
-	KindSoulAction          = 1950
+	KindProvisioningRequest = cascadia.CAS_INTENT
+	KindProvisioningStatus  = cascadia.NIP38_USER_STATUS
+	KindProvisioningResult  = cascadia.CAS_AUDIT
+	KindSoulAction          = cascadia.CAS_INTENT
 
 	// Runtime-facing SoulFactory control kinds (Swarmstr/Metiq-compatible aliases).
 	KindRuntimeCapability     = cascadia.CAS_AGENT_CAPABILITY
-	KindRuntimeControlRequest = 38384
-	KindRuntimeControlResult  = 38386
+	KindRuntimeControlRequest = cascadia.CAS_INTENT
+	KindRuntimeControlResult  = cascadia.CAS_AUDIT
 
-	// Legacy lifecycle result alias used by early callers. New lifecycle results use KindProvisioningResult.
-	KindSoulActionLegacyResult = KindSoulAction + 1
+	KindSoulActionLegacyResult = KindProvisioningResult
 )
 
 // SoulStatus represents the lifecycle state of an agent soul.

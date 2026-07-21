@@ -187,14 +187,14 @@ const (
 	NIP34RepositoryAnnouncement = 30617
 	NIP34RepositoryState        = 30618
 
-	SoulFactoryAction              = 1950
-	SoulFactoryActionLegacyResult  = 1951
-	SoulFactoryProvisioningRequest = 5950
-	SoulFactoryProvisioningStatus  = 6950
-	SoulFactoryProvisioningResult  = 7950
+	SoulFactoryAction              = cascadia.CAS_INTENT
+	SoulFactoryActionLegacyResult  = cascadia.CAS_AUDIT
+	SoulFactoryProvisioningRequest = cascadia.CAS_INTENT
+	SoulFactoryProvisioningStatus  = cascadia.NIP38_USER_STATUS
+	SoulFactoryProvisioningResult  = cascadia.CAS_AUDIT
 	SoulFactoryRuntimeCapability   = cascadia.CAS_AGENT_CAPABILITY
-	SoulFactoryRuntimeControl      = 38384
-	SoulFactoryRuntimeResult       = 38386
+	SoulFactoryRuntimeControl      = cascadia.CAS_INTENT
+	SoulFactoryRuntimeResult       = cascadia.CAS_AUDIT
 	SoulFactoryTemplate            = 31950
 	SoulFactoryAgentSoul           = 31951
 	SoulFactoryDraft               = 31952

@@ -56,9 +56,9 @@ type soulClientSigner interface {
 }
 
 type NostrClient struct {
-	relays              []string
-	signer              soulClientSigner
-	transport           SoulFactoryTransport
+	relays                []string
+	signer                soulClientSigner
+	transport             SoulFactoryTransport
 	expectedFactoryPubkey string // when set, reject results not signed by this pubkey
 }
 
@@ -247,9 +247,8 @@ func (c *NostrClient) PublishProvisionRequest(ctx context.Context, req domain.Pr
 	if capabilityRef != "" {
 		tags = append(tags, nostr.Tag{tagCapability, capabilityRef})
 	}
-	content, err := json.Marshal(map[string]interface{}{
+	params := map[string]interface{}{
 		"schema":         "soulfactory-provisioning/v1",
-		"method":         RuntimeMethodProvision,
 		"agent_id":       agentID,
 		"name":           name,
 		"tier":           string(tier),
@@ -259,6 +258,12 @@ func (c *NostrClient) PublishProvisionRequest(ctx context.Context, req domain.Pr
 		"spec_hash":      specHash,
 		"brief":          strings.TrimSpace(req.Brief),
 		"requested_at":   int64(now),
+	}
+	content, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      fmt.Sprintf("soul-provision:%s:%d", agentID, now),
+		"method":  ContextVMMethodProvision,
+		"params":  params,
 	})
 	if err != nil {
 		return nil, err
@@ -305,15 +310,24 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 	if strings.TrimSpace(reason) != "" {
 		tags = append(tags, nostr.Tag{"reason", strings.TrimSpace(reason)})
 	}
-	content := ""
-	if strings.TrimSpace(newBrief) != "" {
-		body, err := json.Marshal(map[string]string{"brief": strings.TrimSpace(newBrief)})
-		if err != nil {
-			return nil, err
-		}
-		content = string(body)
+	params := map[string]interface{}{
+		"soul_ref": soulRef,
+		"action":   action,
+		"reason":   strings.TrimSpace(reason),
 	}
-	event := &nostr.Event{Kind: nostr.Kind(domain.KindSoulAction), CreatedAt: nostr.Now(), Tags: tags, Content: content}
+	if strings.TrimSpace(newBrief) != "" {
+		params["brief"] = strings.TrimSpace(newBrief)
+	}
+	contentBytes, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      fmt.Sprintf("soul-action:%s:%d", soulRef, nostr.Now()),
+		"method":  ContextVMMethodAction,
+		"params":  params,
+	})
+	if err != nil {
+		return nil, err
+	}
+	event := &nostr.Event{Kind: nostr.Kind(domain.KindSoulAction), CreatedAt: nostr.Now(), Tags: tags, Content: string(contentBytes)}
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign soul action: %w", err)
 	}
