@@ -69,6 +69,20 @@ func TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys(t *te
 	}
 }
 
+func TestRequestSubscriptionScopesContextVMToServicePubkey(t *testing.T) {
+	reactor := &Reactor{config: Config{PrivateKey: testServiceKey}}
+
+	filters := reactor.buildRequestSubscriptionFilters(42)
+	if len(filters) != 1 {
+		t.Fatalf("filter count = %d, want 1", len(filters))
+	}
+	want := testNostrPubKeyFromPrivateKey(t, testServiceKey).Hex()
+	got := filters[0].Tags["p"]
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("#p scope = %v, want [%s]", got, want)
+	}
+}
+
 func assertReactorTag(t *testing.T, tags nostr.Tags, key, value string) {
 	t.Helper()
 	for _, tag := range tags {
