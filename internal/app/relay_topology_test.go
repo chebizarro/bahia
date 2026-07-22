@@ -39,7 +39,7 @@ func TestInteropRelayURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
 	}
 }
 
-func TestInteropRelayURLsWithoutMirrorKeepsUpstreamRelays(t *testing.T) {
+func TestInteropRelayURLsWithoutMirrorKeepsSidecarAndUpstreamRelays(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Relays = []string{"wss://upstream.example"}
 	cfg.Loom.Relays = []string{"wss://loom.example"}
@@ -47,7 +47,7 @@ func TestInteropRelayURLsWithoutMirrorKeepsUpstreamRelays(t *testing.T) {
 	cfg.Nostr.Sidecar.MirrorExternal = false
 
 	got := interopRelayURLs(cfg, []string{"ws://relay:3334"})
-	want := []string{"wss://upstream.example", "wss://loom.example"}
+	want := []string{"ws://relay:3334", "wss://upstream.example", "wss://loom.example"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("interopRelayURLs() = %v, want %v", got, want)
 	}

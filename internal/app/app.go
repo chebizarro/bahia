@@ -2235,13 +2235,18 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
 	var relays []string
+	if cfg.Nostr.Sidecar.Enabled {
+		// The sidecar is always the canonical Bahia service boundary. Generic
+		// inbound subscribers, bootstrap replay, and service projections must
+		// retain it even when no public interop relays are configured.
+		for _, r := range controlPlaneRelays {
+			relays = appendUniqueRelay(relays, r)
+		}
+	}
 	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.MirrorExternal {
 		// The sidecar is the upstream mirror boundary. Subscribe through it for
 		// public interop/audit traffic instead of also connecting Bahia directly to
 		// cfg.Nostr.Relays, which would create duplicate publish/subscribe loops.
-		for _, r := range controlPlaneRelays {
-			relays = appendUniqueRelay(relays, r)
-		}
 	} else {
 		for _, r := range cfg.Nostr.Relays {
 			relays = appendUniqueRelay(relays, r)
