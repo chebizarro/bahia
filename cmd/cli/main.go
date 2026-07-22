@@ -457,6 +457,7 @@ func adoptCommands() *cobra.Command {
 	var importEnvironments []string
 	var importSelections []string
 	var importAll bool
+	var importOrgID string
 	importCmd := &cobra.Command{
 		Use:   "import",
 		Short: "Import selected or all discovered containers into Bahia",
@@ -472,7 +473,7 @@ func adoptCommands() *cobra.Command {
 			if !importAll && len(selections) == 0 {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
-			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll}
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID)}
 			results, err := runAdoptionImportNostrFirst(cmd, req, len(importRawTargets) > 0, func(ctx context.Context) ([]client.AdoptionImportResult, error) {
 				return apiClient.ImportAdoption(ctx, req)
 			})
@@ -489,6 +490,7 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
+	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
 
 	cmd.AddCommand(scanCmd, importCmd)
 	return cmd

@@ -330,6 +330,7 @@ func (c *OperatorControlPlaneClient) ImportAdoptionNostr(ctx context.Context, re
 		Targets:    adoptionEventTargetsFromClient(req.Targets),
 		Selections: adoptionEventSelectionsFromClient(req.Selections),
 		ImportAll:  req.ImportAll,
+		OrgID:      strings.TrimSpace(req.OrgID),
 	}
 	event, err := c.publishAndAwait(ctx, operatorRequest{
 		Method:  "adoption/import",
@@ -800,6 +801,7 @@ type adoptionImportEventRequest struct {
 	Targets    []adoptionEventTarget    `json:"targets"`
 	Selections []adoptionEventSelection `json:"selections,omitempty"`
 	ImportAll  bool                     `json:"import_all,omitempty"`
+	OrgID      string                   `json:"org_id,omitempty"`
 }
 
 type adoptionEventTarget struct {

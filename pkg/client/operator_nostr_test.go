@@ -216,7 +216,7 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 			method:    "adoption/import",
 			result:    []map[string]any{{"target_name": "prod", "container_id": "abc", "service_name": "api", "status": "created"}},
 			run: func(ctx context.Context, c *OperatorControlPlaneClient) (any, error) {
-				return c.ImportAdoptionNostr(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker", EnvironmentName: "production"}}, Selections: []AdoptionSelection{{TargetName: "prod", ContainerID: "abc", ServiceNameOverride: "api"}}}, nil)
+				return c.ImportAdoptionNostr(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker", EnvironmentName: "production"}}, Selections: []AdoptionSelection{{TargetName: "prod", ContainerID: "abc", ServiceNameOverride: "api"}}, OrgID: "31ee612f-93a8-418d-a377-eee0a5cd26dc"}, nil)
 			},
 		},
 	} {
@@ -240,6 +240,9 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 			rpc := decodePublishedContextVMRequest(t, published)
 			if rpc.Method != tc.method {
 				t.Fatalf("method = %q, want %q", rpc.Method, tc.method)
+			}
+			if tc.operation == "import" && !strings.Contains(string(rpc.Params), `"org_id":"31ee612f-93a8-418d-a377-eee0a5cd26dc"`) {
+				t.Fatalf("import params missing org_id: %s", rpc.Params)
 			}
 			assertTagValue(t, published.Tags, "operation", tc.operation)
 			assertTagValue(t, published.Tags, "target", "prod")
