@@ -134,16 +134,27 @@ func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int,
 	if b == nil || len(b.endpoints) == 0 {
 		return 0, fmt.Errorf("soul factory relay bus is not configured")
 	}
-	accepted := 0
-	var failures []string
+	publishCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan RelayPublishResult, len(b.endpoints))
 	for _, endpoint := range b.endpoints {
-		result := endpoint.Publish(ctx, ev)
-		if result.RelayURL == "" {
-			result.RelayURL = endpoint.URL()
-		}
+		endpoint := endpoint
+		go func() {
+			result := endpoint.Publish(publishCtx, ev)
+			if result.RelayURL == "" {
+				result.RelayURL = endpoint.URL()
+			}
+			results <- result
+		}()
+	}
+
+	var failures []string
+	for range b.endpoints {
+		result := <-results
 		if result.Accepted {
-			accepted++
-			continue
+			cancel()
+			return 1, nil
 		}
 		if result.Error != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
@@ -155,13 +166,10 @@ func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int,
 		}
 		failures = append(failures, fmt.Sprintf("%s: %s", result.RelayURL, reason))
 	}
-	if accepted == 0 {
-		if len(failures) == 0 {
-			return 0, fmt.Errorf("event was not accepted by any relay")
-		}
-		return 0, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
+	if len(failures) == 0 {
+		return 0, fmt.Errorf("event was not accepted by any relay")
 	}
-	return accepted, nil
+	return 0, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
 }
 
 func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*RelayBusSubscription, error) {

@@ -1,0 +1,21 @@
+{
+  "feature_id": "SOULFACTORY_FIRST_OK_PUBLISH",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "Relay publishes run concurrently."
+    },
+    {
+      "id": "AC-2",
+      "statement": "The first verified OK accepted=true completes publication and cancels outstanding attempts."
+    },
+    {
+      "id": "AC-3",
+      "statement": "If every relay fails or returns OK accepted=false, publication returns an error containing the relay failure reasons."
+    },
+    {
+      "id": "AC-4",
+      "statement": "No timer or timeout determines event acceptance."
+    }
+  ]
+}
