@@ -61,10 +61,13 @@ type Metrics struct {
 	DriftDetectedTotal int64
 
 	// Fleet hygiene metrics (fp-jan / Swabbie)
-	HygieneScansTotal           int64
-	HygieneCandidatesTotal      map[string]int64 // key: class
-	HygieneActionsTotal         map[string]int64 // key: method:status
+	HygieneScansTotal            int64
+	HygieneCandidatesTotal       map[string]int64 // key: class
+	HygieneActionsTotal          map[string]int64 // key: method:status
 	HygienePressureBreachesTotal int64
+
+	// Fleet health metrics (fp-obs / Bahia WS6)
+	FleetHealthEntities map[string]int64 // key: domain:status
 
 	// Adoption/direct-runtime operational metrics
 	AdoptionScansTotal          map[string]int64 // key: status
@@ -116,24 +119,25 @@ type Metrics struct {
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		HTTPRequestsTotal:     make(map[string]int64),
-		DeploymentsTotal:      make(map[string]int64),
-		AdoptionScansTotal:    make(map[string]int64),
-		AdoptionImportsTotal:  make(map[string]int64),
-		RuntimeActionsTotal:   make(map[string]int64),
-		NostrEventsPublished:  make(map[string]int64),
-		NostrEventsReceived:   make(map[string]int64),
-		NostrPublishOK:        make(map[string]int64),
-		NostrPublishFailed:    make(map[string]int64),
-		NostrReconnects:       make(map[string]int64),
-		NostrRelayHealthy:     make(map[string]bool),
-		NostrRelayDegraded:    make(map[string]bool),
-		NostrRelaySuccessRate: make(map[string]float64),
-		LoomJobsTotal:         make(map[string]int64),
-		CashuPaymentsTotal:    make(map[string]int64),
-		CashuWalletBalance:    make(map[string]int64),
+		HTTPRequestsTotal:      make(map[string]int64),
+		DeploymentsTotal:       make(map[string]int64),
+		AdoptionScansTotal:     make(map[string]int64),
+		AdoptionImportsTotal:   make(map[string]int64),
+		RuntimeActionsTotal:    make(map[string]int64),
+		NostrEventsPublished:   make(map[string]int64),
+		NostrEventsReceived:    make(map[string]int64),
+		NostrPublishOK:         make(map[string]int64),
+		NostrPublishFailed:     make(map[string]int64),
+		NostrReconnects:        make(map[string]int64),
+		NostrRelayHealthy:      make(map[string]bool),
+		NostrRelayDegraded:     make(map[string]bool),
+		NostrRelaySuccessRate:  make(map[string]float64),
+		LoomJobsTotal:          make(map[string]int64),
+		CashuPaymentsTotal:     make(map[string]int64),
+		CashuWalletBalance:     make(map[string]int64),
 		HygieneCandidatesTotal: make(map[string]int64),
 		HygieneActionsTotal:    make(map[string]int64),
+		FleetHealthEntities:    make(map[string]int64),
 	}
 }
 
@@ -373,6 +377,43 @@ func (m *Metrics) RecordHygienePressureBreach() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.HygienePressureBreachesTotal++
+}
+
+var fleetHealthDomains = []string{"worker", "service", "runtime"}
+var fleetHealthStatuses = []string{"healthy", "degraded", "unhealthy", "unknown"}
+
+func normalizeFleetHealthDomain(domain string) string {
+	switch strings.ToLower(strings.TrimSpace(domain)) {
+	case "worker", "service", "runtime":
+		return strings.ToLower(strings.TrimSpace(domain))
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeFleetHealthStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "healthy", "degraded", "unhealthy", "unknown":
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return "unknown"
+	}
+}
+
+// SetFleetHealthEntities sets a bounded fleet-health gauge.
+func (m *Metrics) SetFleetHealthEntities(domain, status string, count int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if count < 0 {
+		count = 0
+	}
+	domain = normalizeFleetHealthDomain(domain)
+	if domain == "unknown" {
+		return
+	}
+	status = normalizeFleetHealthStatus(status)
+	m.FleetHealthEntities[domain+":"+status] = count
 }
 
 // RecordAdoptionScan records an adoption scan operation. It stores only
@@ -833,6 +874,16 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintln(w, "# HELP bahia_nostr_relays_unhealthy_total Count of unhealthy relays")
 		fmt.Fprintln(w, "# TYPE bahia_nostr_relays_unhealthy_total gauge")
 		fmt.Fprintf(w, "bahia_nostr_relays_unhealthy_total %d\n", unhealthyCount)
+
+		// Fleet health metrics
+		fmt.Fprintln(w, "# HELP bahia_fleet_health_entities Fleet health entity counts by bounded domain and health status")
+		fmt.Fprintln(w, "# TYPE bahia_fleet_health_entities gauge")
+		for _, domain := range fleetHealthDomains {
+			for _, status := range fleetHealthStatuses {
+				key := domain + ":" + status
+				fmt.Fprintf(w, "bahia_fleet_health_entities{domain=%q,status=%q} %d\n", domain, status, m.FleetHealthEntities[key])
+			}
+		}
 
 		// Worker metrics
 		fmt.Fprintln(w, "# HELP bahia_workers_active Currently active (online) workers")
