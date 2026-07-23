@@ -48,9 +48,6 @@ const (
 
 	signetKindContextVM = cascadia.CAS_INTENT
 	signetKindGiftWrap  = cascadia.NIP59_GIFT_WRAP
-
-	defaultConnectTimeout = 15 * time.Second
-	defaultSignTimeout    = 15 * time.Second
 )
 
 // Client communicates with Signet via NIP-46.
@@ -62,13 +59,12 @@ type Client struct {
 	clientSecretKey string // Ephemeral key for NIP-46 session
 	requireReal     bool   // Fail closed unless a real Signet bunker is configured and reachable
 	allowMock       bool   // Explicit test/dev-only mock signing mode
-	connectTimeout  time.Duration
-	signTimeout     time.Duration
 
 	mu        sync.Mutex
 	bunker    *nip46.BunkerClient // Active NIP-46 connection
 	agents    map[string]*AgentIdentity
 	connected bool
+	lifetime  context.Context
 }
 
 // AgentIdentity holds the identity info for a provisioned agent.
@@ -89,21 +85,14 @@ type Config struct {
 	ClientSecretKey string        // Optional: persistent client key (generated if empty)
 	RequireReal     bool          // When true, missing/unreachable bunker is a hard error
 	AllowMock       bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
-	ConnectTimeout  time.Duration // Maximum duration for bunker connection and ping
-	SignTimeout     time.Duration // Maximum duration for NIP-46 signing operations
+	ConnectTimeout  time.Duration // Deprecated: caller context controls connection lifetime
+	SignTimeout     time.Duration // Deprecated: caller context controls signing lifetime
 }
 
 // NewClient creates a new Signet client.
 func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 	if logger == nil {
 		logger = slog.Default()
-	}
-
-	if config.ConnectTimeout <= 0 {
-		config.ConnectTimeout = defaultConnectTimeout
-	}
-	if config.SignTimeout <= 0 {
-		config.SignTimeout = defaultSignTimeout
 	}
 
 	// Generate ephemeral client key if not provided
@@ -120,8 +109,6 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		clientSecretKey: clientSK,
 		requireReal:     config.RequireReal,
 		allowMock:       config.AllowMock,
-		connectTimeout:  config.ConnectTimeout,
-		signTimeout:     config.SignTimeout,
 		agents:          make(map[string]*AgentIdentity),
 	}
 
@@ -155,56 +142,28 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("decode Signet client secret key: %w", err)
 	}
 
-	// ConnectBunker retains its context for the response subscription. A
-	// short-lived timeout context here makes the initial handshake succeed and
-	// then silently cancels every later RPC. Keep the caller's application
-	// context for that subscription, while bounding the handshake externally.
-	type connectResult struct {
-		bunker *nip46.BunkerClient
-		err    error
+	// ConnectBunker retains ctx for its response subscription. The application
+	// context is therefore the connection lifetime; installing a child deadline
+	// here silently kills later NIP-46 RPCs.
+	bunker, err := nip46.ConnectBunker(
+		ctx,
+		clientSecret,
+		c.bunkerURI,
+		c.pool,
+		func(authURL string) {
+			c.logger.Info("bunker auth required", "url", authURL)
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("connect to bunker: %w", err)
 	}
-	connectCtx, cancelConnect := context.WithCancel(ctx)
-	resultCh := make(chan connectResult, 1)
-	go func() {
-		bunker, err := nip46.ConnectBunker(
-			connectCtx,
-			clientSecret,
-			c.bunkerURI,
-			c.pool,
-			func(authURL string) {
-				c.logger.Info("bunker auth required", "url", authURL)
-			},
-		)
-		resultCh <- connectResult{bunker: bunker, err: err}
-	}()
-
-	var bunker *nip46.BunkerClient
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			cancelConnect()
-			return fmt.Errorf("connect to bunker: %w", result.err)
-		}
-		bunker = result.bunker
-	case <-time.After(c.connectTimeout):
-		cancelConnect()
-		return fmt.Errorf("connect to bunker: %w", context.DeadlineExceeded)
-	case <-ctx.Done():
-		cancelConnect()
-		return fmt.Errorf("connect to bunker: %w", ctx.Err())
-	}
-
-	// Verify connection with a bounded request without cancelling the long-lived
-	// response subscription established above.
-	pingCtx, cancelPing := context.WithTimeout(ctx, c.connectTimeout)
-	defer cancelPing()
-	if err := bunker.Ping(pingCtx); err != nil {
-		cancelConnect()
+	if err := bunker.Ping(ctx); err != nil {
 		return fmt.Errorf("bunker ping failed: %w", err)
 	}
 
 	c.bunker = bunker
 	c.connected = true
+	c.lifetime = ctx
 
 	c.logger.Info("connected to Signet bunker")
 	return nil
@@ -335,10 +294,7 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 		return ErrNotConnected
 	}
 
-	// Use NIP-46 SignEvent under a client-enforced deadline.
-	signCtx, cancel := context.WithTimeout(ctx, c.signTimeout)
-	defer cancel()
-	if err := bunker.SignEvent(signCtx, event); err != nil {
+	if err := bunker.SignEvent(ctx, event); err != nil {
 		return fmt.Errorf("bunker sign_event: %w", err)
 	}
 
@@ -383,8 +339,10 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		if err != nil {
 			return fmt.Errorf("decode Signet client secret key: %w", err)
 		}
-		connectCtx, cancel := context.WithTimeout(ctx, c.connectTimeout)
-		defer cancel()
+		connectCtx := c.lifetime
+		if connectCtx == nil {
+			connectCtx = ctx
+		}
 		bunker, err := nip46.ConnectBunker(
 			connectCtx,
 			clientSecret,
@@ -401,10 +359,7 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		c.mu.Unlock()
 	}
 
-	// Sign using agent's bunker connection under a client-enforced deadline.
-	signCtx, cancel := context.WithTimeout(ctx, c.signTimeout)
-	defer cancel()
-	if err := identity.bunkerClient.SignEvent(signCtx, event); err != nil {
+	if err := identity.bunkerClient.SignEvent(ctx, event); err != nil {
 		return fmt.Errorf("agent sign_event: %w", err)
 	}
 
@@ -673,9 +628,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 
 	// Subscribe before publishing. Signet can answer immediately, and creating
 	// the response subscription afterwards loses that reply on fast relays.
-	responseCtx, cancelResponse := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelResponse()
-	responses := c.pool.SubscribeMany(responseCtx, relayURLs, nostr.Filter{
+	responses := c.pool.SubscribeMany(ctx, relayURLs, nostr.Filter{
 		Kinds: []nostr.Kind{signetKindGiftWrap},
 		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
 		// NIP-59 deliberately backdates gift-wrap timestamps (go-nostr uses a
@@ -685,7 +638,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		Since: nostr.Now() - 12*60*60,
 	}, nostr.SubscriptionOptions{Label: "signet-mgmt"})
 
-	publishCtx, cancelPublish := context.WithTimeout(ctx, 10*time.Second)
+	publishCtx, cancelPublish := context.WithCancel(ctx)
 	defer cancelPublish()
 	published := 0
 	var publishErr error
@@ -695,6 +648,8 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 			continue
 		}
 		published++
+		cancelPublish()
+		break
 	}
 	if published == 0 {
 		if publishErr != nil {
@@ -732,7 +687,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		}
 		return nil
 	}
-	if err := responseCtx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("await Signet management response: %w", err)
 	}
 	return fmt.Errorf("await Signet management response: subscription closed")
