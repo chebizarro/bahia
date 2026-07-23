@@ -46,7 +46,10 @@ const (
 	// AgentStatusSuspended is the suspended Signet agent state.
 	AgentStatusSuspended = "suspended"
 
-	signetKindContextVM = cascadia.CAS_INTENT
+	// Signet's canonical ContextVM management plane is kind 25910. The pinned
+	// cascadia-go release still aliases CAS_INTENT to the obsolete kind 6950.
+	// Keep the wire boundary explicit until that dependency is corrected.
+	signetKindContextVM nostr.Kind = 25910
 	signetKindGiftWrap  = cascadia.NIP59_GIFT_WRAP
 )
 
