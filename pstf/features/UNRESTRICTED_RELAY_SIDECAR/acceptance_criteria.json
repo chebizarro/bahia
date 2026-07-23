@@ -1,0 +1,21 @@
+{
+  "feature_id": "UNRESTRICTED_RELAY_SIDECAR",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "A valid signed event is accepted regardless of kind, author, or recipient tags."
+    },
+    {
+      "id": "AC-2",
+      "statement": "An ordinary NIP-01 read or count filter is accepted regardless of kinds, authors, recipient tags, or omission of kinds."
+    },
+    {
+      "id": "AC-3",
+      "statement": "Invalid IDs, invalid signatures, and unreasonable timestamps remain rejected."
+    },
+    {
+      "id": "AC-4",
+      "statement": "NIP-11 metadata and operator documentation state that consumer authorization does not occur at relay admission."
+    }
+  ]
+}

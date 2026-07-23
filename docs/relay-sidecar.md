@@ -11,7 +11,7 @@ nostr:
   service_relays:
     - "wss://service-relay.example" # backend service publish/backfill relays
   browser_relays:
-    - "ws://localhost:3000/relay"  # browser-safe discovery
+    - "ws://localhost:3000/relay"  # browser relay discovery
   contextvm_relays:
     - "ws://localhost:3000/relay"  # ContextVM request/reply relays; may intentionally reuse the sidecar URL
   relay_auth_unavailable: "exclude_and_fail"
@@ -54,14 +54,11 @@ Browser flow:
 
 ## Policy
 
-The sidecar validates event IDs, signatures, and timestamp bounds before persistence.
+The sidecar accepts storage and subscriptions for every Nostr event kind. It does not maintain event-kind, author, recipient, or filter-scope allowlists.
 
-- Direct ContextVM `25910` events must be signed by either the Bahia service pubkey or an authorized operator pubkey.
-- ContextVM gift-wrap events (`1059` and `21059`) use random outer wrapper pubkeys, so the sidecar authorizes them by recipient `p` tag. The recipient must be the Bahia service pubkey or an authorized operator pubkey.
-- ContextVM subscriptions must be scoped. Reads for `25910`, `1059`, and `21059` are allowed only when the filter scopes `authors` or `#p` to the Bahia service pubkey or authorized operator pubkeys.
-- Bahia-authored canonical observable events require Bahia's service pubkey. That includes `30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, and Bahia readiness/identity/checkpoint kinds.
-- Legacy Bahia request/status/result/read-model/encrypted kinds (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `31000`-`31024`, `5980`, `7980`) are migration-only and are not accepted as production sidecar contracts.
-- `10100`, `30100`, `5101`, `5102`, `5401`, and `5402` interop events accept any valid signature; Bahia services still decide whether to act.
+Before persistence, it still enforces protocol validity: the event ID must match the serialized event, the Schnorr signature must verify, and `created_at` must fall within the configured operational timestamp bounds. Search remains disabled because the in-memory store does not implement NIP-50; ordinary NIP-01 filters, including filters without `kinds`, are accepted.
+
+Authorization belongs to consumers. Bahia validates signatures, authors, encryption, tags, capabilities, and application semantics before acting on an event. Relay admission is not an authorization boundary.
 
 ## Upstream mirroring guardrail
 
