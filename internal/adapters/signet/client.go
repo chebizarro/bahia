@@ -605,7 +605,11 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	}
 
 	rumor := nostr.Event{
-		Kind:      signetKindContextVM,
+		// Signet carries ContextVM JSON inside a NIP-17 private direct
+		// message, then NIP-59 gift-wraps that event. The outer subscription
+		// includes kind 25910 for direct intents, but gift-wrapped intents must
+		// use the NIP-17 inner kind or Signet's decoder rejects them.
+		Kind:      nostr.KindDirectMessage,
 		Content:   string(body),
 		Tags:      nostr.Tags{nostr.Tag{"p", bunkerPK.Hex()}},
 		CreatedAt: nostr.Now(),
