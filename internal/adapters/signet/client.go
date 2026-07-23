@@ -701,11 +701,14 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		}
 		rumor.PubKey = responseSeal.PubKey
 		var resp signetJSONRPCResponse
-		if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil || resp.ID != requestID {
+		if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil {
 			continue
 		}
 		if resp.Error != nil {
 			return fmt.Errorf("Signet management error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+		if resp.ID != requestID {
+			continue
 		}
 		if out == nil {
 			return nil
