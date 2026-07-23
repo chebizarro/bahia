@@ -20,7 +20,6 @@ import (
 	"fiatjaf.com/nostr/nip19"
 	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
-	"fiatjaf.com/nostr/nip59"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
@@ -583,14 +582,19 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("signet management relays are required")
 	}
-	clientSK, err := nostr.SecretKeyFromHex(c.clientSecretKey)
-	if err != nil {
-		return fmt.Errorf("decode Signet client secret key: %w", err)
-	}
-	clientPK := clientSK.Public()
 	bunkerPK, err := nostr.PubKeyFromHex(bunkerPubkey)
 	if err != nil {
 		return fmt.Errorf("decode Signet bunker pubkey: %w", err)
+	}
+	c.mu.Lock()
+	bunker := c.bunker
+	c.mu.Unlock()
+	if bunker == nil {
+		return ErrNotConnected
+	}
+	provisionerPK, err := bunker.GetPublicKey(ctx)
+	if err != nil {
+		return fmt.Errorf("get Signet provisioner pubkey: %w", err)
 	}
 
 	requestID := nostrutil.GeneratePrivateKeyHex()[:16]
@@ -613,31 +617,46 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		Content:   string(body),
 		Tags:      nostr.Tags{nostr.Tag{"p", bunkerPK.Hex()}},
 		CreatedAt: nostr.Now(),
-		PubKey:    clientPK,
+		PubKey:    provisionerPK,
 	}
 	rumor.ID = rumor.GetID()
-	gift, err := nip59.GiftWrap(
-		rumor,
-		bunkerPK,
-		func(plaintext string) (string, error) {
-			conversationKey, err := nip44.GenerateConversationKey(bunkerPK, clientSK)
-			if err != nil {
-				return "", err
-			}
-			return nip44.Encrypt(plaintext, conversationKey)
-		},
-		func(event *nostr.Event) error { return event.Sign(clientSK) },
-		nil,
-	)
+	rumorCiphertext, err := bunker.NIP44Encrypt(ctx, bunkerPK, rumor.String())
 	if err != nil {
-		return fmt.Errorf("gift-wrap Signet management request: %w", err)
+		return fmt.Errorf("encrypt Signet management rumor: %w", err)
+	}
+	seal := nostr.Event{
+		Kind:      nostr.KindSeal,
+		Content:   rumorCiphertext,
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{},
+	}
+	if err := bunker.SignEvent(ctx, &seal); err != nil {
+		return fmt.Errorf("sign Signet management seal: %w", err)
+	}
+	nonceKey := nostr.Generate()
+	conversationKey, err := nip44.GenerateConversationKey(bunkerPK, nonceKey)
+	if err != nil {
+		return fmt.Errorf("derive Signet gift-wrap key: %w", err)
+	}
+	sealCiphertext, err := nip44.Encrypt(seal.String(), conversationKey)
+	if err != nil {
+		return fmt.Errorf("encrypt Signet management seal: %w", err)
+	}
+	gift := nostr.Event{
+		Kind:      signetKindGiftWrap,
+		Content:   sealCiphertext,
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{nostr.Tag{"p", bunkerPK.Hex()}},
+	}
+	if err := gift.Sign(nonceKey); err != nil {
+		return fmt.Errorf("sign Signet management gift-wrap: %w", err)
 	}
 
 	// Subscribe before publishing. Signet can answer immediately, and creating
 	// the response subscription afterwards loses that reply on fast relays.
 	responses := c.pool.SubscribeMany(ctx, relayURLs, nostr.Filter{
 		Kinds: []nostr.Kind{signetKindGiftWrap},
-		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
+		Tags:  nostr.TagMap{"p": []string{provisionerPK.Hex()}},
 		// NIP-59 deliberately backdates gift-wrap timestamps (go-nostr uses a
 		// window of up to ten hours). Correlation by the private JSON-RPC id
 		// below makes a wider history window safe and prevents a freshly
@@ -663,16 +682,24 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	}()
 
 	for relayEvent := range responses {
-		rumor, err := nip59.GiftUnwrap(relayEvent.Event, func(otherPubkey nostr.PubKey, ciphertext string) (string, error) {
-			conversationKey, err := nip44.GenerateConversationKey(otherPubkey, clientSK)
-			if err != nil {
-				return "", err
-			}
-			return nip44.Decrypt(ciphertext, conversationKey)
-		})
-		if err != nil || rumor.PubKey != bunkerPK {
+		sealJSON, err := bunker.NIP44Decrypt(ctx, relayEvent.Event.PubKey, relayEvent.Event.Content)
+		if err != nil {
 			continue
 		}
+		var responseSeal nostr.Event
+		if err := json.Unmarshal([]byte(sealJSON), &responseSeal); err != nil ||
+			!responseSeal.VerifySignature() || responseSeal.PubKey != bunkerPK {
+			continue
+		}
+		rumorJSON, err := bunker.NIP44Decrypt(ctx, responseSeal.PubKey, responseSeal.Content)
+		if err != nil {
+			continue
+		}
+		var rumor nostr.Event
+		if err := json.Unmarshal([]byte(rumorJSON), &rumor); err != nil {
+			continue
+		}
+		rumor.PubKey = responseSeal.PubKey
 		var resp signetJSONRPCResponse
 		if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil || resp.ID != requestID {
 			continue
