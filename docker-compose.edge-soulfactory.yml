@@ -1,0 +1,12 @@
+services:
+  bahia:
+    image: bahia-recovery:15c8c476
+    env_file:
+      - /srv/data/bahia-controlplane/secrets/soulfactory/reactor.env
+    environment:
+      BAHIA_SOUL_FACTORY_ENABLED: "true"
+      BAHIA_SOUL_FACTORY_RELAYS: "ws://relay:3334/relay,wss://relay.sharegap.net"
+      BAHIA_SOUL_FACTORY_ADDITIONAL_RELAYS: "ws://192.168.40.104:3337"
+
+  web:
+    image: bahia-web:fp48-browser-relay-v2
