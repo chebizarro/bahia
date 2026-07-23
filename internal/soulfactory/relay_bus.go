@@ -570,9 +570,7 @@ func (e *goNostrRelayEndpoint) ensureConnected(ctx context.Context) error {
 	if e.relay != nil && e.relay.IsConnected() {
 		return nil
 	}
-	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	relay, err := nostr.RelayConnect(connectCtx, e.url, nostr.RelayOptions{})
+	relay, err := nostr.RelayConnect(ctx, e.url, nostr.RelayOptions{})
 	if err != nil {
 		e.relay = nil
 		return err

@@ -21,12 +21,12 @@ import (
 type Server struct {
 	cfg        config.RelaySidecarConfig
 	relay      *khatru.Relay
-	store      *memoryStore
+	store      *sqliteStore
 	httpServer *http.Server
 	logger     *zap.Logger
 }
 
-// New creates a Khatru sidecar relay with in-memory, rebuildable storage.
+// New creates a Khatru sidecar relay backed by durable storage.
 func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -42,7 +42,10 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := newMemoryStore()
+	store, err := newSQLiteStore(nostrCfg.Sidecar.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	relay := khatru.NewRelay()
 	relay.Log = log.New(os.Stderr, "[bahia-relay-sidecar] ", log.LstdFlags)
 	relay.ServiceURL = nostrCfg.Sidecar.PublicURL
@@ -154,6 +157,9 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancel()
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("relay sidecar shutdown: %w", err)
+	}
+	if err := s.store.Close(); err != nil {
+		return fmt.Errorf("close relay sidecar store: %w", err)
 	}
 	s.logger.Info("relay sidecar stopped")
 	return nil

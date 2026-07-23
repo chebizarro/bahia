@@ -13,11 +13,19 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
+func sidecarTestConfig(t *testing.T) config.NostrConfig {
+	t.Helper()
 	cfg := config.Defaults().Nostr
+	cfg.Sidecar.DataDir = t.TempDir()
+	return cfg
+}
+
+func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 100
+	cfg.Sidecar.DataDir = t.TempDir()
 
 	server, err := New(cfg, zap.NewNop())
 	if err != nil {
@@ -55,8 +63,47 @@ func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
 	}
 }
 
+func TestSidecarRetainsEventsAcrossRestart(t *testing.T) {
+	cfg := sidecarTestConfig(t)
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.DataDir = t.TempDir()
+
+	first, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("first New() error: %v", err)
+	}
+	event := nostr.Event{
+		CreatedAt: nostr.Now(),
+		Kind:      nostr.Kind(kinds.SoulFactoryDraft),
+		Tags:      nostr.Tags{{"d", "restart-proof-draft"}},
+		Content:   `{"agent_id":"restart-proof"}`,
+	}
+	if err := event.Sign(nostr.Generate()); err != nil {
+		t.Fatalf("sign event: %v", err)
+	}
+	if _, err := first.Relay().AddEvent(context.Background(), event); err != nil {
+		t.Fatalf("store event: %v", err)
+	}
+	if err := first.store.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	second, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("second New() error: %v", err)
+	}
+	defer second.store.Close()
+	for stored := range second.Relay().QueryStored(context.Background(), nostr.Filter{IDs: []nostr.ID{event.ID}}) {
+		if stored.ID == event.ID {
+			return
+		}
+	}
+	t.Fatalf("event %s disappeared across relay restart", event.ID.Hex())
+}
+
 func TestSidecarAcceptsReadFiltersWithoutKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -71,7 +118,7 @@ func TestSidecarAcceptsReadFiltersWithoutKinds(t *testing.T) {
 }
 
 func TestSidecarAcceptsEveryEventKindForReads(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -130,7 +177,7 @@ func TestSidecarRejectsUnsupportedSearchWithoutRestrictingKinds(t *testing.T) {
 }
 
 func TestSidecarDoesNotApplyAuthorRestrictionsToReads(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -157,7 +204,7 @@ func TestSidecarDoesNotApplyAuthorRestrictionsToReads(t *testing.T) {
 }
 
 func TestSidecarAllowsCanonicalAndLegacyStatusResultKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -191,7 +238,7 @@ func TestSidecarAllowsCanonicalAndLegacyStatusResultKinds(t *testing.T) {
 }
 
 func TestSidecarDoesNotRequireScopedContextVMSubscriptions(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	serviceSK := nostr.Generate()
@@ -235,7 +282,7 @@ func TestSidecarDoesNotRequireScopedContextVMSubscriptions(t *testing.T) {
 }
 
 func TestSidecarAcceptsContextVMEventsRegardlessOfAuthorOrRecipient(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	serviceSK := nostr.Generate()
@@ -293,7 +340,7 @@ func TestSidecarAcceptsContextVMEventsRegardlessOfAuthorOrRecipient(t *testing.T
 }
 
 func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -316,7 +363,7 @@ func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
 }
 
 func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 1
@@ -347,7 +394,7 @@ func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 }
 
 func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
 
@@ -381,7 +428,7 @@ func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
 }
 
 func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
 
@@ -411,7 +458,7 @@ func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
 }
 
 func TestSidecarAcceptsArbitrarySignedRequestKind(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -437,7 +484,7 @@ func TestSidecarAcceptsArbitrarySignedRequestKind(t *testing.T) {
 }
 
 func TestSidecarAllowsNIP34Kinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -492,7 +539,7 @@ func TestSidecarAllowsNIP34Kinds(t *testing.T) {
 }
 
 func TestSidecarAllowsSoulFactoryInteropKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 100
@@ -550,7 +597,7 @@ func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 	servicePubkey := nostr.GetPublicKey(serviceSK)
 	unauthorizedSK := nostr.Generate()
 
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.PrivateKey = serviceSK.Hex()
