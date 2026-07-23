@@ -267,12 +267,8 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	if existing, err := r.findExistingProvisioningResult(ctx, event); err != nil {
 		logger.Warn("failed to check existing provisioning terminal result", "error", err)
 	} else if existing != nil {
-		if provisioningResultNeedsRuntimeReconciliation(existing) {
-			logger.Info("reconciling provisioning request after retryable runtime result", "result_event", existing.ID)
-		} else {
-			logger.Info("ignoring provisioning request with existing terminal result", "result_event", existing.ID)
-			return
-		}
+		logger.Info("ignoring provisioning request with existing terminal result", "result_event", existing.ID)
+		return
 	}
 
 	logger.Info("starting provisioning workflow")
@@ -331,15 +327,6 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		run.Status = domain.ProvisioningStatusFailed
 		run.Error = fmt.Sprintf("publish provisioning result: %v", err)
 	}
-}
-
-func provisioningResultNeedsRuntimeReconciliation(event *nostr.Event) bool {
-	if event == nil || event.Kind != nostr.Kind(domain.KindProvisioningResult) {
-		return false
-	}
-	return tagValue(event.Tags, tagStatus) == "error" &&
-		tagValue(event.Tags, tagStep) == string(domain.StepDeploy) &&
-		strings.HasPrefix(strings.TrimSpace(event.Content), "runtime provision ")
 }
 
 // handleSoulAction processes a kind:1950 lifecycle action through the single
