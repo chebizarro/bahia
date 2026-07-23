@@ -12,6 +12,10 @@
     {
       "criteria": ["AC-3"],
       "test": "TestRelayBusPublishNetworkErrorCombinedWithOKFalse"
+    },
+    {
+      "criteria": ["AC-5"],
+      "test": "TestReactorBackfillsLatestRequestAndActionBeforeLiveUpdates"
     }
   ]
 }

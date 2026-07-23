@@ -16,6 +16,10 @@
     {
       "id": "AC-4",
       "statement": "No timer or timeout determines event acceptance."
+    },
+    {
+      "id": "AC-5",
+      "statement": "On restart, the reactor backfills the latest stored provisioning request and lifecycle action before continuing with live events."
     }
   ]
 }

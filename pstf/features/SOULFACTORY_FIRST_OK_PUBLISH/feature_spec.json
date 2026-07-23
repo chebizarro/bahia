@@ -4,11 +4,13 @@
   "intent": "A verified NIP-01 OK accepted=true from any configured relay satisfies Soul Factory publication quorum. An unhealthy secondary relay must not stall provisioning after another relay accepts the event.",
   "scope": [
     "internal/soulfactory/relay_bus.go",
+    "internal/soulfactory/reactor.go",
     "Soul Factory progress, result, soul, and lifecycle event publication"
   ],
   "non_goals": [
     "Treating send completion as relay acceptance",
     "Adding timeout-based event completion",
-    "Requiring every configured relay to accept duplicate copies"
+    "Requiring every configured relay to accept duplicate copies",
+    "Replaying more than the newest stored request/action during restart recovery"
   ]
 }

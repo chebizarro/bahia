@@ -32,6 +32,43 @@ func attachPublishCapture(reactor *Reactor) *capturedPublish {
 	return capture
 }
 
+func TestReactorBackfillsLatestRequestAndActionBeforeLiveUpdates(t *testing.T) {
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{endpoint},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+	)
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+
+	reactor := NewReactor(Config{Relays: []string{endpoint.url}}, nil, nil, slog.Default())
+	reactor.relayBus = bus
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- reactor.Run(ctx) }()
+
+	filters := <-endpoint.subscribeCalls
+	if len(filters) != 2 {
+		t.Fatalf("subscription filters = %d, want provisioning and lifecycle filters", len(filters))
+	}
+	for _, filter := range filters {
+		if filter.Limit != 1 {
+			t.Fatalf("filter limit = %d, want latest stored event only", filter.Limit)
+		}
+		if filter.Since != 0 {
+			t.Fatalf("filter since = %d, want historical recovery enabled", filter.Since)
+		}
+	}
+
+	cancel()
+	if err := <-runDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context cancellation", err)
+	}
+}
+
 func (c *capturedPublish) eventsByKind(kind int) []*nostr.Event {
 	var out []*nostr.Event
 	for _, event := range c.events {

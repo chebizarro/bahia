@@ -160,16 +160,17 @@ func (r *Reactor) Run(ctx context.Context) error {
 		"additional_relays", r.config.AdditionalRelays,
 	)
 
-	// Subscribe to provisioning requests and actions
-	now := nostr.Now()
+	// Backfill the newest request/action so an accepted event resumes after a
+	// reactor restart. Existing terminal-result checks make this idempotent;
+	// the subscription remains open for all subsequent live events.
 	filters := []nostr.Filter{
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
-			Since: now,
+			Limit: 1,
 		},
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
-			Since: now,
+			Limit: 1,
 		},
 	}
 
