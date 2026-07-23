@@ -1,9 +1,12 @@
 package soulfactory
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -75,5 +78,119 @@ func TestBuildProvisionRuntimeParamsMigratesV1DraftFields(t *testing.T) {
 	}
 	if voice.PersonaID != "voice:legacy" {
 		t.Fatalf("voice persona id = %q", voice.PersonaID)
+	}
+}
+
+func TestProvisionRuntimeParamsCarrySanitizedSoulCheckpoint(t *testing.T) {
+	resolved := resolvedProvisioningSpec{
+		AgentID:  "scout",
+		Name:     "Scout",
+		Brief:    "Observe deploys",
+		Tier:     domain.SoulTierStandard,
+		Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw},
+		SpecHash: "sha256:spec",
+	}
+	soul := &domain.AgentSoul{
+		ID:             uuid.New(),
+		AgentID:        "scout",
+		Name:           "Scout",
+		Status:         domain.SoulStatusProvisioning,
+		NostrPubkey:    strings.Repeat("a", 64),
+		NostrNpub:      "npub1scout",
+		BunkerURI:      "bunker://must-not-leak?secret=one-time",
+		SoulMD:         "# Scout",
+		SpecHash:       "sha256:spec",
+		AllowedKinds:   []int{1, domain.KindAgentSoul},
+		PermissionSpec: domain.SoulPermissionSpec{AllowedKinds: []int{1, domain.KindAgentSoul}},
+	}
+
+	params := resolved.provisionRuntimeParams(soul)
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if strings.Contains(string(encoded), "must-not-leak") || strings.Contains(string(encoded), "one-time") {
+		t.Fatalf("runtime params leaked bunker URI: %s", encoded)
+	}
+	bahia := params["bahia"].(map[string]interface{})
+	checkpoint := bahia["soul_checkpoint"].(domain.AgentSoul)
+	if checkpoint.AgentID != soul.AgentID || checkpoint.SoulMD != soul.SoulMD || checkpoint.SpecHash != soul.SpecHash {
+		t.Fatalf("checkpoint = %+v, want durable soul state", checkpoint)
+	}
+	if checkpoint.BunkerURI != "" {
+		t.Fatalf("checkpoint bunker URI = %q, want empty", checkpoint.BunkerURI)
+	}
+}
+
+func TestSoulFromRuntimeCheckpointProjectsLateSuccess(t *testing.T) {
+	runtimeKey := nostr.Generate()
+	runtimePubkey := runtimeKey.Public().Hex()
+	soulID := uuid.New()
+	checkpoint := domain.AgentSoul{
+		ID:          soulID,
+		AgentID:     "scout",
+		Name:        "Scout",
+		Status:      domain.SoulStatusProvisioning,
+		NostrPubkey: strings.Repeat("a", 64),
+		SoulMD:      "# Scout",
+		SpecHash:    "sha256:spec",
+		BunkerURI:   "bunker://must-be-cleared",
+	}
+	control := &RuntimeControlEnvelope{
+		Schema: domain.SoulFactoryRuntimeControlSchema,
+		Method: RuntimeMethodProvision,
+		Soul:   RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
+		Target: RuntimeTargetRef{
+			Runtime:       domain.RuntimeTargetOpenClaw,
+			RuntimePubkey: runtimePubkey,
+			AgentID:       "scout",
+		},
+		Params: map[string]interface{}{
+			"bahia": map[string]interface{}{"soul_checkpoint": checkpoint},
+		},
+	}
+	resultEvent := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeControlResult), PubKey: runtimeKey.Public()}
+	if err := resultEvent.Sign(runtimeKey); err != nil {
+		t.Fatalf("sign result: %v", err)
+	}
+	result := &RuntimeControlResultEnvelope{
+		Status: "success",
+		Result: map[string]interface{}{
+			"runtime_binding": "openclaw://agents/scout",
+			"state":           "running",
+		},
+		Event: resultEvent,
+	}
+
+	soul, err := soulFromRuntimeCheckpoint(control, result)
+	if err != nil {
+		t.Fatalf("soulFromRuntimeCheckpoint: %v", err)
+	}
+	if soul.Status != domain.SoulStatusActive || soul.Runtime.State != "running" ||
+		soul.Runtime.RuntimeBinding != "openclaw://agents/scout" || soul.Runtime.RuntimePubkey != runtimePubkey {
+		t.Fatalf("recovered soul = %+v", soul)
+	}
+	if soul.BunkerURI != "" || soul.LastResultRef != resultEvent.ID.Hex() || soul.ProvisionedAt == nil {
+		t.Fatalf("recovered soul secret/result fields = %+v", soul)
+	}
+}
+
+func TestLateRuntimeReconciliationOnlyAcceptsRuntimeStageErrors(t *testing.T) {
+	runtimeError := &nostr.Event{
+		Kind:    nostr.Kind(domain.KindProvisioningResult),
+		Tags:    nostr.Tags{{tagStatus, "error"}, {tagStep, string(domain.StepDeploy)}},
+		Content: "runtime provision openclaw: context deadline exceeded",
+	}
+	if !provisioningResultNeedsRuntimeReconciliation(runtimeError) {
+		t.Fatal("runtime-stage error was not marked for reconciliation")
+	}
+	for _, event := range []*nostr.Event{
+		{Kind: nostr.Kind(domain.KindProvisioningResult), Tags: nostr.Tags{{tagStatus, "success"}, {tagStep, string(domain.StepDeploy)}}, Content: "runtime provision openclaw"},
+		{Kind: nostr.Kind(domain.KindProvisioningResult), Tags: nostr.Tags{{tagStatus, "error"}, {tagStep, string(domain.StepSignet)}}, Content: "runtime provision openclaw"},
+		{Kind: nostr.Kind(domain.KindProvisioningResult), Tags: nostr.Tags{{tagStatus, "error"}, {tagStep, string(domain.StepDeploy)}}, Content: "NIP-05 registration failed"},
+	} {
+		if provisioningResultNeedsRuntimeReconciliation(event) {
+			t.Fatalf("non-runtime terminal result was marked for reconciliation: %+v", event)
+		}
 	}
 }
