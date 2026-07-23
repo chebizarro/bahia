@@ -641,25 +641,22 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		Since: nostr.Now() - 12*60*60,
 	}, nostr.SubscriptionOptions{Label: "signet-mgmt"})
 
-	publishCtx, cancelPublish := context.WithCancel(ctx)
-	defer cancelPublish()
-	published := 0
-	var publishErr error
-	for result := range c.pool.PublishMany(publishCtx, relayURLs, gift) {
-		if result.Error != nil {
-			publishErr = result.Error
-			continue
+	// Publishing is transport, not request/response flow control. A relay OK is
+	// useful telemetry, but waiting for one before consuming the already-live
+	// response subscription can deadlock indefinitely on otherwise functional
+	// pub/sub relays. Start the publish and drain acknowledgements independently;
+	// the correlated Signet response below is the operation's completion signal.
+	publishResults := c.pool.PublishMany(ctx, relayURLs, gift)
+	go func() {
+		for result := range publishResults {
+			if result.Error != nil {
+				c.logger.Warn("Signet management relay rejected publish",
+					"relay", result.RelayURL,
+					"error", result.Error,
+				)
+			}
 		}
-		published++
-		cancelPublish()
-		break
-	}
-	if published == 0 {
-		if publishErr != nil {
-			return fmt.Errorf("publish Signet management intent: %w", publishErr)
-		}
-		return fmt.Errorf("publish Signet management intent: no relay accepted event")
-	}
+	}()
 
 	for relayEvent := range responses {
 		rumor, err := nip59.GiftUnwrap(relayEvent.Event, func(otherPubkey nostr.PubKey, ciphertext string) (string, error) {
