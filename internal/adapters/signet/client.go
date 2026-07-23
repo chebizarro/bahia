@@ -570,6 +570,10 @@ type signetJSONRPCResponse struct {
 }
 
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
+	if method == "agent/provision" {
+		return c.callNativeManagement(ctx, 8000, params, out)
+	}
+
 	bunkerPubkey, relayURLs, _, err := ParseBunkerURI(c.bunkerURI)
 	if err != nil {
 		return err
@@ -684,6 +688,123 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		}
 		if err := json.Unmarshal(resp.Result, out); err != nil {
 			return fmt.Errorf("parse Signet management result: %w", err)
+		}
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("await Signet management response: %w", err)
+	}
+	return fmt.Errorf("await Signet management response: subscription closed")
+}
+
+// callNativeManagement speaks Signet's relay-native management protocol:
+// encrypted, provisioner-signed command events and encrypted kind-8090 acks.
+// This is deliberately subscription-driven; the caller's lifecycle context,
+// not an arbitrary operation deadline, controls cancellation.
+func (c *Client) callNativeManagement(ctx context.Context, kind nostr.Kind, params map[string]interface{}, out interface{}) error {
+	bunkerPubkey, relayURLs, _, err := ParseBunkerURI(c.bunkerURI)
+	if err != nil {
+		return err
+	}
+	if len(relayURLs) == 0 {
+		relayURLs = append([]string{}, c.relays...)
+	}
+	if len(relayURLs) == 0 {
+		return fmt.Errorf("signet management relays are required")
+	}
+
+	c.mu.Lock()
+	bunker := c.bunker
+	c.mu.Unlock()
+	if bunker == nil {
+		return ErrNotConnected
+	}
+
+	bunkerPK, err := nostr.PubKeyFromHex(bunkerPubkey)
+	if err != nil {
+		return fmt.Errorf("decode Signet bunker pubkey: %w", err)
+	}
+	provisionerPK, err := bunker.GetPublicKey(ctx)
+	if err != nil {
+		return fmt.Errorf("get Signet provisioner pubkey: %w", err)
+	}
+
+	requestID := nostrutil.GeneratePrivateKeyHex()[:16]
+	body := make(map[string]interface{}, len(params)+1)
+	for key, value := range params {
+		body[key] = value
+	}
+	body["request_id"] = requestID
+	plaintext, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encode Signet management request: %w", err)
+	}
+	ciphertext, err := bunker.NIP44Encrypt(ctx, bunkerPK, string(plaintext))
+	if err != nil {
+		return fmt.Errorf("encrypt Signet management request: %w", err)
+	}
+
+	event := nostr.Event{
+		Kind:      kind,
+		Content:   ciphertext,
+		Tags:      nostr.Tags{nostr.Tag{"p", bunkerPK.Hex()}},
+		CreatedAt: nostr.Now(),
+	}
+	if err := bunker.SignEvent(ctx, &event); err != nil {
+		return fmt.Errorf("sign Signet management request: %w", err)
+	}
+
+	responses := c.pool.SubscribeMany(ctx, relayURLs, nostr.Filter{
+		Kinds: []nostr.Kind{8090},
+		Tags:  nostr.TagMap{"p": []string{provisionerPK.Hex()}},
+		Since: nostr.Now() - 60,
+	}, nostr.SubscriptionOptions{Label: "signet-native-mgmt"})
+
+	publishCtx, cancelPublish := context.WithCancel(ctx)
+	defer cancelPublish()
+	published := false
+	var publishErr error
+	for result := range c.pool.PublishMany(publishCtx, relayURLs, event) {
+		if result.Error != nil {
+			publishErr = result.Error
+			continue
+		}
+		published = true
+		cancelPublish()
+		break
+	}
+	if !published {
+		if publishErr != nil {
+			return fmt.Errorf("publish Signet management command: %w", publishErr)
+		}
+		return fmt.Errorf("publish Signet management command: no relay accepted event")
+	}
+
+	for relayEvent := range responses {
+		if relayEvent.Event.PubKey != bunkerPK {
+			continue
+		}
+		decrypted, err := bunker.NIP44Decrypt(ctx, bunkerPK, relayEvent.Event.Content)
+		if err != nil {
+			continue
+		}
+		var ack struct {
+			OK        bool            `json:"ok"`
+			RequestID string          `json:"request_id"`
+			Code      string          `json:"code"`
+			Message   string          `json:"message"`
+			Result    json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(decrypted), &ack); err != nil || ack.RequestID != requestID {
+			continue
+		}
+		if !ack.OK {
+			return fmt.Errorf("Signet management error %s: %s", ack.Code, ack.Message)
+		}
+		if out != nil && len(ack.Result) > 0 && string(ack.Result) != "null" {
+			if err := json.Unmarshal(ack.Result, out); err != nil {
+				return fmt.Errorf("parse Signet management result: %w", err)
+			}
 		}
 		return nil
 	}
