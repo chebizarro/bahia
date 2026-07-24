@@ -20,19 +20,30 @@ type LLMRouteReconciler struct {
 	environments      repository.EnvironmentRepository
 	provisioners      llmadapter.ProvisionerResolver
 	gateway           llmadapter.GatewayRouteManager
+	secrets           llmadapter.SecretResolver
 	defaultGatewayRef string
 	interval          time.Duration
 	logger            *zap.Logger
 }
 
-func NewLLMRouteReconciler(registry *service.LLMRegistryService, envs repository.EnvironmentRepository, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, interval time.Duration, logger *zap.Logger) *LLMRouteReconciler {
+type LLMRouteReconcilerOption func(*LLMRouteReconciler)
+
+func WithLLMRouteSecretResolver(resolver llmadapter.SecretResolver) LLMRouteReconcilerOption {
+	return func(r *LLMRouteReconciler) { r.secrets = resolver }
+}
+
+func NewLLMRouteReconciler(registry *service.LLMRegistryService, envs repository.EnvironmentRepository, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, interval time.Duration, logger *zap.Logger, opts ...LLMRouteReconcilerOption) *LLMRouteReconciler {
 	if interval <= 0 {
 		interval = time.Minute
 	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &LLMRouteReconciler{registry: registry, environments: envs, provisioners: provisioners, gateway: gateway, defaultGatewayRef: defaultGatewayRef, interval: interval, logger: logger}
+	r := &LLMRouteReconciler{registry: registry, environments: envs, provisioners: provisioners, gateway: gateway, defaultGatewayRef: defaultGatewayRef, interval: interval, logger: logger}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 func (r *LLMRouteReconciler) Name() string { return "llm-route-reconciler" }
@@ -99,7 +110,10 @@ func (r *LLMRouteReconciler) reconcileState(ctx context.Context, state *domain.L
 	if err != nil {
 		gatewayObs = &llmadapter.GatewayRouteObservation{RouteName: route.Name, Status: domain.GatewayRouteStatusError, TargetURL: run.BackendEndpoint, Metadata: map[string]any{"observe_error": err.Error()}}
 	}
-	spec := service.BuildLLMGatewayRouteSpec(route, backendObs.BackendEndpoint)
+	spec, err := service.ResolveLLMGatewayRouteSpec(ctx, route, backendObs.BackendEndpoint, r.secrets)
+	if err != nil {
+		return fmt.Errorf("resolve LLM gateway route secrets: %w", err)
+	}
 	obs := observationFromReconcile(route, release, run, state.EnvironmentID, backendObs, gatewayObs, spec.ManagedConfigHash())
 	if err := r.registry.RecordObservation(ctx, obs); err != nil {
 		return err

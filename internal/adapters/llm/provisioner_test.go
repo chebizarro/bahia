@@ -25,6 +25,20 @@ type fakeRuntime struct {
 	undeployed    string
 }
 
+type llmSecretResolverStub struct {
+	values map[string]string
+	calls  []domain.SecretResolveOptions
+}
+
+func (r *llmSecretResolverStub) ResolveSecretWithAudit(_ context.Context, ref string, opts domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
+	r.calls = append(r.calls, opts)
+	value, ok := r.values[ref]
+	if !ok {
+		return "", domain.SecretAccessManifest{}, errors.New("secret not found")
+	}
+	return value, domain.SecretAccessManifest{}, nil
+}
+
 func (f *fakeRuntime) Type() domain.RuntimeType { return domain.RuntimeTypeDocker }
 func (f *fakeRuntime) Deploy(_ context.Context, name, image string, opts runtimeadapter.DeployOptions) error {
 	f.deployedName = name
@@ -186,5 +200,32 @@ func TestExternalAPIProvisionerHealthIgnoresChatBudgetResponses(t *testing.T) {
 	}
 	if healthHits != 1 || chatHits != 0 {
 		t.Fatalf("expected one health probe and no chat probes, health=%d chat=%d", healthHits, chatHits)
+	}
+}
+
+func TestExternalAPIProvisionerResolvesSecretBackedHealthHeaders(t *testing.T) {
+	const secretRef = "2e9b746d-58c3-4e86-9ca5-a0184bc2918e"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer health-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	resolver := &llmSecretResolverStub{values: map[string]string{secretRef: "Bearer health-token"}}
+	p := NewExternalAPIProvisioner(server.Client(), WithExternalAPISecretResolver(resolver))
+	req := ProvisionCandidateRequest{Release: &domain.LLMRelease{ExternalBackend: &domain.LLMExternalBackendConfig{
+		BaseURL:                server.URL,
+		HealthURL:              server.URL + "/healthz",
+		HealthHeaderSecretRefs: map[string]string{"Authorization": secretRef},
+	}}}
+
+	obs, err := p.Observe(t.Context(), req)
+	if err != nil || obs.HealthStatus != domain.HealthStatusHealthy {
+		t.Fatalf("Observe() = (%#v, %v)", obs, err)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0].Reason != "llm_external_health_probe" {
+		t.Fatalf("secret resolution was not audited with health-probe context: %#v", resolver.calls)
 	}
 }

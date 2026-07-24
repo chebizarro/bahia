@@ -53,10 +53,11 @@ func (c LLMPromotionGateConfig) ToHealthGateConfig() HealthGateConfig {
 
 // LLMGatewayRouteConfig configures Bahia-owned gateway routing for an LLM route.
 type LLMGatewayRouteConfig struct {
-	PublicModel    string            `json:"public_model"`
-	Path           string            `json:"path,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
+	PublicModel      string            `json:"public_model"`
+	Path             string            `json:"path,omitempty"`
+	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	HeaderSecretRefs map[string]string `json:"header_secret_refs,omitempty"`
 }
 
 // LLMPlacementPolicy captures route/release placement preferences.
@@ -88,8 +89,10 @@ type LLMRuntimeManagedBackendConfig struct {
 
 // LLMExternalBackendConfig configures an externally managed inference endpoint.
 type LLMExternalBackendConfig struct {
-	BaseURL   string `json:"base_url"`
-	HealthURL string `json:"health_url,omitempty"`
+	BaseURL                string            `json:"base_url"`
+	HealthURL              string            `json:"health_url,omitempty"`
+	HealthHeaders          map[string]string `json:"health_headers,omitempty"`
+	HealthHeaderSecretRefs map[string]string `json:"health_header_secret_refs,omitempty"`
 }
 
 // LLMRoute is a first-class LLM control-plane resource.

@@ -104,6 +104,31 @@ describe('llm page model helpers', () => {
     });
   });
 
+  it('uses secret UUID references for gateway and health Authorization headers', () => {
+    expect(buildCreateRoutePayload({
+      name: 'paid-chat',
+      description: '',
+      public_model: 'bahia/paid-chat',
+      path: '',
+      authorization_secret_ref: 'route-secret-uuid'
+    }).gateway_config.header_secret_refs).toEqual({ Authorization: 'route-secret-uuid' });
+
+    expect(buildReleasePayload({
+      route_id: 'llm-route-1',
+      version: 'v1',
+      model_ref: 'external://routstr',
+      model_source: 'external',
+      backend_mode: 'external',
+      external_base_url: 'http://routstr:8080',
+      external_health_url: 'http://routstr:8080/healthz',
+      health_authorization_secret_ref: 'health-secret-uuid'
+    }).external_backend).toEqual({
+      base_url: 'http://routstr:8080',
+      health_url: 'http://routstr:8080/healthz',
+      health_header_secret_refs: { Authorization: 'health-secret-uuid' }
+    });
+  });
+
   it('derives activity history, releases, pending approvals, and route state rows', () => {
     const events = [
       {

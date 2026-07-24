@@ -56,7 +56,8 @@
     name: '',
     description: '',
     public_model: '',
-    path: ''
+    path: '',
+    authorization_secret_ref: ''
   });
 
   let releaseForm = $state({
@@ -66,6 +67,8 @@
     model_source: 'huggingface',
     backend_mode: 'external',
     external_base_url: '',
+    external_health_url: '',
+    health_authorization_secret_ref: '',
     runtime_image: 'vllm/vllm-openai:latest',
     runtime_container_port: 8000,
     runtime_host_port: 18000,
@@ -142,7 +145,7 @@
       const content = resultContent(result);
       if (!releaseForm.route_id && content.route_id) releaseForm.route_id = content.route_id;
       if (!deployForm.route_id && content.route_id) deployForm.route_id = content.route_id;
-      routeForm = { name: '', description: '', public_model: '', path: '' };
+      routeForm = { name: '', description: '', public_model: '', path: '', authorization_secret_ref: '' };
       setSuccess(`Created LLM route ${content.name || content.route_id}`);
     } catch (err) {
       setFailure(err.message || 'Failed to create LLM route');
@@ -164,7 +167,9 @@
         ...releaseForm,
         version: '',
         model_ref: '',
-        external_base_url: ''
+        external_base_url: '',
+        external_health_url: '',
+        health_authorization_secret_ref: ''
       };
       setSuccess(`Registered release ${content.version || content.release_id}`);
     } catch (err) {
@@ -265,6 +270,10 @@
             Route path
             <input bind:value={routeForm.path} name="route-path" placeholder="/v1/models/chat-prod" />
           </label>
+          <label>
+            Authorization secret UUID
+            <input bind:value={routeForm.authorization_secret_ref} name="route-authorization-secret-ref" placeholder="Bahia secret UUID (optional)" />
+          </label>
           <button type="submit" disabled={routeSubmitting}>{routeSubmitting ? 'Creating…' : 'Create route'}</button>
         </form>
       </section>
@@ -308,6 +317,14 @@
             <label>
               External base URL
               <input bind:value={releaseForm.external_base_url} name="external-base-url" placeholder="https://llm.example.com" required />
+            </label>
+            <label>
+              Health URL
+              <input bind:value={releaseForm.external_health_url} name="external-health-url" placeholder="https://llm.example.com/healthz" />
+            </label>
+            <label>
+              Health authorization secret UUID
+              <input bind:value={releaseForm.health_authorization_secret_ref} name="health-authorization-secret-ref" placeholder="Bahia secret UUID (optional)" />
             </label>
           {:else}
             <label>

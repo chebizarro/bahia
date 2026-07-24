@@ -1,0 +1,19 @@
+{
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "A gateway Authorization header secret UUID resolves to plaintext for gateway application without mutating the persisted route.",
+      "tests": ["TestResolveLLMGatewayRouteSpecUsesSecretRefsWithoutMutatingRoute"]
+    },
+    {
+      "id": "AC-2",
+      "statement": "An external health-probe Authorization header secret UUID is resolved, audited, and attached to the HTTP request.",
+      "tests": ["TestExternalAPIProvisionerResolvesSecretBackedHealthHeaders"]
+    },
+    {
+      "id": "AC-3",
+      "statement": "Invalid UUID references and literal/secret header collisions are rejected.",
+      "tests": ["TestValidateLLMHeaderSecretRefs"]
+    }
+  ]
+}

@@ -8,6 +8,45 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+// SecretResolver resolves an opaque Bahia secret UUID and records the access.
+type SecretResolver interface {
+	ResolveSecretWithAudit(ctx context.Context, ref string, opts domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error)
+}
+
+func resolveHeaderSecretRefs(ctx context.Context, literal, refs map[string]string, resolver SecretResolver, reason string) (map[string]string, error) {
+	if len(literal) == 0 && len(refs) == 0 {
+		return nil, nil
+	}
+	headers := make(map[string]string, len(literal)+len(refs))
+	for name, value := range literal {
+		headers[name] = value
+	}
+	if len(refs) > 0 && resolver == nil {
+		return nil, fmt.Errorf("%s secret refs require a secret resolver", reason)
+	}
+	for name, ref := range refs {
+		if _, exists := headers[name]; exists {
+			return nil, fmt.Errorf("%s header %q cannot define both a literal value and a secret ref", reason, name)
+		}
+		value, _, err := resolver.ResolveSecretWithAudit(ctx, ref, domain.SecretResolveOptions{
+			Actor:     "bahia:llm",
+			Reason:    reason,
+			RequestID: name,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s header %q: %w", reason, name, err)
+		}
+		headers[name] = value
+	}
+	return headers, nil
+}
+
+// ResolveGatewayHeaders resolves secret-backed gateway headers without
+// retaining plaintext in the LLM route or release records.
+func ResolveGatewayHeaders(ctx context.Context, literal, refs map[string]string, resolver SecretResolver) (map[string]string, error) {
+	return resolveHeaderSecretRefs(ctx, literal, refs, resolver, "llm_gateway_route")
+}
+
 // ProvisionCandidateRequest contains the immutable context needed to provision
 // or observe one selected LLM backend candidate.
 type ProvisionCandidateRequest struct {

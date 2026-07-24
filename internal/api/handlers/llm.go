@@ -372,7 +372,7 @@ func gatewayConfig(req *dto.LLMGatewayConfigRequest) *domain.LLMGatewayRouteConf
 	if req == nil {
 		return nil
 	}
-	return &domain.LLMGatewayRouteConfig{PublicModel: req.PublicModel, Path: req.Path, TimeoutSeconds: req.TimeoutSeconds, Headers: req.Headers}
+	return &domain.LLMGatewayRouteConfig{PublicModel: req.PublicModel, Path: req.Path, TimeoutSeconds: req.TimeoutSeconds, Headers: req.Headers, HeaderSecretRefs: req.HeaderSecretRefs}
 }
 func promotionGate(req *dto.LLMPromotionGateRequest) *domain.LLMPromotionGateConfig {
 	if req == nil {
@@ -403,7 +403,7 @@ func externalBackend(req *dto.LLMExternalBackendRequest) *domain.LLMExternalBack
 	if req == nil {
 		return nil
 	}
-	return &domain.LLMExternalBackendConfig{BaseURL: req.BaseURL, HealthURL: req.HealthURL}
+	return &domain.LLMExternalBackendConfig{BaseURL: req.BaseURL, HealthURL: req.HealthURL, HealthHeaders: req.HealthHeaders, HealthHeaderSecretRefs: req.HealthHeaderSecretRefs}
 }
 
 func workerFromLLMHostRequest(req dto.RegisterLLMHostRequest) *domain.Worker {

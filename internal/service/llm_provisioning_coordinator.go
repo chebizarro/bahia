@@ -30,6 +30,7 @@ type LLMProvisioningCoordinator struct {
 	placement         *LLMPlacementService
 	provisioners      llmadapter.ProvisionerResolver
 	gateway           llmadapter.GatewayRouteManager
+	secrets           llmadapter.SecretResolver
 	gate              *LLMPromotionGate
 	promotionLock     LLMPromotionLocker
 	defaultGatewayRef string
@@ -58,6 +59,10 @@ func WithLLMProvisioningResponder(responder LLMProvisioningResponder) LLMProvisi
 
 func WithLLMPromotionLock(lock LLMPromotionLocker) LLMProvisioningCoordinatorOption {
 	return func(c *LLMProvisioningCoordinator) { c.promotionLock = lock }
+}
+
+func WithLLMSecretResolver(resolver llmadapter.SecretResolver) LLMProvisioningCoordinatorOption {
+	return func(c *LLMProvisioningCoordinator) { c.secrets = resolver }
 }
 
 func NewLLMProvisioningCoordinator(registry *LLMRegistryService, envs repository.EnvironmentRepository, runs repository.LLMDeploymentRunRepository, placement *LLMPlacementService, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, logger *zap.Logger, opts ...LLMProvisioningCoordinatorOption) *LLMProvisioningCoordinator {
@@ -226,7 +231,10 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 		return c.failRun(ctx, run, intent, fmt.Errorf("no llm gateway configured for environment %s", env.ID), provisioner, req)
 	}
 	c.publishStatus(ctx, intent, run, "syncing_gateway", "syncing LLM gateway route")
-	spec := BuildLLMGatewayRouteSpec(route, result.BackendEndpoint)
+	spec, err := ResolveLLMGatewayRouteSpec(ctx, route, result.BackendEndpoint, c.secrets)
+	if err != nil {
+		return c.failRun(ctx, run, intent, fmt.Errorf("resolve LLM gateway route secrets: %w", err), provisioner, req)
+	}
 	gatewayObs, superseded, err := c.promoteGateway(ctx, intent, route.ID, env.ID, gatewayRef, spec)
 	if err != nil {
 		return c.failRun(ctx, run, intent, err, provisioner, req)

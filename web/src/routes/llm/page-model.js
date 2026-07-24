@@ -145,7 +145,10 @@ export function buildCreateRoutePayload(routeForm) {
     description: routeForm.description,
     gateway_config: {
       public_model: routeForm.public_model,
-      path: routeForm.path || undefined
+      path: routeForm.path || undefined,
+      ...(routeForm.authorization_secret_ref
+        ? { header_secret_refs: { Authorization: routeForm.authorization_secret_ref } }
+        : {})
     }
   };
 }
@@ -159,7 +162,13 @@ export function buildReleasePayload(releaseForm) {
   };
   if (releaseForm.backend_mode === 'external') {
     payload.backend_preferences = ['external_api'];
-    payload.external_backend = { base_url: releaseForm.external_base_url };
+    payload.external_backend = {
+      base_url: releaseForm.external_base_url,
+      ...(releaseForm.external_health_url ? { health_url: releaseForm.external_health_url } : {}),
+      ...(releaseForm.health_authorization_secret_ref
+        ? { health_header_secret_refs: { Authorization: releaseForm.health_authorization_secret_ref } }
+        : {})
+    };
   } else {
     payload.backend_preferences = ['vllm'];
     payload.runtime_backend = {

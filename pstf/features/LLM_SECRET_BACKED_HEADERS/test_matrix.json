@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "name": "TestResolveLLMGatewayRouteSpecUsesSecretRefsWithoutMutatingRoute",
+      "level": "unit",
+      "covers": ["AC-1"]
+    },
+    {
+      "name": "TestExternalAPIProvisionerResolvesSecretBackedHealthHeaders",
+      "level": "unit",
+      "covers": ["AC-2"]
+    },
+    {
+      "name": "TestValidateLLMHeaderSecretRefs",
+      "level": "unit",
+      "covers": ["AC-3"]
+    }
+  ]
+}

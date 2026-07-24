@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,39 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
+
+type registrySecretResolverStub map[string]string
+
+func (r registrySecretResolverStub) ResolveSecretWithAudit(_ context.Context, ref string, _ domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
+	value, ok := r[ref]
+	if !ok {
+		return "", domain.SecretAccessManifest{}, errors.New("secret not found")
+	}
+	return value, domain.SecretAccessManifest{}, nil
+}
+
+func TestResolveLLMGatewayRouteSpecUsesSecretRefsWithoutMutatingRoute(t *testing.T) {
+	const secretRef = "2e9b746d-58c3-4e86-9ca5-a0184bc2918e"
+	route := &domain.LLMRoute{Name: "chat", GatewayConfig: &domain.LLMGatewayRouteConfig{
+		PublicModel:      "bahia/chat",
+		Headers:          map[string]string{"X-Public": "yes"},
+		HeaderSecretRefs: map[string]string{"Authorization": secretRef},
+	}}
+
+	spec, err := ResolveLLMGatewayRouteSpec(t.Context(), route, "http://backend:8000", registrySecretResolverStub{secretRef: "Bearer route-token"})
+	if err != nil {
+		t.Fatalf("ResolveLLMGatewayRouteSpec() error = %v", err)
+	}
+	if spec.Headers["Authorization"] != "Bearer route-token" || spec.Headers["X-Public"] != "yes" {
+		t.Fatalf("resolved headers = %#v", spec.Headers)
+	}
+	if _, exposed := route.GatewayConfig.Headers["Authorization"]; exposed {
+		t.Fatal("plaintext secret was written back into the persisted route")
+	}
+	if route.GatewayConfig.HeaderSecretRefs["Authorization"] != secretRef {
+		t.Fatalf("secret ref was mutated: %#v", route.GatewayConfig.HeaderSecretRefs)
+	}
+}
 
 func TestLLMRegistryListMethodsTolerateMissingLegacyRepositories(t *testing.T) {
 	reg := NewLLMRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())

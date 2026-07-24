@@ -1,0 +1,11 @@
+{
+  "id": "LLM_SECRET_BACKED_HEADERS",
+  "title": "Secret-backed LLM gateway and health-probe headers",
+  "intent": "Allow LLM routes and external backend health probes to use encrypted Bahia secrets without persisting or publishing plaintext credentials.",
+  "security_invariants": [
+    "LLM route and release state contains only secret UUID references.",
+    "Plaintext is resolved only immediately before the outbound gateway update or health request.",
+    "Every resolution uses the existing versioned secret-access audit path.",
+    "A header cannot have both a literal value and a secret reference."
+  ]
+}

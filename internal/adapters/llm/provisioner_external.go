@@ -16,14 +16,25 @@ var ErrExternalLifecycleUnmanaged = errors.New("external LLM backend lifecycle i
 // ExternalAPIProvisioner represents externally managed LLM providers.
 type ExternalAPIProvisioner struct {
 	httpClient *http.Client
+	secrets    SecretResolver
+}
+
+type ExternalAPIProvisionerOption func(*ExternalAPIProvisioner)
+
+func WithExternalAPISecretResolver(resolver SecretResolver) ExternalAPIProvisionerOption {
+	return func(p *ExternalAPIProvisioner) { p.secrets = resolver }
 }
 
 // NewExternalAPIProvisioner creates an external_api provisioner.
-func NewExternalAPIProvisioner(client *http.Client) *ExternalAPIProvisioner {
+func NewExternalAPIProvisioner(client *http.Client, opts ...ExternalAPIProvisionerOption) *ExternalAPIProvisioner {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &ExternalAPIProvisioner{httpClient: client}
+	p := &ExternalAPIProvisioner{httpClient: client}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func (p *ExternalAPIProvisioner) Provision(ctx context.Context, req ProvisionCandidateRequest) (*ProvisionCandidateResult, error) {
@@ -66,14 +77,24 @@ func (p *ExternalAPIProvisioner) Observe(ctx context.Context, req ProvisionCandi
 	if err != nil {
 		health = domain.HealthStatusUnhealthy
 		meta["health_error"] = err.Error()
-	} else if resp, err := p.httpClient.Do(httpReq); err != nil {
-		health = domain.HealthStatusUnhealthy
-		meta["health_error"] = err.Error()
 	} else {
-		defer resp.Body.Close()
-		meta["health_status_code"] = resp.StatusCode
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		headers, resolveErr := resolveHeaderSecretRefs(ctx, cfg.HealthHeaders, cfg.HealthHeaderSecretRefs, p.secrets, "llm_external_health_probe")
+		if resolveErr != nil {
 			health = domain.HealthStatusUnhealthy
+			meta["health_error"] = resolveErr.Error()
+		} else {
+			applyHeaders(httpReq, headers)
+			resp, requestErr := p.httpClient.Do(httpReq)
+			if requestErr != nil {
+				health = domain.HealthStatusUnhealthy
+				meta["health_error"] = requestErr.Error()
+			} else {
+				defer resp.Body.Close()
+				meta["health_status_code"] = resp.StatusCode
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					health = domain.HealthStatusUnhealthy
+				}
+			}
 		}
 	}
 	return &BackendObservation{
@@ -83,6 +104,12 @@ func (p *ExternalAPIProvisioner) Observe(ctx context.Context, req ProvisionCandi
 		Source:          "external_api",
 		Metadata:        meta,
 	}, nil
+}
+
+func applyHeaders(req *http.Request, headers map[string]string) {
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 }
 
 func (p *ExternalAPIProvisioner) Deprovision(_ context.Context, req ProvisionCandidateRequest) error {

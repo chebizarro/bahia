@@ -229,6 +229,37 @@ func ValidateLLMReleaseConfig(release *LLMRelease) error {
 	if release.ExternalBackend != nil && strings.TrimSpace(release.ExternalBackend.BaseURL) == "" {
 		return fmt.Errorf("%w: external_backend.base_url must not be empty", ErrEmptyField)
 	}
+	if release.ExternalBackend != nil {
+		if err := ValidateLLMHeaderSecretRefs(release.ExternalBackend.HealthHeaders, release.ExternalBackend.HealthHeaderSecretRefs, "external_backend.health"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateLLMHeaderSecretRefs checks that secret-backed HTTP headers use
+// non-empty names, UUID references, and do not shadow literal header values.
+func ValidateLLMHeaderSecretRefs(literal, refs map[string]string, field string) error {
+	literalNames := make(map[string]struct{}, len(literal))
+	for name := range literal {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized == "" {
+			return fmt.Errorf("%w: %s header name must not be empty", ErrEmptyField, field)
+		}
+		literalNames[normalized] = struct{}{}
+	}
+	for name, ref := range refs {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized == "" {
+			return fmt.Errorf("%w: %s secret header name must not be empty", ErrEmptyField, field)
+		}
+		if _, exists := literalNames[normalized]; exists {
+			return fmt.Errorf("%w: %s header %q cannot define both a literal value and a secret ref", ErrInvalidValue, field, name)
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(ref)); err != nil {
+			return fmt.Errorf("%w: %s header %q secret ref must be a secret UUID", ErrInvalidValue, field, name)
+		}
+	}
 	return nil
 }
 

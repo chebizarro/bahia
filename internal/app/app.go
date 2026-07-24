@@ -557,7 +557,8 @@ func New(cfg *config.Config) (*App, error) {
 
 		gatewayManager := llmadapter.NewHTTPGatewayRouteManager(llmGatewayHTTPConfig(cfg.LLM), nil)
 		provisioners := llmadapter.StaticProvisionerResolver{}
-		externalProvisioner := llmadapter.NewExternalAPIProvisioner(nil)
+		llmSecretResolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
+		externalProvisioner := llmadapter.NewExternalAPIProvisioner(nil, llmadapter.WithExternalAPISecretResolver(llmSecretResolver))
 		provisioners[domain.LLMBackendKindExternalAPI] = externalProvisioner
 		for _, kind := range []domain.LLMBackendKind{domain.LLMBackendKindVLLM, domain.LLMBackendKindOllama, domain.LLMBackendKindLlamaCPP} {
 			p, err := llmadapter.NewRuntimeProvisioner(kind, cfg.Runtime, logger)
@@ -570,13 +571,14 @@ func New(cfg *config.Config) (*App, error) {
 		coordOpts := []service.LLMProvisioningCoordinatorOption{
 			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
 			service.WithLLMPromotionLock(service.NewPGLLMPromotionLock(pool, logger)),
+			service.WithLLMSecretResolver(llmSecretResolver),
 		}
 		if controlPlaneSigner != nil && controlPlanePool != nil {
 			llmResponder = controlplane.NewLLMResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)
 			coordOpts = append(coordOpts, service.WithLLMProvisioningResponder(llmResponder))
 		}
 		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
-		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger)
+		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
 		bgManager.RegisterWithOptions(llmCoordinator, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))

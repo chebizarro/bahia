@@ -77,6 +77,9 @@ func (s *LLMRegistryService) CreateRoute(ctx context.Context, route *domain.LLMR
 			return err
 		}
 		defaultRouteGatewayConfig(route)
+		if err := domain.ValidateLLMHeaderSecretRefs(route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, "gateway_config"); err != nil {
+			return err
+		}
 		model := LLMRouteToMLModel(route)
 		if err := s.ml.CreateOrUpdateModel(ctx, model); err != nil {
 			return err
@@ -95,6 +98,9 @@ func (s *LLMRegistryService) CreateRoute(ctx context.Context, route *domain.LLMR
 		return err
 	}
 	defaultRouteGatewayConfig(route)
+	if err := domain.ValidateLLMHeaderSecretRefs(route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, "gateway_config"); err != nil {
+		return err
+	}
 	if err := s.routes.Create(ctx, route); err != nil {
 		return err
 	}
@@ -154,6 +160,9 @@ func (s *LLMRegistryService) UpdateRoute(ctx context.Context, route *domain.LLMR
 			return fmt.Errorf("LLM route is required")
 		}
 		defaultRouteGatewayConfig(route)
+		if err := domain.ValidateLLMHeaderSecretRefs(route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, "gateway_config"); err != nil {
+			return err
+		}
 		return s.ml.CreateOrUpdateModel(ctx, LLMRouteToMLModel(route))
 	}
 	if route == nil {
@@ -171,6 +180,9 @@ func (s *LLMRegistryService) UpdateRoute(ctx context.Context, route *domain.LLMR
 		return err
 	}
 	defaultRouteGatewayConfig(route)
+	if err := domain.ValidateLLMHeaderSecretRefs(route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, "gateway_config"); err != nil {
+		return err
+	}
 	if err := s.routes.Update(ctx, route); err != nil {
 		return err
 	}
@@ -979,4 +991,19 @@ func BuildLLMGatewayRouteSpec(route *domain.LLMRoute, backendEndpoint string) ll
 		spec.Headers = cfg.Headers
 	}
 	return spec
+}
+
+// ResolveLLMGatewayRouteSpec resolves secret-backed headers immediately before
+// applying a route to the gateway. The persisted route remains reference-only.
+func ResolveLLMGatewayRouteSpec(ctx context.Context, route *domain.LLMRoute, backendEndpoint string, resolver llmadapter.SecretResolver) (llmadapter.GatewayRouteSpec, error) {
+	spec := BuildLLMGatewayRouteSpec(route, backendEndpoint)
+	if route == nil || route.GatewayConfig == nil {
+		return spec, nil
+	}
+	headers, err := llmadapter.ResolveGatewayHeaders(ctx, route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, resolver)
+	if err != nil {
+		return llmadapter.GatewayRouteSpec{}, err
+	}
+	spec.Headers = headers
+	return spec, nil
 }

@@ -169,10 +169,11 @@ type RecordObservationRequest struct {
 
 // LLMGatewayConfigRequest configures gateway routing for an LLM route.
 type LLMGatewayConfigRequest struct {
-	PublicModel    string            `json:"public_model,omitempty"`
-	Path           string            `json:"path,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
+	PublicModel      string            `json:"public_model,omitempty"`
+	Path             string            `json:"path,omitempty"`
+	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	HeaderSecretRefs map[string]string `json:"header_secret_refs,omitempty"`
 }
 
 // LLMPlacementPolicyRequest captures placement preferences for LLM backends.
@@ -232,8 +233,10 @@ type LLMRuntimeManagedBackendRequest struct {
 
 // LLMExternalBackendRequest configures externally hosted LLM backends.
 type LLMExternalBackendRequest struct {
-	BaseURL   string `json:"base_url"`
-	HealthURL string `json:"health_url,omitempty"`
+	BaseURL                string            `json:"base_url"`
+	HealthURL              string            `json:"health_url,omitempty"`
+	HealthHeaders          map[string]string `json:"health_headers,omitempty"`
+	HealthHeaderSecretRefs map[string]string `json:"health_header_secret_refs,omitempty"`
 }
 
 // RegisterLLMHostRequest registers or updates an LLM-capable runtime host.

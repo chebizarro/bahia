@@ -50,3 +50,18 @@ func TestValidateLLMReleaseConfig(t *testing.T) {
 	external.ExternalBackend = &LLMExternalBackendConfig{}
 	require.Error(t, ValidateLLMReleaseConfig(&external))
 }
+
+func TestValidateLLMHeaderSecretRefs(t *testing.T) {
+	secretID := uuid.New().String()
+	require.NoError(t, ValidateLLMHeaderSecretRefs(
+		map[string]string{"X-Public": "yes"},
+		map[string]string{"Authorization": secretID},
+		"gateway_config",
+	))
+	require.Error(t, ValidateLLMHeaderSecretRefs(nil, map[string]string{"Authorization": "not-a-uuid"}, "gateway_config"))
+	require.Error(t, ValidateLLMHeaderSecretRefs(
+		map[string]string{"authorization": "literal"},
+		map[string]string{"Authorization": secretID},
+		"gateway_config",
+	))
+}
