@@ -162,6 +162,11 @@ export function buildReleasePayload(releaseForm) {
   };
   if (releaseForm.backend_mode === 'external') {
     payload.backend_preferences = ['external_api'];
+    if (releaseForm.litellm_model?.trim()) {
+      payload.metadata = {
+        litellm_model: releaseForm.litellm_model.trim()
+      };
+    }
     payload.external_backend = {
       base_url: releaseForm.external_base_url,
       ...(releaseForm.external_health_url ? { health_url: releaseForm.external_health_url } : {}),

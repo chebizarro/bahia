@@ -47,14 +47,18 @@ describe('llm page model helpers', () => {
       model_ref: 'hf://meta-llama/Llama-3',
       model_source: 'huggingface',
       backend_mode: 'external',
-      external_base_url: 'https://llm.example.com'
+      external_base_url: 'https://openrouter.ai/api/v1',
+      litellm_model: '  openrouter/anthropic/claude-sonnet-4  '
     })).toEqual({
       route_id: 'llm-route-1',
       version: 'v2',
       model_ref: 'hf://meta-llama/Llama-3',
       model_source: 'huggingface',
       backend_preferences: ['external_api'],
-      external_backend: { base_url: 'https://llm.example.com' }
+      metadata: {
+        litellm_model: 'openrouter/anthropic/claude-sonnet-4'
+      },
+      external_backend: { base_url: 'https://openrouter.ai/api/v1' }
     });
 
     expect(buildReleasePayload({

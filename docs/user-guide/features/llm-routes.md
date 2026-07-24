@@ -59,6 +59,17 @@ config:
   temperature: 0.7
 ```
 
+External releases can optionally set the LiteLLM provider-native model identifier
+in the **LiteLLM provider model** field. Bahia stores it as
+`metadata.litellm_model`; the LiteLLM adapter uses it instead of constructing an
+OpenAI-compatible `api_base` backend. For example, an OpenRouter release can use:
+
+```text
+openrouter/anthropic/claude-sonnet-4
+```
+
+Leave the field blank for Routstr and other OpenAI-compatible base URL backends.
+
 ### Deployment
 
 Deploying a release to an environment makes it live.

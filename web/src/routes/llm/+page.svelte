@@ -69,6 +69,7 @@
     external_base_url: '',
     external_health_url: '',
     health_authorization_secret_ref: '',
+    litellm_model: '',
     runtime_image: 'vllm/vllm-openai:latest',
     runtime_container_port: 8000,
     runtime_host_port: 18000,
@@ -169,7 +170,8 @@
         model_ref: '',
         external_base_url: '',
         external_health_url: '',
-        health_authorization_secret_ref: ''
+        health_authorization_secret_ref: '',
+        litellm_model: ''
       };
       setSuccess(`Registered release ${content.version || content.release_id}`);
     } catch (err) {
@@ -317,6 +319,11 @@
             <label>
               External base URL
               <input bind:value={releaseForm.external_base_url} name="external-base-url" placeholder="https://llm.example.com" required />
+            </label>
+            <label>
+              LiteLLM provider model
+              <input bind:value={releaseForm.litellm_model} name="litellm-model" placeholder="openrouter/anthropic/claude-sonnet-4" />
+              <span class="help-text">Optional provider-native model identifier. Leave blank for OpenAI-compatible base URL routing.</span>
             </label>
             <label>
               Health URL
@@ -590,6 +597,11 @@
     flex-direction: column;
     gap: 0.4rem;
     font-size: 0.9rem;
+  }
+  .help-text {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.35;
   }
   input,
   textarea,
