@@ -1,0 +1,64 @@
+groups:
+  - name: bahia-ws6
+    rules:
+      - alert: BahiaWorkerHeartbeatStale
+        expr: bahia_worker_heartbeat_lag_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker {{ $labels.worker }} heartbeat is stale"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaworkerheartbeatstale"
+      - alert: BahiaWorkerDown
+        expr: bahia_worker_heartbeat_lag_seconds > 1800
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker {{ $labels.worker }} is presumed down"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaworkerdown"
+      - alert: BahiaDriftStuck
+        expr: bahia_fleet_health_drift_stuck > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "One or more Bahia service states have stuck drift"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiadriftstuck"
+      - alert: BahiaWorkerResourcePressure
+        expr: bahia_worker_pressure_recommendations{action="operator_intervention"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker disk, VRAM, memory, or thermal pressure needs intervention"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaworkerresourcepressure"
+      - alert: BahiaRelayDegraded
+        expr: (bahia_nostr_relays_degraded_total + bahia_nostr_relays_unhealthy_total) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bahia relay connectivity is degraded"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiarelaydegraded"
+      - alert: BahiaAudit4903Anomaly
+        expr: increase(bahia_audit_4903_anomalies_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bahia detected an invalid or contradictory kind-4903 audit event"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaaudit4903anomaly"
+      - alert: BahiaAuthorizationRejectionSpike
+        expr: sum(increase(bahia_authorization_rejections_total[5m])) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bahia authorization rejection rate has spiked"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaauthorizationrejectionspike"
+      - alert: BahiaTierRejectionSpike
+        expr: sum(increase(bahia_tier_rejections_total[5m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bahia dependency-tier rejection rate has spiked"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"

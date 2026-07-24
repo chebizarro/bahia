@@ -88,8 +88,11 @@ type Metrics struct {
 	ReconcileTotal         int64
 
 	// Nostr metrics
-	NostrEventsPublished map[string]int64 // key: kind
-	NostrEventsReceived  map[string]int64
+	NostrEventsPublished    map[string]int64 // key: kind
+	NostrEventsReceived     map[string]int64
+	Audit4903AnomaliesTotal int64
+	AuthorizationRejections map[string]int64 // key: bounded reason
+	TierRejections          map[string]int64 // key: requested tier
 
 	// Nostr protocol metrics (NIP-01 frames)
 	NostrEOSELatencies    []float64        // EOSE latency in seconds
@@ -119,24 +122,26 @@ type Metrics struct {
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		HTTPRequestsTotal:      make(map[string]int64),
-		DeploymentsTotal:       make(map[string]int64),
-		AdoptionScansTotal:     make(map[string]int64),
-		AdoptionImportsTotal:   make(map[string]int64),
-		RuntimeActionsTotal:    make(map[string]int64),
-		NostrEventsPublished:   make(map[string]int64),
-		NostrEventsReceived:    make(map[string]int64),
-		NostrPublishOK:         make(map[string]int64),
-		NostrPublishFailed:     make(map[string]int64),
-		NostrReconnects:        make(map[string]int64),
-		NostrRelayHealthy:      make(map[string]bool),
-		NostrRelayDegraded:     make(map[string]bool),
-		NostrRelaySuccessRate:  make(map[string]float64),
-		LoomJobsTotal:          make(map[string]int64),
-		CashuPaymentsTotal:     make(map[string]int64),
-		CashuWalletBalance:     make(map[string]int64),
-		HygieneCandidatesTotal: make(map[string]int64),
-		HygieneActionsTotal:    make(map[string]int64),
+		HTTPRequestsTotal:       make(map[string]int64),
+		DeploymentsTotal:        make(map[string]int64),
+		AdoptionScansTotal:      make(map[string]int64),
+		AdoptionImportsTotal:    make(map[string]int64),
+		RuntimeActionsTotal:     make(map[string]int64),
+		NostrEventsPublished:    make(map[string]int64),
+		NostrEventsReceived:     make(map[string]int64),
+		AuthorizationRejections: make(map[string]int64),
+		TierRejections:          make(map[string]int64),
+		NostrPublishOK:          make(map[string]int64),
+		NostrPublishFailed:      make(map[string]int64),
+		NostrReconnects:         make(map[string]int64),
+		NostrRelayHealthy:       make(map[string]bool),
+		NostrRelayDegraded:      make(map[string]bool),
+		NostrRelaySuccessRate:   make(map[string]float64),
+		LoomJobsTotal:           make(map[string]int64),
+		CashuPaymentsTotal:      make(map[string]int64),
+		CashuWalletBalance:      make(map[string]int64),
+		HygieneCandidatesTotal:  make(map[string]int64),
+		HygieneActionsTotal:     make(map[string]int64),
 	}
 }
 
@@ -465,6 +470,36 @@ func (m *Metrics) RecordNostrReceived(kind string) {
 	m.NostrEventsReceived[kind]++
 }
 
+// RecordAudit4903Anomaly records a rejected or contradictory audit event.
+func (m *Metrics) RecordAudit4903Anomaly() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Audit4903AnomaliesTotal++
+}
+
+// RecordAuthorizationRejection records a rejection using a bounded reason.
+func (m *Metrics) RecordAuthorizationRejection(reason string) {
+	switch reason {
+	case "policy", "identity", "replay", "signature":
+	default:
+		reason = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.AuthorizationRejections[reason]++
+}
+
+// RecordTierRejection records a request rejected by Bahia's active tier.
+func (m *Metrics) RecordTierRejection(requestedTier int) {
+	tier := fmt.Sprintf("%d", requestedTier)
+	if requestedTier < 0 || requestedTier > 3 {
+		tier = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.TierRejections[tier]++
+}
+
 // RecordNostrEOSE records the latency from subscription start to EOSE receipt.
 func (m *Metrics) RecordNostrEOSE(latency time.Duration) {
 	m.mu.Lock()
@@ -736,6 +771,19 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintln(w, "# TYPE bahia_nostr_events_received_total counter")
 		for kind, count := range m.NostrEventsReceived {
 			fmt.Fprintf(w, "bahia_nostr_events_received_total{kind=%q} %d\n", kind, count)
+		}
+		fmt.Fprintln(w, "# HELP bahia_audit_4903_anomalies_total Invalid or contradictory kind-4903 audit events")
+		fmt.Fprintln(w, "# TYPE bahia_audit_4903_anomalies_total counter")
+		fmt.Fprintf(w, "bahia_audit_4903_anomalies_total %d\n", m.Audit4903AnomaliesTotal)
+		fmt.Fprintln(w, "# HELP bahia_authorization_rejections_total Authorization rejections by bounded reason")
+		fmt.Fprintln(w, "# TYPE bahia_authorization_rejections_total counter")
+		for _, reason := range []string{"policy", "identity", "replay", "signature", "other"} {
+			fmt.Fprintf(w, "bahia_authorization_rejections_total{reason=%q} %d\n", reason, m.AuthorizationRejections[reason])
+		}
+		fmt.Fprintln(w, "# HELP bahia_tier_rejections_total Requests rejected because Bahia's active tier was insufficient")
+		fmt.Fprintln(w, "# TYPE bahia_tier_rejections_total counter")
+		for _, tier := range []string{"0", "1", "2", "3", "other"} {
+			fmt.Fprintf(w, "bahia_tier_rejections_total{tier=%q} %d\n", tier, m.TierRejections[tier])
 		}
 
 		// Nostr protocol metrics (EOSE, OK, reconnects)

@@ -1,0 +1,81 @@
+rule_files:
+  - bahia-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'bahia_worker_heartbeat_lag_seconds{worker="worker-a"}'
+        values: '1900x10'
+      - series: 'bahia_fleet_health_drift_stuck'
+        values: '1x10'
+      - series: 'bahia_worker_pressure_recommendations{action="operator_intervention"}'
+        values: '2x15'
+      - series: 'bahia_nostr_relays_degraded_total'
+        values: '1x10'
+      - series: 'bahia_nostr_relays_unhealthy_total'
+        values: '0x10'
+      - series: 'bahia_audit_4903_anomalies_total'
+        values: '0 0 0 0 0 1 1 1 1 1'
+      - series: 'bahia_authorization_rejections_total{reason="policy"}'
+        values: '0 0 0 0 0 12 12 12 12 12'
+      - series: 'bahia_tier_rejections_total{tier="3"}'
+        values: '0 0 0 0 0 6 6 6 6 6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BahiaWorkerHeartbeatStale
+        exp_alerts:
+          - exp_labels: {severity: warning, worker: worker-a}
+            exp_annotations:
+              summary: "Worker worker-a heartbeat is stale"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaworkerheartbeatstale"
+      - eval_time: 6m
+        alertname: BahiaWorkerDown
+        exp_alerts:
+          - exp_labels: {severity: critical, worker: worker-a}
+            exp_annotations:
+              summary: "Worker worker-a is presumed down"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaworkerdown"
+      - eval_time: 6m
+        alertname: BahiaDriftStuck
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "One or more Bahia service states have stuck drift"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiadriftstuck"
+      - eval_time: 11m
+        alertname: BahiaWorkerResourcePressure
+        exp_alerts:
+          - exp_labels: {action: operator_intervention, severity: warning}
+            exp_annotations:
+              summary: "Worker disk, VRAM, memory, or thermal pressure needs intervention"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaworkerresourcepressure"
+      - eval_time: 6m
+        alertname: BahiaRelayDegraded
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Bahia relay connectivity is degraded"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiarelaydegraded"
+      - eval_time: 6m
+        alertname: BahiaAudit4903Anomaly
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Bahia detected an invalid or contradictory kind-4903 audit event"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaaudit4903anomaly"
+      - eval_time: 6m
+        alertname: BahiaAuthorizationRejectionSpike
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Bahia authorization rejection rate has spiked"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiaauthorizationrejectionspike"
+      - eval_time: 6m
+        alertname: BahiaTierRejectionSpike
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Bahia dependency-tier rejection rate has spiked"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
