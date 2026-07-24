@@ -9,8 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
+
+type fleetHealthWorkersStub struct{ workers []domain.Worker }
+
+func (s fleetHealthWorkersStub) List(context.Context, string, int) ([]domain.Worker, error) {
+	return s.workers, nil
+}
+
+type fleetHealthStatesStub struct {
+	states []domain.EnvironmentServiceState
+}
+
+func (s fleetHealthStatesStub) ListAll(context.Context) ([]domain.EnvironmentServiceState, error) {
+	return s.states, nil
+}
 
 func TestSetup_Disabled(t *testing.T) {
 	logger := zap.NewNop()
@@ -105,6 +121,64 @@ func TestSetup_UnsupportedOTLPProtocolIsObservable(t *testing.T) {
 	}
 	if err := provider.Shutdown(context.Background()); err == nil {
 		t.Fatal("expected Shutdown to return retained setup error")
+	}
+}
+
+func TestMetricsHandler_RendersFleetHealthReadModels(t *testing.T) {
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	heartbeat := now.Add(-90 * time.Second)
+	provider := Setup(Config{}, zap.NewNop())
+	provider.now = func() time.Time { return now }
+	provider.SetFleetHealthSources(
+		fleetHealthWorkersStub{workers: []domain.Worker{
+			{
+				PubKey: "worker-a", LastHeartbeatAt: &heartbeat,
+				Telemetry: &domain.WorkerTelemetry{SampledAt: now.Add(-time.Minute)},
+				Pressure: &domain.WorkerPressureAssessment{
+					CapacityClass: domain.WorkerCapacityOpen, RecommendedAction: domain.WorkerPressureActionNone,
+				},
+			},
+			{
+				PubKey:    "worker-b",
+				Telemetry: &domain.WorkerTelemetry{SampledAt: now.Add(-20 * time.Minute)},
+				Pressure: &domain.WorkerPressureAssessment{
+					CapacityClass: domain.WorkerCapacityBlocked, RecommendedAction: domain.WorkerPressureActionOperatorIntervention,
+				},
+			},
+			{PubKey: "worker-c"},
+		}},
+		fleetHealthStatesStub{states: []domain.EnvironmentServiceState{
+			{ServiceID: uuid.New(), DriftStatus: domain.DriftStatusInSync, UpdatedAt: now},
+			{ServiceID: uuid.New(), DriftStatus: domain.DriftStatusDrifted, UpdatedAt: now.Add(-20 * time.Minute)},
+			{ServiceID: uuid.New(), DriftStatus: domain.DriftStatusUnknown, UpdatedAt: now},
+		}},
+	)
+
+	recorder := httptest.NewRecorder()
+	provider.MetricsHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := recorder.Body.String()
+	for _, want := range []string{
+		`bahia_worker_capacity_class_workers{class="open"} 1`,
+		`bahia_worker_capacity_class_workers{class="blocked"} 1`,
+		`bahia_worker_capacity_class_workers{class="reduced"} 1`,
+		`bahia_worker_telemetry_freshness_workers{state="fresh"} 1`,
+		`bahia_worker_telemetry_freshness_workers{state="stale"} 1`,
+		`bahia_worker_telemetry_freshness_workers{state="absent"} 1`,
+		`bahia_worker_heartbeat_lag_seconds{worker="worker-a"} 90`,
+		`bahia_fleet_health_drift_states{status="drifted"} 1`,
+		`bahia_fleet_health_drift_age_seconds_max 1200`,
+		`bahia_fleet_health_drift_stuck 1`,
+		`bahia_fleet_health_services{health="healthy"} 1`,
+		`bahia_fleet_health_services{health="degraded"} 1`,
+		`bahia_fleet_health_services{health="unknown"} 1`,
+		`bahia_worker_pressure_recommendations{action="operator_intervention"} 2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "secret") {
+		t.Fatalf("metrics unexpectedly contain secret material: %s", body)
 	}
 }
 

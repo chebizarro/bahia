@@ -378,6 +378,9 @@ func New(cfg *config.Config) (*App, error) {
 		ServiceName:  cfg.Telemetry.ServiceName,
 		OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
 	}, logger)
+	if dbAvailable {
+		telemetryProvider.SetFleetHealthSources(workerRepo, stateRepo)
+	}
 
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
