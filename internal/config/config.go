@@ -326,10 +326,11 @@ type LLMControlplaneConfig struct {
 
 // LLMGatewayEndpointConfig describes one inference gateway admin endpoint.
 type LLMGatewayEndpointConfig struct {
-	Type      string        `koanf:"type"`
-	BaseURL   string        `koanf:"base_url"`
-	AuthToken string        `koanf:"auth_token"`
-	Timeout   time.Duration `koanf:"timeout"`
+	Type          string        `koanf:"type"`
+	BaseURL       string        `koanf:"base_url"`
+	AuthToken     string        `koanf:"auth_token"`
+	AuthTokenFile string        `koanf:"auth_token_file"`
+	Timeout       time.Duration `koanf:"timeout"`
 }
 
 // RegistryAdapterConfig holds OCI registry adapter settings for multi-registry support.
@@ -1440,6 +1441,12 @@ func (c *Config) validateLLM() error {
 		}
 		if strings.TrimSpace(gateway.BaseURL) == "" {
 			return fmt.Errorf("config validation failed: llm.gateways.%s.base_url is required", name)
+		}
+		if strings.TrimSpace(gateway.AuthToken) != "" && strings.TrimSpace(gateway.AuthTokenFile) != "" {
+			return fmt.Errorf("config validation failed: llm.gateways.%s must set only one of auth_token or auth_token_file", name)
+		}
+		if file := strings.TrimSpace(gateway.AuthTokenFile); file != "" && !filepath.IsAbs(file) {
+			return fmt.Errorf("config validation failed: llm.gateways.%s.auth_token_file must be an absolute path", name)
 		}
 		parsed, err := url.Parse(gateway.BaseURL)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {

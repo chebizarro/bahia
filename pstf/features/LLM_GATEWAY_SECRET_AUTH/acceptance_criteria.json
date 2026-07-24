@@ -1,0 +1,21 @@
+{
+  "feature_id": "LLM_GATEWAY_SECRET_AUTH",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "An absolute auth_token_file is accepted and its trimmed content becomes the gateway HTTP bearer token."
+    },
+    {
+      "id": "AC2",
+      "statement": "Missing, unreadable, or empty token files fail Bahia startup with gateway-scoped errors."
+    },
+    {
+      "id": "AC3",
+      "statement": "Relative token paths and simultaneous auth_token plus auth_token_file configuration are rejected."
+    },
+    {
+      "id": "AC4",
+      "statement": "Production documentation shows a file-backed gateway credential and contains no credential value."
+    }
+  ]
+}

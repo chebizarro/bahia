@@ -12,6 +12,28 @@ LLM Routes provide:
 - **Deployment workflow** — Deploy with approvals
 - **State tracking** — Monitor active deployments
 
+## Gateway administration credentials
+
+Production gateway-manager credentials should be mounted as files rather than
+written into Bahia's configuration:
+
+```yaml
+llm:
+  enabled: true
+  default_gateway_ref: fleet
+  gateways:
+    fleet:
+      type: http
+      base_url: http://bahia-litellm-adapter:8790
+      auth_token_file: /run/secrets/bahia-litellm-adapter-token
+      timeout: 10s
+```
+
+`auth_token_file` must be an absolute path. Bahia reads it once during startup,
+trims surrounding whitespace, and fails startup if the file is missing or
+empty. `auth_token` remains available for compatibility, but the two settings
+are mutually exclusive.
+
 ## Key Concepts
 
 ### Route

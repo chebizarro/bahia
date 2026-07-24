@@ -1,0 +1,14 @@
+{
+  "feature_id": "LLM_GATEWAY_SECRET_AUTH",
+  "title": "File-backed authentication for LLM gateway administration",
+  "intent": "Allow Bahia to authenticate to an inference gateway administrator without persisting the bearer token in Bahia configuration.",
+  "scope": [
+    "Add auth_token_file to each configured LLM gateway endpoint.",
+    "Resolve the token at Bahia startup and pass only the resolved value to the HTTP adapter.",
+    "Fail startup for missing, unreadable, empty, relative, or conflicting token sources."
+  ],
+  "out_of_scope": [
+    "Provider credentials carried by LLM releases; those use secret-backed route headers.",
+    "Runtime rotation without restarting Bahia."
+  ]
+}

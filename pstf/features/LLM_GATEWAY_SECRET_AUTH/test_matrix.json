@@ -1,0 +1,21 @@
+{
+  "feature_id": "LLM_GATEWAY_SECRET_AUTH",
+  "tests": [
+    {
+      "criterion": "AC1",
+      "test": "TestLLMGatewayHTTPConfigReadsAuthTokenFile"
+    },
+    {
+      "criterion": "AC2",
+      "test": "TestLLMGatewayHTTPConfigRejectsUnreadableOrEmptyTokenFile"
+    },
+    {
+      "criterion": "AC3",
+      "test": "TestValidateLLMGatewayAuthTokenFile"
+    },
+    {
+      "criterion": "AC4",
+      "test": "Static review of docs/user-guide/features/llm-routes.md"
+    }
+  ]
+}

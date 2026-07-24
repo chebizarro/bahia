@@ -555,7 +555,11 @@ func New(cfg *config.Config) (*App, error) {
 		llmStateRepo := repository.NewPgLLMRouteStateRepository(pool)
 		llmRegistry = service.NewLLMRegistryService(llmRouteRepo, llmReleaseRepo, envRepo, llmIntentRepo, llmRunRepo, llmObsRepo, llmStateRepo, publisher, logger)
 
-		gatewayManager := llmadapter.NewHTTPGatewayRouteManager(llmGatewayHTTPConfig(cfg.LLM), nil)
+		gatewayHTTPConfig, err := llmGatewayHTTPConfig(cfg.LLM)
+		if err != nil {
+			return nil, fmt.Errorf("resolving LLM gateway authentication: %w", err)
+		}
+		gatewayManager := llmadapter.NewHTTPGatewayRouteManager(gatewayHTTPConfig, nil)
 		provisioners := llmadapter.StaticProvisionerResolver{}
 		llmSecretResolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
 		externalProvisioner := llmadapter.NewExternalAPIProvisioner(nil, llmadapter.WithExternalAPISecretResolver(llmSecretResolver))
@@ -2271,12 +2275,23 @@ func compactBootstrapAuthors(groups ...[]string) []string {
 	return authors
 }
 
-func llmGatewayHTTPConfig(cfg config.LLMControlplaneConfig) llmadapter.GatewayHTTPConfig {
+func llmGatewayHTTPConfig(cfg config.LLMControlplaneConfig) (llmadapter.GatewayHTTPConfig, error) {
 	endpoints := make(map[string]llmadapter.GatewayHTTPEndpointConfig, len(cfg.Gateways))
 	for ref, ep := range cfg.Gateways {
-		endpoints[ref] = llmadapter.GatewayHTTPEndpointConfig{Type: ep.Type, BaseURL: ep.BaseURL, AuthToken: ep.AuthToken, Timeout: ep.Timeout}
+		authToken := strings.TrimSpace(ep.AuthToken)
+		if file := strings.TrimSpace(ep.AuthTokenFile); file != "" {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return llmadapter.GatewayHTTPConfig{}, fmt.Errorf("read llm.gateways.%s.auth_token_file %q: %w", ref, file, err)
+			}
+			authToken = strings.TrimSpace(string(raw))
+			if authToken == "" {
+				return llmadapter.GatewayHTTPConfig{}, fmt.Errorf("llm.gateways.%s.auth_token_file %q is empty", ref, file)
+			}
+		}
+		endpoints[ref] = llmadapter.GatewayHTTPEndpointConfig{Type: ep.Type, BaseURL: ep.BaseURL, AuthToken: authToken, Timeout: ep.Timeout}
 	}
-	return llmadapter.GatewayHTTPConfig{Endpoints: endpoints}
+	return llmadapter.GatewayHTTPConfig{Endpoints: endpoints}, nil
 }
 
 type fipsSubscriberLifecycle interface {
