@@ -18,6 +18,7 @@ export class PoolBackedClient {
     this.activeSubscriptions = new Set();
     this.connectPromise = null;
     this.connectRelaysKey = '';
+    this.disconnected = false;
     this.relayAliases = new Map();
     this.configurePool();
     this.updateRelayAliases();
@@ -95,6 +96,7 @@ export class PoolBackedClient {
   }
 
   async connect(relays = this.relays, { force = false } = {}) {
+    this.disconnected = false;
     const targetRelays = uniqueRelays(relays);
     const connectKey = targetRelays.map(normalizeRelayUrl).join('\n');
     if (this.connectPromise && this.connectRelaysKey === connectKey) return this.connectPromise;
@@ -187,6 +189,8 @@ export class PoolBackedClient {
   }
 
   disconnect() {
+    if (this.disconnected) return;
+    this.disconnected = true;
     Array.from(this.activeSubscriptions).forEach((unsubscribe) => unsubscribe());
     this.activeSubscriptions.clear();
     this.pool?.destroy?.();

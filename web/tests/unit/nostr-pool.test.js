@@ -60,4 +60,14 @@ describe('PoolBackedClient connect lifecycle', () => {
     ]);
     expect(pool.ensureRelay).toHaveBeenCalledTimes(1);
   });
+
+  it('destroys a pool only once when disconnect is repeated', () => {
+    const pool = createPool();
+    const client = createNostrPoolClient({ pool });
+
+    client.disconnect();
+    client.disconnect();
+
+    expect(pool.destroy).toHaveBeenCalledTimes(1);
+  });
 });

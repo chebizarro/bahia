@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import { createIndexedDBCollectionCacheAdapter } from '../../src/lib/stores/collections/indexeddb-cache.js';
 
 const LEGACY_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
@@ -76,6 +77,32 @@ describe('controlplane collection cold-start cache', () => {
     expect(adapter.records.get('backupRuns')).toBeUndefined();
     expect(adapter.records.get('packagePromotions')).toBeUndefined();
     expect(adapter.records.get('mlEndpointStates')).toBeUndefined();
+  });
+
+  it('persists deeply reactive collection entries through the browser structured-clone boundary', async () => {
+    const indexedDB = new IDBFactory();
+    const indexedDBAdapter = createIndexedDBCollectionCacheAdapter({ indexedDB });
+    collections.setControlplaneCacheStorageAdapter(indexedDBAdapter);
+    collections.llmRoutes.push({
+      id: 'route-1',
+      config: {
+        route_name: 'routstr',
+        metadata: { backend_class: 'routstrd' }
+      }
+    });
+
+    await expect(collections.persistCachedCollections()).resolves.toBe(true);
+
+    const records = await indexedDBAdapter.getAll();
+    expect(records.find((record) => record.name === 'llmRoutes')?.items).toEqual([
+      {
+        id: 'route-1',
+        config: {
+          route_name: 'routstr',
+          metadata: { backend_class: 'routstrd' }
+        }
+      }
+    ]);
   });
 
   it('caps persisted collections and keeps the newest timestamped items', async () => {

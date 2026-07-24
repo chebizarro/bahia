@@ -1,0 +1,20 @@
+{
+  "feature_id": "WEB_CACHE_RELAY_LIFECYCLE",
+  "criteria": [
+    {
+      "id": "WEB-CACHE-AC1",
+      "statement": "A deeply reactive LLM route collection persists through an IndexedDB structured-clone boundary and hydrates as equivalent plain data.",
+      "tests": ["web/tests/unit/collections-cache.test.js"]
+    },
+    {
+      "id": "WEB-RELAY-AC1",
+      "statement": "Repeated disconnect calls destroy a pool no more than once per connected lifecycle.",
+      "tests": ["web/tests/unit/nostr-pool.test.js"]
+    },
+    {
+      "id": "WEB-BUILD-AC1",
+      "statement": "The production web application passes static checks and builds successfully.",
+      "tests": ["npm run lint", "npm run build"]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "feature_id": "WEB_CACHE_RELAY_LIFECYCLE",
+  "title": "Browser cache serialization and relay teardown correctness",
+  "observed_behavior": [
+    "Control-plane collection entries are stored in deeply reactive Svelte $state arrays.",
+    "The IndexedDB adapter receives those reactive Proxy entries directly and browser structured cloning rejects them with DataCloneError.",
+    "The in-memory cache test adapter JSON-serializes records, masking the browser-only failure.",
+    "Repeated PoolBackedClient.disconnect calls destroy the same externally supplied pool more than once."
+  ],
+  "intended_behavior": [
+    "Bahia persists plain snapshot DTOs rather than reactive application state.",
+    "Browser IndexedDB writes and reads reactive LLM route data without warnings or data loss.",
+    "Disconnect remains safe and idempotent while preserving subscription and pool cleanup."
+  ],
+  "scope": [
+    "web/src/lib/stores/collections/index.svelte.js",
+    "web/src/lib/nostr/pool-client.js",
+    "web/tests/unit/collections-cache.test.js",
+    "web/tests/unit/nostr-pool.test.js"
+  ]
+}

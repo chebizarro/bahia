@@ -281,11 +281,22 @@ function capPersistedCollection(collectionName, values, scale = 1) {
   return values.slice(-cap);
 }
 
+function snapshotPersistedCollection(collectionName) {
+  const values = COLLECTION_TARGETS[collectionName];
+  if (!Array.isArray(values)) return [];
+
+  // IndexedDB uses the structured-clone algorithm, which cannot clone the
+  // reactive Proxy objects produced by Svelte's deeply reactive $state arrays.
+  // Snapshot at the persistence boundary so the cache contains plain data
+  // transfer objects rather than live application state.
+  return $state.snapshot(values);
+}
+
 export function persistedControlplaneCollections(scale = 1) {
   return Object.fromEntries(
     PERSISTED_CONTROLPLANE_COLLECTIONS.map((collectionName) => [
       collectionName,
-      capPersistedCollection(collectionName, COLLECTION_TARGETS[collectionName], scale)
+      capPersistedCollection(collectionName, snapshotPersistedCollection(collectionName), scale)
     ])
   );
 }
