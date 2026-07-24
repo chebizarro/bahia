@@ -1,0 +1,77 @@
+{
+  "id": null,
+  "uid": "bahia-fleet-health-v1",
+  "title": "Bahia Fleet Health",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "timezone": "browser",
+  "tags": ["bahia", "fleet", "ws6"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Service health", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (health) (bahia_fleet_health_services)", "legendFormat": "{{health}}"}],
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Deployment drift", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "bahia_fleet_health_drift_stuck", "legendFormat": "stuck"},
+        {"refId": "B", "expr": "bahia_fleet_health_drift_age_seconds_max", "legendFormat": "oldest seconds"}
+      ],
+      "gridPos": {"h": 7, "w": 6, "x": 6, "y": 0}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Worker capacity and pressure", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "bahia_worker_capacity_class_workers", "legendFormat": "capacity {{class}}"},
+        {"refId": "B", "expr": "bahia_worker_pressure_recommendations", "legendFormat": "action {{action}}"}
+      ],
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Relay health", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "bahia_nostr_relays_healthy_total", "legendFormat": "healthy"},
+        {"refId": "B", "expr": "bahia_nostr_relays_degraded_total", "legendFormat": "degraded"},
+        {"refId": "C", "expr": "bahia_nostr_relays_unhealthy_total", "legendFormat": "unhealthy"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 7}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Loom jobs", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "bahia_loom_jobs_inflight", "legendFormat": "inflight"},
+        {"refId": "B", "expr": "rate(bahia_loom_jobs_total[5m])", "legendFormat": "{{status}}/s"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 7}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Cashu and Routstr spend", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "bahia_cashu_payments_sats_total", "legendFormat": "Bahia Cashu sats"},
+        {"refId": "B", "expr": "fleet_routstr_sats_spent_total", "legendFormat": "Routstr sats"},
+        {"refId": "C", "expr": "fleet_routstr_wallet_balance_sats", "legendFormat": "Routstr balance {{mint}}"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 7}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Adoption operations", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "rate(bahia_adoption_scans_total[5m])", "legendFormat": "scans {{status}}/s"},
+        {"refId": "B", "expr": "rate(bahia_adoption_imports_total[5m])", "legendFormat": "imports {{status}}/s"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 15}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Runtime operations", "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "rate(bahia_runtime_actions_total[5m])", "legendFormat": "{{key}}/s"},
+        {"refId": "B", "expr": "bahia_reconcile_states_checked", "legendFormat": "states checked"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 15}
+    }
+  ]
+}
