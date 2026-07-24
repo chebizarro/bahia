@@ -15,6 +15,51 @@ signing key or publish an event. Deploying the publisher, configuring the
 authenticated NIP-29 group, and routing Alertmanager webhooks are Track B
 operations and are not implied by these source fixtures.
 
+## Detection and response matrix
+
+| Alert | Detection evidence | First responder | Escalation | Immediate safe action |
+|---|---|---|---|---|
+| `BahiaWorkerHeartbeatStale` | Worker heartbeat lag exceeds 300 seconds for five minutes | Fleet operator | Tier 1 | Inspect worker and relay health; stop assigning new work if freshness continues degrading |
+| `BahiaWorkerDown` | Worker heartbeat lag exceeds 1,800 seconds for five minutes | Fleet operator | Tier 2 | Cordon the worker and identify restart-safe assignments; do not restart workloads blindly |
+| `BahiaDriftStuck` | At least one drifted service state is older than the threshold or has reconciliation failures | Service owner | Tier 2 | Freeze additional promotion for the affected service and compare desired/observed state |
+| `BahiaWorkerResourcePressure` | Bahia recommends operator intervention for worker pressure | Host owner | Tier 1, Tier 2 if continuity capacity is affected | Cordon new placements; inspect reclaimable disk, VRAM, memory, and thermal state |
+| `BahiaRelayDegraded` | One or more configured relays are degraded or unhealthy | Relay operator | Tier 1 | Preserve multi-relay publishing and verify relay acknowledgements; do not infer delivery from a socket connection |
+| `BahiaAudit4903Anomaly` | A rejected or contradictory kind-4903 event increments the anomaly counter | Security/operator pair | Tier 3 | Preserve the event chain and pause correlated mutations pending signature/correlation review |
+| `BahiaAuthorizationRejectionSpike` | More than ten bounded authorization rejections occur within five minutes | Security operator | Tier 2 | Inspect identity, policy, replay, and signature reason counts; do not loosen policy |
+| `BahiaTierRejectionSpike` | More than five insufficient-tier rejections occur within five minutes | Bahia operator | Tier 1 | Compare requested and active tier and restore the failed dependency instead of bypassing the gate |
+
+## Non-mutating detection simulations
+
+These commands validate rule evaluation only. They do not contact production,
+restart a service, publish a Nostr event, or require credentials:
+
+```sh
+# Covers worker-stale/down, drift-stuck, resource-pressure, relay, audit,
+# authorization, and tier-rejection samples.
+docker run --rm \
+  -v "$PWD/deploy/observability:/rules" \
+  -w /rules \
+  --entrypoint /bin/promtool \
+  prom/prometheus:latest \
+  test rules bahia-alerts.test.yml
+
+# Inspect exactly which production series the rules consume.
+docker run --rm \
+  -v "$PWD/deploy/observability:/rules" \
+  --entrypoint /bin/promtool \
+  prom/prometheus:latest \
+  check rules /rules/bahia-alerts.yml
+
+# Prove incident rendering does not publish in dry-run mode.
+go test ./internal/adapters/alerting -run TestDispatcherDryRunRendersWithoutPublishing
+```
+
+The commands above are Track A source verification. Track B acceptance is
+separate and requires Prometheus to scrape the deployed Bahia `/metrics`,
+Alertmanager to load the checked-in rules, and a Signet-backed adapter to
+deliver a test alert to the authenticated NIP-29 `incidents` group. A successful
+Track A fixture is not evidence that production delivery is configured.
+
 ## BahiaWorkerHeartbeatStale
 
 Confirm the worker process and its relay connection before rescheduling work.
