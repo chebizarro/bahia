@@ -170,6 +170,7 @@ type SoulFactoryConfig struct {
 	Relays                        []string      `koanf:"relays" yaml:"relays"`
 	AdditionalRelays              []string      `koanf:"additional_relays" yaml:"additional_relays"`
 	NIP05Relays                   []string      `koanf:"nip05_relays" yaml:"nip05_relays"`
+	NIP29Groups                   []NIP29Group  `koanf:"nip29_groups" yaml:"nip29_groups"`
 	AuthorizedPubkeys             []string      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
 	SoulFactoryPubkey             string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
 	SignetBunkerURI               string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
@@ -184,6 +185,12 @@ type SoulFactoryConfig struct {
 	WorkspacePrivateKeyRef        string        `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
 	WorkspaceAgentMemoryMCPURLRef string        `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
 	WorkspaceGatewayPort          int           `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
+}
+
+// NIP29Group identifies a fleet group that newly provisioned souls join.
+type NIP29Group struct {
+	Relay string `koanf:"relay" yaml:"relay"`
+	ID    string `koanf:"id" yaml:"id"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -2008,6 +2015,25 @@ func (c *Config) validateSoulFactory() error {
 			return fmt.Errorf("config validation failed: soul_factory.nip05_relays[%d]: %w", i, err)
 		}
 	}
+	seenGroups := make(map[string]struct{}, len(sf.NIP29Groups))
+	normalizedGroups := make([]NIP29Group, 0, len(sf.NIP29Groups))
+	for i, group := range sf.NIP29Groups {
+		group.Relay = strings.TrimRight(strings.TrimSpace(group.Relay), "/")
+		group.ID = strings.TrimSpace(group.ID)
+		if err := validateWebsocketRelayURL(group.Relay); err != nil {
+			return fmt.Errorf("config validation failed: soul_factory.nip29_groups[%d].relay: %w", i, err)
+		}
+		if group.ID == "" {
+			return fmt.Errorf("config validation failed: soul_factory.nip29_groups[%d].id is required", i)
+		}
+		key := group.Relay + "\x00" + group.ID
+		if _, exists := seenGroups[key]; exists {
+			continue
+		}
+		seenGroups[key] = struct{}{}
+		normalizedGroups = append(normalizedGroups, group)
+	}
+	sf.NIP29Groups = normalizedGroups
 	sf.SoulFactoryPubkey = strings.ToLower(strings.TrimSpace(sf.SoulFactoryPubkey))
 	sf.SignetBunkerURI = strings.TrimSpace(sf.SignetBunkerURI)
 	sf.SignetClientSecretKey = strings.TrimSpace(sf.SignetClientSecretKey)

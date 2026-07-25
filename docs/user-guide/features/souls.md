@@ -261,6 +261,11 @@ soul_factory:
     - wss://relay.example.com
   additional_relays:
     - wss://private-relay.example.com
+  nip29_groups: # optional; controller-signed membership assignments for new souls
+    - relay: wss://groups.example.com
+      id: fleet-ops
+    - relay: wss://groups.example.com
+      id: fleet-dev
   authorized_pubkeys:
     - "<64-char requester pubkey>"
   soul_factory_pubkey: "<64-char Signet/controller pubkey>"
@@ -277,6 +282,8 @@ soul_factory:
 ```
 
 When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runtime adapter. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory.
+
+When `nip29_groups` is configured, provisioning uses the Signet-custodied Soul Factory controller to authenticate with each group relay and publish a NIP-29 `put-user` event after the new identity is minted. Every relay must acknowledge the assignment or provisioning fails closed. The new soul never receives or handles raw signing-key material.
 
 For OpenClaw command-driver deployments, the packaged local wrapper currently supports `soulfactory.provision`, `soulfactory.update`, `soulfactory.persona.update`, and `soulfactory.revoke`. Full updates require optimistic spec-hash checks and accept either a canonical replacement spec or a merge patch over the persisted prior resolved spec. The sidecar advertises that conservative method set by default; operators can override it with `-methods` or `OPENCLAW_SOULFACTORY_METHODS` only when the configured command really implements additional runtime-control methods. The wrapper supports dry-run verification and non-dry-run targeting of an existing containerized OpenClaw runtime through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` plus `OPENCLAW_SOULFACTORY_CONTAINER`; it does not expose REST lifecycle control or launch persistent bare-metal OpenClaw runtimes.
 

@@ -15,6 +15,7 @@ type fakeRelayEndpoint struct {
 
 	publishResults []RelayPublishResult
 	publishCalls   int
+	published      []nostr.Event
 
 	subscribeQueue chan *fakeRelaySubscription
 	subscribeCalls chan []nostr.Filter
@@ -32,7 +33,8 @@ func newFakeRelayEndpoint(url string) *fakeRelayEndpoint {
 
 func (e *fakeRelayEndpoint) URL() string { return e.url }
 
-func (e *fakeRelayEndpoint) Publish(context.Context, nostr.Event) RelayPublishResult {
+func (e *fakeRelayEndpoint) Publish(_ context.Context, event nostr.Event) RelayPublishResult {
+	e.published = append(e.published, event)
 	result := RelayPublishResult{RelayURL: e.url, Error: errors.New("unexpected publish")}
 	if e.publishCalls < len(e.publishResults) {
 		result = e.publishResults[e.publishCalls]
