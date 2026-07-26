@@ -128,7 +128,7 @@ func (g *SoulGenerator) callLLM(ctx context.Context, prompt string) (string, err
 	// Build request body
 	reqBody := map[string]interface{}{
 		"model":      g.model,
-		"max_tokens": 4096,
+		"max_tokens": 8192,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -225,6 +225,7 @@ func (g *SoulGenerator) parseOutput(response string) (*domain.SoulGeneratorOutpu
 const systemPrompt = `You are an expert agent designer for a Nostr-native AI agent fleet. Your task is to design complete agent personalities based on briefs provided by users.
 
 You must respond with a JSON object containing the agent's soul. The JSON must be valid and complete.
+Keep the response concise enough to finish every JSON field; brevity is preferable to truncation.
 
 Key principles:
 - Agents should have distinct personalities that serve their purpose
