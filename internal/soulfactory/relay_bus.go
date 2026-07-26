@@ -564,7 +564,26 @@ func (e *goNostrRelayEndpoint) Auth(ctx context.Context, signer relayAuthSigner)
 	if relay == nil {
 		return fmt.Errorf("relay is not connected")
 	}
-	return relay.Auth(ctx, func(authCtx context.Context, event *nostr.Event) error { return signer.Sign(authCtx, event) })
+	sign := func(authCtx context.Context, event *nostr.Event) error {
+		return signer.Sign(authCtx, event)
+	}
+	challengeDeadline := time.Now().Add(2 * time.Second)
+	for {
+		err := relay.Auth(ctx, sign)
+		if err == nil || !strings.Contains(err.Error(), "no challenge") {
+			return err
+		}
+		if time.Now().After(challengeDeadline) {
+			return err
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (e *goNostrRelayEndpoint) Close() {
