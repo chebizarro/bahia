@@ -860,7 +860,8 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 	if byName != nil && byIdentity != nil && byName.ID != byIdentity.ID {
 		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
 	}
-	if byName != nil && byIdentity == nil && !sameAdoptedTarget(byName, target, discovered) {
+	if byName != nil && byIdentity == nil && byName.RuntimeConfig != nil &&
+		byName.RuntimeConfig.Adopted != nil && !sameAdoptedTarget(byName, target, discovered) {
 		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
 	}
 
