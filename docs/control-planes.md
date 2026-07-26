@@ -270,6 +270,19 @@ Operator workflows are ContextVM JSON-RPC requests carried as kind `25910`, usua
 CLI behavior:
 
 - `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use ContextVM methods such as `adoption/scan`, `adoption/import`, `service/deploy`, `service/restart`, and `service/stop`.
+- Production operators can sign through NIP-46 without holding the operator
+  identity key. Provide `--nostr-bunker-file` and
+  `--nostr-client-key-file`; when the signer relay is stored separately from
+  the bunker URI, also provide repeatable `--nostr-bunker-relay`. Equivalent
+  environment inputs are `BAHIA_NOSTR_BUNKER_FILE` or
+  `BAHIA_NOSTR_BUNKER_URI`, `BAHIA_NOSTR_CLIENT_KEY_FILE` or
+  `BAHIA_NOSTR_CLIENT_PRIVATE_KEY`, and `BAHIA_NOSTR_BUNKER_RELAYS`.
+  Bunker and client-key files should be mode `0600` or stricter. The client
+  key is NIP-46 transport/session material, not the operator identity key.
+- NIP-46 signs both ContextVM command events and NIP-42 relay AUTH events.
+  Configuration fails closed if the bunker URI and persistent client key are
+  not supplied together, if the bunker has no relay, or if local identity-key
+  and NIP-46 inputs are mixed.
 - Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`).
 - Live status chatter is written to stderr only in table mode; JSON/YAML stdout remains reserved for the final ContextVM acknowledgment or canonical result projection selected by the command.
 - `--http-fallback` (or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) is explicit compatibility mode and is only safe before any relay accepts a signed ContextVM request, such as signer/relay discovery failure or publish with zero accepted relays.

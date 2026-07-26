@@ -21,6 +21,9 @@ import (
 type OperatorControlPlaneConfig struct {
 	Relays             []string
 	PrivateKey         string // 64-character hex or nsec input
+	Signer             canonicalnostr.Signer
+	Pubkey             string
+	CloseSigner        func() error
 	ServicePubkey      string // optional 64-character Bahia ContextVM service pubkey for #p/authors routing
 	PublishWaitTimeout time.Duration
 }
@@ -133,31 +136,48 @@ type OperatorControlPlaneClient struct {
 	transport     operatorRelayTransport
 	servicePubkey string
 	timeout       time.Duration
+	closeSigner   func() error
 }
 
 // NewOperatorControlPlaneClient builds a signer-first operator control-plane client.
 func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorControlPlaneClient, error) {
-	privateKey, err := NormalizeNostrPrivateKey(cfg.PrivateKey)
-	if err != nil {
-		return nil, err
+	privateKey := strings.TrimSpace(cfg.PrivateKey)
+	signer := cfg.Signer
+	pubkey := strings.TrimSpace(cfg.Pubkey)
+	var poolOptions []nostrpool.RelayPoolOption
+	if signer != nil {
+		if privateKey != "" {
+			return nil, fmt.Errorf("configure either an operator signer or a private key, not both")
+		}
+		if len(pubkey) != 64 {
+			return nil, fmt.Errorf("operator signer pubkey must be a 64-character hex pubkey")
+		}
+		poolOptions = append(poolOptions, nostrpool.WithAuthSigner(signer))
+	} else {
+		var err error
+		privateKey, err = NormalizeNostrPrivateKey(privateKey)
+		if err != nil {
+			return nil, err
+		}
+		signer, err = controlplane.NewPrivateKeySigner(privateKey)
+		if err != nil {
+			return nil, err
+		}
+		if signer == nil {
+			return nil, fmt.Errorf("operator signer is required")
+		}
+		secret, err := nostr.SecretKeyFromHex(privateKey)
+		if err != nil {
+			return nil, fmt.Errorf("parse Nostr private key: %w", err)
+		}
+		pubkey = secret.Public().Hex()
+		poolOptions = append(poolOptions, nostrpool.WithPrivateKey(privateKey))
 	}
-	signer, err := controlplane.NewPrivateKeySigner(privateKey)
-	if err != nil {
-		return nil, err
-	}
-	if signer == nil {
-		return nil, fmt.Errorf("nostr private key is required")
-	}
-	secret, err := nostr.SecretKeyFromHex(privateKey)
-	if err != nil {
-		return nil, fmt.Errorf("parse Nostr private key: %w", err)
-	}
-	pubkey := secret.Public().Hex()
 	relays := normalizeOperatorRelays(cfg.Relays)
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("at least one operator relay is required")
 	}
-	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), nostrpool.WithPrivateKey(privateKey))
+	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), poolOptions...)
 	timeout := cfg.PublishWaitTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -174,6 +194,7 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 		transport:     &relayPoolOperatorTransport{pool: pool},
 		servicePubkey: servicePubkey,
 		timeout:       timeout,
+		closeSigner:   cfg.CloseSigner,
 	}, nil
 }
 
@@ -181,6 +202,9 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 func (c *OperatorControlPlaneClient) Close() {
 	if c != nil && c.transport != nil {
 		c.transport.Close()
+	}
+	if c != nil && c.closeSigner != nil {
+		_ = c.closeSigner()
 	}
 }
 

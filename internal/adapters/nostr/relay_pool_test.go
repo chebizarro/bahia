@@ -247,7 +247,7 @@ func TestRelayPoolSubscribeAuthRequiredWithoutCredentialsRecordsAuthUnavailableM
 	snapshot := pool.HealthSnapshot()
 	require.Len(t, snapshot.Relays, 1)
 	require.Equal(t, 1, snapshot.Relays[0].Errors)
-	require.Equal(t, "auth-unavailable: auth-required: sign in: no private key configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
+	require.Equal(t, "auth-unavailable: auth-required: sign in: no signer configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
 }
 
 func TestRelayPoolSubscribeRejectsMultiFilterSilentDrop(t *testing.T) {
@@ -310,7 +310,7 @@ func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t
 	snapshot := pool.HealthSnapshot()
 	require.Len(t, snapshot.Relays, 1)
 	require.Equal(t, 1, snapshot.Relays[0].Errors)
-	require.Equal(t, "auth-unavailable: auth-required: sign in before replay: no private key configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
+	require.Equal(t, "auth-unavailable: auth-required: sign in before replay: no signer configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
 }
 
 func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {

@@ -34,6 +34,15 @@ func TestRootCommandExposesOperatorFlags(t *testing.T) {
 	if flag := cmd.PersistentFlags().Lookup("http-fallback"); flag == nil {
 		t.Fatal("root command missing --http-fallback")
 	}
+	if flag := cmd.PersistentFlags().Lookup("nostr-bunker-file"); flag == nil {
+		t.Fatal("root command missing --nostr-bunker-file")
+	}
+	if flag := cmd.PersistentFlags().Lookup("nostr-client-key-file"); flag == nil {
+		t.Fatal("root command missing --nostr-client-key-file")
+	}
+	if flag := cmd.PersistentFlags().Lookup("nostr-bunker-relay"); flag == nil {
+		t.Fatal("root command missing --nostr-bunker-relay")
+	}
 }
 
 func TestResolveOperatorRelaysPrecedence(t *testing.T) {
@@ -185,6 +194,77 @@ func TestPolicyCreateUsesSignerFirstOperatorClient(t *testing.T) {
 	}
 	if receipt.RequestKind != controlplane.KindPolicyCreate || captured == nil || captured.IdempotencyKey != "policy:create:test" || captured.Name != "require-sbom" {
 		t.Fatalf("unexpected receipt=%#v captured=%#v", receipt, captured)
+	}
+}
+
+func TestBuildCLIOperatorClientUsesNIP46SignerWithoutIdentityKey(t *testing.T) {
+	resetOperatorGlobals(t)
+	cmd := newOperatorFlagTestCommand(t)
+	cmd.SetContext(context.Background())
+	t.Setenv("BAHIA_NOSTR_BUNKER_URI", "bunker://operator?relay=wss://relay.example&secret=connect")
+	t.Setenv("BAHIA_NOSTR_CLIENT_PRIVATE_KEY", nostr.Generate().Hex())
+	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
+
+	operatorKey := nostr.Generate()
+	operatorSigner, err := controlplane.NewPrivateKeySigner(operatorKey.Hex())
+	if err != nil {
+		t.Fatalf("NewPrivateKeySigner() error = %v", err)
+	}
+	closed := false
+	previousSignerFactory := newCLINIP46Signer
+	newCLINIP46Signer = func(_ context.Context, bunkerURI, clientKey string) (nostr.Signer, string, func() error, error) {
+		if !strings.HasPrefix(bunkerURI, "bunker://") || clientKey == "" {
+			t.Fatalf("unexpected NIP-46 inputs bunker=%q clientKeyEmpty=%v", bunkerURI, clientKey == "")
+		}
+		return operatorSigner, operatorKey.Public().Hex(), func() error {
+			closed = true
+			return nil
+		}, nil
+	}
+	defer func() { newCLINIP46Signer = previousSignerFactory }()
+
+	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		if cfg.PrivateKey != "" {
+			t.Fatal("NIP-46 operator client received local identity key material")
+		}
+		if cfg.Signer == nil || cfg.Pubkey != operatorKey.Public().Hex() || cfg.CloseSigner == nil {
+			t.Fatalf("unexpected remote signer config: %#v", cfg)
+		}
+		return fakeCLIOperatorClient{}, nil
+	})
+	defer restoreFactory()
+
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		t.Fatalf("buildCLIOperatorClient() error = %v", err)
+	}
+	op.Close()
+	if closed {
+		t.Fatal("fake operator client does not own the configured close callback")
+	}
+}
+
+func TestResolveNIP46OperatorInputRequiresDurablePair(t *testing.T) {
+	resetOperatorGlobals(t)
+	cmd := newOperatorFlagTestCommand(t)
+	t.Setenv("BAHIA_NOSTR_BUNKER_URI", "bunker://operator?relay=wss://relay.example")
+	if _, _, err := resolveNIP46OperatorInput(cmd); err == nil || !strings.Contains(err.Error(), "requires both") {
+		t.Fatalf("resolveNIP46OperatorInput() error = %v, want paired-input failure", err)
+	}
+}
+
+func TestResolveNIP46OperatorInputAddsSeparateBunkerRelay(t *testing.T) {
+	resetOperatorGlobals(t)
+	cmd := newOperatorFlagTestCommand(t)
+	t.Setenv("BAHIA_NOSTR_BUNKER_URI", "bunker://operator")
+	t.Setenv("BAHIA_NOSTR_CLIENT_PRIVATE_KEY", nostr.Generate().Hex())
+	t.Setenv("BAHIA_NOSTR_BUNKER_RELAYS", "wss://bunker.example")
+	bunkerURI, _, err := resolveNIP46OperatorInput(cmd)
+	if err != nil {
+		t.Fatalf("resolveNIP46OperatorInput() error = %v", err)
+	}
+	if !strings.Contains(bunkerURI, "relay=wss%3A%2F%2Fbunker.example") {
+		t.Fatalf("bunker URI = %q, want encoded separate relay", bunkerURI)
 	}
 }
 
@@ -405,6 +485,9 @@ func newOperatorFlagTestCommand(t *testing.T) *cobra.Command {
 	root.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "")
 	root.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", false, "")
 	root.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "")
+	root.PersistentFlags().StringVar(&nostrBunkerFile, "nostr-bunker-file", "", "")
+	root.PersistentFlags().StringArrayVar(&nostrBunkerRelays, "nostr-bunker-relay", nil, "")
+	root.PersistentFlags().StringVar(&nostrClientKeyFile, "nostr-client-key-file", "", "")
 	cmd := &cobra.Command{Use: "test"}
 	root.AddCommand(cmd)
 	return cmd
@@ -428,6 +511,9 @@ func resetOperatorGlobals(t *testing.T) {
 	outputFormat = "table"
 	apiClient = nil
 	nostrKeyFile = ""
+	nostrBunkerFile = ""
+	nostrBunkerRelays = nil
+	nostrClientKeyFile = ""
 	operatorRelays = nil
 	operatorBootstrapRelays = nil
 	operatorServicePubkey = ""
@@ -441,11 +527,19 @@ func resetOperatorGlobals(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
+	t.Setenv("BAHIA_NOSTR_BUNKER_FILE", "")
+	t.Setenv("BAHIA_NOSTR_BUNKER_URI", "")
+	t.Setenv("BAHIA_NOSTR_BUNKER_RELAYS", "")
+	t.Setenv("BAHIA_NOSTR_CLIENT_KEY_FILE", "")
+	t.Setenv("BAHIA_NOSTR_CLIENT_PRIVATE_KEY", "")
 	t.Cleanup(func() {
 		serverURL = ""
 		outputFormat = "table"
 		apiClient = nil
 		nostrKeyFile = ""
+		nostrBunkerFile = ""
+		nostrBunkerRelays = nil
+		nostrClientKeyFile = ""
 		operatorRelays = nil
 		operatorBootstrapRelays = nil
 		operatorServicePubkey = ""

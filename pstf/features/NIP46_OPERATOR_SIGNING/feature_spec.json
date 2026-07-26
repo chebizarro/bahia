@@ -1,0 +1,18 @@
+{
+  "feature_id": "NIP46_OPERATOR_SIGNING",
+  "title": "Nsec-free Bahia operator CLI signing",
+  "observed_behavior": "The operator CLI required a local Nostr private key and the relay pool could sign NIP-42 AUTH only with that private key.",
+  "intended_behavior": "Operator ContextVM commands and relay AUTH challenges can be signed by a persistent NIP-46 session while the CLI holds no operator identity private key.",
+  "scope": [
+    "cmd/cli operator signer configuration",
+    "pkg/client operator signer injection and lifecycle",
+    "internal/adapters/nostr NIP-42 signer injection",
+    "operator documentation and focused tests"
+  ],
+  "security_properties": [
+    "bunker URI and client session key are required as a pair",
+    "bunker relay presence is validated",
+    "NIP-46 and local identity-key inputs are mutually exclusive",
+    "operator identity private key never enters the NIP-46 client configuration"
+  ]
+}
