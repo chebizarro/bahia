@@ -68,6 +68,36 @@ func TestIntegration_DriftInSync_ApplyNoOp(t *testing.T) {
 	}
 }
 
+func TestIntegration_StoppedHashMatch_ApplyRecreates(t *testing.T) {
+	t.Parallel()
+	mock := newApplyMockState()
+	spec := applyTestSpec()
+	mock.addContainer(DockerContainer{
+		ID:    "stopped-container",
+		Names: []string{"/bahia-22222222-my-api"},
+		State: "exited",
+		Labels: map[string]string{
+			"bahia.service_id":     testServiceID.String(),
+			"bahia.environment_id": testEnvironmentID.String(),
+			"bahia.desired_hash":   spec.DesiredHash,
+		},
+	})
+
+	server, observer := setupApplyTest(mock)
+	defer server.Close()
+
+	result, err := observer.ApplyDesiredState(context.Background(), applyTestRequest(spec))
+	if err != nil {
+		t.Fatalf("apply error: %v", err)
+	}
+	if len(mock.stopCalls) == 0 || len(mock.createCalls) == 0 {
+		t.Fatalf("stopped hash-matched container must be recreated: stops=%v creates=%v", mock.stopCalls, mock.createCalls)
+	}
+	if len(result.ResourceIDs) != 1 || result.ResourceIDs[0] == "stopped-container" {
+		t.Fatalf("result should reference recreated container, got %v", result.ResourceIDs)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Hash drift → drift drifted → apply recreates
 // ---------------------------------------------------------------------------

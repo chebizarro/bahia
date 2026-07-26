@@ -619,6 +619,32 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 	}
 }
 
+func TestRegisterServiceContextVMHandlers_RegistersDeployMethod(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"deploy-registration","method":"service/deploy","params":{}}`)
+
+	transport.HandleEvent(context.Background(), event)
+
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected progress acknowledgement and ContextVM response, got %d events", len(publisher.events))
+	}
+	assertContextVMProgressAck(t, publisher.events[0], event)
+	response := contextVMResponse(t, publisher.events[1])
+	if response.Error == nil {
+		t.Fatal("expected missing dependency error")
+	}
+	if response.Error.Message == "method not found" {
+		t.Fatalf("service/deploy was not registered: %+v", response.Error)
+	}
+	if response.Error.Message != "service deployment control plane is not configured" {
+		t.Fatalf("unexpected error: %+v", response.Error)
+	}
+}
+
 func TestContextVMTransport_JSONRPCParseAndMethodErrors(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)

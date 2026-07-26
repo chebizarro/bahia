@@ -349,6 +349,7 @@ func New(cfg *config.Config) (*App, error) {
 	if cfg.DirectRuntime.Enabled {
 		var runtimeApplyLockOpts []service.RuntimeLifecycleOption
 		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor))
+		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleDeploymentUnits(deploymentUnitRepo))
 		if dbAvailable {
 			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(service.NewRuntimeApplyLock(pool, logger)))
 		}
@@ -1166,6 +1167,12 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:      logger,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
+		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
+			Registry:         registry,
+			RuntimeLifecycle: runtimeLifecycleSvc,
+			Policy:            policySvc,
+			Logger:            logger,
+		})
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
 			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner)

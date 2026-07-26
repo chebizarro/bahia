@@ -261,6 +261,7 @@ type mockRuntime struct {
 	undeployErr     error
 	observeDigest   string
 	observeNormHash string
+	observeHealth   domain.HealthStatus
 }
 
 func (m *mockRuntime) Type() domain.RuntimeType {
@@ -270,13 +271,17 @@ func (m *mockRuntime) Type() domain.RuntimeType {
 func (m *mockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
 	m.mu.Lock()
 	digest := m.observeDigest
+	health := m.observeHealth
 	m.mu.Unlock()
+	if health == "" {
+		health = domain.HealthStatusHealthy
+	}
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageDigest: digest,
 		NormalizedHash:      m.observeNormHash,
-		HealthStatus:        domain.HealthStatusHealthy,
+		HealthStatus:        health,
 		Source:              "mock",
 		ObservedAt:          time.Now().UTC(),
 	}, nil

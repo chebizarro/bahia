@@ -61,6 +61,7 @@ type RuntimeLifecycleService struct {
 	environments repository.EnvironmentRepository
 	artifacts    repository.ArtifactRepository
 	state        repository.EnvironmentServiceStateRepository
+	units        repository.DeploymentUnitRepository
 	resolver     runtime.RuntimeResolver
 	secrets      repository.SecretRepository
 	publisher    events.Publisher
@@ -85,6 +86,14 @@ func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor *se
 func WithRuntimeApplyLock(lock EnvironmentApplyLocker) RuntimeLifecycleOption {
 	return func(s *RuntimeLifecycleService) {
 		s.applyLock = lock
+	}
+}
+
+// WithRuntimeLifecycleDeploymentUnits enables desired environment plans to
+// resolve explicit deployment-unit identity during deploy and reconciliation.
+func WithRuntimeLifecycleDeploymentUnits(repo repository.DeploymentUnitRepository) RuntimeLifecycleOption {
+	return func(s *RuntimeLifecycleService) {
+		s.units = repo
 	}
 }
 
@@ -224,6 +233,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 		Services:    s.services,
 		Artifacts:   s.artifacts,
 		Secrets:     secretListerOrEmpty{s.secrets},
+		Units:       s.units,
 		Builder:     builder,
 	}).Assemble(ctx, envID, serviceID, targetSpec)
 	if err != nil {
