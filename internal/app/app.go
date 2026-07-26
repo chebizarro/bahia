@@ -342,6 +342,7 @@ func New(cfg *config.Config) (*App, error) {
 			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
 			service.WithAdoptionOrganizations(orgRepo),
 			service.WithAdoptionRuntimeIdentities(repository.NewPgAdoptedRuntimeIdentityRepository(pool)),
+			service.WithAdoptionDeploymentUnits(deploymentUnitRepo),
 			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
 		)
 	}

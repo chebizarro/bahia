@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	runtimeAdapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -17,6 +18,80 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
+
+func TestEnsureAdoptionDeploymentUnitCreatesServiceScopedUnitIdempotently(t *testing.T) {
+	repo := &mockDeploymentUnitRepo{}
+	adoption := &AdoptionService{}
+	env := &domain.Environment{ID: uuid.New()}
+	target := AdoptionTarget{EndpointRef: "edge-01-docker"}
+	discovered := runtimeAdapter.DiscoveredContainer{
+		SourceRuntime: "compose",
+		Compose:       &domain.ComposeMetadata{WorkingDir: "/srv/data/bahia-managed"},
+	}
+
+	first, err := adoption.ensureAdoptionDeploymentUnit(context.Background(), repo, env, target, discovered, "groups-relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := adoption.ensureAdoptionDeploymentUnit(context.Background(), repo, env, target, discovered, "groups-relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || repo.createCount != 1 {
+		t.Fatalf("unit was not reused: first=%s second=%s creates=%d", first.ID, second.ID, repo.createCount)
+	}
+	if first.Key != "groups-relay" || first.RuntimeType != domain.RuntimeTypeCompose ||
+		first.EndpointRef != "edge-01-docker" || first.ComposeDir != "/srv/data/bahia-managed" ||
+		first.ReconcileMode != domain.ReconcileModeAutoApply || first.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		t.Fatalf("unexpected deployment unit: %#v", first)
+	}
+}
+
+type mockDeploymentUnitRepo struct {
+	units       []domain.DeploymentUnit
+	createCount int
+}
+
+func (r *mockDeploymentUnitRepo) Create(_ context.Context, unit *domain.DeploymentUnit) error {
+	if unit.ID == uuid.Nil {
+		unit.ID = uuid.New()
+	}
+	r.units = append(r.units, *unit)
+	r.createCount++
+	return nil
+}
+
+func (r *mockDeploymentUnitRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentUnit, error) {
+	for i := range r.units {
+		if r.units[i].ID == id {
+			return &r.units[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *mockDeploymentUnitRepo) GetByEnvironmentKey(_ context.Context, environmentID uuid.UUID, key string) (*domain.DeploymentUnit, error) {
+	for i := range r.units {
+		if r.units[i].EnvironmentID == environmentID && r.units[i].Key == key {
+			return &r.units[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *mockDeploymentUnitRepo) ListByEnvironment(_ context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	var out []domain.DeploymentUnit
+	for _, unit := range r.units {
+		if unit.EnvironmentID == environmentID {
+			out = append(out, unit)
+		}
+	}
+	return out, nil
+}
+
+func (r *mockDeploymentUnitRepo) ResolveDefault(_ context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
+	return domain.NewImplicitDefaultDeploymentUnit(env)
+}
 
 func TestAdoptionServiceImportInfersSingleOrgAndPersistsRuntimeIdentities(t *testing.T) {
 	ctx := context.Background()
