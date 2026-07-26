@@ -25,6 +25,34 @@ func TestControlPlaneRelayURLsPreferSidecarBackend(t *testing.T) {
 	}
 }
 
+func TestControlPlaneRelayURLsUseContextVMPolicyWhenSidecarDisabled(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Relays = []string{"wss://interop.example"}
+	cfg.BrowserRelays = []string{"wss://browser.example"}
+	cfg.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Sidecar.Enabled = false
+
+	got := controlPlaneRelayURLs(cfg)
+	want := []string{"wss://contextvm.example"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("controlPlaneRelayURLs() = %v, want %v", got, want)
+	}
+}
+
+func TestControlPlaneRelayURLsFallBackToBrowserPolicyWhenContextVMUnset(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Relays = []string{"wss://interop.example"}
+	cfg.BrowserRelays = []string{"wss://browser.example"}
+	cfg.ContextVMRelays = nil
+	cfg.Sidecar.Enabled = false
+
+	got := controlPlaneRelayURLs(cfg)
+	want := []string{"wss://browser.example"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("controlPlaneRelayURLs() = %v, want %v", got, want)
+	}
+}
+
 func TestInteropRelayURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Relays = []string{"wss://upstream.example"}

@@ -1171,8 +1171,8 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
 			Registry:         registry,
 			RuntimeLifecycle: runtimeLifecycleSvc,
-			Policy:            policySvc,
-			Logger:            logger,
+			Policy:           policySvc,
+			Logger:           logger,
 		})
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
@@ -2235,7 +2235,7 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 			return []string{cfg.Sidecar.PublicURL}
 		}
 	}
-	return append([]string(nil), cfg.Relays...)
+	return cfg.ContextVMRelayPolicyRelays()
 }
 
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
