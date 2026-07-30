@@ -1,0 +1,3 @@
+services:
+  bahia:
+    image: bahia-recovery:soulfactory-late-result-f857e0d
