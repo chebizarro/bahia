@@ -88,9 +88,11 @@ func TestRelayTopologyCoordinatorReconfiguresPoolsFromCanonicalSnapshot(t *testi
 	cfg.Nostr.ContextVMRelays = []string{"wss://old-contextvm.example"}
 	cfg.Loom.Relays = []string{"wss://loom.example"}
 	controlPlanePool := nostrAdapter.NewRelayPool([]string{"wss://old-contextvm.example"}, zap.NewNop())
+	responsePool := nostrAdapter.NewRelayPool([]string{"wss://old-contextvm.example"}, zap.NewNop())
 	servicePool := nostrAdapter.NewRelayPool([]string{"wss://old-service.example", "wss://loom.example"}, zap.NewNop())
 	coordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
 		ControlPlanePool: controlPlanePool,
+		ResponsePool:     responsePool,
 		ServicePool:      servicePool,
 		NostrConfig:      cfg.Nostr,
 		LoomRelays:       cfg.Loom.Relays,
@@ -106,6 +108,9 @@ func TestRelayTopologyCoordinatorReconfiguresPoolsFromCanonicalSnapshot(t *testi
 	}
 	if got, want := controlPlanePool.URLs(), []string{"wss://new-contextvm.example"}; !slices.Equal(got, want) {
 		t.Fatalf("control plane pool URLs = %v, want %v", got, want)
+	}
+	if got, want := responsePool.URLs(), []string{"wss://new-contextvm.example"}; !slices.Equal(got, want) {
+		t.Fatalf("ContextVM response pool URLs = %v, want %v", got, want)
 	}
 	if got, want := servicePool.URLs(), []string{"wss://new-service.example", "wss://loom.example"}; !slices.Equal(got, want) {
 		t.Fatalf("service pool URLs = %v, want %v", got, want)

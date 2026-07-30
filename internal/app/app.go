@@ -133,6 +133,8 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	controlPlanePool.Connect(ctx)
+	contextVMResponsePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	contextVMResponsePool.Connect(ctx)
 
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
 	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
@@ -1102,6 +1104,7 @@ func New(cfg *config.Config) (*App, error) {
 	if len(controlPlaneRelays) > 0 && servicePubkey != "" {
 		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
 			ControlPlanePool: controlPlanePool,
+			ResponsePool:     contextVMResponsePool,
 			ServicePool:      relayPool,
 			NostrConfig:      cfg.Nostr,
 			LoomRelays:       cfg.Loom.Relays,
@@ -1119,7 +1122,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
-		responder := controlplane.NewEncryptedResponder(controlPlanePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
+		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
 		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
 			Payments:              paymentSvc,
@@ -1326,7 +1329,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:          telemetryProvider,
 		Background:         bgManager,
 		toolCoordinator:    toolCoordinator,
-		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, fipsRelayPool},
+		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPool, fipsRelayPool},
 		ModePolicy:         policy,
 		Health:             healthProvider,
 		RelayFirstRegistry: relayFirstRegistry,
