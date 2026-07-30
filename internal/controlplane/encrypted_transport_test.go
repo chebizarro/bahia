@@ -755,7 +755,7 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 				t.Fatalf("expected encrypted ContextVM progress ack plus response, got %d", len(publisher.events))
 			}
 			wrappedAck := publisher.events[0]
-			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(wrappedAck.Tags, "e", outer.ID.Hex())) {
+			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) || !hasTag(wrappedAck.Tags, "e", outer.ID.Hex()) {
 				t.Fatalf("unexpected wrapper progress ack: kind=%d tags=%#v", wrappedAck.Kind, wrappedAck.Tags)
 			}
 			innerAck := unwrapContextVMResponseEvent(t, wrappedAck, testRequesterKey)
@@ -771,10 +771,10 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 			if err := nostrpool.ValidateInboundEvent(&wrappedResponse, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 				t.Fatalf("response wrapper failed NIP-01 validation: %v", err)
 			}
-			if wrappedResponse.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(wrappedResponse.Tags, "e", outer.ID.Hex())) {
+			if wrappedResponse.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey.Hex()) || !hasTag(wrappedResponse.Tags, "e", outer.ID.Hex()) {
 				t.Fatalf("unexpected wrapper response: kind=%d tags=%#v", wrappedResponse.Kind, wrappedResponse.Tags)
 			}
-			if tc.kind == KindContextVMEphemeralWrap && (wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey.Hex() == requesterPubkey) {
+			if wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey.Hex() == requesterPubkey {
 				t.Fatalf("response wrapper pubkey %s must be random", wrappedResponse.PubKey.Hex())
 			}
 			innerResponse := unwrapContextVMResponseEvent(t, wrappedResponse, testRequesterKey)
