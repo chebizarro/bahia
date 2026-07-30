@@ -241,8 +241,10 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 			if rpc.Method != tc.method {
 				t.Fatalf("method = %q, want %q", rpc.Method, tc.method)
 			}
-			if tc.operation == "import" && !strings.Contains(string(rpc.Params), `"org_id":"31ee612f-93a8-418d-a377-eee0a5cd26dc"`) {
-				t.Fatalf("import params missing org_id: %s", rpc.Params)
+			if tc.operation == "import" {
+				if orgID, _ := rpc.Params["org_id"].(string); orgID != "31ee612f-93a8-418d-a377-eee0a5cd26dc" {
+					t.Fatalf("import params missing org_id: %v", rpc.Params)
+				}
 			}
 			assertTagValue(t, published.Tags, "operation", tc.operation)
 			assertTagValue(t, published.Tags, "target", "prod")
