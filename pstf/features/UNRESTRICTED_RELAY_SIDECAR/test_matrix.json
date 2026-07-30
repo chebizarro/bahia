@@ -1,0 +1,21 @@
+{
+  "feature_id": "UNRESTRICTED_RELAY_SIDECAR",
+  "tests": [
+    {
+      "criteria": ["AC-1"],
+      "test": "TestSidecarAcceptsArbitrarySignedRequestKind and TestSidecarAcceptsContextVMEventsRegardlessOfAuthorOrRecipient"
+    },
+    {
+      "criteria": ["AC-2"],
+      "test": "TestSidecarAcceptsReadFiltersWithoutKinds, TestSidecarAcceptsEveryEventKindForReads, and TestSidecarDoesNotRequireScopedContextVMSubscriptions"
+    },
+    {
+      "criteria": ["AC-3"],
+      "test": "Existing relaysidecar event validation tests"
+    },
+    {
+      "criteria": ["AC-4"],
+      "test": "Review internal/relaysidecar/server.go and docs/relay-sidecar.md"
+    }
+  ]
+}

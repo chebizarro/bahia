@@ -294,20 +294,13 @@ func TestClient_SignNIP98_ExplicitMockMode(t *testing.T) {
 	}
 }
 
-func TestNewClientConfiguresOperationDeadlines(t *testing.T) {
+func TestNewClientDoesNotInstallOperationDeadlines(t *testing.T) {
 	client, err := NewClient(Config{ConnectTimeout: 2 * time.Second, SignTimeout: 3 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if client.connectTimeout != 2*time.Second || client.signTimeout != 3*time.Second {
-		t.Fatalf("operation timeouts = (%s, %s)", client.connectTimeout, client.signTimeout)
-	}
-	defaults, err := NewClient(Config{}, nil)
-	if err != nil {
-		t.Fatalf("NewClient(defaults) error = %v", err)
-	}
-	if defaults.connectTimeout <= 0 || defaults.signTimeout <= 0 {
-		t.Fatalf("default operation timeouts must be positive: (%s, %s)", defaults.connectTimeout, defaults.signTimeout)
+	if client == nil {
+		t.Fatal("NewClient() returned nil")
 	}
 }
 

@@ -1,0 +1,21 @@
+{
+  "feature_id": "SOULFACTORY_FIRST_OK_PUBLISH",
+  "tests": [
+    {
+      "criteria": ["AC-1", "AC-2", "AC-4"],
+      "test": "TestRelayBusPublishReturnsAfterFirstAcceptedOK"
+    },
+    {
+      "criteria": ["AC-3"],
+      "test": "TestRelayBusPublishReportsOKFalseAndAllRelayReject"
+    },
+    {
+      "criteria": ["AC-3"],
+      "test": "TestRelayBusPublishNetworkErrorCombinedWithOKFalse"
+    },
+    {
+      "criteria": ["AC-5"],
+      "test": "TestReactorBackfillsLatestRequestAndActionBeforeLiveUpdates"
+    }
+  ]
+}

@@ -9,6 +9,7 @@ package soulfactory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -160,16 +161,21 @@ func (r *Reactor) Run(ctx context.Context) error {
 		"additional_relays", r.config.AdditionalRelays,
 	)
 
-	// Subscribe to provisioning requests and actions
-	now := nostr.Now()
+	// Backfill the newest request/action so an accepted event resumes after a
+	// reactor restart. Existing terminal-result checks make this idempotent;
+	// the subscription remains open for all subsequent live events.
 	filters := []nostr.Filter{
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
-			Since: now,
+			Limit: 1,
 		},
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
-			Since: now,
+			Limit: 1,
+		},
+		{
+			Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},
+			Limit: 100,
 		},
 	}
 
@@ -223,9 +229,144 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleProvisioningRequest(ctx, event)
 	case nostr.Kind(domain.KindSoulAction):
 		go r.handleSoulAction(ctx, event)
+	case nostr.Kind(domain.KindRuntimeControlResult):
+		go r.handleLateRuntimeResult(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
+}
+
+// handleLateRuntimeResult projects durable runtime truth after a request-scoped
+// provisioner has already emitted a runtime-stage error. It never replays
+// Signet, avatar, memory, workspace, or runtime side effects.
+func (r *Reactor) handleLateRuntimeResult(ctx context.Context, event *nostr.Event) {
+	result, ok := parseRuntimeControlResultEvent(event)
+	if !ok || result.Status != "success" || result.OperatorRequestEvent == "" {
+		return
+	}
+	requestEvent, control, ok := r.correlatedRuntimeRecoveryState(ctx, result)
+	if !ok {
+		return
+	}
+	existing, err := r.findExistingProvisioningResult(ctx, requestEvent)
+	if err != nil || !provisioningResultNeedsRuntimeReconciliation(existing) {
+		return
+	}
+	soul, err := soulFromRuntimeCheckpoint(control, result)
+	if err != nil {
+		r.logger.Warn("late runtime result has no usable Soul checkpoint", "event_id", event.ID, "error", err)
+		return
+	}
+	if current, err := r.GetSoul(ctx, soul.AgentID); err == nil && current != nil &&
+		current.SpecHash == soul.SpecHash && current.Runtime.RuntimeBinding == soul.Runtime.RuntimeBinding &&
+		current.Status == domain.SoulStatusActive {
+		return
+	}
+	if err := r.PublishSoul(ctx, soul); err != nil {
+		r.logger.Error("failed to project late runtime success", "event_id", event.ID, "error", err)
+		return
+	}
+	if err := r.publishResult(ctx, requestEvent, soul); err != nil {
+		r.logger.Error("failed to publish late runtime provisioning success", "event_id", event.ID, "error", err)
+		return
+	}
+	r.logger.Info("late runtime success reconciled", "event_id", event.ID, "agent_id", soul.AgentID, "soul_event", soul.EventID)
+}
+
+func (r *Reactor) correlatedRuntimeRecoveryState(ctx context.Context, result *RuntimeControlResultEnvelope) (*nostr.Event, *RuntimeControlEnvelope, bool) {
+	if r.relayBus == nil || result == nil || result.Event == nil {
+		return nil, nil, false
+	}
+	controlID, err := nostr.IDFromHex(strings.TrimSpace(result.RequestEvent))
+	if err != nil {
+		return nil, nil, false
+	}
+	controls, err := r.relayBus.Query(ctx, []nostr.Filter{{
+		IDs:   []nostr.ID{controlID},
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
+		Limit: 1,
+	}})
+	if err != nil || len(controls) == 0 || controls[0] == nil || !validSignedEvent(controls[0]) {
+		return nil, nil, false
+	}
+	controlEvent := controls[0]
+	if controlEvent.PubKey.Hex() != strings.TrimSpace(r.config.SoulFactoryPubkey) ||
+		result.Event.PubKey.Hex() != tagValue(controlEvent.Tags, tagPubkey) {
+		return nil, nil, false
+	}
+	var control RuntimeControlEnvelope
+	if err := json.Unmarshal([]byte(controlEvent.Content), &control); err != nil {
+		return nil, nil, false
+	}
+	if control.Schema != domain.SoulFactoryRuntimeControlSchema ||
+		control.Method != result.Method ||
+		control.IdempotencyKey != result.IdempotencyKey ||
+		control.Operator.RequestEvent != result.OperatorRequestEvent ||
+		control.Target.RuntimePubkey != result.Event.PubKey.Hex() ||
+		tagValue(result.Event.Tags, tagEvent) != controlEvent.ID.Hex() {
+		return nil, nil, false
+	}
+	operatorID, err := nostr.IDFromHex(strings.TrimSpace(result.OperatorRequestEvent))
+	if err != nil {
+		return nil, nil, false
+	}
+	requests, err := r.relayBus.Query(ctx, []nostr.Filter{{
+		IDs:   []nostr.ID{operatorID},
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
+		Limit: 1,
+	}})
+	if err != nil || len(requests) == 0 || requests[0] == nil || !validSignedEvent(requests[0]) {
+		return nil, nil, false
+	}
+	requestEvent := requests[0]
+	if requestEvent.PubKey.Hex() != control.Operator.Pubkey || !r.isAuthorizedProvisioner(requestEvent.PubKey.Hex()) {
+		return nil, nil, false
+	}
+	return requestEvent, &control, true
+}
+
+func soulFromRuntimeCheckpoint(control *RuntimeControlEnvelope, result *RuntimeControlResultEnvelope) (*domain.AgentSoul, error) {
+	if control == nil || result == nil {
+		return nil, fmt.Errorf("runtime control and result are required")
+	}
+	bahia, ok := control.Params["bahia"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("bahia runtime parameters are missing")
+	}
+	raw, ok := bahia["soul_checkpoint"]
+	if !ok {
+		return nil, fmt.Errorf("soul checkpoint is missing")
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshal soul checkpoint: %w", err)
+	}
+	var soul domain.AgentSoul
+	if err := json.Unmarshal(data, &soul); err != nil {
+		return nil, fmt.Errorf("decode soul checkpoint: %w", err)
+	}
+	if soul.AgentID == "" || soul.AgentID != control.Target.AgentID || soul.SpecHash != control.Soul.SpecHash {
+		return nil, fmt.Errorf("soul checkpoint does not match runtime control target")
+	}
+	soul.BunkerURI = ""
+	soul.Status = domain.SoulStatusActive
+	soul.Runtime.Target = control.Target.Runtime
+	soul.Runtime.RuntimePubkey = result.Event.PubKey.Hex()
+	soul.Runtime.RuntimeBinding = firstNonEmpty(stringResult(result.Result, "runtime_binding"), soul.Runtime.RuntimeBinding)
+	soul.Runtime.State = firstNonEmpty(stringResult(result.Result, "state"), "running")
+	soul.LastResultRef = result.Event.ID.Hex()
+	now := time.Now()
+	soul.ProvisionedAt = &now
+	return &soul, nil
+}
+
+func provisioningResultNeedsRuntimeReconciliation(event *nostr.Event) bool {
+	if event == nil || event.Kind != nostr.Kind(domain.KindProvisioningResult) {
+		return false
+	}
+	return tagValue(event.Tags, tagStatus) == "error" &&
+		tagValue(event.Tags, tagStep) == string(domain.StepDeploy) &&
+		strings.HasPrefix(strings.TrimSpace(event.Content), "runtime provision ")
 }
 
 // handleProvisioningRequest processes a kind:5950 provisioning request.

@@ -386,6 +386,58 @@ func TestProvider_MetricsHandler(t *testing.T) {
 	}
 }
 
+func TestProvider_MetricsHandler_FleetHealthEntities(t *testing.T) {
+	logger := zap.NewNop()
+	p := Setup(Config{Enabled: true}, logger)
+	m := p.GetMetrics()
+
+	m.SetFleetHealthEntities("worker", "healthy", 3)
+	m.SetFleetHealthEntities("service", "degraded", 1)
+	m.SetFleetHealthEntities("runtime", "unhealthy", 2)
+	m.SetFleetHealthEntities("runtime", "unknown", -1)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	p.MetricsHandler()(w, req)
+
+	body := w.Body.String()
+	checks := []string{
+		`bahia_fleet_health_entities{domain="worker",status="healthy"} 3`,
+		`bahia_fleet_health_entities{domain="service",status="degraded"} 1`,
+		`bahia_fleet_health_entities{domain="runtime",status="unhealthy"} 2`,
+		`bahia_fleet_health_entities{domain="runtime",status="unknown"} 0`,
+		`bahia_fleet_health_entities{domain="worker",status="degraded"} 0`,
+	}
+	for _, check := range checks {
+		if !strings.Contains(body, check) {
+			t.Errorf("expected metrics output to contain %q", check)
+		}
+	}
+}
+
+func TestProvider_MetricsHandler_FleetHealthLabelsAreBounded(t *testing.T) {
+	logger := zap.NewNop()
+	p := Setup(Config{Enabled: true}, logger)
+	m := p.GetMetrics()
+
+	m.SetFleetHealthEntities("service_id=secret-service", "raw-error-token", 9)
+	m.SetFleetHealthEntities("worker", "raw-error-token", 4)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	p.MetricsHandler()(w, req)
+
+	body := w.Body.String()
+	for _, leaked := range []string{"secret-service", "raw-error-token", "service_id"} {
+		if strings.Contains(body, leaked) {
+			t.Errorf("expected metrics output not to contain unbounded label %q", leaked)
+		}
+	}
+	if !strings.Contains(body, `bahia_fleet_health_entities{domain="worker",status="unknown"} 4`) {
+		t.Error("expected unrecognized bounded worker status to collapse to unknown")
+	}
+}
+
 func TestCalculatePercentiles(t *testing.T) {
 	values := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	p50, p90, p99 := calculatePercentiles(values)

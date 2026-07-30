@@ -430,7 +430,7 @@ Implementation rules:
 2. The migration must be idempotent. Re-running startup must not duplicate canonical events.
 3. Migrated events must publish canonical `kind` values and may include metadata tags such as `legacy_kind`, `migrated-from`, `migration`, and `schema`.
 4. Runtime publishers and subscribers should not include legacy kind support just to ease rollout.
-5. The relay sidecar should allow canonical production kinds and approved open interop kinds, including NIP-22 comments `1111` and NIP-34 `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618`; it should reject legacy runtime kinds unless a migration path explicitly needs read access.
+5. The relay sidecar accepts every valid Nostr event kind. Canonical-versus-legacy distinctions are application semantics enforced by Bahia consumers, never relay admission policy.
 6. If a new migration transform is added, update `docs/control-planes.md`, `docs/event-spec.md`, `docs/nostr-commands.md`, `docs/protocol-compatibility.md`, and the PSTF verification evidence for the migration feature.
 
 ## Implementation checklist
@@ -439,7 +439,7 @@ Before adding or changing Nostr event code:
 
 - [ ] Use `internal/kinds/kinds.go` rather than hand-written numeric constants.
 - [ ] Confirm the kind is canonical production policy or explicitly migration-only.
-- [ ] Check sidecar allow/deny behavior for reads and publishes.
+- [ ] Verify that consumers validate authors, signatures, encryption, tags, and application semantics without relying on relay admission.
 - [ ] Add or update event shape tests for required tags, content schema, and projection family decoding.
 - [ ] Add idempotency and dedupe behavior for handlers.
 - [ ] Verify relay `OK`, `CLOSED`, and `AUTH` paths.

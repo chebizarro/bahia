@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -12,11 +13,19 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
+func sidecarTestConfig(t *testing.T) config.NostrConfig {
+	t.Helper()
 	cfg := config.Defaults().Nostr
+	cfg.Sidecar.DataDir = t.TempDir()
+	return cfg
+}
+
+func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 100
+	cfg.Sidecar.DataDir = t.TempDir()
 
 	server, err := New(cfg, zap.NewNop())
 	if err != nil {
@@ -58,11 +67,13 @@ func TestSidecarDecouplesPublisherAcknowledgementFromBroadcast(t *testing.T) {
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.DataDir = t.TempDir()
 
 	server, err := New(cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
+	defer server.store.Close()
 
 	relay := server.Relay()
 	if relay.PreventBroadcast == nil || !relay.PreventBroadcast(nil, nostr.Filter{}, nostr.Event{}) {
@@ -76,8 +87,47 @@ func TestSidecarDecouplesPublisherAcknowledgementFromBroadcast(t *testing.T) {
 	}
 }
 
-func TestSidecarRejectsBroadReadFilters(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarRetainsEventsAcrossRestart(t *testing.T) {
+	cfg := sidecarTestConfig(t)
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.DataDir = t.TempDir()
+
+	first, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("first New() error: %v", err)
+	}
+	event := nostr.Event{
+		CreatedAt: nostr.Now(),
+		Kind:      nostr.Kind(kinds.SoulFactoryDraft),
+		Tags:      nostr.Tags{{"d", "restart-proof-draft"}},
+		Content:   `{"agent_id":"restart-proof"}`,
+	}
+	if err := event.Sign(nostr.Generate()); err != nil {
+		t.Fatalf("sign event: %v", err)
+	}
+	if _, err := first.Relay().AddEvent(context.Background(), event); err != nil {
+		t.Fatalf("store event: %v", err)
+	}
+	if err := first.store.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	second, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("second New() error: %v", err)
+	}
+	defer second.store.Close()
+	for stored := range second.Relay().QueryStored(context.Background(), nostr.Filter{IDs: []nostr.ID{event.ID}}) {
+		if stored.ID == event.ID {
+			return
+		}
+	}
+	t.Fatalf("event %s disappeared across relay restart", event.ID.Hex())
+}
+
+func TestSidecarAcceptsReadFiltersWithoutKinds(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -86,13 +136,13 @@ func TestSidecarRejectsBroadReadFilters(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	if reject, _ := server.Relay().OnRequest(context.Background(), nostr.Filter{}); !reject {
-		t.Fatalf("expected broad read filter without kinds to be rejected")
+	if reject, msg := server.Relay().OnRequest(context.Background(), nostr.Filter{}); reject {
+		t.Fatalf("expected read filter without kinds to be accepted, got rejection %q", msg)
 	}
 }
 
-func TestSidecarRejectsBroadRequestKindReadsWithoutAuthorizedAuthors(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarAcceptsEveryEventKindForReads(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -101,17 +151,57 @@ func TestSidecarRejectsBroadRequestKindReadsWithoutAuthorizedAuthors(t *testing.
 		t.Fatalf("New() error: %v", err)
 	}
 
-	reject, msg := server.Relay().OnRequest(context.Background(), nostr.Filter{Kinds: []nostr.Kind{5963}})
-	if !reject {
-		t.Fatalf("expected request kind read filter to be rejected")
-	}
-	if msg == "" {
-		t.Fatalf("expected rejection message")
+	filter := nostr.Filter{Kinds: []nostr.Kind{0, 1, 5963, 31950, 65535}}
+	if reject, msg := server.Relay().OnRequest(context.Background(), filter); reject {
+		t.Fatalf("expected arbitrary event kinds to be readable, got rejection %q", msg)
 	}
 }
 
-func TestSidecarRejectsAuthorScopedLegacyRequestKindReadsForAuthorizedOperators(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarRetainsProtocolValidityChecks(t *testing.T) {
+	pol := &policy{now: func() nostr.Timestamp { return 1_000_000 }}
+	sk := nostr.Generate()
+
+	valid := nostr.Event{CreatedAt: 1_000_000, Kind: 65535, Content: "valid"}
+	if err := valid.Sign(sk); err != nil {
+		t.Fatalf("sign valid event: %v", err)
+	}
+	if reject, msg := pol.acceptEvent(context.Background(), valid); reject {
+		t.Fatalf("expected valid event to be accepted, got rejection %q", msg)
+	}
+
+	badID := valid
+	badID.Content = "modified after signing"
+	if reject, _ := pol.acceptEvent(context.Background(), badID); !reject {
+		t.Fatalf("expected incorrect event ID to be rejected")
+	}
+
+	future := nostr.Event{CreatedAt: 1_000_601, Kind: 65535, Content: "future"}
+	if err := future.Sign(sk); err != nil {
+		t.Fatalf("sign future event: %v", err)
+	}
+	if reject, _ := pol.acceptEvent(context.Background(), future); !reject {
+		t.Fatalf("expected event more than ten minutes in the future to be rejected")
+	}
+
+	past := nostr.Event{CreatedAt: 1_000_000 - nostr.Timestamp((365 * 24 * time.Hour).Seconds()) - 1, Kind: 65535, Content: "past"}
+	if err := past.Sign(sk); err != nil {
+		t.Fatalf("sign past event: %v", err)
+	}
+	if reject, _ := pol.acceptEvent(context.Background(), past); !reject {
+		t.Fatalf("expected event older than one year to be rejected")
+	}
+}
+
+func TestSidecarRejectsUnsupportedSearchWithoutRestrictingKinds(t *testing.T) {
+	pol := &policy{now: nostr.Now}
+	filter := nostr.Filter{Kinds: []nostr.Kind{65535}, Search: "not implemented"}
+	if reject, msg := pol.acceptFilter(context.Background(), filter); !reject || msg == "" {
+		t.Fatalf("expected unsupported search to be rejected with a reason")
+	}
+}
+
+func TestSidecarDoesNotApplyAuthorRestrictionsToReads(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -126,22 +216,19 @@ func TestSidecarRejectsAuthorScopedLegacyRequestKindReadsForAuthorizedOperators(
 
 	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 5997, 6005, 38390, 38400, 38420, 38421, 38430}, Authors: []nostr.PubKey{pubkey}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
-	if !reject {
-		t.Fatalf("expected author-scoped legacy request kind read filter to be rejected after migration boundary")
-	}
-	if msg == "" {
-		t.Fatalf("expected rejection message")
+	if reject {
+		t.Fatalf("expected author-scoped read to be accepted, got rejection %q", msg)
 	}
 
 	encryptedFilter := nostr.Filter{Kinds: []nostr.Kind{5980}, Authors: []nostr.PubKey{pubkey}}
 	reject, msg = server.Relay().OnRequest(context.Background(), encryptedFilter)
-	if !reject {
-		t.Fatalf("expected encrypted request kind read filter to remain blocked")
+	if reject {
+		t.Fatalf("expected encrypted event kind read to be accepted, got rejection %q", msg)
 	}
 }
 
-func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarAllowsCanonicalAndLegacyStatusResultKinds(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -169,16 +256,13 @@ func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testin
 
 	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
 	reject, msg = server.Relay().OnRequest(context.Background(), legacyFilter)
-	if !reject {
-		t.Fatalf("expected legacy signer-first operator status/result/read-model kinds to be rejected after migration boundary")
-	}
-	if msg == "" {
-		t.Fatalf("expected rejection message")
+	if reject {
+		t.Fatalf("expected every legacy status/result/read-model kind to be readable, got rejection %q", msg)
 	}
 }
 
-func TestSidecarAllowsScopedContextVMSubscriptions(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarDoesNotRequireScopedContextVMSubscriptions(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	serviceSK := nostr.Generate()
@@ -215,17 +299,14 @@ func TestSidecarAllowsScopedContextVMSubscriptions(t *testing.T) {
 	}
 	for _, filter := range blocked {
 		reject, msg := server.Relay().OnRequest(context.Background(), filter)
-		if !reject {
-			t.Fatalf("expected unscoped/unknown ContextVM filter %#v to be rejected", filter)
-		}
-		if msg == "" {
-			t.Fatalf("expected rejection message for filter %#v", filter)
+		if reject {
+			t.Fatalf("expected unscoped ContextVM filter %#v to be readable, got rejection %q", filter, msg)
 		}
 	}
 }
 
-func TestSidecarAcceptsContextVMEventsAndAddressedGiftWraps(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarAcceptsContextVMEventsRegardlessOfAuthorOrRecipient(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	serviceSK := nostr.Generate()
@@ -277,13 +358,13 @@ func TestSidecarAcceptsContextVMEventsAndAddressedGiftWraps(t *testing.T) {
 	if err := wrapToUnknown.Sign(nostr.Generate()); err != nil {
 		t.Fatalf("sign gift wrap to unknown: %v", err)
 	}
-	if _, err := server.Relay().AddEvent(context.Background(), wrapToUnknown); err == nil {
-		t.Fatalf("expected gift wrap addressed to unknown pubkey to be rejected")
+	if _, err := server.Relay().AddEvent(context.Background(), wrapToUnknown); err != nil {
+		t.Fatalf("expected gift wrap addressed to unknown pubkey to be accepted: %v", err)
 	}
 }
 
 func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -300,16 +381,13 @@ func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
 
 	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{30079, 31400, 31404, 31974, 31975, 31976, 31977, 31978, 31991, 31999}}
 	reject, msg = server.Relay().OnRequest(context.Background(), legacyFilter)
-	if !reject {
-		t.Fatalf("expected legacy discovery/read-model kinds to be rejected after migration boundary")
-	}
-	if msg == "" {
-		t.Fatalf("expected rejection message")
+	if reject {
+		t.Fatalf("expected legacy discovery/read-model kinds to be readable, got rejection %q", msg)
 	}
 }
 
 func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 1
@@ -340,7 +418,7 @@ func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 }
 
 func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
 
@@ -374,7 +452,7 @@ func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
 }
 
 func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
 
@@ -403,8 +481,8 @@ func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
 	}
 }
 
-func TestSidecarRejectsUnauthorizedRequestKind(t *testing.T) {
-	cfg := config.Defaults().Nostr
+func TestSidecarAcceptsArbitrarySignedRequestKind(t *testing.T) {
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -424,13 +502,13 @@ func TestSidecarRejectsUnauthorizedRequestKind(t *testing.T) {
 		t.Fatalf("sign event: %v", err)
 	}
 
-	if _, err := server.Relay().AddEvent(context.Background(), event); err == nil {
-		t.Fatalf("expected unauthorized request kind to be rejected")
+	if _, err := server.Relay().AddEvent(context.Background(), event); err != nil {
+		t.Fatalf("expected arbitrary signed request kind to be accepted: %v", err)
 	}
 }
 
 func TestSidecarAllowsNIP34Kinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
@@ -485,7 +563,7 @@ func TestSidecarAllowsNIP34Kinds(t *testing.T) {
 }
 
 func TestSidecarAllowsSoulFactoryInteropKinds(t *testing.T) {
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 100
@@ -543,7 +621,7 @@ func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 	servicePubkey := nostr.GetPublicKey(serviceSK)
 	unauthorizedSK := nostr.Generate()
 
-	cfg := config.Defaults().Nostr
+	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.PrivateKey = serviceSK.Hex()
@@ -585,7 +663,7 @@ func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 				t.Fatalf("AddEvent() rejected kind %d from service pubkey", tc.kind)
 			}
 
-			// Unauthorized pubkey cannot write NIP-23 long-form events.
+			// Relay admission is independent of author identity.
 			badDocEvent := nostr.Event{
 				CreatedAt: nostr.Now(),
 				Kind:      nostr.Kind(tc.kind),
@@ -595,8 +673,8 @@ func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 			if err := badDocEvent.Sign(unauthorizedSK); err != nil {
 				t.Fatalf("sign bad doc event: %v", err)
 			}
-			if _, err := server.Relay().AddEvent(context.Background(), badDocEvent); err == nil {
-				t.Fatalf("expected kind %d from unauthorized pubkey to be rejected", tc.kind)
+			if _, err := server.Relay().AddEvent(context.Background(), badDocEvent); err != nil {
+				t.Fatalf("expected kind %d from arbitrary pubkey to be accepted: %v", tc.kind, err)
 			}
 
 			// NIP-23 long-form content and draft kinds are readable.

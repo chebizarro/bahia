@@ -2145,11 +2145,22 @@ func replayCursorWithOverlap(timestamp nostr.Timestamp) nostr.Timestamp {
 }
 
 func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
-	return []nostr.Filter{{
+	filter := nostr.Filter{
 		Kinds:   nostrKindsFromInts(canonicalReactorSubscriptionKinds()),
 		Authors: r.requestSubscriptionAuthors(),
 		Since:   since,
-	}}
+	}
+	// ContextVM requests are addressed to the Bahia service identity. Scoping
+	// the relay read by #p keeps the subscription acceptable to the hardened
+	// sidecar even when the operator allowlist is empty or supplied through a
+	// narrower handler-specific policy. Handler authorization remains
+	// authoritative for every received request.
+	if privateKey := strings.TrimSpace(r.config.PrivateKey); privateKey != "" {
+		if secret, err := nostr.SecretKeyFromHex(privateKey); err == nil {
+			filter.Tags = nostr.TagMap{"p": []string{secret.Public().Hex()}}
+		}
+	}
+	return []nostr.Filter{filter}
 }
 
 func requestSubscriptionKinds() []int {

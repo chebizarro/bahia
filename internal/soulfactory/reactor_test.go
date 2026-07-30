@@ -32,6 +32,192 @@ func attachPublishCapture(reactor *Reactor) *capturedPublish {
 	return capture
 }
 
+func TestReactorBackfillsLatestRequestAndActionBeforeLiveUpdates(t *testing.T) {
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{endpoint},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+	)
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+
+	reactor := NewReactor(Config{Relays: []string{endpoint.url}}, nil, nil, slog.Default())
+	reactor.relayBus = bus
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- reactor.Run(ctx) }()
+
+	filters := <-endpoint.subscribeCalls
+	if len(filters) != 3 {
+		t.Fatalf("subscription filters = %d, want provisioning, lifecycle, and runtime-result filters", len(filters))
+	}
+	for _, filter := range filters {
+		wantLimit := 1
+		if slices.Contains(filter.Kinds, nostr.Kind(domain.KindRuntimeControlResult)) {
+			wantLimit = 100
+		}
+		if filter.Limit != wantLimit {
+			t.Fatalf("filter limit = %d, want %d", filter.Limit, wantLimit)
+		}
+		if filter.Since != 0 {
+			t.Fatalf("filter since = %d, want historical recovery enabled", filter.Since)
+		}
+	}
+
+	cancel()
+	if err := <-runDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context cancellation", err)
+	}
+}
+
+func TestLateRuntimeSuccessProjectsSoulAndTerminalResultExactlyOnce(t *testing.T) {
+	factory := newFakeSigner(t)
+	operator := newFakeSigner(t)
+	runtime := newFakeSigner(t)
+	request := &nostr.Event{
+		Kind:      nostr.Kind(domain.KindProvisioningRequest),
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{{tagAgentID, "scout"}},
+		Content:   `{"brief":"Observe deployments"}`,
+	}
+	if err := operator.Sign(t.Context(), request); err != nil {
+		t.Fatalf("sign request: %v", err)
+	}
+	checkpoint := domain.AgentSoul{
+		ID:          domain.NewUUID(),
+		AgentID:     "scout",
+		Name:        "Scout",
+		Purpose:     "Observe deployments",
+		Tier:        domain.SoulTierStandard,
+		Status:      domain.SoulStatusProvisioning,
+		NostrPubkey: strings.Repeat("a", 64),
+		NostrNpub:   "npub1scout",
+		SoulMD:      "# Scout",
+		SpecHash:    "sha256:spec",
+	}
+	controlEnvelope := RuntimeControlEnvelope{
+		Schema:         domain.SoulFactoryRuntimeControlSchema,
+		Method:         RuntimeMethodProvision,
+		IdempotencyKey: "sha256:idempotency",
+		Operator: RuntimeOperatorRef{
+			Pubkey:       operator.pubkey,
+			RequestEvent: request.ID.Hex(),
+		},
+		Controller: RuntimeControllerRef{Pubkey: factory.pubkey},
+		Target: RuntimeTargetRef{
+			Runtime:       domain.RuntimeTargetOpenClaw,
+			RuntimePubkey: runtime.pubkey,
+			AgentID:       "scout",
+		},
+		Soul: RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
+		Params: map[string]interface{}{
+			"bahia": map[string]interface{}{"soul_checkpoint": checkpoint},
+		},
+	}
+	controlContent, _ := json.Marshal(controlEnvelope)
+	control := &nostr.Event{
+		Kind:      nostr.Kind(domain.KindRuntimeControlRequest),
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{{tagPubkey, runtime.pubkey}},
+		Content:   string(controlContent),
+	}
+	if err := factory.Sign(t.Context(), control); err != nil {
+		t.Fatalf("sign control: %v", err)
+	}
+	resultEnvelope := RuntimeControlResultEnvelope{
+		Schema:               domain.SoulFactoryRuntimeControlSchema,
+		Method:               RuntimeMethodProvision,
+		IdempotencyKey:       controlEnvelope.IdempotencyKey,
+		RequestEvent:         control.ID.Hex(),
+		OperatorRequestEvent: request.ID.Hex(),
+		Status:               "success",
+		Result: map[string]interface{}{
+			"runtime_binding": "openclaw://agents/scout",
+			"state":           "running",
+		},
+	}
+	resultContent, _ := json.Marshal(resultEnvelope)
+	result := &nostr.Event{
+		Kind:      nostr.Kind(domain.KindRuntimeControlResult),
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{tagPubkey, factory.pubkey},
+			{tagEvent, control.ID.Hex()},
+			{tagStatus, "success"},
+		},
+		Content: string(resultContent),
+	}
+	if err := runtime.Sign(t.Context(), result); err != nil {
+		t.Fatalf("sign result: %v", err)
+	}
+	failed := BuildProvisioningErrorResultEvent(request, string(domain.StepDeploy), "runtime provision openclaw: context deadline exceeded")
+	if err := factory.Sign(t.Context(), failed); err != nil {
+		t.Fatalf("sign failed result: %v", err)
+	}
+
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	queueQuery := func(event *nostr.Event) {
+		sub := newFakeRelaySubscription()
+		if event != nil {
+			sub.events <- event
+		}
+		close(sub.eose)
+		endpoint.subscribeQueue <- sub
+	}
+	queueRecoveryQueries := func() {
+		queueQuery(control)
+		queueQuery(request)
+		queueQuery(failed)
+	}
+	queueRecoveryQueries()
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	reactor := NewReactor(Config{
+		Relays:            []string{endpoint.url},
+		AuthorizedPubkeys: []string{operator.pubkey},
+		SoulFactoryPubkey: factory.pubkey,
+	}, scriptedGenerator{}, factory, slog.Default())
+	reactor.relayBus = bus
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return nil, nil }
+	capture := attachPublishCapture(reactor)
+
+	reactor.handleLateRuntimeResult(t.Context(), result)
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 1 {
+		t.Fatalf("late Soul publish count = %d, want 1", got)
+	}
+	if got := len(capture.eventsByKind(domain.KindProvisioningResult)); got != 1 {
+		t.Fatalf("late terminal publish count = %d, want 1", got)
+	}
+	projected := capture.eventsByKind(domain.KindAgentSoul)[0]
+	if findTag(projected, tagStatus) != string(domain.SoulStatusActive) ||
+		findTag(projected, tagRuntimeState) != "running" ||
+		findTag(projected, tagRuntimeBinding) != "openclaw://agents/scout" {
+		t.Fatalf("late projected Soul tags = %+v", projected.Tags)
+	}
+
+	queueRecoveryQueries()
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) {
+		return &domain.AgentSoul{
+			AgentID:  "scout",
+			Status:   domain.SoulStatusActive,
+			SpecHash: "sha256:spec",
+			Runtime:  domain.SoulRuntimeSpec{RuntimeBinding: "openclaw://agents/scout"},
+		}, nil
+	}
+	reactor.handleLateRuntimeResult(t.Context(), result)
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 1 {
+		t.Fatalf("duplicate late result republished Soul: count=%d", got)
+	}
+	if got := len(capture.eventsByKind(domain.KindProvisioningResult)); got != 1 {
+		t.Fatalf("duplicate late result republished terminal result: count=%d", got)
+	}
+}
+
 func (c *capturedPublish) eventsByKind(kind int) []*nostr.Event {
 	var out []*nostr.Event
 	for _, event := range c.events {

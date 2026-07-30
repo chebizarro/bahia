@@ -223,12 +223,18 @@ func (s *resolvedProvisioningSpec) provisionRuntimeParams(soul *domain.AgentSoul
 	content.Identity.Purpose = s.Brief
 	content.Identity.Tier = s.Tier
 	params := BuildProvisionRuntimeParamsFromDraft(content)
+	checkpoint := *soul
+	// Runtime-control events are relay-visible durable workflow state. Preserve
+	// everything needed to project a late successful runtime result, but never
+	// copy the one-time Signet bunker connection secret into that event.
+	checkpoint.BunkerURI = ""
 	params["bahia"] = map[string]interface{}{
-		"agent_id":       soul.AgentID,
-		"soul_id":        soul.ID.String(),
-		"nostr_pubkey":   soul.NostrPubkey,
-		"nostr_npub":     soul.NostrNpub,
-		"workspace_repo": soul.WorkspaceRepoURL,
+		"agent_id":        soul.AgentID,
+		"soul_id":         soul.ID.String(),
+		"nostr_pubkey":    soul.NostrPubkey,
+		"nostr_npub":      soul.NostrNpub,
+		"workspace_repo":  soul.WorkspaceRepoURL,
+		"soul_checkpoint": checkpoint,
 	}
 	return params
 }

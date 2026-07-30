@@ -440,10 +440,14 @@ type NostrConfig struct {
 	PrivateRelays        []string `koanf:"-"`
 	PrivateBrowserRelays []string `koanf:"-"`
 
-	AuthorizedPubkeys []string           `koanf:"authorized_pubkeys"`
-	PublishEnabled    bool               `koanf:"publish_enabled"`
-	RelayQuorum       RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
-	Sidecar           RelaySidecarConfig `koanf:"sidecar"`
+	AuthorizedPubkeys []string `koanf:"authorized_pubkeys"`
+	PublishEnabled    bool     `koanf:"publish_enabled"`
+	// LegacyRelayBackfill explicitly enables startup reads of retired Bahia
+	// request kinds from an external migration relay. The hardened Bahia
+	// sidecar intentionally refuses those reads, so this must remain opt-in.
+	LegacyRelayBackfill bool               `koanf:"legacy_relay_backfill" yaml:"legacy_relay_backfill"`
+	RelayQuorum         RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
+	Sidecar             RelaySidecarConfig `koanf:"sidecar"`
 }
 
 const (
@@ -781,7 +785,7 @@ func Defaults() *Config {
 				MirrorExternal:   false,
 				EventRetention:   7 * 24 * time.Hour,
 				RequestRetention: 24 * time.Hour,
-				MaxQueryLimit:    500,
+				MaxQueryLimit:    2000,
 			},
 		},
 		Reconcile: ReconcileConfig{

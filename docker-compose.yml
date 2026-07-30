@@ -14,6 +14,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   bahia:
     build:
@@ -44,6 +45,8 @@ services:
       BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
       BAHIA_NOSTR__SIDECAR__BACKEND_URL: "ws://relay:3334/relay"
       BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
+      BAHIA_NOSTR_PRIVATE_KEY: ${BAHIA_NOSTR_PRIVATE_KEY:?BAHIA_NOSTR_PRIVATE_KEY is required}
+      BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +79,9 @@ services:
       BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
       BAHIA_NOSTR__SIDECAR__BACKEND_URL: "ws://relay:3334/relay"
       BAHIA_NOSTR__SIDECAR__DATA_DIR: "/var/lib/bahia/relay-sidecar"
-      BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT: "500"
+      BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT: "2000"
+      BAHIA_NOSTR_PRIVATE_KEY: ${BAHIA_NOSTR_PRIVATE_KEY:?BAHIA_NOSTR_PRIVATE_KEY is required}
+      BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q --header='Accept: application/nostr+json' -O /dev/null http://localhost:3334/relay"]

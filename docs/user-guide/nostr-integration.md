@@ -126,7 +126,7 @@ nostr:
     backend_url: "ws://relay:3334/relay"
 ```
 
-Browser and API Nostr relay traffic goes through the sidecar. Operators must configure the sidecar relay allowlists so browsers can reach only the advertised `nostr.browser_relays` / `nostr.sidecar_url` set and backend migration/runtime publishers can reach only configured backend/upstream relays. Legacy-kind backfill may read from migration-configured relays, but live runtime publication remains canonical-only.
+Browser and API Nostr relay traffic goes through the sidecar. The sidecar accepts every valid signed Nostr event kind and every ordinary NIP-01 subscription filter; it does not use event-kind, author, recipient, or filter-scope allowlists. The advertised `nostr.browser_relays` / `nostr.sidecar_url` and configured backend/upstream relay sets select routing destinations, not which events those relays accept. Consumers remain responsible for authorizing and interpreting events.
 
 ### Relay Policy Sources
 

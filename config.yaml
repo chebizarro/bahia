@@ -64,6 +64,10 @@ nostr:
   relay_auth_unavailable: "exclude_and_fail"
   # Locked-down default. MVP enablement is a deploy step with a deployment-provided signer key.
   publish_enabled: false
+  # Retired request-kind history is blocked by the hardened Bahia sidecar.
+  # Enable only when migrating from a separate relay that explicitly permits
+  # author-scoped reads of legacy Bahia kinds.
+  legacy_relay_backfill: false
   sidecar:
     enabled: false
     listen_addr: "0.0.0.0:3334"
@@ -74,7 +78,7 @@ nostr:
     event_retention: 168h
     request_retention: 24h
     auth_private_key: ""
-    max_query_limit: 500
+    max_query_limit: 2000
 
 reconcile:
   interval: 60s

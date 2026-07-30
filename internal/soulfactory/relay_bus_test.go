@@ -15,7 +15,7 @@ type fakeRelayEndpoint struct {
 
 	publishResults []RelayPublishResult
 	publishCalls   int
-	published      []nostr.Event
+	publishFn      func(context.Context, nostr.Event) RelayPublishResult
 
 	subscribeQueue chan *fakeRelaySubscription
 	subscribeCalls chan []nostr.Filter
@@ -33,8 +33,10 @@ func newFakeRelayEndpoint(url string) *fakeRelayEndpoint {
 
 func (e *fakeRelayEndpoint) URL() string { return e.url }
 
-func (e *fakeRelayEndpoint) Publish(_ context.Context, event nostr.Event) RelayPublishResult {
-	e.published = append(e.published, event)
+func (e *fakeRelayEndpoint) Publish(ctx context.Context, event nostr.Event) RelayPublishResult {
+	if e.publishFn != nil {
+		return e.publishFn(ctx, event)
+	}
 	result := RelayPublishResult{RelayURL: e.url, Error: errors.New("unexpected publish")}
 	if e.publishCalls < len(e.publishResults) {
 		result = e.publishResults[e.publishCalls]
@@ -149,6 +151,38 @@ func TestRelayBusPublishRequiresAtLeastOneAcceptedOK(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("Publish() accepted count = %d, want 1", count)
 	}
+}
+
+func TestRelayBusPublishReturnsAfterFirstAcceptedOK(t *testing.T) {
+	blocked := newFakeRelayEndpoint("wss://blocked.example")
+	blockedEntered := make(chan struct{})
+	blockedCanceled := make(chan struct{})
+	blocked.publishFn = func(ctx context.Context, _ nostr.Event) RelayPublishResult {
+		close(blockedEntered)
+		<-ctx.Done()
+		close(blockedCanceled)
+		return RelayPublishResult{RelayURL: blocked.url, Error: ctx.Err()}
+	}
+
+	accepted := newFakeRelayEndpoint("wss://accepted.example")
+	accepted.publishFn = func(context.Context, nostr.Event) RelayPublishResult {
+		<-blockedEntered
+		return RelayPublishResult{RelayURL: accepted.url, Accepted: true}
+	}
+
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{blocked, accepted})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("first-ok")})
+	if err != nil {
+		t.Fatalf("Publish() error = %v, want first accepted OK to complete quorum", err)
+	}
+	if count != 1 {
+		t.Fatalf("Publish() accepted count = %d, want 1", count)
+	}
+	<-blockedCanceled
 }
 
 func TestRelayBusPublishReportsOKFalseAndAllRelayReject(t *testing.T) {

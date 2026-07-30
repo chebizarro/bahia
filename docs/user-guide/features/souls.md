@@ -244,7 +244,7 @@ Soul creation is signer-first and event-driven:
 
 REST provisioning and lifecycle routes are intentionally not part of SoulFactory. Do not integrate against a REST create/provision/suspend/resume path; use signed Nostr events and scoped subscriptions.
 
-The Bahia sidecar relay accepts the SoulFactory event family above as open interop data. Browser routes such as `/souls/new` can query `31950`, `31951`, `31952`, and `30317` through the sidecar without CLOSED rejections, and operators/runtimes can publish correlated SoulFactory request, progress, and result events through the same relay boundary when their signatures and event IDs are valid.
+The Bahia sidecar relay accepts every valid Nostr event kind without a numerical allowlist. Browser routes such as `/souls/new` can query `31950`, `31951`, `31952`, and `30317` through the sidecar, and operators/runtimes can publish correlated SoulFactory request, progress, and result events through the same relay boundary when their signatures and event IDs are valid.
 
 ## Agent Self-Provisioning
 

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
@@ -19,13 +18,12 @@ import (
 
 // OperatorControlPlaneConfig configures the signer-first operator Nostr client.
 type OperatorControlPlaneConfig struct {
-	Relays             []string
-	PrivateKey         string // 64-character hex or nsec input
-	Signer             canonicalnostr.Signer
-	Pubkey             string
-	CloseSigner        func() error
-	ServicePubkey      string // optional 64-character Bahia ContextVM service pubkey for #p/authors routing
-	PublishWaitTimeout time.Duration
+	Relays        []string
+	PrivateKey    string // 64-character hex or nsec input
+	Signer        canonicalnostr.Signer
+	Pubkey        string
+	CloseSigner   func() error
+	ServicePubkey string // optional 64-character Bahia ContextVM service pubkey for #p/authors routing
 }
 
 // OperatorStatusEvent is a correlated non-terminal operator progress event.
@@ -135,7 +133,6 @@ type OperatorControlPlaneClient struct {
 	pubkey        string
 	transport     operatorRelayTransport
 	servicePubkey string
-	timeout       time.Duration
 	closeSigner   func() error
 }
 
@@ -178,10 +175,6 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 		return nil, fmt.Errorf("at least one operator relay is required")
 	}
 	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), poolOptions...)
-	timeout := cfg.PublishWaitTimeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
 	servicePubkey := strings.TrimSpace(cfg.ServicePubkey)
 	if servicePubkey != "" && len(servicePubkey) != 64 {
 		return nil, fmt.Errorf("service pubkey must be a 64-character hex pubkey")
@@ -193,7 +186,6 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 		pubkey:        pubkey,
 		transport:     &relayPoolOperatorTransport{pool: pool},
 		servicePubkey: servicePubkey,
-		timeout:       timeout,
 		closeSigner:   cfg.CloseSigner,
 	}, nil
 }
@@ -467,11 +459,6 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: err}
 	}
 	event := &nostr.Event{Kind: nostr.Kind(controlplane.KindContextVMMessage), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if c.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.timeout)
-		defer cancel()
-	}
 	if err := controlplane.SignGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "sign operator ContextVM request", RequestAccepted: false, Cause: err}
 	}

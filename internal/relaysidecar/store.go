@@ -2,78 +2,139 @@ package relaysidecar
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"iter"
-	"sort"
-	"sync"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore"
+	_ "modernc.org/sqlite"
 )
 
-// memoryStore is the phase-1 sidecar store: intentionally in-memory and
-// rebuildable. Later projector work can replace this with a durable eventstore.
-type memoryStore struct {
-	mu     sync.RWMutex
-	events map[nostr.ID]nostr.Event
-	latest map[string]nostr.ID
+// sqliteStore is the durable source of relay history. Nostr subscribers may
+// disconnect and replay at any time, so accepted events must survive relay
+// process and container restarts.
+type sqliteStore struct {
+	db     *sql.DB
+	readDB *sql.DB
 }
 
-func newMemoryStore() *memoryStore {
-	return &memoryStore{
-		events: make(map[nostr.ID]nostr.Event),
-		latest: make(map[string]nostr.ID),
+func newSQLiteStore(dataDir string) (*sqliteStore, error) {
+	if dataDir == "" {
+		return nil, fmt.Errorf("relay sidecar data_dir is required")
 	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return nil, fmt.Errorf("create relay sidecar data directory: %w", err)
+	}
+	// Connection PRAGMAs belong in the DSN so database/sql applies them to
+	// every lazily opened connection, not just the first one.
+	dsn := filepath.Join(dataDir, "events.sqlite") +
+		"?_pragma=busy_timeout%3d30000&_pragma=journal_mode%3dWAL&_pragma=synchronous%3dFULL"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open relay sidecar event store: %w", err)
+	}
+	// Keep writes on their own connection pool. Relay replay queries can be
+	// long-running, and must never consume the connection needed to persist a
+	// publisher event and return its OK.
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`
+		PRAGMA journal_mode=WAL;
+		PRAGMA synchronous=FULL;
+		PRAGMA busy_timeout=5000;
+		CREATE TABLE IF NOT EXISTS events (
+			id TEXT PRIMARY KEY,
+			created_at INTEGER NOT NULL,
+			kind INTEGER NOT NULL,
+			pubkey TEXT NOT NULL,
+			replaceable_key TEXT,
+			event_json BLOB NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS events_replaceable_key
+			ON events(replaceable_key) WHERE replaceable_key IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS events_created_at ON events(created_at DESC);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("initialize relay sidecar event store: %w", err)
+	}
+	readDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open relay sidecar read pool: %w", err)
+	}
+	readDB.SetMaxOpenConns(32)
+	return &sqliteStore{db: db, readDB: readDB}, nil
 }
 
-func (s *memoryStore) Save(ctx context.Context, event nostr.Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.events[event.ID]; exists {
+func (s *sqliteStore) Save(ctx context.Context, event nostr.Event) error {
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode relay event: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO events (id, created_at, kind, pubkey, replaceable_key, event_json)
+		VALUES (?, ?, ?, ?, NULL, ?)`,
+		event.ID.Hex(), int64(event.CreatedAt), int(event.Kind), event.PubKey.Hex(), encoded)
+	if err != nil {
+		return fmt.Errorf("store relay event: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check stored relay event: %w", err)
+	}
+	if affected == 0 {
 		return eventstore.ErrDupEvent
 	}
-	s.events[event.ID] = event
 	return nil
 }
 
-func (s *memoryStore) Replace(ctx context.Context, event nostr.Event) error {
+func (s *sqliteStore) Replace(ctx context.Context, event nostr.Event) error {
 	key := replaceableKey(event)
 	if key == "" {
 		return s.Save(ctx, event)
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.events[event.ID]; exists {
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode replaceable relay event: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO events (id, created_at, kind, pubkey, replaceable_key, event_json)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(replaceable_key) WHERE replaceable_key IS NOT NULL DO UPDATE SET
+			id = excluded.id,
+			created_at = excluded.created_at,
+			kind = excluded.kind,
+			pubkey = excluded.pubkey,
+			event_json = excluded.event_json
+		WHERE excluded.created_at > events.created_at`,
+		event.ID.Hex(), int64(event.CreatedAt), int(event.Kind), event.PubKey.Hex(), key, encoded)
+	if err != nil {
+		return fmt.Errorf("replace relay event: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check replaced relay event: %w", err)
+	}
+	if affected == 0 {
 		return eventstore.ErrDupEvent
 	}
-	if previousID, ok := s.latest[key]; ok {
-		previous := s.events[previousID]
-		if previous.CreatedAt >= event.CreatedAt {
-			return eventstore.ErrDupEvent
-		}
-		delete(s.events, previousID)
-	}
-	s.latest[key] = event.ID
-	s.events[event.ID] = event
 	return nil
 }
 
-func (s *memoryStore) Delete(ctx context.Context, id nostr.ID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if event, ok := s.events[id]; ok {
-		delete(s.latest, replaceableKey(event))
+func (s *sqliteStore) Delete(ctx context.Context, id nostr.ID) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id.Hex()); err != nil {
+		return fmt.Errorf("delete relay event: %w", err)
 	}
-	delete(s.events, id)
 	return nil
 }
 
-func (s *memoryStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
 	var count uint32
-	for _, event := range s.events {
+	for event := range s.Query(ctx, filter, 0) {
 		if filter.Matches(event) {
 			count++
 		}
@@ -81,35 +142,113 @@ func (s *memoryStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
 	return count
 }
 
-func (s *memoryStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
-	s.mu.RLock()
-	events := make([]nostr.Event, 0, len(s.events))
-	for _, event := range s.events {
-		if filter.Matches(event) {
-			events = append(events, event)
-		}
-	}
-	s.mu.RUnlock()
-
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].CreatedAt > events[j].CreatedAt
-	})
-
+func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
 	limit := maxLimit
-	if filter.Limit > 0 && filter.Limit < limit {
+	if filter.Limit > 0 && (limit <= 0 || filter.Limit < limit) {
 		limit = filter.Limit
 	}
-	if limit <= 0 || limit > len(events) {
-		limit = len(events)
+	if filter.LimitZero {
+		return func(func(nostr.Event) bool) {}
 	}
 
+	query, args := relayQuerySQL(filter)
 	return func(yield func(nostr.Event) bool) {
-		for i := 0; i < limit; i++ {
-			if !yield(events[i]) {
+		rows, err := s.readDB.QueryContext(ctx, query, args...)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+
+		matched := 0
+		for rows.Next() {
+			var encoded []byte
+			var event nostr.Event
+			if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil || !filter.Matches(event) {
+				continue
+			}
+			if !yield(event) {
+				return
+			}
+			matched++
+			if limit > 0 && matched >= limit {
 				return
 			}
 		}
 	}
+}
+
+func relayQuerySQL(filter nostr.Filter) (string, []any) {
+	clauses := make([]string, 0, 5)
+	args := make([]any, 0, len(filter.IDs)+len(filter.Kinds)+len(filter.Authors)+2)
+	addSet := func(column string, values []string) {
+		if values == nil {
+			return
+		}
+		if len(values) == 0 {
+			clauses = append(clauses, "1 = 0")
+			return
+		}
+		placeholders := make([]string, len(values))
+		for i, value := range values {
+			placeholders[i] = "?"
+			args = append(args, value)
+		}
+		clauses = append(clauses, column+" IN ("+strings.Join(placeholders, ",")+")")
+	}
+
+	if filter.IDs != nil {
+		ids := make([]string, len(filter.IDs))
+		for i, id := range filter.IDs {
+			ids[i] = id.Hex()
+		}
+		addSet("id", ids)
+	}
+
+	if filter.Kinds != nil {
+		if len(filter.Kinds) == 0 {
+			clauses = append(clauses, "1 = 0")
+		} else {
+			placeholders := make([]string, len(filter.Kinds))
+			for i, kind := range filter.Kinds {
+				placeholders[i] = "?"
+				args = append(args, int(kind))
+			}
+			clauses = append(clauses, "kind IN ("+strings.Join(placeholders, ",")+")")
+		}
+	}
+
+	if filter.Authors != nil {
+		authors := make([]string, len(filter.Authors))
+		for i, author := range filter.Authors {
+			authors[i] = author.Hex()
+		}
+		addSet("pubkey", authors)
+	}
+
+	if filter.Since != 0 {
+		clauses = append(clauses, "created_at >= ?")
+		args = append(args, int64(filter.Since))
+	}
+	if filter.Until != 0 {
+		clauses = append(clauses, "created_at <= ?")
+		args = append(args, int64(filter.Until))
+	}
+
+	query := "SELECT event_json FROM events"
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += " ORDER BY created_at DESC, id"
+	return query, args
+}
+
+func (s *sqliteStore) Close() error {
+	readErr := s.readDB.Close()
+	writeErr := s.db.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return readErr
 }
 
 func replaceableKey(event nostr.Event) string {

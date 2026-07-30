@@ -21,18 +21,18 @@ import (
 type Server struct {
 	cfg        config.RelaySidecarConfig
 	relay      *khatru.Relay
-	store      *memoryStore
+	store      *sqliteStore
 	httpServer *http.Server
 	logger     *zap.Logger
 }
 
-// New creates a Khatru sidecar relay with in-memory, rebuildable storage.
+// New creates a Khatru sidecar relay backed by durable storage.
 func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if nostrCfg.Sidecar.MaxQueryLimit <= 0 {
-		nostrCfg.Sidecar.MaxQueryLimit = 500
+		nostrCfg.Sidecar.MaxQueryLimit = 2000
 	}
 	if nostrCfg.Sidecar.PublicURL == "" {
 		nostrCfg.Sidecar.PublicURL = "ws://localhost:3334"
@@ -42,13 +42,16 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := newMemoryStore()
+	store, err := newSQLiteStore(nostrCfg.Sidecar.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	relay := khatru.NewRelay()
 	relay.Log = log.New(os.Stderr, "[bahia-relay-sidecar] ", log.LstdFlags)
 	relay.ServiceURL = nostrCfg.Sidecar.PublicURL
 	relay.Info.Name = "Bahia Relay Sidecar"
-	relay.Info.Description = "Local Khatru relay sidecar for Bahia browser bootstrap and control-plane events."
-	relay.Info.PostingPolicy = "Bahia sidecar-first control-plane relay: accepts scoped ContextVM kind 25910 messages, CEP-4/NIP-59 gift-wraps addressed to the Bahia service or authorized operators, Bahia-signed canonical observables, and configured open interop kinds. Legacy Bahia request/status/result/read-model kinds are migration-only and are not exposed as production runtime contracts. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
+	relay.Info.Description = "Local Khatru relay sidecar for Bahia browser bootstrap and Nostr events."
+	relay.Info.PostingPolicy = "Accepts every valid signed Nostr event kind. Event authorization belongs to protocol consumers, not relay kind allowlists. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
 	relay.Info.SupportedNIPs = []any{1, 11, 17, 40, 42, 44, 51, 59, 65, 70}
 
 	if servicePubkey, ok, err := deriveFiatjafPubkey(nostrCfg.PrivateKey); err != nil {
@@ -70,10 +73,9 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.Count = func(ctx context.Context, filter nostr.Filter) (uint32, error) {
 		return store.Count(ctx, filter), nil
 	}
-	// Khatru normally broadcasts to every matching subscriber synchronously
-	// before it writes the publisher's OK. A slow or stale subscriber can
-	// therefore stall unrelated publishers. Persist first, let the handler
-	// acknowledge, and fan out independently.
+	// Khatru broadcasts to matching subscribers synchronously before sending
+	// the publisher's OK. Persist first, acknowledge promptly, and move fanout
+	// off the publisher path so slow subscribers cannot stall unrelated writes.
 	relay.PreventBroadcast = func(_ *khatru.WebSocket, _ nostr.Filter, _ nostr.Event) bool {
 		return true
 	}
@@ -165,6 +167,9 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancel()
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("relay sidecar shutdown: %w", err)
+	}
+	if err := s.store.Close(); err != nil {
+		return fmt.Errorf("close relay sidecar store: %w", err)
 	}
 	s.logger.Info("relay sidecar stopped")
 	return nil

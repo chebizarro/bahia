@@ -1,0 +1,15 @@
+{
+  "feature_id": "UNRESTRICTED_RELAY_SIDECAR",
+  "title": "Remove event admission restrictions from the Bahia relay sidecar",
+  "intent": "The sidecar behaves as a Nostr relay rather than an application authorization gateway. Every protocol-valid event kind and ordinary NIP-01 subscription filter is accepted.",
+  "scope": [
+    "internal/relaysidecar",
+    "relay NIP-11 metadata",
+    "relay policy documentation"
+  ],
+  "non_goals": [
+    "Removing event ID, signature, or timestamp validation",
+    "Adding NIP-50 search support",
+    "Weakening authorization in Bahia event consumers"
+  ]
+}
