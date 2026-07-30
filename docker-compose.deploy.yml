@@ -1,0 +1,5 @@
+services:
+  bahia:
+    image: ${BAHIA_IMAGE:?BAHIA_IMAGE is required}
+  relay:
+    image: ${BAHIA_RELAY_IMAGE:-${BAHIA_IMAGE:?BAHIA_IMAGE is required}}
