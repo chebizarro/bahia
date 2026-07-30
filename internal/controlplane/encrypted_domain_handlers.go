@@ -82,7 +82,7 @@ func (h *EncryptedDomainHandlers) Register(transport *EncryptedRequestTransport)
 	if h == nil || transport == nil {
 		return
 	}
-	transport.RegisterHandler(EncryptedOperationPaymentsHistory, h.PaymentHistory)
+	h.registerDomainHandler(transport, EncryptedOperationPaymentsHistory, h.PaymentHistory, "payments/history")
 	h.registerDomainHandler(transport, EncryptedOperationOrgsList, h.ListOrgs, "orgs/list")
 	h.registerDomainHandler(transport, EncryptedOperationOrgsDetail, h.OrgDetail, "orgs/detail")
 	h.registerDomainHandler(transport, EncryptedOperationOrgsCreate, h.CreateOrg, "orgs/create")
