@@ -218,7 +218,7 @@ func soulsProvisionCommand() *cobra.Command {
 
 	cmd.Flags().StringVarP(&name, "name", "n", "", "Agent name (default: derived from agent-id)")
 	cmd.Flags().StringVarP(&tier, "tier", "t", "standard", "Resource tier: lightweight, standard, heavy")
-	cmd.Flags().StringVar(&template, "template", "", "Template reference (e.g., 31950:pubkey:identifier)")
+	cmd.Flags().StringVar(&template, "template", "", "Template reference (e.g., 30900:pubkey:identifier)")
 	cmd.Flags().StringVarP(&brief, "brief", "b", "", "Agent brief/description")
 	cmd.Flags().StringVarP(&briefFile, "brief-file", "f", "", "Read brief from file")
 	cmd.Flags().BoolVarP(&follow, "follow", "w", false, "Watch provisioning progress")
@@ -529,7 +529,7 @@ func buildProvisioningRequestEvent(agentID, name, tier, template, brief string) 
 	contentJSON, _ := json.Marshal(content)
 
 	return map[string]interface{}{
-		"kind":       5950,
+		"kind":       25910,
 		"created_at": time.Now().Unix(),
 		"tags":       tags,
 		"content":    string(contentJSON),

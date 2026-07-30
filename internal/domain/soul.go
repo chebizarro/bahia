@@ -16,9 +16,9 @@ func NewUUID() uuid.UUID {
 
 // Soul Factory Event Kinds
 const (
-	KindSoulTemplate        = 31950
-	KindAgentSoul           = 31951
-	KindSoulDraft           = 31952
+	KindSoulTemplate        = cascadia.CAS_CP_STATE
+	KindAgentSoul           = cascadia.CAS_CP_STATE
+	KindSoulDraft           = cascadia.CAS_CP_STATE
 	KindProvisioningRequest = cascadia.CAS_INTENT
 	KindProvisioningStatus  = cascadia.NIP38_USER_STATUS
 	KindProvisioningResult  = cascadia.CAS_AUDIT
@@ -129,7 +129,7 @@ type ToolGrant struct {
 	Scopes    []string `json:"scopes"`
 }
 
-// SoulIdentitySpec captures editable identity fields in a kind:31952 draft.
+// SoulIdentitySpec captures editable identity fields in a kind:30900 draft.
 type SoulIdentitySpec struct {
 	Name    string   `json:"name,omitempty"`
 	Purpose string   `json:"purpose,omitempty"`
@@ -319,7 +319,7 @@ type AgentSoul struct {
 	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
 }
 
-// SoulDraftContent represents the JSON content of a kind:31952 draft event.
+// SoulDraftContent represents the JSON content of a kind:30900 draft event.
 type SoulDraftContent struct {
 	Schema       string      `json:"schema,omitempty"`
 	Brief        string      `json:"brief"`
@@ -381,7 +381,7 @@ type ProvisioningRequest struct {
 // ProvisioningRun tracks the multi-step provisioning workflow.
 type ProvisioningRun struct {
 	ID          uuid.UUID                `json:"id"`
-	RequestID   string                   `json:"request_id"` // kind:5950 event ID
+	RequestID   string                   `json:"request_id"` // kind:25910 event ID
 	SoulID      *uuid.UUID               `json:"soul_id,omitempty"`
 	AgentID     string                   `json:"agent_id"`
 	Status      ProvisioningStatus       `json:"status"`

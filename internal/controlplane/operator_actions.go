@@ -53,6 +53,7 @@ type adoptionImportEventRequest struct {
 	Targets    []adoptionEventTarget    `json:"targets"`
 	Selections []adoptionEventSelection `json:"selections,omitempty"`
 	ImportAll  bool                     `json:"import_all,omitempty"`
+	OrgID      string                   `json:"org_id,omitempty"`
 }
 
 type adoptionEventTarget struct {

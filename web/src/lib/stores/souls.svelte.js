@@ -34,7 +34,7 @@ export const souls = $state([]);
 // All soul templates
 export const templates = $state([]);
 
-// Editable soul drafts (kind 31952)
+// Editable soul drafts (kind 30900)
 export const drafts = $state([]);
 
 // Runtime capability announcements (kind 30317)
@@ -573,7 +573,7 @@ function parseRunResultEvent(event) {
   };
 }
 
-// Track a provisioning or lifecycle run. Terminal state comes only from explicit 7950
+// Track a provisioning or lifecycle run. Terminal state comes only from explicit retired-kind
 // (or legacy 1951 migration alias) result events, never from EOSE, CLOSED, or local time.
 export function trackLifecycleRun(requestEventId, { type = 'provisioning', action = '', onProgress, onComplete, onError } = {}) {
   const defaultTotal = type === 'provisioning' ? 8 : 0;

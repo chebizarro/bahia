@@ -124,7 +124,14 @@ func (h *OperatorContextVMHandlers) AdoptionImport(ctx context.Context, request 
 	if err != nil {
 		return nil, err
 	}
-	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: raw.ImportAll})
+	var orgID uuid.UUID
+	if strings.TrimSpace(raw.OrgID) != "" {
+		orgID, err = uuid.Parse(strings.TrimSpace(raw.OrgID))
+		if err != nil {
+			return nil, fmt.Errorf("invalid org_id: %w", err)
+		}
+	}
+	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: raw.ImportAll, OrgID: orgID})
 	if err != nil {
 		return nil, err
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	// RuntimeMethodPersonaConfigure is the kind:38384 method used to hot-reload a
+	// RuntimeMethodPersonaConfigure is the kind:retired-kind method used to hot-reload a
 	// persona/system prompt into a running runtime.
 	RuntimeMethodPersonaConfigure = "soulfactory.persona.configure"
 	// RuntimeMethodPersonaPreview renders the generated prompt sections without
@@ -86,7 +86,7 @@ type OpenClawPersonalityConfig struct {
 	AgentDefaultsPatch   map[string]interface{} `json:"agent_defaults_patch,omitempty"`
 }
 
-// PersonalityRuntimeParams is the params contract for kind:38384
+// PersonalityRuntimeParams is the params contract for kind:retired-kind
 // RuntimeMethodPersonaUpdate requests.
 type PersonalityRuntimeParams struct {
 	Schema   string                    `json:"schema"`

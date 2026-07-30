@@ -22,131 +22,171 @@ package kinds
 
 import cascadia "git.sharegap.net/cascadia/cascadia-go"
 
-// =============================================================================
-// DNS Control-Plane Kinds (5941-5945, 6941, 7941-7945)
-// =============================================================================
-
+// Domain-specific names are semantic aliases only. Fleet transport and
+// observability use the canonical Cascadia kinds; no retired wire numbers
+// remain available to production code.
 const (
-	DNSZoneCreateRequest      = 5941
-	DNSPolicyApplyRequest     = 5942
-	DNSRecordOverrideRequest  = 5943
-	DNSDriftRemediateRequest  = 5944
-	DNSBackendRegisterRequest = 5945
-
-	DNSOperationStatus = 6941
-
-	DNSZoneCreateResult      = 7941
-	DNSPolicyApplyResult     = 7942
-	DNSRecordOverrideResult  = 7943
-	DNSDriftRemediateResult  = 7944
-	DNSBackendRegisterResult = 7945
+	DNSZoneCreateRequest      = ContextVMMessage
+	DNSPolicyApplyRequest     = ContextVMMessage
+	DNSRecordOverrideRequest  = ContextVMMessage
+	DNSDriftRemediateRequest  = ContextVMMessage
+	DNSBackendRegisterRequest = ContextVMMessage
+	DeployRequest             = ContextVMMessage
+	RollbackRequest           = ContextVMMessage
+	ServiceAction             = ContextVMMessage
+	ServiceCreate             = ContextVMMessage
+	EnvironmentCreate         = ContextVMMessage
+	DeploymentApproval        = ContextVMMessage
+	ObservationSubmit         = ContextVMMessage
+	DriftRemediate            = ContextVMMessage
+	LLMRouteCreate            = ContextVMMessage
+	LLMReleaseRegister        = ContextVMMessage
+	LLMDeployRequest          = ContextVMMessage
+	LLMDeploymentApproval     = ContextVMMessage
+	LLMRollbackRequest        = ContextVMMessage
+	ToolProvisionRequest      = ContextVMMessage
+	ToolApprovalRequest       = ContextVMMessage
+	AdoptionScanRequest       = ContextVMMessage
+	AdoptionImportRequest     = ContextVMMessage
+	ServiceUpdate             = ContextVMMessage
+	ServiceDelete             = ContextVMMessage
+	EnvironmentUpdate         = ContextVMMessage
+	EnvironmentDelete         = ContextVMMessage
+	ArtifactRegister          = ContextVMMessage
+	PolicyCreate              = ContextVMMessage
+	PolicyUpdate              = ContextVMMessage
+	PolicyDelete              = ContextVMMessage
+	PolicyEvaluate            = ContextVMMessage
+	PackageRepositoryApply    = ContextVMMessage
+	PackageRepositoryDelete   = ContextVMMessage
+	PackagePublishIntent      = ContextVMMessage
+	PackagePromotionRequest   = ContextVMMessage
+	PackageYankRequest        = ContextVMMessage
+	PackageDriftDetect        = ContextVMMessage
+	WorkerCordonRequest       = ContextVMMessage
+	WorkerUncordonRequest     = ContextVMMessage
+	WorkerDrainRequest        = ContextVMMessage
+	WorkerUndrainRequest      = ContextVMMessage
+	WorkerMaintenanceEnter    = ContextVMMessage
+	WorkerMaintenanceExit     = ContextVMMessage
+	WorkerLabelsUpdate        = ContextVMMessage
+	WorkerPolicyApplyRequest  = ContextVMMessage
+	WorkloadPinRequest        = ContextVMMessage
+	HiveCIWorkflowRun         = ContextVMMessage
+	CmdBuildRegister          = ContextVMMessage
+	CmdArtifactRegister       = ContextVMMessage
+	CmdIntentCreate           = ContextVMMessage
+	CmdIntentApprove          = ContextVMMessage
+	CmdIntentReject           = ContextVMMessage
+	CmdRollbackRequest        = ContextVMMessage
+)
+const (
+	DNSOperationStatus       = NIP38Status
+	DeploymentStatus         = NIP38Status
+	ServiceStatus            = NIP38Status
+	ActionStatus             = NIP38Status
+	LLMDeploymentStatus      = NIP38Status
+	ToolProvisionStatus      = NIP38Status
+	AdoptionStatus           = NIP38Status
+	BackupRunStatus          = NIP38Status
+	BackupRestoreStatus      = NIP38Status
+	BackupVerificationStatus = NIP38Status
+	BackupObservation        = NIP38Status
+	PackageStatus            = NIP38Status
+	WorkerStatus             = NIP38Status
+	HiveCIWorkflowResult     = NIP38Status
+	AssistantStatus          = NIP38Status
+)
+const (
+	DNSZoneCreateResult           = CASAudit
+	DNSPolicyApplyResult          = CASAudit
+	DNSRecordOverrideResult       = CASAudit
+	DNSDriftRemediateResult       = CASAudit
+	DNSBackendRegisterResult      = CASAudit
+	DeploymentResult              = CASAudit
+	ActionResult                  = CASAudit
+	ServiceCreateResult           = CASAudit
+	EnvironmentCreateResult       = CASAudit
+	ObservationResult             = CASAudit
+	RemediationResult             = CASAudit
+	LLMRouteCreateResult          = CASAudit
+	LLMReleaseRegisterResult      = CASAudit
+	LLMDeploymentResult           = CASAudit
+	ToolProvisionResult           = CASAudit
+	ToolApprovalResponse          = CASAudit
+	AdoptionScanResult            = CASAudit
+	AdoptionImportResult          = CASAudit
+	PackageResult                 = CASAudit
+	PackageDriftEvent             = CASAudit
+	WorkerResult                  = CASAudit
+	BackupRunAttestation          = CASAudit
+	BackupVerificationAttestation = CASAudit
+	AssistantResult               = CASAudit
+)
+const (
+	// Internal projection selectors are never serialized as event kinds. The
+	// projector maps each selector to kind 30900 plus domain/schema tags.
+	ServiceState = -(iota + 1)
+	ServiceRegistry
+	EnvironmentRegistry
+	LLMRouteRegistry
+	LLMRouteState
+	ArtifactRegistry
+	DeploymentIntentRegistry
+	DeploymentRunRegistry
+	BuildRegistry
+	PolicyRegistry
+	PackageRepositoryRegistry
+	PackageArtifactRegistry
+	PackagePromotionRegistry
+	SystemDiscovery
+	WorkerState
+	WorkerAssignmentState
+	WorkerDrainStatus
+	WorkerEligibilityPreview
+	LegacyWorkerState
 )
 
 // =============================================================================
-// Core Control-Plane Request Kinds (5961-5989)
+// DNS Control-Plane Kinds (canonical, canonical, canonical)
+// =============================================================================
+
+const ()
+
+// =============================================================================
+// Core Control-Plane Request Kinds (canonical)
 // =============================================================================
 
 const (
-	DeployRequest         = 5961
-	RollbackRequest       = 5962
-	ServiceAction         = 5963
-	ServiceCreate         = 5964
-	EnvironmentCreate     = 5965
-	DeploymentApproval    = 5966
-	ObservationSubmit     = 5967
-	DriftRemediate        = 5968
-	LLMRouteCreate        = 5971
-	LLMReleaseRegister    = 5972
-	LLMDeployRequest      = 5973
-	LLMDeploymentApproval = 5974
-	LLMRollbackRequest    = 5975
-	ToolProvisionRequest  = 5976
-	ToolApprovalRequest   = 5977
-	AdoptionScanRequest   = 5978
-	AdoptionImportRequest = 5979
-	EncryptedRequest      = 5980 // Browser → Bahia encrypted request
-	ServiceUpdate         = 5981
-	ServiceDelete         = 5982
-	EnvironmentUpdate     = 5983
-	EnvironmentDelete     = 5984
-	ArtifactRegister      = 5985
-	PolicyCreate          = 5986
-	PolicyUpdate          = 5987
-	PolicyDelete          = 5988
-	PolicyEvaluate        = 5989
+	EncryptedRequest = 5980 // Browser → Bahia encrypted request
 )
 
 // =============================================================================
-// Package Control-Plane Request Kinds (5991-5996)
+// Package Control-Plane Request Kinds (canonical)
+// =============================================================================
+
+const ()
+
+// =============================================================================
+// Worker Control-Plane Request Kinds (canonical)
 // =============================================================================
 
 const (
-	PackageRepositoryApply  = 5991
-	PackageRepositoryDelete = 5992
-	PackagePublishIntent    = 5993
-	PackagePromotionRequest = 5994
-	PackageYankRequest      = 5995
-	PackageDriftDetect      = 5996
+	WorkerCleanupRequest = 6006
 )
 
 // =============================================================================
-// Worker Control-Plane Request Kinds (5997-6006)
+// Core Control-Plane Status Kinds (canonical)
+// =============================================================================
+
+const ()
+
+// =============================================================================
+// Core Control-Plane Result Kinds (canonical)
 // =============================================================================
 
 const (
-	WorkerCordonRequest      = 5997
-	WorkerUncordonRequest    = 5998
-	WorkerDrainRequest       = 5999
-	WorkerUndrainRequest     = 6000
-	WorkerMaintenanceEnter   = 6001
-	WorkerMaintenanceExit    = 6002
-	WorkerLabelsUpdate       = 6003
-	WorkerPolicyApplyRequest = 6004
-	WorkloadPinRequest       = 6005
-	WorkerCleanupRequest     = 6006
-)
-
-// =============================================================================
-// Core Control-Plane Status Kinds (6961-6997)
-// =============================================================================
-
-const (
-	DeploymentStatus         = 6961
-	ServiceStatus            = 6962
-	ActionStatus             = 6963
-	LLMDeploymentStatus      = 6973
-	ToolProvisionStatus      = 6976
-	AdoptionStatus           = 6978
-	BackupRunStatus          = 6981
-	BackupRestoreStatus      = 6982
-	BackupVerificationStatus = 6983
-	BackupObservation        = 6984
-	PackageStatus            = 6991
-	WorkerStatus             = 6997
-)
-
-// =============================================================================
-// Core Control-Plane Result Kinds (7961-7997)
-// =============================================================================
-
-const (
-	DeploymentResult         = 7961
-	ActionResult             = 7962
-	ServiceCreateResult      = 7963
-	EnvironmentCreateResult  = 7964
-	ObservationResult        = 7965
-	RemediationResult        = 7966
-	LLMRouteCreateResult     = 7971
-	LLMReleaseRegisterResult = 7972
-	LLMDeploymentResult      = 7973
-	ToolProvisionResult      = 7976
-	ToolApprovalResponse     = 7977
-	AdoptionScanResult       = 7978
-	AdoptionImportResult     = 7979
-	EncryptedResult          = 7980 // Bahia → Browser encrypted result
-	PackageResult            = 7991
-	PackageDriftEvent        = 7992
-	WorkerResult             = 7997
+	EncryptedResult = 7980 // Bahia → Browser encrypted result
 )
 
 // =============================================================================
@@ -166,12 +206,7 @@ const (
 
 const (
 	LoomWorkerAdvertisement = cascadia.CAS_WORKER_AD
-	LoomJobStatusUpdate     = 30100
 	LoomJobResult           = 5101
-	LoomJobCancellation     = 5102
-
-	HiveCIWorkflowRun    = 5401
-	HiveCIWorkflowResult = 5402
 
 	NIP22Comment = 1111
 
@@ -195,9 +230,9 @@ const (
 	SoulFactoryRuntimeCapability   = cascadia.CAS_AGENT_CAPABILITY
 	SoulFactoryRuntimeControl      = cascadia.CAS_INTENT
 	SoulFactoryRuntimeResult       = cascadia.CAS_AUDIT
-	SoulFactoryTemplate            = 31950
-	SoulFactoryAgentSoul           = 31951
-	SoulFactoryDraft               = 31952
+	SoulFactoryTemplate            = cascadia.CAS_CP_STATE
+	SoulFactoryAgentSoul           = cascadia.CAS_CP_STATE
+	SoulFactoryDraft               = cascadia.CAS_CP_STATE
 )
 
 // =============================================================================
@@ -308,17 +343,10 @@ const (
 )
 
 // =============================================================================
-// Deprecated Legacy Command Kinds (31100-31105)
+// Deprecated Legacy Command Kinds (canonical)
 // =============================================================================
 
-const (
-	CmdBuildRegister    = 31100
-	CmdArtifactRegister = 31101
-	CmdIntentCreate     = 31102
-	CmdIntentApprove    = 31103
-	CmdIntentReject     = 31104
-	CmdRollbackRequest  = 31105
-)
+const ()
 
 // =============================================================================
 // Nostr Signature Kind
@@ -332,31 +360,13 @@ const (
 // Backup Attestation Kinds
 // =============================================================================
 
-const (
-	BackupRunAttestation          = 31310
-	BackupVerificationAttestation = 31311
-)
+const ()
 
 // =============================================================================
-// Replaceable Read-Model Registry Kinds (31961-31999)
+// Replaceable Read-Model Registry Kinds (canonical)
 // =============================================================================
 
 const (
-	ServiceState              = 31961
-	ServiceRegistry           = 31962
-	EnvironmentRegistry       = 31963
-	LLMRouteRegistry          = 31964
-	LLMRouteState             = 31965
-	ArtifactRegistry          = 31966
-	DeploymentIntentRegistry  = 31967
-	DeploymentRunRegistry     = 31968
-	BuildRegistry             = 31969
-	PolicyRegistry            = 31970
-	PackageRepositoryRegistry = 31971
-	PackageArtifactRegistry   = 31972
-	PackagePromotionRegistry  = 31973
-	SystemDiscovery           = 31974
-
 	DNSZoneState     = 31975
 	DNSEndpointState = 31976
 	DNSPolicyState   = 31977
@@ -390,22 +400,16 @@ const (
 )
 
 // =============================================================================
-// Worker State Kinds (32000-32003)
+// Worker State Kinds (canonical)
 // =============================================================================
 
-const (
-	WorkerState              = 32000
-	WorkerAssignmentState    = 32001
-	WorkerDrainStatus        = 32002
-	WorkerEligibilityPreview = 32003
-)
+const ()
 
 // =============================================================================
 // Legacy Worker State Kinds (deprecated, for mixed-version compatibility)
 // =============================================================================
 
 const (
-	LegacyWorkerState              = 31974 // Conflicts with SystemDiscovery; use WorkerState
 	LegacyWorkerAssignmentState    = 31991 // Conflicts with BackupDefinitionRegistry
 	LegacyWorkerDrainStatus        = 31992
 	LegacyWorkerEligibilityPreview = 31993
@@ -470,8 +474,6 @@ const (
 const (
 	AssistantPromptRequest = 38420
 	AssistantApproval      = 38421
-	AssistantStatus        = 38422
-	AssistantResult        = 38423
 )
 
 // =============================================================================

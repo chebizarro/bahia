@@ -1,10 +1,10 @@
 // Package soulfactory implements the Soul Factory agent provisioning system.
 //
 // Soul Factory is a Nostr-native agent provisioning service that:
-// - Listens for provisioning requests (kind:5950)
-// - Listens for lifecycle actions (kind:1950)
+// - Listens for provisioning requests (kind:retired-kind)
+// - Listens for lifecycle actions (kind:retired-kind)
 // - Orchestrates the provisioning workflow
-// - Publishes progress (kind:6950) and results (kind:7950)
+// - Publishes progress (kind:retired-kind) and results (kind:retired-kind)
 package soulfactory
 
 import (
@@ -81,7 +81,7 @@ func WithProvisioningEngine(engine ProvisioningEngine) ReactorOption {
 }
 
 // WithLifecycleHandler installs the single lifecycle action orchestrator used
-// for kind:1950 events. This is primarily for wiring integrations in tests and
+// for kind:retired-kind events. This is primarily for wiring integrations in tests and
 // full provisioner construction; nil leaves the default local handler in place.
 func WithLifecycleHandler(handler *LifecycleHandler) ReactorOption {
 	return func(r *Reactor) {
@@ -177,7 +177,7 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	}
 }
 
-// handleProvisioningRequest processes a kind:5950 provisioning request.
+// handleProvisioningRequest processes a kind:retired-kind provisioning request.
 func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received provisioning request")
@@ -277,7 +277,7 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	}
 }
 
-// handleSoulAction processes a kind:1950 lifecycle action through the single
+// handleSoulAction processes a kind:retired-kind lifecycle action through the single
 // lifecycle_handler.go orchestration path.
 func (r *Reactor) handleSoulAction(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "initiator", event.PubKey)
@@ -292,17 +292,17 @@ func (r *Reactor) isAuthorizedProvisioner(pubkey string) bool {
 	return slices.Contains(r.config.AuthorizedPubkeys, pubkey)
 }
 
-// parseProvisioningRequest extracts request data from a kind:5950 event.
+// parseProvisioningRequest extracts request data from a kind:retired-kind event.
 func (r *Reactor) parseProvisioningRequest(event *nostr.Event) (*domain.ProvisioningRequest, error) {
 	return ParseProvisioningRequestEvent(event)
 }
 
-// parseSoulAction extracts action data from a kind:1950 event.
+// parseSoulAction extracts action data from a kind:retired-kind event.
 func (r *Reactor) parseSoulAction(event *nostr.Event) (*domain.SoulAction, error) {
 	return ParseSoulActionEvent(event)
 }
 
-// publishStatus publishes a kind:6950 progress event.
+// publishStatus publishes a kind:retired-kind progress event.
 func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) error {
 	event := BuildProvisioningStatusEvent(requestEvent, step, current, total, message)
 
@@ -316,7 +316,7 @@ func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, 
 	return r.publishCanonicalProvisioningObservable(ctx, requestEvent, event)
 }
 
-// publishResult publishes a kind:7950 success result event.
+// publishResult publishes a kind:retired-kind success result event.
 func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, soul *domain.AgentSoul) error {
 	event, err := BuildProvisioningSuccessResultEvent(requestEvent, soul, r.config.SoulFactoryPubkey)
 	if err != nil {
@@ -347,7 +347,7 @@ func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Eve
 	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
 
-// publishError publishes a kind:7950 error result event.
+// publishError publishes a kind:retired-kind error result event.
 func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
 	event := BuildProvisioningErrorResultEvent(requestEvent, step, message)
 
@@ -361,7 +361,7 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 	return r.publishCanonicalProvisioningObservable(ctx, requestEvent, event)
 }
 
-// publishSoul publishes a kind:31951 agent soul event.
+// publishSoul publishes a kind:30900 agent soul event.
 func (r *Reactor) PublishSoul(ctx context.Context, soul *domain.AgentSoul) error {
 	event := BuildAgentSoulEvent(soul)
 

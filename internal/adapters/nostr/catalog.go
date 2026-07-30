@@ -18,13 +18,8 @@ const KindCatalogVersion = "2026-05-26.item8"
 const (
 	KindNIP65RelayList = kinds.NIP65RelayList
 
-	KindHiveCIWorkflowRun    = kinds.HiveCIWorkflowRun
-	KindHiveCIWorkflowResult = kinds.HiveCIWorkflowResult
-
 	KindLoomWorkerAdvertisement = kinds.LoomWorkerAdvertisement
-	KindLoomJobStatusUpdate     = kinds.LoomJobStatusUpdate
 	KindLoomJobResult           = kinds.LoomJobResult
-	KindLoomJobCancellation     = kinds.LoomJobCancellation
 
 	KindRelaySetDiscovery = kinds.RelaySetDiscovery
 
@@ -32,48 +27,7 @@ const (
 	KindBahiaReplayCheckpoint   = kinds.BahiaReplayCheckpoint
 	KindBahiaReadinessStatus    = kinds.BahiaReadinessStatus
 
-	KindControlPlaneDeployRequest            = kinds.DeployRequest
-	KindControlPlaneRollbackRequest          = kinds.RollbackRequest
-	KindControlPlaneServiceAction            = kinds.ServiceAction
-	KindControlPlaneServiceCreate            = kinds.ServiceCreate
-	KindControlPlaneEnvironmentCreate        = kinds.EnvironmentCreate
-	KindControlPlaneDeploymentApproval       = kinds.DeploymentApproval
-	KindControlPlaneObservationSubmit        = kinds.ObservationSubmit
-	KindControlPlaneDriftRemediate           = kinds.DriftRemediate
-	KindControlPlaneLLMRouteCreate           = kinds.LLMRouteCreate
-	KindControlPlaneLLMReleaseRegister       = kinds.LLMReleaseRegister
-	KindControlPlaneLLMDeployRequest         = kinds.LLMDeployRequest
-	KindControlPlaneLLMDeploymentApproval    = kinds.LLMDeploymentApproval
-	KindControlPlaneLLMRollbackRequest       = kinds.LLMRollbackRequest
-	KindControlPlaneToolProvisionRequest     = kinds.ToolProvisionRequest
-	KindControlPlaneToolApprovalRequest      = kinds.ToolApprovalRequest
-	KindControlPlaneAdoptionScanRequest      = kinds.AdoptionScanRequest
-	KindControlPlaneAdoptionImportRequest    = kinds.AdoptionImportRequest
-	KindControlPlaneServiceUpdate            = kinds.ServiceUpdate
-	KindControlPlaneServiceDelete            = kinds.ServiceDelete
-	KindControlPlaneEnvironmentUpdate        = kinds.EnvironmentUpdate
-	KindControlPlaneEnvironmentDelete        = kinds.EnvironmentDelete
-	KindControlPlaneArtifactRegister         = kinds.ArtifactRegister
-	KindControlPlanePolicyCreate             = kinds.PolicyCreate
-	KindControlPlanePolicyUpdate             = kinds.PolicyUpdate
-	KindControlPlanePolicyDelete             = kinds.PolicyDelete
-	KindControlPlanePolicyEvaluate           = kinds.PolicyEvaluate
-	KindControlPlanePackageRepositoryApply   = kinds.PackageRepositoryApply
-	KindControlPlanePackageRepositoryDelete  = kinds.PackageRepositoryDelete
-	KindControlPlanePackagePublishIntent     = kinds.PackagePublishIntent
-	KindControlPlanePackagePromotionRequest  = kinds.PackagePromotionRequest
-	KindControlPlanePackageYankRequest       = kinds.PackageYankRequest
-	KindControlPlanePackageDriftDetect       = kinds.PackageDriftDetect
-	KindControlPlaneWorkerCordonRequest      = kinds.WorkerCordonRequest
-	KindControlPlaneWorkerUncordonRequest    = kinds.WorkerUncordonRequest
-	KindControlPlaneWorkerDrainRequest       = kinds.WorkerDrainRequest
-	KindControlPlaneWorkerUndrainRequest     = kinds.WorkerUndrainRequest
-	KindControlPlaneWorkerMaintenanceEnter   = kinds.WorkerMaintenanceEnter
-	KindControlPlaneWorkerMaintenanceExit    = kinds.WorkerMaintenanceExit
-	KindControlPlaneWorkerLabelsUpdate       = kinds.WorkerLabelsUpdate
-	KindControlPlaneWorkerPolicyApplyRequest = kinds.WorkerPolicyApplyRequest
-	KindControlPlaneWorkloadPinRequest       = kinds.WorkloadPinRequest
-	KindControlPlaneWorkerCleanupRequest     = kinds.WorkerCleanupRequest
+	KindControlPlaneWorkerCleanupRequest = kinds.WorkerCleanupRequest
 
 	KindMLRecipeRunRequest            = kinds.MLRecipeRunRequest
 	KindMLInferenceDeployRequest      = kinds.MLInferenceDeployRequest
@@ -85,32 +39,6 @@ const (
 	KindMLInferenceApprovalResult     = kinds.MLInferenceApprovalResult
 	KindMLInferenceRollbackResult     = kinds.MLInferenceRollbackResult
 	KindMLModelImportResult           = kinds.MLModelImportResult
-
-	KindControlPlaneDeploymentStatus    = kinds.DeploymentStatus
-	KindControlPlaneServiceStatus       = kinds.ServiceStatus
-	KindControlPlaneActionStatus        = kinds.ActionStatus
-	KindControlPlaneLLMDeploymentStatus = kinds.LLMDeploymentStatus
-	KindControlPlaneToolProvisionStatus = kinds.ToolProvisionStatus
-	KindControlPlaneAdoptionStatus      = kinds.AdoptionStatus
-	KindControlPlanePackageStatus       = kinds.PackageStatus
-	KindControlPlaneWorkerStatus        = kinds.WorkerStatus
-
-	KindControlPlaneDeploymentResult         = kinds.DeploymentResult
-	KindControlPlaneActionResult             = kinds.ActionResult
-	KindControlPlaneServiceCreateResult      = kinds.ServiceCreateResult
-	KindControlPlaneEnvironmentCreateResult  = kinds.EnvironmentCreateResult
-	KindControlPlaneObservationResult        = kinds.ObservationResult
-	KindControlPlaneRemediationResult        = kinds.RemediationResult
-	KindControlPlaneLLMRouteCreateResult     = kinds.LLMRouteCreateResult
-	KindControlPlaneLLMReleaseRegisterResult = kinds.LLMReleaseRegisterResult
-	KindControlPlaneLLMDeploymentResult      = kinds.LLMDeploymentResult
-	KindControlPlaneToolProvisionResult      = kinds.ToolProvisionResult
-	KindControlPlaneToolApprovalResponse     = kinds.ToolApprovalResponse
-	KindControlPlaneAdoptionScanResult       = kinds.AdoptionScanResult
-	KindControlPlaneAdoptionImportResult     = kinds.AdoptionImportResult
-	KindControlPlanePackageResult            = kinds.PackageResult
-	KindControlPlanePackageDriftEvent        = kinds.PackageDriftEvent
-	KindControlPlaneWorkerResult             = kinds.WorkerResult
 
 	KindFIPSOverlayAdvert = kinds.FIPSOverlayAdvert
 )
@@ -437,8 +365,6 @@ func NewKindCatalog() *KindCatalog {
 		{Name: "state_snapshot", Kinds: []int{KindCASControlState}, Tier: 1, Snapshot: true, Required: true},
 		{Name: "status_live", Kinds: []int{KindNIP38Status}, Tier: 1, Snapshot: false, Required: true},
 		{Name: "audit_live", Kinds: []int{KindCASAudit}, Tier: 1, Snapshot: false, Required: true},
-		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Tier: 3, Snapshot: false, Required: false},
-		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Tier: 3, Snapshot: false, Required: false},
 		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false},
 	}
 
@@ -534,11 +460,7 @@ func (c *KindCatalog) registerRequiredGroupNoopDecoders() {
 }
 
 func (c *KindCatalog) registerOptionalProtocolDecoders() {
-	c.decoders[KindLoomJobStatusUpdate] = decodeLoomJobStatusProjection
 	c.decoders[KindLoomJobResult] = decodeLoomJobResultProjection
-	c.decoders[KindLoomJobCancellation] = decodeLoomJobCancellationProjection
-	c.decoders[KindHiveCIWorkflowRun] = decodeHiveCIWorkflowRunProjection
-	c.decoders[KindHiveCIWorkflowResult] = decodeHiveCIWorkflowResultProjection
 	c.decoders[KindFIPSOverlayAdvert] = decodeNoopProjection("fips_snapshot", 3, FamilyFIPS)
 }
 

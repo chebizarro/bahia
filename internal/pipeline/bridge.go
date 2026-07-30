@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -13,6 +14,8 @@ import (
 )
 
 const ciSystemHiveCI = "hive-ci"
+
+var errPromotionGateBlocked = errors.New("promotion gate blocked")
 
 // Bridge orchestrates Hive-CI result -> Bahia build registration for CI-5/CI-6.
 type Bridge struct {
@@ -192,7 +195,9 @@ func (b *Bridge) ProcessResult(ctx context.Context, resultEventID string) error 
 		}
 	}
 
-	if err := b.autoCreateStagingIntent(ctx, policy, run, result, artifact); err != nil {
+	if err := b.autoCreateStagingIntent(ctx, policy, run, result, artifact); errors.Is(err, errPromotionGateBlocked) {
+		return nil
+	} else if err != nil {
 		return err
 	}
 
@@ -262,6 +267,19 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 	if !autoDeploy {
 		return nil
 	}
+	if requiresPSTFGreen(policy.Metadata) && !pstfGateGreen(result) {
+		if b.hiveRepo != nil && result != nil {
+			if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected); err != nil {
+				return fmt.Errorf("mark result rejected after failed PSTF gate: %w", err)
+			}
+		}
+		b.logger.Info("blocking promotion because PSTF gate is not green",
+			zap.String("result_event_id", resultEventID(result)),
+			zap.String("pstf_gate_name", resultPSTFGateName(result)),
+			zap.String("pstf_gate_status", resultPSTFGateStatus(result)),
+		)
+		return errPromotionGateBlocked
+	}
 
 	targetEnvName, _ := policy.Metadata["staging_environment"].(string)
 	var env *domain.Environment
@@ -312,4 +330,46 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 		return fmt.Errorf("create staging deployment intent: %w", err)
 	}
 	return nil
+}
+
+func requiresPSTFGreen(metadata map[string]any) bool {
+	for _, key := range []string{"require_pstf_green", "promotion_requires_pstf_green", "pstf_gate_required"} {
+		if value, ok := metadata[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+func pstfGateGreen(result *domain.HiveCIWorkflowResult) bool {
+	if result == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(result.PSTFGateStatus)) {
+	case "green", "passed", "pass", "success", "succeeded", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
+func resultEventID(result *domain.HiveCIWorkflowResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.ResultEventID
+}
+
+func resultPSTFGateName(result *domain.HiveCIWorkflowResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.PSTFGateName
+}
+
+func resultPSTFGateStatus(result *domain.HiveCIWorkflowResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.PSTFGateStatus
 }

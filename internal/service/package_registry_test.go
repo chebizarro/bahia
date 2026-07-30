@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/backends/filesystem_mock"
 	"github.com/openagentsinc/bahia/internal/backends/packagebackend"
+	"github.com/openagentsinc/bahia/internal/backends/registryproxy"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -76,6 +79,57 @@ func TestPackageRegistryServicePublishEnforcesPolicyAndVerifiesSource(t *testing
 	}
 	if _, err := svc.PublishPackage(context.Background(), created, nil, PackagePublishRequest{PackageName: "pkg-two", Version: "1", Filename: "pkg.tgz", SourceURL: sourceURL, SHA256: digest, SizeBytes: size, ContentType: "text/plain"}); err == nil || !strings.Contains(err.Error(), "media type policy") {
 		t.Fatalf("expected media type policy error, got %v", err)
+	}
+}
+
+func TestPackageRegistryServiceNormalizesGoVanityMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	backend, err := registryproxy.New(registryproxy.Config{Type: domain.PackageBackendAthens, BaseURL: server.URL, PublicBaseURL: "https://proxy.example/go"})
+	if err != nil {
+		t.Fatalf("registryproxy.New: %v", err)
+	}
+	svc, err := NewPackageRegistryService(config.PackageControlplaneConfig{}, packagebackend.Registry{"athens": backend}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPackageRegistryService: %v", err)
+	}
+	repo := domain.PackageRepository{
+		ID:                     uuid.New(),
+		Name:                   "cascadia-go",
+		ExternalRepositoryName: "git.sharegap.net/cascadia/cascadia-go",
+		Format:                 domain.PackageRepositoryFormatGoModules,
+		BackendRef:             "athens",
+		Metadata: map[string]any{"go_vanity": map[string]any{
+			"module_prefix": "git.sharegap.net/cascadia/cascadia-go",
+			"repo_root":     "https://git.sharegap.net/cascadia/cascadia-go",
+		}},
+	}
+
+	created, err := svc.EnsureRepository(context.Background(), &repo, nil)
+	if err != nil {
+		t.Fatalf("EnsureRepository: %v", err)
+	}
+	vanity, ok := created.Metadata["go_vanity"].(map[string]any)
+	if !ok {
+		t.Fatalf("go_vanity metadata = %#v", created.Metadata["go_vanity"])
+	}
+	if vanity["vcs"] != "git" || vanity["meta_tag"] != "git.sharegap.net/cascadia/cascadia-go git https://git.sharegap.net/cascadia/cascadia-go" {
+		t.Fatalf("unexpected go_vanity metadata: %#v", vanity)
+	}
+	if created.BackendType != domain.PackageBackendAthens || created.PublicURL != "https://proxy.example/go/git.sharegap.net/cascadia/cascadia-go" {
+		t.Fatalf("unexpected repository projection: %#v", created)
+	}
+}
+
+func TestPackageRegistryServiceRejectsBadGoVanityMetadata(t *testing.T) {
+	svc := newTestPackageService(t)
+	repo := testServiceRepo("go-dev")
+	repo.Format = domain.PackageRepositoryFormatGoModules
+	repo.Metadata = map[string]any{"go_vanity": map[string]any{"module_prefix": "git.example/acme/pkg"}}
+	if err := svc.ValidateRepositorySpec(&repo, nil); err == nil || !strings.Contains(err.Error(), "go_vanity.repo_root") {
+		t.Fatalf("expected go_vanity repo_root error, got %v", err)
 	}
 }
 

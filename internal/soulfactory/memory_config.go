@@ -10,7 +10,7 @@ import (
 
 const (
 	// SoulFactoryMemoryConfigSchema versions the portable memory config payload
-	// embedded in kind:38384 soulfactory.memory.configure params.
+	// embedded in kind:retired-kind soulfactory.memory.configure params.
 	SoulFactoryMemoryConfigSchema  = "soulfactory-memory-config/v1"
 	SoulFactoryMemoryStatusSchema  = "soulfactory-memory-status/v1"
 	SoulFactoryMemoryReindexSchema = "soulfactory-memory-reindex/v1"
@@ -79,7 +79,7 @@ func (e *MemorySpecValidationError) Error() string {
 
 // MemoryConfigService maps Bahia memory specs into runtime-control params.
 // It is pure and deterministic; runtimes report applied config and memory stats
-// through kind:38386 result events.
+// through kind:4903 result events.
 type MemoryConfigService struct{}
 
 func NewMemoryConfigService() MemoryConfigService { return MemoryConfigService{} }
@@ -109,7 +109,7 @@ type MemorySearchRuntimeConfig struct {
 
 // OpenClawMemorySearchConfig mirrors the OpenClaw agents.defaults.memorySearch
 // fields used by Bahia today. It intentionally avoids transport side effects;
-// runtimes apply this config through Nostr 38384 control requests.
+// runtimes apply this config through Nostr retired-kind control requests.
 type OpenClawMemorySearchConfig struct {
 	Enabled      bool                              `json:"enabled"`
 	Sources      []string                          `json:"sources,omitempty"`
@@ -144,10 +144,10 @@ type OpenClawMemoryMMRConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
-// MemoryReindexRequest is the portable params contract for kind:38384
+// MemoryReindexRequest is the portable params contract for kind:retired-kind
 // soulfactory.memory.reindex requests. The runtime reports progress and terminal
-// stats through its kind:38386 result event; lifecycle hot-reload also emits
-// kind:6950 progress around the control request.
+// stats through its kind:4903 result event; lifecycle hot-reload also emits
+// kind:retired-kind progress around the control request.
 type MemoryReindexRequest struct {
 	Schema            string              `json:"schema"`
 	Mode              string              `json:"mode"`
@@ -257,7 +257,7 @@ func (s MemoryConfigService) BuildStatusRuntimeParams() map[string]interface{} {
 }
 
 // BuildMemoryConfigureRuntimeParams serializes the memory configuration contract
-// to the params object embedded in a kind:38384 soulfactory.memory.configure
+// to the params object embedded in a kind:retired-kind soulfactory.memory.configure
 // RuntimeControlEnvelope.
 func BuildMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) (map[string]interface{}, error) {
 	return NewMemoryConfigService().BuildConfigureRuntimeParams(spec)
@@ -268,7 +268,7 @@ func BuildMemoryStatusRuntimeParams() map[string]interface{} {
 }
 
 // MarshalMemoryConfigureRuntimeParams returns stable JSON for callers that need
-// to persist or diff the exact 38384 params payload before signing the event.
+// to persist or diff the exact retired-kind params payload before signing the event.
 func MarshalMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) ([]byte, error) {
 	params, err := BuildMemoryConfigureRuntimeParams(spec)
 	if err != nil {
@@ -278,7 +278,7 @@ func MarshalMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) ([]byte, er
 }
 
 // BuildMemoryReindexRuntimeParams builds the params object embedded in a
-// kind:38384 soulfactory.memory.reindex RuntimeControlEnvelope.
+// kind:retired-kind soulfactory.memory.reindex RuntimeControlEnvelope.
 func BuildMemoryReindexRuntimeParams(spec domain.SoulMemorySpec, mode, reason, previousSpecHash, newSpecHash, draftRef, draftEventID string) (map[string]interface{}, error) {
 	mapping, err := MapSoulMemorySpec(spec)
 	if err != nil {

@@ -26,16 +26,16 @@ type LifecycleExecutionResult struct {
 }
 
 // LifecycleEngine executes lifecycle side effects for an already parsed and
-// authorized kind:1950 action. Implementations must not publish Nostr results.
+// authorized kind:retired-kind action. Implementations must not publish Nostr results.
 type LifecycleEngine interface {
 	ExecuteLifecycleAction(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error)
 }
 
-// LifecycleHandler processes soul lifecycle actions (kind:1950). It is the only
+// LifecycleHandler processes soul lifecycle actions (kind:retired-kind). It is the only
 // SoulFactory orchestrator for lifecycle/customization requests: it parses the
-// request, authorizes it, deduplicates replays, publishes 6950 progress, invokes
-// an execution engine, publishes the 31951 read model when needed, and publishes
-// canonical 7950 terminal results. The 1951 legacy result alias is optional and
+// request, authorizes it, deduplicates replays, publishes retired-kind progress, invokes
+// an execution engine, publishes the 30900 read model when needed, and publishes
+// canonical retired-kind terminal results. The 1951 legacy result alias is optional and
 // migration-only.
 type LifecycleHandler struct {
 	reactor          *Reactor
@@ -203,7 +203,7 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	return nil, nil
 }
 
-// parseAction extracts action details from a kind:1950 event.
+// parseAction extracts action details from a kind:retired-kind event.
 func (h *LifecycleHandler) parseAction(event *nostr.Event) (*domain.SoulAction, error) {
 	return ParseSoulActionEvent(event)
 }
@@ -233,7 +233,7 @@ func (h *LifecycleHandler) publishActionProgress(ctx context.Context, action *do
 	return h.reactor.publish(ctx, event, h.lifecycleRelays())
 }
 
-// publishActionResult publishes the terminal canonical 7950 result for an action.
+// publishActionResult publishes the terminal canonical retired-kind result for an action.
 func (h *LifecycleHandler) publishActionResult(ctx context.Context, action *domain.SoulAction, status string, data map[string]interface{}, agentID string) error {
 	event, err := BuildActionResultEvent(action, status, data, ActionResultCanonical, agentID)
 	if err != nil {

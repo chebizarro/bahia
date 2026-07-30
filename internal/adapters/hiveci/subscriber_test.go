@@ -176,9 +176,12 @@ func TestHandleEventIngestsValidWorkflowRunAndResult(t *testing.T) {
 		{"triggered-by", "user"},
 		{"publisher", publisher},
 	})
+	run.Content = `{"method":"ci/workflow-run","params":{"repo":"30618:pk:repo","commit":"abc","branch":"main","workflow":".github/workflows/ci.yml","triggered_by":"user"}}`
+	require.NoError(t, nostrutil.SignEventWithHexKey(run, hiveCITestPrivateKey))
 	s.handleEvent(context.Background(), run)
 
 	result := signedHiveCIEvent(t, kindWorkflowResult, now.Add(time.Second), nostr.Tags{
+		{"domain", "ci"},
 		{"e", nostrutil.EventIDHex(run)},
 		{"log_url", "https://b.test/log"},
 		{"status", "success"},
@@ -204,6 +207,8 @@ func TestSubscribeAuthRequiredClosedAuthenticatesAndRetriesImmediately(t *testin
 		{"triggered-by", "user"},
 		{"publisher", publisher},
 	})
+	run.Content = `{"method":"ci/workflow-run","params":{"repo":"30618:pk:repo","commit":"abc","branch":"main","workflow":".github/workflows/ci.yml","triggered_by":"user"}}`
+	require.NoError(t, nostrutil.SignEventWithHexKey(run, hiveCITestPrivateKey))
 	pool := &fakeRelaySubscriber{subscriptions: []*nostrAdapter.MergedSubscription{
 		mergedWithClosed(nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted"}),
 		mergedWithEvents(run),
@@ -334,7 +339,7 @@ func TestWorkflowResultContentMetadataAndCallbackUsesResultID(t *testing.T) {
 	ev := signedHiveCIEvent(t, kindWorkflowResult, now, nostr.Tags{
 		{"e", runID}, {"log_url", "https://b.test/log"}, {"status", "success"}, {"exit_code", "0"}, {"duration", "12"},
 	})
-	ev.Content = `{"image_repo":"harbor.sharegap.net/cascadia/ddgs","image_tag":"pilot-v1","image_digest":"sha256:abc"}`
+	ev.Content = `{"image_repo":"harbor.sharegap.net/cascadia/ddgs","image_tag":"pilot-v1","image_digest":"sha256:abc","pstf_gate_name":"pstf-drift","pstf_gate_status":"green"}`
 	s.handleWorkflowResult(context.Background(), ev)
 	resultID := nostrutil.EventIDHex(ev)
 	stored, ok := repo.results[resultID]
@@ -343,6 +348,9 @@ func TestWorkflowResultContentMetadataAndCallbackUsesResultID(t *testing.T) {
 	}
 	if stored.ImageRepo != "harbor.sharegap.net/cascadia/ddgs" || stored.ImageTag != "pilot-v1" || stored.ImageDigest != "sha256:abc" {
 		t.Fatalf("unexpected persisted image metadata: %+v", stored)
+	}
+	if stored.PSTFGateName != "pstf-drift" || stored.PSTFGateStatus != "green" {
+		t.Fatalf("unexpected persisted PSTF gate metadata: %+v", stored)
 	}
 	if called != resultID {
 		t.Fatalf("expected callback with result id, got %q", called)

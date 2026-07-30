@@ -438,7 +438,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	// Publish the final authoritative read model only after immediately-known
 	// runtime and Bahia fields have been populated.
-	logger.Info("publishing final soul event (kind:31951)")
+	logger.Info("publishing final soul event (kind:30900)")
 	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
 		p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("publish soul: %w", err)

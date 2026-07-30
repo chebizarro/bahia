@@ -40,12 +40,21 @@ type DeploymentUnit struct {
 	ComposeDir     string            `json:"compose_dir,omitempty"`
 	Namespace      string            `json:"namespace,omitempty"`
 	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	GitSource      *GitSourceBinding `json:"git_source,omitempty"`
 	ReconcileMode  ReconcileMode     `json:"reconcile_mode"`
 	OwnershipMode  OwnershipMode     `json:"ownership_mode"`
 	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
 	Implicit       bool              `json:"implicit"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+// GitSourceBinding identifies the git checkout that backs a deployment unit.
+type GitSourceBinding struct {
+	RepositoryURL string `json:"repository_url,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
 }
 
 // NewImplicitDefaultDeploymentUnit resolves the in-memory default unit for an environment.
@@ -140,6 +149,13 @@ func NormalizeDeploymentUnitTargeting(unit *DeploymentUnit) {
 	if unit.NetworkProfile == nil {
 		unit.NetworkProfile = stringMapFromRuntimeConfig(unit.RuntimeConfig, "network_profile")
 	}
+	unit.GitSource = normalizeGitSourceBinding(unit.GitSource, unit.RuntimeConfig)
+	if unit.GitSource != nil {
+		if unit.RuntimeConfig == nil {
+			unit.RuntimeConfig = map[string]any{}
+		}
+		unit.RuntimeConfig["git_source"] = unit.GitSource.runtimeConfigValue()
+	}
 	if unit.ReconcileMode == "" {
 		unit.ReconcileMode = ReconcileModeObserveOnly
 	}
@@ -187,6 +203,83 @@ func stringMapFromRuntimeConfig(config map[string]any, key string) map[string]st
 		return nil
 	}
 	return out
+}
+
+func normalizeGitSourceBinding(binding *GitSourceBinding, config map[string]any) *GitSourceBinding {
+	if binding == nil {
+		binding = gitSourceFromRuntimeConfig(config)
+	}
+	if binding == nil {
+		return nil
+	}
+	out := &GitSourceBinding{
+		RepositoryURL: strings.TrimSpace(binding.RepositoryURL),
+		Ref:           strings.TrimSpace(binding.Ref),
+		Branch:        strings.TrimSpace(binding.Branch),
+		CommitSHA:     strings.TrimSpace(binding.CommitSHA),
+	}
+	if out.RepositoryURL == "" && out.Ref == "" && out.Branch == "" && out.CommitSHA == "" {
+		return nil
+	}
+	return out
+}
+
+func gitSourceFromRuntimeConfig(config map[string]any) *GitSourceBinding {
+	if config == nil {
+		return nil
+	}
+	if raw, ok := config["git_source"]; ok {
+		switch value := raw.(type) {
+		case map[string]any:
+			return &GitSourceBinding{
+				RepositoryURL: firstNonEmpty(stringFromAny(value["repository_url"]), stringFromAny(value["repo_url"]), stringFromAny(value["repository"]), stringFromAny(value["url"])),
+				Ref:           firstNonEmpty(stringFromAny(value["ref"]), stringFromAny(value["git_ref"])),
+				Branch:        firstNonEmpty(stringFromAny(value["branch"]), stringFromAny(value["default_branch"])),
+				CommitSHA:     firstNonEmpty(stringFromAny(value["commit_sha"]), stringFromAny(value["commit"]), stringFromAny(value["commit_hash"])),
+			}
+		case map[string]string:
+			return &GitSourceBinding{
+				RepositoryURL: firstNonEmpty(value["repository_url"], value["repo_url"], value["repository"], value["url"]),
+				Ref:           firstNonEmpty(value["ref"], value["git_ref"]),
+				Branch:        firstNonEmpty(value["branch"], value["default_branch"]),
+				CommitSHA:     firstNonEmpty(value["commit_sha"], value["commit"], value["commit_hash"]),
+			}
+		}
+	}
+	return &GitSourceBinding{
+		RepositoryURL: firstNonEmpty(
+			stringFromRuntimeConfig(config, "git_repository_url"),
+			stringFromRuntimeConfig(config, "repository_url"),
+			stringFromRuntimeConfig(config, "repo_url"),
+		),
+		Ref:       firstNonEmpty(stringFromRuntimeConfig(config, "git_ref"), stringFromRuntimeConfig(config, "source_ref")),
+		Branch:    firstNonEmpty(stringFromRuntimeConfig(config, "git_branch"), stringFromRuntimeConfig(config, "branch"), stringFromRuntimeConfig(config, "default_branch")),
+		CommitSHA: firstNonEmpty(stringFromRuntimeConfig(config, "git_commit_sha"), stringFromRuntimeConfig(config, "commit_sha"), stringFromRuntimeConfig(config, "commit_hash")),
+	}
+}
+
+func (g GitSourceBinding) runtimeConfigValue() map[string]any {
+	out := map[string]any{}
+	if g.RepositoryURL != "" {
+		out["repository_url"] = g.RepositoryURL
+	}
+	if g.Ref != "" {
+		out["ref"] = g.Ref
+	}
+	if g.Branch != "" {
+		out["branch"] = g.Branch
+	}
+	if g.CommitSHA != "" {
+		out["commit_sha"] = g.CommitSHA
+	}
+	return out
+}
+
+func stringFromAny(raw any) string {
+	if s, ok := raw.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }
 
 func firstNonEmpty(values ...string) string {
@@ -261,6 +354,9 @@ func ValidateDeploymentUnit(unit *DeploymentUnit) error {
 	}
 	if unit.OwnershipMode == "" {
 		return fmt.Errorf("%w: ownership_mode must not be empty", ErrEmptyField)
+	}
+	if unit.GitSource != nil && unit.GitSource.RepositoryURL == "" {
+		return fmt.Errorf("%w: git_source.repository_url must not be empty", ErrEmptyField)
 	}
 	return nil
 }

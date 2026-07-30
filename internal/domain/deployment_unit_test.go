@@ -12,9 +12,14 @@ func TestNewImplicitDefaultDeploymentUnitUsesEnvironmentRuntimeConfig(t *testing
 	env := &Environment{
 		ID: envID,
 		RuntimeConfig: map[string]any{
-			"type":                   "compose",
-			"compose_dir":            "/srv/bahia/compose/prod",
-			"endpoint_ref":           "prod-docker",
+			"type":         "compose",
+			"compose_dir":  "/srv/bahia/compose/prod",
+			"endpoint_ref": "prod-docker",
+			"git_source": map[string]any{
+				"repository_url": " https://git.example/bahia.git ",
+				"branch":         " main ",
+				"commit_sha":     " abc123 ",
+			},
 			"default_reconcile_mode": "approval_required",
 			"secret_scope_mode":      "unit",
 		},
@@ -32,7 +37,36 @@ func TestNewImplicitDefaultDeploymentUnitUsesEnvironmentRuntimeConfig(t *testing
 	require.Equal(t, ReconcileModeApprovalRequired, unit.ReconcileMode)
 	require.Equal(t, SecretScopeModeUnit, env.Targeting.SecretScopeMode)
 	require.Equal(t, OwnershipModeBahiaManaged, unit.OwnershipMode)
+	require.NotNil(t, unit.GitSource)
+	require.Equal(t, "https://git.example/bahia.git", unit.GitSource.RepositoryURL)
+	require.Equal(t, "main", unit.GitSource.Branch)
+	require.Equal(t, "abc123", unit.GitSource.CommitSHA)
 	require.Equal(t, "/srv/bahia/compose/prod", unit.RuntimeConfig["compose_dir"])
+}
+
+func TestNormalizeDeploymentUnitTargetingBindsLegacyGitSourceConfig(t *testing.T) {
+	unit := &DeploymentUnit{
+		EnvironmentID: uuid.New(),
+		Key:           DefaultDeploymentUnitKey,
+		RuntimeType:   RuntimeTypeCompose,
+		RuntimeConfig: map[string]any{
+			"git_repository_url": " https://git.example/runtime.git ",
+			"git_ref":            " refs/heads/main ",
+			"git_commit_sha":     " deadbeef ",
+		},
+	}
+
+	NormalizeDeploymentUnitTargeting(unit)
+
+	require.NotNil(t, unit.GitSource)
+	require.Equal(t, "https://git.example/runtime.git", unit.GitSource.RepositoryURL)
+	require.Equal(t, "refs/heads/main", unit.GitSource.Ref)
+	require.Equal(t, "deadbeef", unit.GitSource.CommitSHA)
+	require.Equal(t, map[string]any{
+		"repository_url": "https://git.example/runtime.git",
+		"ref":            "refs/heads/main",
+		"commit_sha":     "deadbeef",
+	}, unit.RuntimeConfig["git_source"])
 }
 
 func TestValidateDeploymentUnitRequiresPolicyAndOwnership(t *testing.T) {
@@ -49,5 +83,8 @@ func TestValidateDeploymentUnitRequiresPolicyAndOwnership(t *testing.T) {
 	require.Error(t, ValidateDeploymentUnit(unit))
 	unit.ReconcileMode = ReconcileModeObserveOnly
 	unit.OwnershipMode = ""
+	require.Error(t, ValidateDeploymentUnit(unit))
+	unit.OwnershipMode = OwnershipModeBahiaManaged
+	unit.GitSource = &GitSourceBinding{Branch: "main"}
 	require.Error(t, ValidateDeploymentUnit(unit))
 }

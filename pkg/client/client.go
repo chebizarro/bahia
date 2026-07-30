@@ -203,6 +203,7 @@ type AdoptionImportRequest struct {
 	Targets    []AdoptionTarget    `json:"targets"`
 	Selections []AdoptionSelection `json:"selections,omitempty"`
 	ImportAll  bool                `json:"import_all,omitempty"`
+	OrgID      string              `json:"org_id,omitempty"`
 }
 
 // DiscoveredContainer is a normalized container preview returned by adoption scan.

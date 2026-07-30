@@ -77,7 +77,7 @@ func contextVMParamsOrContent(content []byte) []byte {
 }
 
 // ParseProvisioningRequestEvent extracts a domain provisioning request from a
-// kind:5950 event. It accepts both the legacy tag + {brief} shape and additive
+// kind:retired-kind event. It accepts both the legacy tag + {brief} shape and additive
 // draft/spec-hash fields introduced for runtime-aware provisioning.
 func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequest, error) {
 	if event == nil {
@@ -165,7 +165,7 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 }
 
 // ParseSoulActionEvent extracts a lifecycle/customization action from a
-// kind:1950 event. It accepts legacy {brief} regenerate content and the newer
+// kind:retired-kind event. It accepts legacy {brief} regenerate content and the newer
 // structured {new_brief, draft_ref, spec_hash, previous_spec_hash, patch} shape.
 func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 	if event == nil {
@@ -239,7 +239,7 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 	return action, nil
 }
 
-// ParseAgentSoulEvent converts a kind:31951 read-model event into an AgentSoul.
+// ParseAgentSoulEvent converts a kind:30900 read-model event into an AgentSoul.
 func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 	if event == nil {
 		return nil
@@ -339,7 +339,7 @@ func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 	return soul
 }
 
-// ParseSoulDraftEvent converts a kind:31952 draft event into a SoulDraft.
+// ParseSoulDraftEvent converts a kind:30900 draft event into a SoulDraft.
 func ParseSoulDraftEvent(event *nostr.Event) (*domain.SoulDraft, error) {
 	if event == nil {
 		return nil, fmt.Errorf("nil soul draft event")
@@ -382,7 +382,7 @@ func ParseSoulDraftEvent(event *nostr.Event) (*domain.SoulDraft, error) {
 	return draft, nil
 }
 
-// BuildSoulDraftEvent builds a kind:31952 draft event. The caller is
+// BuildSoulDraftEvent builds a kind:30900 draft event. The caller is
 // responsible for signing and publishing it.
 func BuildSoulDraftEvent(draft *domain.SoulDraft) (*nostr.Event, error) {
 	if draft == nil {
@@ -454,7 +454,7 @@ var supportedMemoryRerankModels = map[string]struct{}{
 }
 
 // ValidateSoulDraftContent validates v2 customization sections that the event
-// codec accepts on kind:31952 drafts. Legacy/no-schema v1 drafts without v2
+// codec accepts on kind:30900 drafts. Legacy/no-schema v1 drafts without v2
 // customization sections pass unchanged for backward compatibility.
 func ValidateSoulDraftContent(content domain.SoulDraftContent) error {
 	var violations []string
@@ -725,7 +725,7 @@ func cloneDraftJSONValue(value interface{}) interface{} {
 	}
 }
 
-// BuildProvisioningStatusEvent builds a kind:6950 progress event.
+// BuildProvisioningStatusEvent builds a kind:retired-kind progress event.
 func BuildProvisioningStatusEvent(requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) *nostr.Event {
 	return &nostr.Event{
 		Kind:      domain.KindProvisioningStatus,
@@ -741,7 +741,7 @@ func BuildProvisioningStatusEvent(requestEvent *nostr.Event, step domain.Provisi
 	}
 }
 
-// BuildProvisioningSuccessResultEvent builds a kind:7950 provisioning success event.
+// BuildProvisioningSuccessResultEvent builds a kind:retired-kind provisioning success event.
 func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain.AgentSoul, factoryPubkey string) (*nostr.Event, error) {
 	factoryPubkey = strings.TrimSpace(factoryPubkey)
 	if factoryPubkey == "" {
@@ -772,7 +772,7 @@ func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain
 	return &nostr.Event{Kind: domain.KindProvisioningResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}, nil
 }
 
-// BuildProvisioningErrorResultEvent builds a kind:7950 error result event.
+// BuildProvisioningErrorResultEvent builds a kind:retired-kind error result event.
 func BuildProvisioningErrorResultEvent(requestEvent *nostr.Event, step, message string) *nostr.Event {
 	return &nostr.Event{
 		Kind:      domain.KindProvisioningResult,
@@ -788,7 +788,7 @@ func BuildProvisioningErrorResultEvent(requestEvent *nostr.Event, step, message 
 	}
 }
 
-// BuildAgentSoulEvent builds a kind:31951 authoritative soul read-model event.
+// BuildAgentSoulEvent builds a kind:30900 authoritative soul read-model event.
 func BuildAgentSoulEvent(soul *domain.AgentSoul) *nostr.Event {
 	tags := nostr.Tags{
 		{tagParameterizedD, soul.AgentID},
@@ -820,8 +820,8 @@ func BuildAgentSoulEvent(soul *domain.AgentSoul) *nostr.Event {
 }
 
 // BuildActionStatusEvent builds a lifecycle progress event. Lifecycle actions
-// reuse kind:6950 and are distinguished from provisioning by request-kind,
-// soul, and action tags correlated to the original kind:1950 event via #e.
+// reuse kind:retired-kind and are distinguished from provisioning by request-kind,
+// soul, and action tags correlated to the original kind:retired-kind event via #e.
 func BuildActionStatusEvent(action *domain.SoulAction, status, message string, agentID ...string) *nostr.Event {
 	tags := nostr.Tags{
 		{tagEvent, action.EventID, "", "reply"},
@@ -852,7 +852,7 @@ const (
 )
 
 // BuildActionResultEvent builds a lifecycle terminal event. Canonical lifecycle
-// results are kind:7950; ActionResultLegacy preserves the early kind:1951 alias.
+// results are kind:retired-kind; ActionResultLegacy preserves the early kind:1951 alias.
 func BuildActionResultEvent(action *domain.SoulAction, status string, data map[string]interface{}, shape ActionResultShape, agentID ...string) (*nostr.Event, error) {
 	if action == nil {
 		return nil, fmt.Errorf("nil soul action")
@@ -884,7 +884,7 @@ func BuildActionResultEvent(action *domain.SoulAction, status string, data map[s
 	return &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: tags, Content: content}, nil
 }
 
-// RuntimeControlEnvelope is the JSON content of a kind:38384 runtime control request.
+// RuntimeControlEnvelope is the JSON content of a kind:retired-kind runtime control request.
 type RuntimeControlEnvelope struct {
 	Schema         string                 `json:"schema"`
 	Method         string                 `json:"method"`
@@ -919,7 +919,7 @@ type RuntimeSoulRef struct {
 	SpecHash string `json:"spec_hash"`
 }
 
-// BuildRuntimeControlRequestEvent builds an unsigned kind:38384 request.
+// BuildRuntimeControlRequestEvent builds an unsigned kind:retired-kind request.
 func BuildRuntimeControlRequestEvent(envelope RuntimeControlEnvelope) (*nostr.Event, error) {
 	if envelope.Schema == "" {
 		envelope.Schema = domain.SoulFactoryRuntimeControlSchema
@@ -947,7 +947,7 @@ func BuildRuntimeControlRequestEvent(envelope RuntimeControlEnvelope) (*nostr.Ev
 	return &nostr.Event{Kind: domain.KindRuntimeControlRequest, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}, nil
 }
 
-// ParseRuntimeControlRequestEvent decodes a kind:38384 runtime control request envelope.
+// ParseRuntimeControlRequestEvent decodes a kind:retired-kind runtime control request envelope.
 func ParseRuntimeControlRequestEvent(event *nostr.Event) (*RuntimeControlEnvelope, error) {
 	if event == nil {
 		return nil, fmt.Errorf("nil runtime control request")

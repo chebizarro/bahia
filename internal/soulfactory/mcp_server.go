@@ -133,7 +133,7 @@ func (s *MCPServer) GetTools() []MCPTool {
 					},
 					"template": map[string]interface{}{
 						"type":        "string",
-						"description": "Template reference (31950:pubkey:identifier)",
+						"description": "Template reference (30900:pubkey:identifier)",
 					},
 				},
 				"required": []string{"agent_id", "brief"},

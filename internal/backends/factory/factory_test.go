@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/backends/filesystem_mock"
 	"github.com/openagentsinc/bahia/internal/backends/nexus"
 	"github.com/openagentsinc/bahia/internal/backends/pulp"
+	"github.com/openagentsinc/bahia/internal/backends/registryproxy"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -116,6 +117,39 @@ func TestPulpClientUsesBasicAuthHeader(t *testing.T) {
 	_, err = p.ObserveRepository(context.Background(), testRepo("repo"))
 	if err != nil {
 		t.Fatalf("ObserveRepository() error = %v", err)
+	}
+}
+
+func TestBuildBackendSupportsAthensAndVerdaccioRegistryProxies(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		backend    domain.PackageBackendType
+		wantFormat domain.PackageRepositoryFormat
+	}{
+		{name: "athens", backend: domain.PackageBackendAthens, wantFormat: domain.PackageRepositoryFormatGoModules},
+		{name: "verdaccio", backend: domain.PackageBackendVerdaccio, wantFormat: domain.PackageRepositoryFormatNPM},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			backend, err := BuildBackend(config.PackageBackendConfig{Type: string(tt.backend), BaseURL: server.URL})
+			if err != nil {
+				t.Fatalf("BuildBackend() error = %v", err)
+			}
+			proxy, ok := backend.(*registryproxy.Backend)
+			if !ok {
+				t.Fatalf("backend type = %T, want *registryproxy.Backend", backend)
+			}
+			if proxy.Type() != tt.backend {
+				t.Fatalf("backend type = %q, want %q", proxy.Type(), tt.backend)
+			}
+			if !proxy.Capabilities().CanObserveDrift || len(proxy.Capabilities().Formats) != 1 || proxy.Capabilities().Formats[0] != tt.wantFormat {
+				t.Fatalf("unexpected capabilities: %#v", proxy.Capabilities())
+			}
+		})
 	}
 }
 

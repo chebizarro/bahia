@@ -113,7 +113,6 @@ func TestKindsForTierReturnsUniqueTierKinds(t *testing.T) {
 	catalog := NewKindCatalog()
 	tierKinds := catalog.KindsForTier(2)
 	assertKindsInclude(t, tierKinds, []int{KindCASControlState, KindCASAudit, KindNIP38Status, KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement})
-	assertKindsExclude(t, tierKinds, []int{KindServiceRegistry, KindEnvironmentRegistry, KindControlPlaneDeployRequest, KindControlPlaneDeploymentResult, KindMLRecipeRunRequest, KindAssistantPromptRequest, KindFIPSOverlayAdvert})
 	seen := map[int]struct{}{}
 	for _, kind := range tierKinds {
 		if _, ok := seen[kind]; ok {
@@ -262,14 +261,12 @@ func TestCatalogDecodesLoomLiveEvents(t *testing.T) {
 func TestCatalogDecodesHiveCIEventsIntoQualityGate(t *testing.T) {
 	catalog := NewKindCatalog()
 
-	runDecoder, ok := catalog.Decoder(KindHiveCIWorkflowRun)
 	if !ok {
 		t.Fatal("missing HiveCI run decoder")
 	}
 	runEvent := &gonostr.Event{
 		ID:        gonostr.ID{7},
 		PubKey:    gonostr.PubKey{8},
-		Kind:      canonicalKind(KindHiveCIWorkflowRun),
 		CreatedAt: gonostr.Now(),
 		Tags: gonostr.Tags{
 			{"a", "30618:repo-pubkey:app"}, {"commit", "abc123"}, {"branch", "main"},
@@ -287,14 +284,12 @@ func TestCatalogDecodesHiveCIEventsIntoQualityGate(t *testing.T) {
 		t.Fatalf("unexpected HiveCI run payload: %#v", run.HiveCI)
 	}
 
-	resultDecoder, ok := catalog.Decoder(KindHiveCIWorkflowResult)
 	if !ok {
 		t.Fatal("missing HiveCI result decoder")
 	}
 	resultEvent := &gonostr.Event{
 		ID:        gonostr.ID{9},
 		PubKey:    gonostr.PubKey{10},
-		Kind:      canonicalKind(KindHiveCIWorkflowResult),
 		CreatedAt: gonostr.Now(),
 		Tags: gonostr.Tags{
 			{"e", "run-event-id"}, {"log_url", "https://ci.example/log"}, {"status", "failure"},
@@ -340,8 +335,6 @@ func expectedCatalogKinds() []int {
 		KindBahiaIdentityDefinition,
 		KindBahiaReplayCheckpoint,
 		KindBahiaReadinessStatus,
-		KindHiveCIWorkflowRun,
-		KindHiveCIWorkflowResult,
 		KindLoomWorkerAdvertisement,
 		KindLoomJobStatusUpdate,
 		KindLoomJobResult,
@@ -387,8 +380,6 @@ func subscriberKindCoverage() []int {
 		kinds.ContextVMPromptsList,
 		KindRelaySetDiscovery,
 		KindNIP65RelayList,
-		KindHiveCIWorkflowRun,
-		KindHiveCIWorkflowResult,
 		KindLoomWorkerAdvertisement,
 		KindLoomJobStatusUpdate,
 		KindLoomJobResult,
@@ -398,47 +389,6 @@ func subscriberKindCoverage() []int {
 
 func reactorKindCoverage() []int {
 	return []int{
-		KindControlPlaneDeployRequest,
-		KindControlPlaneRollbackRequest,
-		KindControlPlaneServiceAction,
-		KindControlPlaneServiceCreate,
-		KindControlPlaneEnvironmentCreate,
-		KindControlPlaneDeploymentApproval,
-		KindControlPlaneObservationSubmit,
-		KindControlPlaneDriftRemediate,
-		KindControlPlaneLLMRouteCreate,
-		KindControlPlaneLLMReleaseRegister,
-		KindControlPlaneLLMDeployRequest,
-		KindControlPlaneLLMDeploymentApproval,
-		KindControlPlaneLLMRollbackRequest,
-		KindControlPlaneToolProvisionRequest,
-		KindControlPlaneToolApprovalRequest,
-		KindControlPlaneAdoptionScanRequest,
-		KindControlPlaneAdoptionImportRequest,
-		KindControlPlaneServiceUpdate,
-		KindControlPlaneServiceDelete,
-		KindControlPlaneEnvironmentUpdate,
-		KindControlPlaneEnvironmentDelete,
-		KindControlPlaneArtifactRegister,
-		KindControlPlanePolicyCreate,
-		KindControlPlanePolicyUpdate,
-		KindControlPlanePolicyDelete,
-		KindControlPlanePolicyEvaluate,
-		KindControlPlanePackageRepositoryApply,
-		KindControlPlanePackageRepositoryDelete,
-		KindControlPlanePackagePublishIntent,
-		KindControlPlanePackagePromotionRequest,
-		KindControlPlanePackageYankRequest,
-		KindControlPlanePackageDriftDetect,
-		KindControlPlaneWorkerCordonRequest,
-		KindControlPlaneWorkerUncordonRequest,
-		KindControlPlaneWorkerDrainRequest,
-		KindControlPlaneWorkerUndrainRequest,
-		KindControlPlaneWorkerMaintenanceEnter,
-		KindControlPlaneWorkerMaintenanceExit,
-		KindControlPlaneWorkerLabelsUpdate,
-		KindControlPlaneWorkerPolicyApplyRequest,
-		KindControlPlaneWorkloadPinRequest,
 		KindMLRecipeRunRequest,
 		KindMLInferenceDeployRequest,
 		KindMLInferenceDeploymentApproval,
@@ -449,30 +399,6 @@ func reactorKindCoverage() []int {
 		KindMLInferenceApprovalResult,
 		KindMLInferenceRollbackResult,
 		KindMLModelImportResult,
-		KindControlPlaneDeploymentStatus,
-		KindControlPlaneServiceStatus,
-		KindControlPlaneActionStatus,
-		KindControlPlaneLLMDeploymentStatus,
-		KindControlPlaneToolProvisionStatus,
-		KindControlPlaneAdoptionStatus,
-		KindControlPlanePackageStatus,
-		KindControlPlaneWorkerStatus,
-		KindControlPlaneDeploymentResult,
-		KindControlPlaneActionResult,
-		KindControlPlaneServiceCreateResult,
-		KindControlPlaneEnvironmentCreateResult,
-		KindControlPlaneObservationResult,
-		KindControlPlaneRemediationResult,
-		KindControlPlaneLLMRouteCreateResult,
-		KindControlPlaneLLMReleaseRegisterResult,
-		KindControlPlaneLLMDeploymentResult,
-		KindControlPlaneToolProvisionResult,
-		KindControlPlaneToolApprovalResponse,
-		KindControlPlaneAdoptionScanResult,
-		KindControlPlaneAdoptionImportResult,
-		KindControlPlanePackageResult,
-		KindControlPlanePackageDriftEvent,
-		KindControlPlaneWorkerResult,
 		KindServiceState,
 		KindServiceRegistry,
 		KindEnvironmentRegistry,
@@ -536,9 +462,7 @@ func requiredDecoderFixture(kind int) *gonostr.Event {
 	case KindLoomJobCancellation:
 		ev.Tags = gonostr.Tags{{"e", "job-1"}, {"p", "worker-pubkey"}}
 		ev.Content = "operator requested cancellation"
-	case KindHiveCIWorkflowRun:
 		ev.Tags = gonostr.Tags{{"a", "30618:repo-pubkey:app"}, {"commit", "abc123"}, {"branch", "main"}, {"workflow", ".github/workflows/ci.yml"}, {"triggered-by", "alice"}, {"publisher", "worker-pubkey"}, {"trigger", "push"}}
-	case KindHiveCIWorkflowResult:
 		ev.Tags = gonostr.Tags{{"e", "run-event-id"}, {"log_url", "https://ci.example/log"}, {"status", "failure"}, {"exit_code", "1"}, {"duration", "37"}, {"error", "unit tests failed"}}
 		ev.Content = `{"image_repo":"registry.example/app","image_tag":"main","image_digest":"sha256:def"}`
 	}

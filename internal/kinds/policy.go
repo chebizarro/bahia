@@ -41,23 +41,14 @@ func IsBahiaProjectionKind(kind int) bool {
 
 // IsOpenInteropKind returns true if the kind is an open interop kind that
 // does not require authorization. These are events from external systems
-// (Loom, Hive-CI, NIP-34, SoulFactory) that interoperate with Bahia.
+// (Loom and NIP-34) that interoperate with Bahia.
 func IsOpenInteropKind(kind int) bool {
-	return isLoomInteropKind(kind) || isHiveCIInteropKind(kind) || kind == NIP22Comment || IsNIP34Kind(kind) || IsSoulFactoryKind(kind)
+	return isLoomInteropKind(kind) || kind == NIP22Comment || IsNIP34Kind(kind) || IsSoulFactoryKind(kind)
 }
 
 func isLoomInteropKind(kind int) bool {
 	switch kind {
-	case LoomWorkerAdvertisement, LoomJobStatusUpdate, LoomJobResult, LoomJobCancellation:
-		return true
-	default:
-		return false
-	}
-}
-
-func isHiveCIInteropKind(kind int) bool {
-	switch kind {
-	case HiveCIWorkflowRun, HiveCIWorkflowResult:
+	case LoomWorkerAdvertisement, LoomJobResult:
 		return true
 	default:
 		return false
@@ -86,10 +77,8 @@ func IsNIP34Kind(kind int) bool {
 // semantics.
 func IsSoulFactoryKind(kind int) bool {
 	switch kind {
-	case SoulFactoryTemplate, SoulFactoryAgentSoul, SoulFactoryDraft,
-		SoulFactoryProvisioningRequest, SoulFactoryProvisioningStatus, SoulFactoryProvisioningResult,
-		SoulFactoryAction, SoulFactoryActionLegacyResult,
-		SoulFactoryRuntimeCapability, SoulFactoryRuntimeControl, SoulFactoryRuntimeResult:
+	case CASControlState, SoulFactoryRuntimeCapability,
+		ContextVMMessage, NIP38Status, CASAudit:
 		return true
 	default:
 		return false
@@ -111,38 +100,7 @@ func IsReadableKind(kind int) bool {
 
 // AllRequestKinds returns all legacy Bahia request kinds for migration tools.
 func AllRequestKinds() []int {
-	return []int{
-		// DNS requests
-		DNSZoneCreateRequest, DNSPolicyApplyRequest, DNSRecordOverrideRequest,
-		DNSDriftRemediateRequest, DNSBackendRegisterRequest,
-		// Core requests
-		DeployRequest, RollbackRequest, ServiceAction, ServiceCreate,
-		EnvironmentCreate, DeploymentApproval, ObservationSubmit, DriftRemediate,
-		LLMRouteCreate, LLMReleaseRegister, LLMDeployRequest, LLMDeploymentApproval,
-		LLMRollbackRequest, ToolProvisionRequest, ToolApprovalRequest,
-		AdoptionScanRequest, AdoptionImportRequest,
-		ServiceUpdate, ServiceDelete, EnvironmentUpdate, EnvironmentDelete,
-		ArtifactRegister, PolicyCreate, PolicyUpdate, PolicyDelete, PolicyEvaluate,
-		// Package requests
-		PackageRepositoryApply, PackageRepositoryDelete, PackagePublishIntent,
-		PackagePromotionRequest, PackageYankRequest, PackageDriftDetect,
-		// Worker requests
-		WorkerCordonRequest, WorkerUncordonRequest, WorkerDrainRequest,
-		WorkerUndrainRequest, WorkerMaintenanceEnter, WorkerMaintenanceExit,
-		WorkerLabelsUpdate, WorkerPolicyApplyRequest, WorkloadPinRequest,
-		WorkerCleanupRequest,
-		// ML requests
-		MLRecipeRunRequest, MLInferenceDeployRequest, MLInferenceDeploymentApproval,
-		MLInferenceRollbackRequest, MLModelImportRequest,
-		// Backup requests
-		BackupRunRequest, BackupVerificationRequest, BackupRestoreRequest,
-		BackupRestoreApproval, BackupRetentionEnforce, BackupRepositoryRegister,
-		BackupPolicyApply, BackupRecipeApply, BackupDefinitionApply, BackupRepositoryProbe,
-		// Assistant requests
-		AssistantPromptRequest, AssistantApproval,
-		// Continuity requests
-		FailoverRequest, RecoveryRequest,
-	}
+	return []int{ContextVMMessage, ContextVMGiftWrap, ContextVMEphemeralGiftWrap}
 }
 
 // AllStatusKinds returns canonical operational status kinds.
@@ -183,10 +141,7 @@ func AllReadModelKinds() []int {
 
 // DNSRequestKinds returns all DNS request kinds.
 func DNSRequestKinds() []int {
-	return []int{
-		DNSZoneCreateRequest, DNSPolicyApplyRequest, DNSRecordOverrideRequest,
-		DNSDriftRemediateRequest, DNSBackendRegisterRequest,
-	}
+	return []int{ContextVMMessage, ContextVMGiftWrap, ContextVMEphemeralGiftWrap}
 }
 
 // DNSResultKinds returns canonical DNS result observable kinds.

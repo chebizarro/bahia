@@ -12,13 +12,15 @@ type PackageBackendType string
 const (
 	PackageBackendNexus          PackageBackendType = "nexus"
 	PackageBackendPulp           PackageBackendType = "pulp"
+	PackageBackendAthens         PackageBackendType = "athens"
+	PackageBackendVerdaccio      PackageBackendType = "verdaccio"
 	PackageBackendFilesystemMock PackageBackendType = "filesystem_mock"
 )
 
 // IsValid reports whether the backend type is one Bahia can register.
 func (t PackageBackendType) IsValid() bool {
 	switch t {
-	case PackageBackendNexus, PackageBackendPulp, PackageBackendFilesystemMock:
+	case PackageBackendNexus, PackageBackendPulp, PackageBackendAthens, PackageBackendVerdaccio, PackageBackendFilesystemMock:
 		return true
 	default:
 		return false
@@ -178,6 +180,14 @@ type PackageRepository struct {
 	UpdatedAt              time.Time               `json:"updated_at"`
 	LastEventID            string                  `json:"last_event_id,omitempty"`
 	LastEventCreatedAt     time.Time               `json:"last_event_created_at"`
+}
+
+// GoVanityMetadata declares the go-import vanity route for a Go module repository.
+type GoVanityMetadata struct {
+	ModulePrefix string `json:"module_prefix"`
+	VCS          string `json:"vcs"`
+	RepoRoot     string `json:"repo_root"`
+	MetaTag      string `json:"meta_tag"`
 }
 
 // PackageArtifact is a Nostr-derived projection of package artifact state.

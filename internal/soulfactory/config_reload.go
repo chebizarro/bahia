@@ -24,7 +24,7 @@ var configReloadSections = map[string]struct{}{
 	"assets":       {},
 }
 
-// ConfigReloadRequest is the params contract for kind:38384
+// ConfigReloadRequest is the params contract for kind:retired-kind
 // soulfactory.config.reload requests. It supports partial patches and fully
 // resolved draft specs; runtimes use TargetFields to dispatch native hot-reload
 // handlers without restarting the session.

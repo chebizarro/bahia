@@ -92,7 +92,7 @@ type RuntimeCapability struct {
 	Compatible        bool
 }
 
-// RuntimeAdapterRequest describes one signed kind:38384 control request. The
+// RuntimeAdapterRequest describes one signed kind:retired-kind control request. The
 // request must already carry the operator/soul/spec context resolved by the
 // caller; draft-backed provisioning is intentionally out of this adapter slice.
 type RuntimeAdapterRequest struct {
@@ -108,7 +108,7 @@ type RuntimeAdapterRequest struct {
 	IdempotencyKey string
 }
 
-// RuntimeControlResultEnvelope is the JSON content of a kind:38386 runtime
+// RuntimeControlResultEnvelope is the JSON content of a kind:4903 runtime
 // control result.
 type RuntimeControlResultEnvelope struct {
 	Schema               string                 `json:"schema"`

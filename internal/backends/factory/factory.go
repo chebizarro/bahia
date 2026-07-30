@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/backends/nexus"
 	"github.com/openagentsinc/bahia/internal/backends/packagebackend"
 	"github.com/openagentsinc/bahia/internal/backends/pulp"
+	"github.com/openagentsinc/bahia/internal/backends/registryproxy"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -80,6 +81,8 @@ func BuildBackendWithSecrets(ctx context.Context, cfg config.PackageBackendConfi
 		return nexus.New(nexus.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic})
 	case domain.PackageBackendPulp:
 		return pulp.New(pulp.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic})
+	case domain.PackageBackendAthens, domain.PackageBackendVerdaccio:
+		return registryproxy.New(registryproxy.Config{Type: domain.PackageBackendType(strings.TrimSpace(cfg.Type)), BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client})
 	default:
 		return nil, fmt.Errorf("unsupported package backend type %q", cfg.Type)
 	}

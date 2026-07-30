@@ -18,9 +18,17 @@ type DeploymentUnitRequest struct {
 	ComposeDir     string            `json:"compose_dir,omitempty"`
 	Namespace      string            `json:"namespace,omitempty"`
 	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	GitSource      *GitSourceRequest `json:"git_source,omitempty"`
 	OwnershipMode  string            `json:"ownership_mode,omitempty"`
 	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
 	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+}
+
+type GitSourceRequest struct {
+	RepositoryURL string `json:"repository_url,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
 }
 
 // CreateServiceRequest represents a request to register a new service.

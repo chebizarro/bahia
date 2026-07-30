@@ -44,23 +44,6 @@ type DNSPolicyRepositoryProvider interface {
 	DNSPolicyRepository() repository.DNSPolicyRepository
 }
 
-func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
-	switch event.Kind {
-	case KindDNSDriftRemediateRequest:
-		r.handleDNSDriftRemediate(ctx, event)
-	case KindDNSZoneCreateRequest:
-		r.handleDNSZoneCreate(ctx, event)
-	case KindDNSRecordOverrideRequest:
-		r.handleDNSRecordOverride(ctx, event)
-	case KindDNSPolicyApplyRequest:
-		r.handleDNSPolicyApply(ctx, event)
-	case KindDNSBackendRegisterRequest:
-		r.publishDNSUnsupported(ctx, event, KindDNSBackendRegisterResult, dnsActionBackendRegister, dnsUnsupportedBackendRegister)
-	default:
-		r.logger.Warn("unexpected DNS control-plane kind", "kind", event.Kind, "event_id", event.ID)
-	}
-}
-
 func (r *Reactor) handleDNSDriftRemediate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	if !r.isAuthorized(event.PubKey.Hex()) {

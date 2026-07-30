@@ -19,7 +19,7 @@ import (
 //   - Control-plane request/response kinds are owned and audited by the reactor.
 //   - The subscriber tracks non-reactor operational streams: worker catalog updates,
 //     Hive-CI/Loom events, and assistant relay status/result events.
-//   - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
+//   - Legacy NIP-90 kind retired belongs to the old upstream dvm-cicd-runner path and is
 //     not part of this subscriber contract.
 var DefaultInboundKinds = []int{
 	// Canonical Bahia observables.
@@ -33,14 +33,10 @@ var DefaultInboundKinds = []int{
 	KindNIP65RelayList,
 
 	// Hive-CI protocol kinds.
-	KindHiveCIWorkflowRun,
-	KindHiveCIWorkflowResult,
 
 	// Loom protocol kinds.
 	KindLoomWorkerAdvertisement,
-	KindLoomJobStatusUpdate,
 	KindLoomJobResult,
-	KindLoomJobCancellation,
 }
 
 // EventHandler is called for each inbound event after persistence.
@@ -294,14 +290,6 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		)
 		return
 	}
-	if isLegacyProductionRuntimeKind(eventKindInt(ev)) {
-		s.logger.Warn("dropping legacy inbound event after migration boundary",
-			zap.String("event_id", eventIDHex(ev)),
-			zap.Int("kind", eventKindInt(ev)),
-		)
-		return
-	}
-
 	// Serialize tags.
 	tagsJSON, err := json.Marshal(ev.Tags)
 	if err != nil {
@@ -361,9 +349,6 @@ func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filt
 	var adoptionKinds []int
 
 	for _, kind := range s.kinds {
-		if isLegacyProductionRuntimeKind(kind) {
-			continue
-		}
 		switch {
 		case isDirectRuntimeScopedInboundKind(kind):
 			directRuntimeKinds = append(directRuntimeKinds, kind)
@@ -490,15 +475,6 @@ func isAdoptionScopedInboundKind(kind int) bool {
 
 func isControlPlaneRequestKind(kind int) bool {
 	return isCanonicalControlPlaneRequest(kind)
-}
-
-func isLegacyProductionRuntimeKind(kind int) bool {
-	return (kind >= 5941 && kind <= 5999) ||
-		(kind >= 6961 && kind <= 6999) ||
-		(kind >= 7961 && kind <= 7999) ||
-		(kind >= 31100 && kind <= 31399) ||
-		(kind >= 31900 && kind <= 32099) ||
-		(kind >= 38390 && kind <= 38499)
 }
 
 func combineAuthors(groups ...[]string) []string {

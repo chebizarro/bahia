@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -17,8 +18,8 @@ import (
 )
 
 const (
-	kindWorkflowRun    = 5401
-	kindWorkflowResult = 5402
+	kindWorkflowRun    = cascadia.CAS_INTENT
+	kindWorkflowResult = cascadia.CAS_CP_STATE
 )
 
 // ResultConsumer is invoked after a valid workflow result has been persisted.
@@ -29,7 +30,7 @@ type relaySubscriber interface {
 	AuthenticateRelay(context.Context, string) error
 }
 
-// Subscriber ingests Hive-CI 5401/5402 events from relays and persists parsed records.
+// Subscriber ingests Hive-CI retired-kind/retired-kind events from relays and persists parsed records.
 type Subscriber struct {
 	pool     relaySubscriber
 	repo     repository.HiveCIRepository
@@ -192,10 +193,15 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		return
 	}
 
-	switch int(ev.Kind) {
-	case kindWorkflowRun:
+	if int(ev.Kind) == kindWorkflowRun {
+		var envelope struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal([]byte(ev.Content), &envelope) != nil || envelope.Method != "ci/workflow-run" {
+			return
+		}
 		s.handleWorkflowRun(ctx, ev)
-	case kindWorkflowResult:
+	} else if int(ev.Kind) == kindWorkflowResult && optionalTag(ev, "domain") == "ci" {
 		s.handleWorkflowResult(ctx, ev)
 	}
 }
@@ -213,24 +219,24 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
-	commit, err := requiredTag(ev, "commit")
-	if err != nil {
+	var envelope struct {
+		Params struct {
+			Commit      string `json:"commit"`
+			Branch      string `json:"branch"`
+			Workflow    string `json:"workflow"`
+			TriggeredBy string `json:"triggered_by"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(ev.Content), &envelope); err != nil {
 		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
-	branch, err := requiredTag(ev, "branch")
-	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	workflow, err := requiredTag(ev, "workflow")
-	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	triggeredBy, err := requiredTag(ev, "triggered-by")
-	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
+	commit := firstNonEmpty(optionalTag(ev, "commit"), envelope.Params.Commit)
+	branch := firstNonEmpty(optionalTag(ev, "branch"), envelope.Params.Branch)
+	workflow := firstNonEmpty(optionalTag(ev, "workflow"), envelope.Params.Workflow)
+	triggeredBy := firstNonEmpty(optionalTag(ev, "triggered-by"), envelope.Params.TriggeredBy)
+	if commit == "" || branch == "" || workflow == "" || triggeredBy == "" {
+		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.String("reason", "missing canonical workflow params"))
 		return
 	}
 	publisher, err := requiredTag(ev, "publisher")
@@ -364,9 +370,11 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	}
 
 	type workflowResultContent struct {
-		ImageRepo   string `json:"image_repo"`
-		ImageTag    string `json:"image_tag"`
-		ImageDigest string `json:"image_digest"`
+		ImageRepo      string `json:"image_repo"`
+		ImageTag       string `json:"image_tag"`
+		ImageDigest    string `json:"image_digest"`
+		PSTFGateName   string `json:"pstf_gate_name"`
+		PSTFGateStatus string `json:"pstf_gate_status"`
 	}
 	var content workflowResultContent
 	if strings.TrimSpace(ev.Content) != "" {
@@ -384,6 +392,8 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	if imageDigest == "" {
 		imageDigest = content.ImageDigest
 	}
+	pstfGateName := firstNonEmpty(optionalTag(ev, "pstf_gate_name"), optionalTag(ev, "gate_name"), content.PSTFGateName)
+	pstfGateStatus := firstNonEmpty(optionalTag(ev, "pstf_gate_status"), optionalTag(ev, "gate_status"), optionalTag(ev, "pstf_status"), content.PSTFGateStatus)
 
 	result := domain.HiveCIWorkflowResult{
 		ResultEventID:   eventID,
@@ -396,6 +406,8 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		ImageRepo:       imageRepo,
 		ImageTag:        imageTag,
 		ImageDigest:     imageDigest,
+		PSTFGateName:    pstfGateName,
+		PSTFGateStatus:  pstfGateStatus,
 		PublisherPubkey: pubkey,
 		EventCreatedAt:  ev.CreatedAt.Time(),
 		ProcessingState: processingState,
@@ -421,6 +433,15 @@ func isTerminalHiveCIResultState(state domain.HiveCIProcessingState) bool {
 	default:
 		return false
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func requiredTag(ev *nostr.Event, key string) (string, error) {
