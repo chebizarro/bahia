@@ -1,0 +1,20 @@
+# Bahia /metrics (internal/adapters/telemetry)
+bahia_fleet_health_services
+bahia_fleet_health_drift_stuck
+bahia_fleet_health_drift_age_seconds_max
+bahia_worker_capacity_class_workers
+bahia_worker_pressure_recommendations
+bahia_nostr_relays_healthy_total
+bahia_nostr_relays_degraded_total
+bahia_nostr_relays_unhealthy_total
+bahia_loom_jobs_inflight
+bahia_loom_jobs_total
+bahia_cashu_payments_sats_total
+bahia_adoption_scans_total
+bahia_adoption_imports_total
+bahia_runtime_actions_total
+bahia_reconcile_states_checked
+
+# fleet-routstr-gateway /metrics (src/metrics.ts)
+fleet_routstr_sats_spent_total
+fleet_routstr_wallet_balance_sats

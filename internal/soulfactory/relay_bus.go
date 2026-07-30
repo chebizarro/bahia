@@ -164,6 +164,23 @@ func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int,
 	return accepted, nil
 }
 
+// Authenticate establishes each relay connection and completes NIP-42 before
+// a write that requires authenticated relay state.
+func (b *SoulFactoryRelayBus) Authenticate(ctx context.Context) error {
+	if b == nil || len(b.endpoints) == 0 {
+		return fmt.Errorf("soul factory relay bus is not configured")
+	}
+	if b.signer == nil {
+		return fmt.Errorf("soul factory relay auth signer is not configured")
+	}
+	for _, endpoint := range b.endpoints {
+		if err := endpoint.Auth(ctx, b.signer); err != nil {
+			return fmt.Errorf("authenticate to %s: %w", endpoint.URL(), err)
+		}
+	}
+	return nil
+}
+
 func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*RelayBusSubscription, error) {
 	if b == nil || len(b.endpoints) == 0 {
 		return nil, fmt.Errorf("soul factory relay bus is not configured")
@@ -538,13 +555,35 @@ func (e *goNostrRelayEndpoint) Auth(ctx context.Context, signer relayAuthSigner)
 	if signer == nil {
 		return fmt.Errorf("relay auth signer is required")
 	}
+	if err := e.ensureConnected(ctx); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	relay := e.relay
 	e.mu.Unlock()
 	if relay == nil {
 		return fmt.Errorf("relay is not connected")
 	}
-	return relay.Auth(ctx, func(authCtx context.Context, event *nostr.Event) error { return signer.Sign(authCtx, event) })
+	sign := func(authCtx context.Context, event *nostr.Event) error {
+		return signer.Sign(authCtx, event)
+	}
+	challengeDeadline := time.Now().Add(2 * time.Second)
+	for {
+		err := relay.Auth(ctx, sign)
+		if err == nil || !strings.Contains(err.Error(), "no challenge") {
+			return err
+		}
+		if time.Now().After(challengeDeadline) {
+			return err
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (e *goNostrRelayEndpoint) Close() {

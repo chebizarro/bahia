@@ -43,7 +43,7 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 	}
 
 	// Step 2: Check for no-op (hash match + pull policy allows skip).
-	if existing != nil && ContainerDesiredHashMatches(existing, spec) {
+	if existing != nil && strings.EqualFold(strings.TrimSpace(existing.State), "running") && ContainerDesiredHashMatches(existing, spec) {
 		pullPolicy := normalizePullPolicy(req.PullPolicy, spec.PullPolicy)
 		if pullPolicy != "always" {
 			logger.Info("desired hash matches, no-op",

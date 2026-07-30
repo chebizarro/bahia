@@ -619,6 +619,32 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 	}
 }
 
+func TestRegisterServiceContextVMHandlers_RegistersDeployMethod(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"deploy-registration","method":"service/deploy","params":{}}`)
+
+	transport.HandleEvent(context.Background(), event)
+
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected progress acknowledgement and ContextVM response, got %d events", len(publisher.events))
+	}
+	assertContextVMProgressAck(t, publisher.events[0], event)
+	response := contextVMResponse(t, publisher.events[1])
+	if response.Error == nil {
+		t.Fatal("expected missing dependency error")
+	}
+	if response.Error.Message == "method not found" {
+		t.Fatalf("service/deploy was not registered: %+v", response.Error)
+	}
+	if response.Error.Message != "service deployment control plane is not configured" {
+		t.Fatalf("unexpected error: %+v", response.Error)
+	}
+}
+
 func TestContextVMTransport_JSONRPCParseAndMethodErrors(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
@@ -729,7 +755,7 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 				t.Fatalf("expected encrypted ContextVM progress ack plus response, got %d", len(publisher.events))
 			}
 			wrappedAck := publisher.events[0]
-			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(wrappedAck.Tags, "e", outer.ID.Hex())) {
+			if wrappedAck.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedAck.Tags, "p", inner.PubKey.Hex()) || !hasTag(wrappedAck.Tags, "e", outer.ID.Hex()) {
 				t.Fatalf("unexpected wrapper progress ack: kind=%d tags=%#v", wrappedAck.Kind, wrappedAck.Tags)
 			}
 			innerAck := unwrapContextVMResponseEvent(t, wrappedAck, testRequesterKey)
@@ -745,10 +771,10 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 			if err := nostrpool.ValidateInboundEvent(&wrappedResponse, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 				t.Fatalf("response wrapper failed NIP-01 validation: %v", err)
 			}
-			if wrappedResponse.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey.Hex()) || (tc.kind == KindContextVMEphemeralWrap && !hasTag(wrappedResponse.Tags, "e", outer.ID.Hex())) {
+			if wrappedResponse.Kind != nostr.Kind(tc.kind) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey.Hex()) || !hasTag(wrappedResponse.Tags, "e", outer.ID.Hex()) {
 				t.Fatalf("unexpected wrapper response: kind=%d tags=%#v", wrappedResponse.Kind, wrappedResponse.Tags)
 			}
-			if tc.kind == KindContextVMEphemeralWrap && (wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey.Hex() == requesterPubkey) {
+			if wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey.Hex() == requesterPubkey {
 				t.Fatalf("response wrapper pubkey %s must be random", wrappedResponse.PubKey.Hex())
 			}
 			innerResponse := unwrapContextVMResponseEvent(t, wrappedResponse, testRequesterKey)

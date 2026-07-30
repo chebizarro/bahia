@@ -35,6 +35,7 @@ type AdoptionService struct {
 	environments      repository.EnvironmentRepository
 	builds            repository.BuildRepository
 	artifacts         repository.ArtifactRepository
+	deploymentUnits   repository.DeploymentUnitRepository
 	state             repository.EnvironmentServiceStateRepository
 	observations      repository.RuntimeObservationRepository
 	secrets           repository.SecretRepository
@@ -95,6 +96,14 @@ func WithAdoptionOrganizations(repo repository.OrganizationRepository) AdoptionS
 func WithAdoptionRuntimeIdentities(repo repository.AdoptedRuntimeIdentityRepository) AdoptionServiceOption {
 	return func(s *AdoptionService) {
 		s.adoptedIdentities = repo
+	}
+}
+
+// WithAdoptionDeploymentUnits makes imported workloads durable, independently
+// reconcilable ownership boundaries rather than label-only observations.
+func WithAdoptionDeploymentUnits(repo repository.DeploymentUnitRepository) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.deploymentUnits = repo
 	}
 }
 
@@ -469,9 +478,19 @@ func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, 
 		}
 		stagedResult.ArtifactID = &artifact.ID
 
+		var deploymentUnitID *uuid.UUID
+		if repos.DeploymentUnits != nil {
+			unit, err := s.ensureAdoptionDeploymentUnit(ctx, repos.DeploymentUnits, env, target, discovered, svc.Name)
+			if err != nil {
+				return err
+			}
+			deploymentUnitID = &unit.ID
+		}
+
 		state := &domain.EnvironmentServiceState{
 			ServiceID:         svc.ID,
 			EnvironmentID:     env.ID,
+			DeploymentUnitID:  deploymentUnitID,
 			DesiredArtifactID: &artifact.ID,
 			DriftStatus:       domain.DriftStatusUnknown,
 		}
@@ -480,6 +499,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, 
 		}
 
 		obs := observationFromDiscovered(target, svc.ID, env.ID, discovered)
+		obs.DeploymentUnitID = deploymentUnitID
 		if err := registry.RecordObservation(ctx, obs); err != nil {
 			return fmt.Errorf("recording runtime observation: %w", err)
 		}
@@ -623,6 +643,9 @@ func (s *AdoptionService) completeTxRepos(repos repository.TxRepos) repository.T
 	if repos.Artifacts == nil {
 		repos.Artifacts = s.artifacts
 	}
+	if repos.DeploymentUnits == nil {
+		repos.DeploymentUnits = s.deploymentUnits
+	}
 	if repos.State == nil {
 		repos.State = s.state
 	}
@@ -636,6 +659,53 @@ func (s *AdoptionService) completeTxRepos(repos repository.TxRepos) repository.T
 		repos.AdoptedIdentities = s.adoptedIdentities
 	}
 	return repos
+}
+
+func (s *AdoptionService) ensureAdoptionDeploymentUnit(
+	ctx context.Context,
+	units repository.DeploymentUnitRepository,
+	env *domain.Environment,
+	target AdoptionTarget,
+	discovered runtime.DiscoveredContainer,
+	serviceName string,
+) (*domain.DeploymentUnit, error) {
+	if units == nil {
+		return nil, fmt.Errorf("deployment unit repository is required for adoption")
+	}
+	key := normalizeResourceName(serviceName)
+	if key == "" {
+		return nil, fmt.Errorf("deployment unit key is required for adoption")
+	}
+	existing, err := units.GetByEnvironmentKey(ctx, env.ID, key)
+	if err != nil {
+		return nil, fmt.Errorf("loading adoption deployment unit: %w", err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	runtimeType := domain.RuntimeTypeDocker
+	composeDir := ""
+	if isComposeOrigin(discovered) {
+		runtimeType = domain.RuntimeTypeCompose
+		if discovered.Compose != nil {
+			composeDir = strings.TrimSpace(discovered.Compose.WorkingDir)
+		}
+	}
+	unit := &domain.DeploymentUnit{
+		EnvironmentID: env.ID,
+		Key:           key,
+		DisplayName:   serviceName,
+		RuntimeType:   runtimeType,
+		EndpointRef:   strings.TrimSpace(target.EndpointRef),
+		ComposeDir:    composeDir,
+		ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	if err := units.Create(ctx, unit); err != nil {
+		return nil, fmt.Errorf("creating adoption deployment unit: %w", err)
+	}
+	return unit, nil
 }
 
 func (s *AdoptionService) registryForRepos(repos repository.TxRepos) *RegistryService {
@@ -790,7 +860,8 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 	if byName != nil && byIdentity != nil && byName.ID != byIdentity.ID {
 		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
 	}
-	if byName != nil && byIdentity == nil && !sameAdoptedTarget(byName, target, discovered) {
+	if byName != nil && byIdentity == nil && byName.RuntimeConfig != nil &&
+		byName.RuntimeConfig.Adopted != nil && !sameAdoptedTarget(byName, target, discovered) {
 		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
 	}
 

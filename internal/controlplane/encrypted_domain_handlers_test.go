@@ -217,6 +217,31 @@ func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *
 	}
 }
 
+func TestEncryptedDomainHandlers_RegisterContextVMPaymentHistoryAlias(t *testing.T) {
+	paymentRepo := &encryptedPaymentRepo{records: []domain.PaymentRecord{{WorkerPubkey: "worker-a", AmountSats: 21}}}
+	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
+		Payments: service.NewPaymentService(paymentRepo, nil, nil, zap.NewNop()),
+		Logger:   zap.NewNop(),
+	})
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	handlers.Register(transport)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, "payments/history", map[string]any{"worker": "worker-a", "limit": 50}))
+
+	if len(publisher.events) != 2 {
+		t.Fatalf("published events = %d, want progress ack plus terminal response", len(publisher.events))
+	}
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error != nil {
+		t.Fatalf("unexpected payments/history error: %+v", response.Error)
+	}
+	records, ok := response.Result.([]any)
+	if !ok || len(records) != 1 {
+		t.Fatalf("unexpected payments/history result: %#v", response.Result)
+	}
+}
+
 func TestEncryptedDomainHandlers_RegisterContextVMOrgListAlias(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	orgID := uuid.New()

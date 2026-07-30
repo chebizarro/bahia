@@ -1,0 +1,21 @@
+{
+  "feature_id": "NIP46_OPERATOR_SIGNING",
+  "tests": [
+    {
+      "criterion": "AC-1",
+      "coverage": "TestBuildCLIOperatorClientUsesNIP46SignerWithoutIdentityKey; TestResolveNIP46OperatorInputAddsSeparateBunkerRelay"
+    },
+    {
+      "criterion": "AC-2",
+      "coverage": "pkg/client operator tests plus internal/adapters/nostr relay-pool tests"
+    },
+    {
+      "criterion": "AC-3",
+      "coverage": "TestResolveNIP46OperatorInputRequiresDurablePair and constructor validation"
+    },
+    {
+      "criterion": "AC-4",
+      "coverage": "Live CLI adoption-scan probe using Stew's file-backed OpenClaw NIP-46 session"
+    }
+  ]
+}

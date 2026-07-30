@@ -13,6 +13,7 @@ import (
 type relayTopologyCoordinator struct {
 	mu               sync.Mutex
 	controlPlanePool *nostrAdapter.RelayPool
+	responsePool     *nostrAdapter.RelayPool
 	servicePool      *nostrAdapter.RelayPool
 	nostrConfig      config.NostrConfig
 	loomRelays       []string
@@ -21,6 +22,7 @@ type relayTopologyCoordinator struct {
 
 type relayTopologyCoordinatorConfig struct {
 	ControlPlanePool *nostrAdapter.RelayPool
+	ResponsePool     *nostrAdapter.RelayPool
 	ServicePool      *nostrAdapter.RelayPool
 	NostrConfig      config.NostrConfig
 	LoomRelays       []string
@@ -34,6 +36,7 @@ func newRelayTopologyCoordinator(cfg relayTopologyCoordinatorConfig) *relayTopol
 	}
 	return &relayTopologyCoordinator{
 		controlPlanePool: cfg.ControlPlanePool,
+		responsePool:     cfg.ResponsePool,
 		servicePool:      cfg.ServicePool,
 		nostrConfig:      cloneNostrRelayTopologyConfig(cfg.NostrConfig),
 		loomRelays:       cloneAppStrings(cfg.LoomRelays),
@@ -60,6 +63,10 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 	if reconfigureControlPlane && c.controlPlanePool != nil {
 		result := c.controlPlanePool.ReconfigureRelayURLs(controlPlaneRelays)
 		c.logReconfigureResult("control_plane", result)
+	}
+	if reconfigureControlPlane && c.responsePool != nil {
+		result := c.responsePool.ReconfigureRelayURLs(controlPlaneRelays)
+		c.logReconfigureResult("contextvm_response", result)
 	}
 	if reconfigureService && c.servicePool != nil {
 		result := c.servicePool.ReconfigureRelayURLs(serviceRelays)

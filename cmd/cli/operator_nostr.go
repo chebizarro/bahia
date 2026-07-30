@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 
+	canonicalnostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -30,6 +34,50 @@ var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig) (cliOpera
 
 var discoverOperatorRelaysForCLI = func(ctx context.Context, cfg client.OperatorRelayDiscoveryConfig) ([]string, error) {
 	return client.DiscoverOperatorRelays(ctx, cfg)
+}
+
+type cliNIP46Signer struct {
+	client *signet.Client
+	pubkey string
+}
+
+func (s *cliNIP46Signer) GetPublicKey(_ context.Context) (canonicalnostr.PubKey, error) {
+	if s == nil || s.pubkey == "" {
+		return canonicalnostr.PubKey{}, fmt.Errorf("NIP-46 signer public key is not configured")
+	}
+	pubkey, err := canonicalnostr.PubKeyFromHex(s.pubkey)
+	if err != nil {
+		return canonicalnostr.PubKey{}, fmt.Errorf("parse NIP-46 signer public key: %w", err)
+	}
+	return pubkey, nil
+}
+
+func (s *cliNIP46Signer) SignEvent(ctx context.Context, event *canonicalnostr.Event) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("NIP-46 signer is not configured")
+	}
+	return s.client.Sign(ctx, event)
+}
+
+var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (canonicalnostr.Signer, string, func() error, error) {
+	signetClient, err := signet.NewClient(signet.Config{
+		BunkerURI:       bunkerURI,
+		ClientSecretKey: clientKey,
+		RequireReal:     true,
+	}, slog.Default())
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err := signetClient.Connect(ctx); err != nil {
+		_ = signetClient.Close()
+		return nil, "", nil, err
+	}
+	pubkey, err := signetClient.GetPublicKey(ctx)
+	if err != nil {
+		_ = signetClient.Close()
+		return nil, "", nil, err
+	}
+	return &cliNIP46Signer{client: signetClient, pubkey: pubkey}, pubkey, signetClient.Close, nil
 }
 
 func runDeploymentIntentNostr(cmd *cobra.Command, serviceID, envID, artifactID, requestedBy string) (*client.DeploymentCommandResult, error) {
@@ -127,18 +175,112 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	if err != nil {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: err}
 	}
-	if strings.TrimSpace(key) == "" {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("provide --nostr-key-file, BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first operator requests")}
+	bunkerURI, clientKey, err := resolveNIP46OperatorInput(cmd)
+	if err != nil {
+		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: err}
+	}
+	if strings.TrimSpace(key) != "" && bunkerURI != "" {
+		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("configure either a NIP-46 bunker signer or a local private key, not both")}
+	}
+	if strings.TrimSpace(key) == "" && bunkerURI == "" {
+		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("provide --nostr-bunker-file with --nostr-client-key-file (or BAHIA_NOSTR_BUNKER_FILE/BAHIA_NOSTR_BUNKER_URI with BAHIA_NOSTR_CLIENT_KEY_FILE/BAHIA_NOSTR_CLIENT_PRIVATE_KEY); local-key inputs remain compatibility-only")}
 	}
 	relays, err := resolveOperatorRelays(cmd)
 	if err != nil {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator relays", RequestAccepted: false, Cause: err}
 	}
-	op, err := newCLIOperatorClient(client.OperatorControlPlaneConfig{Relays: relays, PrivateKey: key, ServicePubkey: resolveOperatorServicePubkey(cmd)})
+	cfg := client.OperatorControlPlaneConfig{Relays: relays, ServicePubkey: resolveOperatorServicePubkey(cmd)}
+	if bunkerURI != "" {
+		signer, pubkey, closeSigner, signerErr := newCLINIP46Signer(cmd.Context(), bunkerURI, clientKey)
+		if signerErr != nil {
+			return nil, &client.ControlPlaneRequestError{Phase: "connect operator NIP-46 signer", RequestAccepted: false, Cause: signerErr}
+		}
+		cfg.Signer = signer
+		cfg.Pubkey = pubkey
+		cfg.CloseSigner = closeSigner
+	} else {
+		cfg.PrivateKey = key
+	}
+	op, err := newCLIOperatorClient(cfg)
 	if err != nil {
+		if cfg.CloseSigner != nil {
+			_ = cfg.CloseSigner()
+		}
 		return nil, &client.ControlPlaneRequestError{Phase: "configure operator Nostr client", RequestAccepted: false, Cause: err}
 	}
 	return op, nil
+}
+
+func resolveNIP46OperatorInput(cmd *cobra.Command) (string, string, error) {
+	bunkerURI, err := resolveSecretInput(cmd, "nostr-bunker-file", nostrBunkerFile, "BAHIA_NOSTR_BUNKER_FILE", "BAHIA_NOSTR_BUNKER_URI", "NIP-46 bunker URI")
+	if err != nil {
+		return "", "", err
+	}
+	clientKey, err := resolveSecretInput(cmd, "nostr-client-key-file", nostrClientKeyFile, "BAHIA_NOSTR_CLIENT_KEY_FILE", "BAHIA_NOSTR_CLIENT_PRIVATE_KEY", "NIP-46 client key")
+	if err != nil {
+		return "", "", err
+	}
+	if (bunkerURI == "") != (clientKey == "") {
+		return "", "", fmt.Errorf("NIP-46 operator signing requires both a bunker URI and a persistent client key")
+	}
+	if bunkerURI != "" {
+		bunkerURI, err = addBunkerRelays(bunkerURI, resolveBunkerRelays(cmd))
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return bunkerURI, clientKey, nil
+}
+
+func resolveBunkerRelays(cmd *cobra.Command) []string {
+	if cmd != nil && cmd.Root() != nil {
+		flags := cmd.Root().PersistentFlags()
+		if flags != nil && flags.Changed("nostr-bunker-relay") {
+			return normalizeRelayList(nostrBunkerRelays)
+		}
+	}
+	return normalizeRelayList(strings.Split(os.Getenv("BAHIA_NOSTR_BUNKER_RELAYS"), ","))
+}
+
+func addBunkerRelays(bunkerURI string, relays []string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(bunkerURI))
+	if err != nil || parsed.Scheme != "bunker" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid NIP-46 bunker URI")
+	}
+	query := parsed.Query()
+	for _, relay := range relays {
+		query.Add("relay", relay)
+	}
+	if len(query["relay"]) == 0 {
+		return "", fmt.Errorf("NIP-46 bunker URI has no relay; provide --nostr-bunker-relay or BAHIA_NOSTR_BUNKER_RELAYS")
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func resolveSecretInput(cmd *cobra.Command, flagName, flagValue, fileEnv, valueEnv, label string) (string, error) {
+	if cmd != nil && cmd.Root() != nil {
+		flags := cmd.Root().PersistentFlags()
+		if flags != nil && flags.Changed(flagName) {
+			path := strings.TrimSpace(flagValue)
+			if path == "" {
+				return "", fmt.Errorf("--%s requires a file path or - for stdin", flagName)
+			}
+			return readNostrPrivateKeyInput(cmd, path)
+		}
+	}
+	filePath := strings.TrimSpace(os.Getenv(fileEnv))
+	value := strings.TrimSpace(os.Getenv(valueEnv))
+	if filePath != "" && value != "" {
+		return "", fmt.Errorf("specify only one of %s or %s", fileEnv, valueEnv)
+	}
+	if filePath != "" {
+		return readNostrPrivateKeyInput(cmd, filePath)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("%s environment input must be a single line", label)
+	}
+	return value, nil
 }
 
 func resolveOperatorRelays(cmd *cobra.Command) ([]string, error) {

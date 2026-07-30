@@ -133,6 +133,8 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	controlPlanePool.Connect(ctx)
+	contextVMResponsePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	contextVMResponsePool.Connect(ctx)
 
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
 	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
@@ -342,6 +344,7 @@ func New(cfg *config.Config) (*App, error) {
 			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
 			service.WithAdoptionOrganizations(orgRepo),
 			service.WithAdoptionRuntimeIdentities(repository.NewPgAdoptedRuntimeIdentityRepository(pool)),
+			service.WithAdoptionDeploymentUnits(deploymentUnitRepo),
 			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
 		)
 	}
@@ -349,6 +352,7 @@ func New(cfg *config.Config) (*App, error) {
 	if cfg.DirectRuntime.Enabled {
 		var runtimeApplyLockOpts []service.RuntimeLifecycleOption
 		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor))
+		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleDeploymentUnits(deploymentUnitRepo))
 		if dbAvailable {
 			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(service.NewRuntimeApplyLock(pool, logger)))
 		}
@@ -378,6 +382,9 @@ func New(cfg *config.Config) (*App, error) {
 		ServiceName:  cfg.Telemetry.ServiceName,
 		OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
 	}, logger)
+	if dbAvailable {
+		telemetryProvider.SetFleetHealthSources(workerRepo, stateRepo)
+	}
 
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
@@ -1103,6 +1110,7 @@ func New(cfg *config.Config) (*App, error) {
 	if len(controlPlaneRelays) > 0 && servicePubkey != "" {
 		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
 			ControlPlanePool: controlPlanePool,
+			ResponsePool:     contextVMResponsePool,
 			ServicePool:      relayPool,
 			NostrConfig:      cfg.Nostr,
 			LoomRelays:       cfg.Loom.Relays,
@@ -1120,7 +1128,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
-		responder := controlplane.NewEncryptedResponder(controlPlanePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
+		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
 		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
 			Payments:              paymentSvc,
@@ -1169,6 +1177,12 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:      logger,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
+		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
+			Registry:         registry,
+			RuntimeLifecycle: runtimeLifecycleSvc,
+			Policy:           policySvc,
+			Logger:           logger,
+		})
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
 			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner)
@@ -1176,7 +1190,9 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner)
 		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
-		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
+		// ContextVM carries the canonical mutation plane, so it must remain
+		// available in the minimum production control-plane tier.
+		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier1))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
 	}
 
@@ -1319,7 +1335,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:          telemetryProvider,
 		Background:         bgManager,
 		toolCoordinator:    toolCoordinator,
-		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, fipsRelayPool},
+		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPool, fipsRelayPool},
 		ModePolicy:         policy,
 		Health:             healthProvider,
 		RelayFirstRegistry: relayFirstRegistry,
@@ -2230,7 +2246,7 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 			return []string{cfg.Sidecar.PublicURL}
 		}
 	}
-	return append([]string(nil), cfg.Relays...)
+	return cfg.ContextVMRelayPolicyRelays()
 }
 
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {

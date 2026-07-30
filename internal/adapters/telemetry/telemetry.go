@@ -37,14 +37,17 @@ type Config struct {
 
 // Provider manages telemetry lifecycle.
 type Provider struct {
-	config         Config
-	logger         *zap.Logger
-	metrics        *Metrics
-	tracerProvider *sdktrace.TracerProvider
-	meterProvider  *sdkmetric.MeterProvider
-	setupErr       error
-	shutdownOnce   sync.Once
-	shutdownErr    error
+	config             Config
+	logger             *zap.Logger
+	metrics            *Metrics
+	fleetHealthWorkers fleetHealthWorkerSource
+	fleetHealthStates  fleetHealthStateSource
+	now                func() time.Time
+	tracerProvider     *sdktrace.TracerProvider
+	meterProvider      *sdkmetric.MeterProvider
+	setupErr           error
+	shutdownOnce       sync.Once
+	shutdownErr        error
 }
 
 // Metrics collects application-level counters and gauges.
@@ -61,9 +64,9 @@ type Metrics struct {
 	DriftDetectedTotal int64
 
 	// Fleet hygiene metrics (fp-jan / Swabbie)
-	HygieneScansTotal           int64
-	HygieneCandidatesTotal      map[string]int64 // key: class
-	HygieneActionsTotal         map[string]int64 // key: method:status
+	HygieneScansTotal            int64
+	HygieneCandidatesTotal       map[string]int64 // key: class
+	HygieneActionsTotal          map[string]int64 // key: method:status
 	HygienePressureBreachesTotal int64
 
 	// Adoption/direct-runtime operational metrics
@@ -85,8 +88,11 @@ type Metrics struct {
 	ReconcileTotal         int64
 
 	// Nostr metrics
-	NostrEventsPublished map[string]int64 // key: kind
-	NostrEventsReceived  map[string]int64
+	NostrEventsPublished    map[string]int64 // key: kind
+	NostrEventsReceived     map[string]int64
+	Audit4903AnomaliesTotal int64
+	AuthorizationRejections map[string]int64 // key: bounded reason
+	TierRejections          map[string]int64 // key: requested tier
 
 	// Nostr protocol metrics (NIP-01 frames)
 	NostrEOSELatencies    []float64        // EOSE latency in seconds
@@ -116,24 +122,26 @@ type Metrics struct {
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		HTTPRequestsTotal:     make(map[string]int64),
-		DeploymentsTotal:      make(map[string]int64),
-		AdoptionScansTotal:    make(map[string]int64),
-		AdoptionImportsTotal:  make(map[string]int64),
-		RuntimeActionsTotal:   make(map[string]int64),
-		NostrEventsPublished:  make(map[string]int64),
-		NostrEventsReceived:   make(map[string]int64),
-		NostrPublishOK:        make(map[string]int64),
-		NostrPublishFailed:    make(map[string]int64),
-		NostrReconnects:       make(map[string]int64),
-		NostrRelayHealthy:     make(map[string]bool),
-		NostrRelayDegraded:    make(map[string]bool),
-		NostrRelaySuccessRate: make(map[string]float64),
-		LoomJobsTotal:         make(map[string]int64),
-		CashuPaymentsTotal:    make(map[string]int64),
-		CashuWalletBalance:    make(map[string]int64),
-		HygieneCandidatesTotal: make(map[string]int64),
-		HygieneActionsTotal:    make(map[string]int64),
+		HTTPRequestsTotal:       make(map[string]int64),
+		DeploymentsTotal:        make(map[string]int64),
+		AdoptionScansTotal:      make(map[string]int64),
+		AdoptionImportsTotal:    make(map[string]int64),
+		RuntimeActionsTotal:     make(map[string]int64),
+		NostrEventsPublished:    make(map[string]int64),
+		NostrEventsReceived:     make(map[string]int64),
+		AuthorizationRejections: make(map[string]int64),
+		TierRejections:          make(map[string]int64),
+		NostrPublishOK:          make(map[string]int64),
+		NostrPublishFailed:      make(map[string]int64),
+		NostrReconnects:         make(map[string]int64),
+		NostrRelayHealthy:       make(map[string]bool),
+		NostrRelayDegraded:      make(map[string]bool),
+		NostrRelaySuccessRate:   make(map[string]float64),
+		LoomJobsTotal:           make(map[string]int64),
+		CashuPaymentsTotal:      make(map[string]int64),
+		CashuWalletBalance:      make(map[string]int64),
+		HygieneCandidatesTotal:  make(map[string]int64),
+		HygieneActionsTotal:     make(map[string]int64),
 	}
 }
 
@@ -147,6 +155,7 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 		config:  cfg,
 		logger:  logger,
 		metrics: NewMetrics(),
+		now:     time.Now,
 	}
 
 	if !cfg.Enabled {
@@ -461,6 +470,36 @@ func (m *Metrics) RecordNostrReceived(kind string) {
 	m.NostrEventsReceived[kind]++
 }
 
+// RecordAudit4903Anomaly records a rejected or contradictory audit event.
+func (m *Metrics) RecordAudit4903Anomaly() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Audit4903AnomaliesTotal++
+}
+
+// RecordAuthorizationRejection records a rejection using a bounded reason.
+func (m *Metrics) RecordAuthorizationRejection(reason string) {
+	switch reason {
+	case "policy", "identity", "replay", "signature":
+	default:
+		reason = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.AuthorizationRejections[reason]++
+}
+
+// RecordTierRejection records a request rejected by Bahia's active tier.
+func (m *Metrics) RecordTierRejection(requestedTier int) {
+	tier := fmt.Sprintf("%d", requestedTier)
+	if requestedTier < 0 || requestedTier > 3 {
+		tier = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.TierRejections[tier]++
+}
+
 // RecordNostrEOSE records the latency from subscription start to EOSE receipt.
 func (m *Metrics) RecordNostrEOSE(latency time.Duration) {
 	m.mu.Lock()
@@ -575,6 +614,7 @@ func (m *Metrics) SetCashuWalletBalance(mintURL string, balance int64) {
 // MetricsHandler returns an HTTP handler that serves Prometheus-compatible metrics.
 func (p *Provider) MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		fleetHealth := p.fleetHealthSnapshot(r.Context(), p.now().UTC())
 		m := p.metrics
 		m.mu.RLock()
 		defer m.mu.RUnlock()
@@ -732,6 +772,19 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		for kind, count := range m.NostrEventsReceived {
 			fmt.Fprintf(w, "bahia_nostr_events_received_total{kind=%q} %d\n", kind, count)
 		}
+		fmt.Fprintln(w, "# HELP bahia_audit_4903_anomalies_total Invalid or contradictory kind-4903 audit events")
+		fmt.Fprintln(w, "# TYPE bahia_audit_4903_anomalies_total counter")
+		fmt.Fprintf(w, "bahia_audit_4903_anomalies_total %d\n", m.Audit4903AnomaliesTotal)
+		fmt.Fprintln(w, "# HELP bahia_authorization_rejections_total Authorization rejections by bounded reason")
+		fmt.Fprintln(w, "# TYPE bahia_authorization_rejections_total counter")
+		for _, reason := range []string{"policy", "identity", "replay", "signature", "other"} {
+			fmt.Fprintf(w, "bahia_authorization_rejections_total{reason=%q} %d\n", reason, m.AuthorizationRejections[reason])
+		}
+		fmt.Fprintln(w, "# HELP bahia_tier_rejections_total Requests rejected because Bahia's active tier was insufficient")
+		fmt.Fprintln(w, "# TYPE bahia_tier_rejections_total counter")
+		for _, tier := range []string{"0", "1", "2", "3", "other"} {
+			fmt.Fprintf(w, "bahia_tier_rejections_total{tier=%q} %d\n", tier, m.TierRejections[tier])
+		}
 
 		// Nostr protocol metrics (EOSE, OK, reconnects)
 		if len(m.NostrEOSELatencies) > 0 {
@@ -852,6 +905,7 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		for status, count := range m.LoomJobsTotal {
 			fmt.Fprintf(w, "bahia_loom_jobs_total{status=%q} %d\n", status, count)
 		}
+		renderFleetHealthMetrics(w, fleetHealth)
 
 		// Cashu payment metrics
 		fmt.Fprintln(w, "# HELP bahia_cashu_payments_total Total Cashu payments by status")
@@ -870,6 +924,54 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			fmt.Fprintf(w, "bahia_cashu_wallet_balance_sats{mint=%q} %d\n", mint, balance)
 		}
 	}
+}
+
+func renderFleetHealthMetrics(w http.ResponseWriter, snapshot FleetHealthSnapshot) {
+	fmt.Fprintln(w, "# HELP bahia_worker_capacity_class_workers Workers by placement capacity class")
+	fmt.Fprintln(w, "# TYPE bahia_worker_capacity_class_workers gauge")
+	for _, class := range []string{"open", "reduced", "cleanup_only", "blocked"} {
+		fmt.Fprintf(w, "bahia_worker_capacity_class_workers{class=%q} %d\n", class, snapshot.WorkerCapacity[class])
+	}
+	fmt.Fprintln(w, "# HELP bahia_worker_telemetry_freshness_workers Workers by telemetry freshness")
+	fmt.Fprintln(w, "# TYPE bahia_worker_telemetry_freshness_workers gauge")
+	for _, state := range []string{"fresh", "stale", "absent"} {
+		fmt.Fprintf(w, "bahia_worker_telemetry_freshness_workers{state=%q} %d\n", state, snapshot.TelemetryFreshness[state])
+	}
+	fmt.Fprintln(w, "# HELP bahia_worker_heartbeat_lag_seconds Seconds since each known worker heartbeat")
+	fmt.Fprintln(w, "# TYPE bahia_worker_heartbeat_lag_seconds gauge")
+	for _, worker := range sortedFloatKeys(snapshot.HeartbeatLagSeconds) {
+		fmt.Fprintf(w, "bahia_worker_heartbeat_lag_seconds{worker=%q} %.0f\n", worker, snapshot.HeartbeatLagSeconds[worker])
+	}
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_drift_states Service states by drift status")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_drift_states gauge")
+	for _, status := range []string{"in_sync", "drifted", "unknown", "deploying", "remediation_needed"} {
+		fmt.Fprintf(w, "bahia_fleet_health_drift_states{status=%q} %d\n", status, snapshot.DriftStates[status])
+	}
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_drift_age_seconds_max Age of the oldest drifted service state")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_drift_age_seconds_max gauge")
+	fmt.Fprintf(w, "bahia_fleet_health_drift_age_seconds_max %.0f\n", snapshot.MaxDriftAgeSeconds)
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_drift_stuck Service states whose drift is stuck")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_drift_stuck gauge")
+	fmt.Fprintf(w, "bahia_fleet_health_drift_stuck %d\n", snapshot.StuckDriftStates)
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_services Services by derived health")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_services gauge")
+	for _, health := range []string{"healthy", "degraded", "unknown"} {
+		fmt.Fprintf(w, "bahia_fleet_health_services{health=%q} %d\n", health, snapshot.ServiceHealth[health])
+	}
+	fmt.Fprintln(w, "# HELP bahia_worker_pressure_recommendations Workers by recommended pressure action")
+	fmt.Fprintln(w, "# TYPE bahia_worker_pressure_recommendations gauge")
+	for _, action := range []string{"none", "cleanup_recommended", "operator_intervention"} {
+		fmt.Fprintf(w, "bahia_worker_pressure_recommendations{action=%q} %d\n", action, snapshot.PressureActions[action])
+	}
+}
+
+func sortedFloatKeys(values map[string]float64) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // calculatePercentiles returns p50, p90, and p99 for a slice of float64 values.

@@ -640,12 +640,13 @@ func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context,
 }
 
 func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, outer, request *nostr.Event, payload any) (*nostr.Event, error) {
-	if outer == nil || outer.Kind != KindContextVMEphemeralWrap {
-		wrapped, _, err := cascontextvm.Wrap(ctx, t.responder.signer, request.PubKey.Hex(), payload)
-		return wrapped, err
+	if outer == nil {
+		return nil, fmt.Errorf("ContextVM outer request is required")
 	}
-	// cascadia-go v0.7.0 Wrap/Unwrap covers stored NIP-59 gift-wrap (1059).
-	// Bahia keeps this local only for its ephemeral 21059 response path.
+	wrapperKind := KindContextVMGiftWrap
+	if outer.Kind == KindContextVMEphemeralWrap {
+		wrapperKind = KindContextVMEphemeralWrap
+	}
 	content, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ContextVM inner response: %w", err)
@@ -668,7 +669,7 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, o
 	if err != nil {
 		return nil, fmt.Errorf("encrypt ContextVM response: %w", err)
 	}
-	wrapped := &nostr.Event{Kind: nostr.Kind(KindContextVMEphemeralWrap), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, outer.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}}, Content: ciphertext}
+	wrapped := &nostr.Event{Kind: nostr.Kind(wrapperKind), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, outer.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}}, Content: ciphertext}
 	if err := wrapped.Sign(wrapperPrivateKey); err != nil {
 		return nil, fmt.Errorf("sign ContextVM gift wrap response: %w", err)
 	}

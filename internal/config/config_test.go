@@ -762,6 +762,11 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
     - "wss://private.example"
   nip05_relays:
     - "wss://identity.example"
+  nip29_groups:
+    - relay: " wss://groups.example/ "
+      id: " fleet-dev "
+    - relay: "wss://groups.example"
+      id: "fleet-dev"
   authorized_pubkeys:
     - "` + authorized + `"
   soul_factory_pubkey: "` + controller + `"
@@ -796,6 +801,9 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	}
 	if got := cfg.SoulFactory.NIP05Relays; len(got) != 1 || got[0] != "wss://identity.example" {
 		t.Fatalf("SoulFactory NIP-05 relays = %v", got)
+	}
+	if got := cfg.SoulFactory.NIP29Groups; len(got) != 1 || got[0].Relay != "wss://groups.example" || got[0].ID != "fleet-dev" {
+		t.Fatalf("SoulFactory NIP-29 groups = %#v", got)
 	}
 	if cfg.SoulFactory.SoulFactoryPubkey != controller {
 		t.Fatalf("SoulFactory pubkey = %q", cfg.SoulFactory.SoulFactoryPubkey)

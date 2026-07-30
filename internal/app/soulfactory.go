@@ -134,6 +134,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		},
 		AgentMemory: agentmemory.Config{},
 		NIP05Relays: cfg.SoulFactory.NIP05Relays,
+		NIP29Groups: soulFactoryNIP29Groups(cfg.SoulFactory.NIP29Groups),
 		Workspace: soulfactory.WorkspaceConfig{
 			GiteaURL:              sf.WorkspaceGiteaURL,
 			TemplateDir:           sf.WorkspaceTemplateDir,
@@ -160,6 +161,14 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		runner:  &soulFactoryRunner{reactor: reactor},
 		close:   closeSigner,
 	}, nil
+}
+
+func soulFactoryNIP29Groups(groups []config.NIP29Group) []soulfactory.NIP29Group {
+	out := make([]soulfactory.NIP29Group, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, soulfactory.NIP29Group{Relay: group.Relay, ID: group.ID})
+	}
+	return out
 }
 
 func resolveSoulFactoryControllerPubkey(ctx context.Context, configured string, signer soulFactorySignerClient) (string, error) {

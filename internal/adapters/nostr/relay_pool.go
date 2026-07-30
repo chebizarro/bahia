@@ -27,6 +27,7 @@ type RelayPool struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	privateKey     string // hex-encoded private key for NIP-42 AUTH (optional)
+	authSigner     nostr.Signer
 }
 
 type managedRelay struct {
@@ -45,6 +46,12 @@ type RelayPoolOption func(*RelayPool)
 // to respond to auth-required errors detected via PublishResult.IsAuthRequired().
 func WithPrivateKey(privateKeyHex string) RelayPoolOption {
 	return func(p *RelayPool) { p.privateKey = privateKeyHex }
+}
+
+// WithAuthSigner sets a signer for NIP-42 AUTH without requiring local
+// identity key material. It is intended for remote signers such as NIP-46.
+func WithAuthSigner(signer nostr.Signer) RelayPoolOption {
+	return func(p *RelayPool) { p.authSigner = signer }
 }
 
 // RelayPoolReconfigureResult describes an in-place relay topology update.
@@ -1185,8 +1192,8 @@ func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOptions {
 }
 
 func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *managedRelay) error {
-	if p.privateKey == "" {
-		return fmt.Errorf("no private key configured for NIP-42 AUTH")
+	if p.privateKey == "" && p.authSigner == nil {
+		return fmt.Errorf("no signer configured for NIP-42 AUTH")
 	}
 	if mr == nil || mr.relay == nil {
 		return fmt.Errorf("relay not connected: %s", mr.url)
@@ -1194,6 +1201,9 @@ func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *mana
 
 	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", mr.url))
 	if err := mr.relay.Auth(ctx, func(_ context.Context, event *nostr.Event) error {
+		if p.authSigner != nil {
+			return p.authSigner.SignEvent(ctx, event)
+		}
 		return signEventWithPrivateKeyHex(event, p.privateKey)
 	}); err != nil {
 		p.logger.Error("NIP-42 AUTH failed",
@@ -1210,8 +1220,8 @@ func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *mana
 // Call this after receiving an auth-required error (PublishResult.IsAuthRequired()).
 // Returns an error if no private key is configured or auth fails.
 func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) error {
-	if p.privateKey == "" {
-		return fmt.Errorf("no private key configured for NIP-42 AUTH")
+	if p.privateKey == "" && p.authSigner == nil {
+		return fmt.Errorf("no signer configured for NIP-42 AUTH")
 	}
 
 	normalizedURL := nostr.NormalizeURL(relayURL)

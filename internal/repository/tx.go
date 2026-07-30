@@ -20,6 +20,7 @@ type TxRepos struct {
 	Environments      EnvironmentRepository
 	Builds            BuildRepository
 	Artifacts         ArtifactRepository
+	DeploymentUnits   DeploymentUnitRepository
 	State             EnvironmentServiceStateRepository
 	Observations      RuntimeObservationRepository
 	Secrets           SecretRepository
@@ -64,6 +65,7 @@ func (e *PgTxExecutor) WithinTx(ctx context.Context, fn func(repos TxRepos) erro
 		Environments:      newPgEnvironmentRepositoryWithDB(tx),
 		Builds:            newPgBuildRepositoryWithDB(tx),
 		Artifacts:         newPgArtifactRepositoryWithDB(tx),
+		DeploymentUnits:   newPgDeploymentUnitRepositoryWithDB(tx),
 		State:             newPgEnvironmentServiceStateRepositoryWithDB(tx),
 		Observations:      newPgRuntimeObservationRepositoryWithDB(tx),
 		Secrets:           newPgSecretRepositoryWithDB(tx),

@@ -26,6 +26,9 @@ var (
 	outputFormat                  string
 	apiClient                     *client.Client
 	nostrKeyFile                  string
+	nostrBunkerFile               string
+	nostrBunkerRelays             []string
+	nostrClientKeyFile            string
 	operatorRelays                []string
 	operatorBootstrapRelays       []string
 	operatorServicePubkey         string
@@ -56,6 +59,9 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&serverURL, "server", getEnvOrDefault("BAHIA_SERVER", "http://localhost:8080"), "Bahia server URL")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
 	rootCmd.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "Read the Nostr private key from this file (use - for stdin; env BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY)")
+	rootCmd.PersistentFlags().StringVar(&nostrBunkerFile, "nostr-bunker-file", "", "Read the NIP-46 bunker URI from this file (env BAHIA_NOSTR_BUNKER_FILE or BAHIA_NOSTR_BUNKER_URI)")
+	rootCmd.PersistentFlags().StringArrayVar(&nostrBunkerRelays, "nostr-bunker-relay", nil, "NIP-46 signer relay when it is stored separately from the bunker URI (repeatable; env BAHIA_NOSTR_BUNKER_RELAYS)")
+	rootCmd.PersistentFlags().StringVar(&nostrClientKeyFile, "nostr-client-key-file", "", "Read the persistent NIP-46 client key from this file (env BAHIA_NOSTR_CLIENT_KEY_FILE or BAHIA_NOSTR_CLIENT_PRIVATE_KEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")

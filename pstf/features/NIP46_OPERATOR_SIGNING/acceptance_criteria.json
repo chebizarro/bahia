@@ -1,0 +1,21 @@
+{
+  "feature_id": "NIP46_OPERATOR_SIGNING",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "The CLI constructs an operator client from a bunker URI, separate signer relay, and persistent NIP-46 client key without local operator identity key material."
+    },
+    {
+      "id": "AC-2",
+      "statement": "The injected remote signer signs ContextVM events and NIP-42 AUTH challenges."
+    },
+    {
+      "id": "AC-3",
+      "statement": "Partial, ambiguous, or mixed signer configuration fails before relay publication."
+    },
+    {
+      "id": "AC-4",
+      "statement": "The deployed Stew NIP-46 session completes bunker connect, ping, public-key resolution, and operator event signing."
+    }
+  ]
+}

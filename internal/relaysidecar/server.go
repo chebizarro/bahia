@@ -70,8 +70,19 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.Count = func(ctx context.Context, filter nostr.Filter) (uint32, error) {
 		return store.Count(ctx, filter), nil
 	}
+	// Khatru normally broadcasts to every matching subscriber synchronously
+	// before it writes the publisher's OK. A slow or stale subscriber can
+	// therefore stall unrelated publishers. Persist first, let the handler
+	// acknowledge, and fan out independently.
+	relay.PreventBroadcast = func(_ *khatru.WebSocket, _ nostr.Filter, _ nostr.Event) bool {
+		return true
+	}
 	relay.OnEventSaved = func(ctx context.Context, event nostr.Event) {
 		logger.Debug("sidecar event accepted", zap.String("event_id", event.ID.Hex()), zap.Uint16("kind", uint16(event.Kind)))
+		go relay.ForceBroadcastEvent(event)
+	}
+	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
+		go relay.ForceBroadcastEvent(event)
 	}
 
 	return &Server{

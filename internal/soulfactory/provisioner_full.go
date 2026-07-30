@@ -29,17 +29,19 @@ type agentMemoryClient interface {
 }
 
 type FullProvisioner struct {
-	reactor          *Reactor
-	avatarGenerator  *llm.AvatarGenerator
-	blossomClient    *blossom.Client
-	qdrantClient     *qdrant.Client
-	agentMemory      agentMemoryClient
-	workspaceManager workspaceInitializer
-	nip05Manager     *NIP05Manager
-	nip05Relays      []string
-	bahiaIntegration *BahiaIntegration
-	runtimeAdapters  map[domain.RuntimeTarget]RuntimeAdapter
-	lookupSoul       func(context.Context, string) (*domain.AgentSoul, error)
+	reactor            *Reactor
+	avatarGenerator    *llm.AvatarGenerator
+	blossomClient      *blossom.Client
+	qdrantClient       *qdrant.Client
+	agentMemory        agentMemoryClient
+	workspaceManager   workspaceInitializer
+	nip05Manager       *NIP05Manager
+	nip05Relays        []string
+	bahiaIntegration   *BahiaIntegration
+	nip29Membership    nip29MembershipAssigner
+	nip29MembershipErr error
+	runtimeAdapters    map[domain.RuntimeTarget]RuntimeAdapter
+	lookupSoul         func(context.Context, string) (*domain.AgentSoul, error)
 }
 
 // FullProvisionerConfig holds all adapter configurations.
@@ -52,6 +54,7 @@ type FullProvisionerConfig struct {
 	NIP05       NIP05Config
 	// NIP05Relays are advertised for provisioned identities. They must be explicitly configured when NIP-05 is enabled.
 	NIP05Relays     []string
+	NIP29Groups     []NIP29Group
 	Bahia           BahiaIntegrationConfig
 	RuntimeAdapters map[domain.RuntimeTarget]RuntimeAdapter
 }
@@ -60,14 +63,20 @@ type FullProvisionerConfig struct {
 // The bahiaIntegration parameter is optional - pass nil if bahia integration is not needed.
 func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaIntegration *BahiaIntegration) *FullProvisioner {
 	logger := reactor.logger
+	nip29Membership, err := newNIP29Membership(config.NIP29Groups, reactor.signer)
+	if err != nil {
+		logger.Error("NIP-29 membership configuration is invalid", "error", err)
+	}
 	p := &FullProvisioner{
-		reactor:          reactor,
-		qdrantClient:     qdrant.NewClient(config.Qdrant, logger),
-		agentMemory:      agentmemory.NewClient(config.AgentMemory, logger),
-		bahiaIntegration: bahiaIntegration,
-		nip05Relays:      append([]string(nil), config.NIP05Relays...),
-		runtimeAdapters:  cloneRuntimeAdapters(config.RuntimeAdapters),
-		lookupSoul:       reactor.GetSoul,
+		reactor:            reactor,
+		qdrantClient:       qdrant.NewClient(config.Qdrant, logger),
+		agentMemory:        agentmemory.NewClient(config.AgentMemory, logger),
+		bahiaIntegration:   bahiaIntegration,
+		nip29Membership:    nip29Membership,
+		nip29MembershipErr: err,
+		nip05Relays:        append([]string(nil), config.NIP05Relays...),
+		runtimeAdapters:    cloneRuntimeAdapters(config.RuntimeAdapters),
+		lookupSoul:         reactor.GetSoul,
 	}
 	if len(config.Blossom.Servers) > 0 {
 		p.blossomClient = blossom.NewClient(config.Blossom, logger)
@@ -209,8 +218,21 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	soul.NostrNpub = npub
 	soul.BunkerURI = bunkerURI
 
+	var assignedGroups []string
+	if p.nip29MembershipErr != nil {
+		p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, p.nip29MembershipErr, time.Since(stepStart))
+		return nil, fmt.Errorf("configure NIP-29 groups: %w", p.nip29MembershipErr)
+	}
+	if p.nip29Membership != nil {
+		assignedGroups, err = p.nip29Membership.Assign(ctx, soul.NostrPubkey)
+		if err != nil {
+			p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("assign NIP-29 groups: %w", err)
+		}
+	}
 	p.recordStep(run, domain.StepSignet, domain.StepStatusComplete, map[string]interface{}{
-		"npub": npub,
+		"npub":         npub,
+		"nip29_groups": assignedGroups,
 	}, nil, time.Since(stepStart))
 
 	// Step 3: Generate and upload avatar
