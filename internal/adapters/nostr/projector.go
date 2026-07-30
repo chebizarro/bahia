@@ -3327,7 +3327,6 @@ func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
 		{"schema", "bahia.audit.v1"},
 		{"legacy_kind", strconv.Itoa(legacyKind)},
 		{"protected", "true"},
-		{"-"},
 		{"t", string(e.Type)},
 		{"event_type", string(e.Type)},
 	}
