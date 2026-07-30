@@ -10,6 +10,7 @@ export const CONTEXTVM_RELAY_SET_DTAG = 'bahia-contextvm-v1';
 export const SERVICE_RELAY_SET_DTAG = 'bahia-service-v1';
 const DISCOVERY_CACHE_KEY = 'bahia_system_discovery_cache_v1';
 const DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000;
+const DISCOVERY_EOSE_DRAIN_MS = 1500;
 
 export const discoveryState = $state({
   seed: null,
@@ -248,6 +249,20 @@ export async function discoverSystemInfo({ force = false } = {}) {
 
       const collectedEvents = [];
       const normalized = await new Promise((resolve, reject) => {
+        const eoseRelays = new Set();
+        let finalizeTimer = null;
+        const scheduleFinalize = () => {
+          if (eoseRelays.size < relays.length) return;
+          if (finalizeTimer) clearTimeout(finalizeTimer);
+          finalizeTimer = setTimeout(() => {
+            try {
+              resolve(normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys));
+            } catch (err) {
+              reject(err);
+            }
+          }, DISCOVERY_EOSE_DRAIN_MS);
+        };
+
         discoveryUnsubscribe = bootstrapClient.subscribe([
           {
             kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
@@ -257,15 +272,14 @@ export async function discoverSystemInfo({ force = false } = {}) {
         ], {
           onEvent: (event) => {
             collectedEvents.push(event);
+            if (finalizeTimer) scheduleFinalize();
           },
-          onEose: () => {
-            try {
-              resolve(normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys));
-            } catch (err) {
-              reject(err);
-            }
+          onEose: (relay) => {
+            eoseRelays.add(normalizeRelayUrl(relay));
+            scheduleFinalize();
           },
           onClosed: (reason) => {
+            if (finalizeTimer) clearTimeout(finalizeTimer);
             reject(new Error(`Discovery subscription closed: ${reason}`));
           }
         });
