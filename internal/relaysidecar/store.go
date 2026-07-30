@@ -18,7 +18,8 @@ import (
 // disconnect and replay at any time, so accepted events must survive relay
 // process and container restarts.
 type sqliteStore struct {
-	db *sql.DB
+	db     *sql.DB
+	readDB *sql.DB
 }
 
 func newSQLiteStore(dataDir string) (*sqliteStore, error) {
@@ -28,14 +29,22 @@ func newSQLiteStore(dataDir string) (*sqliteStore, error) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create relay sidecar data directory: %w", err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "events.sqlite"))
+	// Connection PRAGMAs belong in the DSN so database/sql applies them to
+	// every lazily opened connection, not just the first one.
+	dsn := filepath.Join(dataDir, "events.sqlite") +
+		"?_pragma=busy_timeout%3d30000&_pragma=journal_mode%3dWAL&_pragma=synchronous%3dFULL"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open relay sidecar event store: %w", err)
 	}
+	// Keep writes on their own connection pool. Relay replay queries can be
+	// long-running, and must never consume the connection needed to persist a
+	// publisher event and return its OK.
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`
 		PRAGMA journal_mode=WAL;
 		PRAGMA synchronous=FULL;
+		PRAGMA busy_timeout=5000;
 		CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,
 			created_at INTEGER NOT NULL,
@@ -51,7 +60,13 @@ func newSQLiteStore(dataDir string) (*sqliteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize relay sidecar event store: %w", err)
 	}
-	return &sqliteStore{db: db}, nil
+	readDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open relay sidecar read pool: %w", err)
+	}
+	readDB.SetMaxOpenConns(32)
+	return &sqliteStore{db: db, readDB: readDB}, nil
 }
 
 func (s *sqliteStore) Save(ctx context.Context, event nostr.Event) error {
@@ -127,7 +142,7 @@ func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
 }
 
 func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
-	rows, err := s.db.QueryContext(ctx, `SELECT event_json FROM events ORDER BY created_at DESC, id`)
+	rows, err := s.readDB.QueryContext(ctx, `SELECT event_json FROM events ORDER BY created_at DESC, id`)
 	if err != nil {
 		return func(func(nostr.Event) bool) {}
 	}
@@ -159,7 +174,12 @@ func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit i
 }
 
 func (s *sqliteStore) Close() error {
-	return s.db.Close()
+	readErr := s.readDB.Close()
+	writeErr := s.db.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return readErr
 }
 
 func replaceableKey(event nostr.Event) string {

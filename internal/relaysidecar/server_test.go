@@ -63,6 +63,30 @@ func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
 	}
 }
 
+func TestSidecarDecouplesPublisherAcknowledgementFromBroadcast(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.DataDir = t.TempDir()
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	defer server.store.Close()
+
+	relay := server.Relay()
+	if relay.PreventBroadcast == nil || !relay.PreventBroadcast(nil, nostr.Filter{}, nostr.Event{}) {
+		t.Fatal("expected synchronous Khatru broadcast to be disabled")
+	}
+	if relay.OnEventSaved == nil {
+		t.Fatal("expected stored events to be broadcast asynchronously")
+	}
+	if relay.OnEphemeralEvent == nil {
+		t.Fatal("expected ephemeral events to be broadcast asynchronously")
+	}
+}
+
 func TestSidecarRetainsEventsAcrossRestart(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
