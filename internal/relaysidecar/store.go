@@ -8,6 +8,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore"
@@ -142,35 +143,103 @@ func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
 }
 
 func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
-	rows, err := s.readDB.QueryContext(ctx, `SELECT event_json FROM events ORDER BY created_at DESC, id`)
-	if err != nil {
-		return func(func(nostr.Event) bool) {}
-	}
-	defer rows.Close()
-	events := make([]nostr.Event, 0)
-	for rows.Next() {
-		var encoded []byte
-		var event nostr.Event
-		if rows.Scan(&encoded) == nil && json.Unmarshal(encoded, &event) == nil && filter.Matches(event) {
-			events = append(events, event)
-		}
-	}
-
 	limit := maxLimit
 	if filter.Limit > 0 && (limit <= 0 || filter.Limit < limit) {
 		limit = filter.Limit
 	}
-	if limit <= 0 || limit > len(events) {
-		limit = len(events)
+	if filter.LimitZero {
+		return func(func(nostr.Event) bool) {}
 	}
 
+	query, args := relayQuerySQL(filter)
 	return func(yield func(nostr.Event) bool) {
-		for i := 0; i < limit; i++ {
-			if !yield(events[i]) {
+		rows, err := s.readDB.QueryContext(ctx, query, args...)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+
+		matched := 0
+		for rows.Next() {
+			var encoded []byte
+			var event nostr.Event
+			if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil || !filter.Matches(event) {
+				continue
+			}
+			if !yield(event) {
+				return
+			}
+			matched++
+			if limit > 0 && matched >= limit {
 				return
 			}
 		}
 	}
+}
+
+func relayQuerySQL(filter nostr.Filter) (string, []any) {
+	clauses := make([]string, 0, 5)
+	args := make([]any, 0, len(filter.IDs)+len(filter.Kinds)+len(filter.Authors)+2)
+	addSet := func(column string, values []string) {
+		if values == nil {
+			return
+		}
+		if len(values) == 0 {
+			clauses = append(clauses, "1 = 0")
+			return
+		}
+		placeholders := make([]string, len(values))
+		for i, value := range values {
+			placeholders[i] = "?"
+			args = append(args, value)
+		}
+		clauses = append(clauses, column+" IN ("+strings.Join(placeholders, ",")+")")
+	}
+
+	if filter.IDs != nil {
+		ids := make([]string, len(filter.IDs))
+		for i, id := range filter.IDs {
+			ids[i] = id.Hex()
+		}
+		addSet("id", ids)
+	}
+
+	if filter.Kinds != nil {
+		if len(filter.Kinds) == 0 {
+			clauses = append(clauses, "1 = 0")
+		} else {
+			placeholders := make([]string, len(filter.Kinds))
+			for i, kind := range filter.Kinds {
+				placeholders[i] = "?"
+				args = append(args, int(kind))
+			}
+			clauses = append(clauses, "kind IN ("+strings.Join(placeholders, ",")+")")
+		}
+	}
+
+	if filter.Authors != nil {
+		authors := make([]string, len(filter.Authors))
+		for i, author := range filter.Authors {
+			authors[i] = author.Hex()
+		}
+		addSet("pubkey", authors)
+	}
+
+	if filter.Since != 0 {
+		clauses = append(clauses, "created_at >= ?")
+		args = append(args, int64(filter.Since))
+	}
+	if filter.Until != 0 {
+		clauses = append(clauses, "created_at <= ?")
+		args = append(args, int64(filter.Until))
+	}
+
+	query := "SELECT event_json FROM events"
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += " ORDER BY created_at DESC, id"
+	return query, args
 }
 
 func (s *sqliteStore) Close() error {
