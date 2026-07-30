@@ -777,7 +777,7 @@ func Defaults() *Config {
 				MirrorExternal:   false,
 				EventRetention:   7 * 24 * time.Hour,
 				RequestRetention: 24 * time.Hour,
-				MaxQueryLimit:    500,
+				MaxQueryLimit:    2000,
 			},
 		},
 		Reconcile: ReconcileConfig{

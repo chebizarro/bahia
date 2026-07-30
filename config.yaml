@@ -78,7 +78,7 @@ nostr:
     event_retention: 168h
     request_retention: 24h
     auth_private_key: ""
-    max_query_limit: 500
+    max_query_limit: 2000
 
 reconcile:
   interval: 60s

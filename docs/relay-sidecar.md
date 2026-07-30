@@ -25,7 +25,7 @@ nostr:
     event_retention: 168h
     request_retention: 24h
     auth_private_key: ""
-    max_query_limit: 500
+    max_query_limit: 2000
 ```
 
 - `public_url` / `browser_relays` are exposed through ContextVM discovery (`11316`-`11320`) and the `d=bahia-browser-v1` NIP-51 relay set (`30002`) to the frontend.

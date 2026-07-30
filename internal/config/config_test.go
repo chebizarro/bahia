@@ -70,7 +70,7 @@ func TestDefaults(t *testing.T) {
 	if len(cfg.Nostr.ContextVMRelays) != 0 {
 		t.Errorf("expected no default ContextVM relays, got %v", cfg.Nostr.ContextVMRelays)
 	}
-	if cfg.Nostr.Sidecar.MaxQueryLimit != 500 {
+	if cfg.Nostr.Sidecar.MaxQueryLimit != 2000 {
 		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
 	}
 	if cfg.SoulFactory.Enabled {

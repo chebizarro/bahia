@@ -32,7 +32,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		logger = zap.NewNop()
 	}
 	if nostrCfg.Sidecar.MaxQueryLimit <= 0 {
-		nostrCfg.Sidecar.MaxQueryLimit = 500
+		nostrCfg.Sidecar.MaxQueryLimit = 2000
 	}
 	if nostrCfg.Sidecar.PublicURL == "" {
 		nostrCfg.Sidecar.PublicURL = "ws://localhost:3334"
