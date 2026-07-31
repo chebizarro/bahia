@@ -230,6 +230,7 @@ export async function publishEncryptedRequest(options) {
   try {
     await transport.connect();
     assertConnectedBahiaRelays(transport.client);
+    if (authState.pubkey) ensureSharedSubscription(transport);
     const event = options?.event || await transport.buildEncryptedRequestEvent(options);
     return await transport.publishEncryptedRequest(event);
   } catch (error) {

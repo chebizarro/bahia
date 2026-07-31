@@ -277,6 +277,34 @@ describe('encrypted controlplane transport', () => {
     await expect(transport.publishEncryptedRequest(event)).rejects.toThrow('blocked: no');
   });
 
+  it('establishes the shared result subscription before publishing a request event', async () => {
+    const order = [];
+    const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
+    client.subscribe.mockImplementation(() => {
+      order.push('subscribe');
+      return vi.fn();
+    });
+    client.publish.mockImplementation(async () => {
+      order.push('publish');
+      return [{ relay: 'wss://relay.example', sent: true, accepted: true, message: '' }];
+    });
+
+    await expect(module.publishEncryptedRequest({ event })).resolves.toMatchObject({ requestEventId: 'request-id' });
+
+    expect(order).toEqual(['subscribe', 'publish']);
+  });
+
+  it('preserves prebuilt event publishing when the requester is unauthenticated', async () => {
+    authMock.authState.status = 'unauthenticated';
+    authMock.authState.pubkey = null;
+    const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
+
+    await expect(module.publishEncryptedRequest({ event })).resolves.toMatchObject({ requestEventId: 'request-id' });
+
+    expect(client.subscribe).not.toHaveBeenCalled();
+    expect(client.publish).toHaveBeenCalledWith(event);
+  });
+
   it('awaitEncryptedResult resolves only correlated encrypted results and unsubscribes', async () => {
     let handlers;
     const unsubscribe = vi.fn();

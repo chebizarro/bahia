@@ -16,7 +16,7 @@ function hexToBytes(hex) {
   return Uint8Array.from(normalized.match(/.{1,2}/g).map((byte) => Number.parseInt(byte, 16)));
 }
 
-export async function startBahiaTestRelay({ addr = defaultAddr } = {}) {
+export async function startBahiaTestRelay({ addr = defaultAddr, waitForReady = waitForRelayReady } = {}) {
   const healthUrl = `http://${addr}/healthz`;
   const existing = await readRelayHealth(healthUrl);
   if (existing?.ok) {
@@ -30,21 +30,45 @@ export async function startBahiaTestRelay({ addr = defaultAddr } = {}) {
   });
 
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk.toString(); });
-  child.stderr.on('data', (chunk) => { output += chunk.toString(); });
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const captureOutput = (chunk) => {
+    output += chunk.toString();
+    if (output.includes('bahia test relay listening on ')) resolveReady();
+  };
+  child.stdout.on('data', captureOutput);
+  child.stderr.on('data', captureOutput);
+  child.once('exit', (code) => {
+    rejectReady(new Error(`Bahia test relay exited early with ${code}:\n${output}`));
+  });
 
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Bahia test relay exited early with ${child.exitCode}:\n${output}`);
+  let timeout;
+  try {
+    const health = await Promise.race([
+      waitForReady({ child, healthUrl, ready, readHealth: readRelayHealth }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Timed out waiting for Bahia test relay at ${healthUrl}:\n${output}`)), 20_000);
+      })
+    ]);
+    if (!health?.ok) {
+      throw new Error(`Bahia test relay signaled readiness before health was available at ${healthUrl}:\n${output}`);
     }
-    const health = await readRelayHealth(healthUrl);
-    if (health?.ok) return relayHandle(addr, child, health);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    return relayHandle(addr, child, health);
+  } catch (error) {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
+}
 
-  child.kill('SIGTERM');
-  throw new Error(`Timed out waiting for Bahia test relay at ${healthUrl}:\n${output}`);
+async function waitForRelayReady({ healthUrl, ready, readHealth }) {
+  await ready;
+  return readHealth(healthUrl);
 }
 
 function relayHandle(addr, child, health) {
