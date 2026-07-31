@@ -500,7 +500,13 @@ func (r *Reactor) Run(ctx context.Context) error {
 			if !ok {
 				delay := r.backoff.Next()
 				r.logger.Warn("subscription closed, reconnecting...", "delay", delay)
-				time.Sleep(delay)
+				select {
+				case <-ctx.Done():
+					r.logger.Info("reactor shutting down during reconnect backoff")
+					r.pool.Close()
+					return ctx.Err()
+				case <-time.After(delay):
+				}
 				r.caughtUp.Store(false)
 				authAttempted = make(map[string]struct{})
 				filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)

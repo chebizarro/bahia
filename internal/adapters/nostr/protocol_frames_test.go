@@ -229,11 +229,11 @@ func TestSubscriber_CaughtUpState(t *testing.T) {
 
 	require.False(t, sub.IsCaughtUp(), "subscriber should start not caught up")
 
-	sub.handleEOSE()
+	sub.handleEOSE(nil)
 	require.True(t, sub.IsCaughtUp(), "subscriber should report caught up after EOSE")
 
 	// Repeated EOSE notifications should be harmless.
-	sub.handleEOSE()
+	sub.handleEOSE(nil)
 	require.True(t, sub.IsCaughtUp(), "subscriber should remain caught up after duplicate EOSE")
 }
 

@@ -325,8 +325,14 @@ func TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp(t 
 	require.Equal(t, 1, repo.inserted)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{KindCASControlState}))
 	require.False(t, sub.IsCaughtUp())
-	sub.handleEOSE()
+	backoff := DefaultBackoff()
+	backoff.Next()
+	backoff.Next()
+	require.Equal(t, 2, backoff.Attempt())
+
+	sub.handleEOSE(backoff)
 	require.True(t, sub.IsCaughtUp(), "EOSE marks historical ML read-model catch-up complete without sleeps or polling")
+	require.Zero(t, backoff.Attempt(), "a healthy EOSE session resets reconnect backoff")
 }
 
 func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *testing.T) {

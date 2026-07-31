@@ -393,6 +393,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
+	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
 	healthProvider := NewHealthProvider(policy, bgManager)
 	healthProvider.SetRelayQuorumConfig(RelayQuorumConfig{
 		FullMinHealthy:      cfg.Nostr.RelayQuorum.FullMinHealthy,

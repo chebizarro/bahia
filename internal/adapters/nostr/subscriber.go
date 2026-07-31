@@ -156,7 +156,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 	backoff := DefaultBackoff()
 
 	for {
-		err := s.subscribe(ctx)
+		err := s.subscribe(ctx, backoff)
 		if ctx.Err() != nil {
 			return nil // clean shutdown
 		}
@@ -182,7 +182,7 @@ func (s *Subscriber) IsCaughtUp() bool {
 }
 
 // subscribe opens a subscription to all relays and processes events.
-func (s *Subscriber) subscribe(ctx context.Context) error {
+func (s *Subscriber) subscribe(ctx context.Context, backoff *Backoff) error {
 	// Reset caught-up state on new subscription.
 	s.caughtUp.Store(false)
 
@@ -200,10 +200,6 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 		zap.Ints("kinds", s.kinds),
 		zap.Strings("relays", s.pool.URLs()),
 	)
-
-	// Note: Backoff should be reset externally after successful subscription.
-	// The caller (Run) doesn't have visibility into this, but the subscription
-	// will run until error, at which point backoff continues from where it was.
 
 	authAttempted := make(map[string]struct{})
 	for {
@@ -226,7 +222,7 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 				merged.Closed = nil
 			}
 		case <-merged.EndOfStoredEvents:
-			s.handleEOSE()
+			s.handleEOSE(backoff)
 			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
@@ -245,7 +241,10 @@ func (s *Subscriber) handleRelayEOSE(eose RelayEOSE) {
 	)
 }
 
-func (s *Subscriber) handleEOSE() {
+func (s *Subscriber) handleEOSE(backoff *Backoff) {
+	if backoff != nil {
+		backoff.Reset()
+	}
 	if !s.caughtUp.Load() {
 		s.caughtUp.Store(true)
 		s.logger.Info("EOSE received: caught up with stored events",

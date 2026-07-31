@@ -17,7 +17,7 @@ type InMemoryNostrEventRepository struct {
 	cursors map[string]NostrMigrationCursor
 }
 
-var _ NostrEventRepository = (*InMemoryNostrEventRepository)(nil)
+var _ NostrEventOutboxRepository = (*InMemoryNostrEventRepository)(nil)
 
 // NewInMemoryNostrEventRepository creates an empty in-memory Nostr event repository.
 func NewInMemoryNostrEventRepository() *InMemoryNostrEventRepository {
@@ -40,6 +40,9 @@ func (r *InMemoryNostrEventRepository) Record(_ context.Context, rec *NostrEvent
 	if stored.Tags == nil {
 		stored.Tags = json.RawMessage("[]")
 	}
+	if stored.PublishState == "" {
+		stored.PublishState = NostrPublishStateNotApplicable
+	}
 	r.records[stored.ID] = stored
 	return true, nil
 }
@@ -59,6 +62,60 @@ func (r *InMemoryNostrEventRepository) GetByID(_ context.Context, id string) (*N
 // FindByID retrieves a Nostr event by ID.
 func (r *InMemoryNostrEventRepository) FindByID(ctx context.Context, id string) (*NostrEventRecord, error) {
 	return r.GetByID(ctx, id)
+}
+
+// ListUnpublished returns the oldest pending outbound events first.
+func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit int) ([]NostrEventRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	records := make([]NostrEventRecord, 0)
+	for _, rec := range r.records {
+		if rec.PublishState == NostrPublishStatePending {
+			records = append(records, cloneNostrEventRecord(&rec))
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].ReceivedAt.Equal(records[j].ReceivedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].ReceivedAt.Before(records[j].ReceivedAt)
+	})
+	return limitNostrEventRecords(records, limit), nil
+}
+
+// MarkPublished records a successful relay acceptance (including duplicate OK).
+func (r *InMemoryNostrEventRepository) MarkPublished(_ context.Context, id string, publishedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.records[id]
+	if !ok {
+		return nil
+	}
+	rec.PublishState = NostrPublishStatePublished
+	rec.PublishAttempts++
+	rec.LastPublishError = ""
+	rec.PublishedAt = &publishedAt
+	r.records[id] = rec
+	return nil
+}
+
+// RecordPublishFailure retains the event as pending and records retry diagnostics.
+func (r *InMemoryNostrEventRepository) RecordPublishFailure(_ context.Context, id, publishError string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.records[id]
+	if !ok {
+		return nil
+	}
+	rec.PublishState = NostrPublishStatePending
+	rec.PublishAttempts++
+	rec.LastPublishError = publishError
+	r.records[id] = rec
+	return nil
 }
 
 // FindSince returns events created after since, filtered by kinds when provided.
@@ -310,6 +367,10 @@ func cloneNostrEventRecord(rec *NostrEventRecord) NostrEventRecord {
 	if rec.EntityID != nil {
 		entityID := *rec.EntityID
 		cloned.EntityID = &entityID
+	}
+	if rec.PublishedAt != nil {
+		publishedAt := *rec.PublishedAt
+		cloned.PublishedAt = &publishedAt
 	}
 	return cloned
 }

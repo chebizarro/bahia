@@ -30,7 +30,8 @@ func TestPgNostrEventRepositoryRecordReportsInserted(t *testing.T) {
 	}
 
 	mock.ExpectExec("INSERT INTO nostr_events").
-		WithArgs(rec.ID, rec.Kind, rec.PubKey, rec.Content, rec.Tags, rec.Sig, rec.CreatedAt, rec.ReceivedAt, rec.EntityType, rec.EntityID).
+		WithArgs(rec.ID, rec.Kind, rec.PubKey, rec.Content, rec.Tags, rec.Sig, rec.CreatedAt, rec.ReceivedAt, rec.EntityType, rec.EntityID,
+			NostrPublishStateNotApplicable, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 
 	inserted, err := repo.Record(ctx, rec)
@@ -57,7 +58,8 @@ func TestPgNostrEventRepositoryRecordReportsDuplicate(t *testing.T) {
 	}
 
 	mock.ExpectExec("INSERT INTO nostr_events").
-		WithArgs(rec.ID, rec.Kind, rec.PubKey, rec.Content, rec.Tags, pgxmock.AnyArg(), rec.CreatedAt, pgxmock.AnyArg(), rec.EntityType, rec.EntityID).
+		WithArgs(rec.ID, rec.Kind, rec.PubKey, rec.Content, rec.Tags, pgxmock.AnyArg(), rec.CreatedAt, pgxmock.AnyArg(), rec.EntityType, rec.EntityID,
+			NostrPublishStateNotApplicable, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 
 	inserted, err := repo.Record(ctx, rec)

@@ -3,8 +3,11 @@ package nostr
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -117,11 +120,16 @@ const (
 
 // Publisher bridges internal events to Nostr relay publication.
 type Publisher struct {
-	pool       *RelayPool
-	privateKey string
-	enabled    bool
-	logger     *zap.Logger
-	eventRepo  repository.NostrEventRepository
+	pool         *RelayPool
+	privateKey   string
+	enabled      bool
+	logger       *zap.Logger
+	eventRepo    repository.NostrEventRepository
+	outboxRepo   repository.NostrEventOutboxRepository
+	publishFn    func(context.Context, nostr.Event) ([]PublishResult, error)
+	publishMu    sync.Mutex
+	newBackoff   func() *Backoff
+	idleInterval time.Duration
 }
 
 // NewPublisher creates a new Nostr event publisher.
@@ -138,13 +146,18 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 		pool.Connect(context.Background())
 	}
 
-	return &Publisher{
-		pool:       pool,
-		privateKey: cfg.PrivateKey,
-		enabled:    cfg.PublishEnabled && cfg.PrivateKey != "",
-		logger:     logger,
-		eventRepo:  eventRepo,
+	publisher := &Publisher{
+		pool:         pool,
+		privateKey:   cfg.PrivateKey,
+		enabled:      cfg.PublishEnabled && cfg.PrivateKey != "",
+		logger:       logger,
+		eventRepo:    eventRepo,
+		publishFn:    pool.PublishWithResults,
+		newBackoff:   DefaultBackoff,
+		idleInterval: time.Second,
 	}
+	publisher.outboxRepo, _ = eventRepo.(repository.NostrEventOutboxRepository)
+	return publisher
 }
 
 // Pool returns the underlying relay pool for sharing with other components.
@@ -198,40 +211,206 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 		return
 	}
 
-	published, err := p.pool.Publish(ctx, ev)
-	if err != nil {
-		p.logger.Warn("failed to publish nostr event", zap.String("event_type", label), zap.Error(err))
-		return
-	}
-
-	// Record to audit table.
+	rec := nostrEventRecordFromEvent(ev, label)
 	if p.eventRepo != nil {
-		tagsJSON, _ := json.Marshal(ev.Tags)
-		rec := &repository.NostrEventRecord{
-			ID:         ev.ID.Hex(),
-			Kind:       int(ev.Kind),
-			PubKey:     ev.PubKey.Hex(),
-			Content:    ev.Content,
-			Tags:       tagsJSON,
-			Sig:        eventSignatureHex(&ev),
-			CreatedAt:  ev.CreatedAt.Time(),
-			EntityType: label,
+		if p.outboxRepo != nil {
+			rec.PublishState = repository.NostrPublishStatePending
 		}
 		if _, recordErr := p.eventRepo.Record(ctx, rec); recordErr != nil {
-			p.logger.Warn("failed to record nostr event to audit table",
+			p.logger.Warn("failed to persist nostr event before publish",
 				zap.String("event_id", ev.ID.Hex()),
 				zap.Error(recordErr),
 			)
+			return
 		}
 	}
 
-	if published > 0 {
-		p.logger.Debug("nostr event published",
+	attempt := p.publishOutboxEvent(ctx, ev)
+	if attempt.err != nil {
+		p.logger.Warn("failed to publish nostr event; retained for redelivery",
 			zap.String("event_type", label),
 			zap.String("event_id", ev.ID.Hex()),
-			zap.Int("relays", published),
+			zap.Bool("rate_limited", attempt.rateLimited),
+			zap.Error(attempt.err),
 		)
+		return
 	}
+
+	p.logger.Debug("nostr event published",
+		zap.String("event_type", label),
+		zap.String("event_id", ev.ID.Hex()),
+		zap.Int("relays", attempt.published),
+	)
+}
+
+type publishAttempt struct {
+	published   int
+	rateLimited bool
+	err         error
+}
+
+func nostrEventRecordFromEvent(ev nostr.Event, entityType string) *repository.NostrEventRecord {
+	tagsJSON, _ := json.Marshal(ev.Tags)
+	return &repository.NostrEventRecord{
+		ID:         ev.ID.Hex(),
+		Kind:       int(ev.Kind),
+		PubKey:     ev.PubKey.Hex(),
+		Content:    ev.Content,
+		Tags:       tagsJSON,
+		Sig:        eventSignatureHex(&ev),
+		CreatedAt:  ev.CreatedAt.Time(),
+		ReceivedAt: time.Now().UTC(),
+		EntityType: entityType,
+	}
+}
+
+func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publishAttempt {
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
+
+	if p.publishFn == nil {
+		return p.recordPublishFailure(ctx, ev.ID.Hex(), nil, fmt.Errorf("relay publisher is not configured"))
+	}
+	results, publishErr := p.publishFn(ctx, ev)
+	published := countSuccessfulPublishResults(results)
+	if published > 0 {
+		if p.outboxRepo != nil {
+			if err := p.outboxRepo.MarkPublished(ctx, ev.ID.Hex(), time.Now().UTC()); err != nil {
+				return publishAttempt{published: published, err: err}
+			}
+		}
+		return publishAttempt{published: published}
+	}
+	return p.recordPublishFailure(ctx, ev.ID.Hex(), results, publishErr)
+}
+
+func (p *Publisher) recordPublishFailure(ctx context.Context, eventID string, results []PublishResult, publishErr error) publishAttempt {
+	rateLimited := false
+	details := make([]string, 0, len(results)+1)
+	if publishErr != nil {
+		details = append(details, publishErr.Error())
+	}
+	for _, result := range results {
+		rateLimited = rateLimited || result.IsRateLimited()
+		switch {
+		case result.Error != nil:
+			details = append(details, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
+		case result.Reason != "":
+			details = append(details, fmt.Sprintf("%s: %s", result.RelayURL, result.Reason))
+		}
+	}
+	if len(details) == 0 {
+		details = append(details, "no relay accepted the event")
+	}
+	failure := strings.Join(details, "; ")
+	if p.outboxRepo != nil {
+		if err := p.outboxRepo.RecordPublishFailure(ctx, eventID, failure); err != nil {
+			failure += "; persist publish failure: " + err.Error()
+		}
+	}
+	return publishAttempt{rateLimited: rateLimited, err: fmt.Errorf("%s", failure)}
+}
+
+func eventFromNostrRecord(rec repository.NostrEventRecord) (nostr.Event, error) {
+	var ev nostr.Event
+	if err := decodeEventHex(ev.ID[:], rec.ID, "id"); err != nil {
+		return nostr.Event{}, err
+	}
+	if err := decodeEventHex(ev.PubKey[:], rec.PubKey, "pubkey"); err != nil {
+		return nostr.Event{}, err
+	}
+	if err := decodeEventHex(ev.Sig[:], rec.Sig, "signature"); err != nil {
+		return nostr.Event{}, err
+	}
+	if err := json.Unmarshal(rec.Tags, &ev.Tags); err != nil {
+		return nostr.Event{}, fmt.Errorf("decode tags: %w", err)
+	}
+	ev.Kind = canonicalKind(rec.Kind)
+	ev.Content = rec.Content
+	ev.CreatedAt = nostr.Timestamp(rec.CreatedAt.Unix())
+	return ev, nil
+}
+
+func decodeEventHex(dst []byte, value, field string) error {
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("decode %s: %w", field, err)
+	}
+	if len(decoded) != len(dst) {
+		return fmt.Errorf("decode %s: got %d bytes, want %d", field, len(decoded), len(dst))
+	}
+	copy(dst, decoded)
+	return nil
+}
+
+// Name implements app.BackgroundRunner.
+func (p *Publisher) Name() string { return "nostr-publish-outbox" }
+
+// Run redelivers pending outbound events until the application context is cancelled.
+func (p *Publisher) Run(ctx context.Context) error {
+	if !p.enabled || p.outboxRepo == nil {
+		<-ctx.Done()
+		return nil
+	}
+
+	backoff := p.newBackoff()
+	if backoff == nil {
+		backoff = DefaultBackoff()
+	}
+	for {
+		pending, failed, rateLimited, err := p.retryUnpublished(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		delay := p.idleInterval
+		if err != nil || failed {
+			delay = backoff.Next()
+			p.logger.Warn("nostr outbox redelivery delayed",
+				zap.Duration("delay", delay),
+				zap.Bool("rate_limited", rateLimited),
+				zap.Error(err),
+			)
+		} else {
+			backoff.Reset()
+			if pending > 0 {
+				continue
+			}
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+func (p *Publisher) retryUnpublished(ctx context.Context) (pending int, failed bool, rateLimited bool, err error) {
+	records, err := p.outboxRepo.ListUnpublished(ctx, 100)
+	if err != nil {
+		return 0, false, false, err
+	}
+	for _, rec := range records {
+		ev, decodeErr := eventFromNostrRecord(rec)
+		if decodeErr != nil {
+			attempt := p.recordPublishFailure(ctx, rec.ID, nil, decodeErr)
+			failed = true
+			rateLimited = rateLimited || attempt.rateLimited
+			continue
+		}
+		attempt := p.publishOutboxEvent(ctx, ev)
+		if attempt.err != nil {
+			failed = true
+			rateLimited = rateLimited || attempt.rateLimited
+			err = attempt.err
+		}
+	}
+	return len(records), failed, rateLimited, err
 }
 
 // Subscribe listens for incoming Nostr events on all connected relays.
