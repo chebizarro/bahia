@@ -139,8 +139,6 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
     });
     let timer = null;
     let settled = false;
-    let unsubscribe = null;
-    let unsubscribeAfterAssign = false;
 
     const latestBranches = () => {
       const latestEvent = events.reduce((latest, event) => {
@@ -156,8 +154,6 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
       if (timer) clearTimeout(timer);
       const metadata = tracker.metadata({ degraded: missingRepositoryRelayFallback, ...metadataOptions });
       resolve({ ...latestBranches(), error, ...metadata });
-      if (unsubscribe) unsubscribe();
-      else unsubscribeAfterAssign = true;
     };
 
     if (timeout > 0) {
@@ -198,11 +194,10 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
     }];
 
     if (repositoryRelays?.length > 0) {
-      unsubscribe = nostr.subscribeOnRelays(repositoryRelays, ...subscribeArgs);
+      nostr.subscribeWithRecoveryOnRelays(repositoryRelays, ...subscribeArgs);
     } else {
-      unsubscribe = nostr.subscribe(...subscribeArgs);
+      nostr.subscribeWithRecovery(...subscribeArgs);
     }
-    if (unsubscribeAfterAssign) unsubscribe?.();
   });
 }
 

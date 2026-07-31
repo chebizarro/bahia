@@ -1,15 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const subscriptionsMock = vi.hoisted(() => ({
   relayEvents: [],
   closedRelays: [],
   emitEose: true,
+  unsubscribe: vi.fn(),
   nostr: {
-    subscribe: vi.fn((_filters, handlers = {}) => {
+    subscribeWithRecovery: vi.fn((_filters, handlers = {}) => {
       for (const event of subscriptionsMock.relayEvents) handlers.onEvent?.(event, 'wss://docs.example');
       for (const closure of subscriptionsMock.closedRelays) handlers.onClosed?.(closure.reason, closure.relay, closure.meta);
       if (subscriptionsMock.emitEose) handlers.onEose?.('wss://docs.example');
-      return vi.fn();
+      return subscriptionsMock.unsubscribe;
     })
   }
 }));
@@ -49,7 +50,12 @@ describe('Nostr documentation client', () => {
     subscriptionsMock.relayEvents = [];
     subscriptionsMock.closedRelays = [];
     subscriptionsMock.emitEose = true;
-    subscriptionsMock.nostr.subscribe.mockClear();
+    subscriptionsMock.unsubscribe.mockClear();
+    subscriptionsMock.nostr.subscribeWithRecovery.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('ignores an empty docs cache and queries relay-backed NIP-23 events', async () => {
@@ -61,13 +67,14 @@ describe('Nostr documentation client', () => {
 
     const catalog = await fetchDocsCatalog({ timeoutMs: 2500 });
 
-    expect(subscriptionsMock.nostr.subscribe).toHaveBeenCalledWith([
+    expect(subscriptionsMock.nostr.subscribeWithRecovery).toHaveBeenCalledWith([
       { kinds: [30023], '#t': ['bahia-docs'] }
     ], expect.objectContaining({
       onEvent: expect.any(Function),
       onEose: expect.any(Function),
       onClosed: expect.any(Function)
     }));
+    expect(subscriptionsMock.unsubscribe).not.toHaveBeenCalled();
     expect(catalog.count).toBe(1);
     expect(catalog.complete).toBe(true);
     expect(catalog.degraded).toBeNull();
@@ -123,6 +130,24 @@ describe('Nostr documentation client', () => {
       partialEventCount: 0,
       relaySummary: [expect.objectContaining({ relay: 'wss://docs-auth.example', status: 'auth-required' })]
     });
+  });
+
+  it('uses the timeout only as a fallback deadline and keeps recovery active', async () => {
+    vi.useFakeTimers();
+    subscriptionsMock.emitEose = false;
+
+    const catalogPromise = fetchDocsCatalog({ bypassCache: true, timeoutMs: 100 });
+    let settled = false;
+    catalogPromise.then(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const catalog = await catalogPromise;
+    expect(catalog.complete).toBe(false);
+    expect(catalog.degraded).toMatchObject({ reason: 'timeout-before-eose' });
+    expect(subscriptionsMock.unsubscribe).not.toHaveBeenCalled();
   });
 
   it('resolves a single topic from the relay event catalog', async () => {

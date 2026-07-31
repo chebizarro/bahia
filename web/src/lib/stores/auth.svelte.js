@@ -325,6 +325,8 @@ async function queryAuthEventsOnRelays(pubkey, relays = [], kinds = [], limit = 
       return [];
     }
 
+    // Intentional bounded bootstrap read: these pre-auth relays are temporary discovery inputs
+    // used before the app relay set is known, so keeping a persistent subscription is incorrect.
     return await new Promise((resolve, reject) => {
       const events = [];
       const seenIds = new Set();

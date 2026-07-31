@@ -94,8 +94,6 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
     });
     let timer = null;
     let settled = false;
-    let unsubscribe = null;
-    let unsubscribeAfterAssign = false;
 
     const settle = (metadataOptions = {}) => {
       if (settled) return;
@@ -103,8 +101,6 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
       if (timer) clearTimeout(timer);
       const deduped = dedupeReplaceableEvents(collected);
       resolve({ events: deduped, ...tracker.metadata(metadataOptions) });
-      if (unsubscribe) unsubscribe();
-      else unsubscribeAfterAssign = true;
     };
 
     if (timeoutMs > 0) {
@@ -117,7 +113,7 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
       }, timeoutMs);
     }
 
-    unsubscribe = nostr.subscribe([filter], {
+    nostr.subscribeWithRecovery([filter], {
       onEvent: (event, relay) => {
         tracker.markEvent(event, relay);
         collected.push(event);
@@ -134,7 +130,6 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
         tracker.markAuth(challenge, relay);
       }
     });
-    if (unsubscribeAfterAssign) unsubscribe?.();
   });
 
   if (result.complete) writeCache(result.events);

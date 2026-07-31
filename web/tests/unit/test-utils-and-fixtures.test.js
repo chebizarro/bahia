@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 const nostrMock = vi.hoisted(() => ({
-  subscribe: vi.fn(),
-  subscribeOnRelays: vi.fn()
+  subscribeWithRecovery: vi.fn(),
+  subscribeWithRecoveryOnRelays: vi.fn()
 }));
 
 vi.mock('../../src/lib/nostr/client.js', async () => {
@@ -71,17 +71,19 @@ describe('Nostr branch behavior coverage', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('fetches repository branches from explicit NIP-34 relay URLs and selects the latest state event on EOSE', async () => {
+  it('fetches repository branches from explicit NIP-34 relay URLs, settles on EOSE, and stays subscribed', async () => {
     const pubkey = 'a'.repeat(64);
-    nostrMock.subscribeOnRelays.mockImplementation((_relays, _filters, handlers) => {
+    const unsubscribe = vi.fn();
+    nostrMock.subscribeWithRecoveryOnRelays.mockImplementation((_relays, _filters, handlers) => {
       handlers.onEvent(repoStateEvent({ id: 'old', pubkey, created_at: 10, tags: [['d', 'bahia'], ['refs/heads/old', 'old']] }), 'wss://repo-a.example');
       handlers.onEvent(repoStateEvent({ id: 'new', pubkey, created_at: 20 }), 'wss://repo-b.example');
       handlers.onEose('wss://repo-a.example');
       handlers.onEose('wss://repo-b.example');
-      return vi.fn();
+      return unsubscribe;
     });
 
     const result = await fetchRepoBranches(repoCoordinate(pubkey, 'bahia'), {
@@ -89,7 +91,7 @@ describe('Nostr branch behavior coverage', () => {
       relayUrls: ['wss://repo-a.example', 'wss://repo-b.example']
     });
 
-    expect(nostrMock.subscribeOnRelays).toHaveBeenCalledWith(
+    expect(nostrMock.subscribeWithRecoveryOnRelays).toHaveBeenCalledWith(
       ['wss://repo-a.example', 'wss://repo-b.example'],
       [{ kinds: [30618], authors: [pubkey], '#d': ['bahia'] }],
       expect.objectContaining({
@@ -98,6 +100,7 @@ describe('Nostr branch behavior coverage', () => {
         onClosed: expect.any(Function)
       })
     );
+    expect(unsubscribe).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       branches: ['main', 'feature/auth'],
       defaultBranch: 'main',
@@ -112,7 +115,7 @@ describe('Nostr branch behavior coverage', () => {
   });
 
   it('uses global relay fallback with degraded metadata when a NIP-34 selection has no repository relay hints', async () => {
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       handlers.onEvent(repoStateEvent());
       handlers.onEose('wss://global.example');
       return vi.fn();
@@ -120,7 +123,7 @@ describe('Nostr branch behavior coverage', () => {
 
     const result = await fetchRepoBranches(repoCoordinate(), { timeout: 100, relayUrls: [] });
 
-    expect(nostrMock.subscribe).toHaveBeenCalledWith(
+    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith(
       [{ kinds: [30618], authors: ['a'.repeat(64)], '#d': ['bahia'] }],
       expect.objectContaining({
         onEvent: expect.any(Function),
@@ -139,7 +142,7 @@ describe('Nostr branch behavior coverage', () => {
   });
 
   it('returns partial repo state when the branch subscription closes before EOSE', async () => {
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       handlers.onEvent(repoStateEvent());
       handlers.onClosed('relay closed before EOSE', 'wss://relay.example');
       return vi.fn();
@@ -160,7 +163,7 @@ describe('Nostr branch behavior coverage', () => {
   });
 
   it('returns a closed-subscription error when branch history closes with no partial events', async () => {
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       handlers.onClosed('relay closed before EOSE', 'wss://relay.example');
       return vi.fn();
     });
@@ -180,7 +183,7 @@ describe('Nostr branch behavior coverage', () => {
   });
 
   it('returns AUTH-required branch closure metadata without treating it as complete history', async () => {
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       handlers.onClosed('auth-required: sign in first', 'wss://auth.example', { terminal: true, source: 'auth', authRequired: true });
       return vi.fn();
     });
@@ -198,6 +201,29 @@ describe('Nostr branch behavior coverage', () => {
       partialEventCount: 0,
       relaySummary: [expect.objectContaining({ relay: 'wss://auth.example', status: 'auth-required' })]
     });
+  });
+
+  it('uses the timeout only as a fallback deadline and keeps recovery active', async () => {
+    vi.useFakeTimers();
+    const unsubscribe = vi.fn();
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
+      handlers.onClosed('relay reconnecting', 'wss://relay.example', { terminal: false, recovering: true });
+      return unsubscribe;
+    });
+
+    const resultPromise = fetchRepoBranches(repoCoordinate(), { timeout: 100 });
+    let settled = false;
+    resultPromise.then(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await resultPromise;
+    expect(result.complete).toBe(false);
+    expect(result.error).toBe('Timed out waiting for repo state EOSE');
+    expect(result.degraded).toMatchObject({ reason: 'timeout-before-eose' });
+    expect(unsubscribe).not.toHaveBeenCalled();
   });
 
   it('keeps non-Nostr repository selections out of NIP-34 branch lookup', () => {
