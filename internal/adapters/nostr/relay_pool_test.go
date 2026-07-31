@@ -178,6 +178,9 @@ func TestRelayPool_HealthSnapshotReturnsPerRelayStatus(t *testing.T) {
 	relayOne := pool.health.GetOrCreate("wss://relay-one.example")
 	relayOne.SetConnected(true)
 	relayOne.RecordPublishSuccess(25 * time.Millisecond)
+	pool.RecordRelayClosed("wss://relay-one.example", "rate-limited: slow down")
+	pool.RecordRelayReREQ()
+	relayOne.RecordReconnect()
 	pool.relays["wss://relay-one.example"].connected = true
 
 	relayTwo := pool.health.GetOrCreate("wss://relay-two.example")
@@ -199,6 +202,9 @@ func TestRelayPool_HealthSnapshotReturnsPerRelayStatus(t *testing.T) {
 	require.True(t, statuses["wss://relay-one.example"].Healthy)
 	require.False(t, statuses["wss://relay-one.example"].LastSeen.IsZero())
 	require.Equal(t, 0, statuses["wss://relay-one.example"].Errors)
+	require.Equal(t, int64(1), statuses["wss://relay-one.example"].ClosedReasons["rate-limited"])
+	require.Equal(t, int64(1), statuses["wss://relay-one.example"].ReREQAttempts)
+	require.Equal(t, int64(1), statuses["wss://relay-one.example"].ReconnectAttempts)
 
 	require.False(t, statuses["wss://relay-two.example"].Connected)
 	require.False(t, statuses["wss://relay-two.example"].Healthy)

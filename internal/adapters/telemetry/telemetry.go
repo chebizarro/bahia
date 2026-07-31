@@ -106,9 +106,13 @@ type Metrics struct {
 	NostrBackoffDurations []float64        // backoff durations in seconds
 
 	// Relay health metrics
-	NostrRelayHealthy     map[string]bool    // key: relay_url - is healthy
-	NostrRelayDegraded    map[string]bool    // key: relay_url - is degraded
-	NostrRelaySuccessRate map[string]float64 // key: relay_url - success rate (0-1)
+	NostrRelayHealthy           map[string]bool             // key: relay_url - is healthy
+	NostrRelayDegraded          map[string]bool             // key: relay_url - is degraded
+	NostrRelaySuccessRate       map[string]float64          // key: relay_url - success rate (0-1)
+	NostrRelayClosedReasons     map[string]map[string]int64 // key: relay_url, then bounded CLOSED reason
+	NostrRelayReREQAttempts     map[string]int64            // key: relay_url
+	NostrRelayReconnectAttempts map[string]int64            // key: relay_url
+	NostrOutboxDepth            int64
 
 	// Worker metrics
 	WorkersActive    int64
@@ -125,27 +129,30 @@ type Metrics struct {
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		HTTPRequestsTotal:       make(map[string]int64),
-		DeploymentsTotal:        make(map[string]int64),
-		AdoptionScansTotal:      make(map[string]int64),
-		AdoptionImportsTotal:    make(map[string]int64),
-		RuntimeActionsTotal:     make(map[string]int64),
-		NostrEventsPublished:    make(map[string]int64),
-		NostrEventsReceived:     make(map[string]int64),
-		AuthorizationRejections: make(map[string]int64),
-		TierRejections:          make(map[string]int64),
-		NostrPublishOK:          make(map[string]int64),
-		NostrPublishFailed:      make(map[string]int64),
-		NostrReconnects:         make(map[string]int64),
-		NostrRelayHealthy:       make(map[string]bool),
-		NostrRelayDegraded:      make(map[string]bool),
-		NostrRelaySuccessRate:   make(map[string]float64),
-		LoomJobsTotal:           make(map[string]int64),
-		CashuPaymentsTotal:      make(map[string]int64),
-		CashuWalletBalance:      make(map[string]int64),
-		HygieneCandidatesTotal:  make(map[string]int64),
-		HygieneActionsTotal:     make(map[string]int64),
-		FleetHealthEntities:     make(map[string]int64),
+		HTTPRequestsTotal:           make(map[string]int64),
+		DeploymentsTotal:            make(map[string]int64),
+		AdoptionScansTotal:          make(map[string]int64),
+		AdoptionImportsTotal:        make(map[string]int64),
+		RuntimeActionsTotal:         make(map[string]int64),
+		NostrEventsPublished:        make(map[string]int64),
+		NostrEventsReceived:         make(map[string]int64),
+		AuthorizationRejections:     make(map[string]int64),
+		TierRejections:              make(map[string]int64),
+		NostrPublishOK:              make(map[string]int64),
+		NostrPublishFailed:          make(map[string]int64),
+		NostrReconnects:             make(map[string]int64),
+		NostrRelayHealthy:           make(map[string]bool),
+		NostrRelayDegraded:          make(map[string]bool),
+		NostrRelaySuccessRate:       make(map[string]float64),
+		NostrRelayClosedReasons:     make(map[string]map[string]int64),
+		NostrRelayReREQAttempts:     make(map[string]int64),
+		NostrRelayReconnectAttempts: make(map[string]int64),
+		LoomJobsTotal:               make(map[string]int64),
+		CashuPaymentsTotal:          make(map[string]int64),
+		CashuWalletBalance:          make(map[string]int64),
+		HygieneCandidatesTotal:      make(map[string]int64),
+		HygieneActionsTotal:         make(map[string]int64),
+		FleetHealthEntities:         make(map[string]int64),
 	}
 }
 
@@ -601,6 +608,29 @@ func (m *Metrics) SetNostrRelayHealth(relayURL string, healthy, degraded bool, s
 	m.NostrRelaySuccessRate[relayURL] = successRate
 }
 
+// SetNostrRelayTransportHealth updates relay protocol recovery counters from a health snapshot.
+func (m *Metrics) SetNostrRelayTransportHealth(relayURL string, closedReasons map[string]int64, reREQAttempts, reconnectAttempts int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copiedReasons := make(map[string]int64, len(closedReasons))
+	for reason, count := range closedReasons {
+		copiedReasons[reason] = count
+	}
+	m.NostrRelayClosedReasons[relayURL] = copiedReasons
+	m.NostrRelayReREQAttempts[relayURL] = reREQAttempts
+	m.NostrRelayReconnectAttempts[relayURL] = reconnectAttempts
+}
+
+// SetNostrOutboxDepth updates the unpublished Nostr event outbox gauge.
+func (m *Metrics) SetNostrOutboxDepth(depth int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if depth < 0 {
+		depth = 0
+	}
+	m.NostrOutboxDepth = depth
+}
+
 // --- Worker Metrics ---
 
 // SetWorkersActive sets the active worker gauge.
@@ -902,6 +932,30 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		for relay, rate := range m.NostrRelaySuccessRate {
 			fmt.Fprintf(w, "bahia_nostr_relay_success_rate{relay=%q} %.4f\n", relay, rate)
 		}
+
+		fmt.Fprintln(w, "# HELP bahia_nostr_relay_closed_total Relay CLOSED frames by relay and bounded reason")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_closed_total counter")
+		for relay, reasons := range m.NostrRelayClosedReasons {
+			for reason, count := range reasons {
+				fmt.Fprintf(w, "bahia_nostr_relay_closed_total{relay=%q,reason=%q} %d\n", relay, reason, count)
+			}
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_nostr_relay_rereq_attempts_total Relay subscription recovery REQ attempts")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_rereq_attempts_total counter")
+		for relay, count := range m.NostrRelayReREQAttempts {
+			fmt.Fprintf(w, "bahia_nostr_relay_rereq_attempts_total{relay=%q} %d\n", relay, count)
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_nostr_relay_reconnect_attempts_total Relay transport reconnect attempts")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_reconnect_attempts_total counter")
+		for relay, count := range m.NostrRelayReconnectAttempts {
+			fmt.Fprintf(w, "bahia_nostr_relay_reconnect_attempts_total{relay=%q} %d\n", relay, count)
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_nostr_outbox_depth Unpublished events in the durable Nostr publish outbox")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_outbox_depth gauge")
+		fmt.Fprintf(w, "bahia_nostr_outbox_depth %d\n", m.NostrOutboxDepth)
 
 		// Aggregate relay health counts
 		healthyCount := 0

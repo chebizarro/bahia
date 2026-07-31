@@ -483,6 +483,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 					r.caughtUp.Store(false)
 					authAttempted = make(map[string]struct{})
 					filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
+					r.pool.RecordRelayReREQ()
 					merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
 					if err != nil {
 						r.logger.Error("resubscribe after relay auth failed", "error", err)
@@ -510,6 +511,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 				r.caughtUp.Store(false)
 				authAttempted = make(map[string]struct{})
 				filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
+				r.pool.RecordRelayReREQ()
 				merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
 				if err != nil {
 					r.logger.Error("reconnect failed", "error", err)
@@ -535,6 +537,9 @@ func (r *Reactor) handleEOSE() {
 }
 
 func (r *Reactor) handleRelayClosed(ctx context.Context, closed nostrpool.RelayClosed, authAttempted map[string]struct{}) bool {
+	if r.pool != nil {
+		r.pool.RecordRelayClosed(closed.RelayURL, closed.Reason)
+	}
 	r.logger.Warn("relay closed control-plane subscription",
 		"relay", closed.RelayURL,
 		"subscription_id", closed.SubscriptionID,

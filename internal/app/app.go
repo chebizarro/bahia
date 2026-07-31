@@ -1327,6 +1327,12 @@ func New(cfg *config.Config) (*App, error) {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
+	outboxRepo, _ := nostrEventRepo.(repository.NostrEventOutboxRepository)
+	bgManager.RegisterWithOptions(newNostrTransportMetricsRunner(
+		telemetryProvider.GetMetrics(), outboxRepo, 15*time.Second, logger,
+		controlPlanePool, contextVMResponsePool, relayPool, fipsRelayPool,
+	), RunnerTier(Tier1), RunnerRequired(false))
+
 	application := &App{
 		Config:             cfg,
 		Logger:             logger,

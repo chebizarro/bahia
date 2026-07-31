@@ -173,6 +173,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			return nil
 		case <-time.After(delay):
 		}
+		s.pool.RecordRelayReREQ()
 	}
 }
 
@@ -254,6 +255,9 @@ func (s *Subscriber) handleEOSE(backoff *Backoff) {
 }
 
 func (s *Subscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, authAttempted map[string]struct{}) bool {
+	if s.pool != nil {
+		s.pool.RecordRelayClosed(closed.RelayURL, closed.Reason)
+	}
 	s.logger.Warn("relay closed subscription",
 		zap.String("relay", closed.RelayURL),
 		zap.String("subscription_id", closed.SubscriptionID),

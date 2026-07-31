@@ -107,6 +107,11 @@ type loomRelayPool interface {
 	AuthenticateRelay(context.Context, string) error
 }
 
+type loomRelayHealthRecorder interface {
+	RecordRelayClosed(relayURL, reason string)
+	RecordRelayReREQ()
+}
+
 type Client struct {
 	pool            loomRelayPool
 	workerRepo      repository.WorkerRepository
@@ -413,8 +418,13 @@ func (c *Client) AwaitJobStatusFromWorker(ctx context.Context, jobEventID string
 	seen := nostrAdapter.NewEventDeduplicator(256)
 	authAttempted := make(map[string]struct{})
 	backoff := c.initialJobSubscriptionBackoff()
+	subscribeAttempts := 0
 
 resubscribe:
+	if subscribeAttempts > 0 {
+		c.recordRelayReREQ()
+	}
+	subscribeAttempts++
 	sub, err := c.pool.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		c.logger.Warn("failed to subscribe for Loom job status; retrying",
@@ -543,6 +553,12 @@ func nextJobSubscriptionBackoff(current time.Duration) time.Duration {
 	return current * 2
 }
 
+func (c *Client) recordRelayReREQ() {
+	if recorder, ok := c.pool.(loomRelayHealthRecorder); ok {
+		recorder.RecordRelayReREQ()
+	}
+}
+
 func waitForJobResubscribe(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -580,6 +596,9 @@ func (c *Client) jobStatusFilters(jobEventID string, expectedWorkerPubkey string
 }
 
 func (c *Client) handleJobSubscriptionClosed(ctx context.Context, closed nostrAdapter.RelayClosed, authAttempted map[string]struct{}, jobEventID string) (bool, error) {
+	if recorder, ok := c.pool.(loomRelayHealthRecorder); ok {
+		recorder.RecordRelayClosed(closed.RelayURL, closed.Reason)
+	}
 	c.logger.Warn("loom job status subscription closed by relay",
 		zap.String("relay", closed.RelayURL),
 		zap.String("subscription_id", closed.SubscriptionID),

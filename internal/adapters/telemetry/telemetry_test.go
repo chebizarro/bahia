@@ -354,6 +354,8 @@ func TestProvider_MetricsHandler(t *testing.T) {
 	m.RecordDriftDetected()
 	m.SetWorkersActive(5)
 	m.RecordCashuPayment("sent", 100)
+	m.SetNostrRelayTransportHealth("wss://relay.example", map[string]int64{"auth-required": 2}, 3, 4)
+	m.SetNostrOutboxDepth(5)
 
 	// Get metrics output
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -371,6 +373,10 @@ func TestProvider_MetricsHandler(t *testing.T) {
 		"bahia_drift_detected_total",
 		"bahia_workers_active 5",
 		"bahia_cashu_payments_total",
+		`bahia_nostr_relay_closed_total{relay="wss://relay.example",reason="auth-required"} 2`,
+		`bahia_nostr_relay_rereq_attempts_total{relay="wss://relay.example"} 3`,
+		`bahia_nostr_relay_reconnect_attempts_total{relay="wss://relay.example"} 4`,
+		"bahia_nostr_outbox_depth 5",
 	}
 
 	for _, check := range checks {

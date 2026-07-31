@@ -11,6 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPgNostrEventRepositoryCountUnpublished(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgNostrEventRepositoryWithDB(mock)
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM nostr_events WHERE publish_state = \$1`).
+		WithArgs(NostrPublishStatePending).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(7)))
+
+	count, err := repo.CountUnpublished(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgNostrEventRepositoryRecordReportsInserted(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

@@ -935,12 +935,17 @@ type RelayHealthSnapshot struct {
 
 // RelayStatus describes the current status of a single relay.
 type RelayStatus struct {
-	URL       string
-	Connected bool
-	Healthy   bool
-	LastSeen  time.Time
-	Errors    int
-	LastError string
+	URL               string
+	Connected         bool
+	Healthy           bool
+	Degraded          bool
+	SuccessRate       float64
+	LastSeen          time.Time
+	Errors            int
+	LastError         string
+	ClosedReasons     map[string]int64
+	ReREQAttempts     int64
+	ReconnectAttempts int64
 }
 
 // HealthSnapshot returns a point-in-time summary of configured relay state.
@@ -961,9 +966,14 @@ func (p *RelayPool) HealthSnapshot() RelayHealthSnapshot {
 			stats := p.health.GetOrCreate(url).Stats()
 			status.Connected = connected || stats.Connected
 			status.Healthy = status.Connected && stats.IsHealthy()
+			status.Degraded = status.Connected && stats.IsDegraded()
+			status.SuccessRate = stats.SuccessRate
 			status.LastSeen = stats.LastConnected
 			status.Errors = int(stats.ErrorCount)
 			status.LastError = stats.LastError
+			status.ClosedReasons = stats.ClosedReasons
+			status.ReREQAttempts = stats.ReREQAttempts
+			status.ReconnectAttempts = stats.Reconnects
 		} else {
 			status.Healthy = connected
 		}
@@ -1033,6 +1043,28 @@ func (p *RelayPool) recordRelayError(relayURL, reason string) {
 		return
 	}
 	p.health.GetOrCreate(relayURL).RecordError(reason)
+}
+
+// RecordRelayClosed records a relay CLOSED frame observed by a subscription consumer.
+func (p *RelayPool) RecordRelayClosed(relayURL, reason string) {
+	if p == nil || p.health == nil {
+		return
+	}
+	normalizedURL := nostr.NormalizeURL(relayURL)
+	if normalizedURL == "" {
+		return
+	}
+	p.health.GetOrCreate(normalizedURL).RecordClosed(reason)
+}
+
+// RecordRelayReREQ records one recovery REQ attempt for every configured relay.
+func (p *RelayPool) RecordRelayReREQ() {
+	if p == nil || p.health == nil {
+		return
+	}
+	for _, relayURL := range p.URLs() {
+		p.health.GetOrCreate(relayURL).RecordReREQ()
+	}
 }
 
 // RecordRelayError records relay-level protocol or transport metadata for

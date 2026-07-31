@@ -2,6 +2,7 @@
 package nostr
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,8 @@ type RelayHealth struct {
 	PublishSuccess  int64
 	PublishFailed   int64
 	Reconnects      int64
+	ReREQAttempts   int64
+	ClosedReasons   map[string]int64
 	ErrorCount      int64
 
 	// Recent errors
@@ -38,8 +41,9 @@ const maxLatencySamples = 100
 // NewRelayHealth creates a new RelayHealth tracker for a relay URL.
 func NewRelayHealth(url string) *RelayHealth {
 	return &RelayHealth{
-		URL:       url,
-		latencies: make([]float64, maxLatencySamples),
+		URL:           url,
+		ClosedReasons: make(map[string]int64),
+		latencies:     make([]float64, maxLatencySamples),
 	}
 }
 
@@ -82,6 +86,33 @@ func (h *RelayHealth) RecordReconnect() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.Reconnects++
+}
+
+// RecordReREQ records a subscription re-REQ attempt.
+func (h *RelayHealth) RecordReREQ() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ReREQAttempts++
+}
+
+// RecordClosed records a relay CLOSED frame by its bounded machine-readable reason.
+func (h *RelayHealth) RecordClosed(reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ClosedReasons[closedReasonCategory(reason)]++
+}
+
+func closedReasonCategory(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	if prefix, _, ok := strings.Cut(reason, ":"); ok {
+		reason = strings.TrimSpace(prefix)
+	}
+	switch reason {
+	case "auth-required", "blocked", "duplicate", "error", "invalid", "pow", "rate-limited", "restricted", "unsupported":
+		return reason
+	default:
+		return "other"
+	}
 }
 
 // SetConnected updates the connection state.
@@ -164,10 +195,16 @@ func (h *RelayHealth) Stats() RelayHealthStats {
 		PublishSuccess:  h.PublishSuccess,
 		PublishFailed:   h.PublishFailed,
 		Reconnects:      h.Reconnects,
+		ReREQAttempts:   h.ReREQAttempts,
+		ClosedReasons:   make(map[string]int64, len(h.ClosedReasons)),
 		ErrorCount:      h.ErrorCount,
 		LastError:       h.LastError,
 		LastErrorTime:   h.LastErrorTime,
 		LastConnected:   h.LastConnected,
+	}
+
+	for reason, count := range h.ClosedReasons {
+		stats.ClosedReasons[reason] = count
 	}
 
 	if h.PublishAttempts > 0 {
@@ -196,6 +233,8 @@ type RelayHealthStats struct {
 	PublishFailed     int64
 	SuccessRate       float64 // 0.0 to 1.0
 	Reconnects        int64
+	ReREQAttempts     int64
+	ClosedReasons     map[string]int64
 	ErrorCount        int64
 	AvgLatencySeconds float64
 	LastError         string

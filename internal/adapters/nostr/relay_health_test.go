@@ -242,6 +242,24 @@ func TestRelayHealthTracker_HealthCounts(t *testing.T) {
 	assert.Contains(t, tracker.UnhealthyRelays(), "wss://unhealthy.relay")
 }
 
+func TestRelayHealth_RecordsClosedAndRecoveryAttempts(t *testing.T) {
+	h := NewRelayHealth("wss://test.relay")
+	h.RecordClosed("auth-required: sign in")
+	h.RecordClosed("auth-required: retry")
+	h.RecordClosed("unstructured relay message")
+	h.RecordReREQ()
+	h.RecordReconnect()
+
+	stats := h.Stats()
+	assert.Equal(t, int64(2), stats.ClosedReasons["auth-required"])
+	assert.Equal(t, int64(1), stats.ClosedReasons["other"])
+	assert.Equal(t, int64(1), stats.ReREQAttempts)
+	assert.Equal(t, int64(1), stats.Reconnects)
+
+	stats.ClosedReasons["auth-required"] = 99
+	assert.Equal(t, int64(2), h.Stats().ClosedReasons["auth-required"], "snapshot must not alias tracker state")
+}
+
 func TestRelayHealth_P95Latency(t *testing.T) {
 	h := NewRelayHealth("wss://test.relay")
 

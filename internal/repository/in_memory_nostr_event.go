@@ -87,6 +87,19 @@ func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit 
 	return limitNostrEventRecords(records, limit), nil
 }
 
+// CountUnpublished returns the current in-memory publish outbox depth.
+func (r *InMemoryNostrEventRepository) CountUnpublished(_ context.Context) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var count int64
+	for _, rec := range r.records {
+		if rec.PublishState == NostrPublishStatePending {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // MarkPublished records a successful relay acceptance (including duplicate OK).
 func (r *InMemoryNostrEventRepository) MarkPublished(_ context.Context, id string, publishedAt time.Time) error {
 	r.mu.Lock()

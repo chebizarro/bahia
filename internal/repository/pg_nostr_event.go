@@ -62,6 +62,7 @@ type NostrEventRepository interface {
 type NostrEventOutboxRepository interface {
 	NostrEventRepository
 	ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error)
+	CountUnpublished(ctx context.Context) (int64, error)
 	MarkPublished(ctx context.Context, id string, publishedAt time.Time) error
 	RecordPublishFailure(ctx context.Context, id, publishError string) error
 }
@@ -150,6 +151,15 @@ func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int)
 	}
 	defer rows.Close()
 	return scanNostrEventRows(rows)
+}
+
+// CountUnpublished returns the current durable publish outbox depth.
+func (r *PgNostrEventRepository) CountUnpublished(ctx context.Context) (int64, error) {
+	var count int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1`, NostrPublishStatePending).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting unpublished nostr events: %w", err)
+	}
+	return count, nil
 }
 
 // MarkPublished records a successful relay acceptance (including duplicate OK).

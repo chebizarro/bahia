@@ -21,6 +21,8 @@ type fakeLoomRelayPool struct {
 	subscribeCalls int
 	authCalls      int
 	authErr        error
+	reREQAttempts  int
+	closedReasons  []string
 }
 
 func (f *fakeLoomRelayPool) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
@@ -45,6 +47,12 @@ func (f *fakeLoomRelayPool) AuthenticateRelay(context.Context, string) error {
 	f.authCalls++
 	return f.authErr
 }
+
+func (f *fakeLoomRelayPool) RecordRelayClosed(_ string, reason string) {
+	f.closedReasons = append(f.closedReasons, reason)
+}
+
+func (f *fakeLoomRelayPool) RecordRelayReREQ() { f.reREQAttempts++ }
 
 func testClient(t *testing.T, sub *nostrAdapter.MergedSubscription, clientSK string) (*Client, *fakeLoomRelayPool, string) {
 	t.Helper()
@@ -358,6 +366,9 @@ func TestAwaitJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
 	if pool.authCalls != 1 {
 		t.Fatalf("auth calls = %d, want 1", pool.authCalls)
 	}
+	if len(pool.closedReasons) != 1 || pool.closedReasons[0] != "auth-required: restricted" {
+		t.Fatalf("closed reasons = %v", pool.closedReasons)
+	}
 }
 
 func TestSelectWorker_FailClosedOnCriteria(t *testing.T) {
@@ -407,6 +418,9 @@ func TestAwaitJobStatusFromWorker_ChannelClosureResubscribesAndBackfillsResult(t
 	}
 	if pool.subscribeCalls != 2 {
 		t.Fatalf("subscribe calls = %d, want 2", pool.subscribeCalls)
+	}
+	if pool.reREQAttempts != 1 {
+		t.Fatalf("re-REQ attempts = %d, want 1", pool.reREQAttempts)
 	}
 }
 
