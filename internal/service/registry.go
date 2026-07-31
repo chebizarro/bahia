@@ -743,6 +743,10 @@ func (s *RegistryService) repairStateAfterRejectedIntent(ctx context.Context, re
 
 // --- Deployment Run operations ---
 
+type nonTerminalDeploymentRunLister interface {
+	ListNonTerminal(context.Context) ([]domain.DeploymentRun, error)
+}
+
 func (s *RegistryService) CreateDeploymentRun(ctx context.Context, dr *domain.DeploymentRun) error {
 	// Guard: verify the intent exists and is in an approved state.
 	intent, err := s.intents.GetByID(ctx, dr.DeploymentIntentID)
@@ -791,6 +795,19 @@ func (s *RegistryService) GetDeploymentRun(ctx context.Context, id uuid.UUID) (*
 
 func (s *RegistryService) ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error) {
 	return s.runs.ListByIntent(ctx, intentID)
+}
+
+// ListNonTerminalDeploymentRuns returns persisted queued/running runs when the
+// configured repository supports startup recovery.
+func (s *RegistryService) ListNonTerminalDeploymentRuns(ctx context.Context) ([]domain.DeploymentRun, error) {
+	if s.runs == nil {
+		return nil, nil
+	}
+	lister, ok := s.runs.(nonTerminalDeploymentRunLister)
+	if !ok {
+		return nil, fmt.Errorf("deployment run repository does not support non-terminal recovery")
+	}
+	return lister.ListNonTerminal(ctx)
 }
 
 // CompleteDeploymentRun marks a deployment run as completed and updates related state.

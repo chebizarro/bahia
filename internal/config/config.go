@@ -398,7 +398,6 @@ type HarborConfig struct {
 type LoomConfig struct {
 	Relays              []string                      `koanf:"relays"`
 	JobTimeout          time.Duration                 `koanf:"job_timeout"`
-	PollInterval        time.Duration                 `koanf:"poll_interval"`
 	CanonicalProjection LoomCanonicalProjectionConfig `koanf:"canonical_projection" yaml:"canonical_projection"`
 }
 
@@ -764,8 +763,7 @@ func Defaults() *Config {
 			Enabled:  false,
 		},
 		Loom: LoomConfig{
-			JobTimeout:   30 * time.Minute,
-			PollInterval: 10 * time.Second,
+			JobTimeout: 30 * time.Minute,
 		},
 		Nostr: NostrConfig{
 			ContextVMRelays:            []string{},

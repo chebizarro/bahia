@@ -37,6 +37,9 @@ const (
 	KindJobStatus    = 30100 // Parameterized replaceable status update
 	KindJobResult    = 5101  // Final job result
 	KindJobCancelReq = 5102  // Cancellation request
+
+	defaultJobSubscriptionBackoff = 250 * time.Millisecond
+	maxJobSubscriptionBackoff     = 5 * time.Second
 )
 
 // Nostr tag keys shared by job producers (request/cancel) and consumers
@@ -114,9 +117,9 @@ type Client struct {
 	jobsMu           sync.RWMutex
 	submittedWorkers map[string]string
 
-	jobTimeout   time.Duration
-	pollInterval time.Duration
-	logger       *zap.Logger
+	jobTimeout             time.Duration
+	jobSubscriptionBackoff time.Duration
+	logger                 *zap.Logger
 }
 
 // NewClient creates a new Loom client.
@@ -139,13 +142,13 @@ func NewClient(cfg config.LoomConfig, nostrPrivateKey string, pool *nostrAdapter
 	}
 
 	c := &Client{
-		pool:             pool,
-		privateKey:       nostrPrivateKey,
-		clientPubkey:     clientPubkey,
-		submittedWorkers: make(map[string]string),
-		jobTimeout:       cfg.JobTimeout,
-		pollInterval:     cfg.PollInterval,
-		logger:           logger,
+		pool:                   pool,
+		privateKey:             nostrPrivateKey,
+		clientPubkey:           clientPubkey,
+		submittedWorkers:       make(map[string]string),
+		jobTimeout:             cfg.JobTimeout,
+		jobSubscriptionBackoff: defaultJobSubscriptionBackoff,
+		logger:                 logger,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -195,7 +198,7 @@ func (c *Client) CanonicalProjectionReady() bool {
 
 // StartCanonicalProjection follows a submitted native Loom job in the
 // background and projects every validated status plus the terminal result to
-// the canonical state/audit surface. The poll owns its context so returning the
+// the canonical state/audit surface. The await owns its context so returning the
 // ContextVM response does not cancel result collection.
 func (c *Client) StartCanonicalProjection(jobEventID string) {
 	if !c.CanonicalProjectionReady() {
@@ -206,14 +209,14 @@ func (c *Client) StartCanonicalProjection(jobEventID string) {
 	go func() {
 		ctx := context.Background()
 		var projectionErr error
-		result, err := c.PollJobStatus(ctx, jobEventID, func(status *JobStatus) {
+		result, err := c.AwaitJobStatus(ctx, jobEventID, func(status *JobStatus) {
 			if projectionErr != nil {
 				return
 			}
 			projectionErr = c.ProjectCanonicalJobState(ctx, status, "loom.status")
 		})
 		if err != nil {
-			c.logger.Error("Loom canonical projection poll failed",
+			c.logger.Error("Loom canonical projection await failed",
 				zap.String("job_id", jobEventID), zap.Error(err))
 			return
 		}
@@ -374,19 +377,24 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	return eventID, nil
 }
 
-// PollJobStatus subscribes to Kind 30100 (status) and Kind 5101 (result) events
+// JobTimeout returns the maximum wall-clock duration allowed for a Loom job.
+func (c *Client) JobTimeout() time.Duration {
+	return c.jobTimeout
+}
+
+// AwaitJobStatus subscribes to Kind 30100 (status) and Kind 5101 (result) events
 // for the given job event ID. It returns when a terminal result (Kind 5101) is
 // received or the context expires. An optional StatusCallback is invoked for
 // each intermediate status update.
-func (c *Client) PollJobStatus(ctx context.Context, jobEventID string, callbacks ...StatusCallback) (*JobStatus, error) {
-	return c.PollJobStatusFromWorker(ctx, jobEventID, "", callbacks...)
+func (c *Client) AwaitJobStatus(ctx context.Context, jobEventID string, callbacks ...StatusCallback) (*JobStatus, error) {
+	return c.AwaitJobStatusFromWorker(ctx, jobEventID, "", callbacks...)
 }
 
-// PollJobStatusFromWorker is PollJobStatus scoped to an expected worker pubkey.
+// AwaitJobStatusFromWorker is AwaitJobStatus scoped to an expected worker pubkey.
 // Relay-provided status/result events must pass shared Nostr validation plus
 // Loom-specific kind, tag, job-correlation, client, worker, and duplicate checks
 // before they can drive callbacks or terminal completion.
-func (c *Client) PollJobStatusFromWorker(ctx context.Context, jobEventID string, expectedWorkerPubkey string, callbacks ...StatusCallback) (*JobStatus, error) {
+func (c *Client) AwaitJobStatusFromWorker(ctx context.Context, jobEventID string, expectedWorkerPubkey string, callbacks ...StatusCallback) (*JobStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.jobTimeout)
 	defer cancel()
 
@@ -404,11 +412,21 @@ func (c *Client) PollJobStatusFromWorker(ctx context.Context, jobEventID string,
 	latest := &JobStatus{JobID: jobEventID, Status: StatusQueued}
 	seen := nostrAdapter.NewEventDeduplicator(256)
 	authAttempted := make(map[string]struct{})
+	backoff := c.initialJobSubscriptionBackoff()
 
 resubscribe:
 	sub, err := c.pool.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
-		return nil, fmt.Errorf("subscribing for job status: %w", err)
+		c.logger.Warn("failed to subscribe for Loom job status; retrying",
+			zap.String("job_id", jobEventID),
+			zap.Duration("backoff", backoff),
+			zap.Error(err),
+		)
+		if err := waitForJobResubscribe(ctx, backoff); err != nil {
+			return nil, err
+		}
+		backoff = nextJobSubscriptionBackoff(backoff)
+		goto resubscribe
 	}
 
 	for {
@@ -418,6 +436,7 @@ resubscribe:
 			return nil, ctx.Err()
 		case eose, ok := <-sub.RelayEOSE:
 			if ok {
+				backoff = c.initialJobSubscriptionBackoff()
 				c.logger.Debug("loom relay sent EOSE",
 					zap.String("relay", eose.RelayURL),
 					zap.String("subscription_id", eose.SubscriptionID),
@@ -448,12 +467,21 @@ resubscribe:
 		case ev, ok := <-sub.Events:
 			if !ok {
 				sub.Close()
-				return nil, fmt.Errorf("subscription closed before terminal job result")
+				c.logger.Warn("Loom job subscription ended before terminal result; resubscribing",
+					zap.String("job_id", jobEventID),
+					zap.Duration("backoff", backoff),
+				)
+				if err := waitForJobResubscribe(ctx, backoff); err != nil {
+					return nil, err
+				}
+				backoff = nextJobSubscriptionBackoff(backoff)
+				goto resubscribe
 			}
 			if ev == nil {
 				c.logger.Warn("dropping nil Loom job event", zap.String("job_id", jobEventID))
 				continue
 			}
+			backoff = c.initialJobSubscriptionBackoff()
 			if err := c.validateJobEvent(ev, jobEventID, expectedWorkerPubkey); err != nil {
 				c.logger.Warn("dropping invalid Loom job event",
 					zap.String("job_id", jobEventID),
@@ -498,6 +526,31 @@ resubscribe:
 				return parseJobResult(ev, jobEventID), nil
 			}
 		}
+	}
+}
+
+func (c *Client) initialJobSubscriptionBackoff() time.Duration {
+	if c.jobSubscriptionBackoff > 0 {
+		return c.jobSubscriptionBackoff
+	}
+	return defaultJobSubscriptionBackoff
+}
+
+func nextJobSubscriptionBackoff(current time.Duration) time.Duration {
+	if current >= maxJobSubscriptionBackoff/2 {
+		return maxJobSubscriptionBackoff
+	}
+	return current * 2
+}
+
+func waitForJobResubscribe(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

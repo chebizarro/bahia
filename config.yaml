@@ -28,7 +28,6 @@ loom:
     - "wss://relay.damus.io"
     - "wss://nos.lol"
   job_timeout: 30m
-  poll_interval: 10s
   canonical_projection:
     # Disabled by default. When enabled, production signs canonical 30900 state
     # and 4903 audit projections through Signet/NIP-46, not raw nsec material.

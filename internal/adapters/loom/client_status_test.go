@@ -15,16 +15,26 @@ import (
 )
 
 type fakeLoomRelayPool struct {
-	sub       *nostrAdapter.MergedSubscription
-	filters   []nostr.Filter
-	authCalls int
-	authErr   error
+	sub            *nostrAdapter.MergedSubscription
+	subs           []*nostrAdapter.MergedSubscription
+	filters        []nostr.Filter
+	subscribeCalls int
+	authCalls      int
+	authErr        error
 }
 
 func (f *fakeLoomRelayPool) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
 
 func (f *fakeLoomRelayPool) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Filter) (*nostrAdapter.MergedSubscription, error) {
 	f.filters = append([]nostr.Filter(nil), filters...)
+	call := f.subscribeCalls
+	f.subscribeCalls++
+	if len(f.subs) > 0 {
+		if call >= len(f.subs) {
+			return f.subs[len(f.subs)-1], nil
+		}
+		return f.subs[call], nil
+	}
 	if f.sub == nil {
 		return nil, errors.New("missing subscription")
 	}
@@ -44,11 +54,12 @@ func testClient(t *testing.T, sub *nostrAdapter.MergedSubscription, clientSK str
 	}
 	pool := &fakeLoomRelayPool{sub: sub}
 	client := &Client{
-		pool:         pool,
-		privateKey:   clientSK,
-		clientPubkey: clientPK,
-		jobTimeout:   time.Minute,
-		logger:       zap.NewNop(),
+		pool:                   pool,
+		privateKey:             clientSK,
+		clientPubkey:           clientPK,
+		jobTimeout:             time.Minute,
+		jobSubscriptionBackoff: time.Millisecond,
+		logger:                 zap.NewNop(),
 	}
 	return client, pool, clientPK
 }
@@ -116,7 +127,7 @@ func assertAuthor(t *testing.T, got []nostr.PubKey, want string, label string) {
 	}
 }
 
-func TestPollJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
+func TestAwaitJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("a", 64)
@@ -126,9 +137,9 @@ func TestPollJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
 	client, pool, clientPK := testClient(t, sub, clientSK)
 	events <- validResultEvent(t, workerSK, jobID, clientPK)
 
-	status, err := client.PollJobStatusFromWorker(context.Background(), jobID, workerPK)
+	status, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, workerPK)
 	if err != nil {
-		t.Fatalf("PollJobStatusFromWorker() error = %v", err)
+		t.Fatalf("AwaitJobStatusFromWorker() error = %v", err)
 	}
 	if status.Status != StatusCompleted {
 		t.Fatalf("status = %q, want %q", status.Status, StatusCompleted)
@@ -151,7 +162,7 @@ func TestPollJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
 	assertAuthor(t, pool.filters[1].Authors, workerPK, "result filter")
 }
 
-func TestPollJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
+func TestAwaitJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)
 	otherWorkerSK, _ := generatedKeyPair(t)
@@ -224,9 +235,9 @@ func TestPollJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
 			events <- tt.event(t, clientPK)
 			events <- validResultEvent(t, workerSK, jobID, clientPK)
 
-			status, err := client.PollJobStatusFromWorker(context.Background(), jobID, workerPK)
+			status, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, workerPK)
 			if err != nil {
-				t.Fatalf("PollJobStatusFromWorker() error = %v", err)
+				t.Fatalf("AwaitJobStatusFromWorker() error = %v", err)
 			}
 			if status.WorkerPubkey != workerPK || status.Status != StatusCompleted {
 				t.Fatalf("trusted status = %#v, want valid worker completion", status)
@@ -235,7 +246,7 @@ func TestPollJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
 	}
 }
 
-func TestPollJobStatus_UsesRememberedSubmittedWorkerForValidation(t *testing.T) {
+func TestAwaitJobStatus_UsesRememberedSubmittedWorkerForValidation(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)
 	otherWorkerSK, _ := generatedKeyPair(t)
@@ -248,9 +259,9 @@ func TestPollJobStatus_UsesRememberedSubmittedWorkerForValidation(t *testing.T) 
 	events <- validResultEvent(t, otherWorkerSK, jobID, clientPK)
 	events <- validResultEvent(t, workerSK, jobID, clientPK)
 
-	status, err := client.PollJobStatus(context.Background(), jobID)
+	status, err := client.AwaitJobStatus(context.Background(), jobID)
 	if err != nil {
-		t.Fatalf("PollJobStatus() error = %v", err)
+		t.Fatalf("AwaitJobStatus() error = %v", err)
 	}
 	if status.WorkerPubkey != workerPK {
 		t.Fatalf("worker pubkey = %q, want remembered worker %q", status.WorkerPubkey, workerPK)
@@ -258,7 +269,7 @@ func TestPollJobStatus_UsesRememberedSubmittedWorkerForValidation(t *testing.T) 
 	assertAuthor(t, pool.filters[0].Authors, workerPK, "status filter")
 }
 
-func TestPollJobStatusFromWorker_DeduplicatesStatusCallbacks(t *testing.T) {
+func TestAwaitJobStatusFromWorker_DeduplicatesStatusCallbacks(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("d", 64)
@@ -272,21 +283,21 @@ func TestPollJobStatusFromWorker_DeduplicatesStatusCallbacks(t *testing.T) {
 	events <- validResultEvent(t, workerSK, jobID, clientPK)
 
 	callbackCount := 0
-	_, err := client.PollJobStatusFromWorker(context.Background(), jobID, workerPK, func(status *JobStatus) {
+	_, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, workerPK, func(status *JobStatus) {
 		callbackCount++
 		if status.Status != StatusRunning {
 			t.Fatalf("callback status = %q, want %q", status.Status, StatusRunning)
 		}
 	})
 	if err != nil {
-		t.Fatalf("PollJobStatusFromWorker() error = %v", err)
+		t.Fatalf("AwaitJobStatusFromWorker() error = %v", err)
 	}
 	if callbackCount != 1 {
 		t.Fatalf("callback count = %d, want 1", callbackCount)
 	}
 }
 
-func TestPollJobStatusFromWorker_HandlesEOSEAndWaitsForRealtimeResult(t *testing.T) {
+func TestAwaitJobStatusFromWorker_HandlesEOSEAndWaitsForRealtimeResult(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("e", 64)
@@ -298,7 +309,7 @@ func TestPollJobStatusFromWorker_HandlesEOSEAndWaitsForRealtimeResult(t *testing
 
 	done := make(chan error, 1)
 	go func() {
-		status, err := client.PollJobStatusFromWorker(context.Background(), jobID, workerPK)
+		status, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, workerPK)
 		if err == nil && status.Status != StatusCompleted {
 			err = errors.New("unexpected status")
 		}
@@ -306,11 +317,11 @@ func TestPollJobStatusFromWorker_HandlesEOSEAndWaitsForRealtimeResult(t *testing
 	}()
 	events <- validResultEvent(t, workerSK, jobID, clientPK)
 	if err := <-done; err != nil {
-		t.Fatalf("PollJobStatusFromWorker() error = %v", err)
+		t.Fatalf("AwaitJobStatusFromWorker() error = %v", err)
 	}
 }
 
-func TestPollJobStatusFromWorker_ContinuesAfterRelayClosedWhenResultArrives(t *testing.T) {
+func TestAwaitJobStatusFromWorker_ContinuesAfterRelayClosedWhenResultArrives(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("2", 64)
@@ -322,16 +333,16 @@ func TestPollJobStatusFromWorker_ContinuesAfterRelayClosedWhenResultArrives(t *t
 	client, _, clientPK := testClient(t, sub, clientSK)
 	events <- validResultEvent(t, workerSK, jobID, clientPK)
 
-	status, err := client.PollJobStatusFromWorker(context.Background(), jobID, workerPK)
+	status, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, workerPK)
 	if err != nil {
-		t.Fatalf("PollJobStatusFromWorker() error = %v", err)
+		t.Fatalf("AwaitJobStatusFromWorker() error = %v", err)
 	}
 	if status.Status != StatusCompleted {
 		t.Fatalf("status = %q, want completed", status.Status)
 	}
 }
 
-func TestPollJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
+func TestAwaitJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	jobID := strings.Repeat("f", 64)
 	closed := make(chan nostrAdapter.RelayClosed, 1)
@@ -340,7 +351,7 @@ func TestPollJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
 	client, pool, _ := testClient(t, sub, clientSK)
 	pool.authErr = errors.New("auth failed")
 
-	_, err := client.PollJobStatusFromWorker(context.Background(), jobID, "")
+	_, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, "")
 	if err == nil || !strings.Contains(err.Error(), "auth") {
 		t.Fatalf("error = %v, want auth error", err)
 	}
@@ -372,19 +383,47 @@ func TestSelectWorker_FailClosedOnCriteria(t *testing.T) {
 	}
 }
 
-func TestPollJobStatusFromWorker_ClosedWithoutTerminalResultIsSurfaced(t *testing.T) {
+func TestAwaitJobStatusFromWorker_ChannelClosureResubscribesAndBackfillsResult(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
 	jobID := strings.Repeat("1", 64)
+
+	closedEvents := make(chan *nostr.Event)
+	close(closedEvents)
+	first := testSubscription(closedEvents, nil, nil, nil)
+
+	resultEvents := make(chan *nostr.Event, 1)
+	second := testSubscription(resultEvents, nil, nil, nil)
+	client, pool, clientPK := testClient(t, first, clientSK)
+	pool.subs = []*nostrAdapter.MergedSubscription{first, second}
+	resultEvents <- validResultEvent(t, workerSK, jobID, clientPK)
+
+	status, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, workerPK)
+	if err != nil {
+		t.Fatalf("AwaitJobStatusFromWorker() error = %v", err)
+	}
+	if status.Status != StatusCompleted {
+		t.Fatalf("status = %q, want completed", status.Status)
+	}
+	if pool.subscribeCalls != 2 {
+		t.Fatalf("subscribe calls = %d, want 2", pool.subscribeCalls)
+	}
+}
+
+func TestAwaitJobStatusFromWorker_RepeatedChannelClosureStopsAtContextDeadline(t *testing.T) {
+	clientSK, _ := generatedKeyPair(t)
+	jobID := strings.Repeat("4", 64)
 	events := make(chan *nostr.Event)
 	close(events)
-	closed := make(chan nostrAdapter.RelayClosed, 1)
-	closed <- nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub", Reason: "rate-limited: slow down"}
-	close(closed)
-	sub := testSubscription(events, nil, nil, closed)
-	client, _, _ := testClient(t, sub, clientSK)
+	sub := testSubscription(events, nil, nil, nil)
+	client, pool, _ := testClient(t, sub, clientSK)
+	client.jobTimeout = 15 * time.Millisecond
 
-	_, err := client.PollJobStatusFromWorker(context.Background(), jobID, "")
-	if err == nil {
-		t.Fatal("expected error when subscription closes without a terminal result")
+	_, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, "")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline exceeded", err)
+	}
+	if pool.subscribeCalls < 2 {
+		t.Fatalf("subscribe calls = %d, want at least 2", pool.subscribeCalls)
 	}
 }

@@ -21,7 +21,8 @@ import (
 // Coordinator manages the lifecycle of deployment workflows.
 type deploymentLoomClient interface {
 	SubmitJob(context.Context, loom.JobRequest) (string, error)
-	PollJobStatusFromWorker(context.Context, string, string, ...loom.StatusCallback) (*loom.JobStatus, error)
+	AwaitJobStatusFromWorker(context.Context, string, string, ...loom.StatusCallback) (*loom.JobStatus, error)
+	JobTimeout() time.Duration
 }
 
 type Coordinator struct {
@@ -77,10 +78,39 @@ func WithRuntimeResolver(resolver runtimeadapter.RuntimeResolver) CoordinatorOpt
 	return func(c *Coordinator) { c.runtimeResolver = resolver }
 }
 
-// Shutdown cancels all in-flight poll goroutines and waits for them to finish.
+// RecoverNonTerminalRuns reattaches completion awaits for persisted Loom jobs
+// left queued or running by a previous process instance.
+func (c *Coordinator) RecoverNonTerminalRuns(ctx context.Context) error {
+	if c.registry == nil || c.loom == nil {
+		return nil
+	}
+	runs, err := c.registry.ListNonTerminalDeploymentRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("listing non-terminal deployment runs: %w", err)
+	}
+
+	recovered := 0
+	for i := range runs {
+		run := runs[i]
+		if !isLoomDeploymentJob(run.LoomJobID) {
+			continue
+		}
+		c.startCompletionAwait(&run)
+		recovered++
+	}
+	c.logger.Info("deployment run recovery initialized", zap.Int("recovered_runs", recovered))
+	return nil
+}
+
+func isLoomDeploymentJob(jobID string) bool {
+	jobID = strings.TrimSpace(jobID)
+	return jobID != "" && !strings.HasPrefix(jobID, "runtime:") && !strings.HasPrefix(jobID, "admission:")
+}
+
+// Shutdown cancels all in-flight await goroutines and waits for them to finish.
 // It should be called during graceful application shutdown.
 func (c *Coordinator) Shutdown(timeout time.Duration) {
-	c.logger.Info("coordinator shutting down, cancelling in-flight polls")
+	c.logger.Info("coordinator shutting down, cancelling in-flight awaits")
 	c.cancel()
 
 	done := make(chan struct{})
@@ -91,9 +121,9 @@ func (c *Coordinator) Shutdown(timeout time.Duration) {
 
 	select {
 	case <-done:
-		c.logger.Info("coordinator shutdown complete, all polls finished")
+		c.logger.Info("coordinator shutdown complete, all awaits finished")
 	case <-time.After(timeout):
-		c.logger.Warn("coordinator shutdown timed out, some polls may still be running",
+		c.logger.Warn("coordinator shutdown timed out, some awaits may still be running",
 			zap.Duration("timeout", timeout),
 		)
 	}
@@ -201,13 +231,9 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		zap.String("environment", env.Name),
 	)
 
-	// Start polling for job completion in a tracked goroutine.
-	// Uses the coordinator's lifecycle context so polls are cancelled on shutdown.
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		c.pollForCompletion(c.ctx, run.ID, jobEventID, workerPubkey)
-	}()
+	// Await job completion in a tracked goroutine. The coordinator lifecycle
+	// context cancels the await without converting shutdown into a job timeout.
+	c.startCompletionAwait(run)
 
 	return nil
 }
@@ -326,52 +352,81 @@ func isLocalImageRef(image string) bool {
 	return strings.HasPrefix(strings.TrimSpace(image), "local/")
 }
 
-func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jobEventID string, workerPubkey string) {
-	status, err := c.loom.PollJobStatusFromWorker(ctx, jobEventID, workerPubkey)
+func (c *Coordinator) startCompletionAwait(run *domain.DeploymentRun) {
+	if run == nil {
+		return
+	}
+	runCopy := *run
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.awaitCompletion(c.ctx, &runCopy)
+	}()
+}
+
+func (c *Coordinator) awaitCompletion(ctx context.Context, run *domain.DeploymentRun) {
+	if c.loom == nil || run == nil {
+		return
+	}
+
+	startedAt := run.StartedAt
+	if startedAt == nil {
+		fallback := run.CreatedAt
+		if fallback.IsZero() {
+			fallback = time.Now().UTC()
+		}
+		startedAt = &fallback
+	}
+
+	awaitCtx := ctx
+	cancel := func() {}
+	var jobDeadline time.Time
+	if timeout := c.loom.JobTimeout(); timeout > 0 {
+		jobDeadline = startedAt.Add(timeout)
+		awaitCtx, cancel = context.WithDeadline(ctx, jobDeadline)
+	}
+	defer cancel()
+
+	status, err := c.loom.AwaitJobStatusFromWorker(awaitCtx, run.LoomJobID, run.WorkerPubkey)
 	if err != nil {
-		// Only context cancellation/deadline represents a timeout lifecycle outcome.
-		// Relay CLOSED/AUTH/subscription errors are infrastructure failures; do not
-		// mutate run state or worker stats from incomplete data.
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if ctx.Err() != nil {
-				c.logger.Info("poll cancelled during shutdown, marking run as timeout",
-					zap.String("run_id", runID.String()),
-				)
-			} else {
-				c.logger.Warn("loom job poll timed out",
-					zap.String("run_id", runID.String()),
-					zap.String("loom_job_id", jobEventID),
-					zap.Error(err),
-				)
-			}
-
-			// Use a detached context for the completion call since the poll context may be cancelled.
-			// The run record must be updated even during shutdown to avoid leaving it in queued/running state.
-			completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer completeCancel()
-
-			if completeErr := c.registry.CompleteDeploymentRun(completeCtx, runID, domain.RunStatusTimeout, nil); completeErr != nil {
-				c.logger.Error("failed to mark timed-out run as complete",
-					zap.String("run_id", runID.String()),
-					zap.Error(completeErr),
-				)
-			}
+		// Process shutdown leaves the run non-terminal so the next process can
+		// recover it. Only expiration of StartedAt + JobTimeout is a job timeout.
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			c.logger.Info("Loom job await cancelled during shutdown; leaving run non-terminal",
+				zap.String("run_id", run.ID.String()),
+				zap.String("loom_job_id", run.LoomJobID),
+			)
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) && !jobDeadline.IsZero() && !time.Now().Before(jobDeadline) {
+			c.logger.Warn("Loom job exceeded its wall-clock timeout",
+				zap.String("run_id", run.ID.String()),
+				zap.String("loom_job_id", run.LoomJobID),
+				zap.Time("started_at", *startedAt),
+				zap.Time("deadline", jobDeadline),
+			)
+			c.completeRunDetached(run.ID, domain.RunStatusTimeout, nil)
 			return
 		}
 
-		c.logger.Error("failed to poll job status without trusted terminal result",
-			zap.String("run_id", runID.String()),
-			zap.String("loom_job_id", jobEventID),
+		c.logger.Error("failed to await job status without trusted terminal result",
+			zap.String("run_id", run.ID.String()),
+			zap.String("loom_job_id", run.LoomJobID),
 			zap.Error(err),
 		)
 		return
 	}
 
-	runStatus := mapLoomStatus(status.Status)
+	c.completeRunDetached(run.ID, mapLoomStatus(status.Status), status.ExitCode)
+}
 
-	if err := c.registry.CompleteDeploymentRun(ctx, runID, runStatus, status.ExitCode); err != nil {
+func (c *Coordinator) completeRunDetached(runID uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) {
+	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer completeCancel()
+	if err := c.registry.CompleteDeploymentRun(completeCtx, runID, status, exitCode); err != nil {
 		c.logger.Error("failed to complete deployment run",
 			zap.String("run_id", runID.String()),
+			zap.String("status", string(status)),
 			zap.Error(err),
 		)
 	}

@@ -322,6 +322,11 @@ func New(cfg *config.Config) (*App, error) {
 		workflow.WithRuntimeResolver(runtimeResolver),
 	)
 	coord.SetupEventHandlers(publisher)
+	if dbAvailable && pool != nil {
+		if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+			logger.Warn("failed to recover non-terminal deployment runs", zap.Error(err))
+		}
+	}
 
 	// Secret encryptor (uses Bahia's Nostr key for at-rest encryption).
 	var secretEncryptor *secretsAdapter.Encryptor
@@ -1835,7 +1840,7 @@ func (c loomCleanupClient) PollCleanupJobStatusFromWorker(ctx context.Context, j
 			}
 		})
 	}
-	status, err := c.client.PollJobStatusFromWorker(ctx, jobEventID, expectedWorkerPubkey, loomCallbacks...)
+	status, err := c.client.AwaitJobStatusFromWorker(ctx, jobEventID, expectedWorkerPubkey, loomCallbacks...)
 	return cleanupJobStatusFromLoom(status), err
 }
 

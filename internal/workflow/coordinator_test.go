@@ -195,6 +195,17 @@ func (m *stubRunRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Deployme
 func (m *stubRunRepo) ListByIntent(_ context.Context, _ uuid.UUID) ([]domain.DeploymentRun, error) {
 	return nil, nil
 }
+func (m *stubRunRepo) ListNonTerminal(_ context.Context) ([]domain.DeploymentRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var runs []domain.DeploymentRun
+	for _, run := range m.runs {
+		if run.Status == domain.RunStatusQueued || run.Status == domain.RunStatusRunning {
+			runs = append(runs, *run)
+		}
+	}
+	return runs, nil
+}
 func (m *stubRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -300,9 +311,12 @@ func (s *stubRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) 
 type stubLoomClient struct {
 	status       *loom.JobStatus
 	err          error
+	awaitFn      func(context.Context, string, string) (*loom.JobStatus, error)
+	jobTimeout   time.Duration
 	gotJobID     string
 	gotWorkerKey string
 	submitCalls  int
+	awaitCalls   int
 	lastJobReq   loom.JobRequest
 }
 
@@ -312,10 +326,21 @@ func (s *stubLoomClient) SubmitJob(_ context.Context, req loom.JobRequest) (stri
 	return "stub-job", nil
 }
 
-func (s *stubLoomClient) PollJobStatusFromWorker(_ context.Context, jobID string, workerPubkey string, _ ...loom.StatusCallback) (*loom.JobStatus, error) {
+func (s *stubLoomClient) AwaitJobStatusFromWorker(ctx context.Context, jobID string, workerPubkey string, _ ...loom.StatusCallback) (*loom.JobStatus, error) {
 	s.gotJobID = jobID
 	s.gotWorkerKey = workerPubkey
+	s.awaitCalls++
+	if s.awaitFn != nil {
+		return s.awaitFn(ctx, jobID, workerPubkey)
+	}
 	return s.status, s.err
+}
+
+func (s *stubLoomClient) JobTimeout() time.Duration {
+	if s.jobTimeout > 0 {
+		return s.jobTimeout
+	}
+	return time.Minute
 }
 
 // mockLoomClient is a controllable fake that replaces the real loom.Client.
@@ -516,134 +541,105 @@ func TestShutdown_Idempotent(t *testing.T) {
 	coord.Shutdown(1 * time.Second)
 }
 
-func TestPollForCompletion_UsesCoordinatorContext(t *testing.T) {
-	// This test verifies that pollForCompletion respects context cancellation.
-	// We create a coordinator, start a mock poll, cancel the context, and verify
-	// the poll exits promptly.
-
+func TestAwaitCompletion_ShutdownLeavesRunNonTerminal(t *testing.T) {
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
-
-	svc := &domain.Service{Name: "test-svc", ArtifactRepo: "harbor/test"}
-	_ = svcRepo.Create(context.Background(), svc)
-	env := &domain.Environment{Name: "staging", DeployStrategy: domain.DeployStrategyReplace}
-	_ = envRepo.Create(context.Background(), env)
-	art := &domain.Artifact{BuildID: uuid.New(), ServiceID: svc.ID, ImageRepo: "harbor/test", ImageTag: "v1", ImageDigest: "sha256:abc"}
-	_ = artRepo.Create(context.Background(), art)
-
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	logger := zap.NewNop()
-
-	// We can't easily mock the loom.Client since it's a concrete struct,
-	// but we can test the pollForCompletion method's context behavior directly.
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, logger)
-
-	// Create a run in the repo for the poll to complete.
-	di := &domain.DeploymentIntent{
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	intent := &domain.DeploymentIntent{
 		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
 		RequestedBy: "test", SourceKind: domain.SourceKindManual,
 		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
 	}
-	_ = registry.CreateDeploymentIntent(context.Background(), di)
-	intentRepo.mu.Lock()
-	intentRepo.intents[di.ID].Status = domain.IntentStatusDeploying
-	intentRepo.mu.Unlock()
-
-	run := &domain.DeploymentRun{DeploymentIntentID: di.ID, LoomJobID: "test-job", Status: domain.RunStatusQueued}
-	_ = registry.CreateDeploymentRun(context.Background(), run)
-
-	// Cancel the coordinator context (simulating shutdown).
-	coord.cancel()
-
-	// Call pollForCompletion directly — it should exit quickly since the context is cancelled.
-	// The loom client is nil, but pollForCompletion will call c.loom.PollJobStatus which will
-	// panic on nil receiver. Instead, we verify the context cancellation via the Shutdown path.
-
-	// Verify the run can still be completed with a timeout status using a detached context.
-	// This validates the "detached context for completion during shutdown" behavior.
-	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer completeCancel()
-
-	err := registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusTimeout, nil)
-	if err != nil {
-		t.Fatalf("should be able to complete run with detached context: %v", err)
-	}
-
-	// Verify the run was marked as timeout.
-	runRepo.mu.Lock()
-	updatedRun := runRepo.runs[run.ID]
-	runRepo.mu.Unlock()
-
-	if updatedRun.Status != domain.RunStatusTimeout {
-		t.Errorf("expected run status timeout, got %s", updatedRun.Status)
-	}
-}
-
-func TestPollForCompletion_DoesNotMutateRunOnUntrustedPollError(t *testing.T) {
-	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
-	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
-
-	intent := &domain.DeploymentIntent{
-		ServiceID:      svc.ID,
-		EnvironmentID:  env.ID,
-		ArtifactID:     art.ID,
-		RequestedBy:    "test",
-		SourceKind:     domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired,
-		Status:         domain.IntentStatusApproved,
-	}
 	if err := registry.CreateDeploymentIntent(context.Background(), intent); err != nil {
 		t.Fatal(err)
 	}
-	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "job-id", Status: domain.RunStatusQueued}
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "job-id", WorkerPubkey: "worker-pubkey", Status: domain.RunStatusQueued, StartedAt: &now}
 	if err := registry.CreateDeploymentRun(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 
-	stubLoom := &stubLoomClient{err: errors.New("loom job status subscription closed: auth-required")}
+	awaitStarted := make(chan struct{})
+	stubLoom := &stubLoomClient{awaitFn: func(ctx context.Context, _, _ string) (*loom.JobStatus, error) {
+		close(awaitStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
 	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
 	coord.loom = stubLoom
-
-	coord.pollForCompletion(context.Background(), run.ID, "job-id", "worker-pubkey")
+	coord.startCompletionAwait(run)
+	<-awaitStarted
+	coord.Shutdown(time.Second)
 
 	updated, err := registry.GetDeploymentRun(context.Background(), run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Status != domain.RunStatusQueued {
-		t.Fatalf("run status = %s, want queued after untrusted poll error", updated.Status)
+		t.Fatalf("run status = %s, want queued after shutdown cancellation", updated.Status)
+	}
+}
+
+func TestAwaitCompletion_DoesNotMutateRunOnUntrustedAwaitError(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(context.Background(), intent); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "job-id", WorkerPubkey: "worker-pubkey", Status: domain.RunStatusQueued, StartedAt: &now}
+	if err := registry.CreateDeploymentRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+
+	stubLoom := &stubLoomClient{err: errors.New("loom job status subscription auth failed")}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
+	coord.loom = stubLoom
+	coord.awaitCompletion(context.Background(), run)
+
+	updated, err := registry.GetDeploymentRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != domain.RunStatusQueued {
+		t.Fatalf("run status = %s, want queued after untrusted await error", updated.Status)
 	}
 	if stubLoom.gotWorkerKey != "worker-pubkey" {
 		t.Fatalf("worker pubkey passed to Loom = %q, want selected worker", stubLoom.gotWorkerKey)
 	}
 }
 
-func TestPollForCompletion_MarksTimeoutOnlyForContextDeadline(t *testing.T) {
+func TestAwaitCompletion_TimeoutUsesStartedAtWallClock(t *testing.T) {
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
 	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
-
 	intent := &domain.DeploymentIntent{
-		ServiceID:      svc.ID,
-		EnvironmentID:  env.ID,
-		ArtifactID:     art.ID,
-		RequestedBy:    "test",
-		SourceKind:     domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired,
-		Status:         domain.IntentStatusApproved,
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
 	}
 	if err := registry.CreateDeploymentIntent(context.Background(), intent); err != nil {
 		t.Fatal(err)
 	}
-	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "job-id", Status: domain.RunStatusQueued}
+	startedAt := time.Now().UTC().Add(-2 * time.Minute)
+	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "job-id", Status: domain.RunStatusQueued, StartedAt: &startedAt}
 	if err := registry.CreateDeploymentRun(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 
+	stubLoom := &stubLoomClient{jobTimeout: time.Minute, awaitFn: func(ctx context.Context, _, _ string) (*loom.JobStatus, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
 	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
-	coord.loom = &stubLoomClient{err: context.DeadlineExceeded}
-
-	coord.pollForCompletion(context.Background(), run.ID, "job-id", "worker-pubkey")
+	coord.loom = stubLoom
+	coord.awaitCompletion(context.Background(), run)
 
 	updated, err := registry.GetDeploymentRun(context.Background(), run.ID)
 	if err != nil {
@@ -651,6 +647,44 @@ func TestPollForCompletion_MarksTimeoutOnlyForContextDeadline(t *testing.T) {
 	}
 	if updated.Status != domain.RunStatusTimeout {
 		t.Fatalf("run status = %s, want timeout", updated.Status)
+	}
+}
+
+func TestRecoverNonTerminalRuns_ReattachesPersistedLoomJob(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(context.Background(), intent); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "persisted-job-id", WorkerPubkey: "persisted-worker", Status: domain.RunStatusRunning, StartedAt: &now}
+	if err := registry.CreateDeploymentRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: loom.StatusCompleted}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
+	coord.loom = stubLoom
+	if err := coord.RecoverNonTerminalRuns(context.Background()); err != nil {
+		t.Fatalf("RecoverNonTerminalRuns() error = %v", err)
+	}
+	coord.wg.Wait()
+
+	updated, err := registry.GetDeploymentRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != domain.RunStatusSucceeded {
+		t.Fatalf("run status = %s, want succeeded after recovery", updated.Status)
+	}
+	if stubLoom.gotJobID != "persisted-job-id" || stubLoom.gotWorkerKey != "persisted-worker" {
+		t.Fatalf("recovered await = (%q, %q), want persisted job and worker", stubLoom.gotJobID, stubLoom.gotWorkerKey)
 	}
 }
 

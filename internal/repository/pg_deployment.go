@@ -283,6 +283,34 @@ func (r *PgDeploymentRunRepository) ListByIntent(ctx context.Context, intentID u
 	return runs, rows.Err()
 }
 
+// ListNonTerminal returns queued and running deployment runs so workflow
+// coordination can reattach to their persisted Loom jobs after a restart.
+func (r *PgDeploymentRunRepository) ListNonTerminal(ctx context.Context) ([]domain.DeploymentRun, error) {
+	rows, err := r.pool.Query(ctx, `SELECT `+runColumns+` FROM deployment_runs WHERE status IN ('queued', 'running') ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing non-terminal deployment runs: %w", err)
+	}
+	defer rows.Close()
+
+	var runs []domain.DeploymentRun
+	for rows.Next() {
+		var dr domain.DeploymentRun
+		var metaJSON, applyMetaJSON []byte
+		if err := rows.Scan(&dr.ID, &dr.DeploymentIntentID, &dr.DeploymentUnitID, &dr.LoomJobID, &dr.WorkerPubkey, &dr.WorkerName, &dr.Status,
+			&dr.ExitCode, &dr.StdoutRef, &dr.StderrRef, &dr.StartedAt, &dr.FinishedAt, &metaJSON, &applyMetaJSON, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning non-terminal deployment run: %w", err)
+		}
+		if err := unmarshalJSON(metaJSON, &dr.Metadata, "run metadata"); err != nil {
+			return nil, fmt.Errorf("reading run %s: %w", dr.ID, err)
+		}
+		if err := unmarshalJSON(applyMetaJSON, &dr.ApplyMetadata, "apply metadata"); err != nil {
+			return nil, fmt.Errorf("reading run %s: %w", dr.ID, err)
+		}
+		runs = append(runs, dr)
+	}
+	return runs, rows.Err()
+}
+
 func (r *PgDeploymentRunRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {
 	now := time.Now().UTC()
 	var finishedAt *time.Time
