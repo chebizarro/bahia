@@ -1,5 +1,12 @@
 import { uniqueRelays, messageFromError } from './pool-utils.js';
 
+const DEFAULT_RECOVERY_OPTIONS = Object.freeze({
+  initialDelayMs: 500,
+  maxDelayMs: 30_000,
+  jitterRatio: 0.25,
+  disconnectAfterFailures: 3
+});
+
 export function subscribeOnRelays(client, relays, filters, { onEvent, onEose, onClosed, onAuth } = {}) {
   const requestedRelays = uniqueRelays(relays);
   const subId = `sub_${++client.subIdCounter}`;
@@ -99,5 +106,160 @@ export function subscribeOnRelays(client, relays, filters, { onEvent, onEose, on
   };
 
   client.activeSubscriptions.add(unsubscribe);
+  return unsubscribe;
+}
+
+function recoveryFilters(filters, lastSeenCreatedAt) {
+  if (!Number.isFinite(lastSeenCreatedAt)) return filters;
+  const replaySince = Math.max(0, Math.floor(lastSeenCreatedAt) - 1);
+  return filters.map((filter) => ({
+    ...filter,
+    since: Number.isFinite(filter?.since) ? Math.max(filter.since, replaySince) : replaySince
+  }));
+}
+
+function recoveryDelay(failures, options) {
+  const exponent = Math.max(0, failures - 1);
+  const unjittered = Math.min(options.maxDelayMs, options.initialDelayMs * (2 ** exponent));
+  const random = Math.min(1, Math.max(0, Number(options.random()) || 0));
+  const factor = 1 - options.jitterRatio + (2 * options.jitterRatio * random);
+  return Math.max(0, Math.round(unjittered * factor));
+}
+
+/**
+ * Maintains one logical long-lived subscription per relay across protocol CLOSED
+ * frames and connection failures. Replays are bounded by each relay's latest valid
+ * event timestamp, while a logical event-id set suppresses overlap duplicates.
+ */
+export function subscribeWithRecoveryOnRelays(
+  client,
+  relays,
+  filters,
+  { onEvent, onEose, onClosed, onAuth } = {},
+  recoveryOptions = {}
+) {
+  const requestedRelays = uniqueRelays(relays);
+  const options = {
+    initialDelayMs: Math.max(0, Number(recoveryOptions.initialDelayMs ?? DEFAULT_RECOVERY_OPTIONS.initialDelayMs)),
+    maxDelayMs: Math.max(0, Number(recoveryOptions.maxDelayMs ?? DEFAULT_RECOVERY_OPTIONS.maxDelayMs)),
+    jitterRatio: Math.min(1, Math.max(0, Number(recoveryOptions.jitterRatio ?? DEFAULT_RECOVERY_OPTIONS.jitterRatio))),
+    disconnectAfterFailures: Math.max(1, Math.floor(Number(recoveryOptions.disconnectAfterFailures ?? DEFAULT_RECOVERY_OPTIONS.disconnectAfterFailures))),
+    random: typeof recoveryOptions.random === 'function' ? recoveryOptions.random : Math.random
+  };
+  options.maxDelayMs = Math.max(options.initialDelayMs, options.maxDelayMs);
+
+  const states = new Map(requestedRelays.map((relay) => [relay, {
+    childUnsubscribe: null,
+    timer: null,
+    failures: 0,
+    lastSeenCreatedAt: null,
+    generation: 0,
+    authPromise: Promise.resolve()
+  }]));
+  const seenEvents = new Set();
+  let active = true;
+
+  const clearChild = (state) => {
+    const childUnsubscribe = state.childUnsubscribe;
+    state.childUnsubscribe = null;
+    childUnsubscribe?.();
+  };
+
+  const scheduleRetry = (relayUrl, reason = '', meta = {}) => {
+    const state = states.get(relayUrl);
+    if (!active || !state) return;
+
+    clearChild(state);
+    state.failures += 1;
+    const delayMs = recoveryDelay(state.failures, options);
+    const disconnected = state.failures >= options.disconnectAfterFailures;
+    if (disconnected) client.markRelayStatus(relayUrl, 'disconnected');
+
+    onClosed?.(reason, relayUrl, {
+      ...meta,
+      terminal: false,
+      recovering: true,
+      disconnected,
+      consecutiveFailures: state.failures,
+      retryInMs: delayMs
+    });
+
+    const armRetry = () => {
+      if (!active || state.timer) return;
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        openRelay(relayUrl);
+      }, delayMs);
+    };
+
+    if (meta.authRequired) {
+      Promise.resolve(state.authPromise).catch(() => {}).finally(armRetry);
+    } else {
+      armRetry();
+    }
+  };
+
+  const openRelay = (relayUrl) => {
+    const state = states.get(relayUrl);
+    if (!active || !state) return;
+    const generation = ++state.generation;
+    const childUnsubscribe = subscribeOnRelays(
+      client,
+      [relayUrl],
+      recoveryFilters(filters, state.lastSeenCreatedAt),
+      {
+        onEvent: (event, relay) => {
+          if (!active || generation !== state.generation) return;
+          if (Number.isFinite(event?.created_at)) {
+            state.lastSeenCreatedAt = Math.max(state.lastSeenCreatedAt ?? event.created_at, event.created_at);
+          }
+          if (event?.id && seenEvents.has(event.id)) return;
+          if (event?.id) seenEvents.add(event.id);
+          onEvent?.(event, relay);
+        },
+        onEose: (relay) => {
+          if (!active || generation !== state.generation) return;
+          state.failures = 0;
+          client.markRelayStatus(relayUrl, 'connected');
+          onEose?.(relay);
+        },
+        onClosed: (reason, relay, meta) => {
+          if (!active || generation !== state.generation) return;
+          scheduleRetry(relayUrl, reason, meta);
+        },
+        onAuth: (challenge, relay, eventTemplate) => {
+          if (!active || generation !== state.generation) return undefined;
+          try {
+            state.authPromise = Promise.resolve(onAuth?.(challenge, relay, eventTemplate));
+          } catch (error) {
+            state.authPromise = Promise.reject(error);
+          }
+          state.authPromise.catch(() => {});
+          return state.authPromise;
+        }
+      }
+    );
+
+    if (!active || generation !== state.generation) {
+      childUnsubscribe();
+      return;
+    }
+    state.childUnsubscribe = childUnsubscribe;
+  };
+
+  const unsubscribe = () => {
+    if (!client.activeSubscriptions.has(unsubscribe)) return;
+    client.activeSubscriptions.delete(unsubscribe);
+    active = false;
+    for (const state of states.values()) {
+      state.generation += 1;
+      if (state.timer) clearTimeout(state.timer);
+      state.timer = null;
+      clearChild(state);
+    }
+  };
+
+  client.activeSubscriptions.add(unsubscribe);
+  requestedRelays.forEach(openRelay);
   return unsubscribe;
 }

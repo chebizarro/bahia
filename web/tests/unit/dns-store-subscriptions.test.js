@@ -23,7 +23,7 @@ const nostrMock = vi.hoisted(() => ({
   setRelays: vi.fn(),
   connect: vi.fn(),
   queryUntilEose: vi.fn(),
-  subscribe: vi.fn(),
+  subscribeWithRecovery: vi.fn(),
   retryRelay: vi.fn()
 }));
 
@@ -84,7 +84,7 @@ describe('DNS dashboard Nostr subscription store', () => {
     vi.clearAllMocks();
     global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ supported_nips: [1, 11, 42] }) }));
     nostrMock.connect.mockResolvedValue({ connected: 1, total: 1, failed: 0, connecting: 0, relays: [{ url: 'ws://localhost:10547/relay', status: 'connected' }] });
-    nostrMock.subscribe.mockReturnValue(vi.fn());
+    nostrMock.subscribeWithRecovery.mockReturnValue(vi.fn());
     systemInfoMock.loadSystemInfo.mockResolvedValue({
       nostr: {
         browser_relays: ['http://localhost:10547/relay'],
@@ -104,8 +104,8 @@ describe('DNS dashboard Nostr subscription store', () => {
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
-    expect(nostrMock.subscribe).toHaveBeenCalledTimes(1);
-    expect(nostrMock.subscribe).toHaveBeenCalledWith([
+    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledTimes(1);
+    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith([
       { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] }
     ], expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function), onAuth: expect.any(Function) }));
   });
@@ -145,8 +145,8 @@ describe('DNS dashboard Nostr subscription store', () => {
     const result = await store.connect('wss://relay.example', 'b'.repeat(64), { trustedRelayMonitorPubkeys: [monitor] });
 
     expect(result.ok).toBe(true);
-    expect(nostrMock.subscribe).toHaveBeenCalledTimes(2);
-    expect(nostrMock.subscribe.mock.calls[1][0]).toEqual([
+    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledTimes(2);
+    expect(nostrMock.subscribeWithRecovery.mock.calls[1][0]).toEqual([
       { kinds: [10166], authors: [monitor], limit: 1 },
       { kinds: [30166], authors: [monitor], '#d': ['wss://relay.example'], limit: 1 }
     ]);
@@ -239,7 +239,7 @@ describe('DNS dashboard Nostr subscription store', () => {
 
   it('updates reactive DNS state from live EVENT callbacks and marks EOSE catch-up complete', async () => {
     await store.connect('ws://localhost:10547/relay', 'b'.repeat(64));
-    const callbacks = nostrMock.subscribe.mock.calls[0][1];
+    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
 
     callbacks.onEvent(zoneEvent(), 'relay-a');
     callbacks.onEvent(endpointEvent(), 'relay-a');
@@ -275,7 +275,7 @@ describe('DNS dashboard Nostr subscription store', () => {
 
   it('surfaces CLOSED and AUTH subscription failures without hiding them behind refresh', async () => {
     await store.connect('ws://localhost:10547/relay', 'b'.repeat(64));
-    const callbacks = nostrMock.subscribe.mock.calls[0][1];
+    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
 
     callbacks.onClosed('rate-limited', 'relay-a', { terminal: true, source: 'closed' });
     expect(store.dnsState.error.subscription).toContain('rate-limited');

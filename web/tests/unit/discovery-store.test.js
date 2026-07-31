@@ -5,6 +5,7 @@ const poolClientHarness = vi.hoisted(() => ({
   connectedRelays: ['ws://localhost:10547/relay'],
   instance: null,
   closedRelays: [],
+  silentRelays: [],
   unsubscribe: vi.fn(),
   PoolBackedClient: vi.fn(function PoolBackedClient() {
     const client = {
@@ -23,7 +24,10 @@ const poolClientHarness = vi.hoisted(() => ({
           handlers.onClosed?.(closure.reason, closure.relay, closure.meta);
         }
         for (const relay of relays) {
-          if (!poolClientHarness.closedRelays.some((closure) => closure.relay === relay && closure.meta?.terminal !== false)) {
+          if (
+            !poolClientHarness.silentRelays.includes(relay)
+            && !poolClientHarness.closedRelays.some((closure) => closure.relay === relay && closure.meta?.terminal !== false)
+          ) {
             handlers.onEose?.(relay);
           }
         }
@@ -117,6 +121,7 @@ describe('Nostr system discovery store', () => {
     poolClientHarness.instance = null;
     poolClientHarness.lastSubscription = null;
     poolClientHarness.closedRelays = [];
+    poolClientHarness.silentRelays = [];
     poolClientHarness.unsubscribe.mockClear();
     store = await import('../../src/lib/stores/discovery.svelte.js');
     store.resetDiscoveryStore();
@@ -156,6 +161,50 @@ describe('Nostr system discovery store', () => {
     });
     expect(info._discovery.relay_sets['bahia-browser-v1']).toHaveLength(2);
     expect(info._discovery.relay_sets['bahia-contextvm-v1']).toEqual(['wss://contextvm.example/relay']);
+  });
+
+  it('succeeds after one relay EOSEs and another closes terminally', async () => {
+    window.__BAHIA_BOOTSTRAP__.relay_urls = [
+      'wss://dead.example',
+      'wss://live.example'
+    ];
+    poolClientHarness.closedRelays = [{
+      relay: 'wss://dead.example',
+      reason: 'connection failed',
+      meta: { terminal: true, source: 'connection' }
+    }];
+
+    const info = await store.discoverSystemInfo({ force: true });
+
+    expect(poolClientHarness.instance.subscribeOnRelays).toHaveBeenCalledWith(
+      ['wss://dead.example', 'wss://live.example'],
+      [discoveryFilter],
+      expect.any(Object)
+    );
+    expect(info.nostr.service_pubkey).toBe(trustedPubkey);
+    expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
+  });
+
+  it('uses the overall deadline to succeed with one EOSE and one silent relay', async () => {
+    vi.useFakeTimers();
+    try {
+      window.__BAHIA_BOOTSTRAP__.relay_urls = [
+        'wss://live.example',
+        'wss://silent.example'
+      ];
+      poolClientHarness.silentRelays = ['wss://silent.example'];
+
+      const discovery = store.discoverSystemInfo({ force: true });
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(discovery).resolves.toMatchObject({
+        nostr: { service_pubkey: trustedPubkey }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('carries NIP-34 repository relay policy from service discovery payload', () => {

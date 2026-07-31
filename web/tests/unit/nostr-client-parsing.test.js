@@ -358,6 +358,95 @@ describe('Nostr Client - Parsing Functions', () => {
       });
       expect(get(client.connectionStatus)['ws://relay.example']).toBe('connected');
     });
+
+    it('re-REQs after CLOSED with a bounded replay cursor and resumes events', async () => {
+      vi.useFakeTimers();
+      try {
+        const relay = createRelay('ws://relay.example');
+        const pool = createPool([relay]);
+        const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool, validateEvent: null });
+        const onEvent = vi.fn();
+        const onClosed = vi.fn();
+
+        const unsubscribe = client.subscribeWithRecovery(
+          [{ kinds: [30900] }],
+          { onEvent, onClosed },
+          { initialDelayMs: 100, maxDelayMs: 1000, jitterRatio: 0, disconnectAfterFailures: 3 }
+        );
+        await flushPromises();
+
+        relay.subscriptions[0].params.onevent({ id: 'event-1', created_at: 100 });
+        await flushPromises();
+        relay.subscriptions[0].params.onclose('rate-limited');
+        await flushPromises();
+
+        expect(onClosed).toHaveBeenCalledWith('rate-limited', 'ws://relay.example', expect.objectContaining({
+          terminal: false,
+          recovering: true,
+          disconnected: false,
+          consecutiveFailures: 1,
+          retryInMs: 100
+        }));
+
+        await vi.advanceTimersByTimeAsync(100);
+        await flushPromises();
+        expect(relay.subscriptions).toHaveLength(2);
+        expect(relay.subscriptions[1].filters).toEqual([{ kinds: [30900], since: 99 }]);
+
+        relay.subscriptions[1].params.onevent({ id: 'event-2', created_at: 101 });
+        await flushPromises();
+        expect(onEvent.mock.calls.map(([event]) => event.id)).toEqual(['event-1', 'event-2']);
+
+        unsubscribe();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resets recovery backoff after EOSE', async () => {
+      vi.useFakeTimers();
+      try {
+        const relay = createRelay('ws://relay.example');
+        const client = createNostrPoolClient({
+          relays: ['ws://relay.example'],
+          pool: createPool([relay]),
+          validateEvent: null
+        });
+        const unsubscribe = client.subscribeWithRecovery(
+          [{ kinds: [30900] }],
+          {},
+          { initialDelayMs: 100, maxDelayMs: 1000, jitterRatio: 0 }
+        );
+        await flushPromises();
+
+        relay.subscriptions[0].params.onclose('first failure');
+        await flushPromises();
+        await vi.advanceTimersByTimeAsync(100);
+        await flushPromises();
+
+        relay.subscriptions[1].params.onclose('second failure');
+        await flushPromises();
+        await vi.advanceTimersByTimeAsync(199);
+        expect(relay.subscriptions).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        await flushPromises();
+        expect(relay.subscriptions).toHaveLength(3);
+
+        relay.subscriptions[2].params.oneose();
+        await flushPromises();
+        relay.subscriptions[2].params.onclose('failure after healthy EOSE');
+        await flushPromises();
+        await vi.advanceTimersByTimeAsync(99);
+        expect(relay.subscriptions).toHaveLength(3);
+        await vi.advanceTimersByTimeAsync(1);
+        await flushPromises();
+        expect(relay.subscriptions).toHaveLength(4);
+
+        unsubscribe();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('publish', () => {

@@ -381,7 +381,7 @@ function subscribeToConnectionState() {
 
 function startSubscription() {
   if (liveUnsubscribe) liveUnsubscribe();
-  liveUnsubscribe = nostr.subscribe(fipsMeshReadModelFilters(), {
+  liveUnsubscribe = nostr.subscribeWithRecovery(fipsMeshReadModelFilters(), {
     onEvent: (event) => applyFipsMeshEvent(event),
     onEose: () => {
       fipsMeshState.lastEoseAt = Date.now();
@@ -391,7 +391,11 @@ function startSubscription() {
     },
     onClosed: (reason = '', relay = '', meta = {}) => {
       fipsMeshState.lastClosed = { reason: String(reason || ''), relay, terminal: meta?.terminal !== false, source: meta?.source || 'closed' };
-      if (meta?.terminal !== false && fipsMeshState.status === 'live') fipsMeshState.status = 'degraded';
+      if (meta?.terminal === false) {
+        fipsMeshState.status = meta?.disconnected ? 'disconnected' : 'reconnecting';
+      } else if (fipsMeshState.status === 'live') {
+        fipsMeshState.status = 'degraded';
+      }
     }
   });
 }

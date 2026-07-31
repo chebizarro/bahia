@@ -25,7 +25,7 @@ const nostrMock = vi.hoisted(() => {
     connected: store(false),
     setRelays: vi.fn(),
     connect: vi.fn(),
-    subscribe: vi.fn()
+    subscribeWithRecovery: vi.fn()
   };
 });
 
@@ -82,7 +82,7 @@ describe('FIPS mesh store', () => {
     nostrMock.connect.mockImplementation(async () => {
       nostrMock.connected.set(true);
     });
-    nostrMock.subscribe.mockReturnValue(vi.fn());
+    nostrMock.subscribeWithRecovery.mockReturnValue(vi.fn());
     systemInfoMock.loadSystemInfo.mockResolvedValue({
       nostr: {
         browser_relays: ['http://localhost:10547/relay'],
@@ -107,14 +107,14 @@ describe('FIPS mesh store', () => {
     const initial = meshEndpoint();
 
     const result = await store.bootstrapFipsMesh();
-    const callbacks = nostrMock.subscribe.mock.calls[0][1];
+    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
     callbacks.onEvent(initial, 'relay-a');
     callbacks.onEose('relay-a');
 
     expect(result.ok).toBe(true);
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(nostrMock.subscribe).toHaveBeenCalledWith(expect.arrayContaining([
+    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['mesh'], '#mesh': ['fips'] })
     ]), expect.objectContaining({
       onEvent: expect.any(Function),
@@ -128,7 +128,7 @@ describe('FIPS mesh store', () => {
 
   it('applies live EVENT, EOSE, and CLOSED callbacks without polling', async () => {
     await store.bootstrapFipsMesh();
-    const callbacks = nostrMock.subscribe.mock.calls[0][1];
+    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
 
     callbacks.onEvent(meshEndpoint({ id: 'live-endpoint', created_at: 120, content: { fqdn: 'live.mesh.example' } }), 'relay-a');
     callbacks.onEose('relay-a');

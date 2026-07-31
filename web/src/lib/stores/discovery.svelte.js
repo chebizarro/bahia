@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 import { KINDS, getDTag, getTagValues, parseJsonContent, upsertReplaceableEvent } from '../nostr/client.js';
 import { PoolBackedClient } from '../nostr/pool-client.js';
+import { createReadModelMetadataTracker } from '../nostr/pool-utils.js';
 
 export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
 export const DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
@@ -10,7 +11,7 @@ export const CONTEXTVM_RELAY_SET_DTAG = 'bahia-contextvm-v1';
 export const SERVICE_RELAY_SET_DTAG = 'bahia-service-v1';
 const DISCOVERY_CACHE_KEY = 'bahia_system_discovery_cache_v1';
 const DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000;
-const DISCOVERY_EOSE_DRAIN_MS = 1500;
+const DISCOVERY_DEADLINE_MS = 10_000;
 
 export const discoveryState = $state({
   seed: null,
@@ -249,20 +250,38 @@ export async function discoverSystemInfo({ force = false } = {}) {
 
       const collectedEvents = [];
       const normalized = await new Promise((resolve, reject) => {
+        const tracker = createReadModelMetadataTracker({ relays });
         const eoseRelays = new Set();
-        let finalizeTimer = null;
-        const scheduleFinalize = () => {
-          if (eoseRelays.size < relays.length) return;
-          if (finalizeTimer) clearTimeout(finalizeTimer);
-          finalizeTimer = setTimeout(() => {
-            try {
-              resolve(normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys));
-            } catch (err) {
-              reject(err);
+        let settled = false;
+        let lastCloseReason = '';
+
+        const settle = ({ deadline = false } = {}) => {
+          if (settled) return;
+          if (deadline) {
+            for (const [relay, state] of tracker.relayStates) {
+              if (!state.terminal) tracker.markClosed('discovery deadline exceeded', relay, { terminal: true, source: 'deadline' });
             }
-          }, DISCOVERY_EOSE_DRAIN_MS);
+          } else if (!tracker.isTerminal()) {
+            return;
+          }
+
+          settled = true;
+          clearTimeout(deadlineTimer);
+          if (eoseRelays.size === 0) {
+            reject(new Error(deadline
+              ? 'Discovery subscription timed out before any relay reached EOSE'
+              : `Discovery subscription closed: ${lastCloseReason || 'all relays closed before EOSE'}`));
+            return;
+          }
+
+          try {
+            resolve(normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys));
+          } catch (err) {
+            reject(err);
+          }
         };
 
+        const deadlineTimer = setTimeout(() => settle({ deadline: true }), DISCOVERY_DEADLINE_MS);
         discoveryUnsubscribe = bootstrapClient.subscribe([
           {
             kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
@@ -270,17 +289,21 @@ export async function discoverSystemInfo({ force = false } = {}) {
             '#d': [SYSTEM_DISCOVERY_DTAG, BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG]
           }
         ], {
-          onEvent: (event) => {
+          onEvent: (event, relay) => {
+            if (settled) return;
+            tracker.markEvent(event, normalizeRelayUrl(relay));
             collectedEvents.push(event);
-            if (finalizeTimer) scheduleFinalize();
           },
           onEose: (relay) => {
-            eoseRelays.add(normalizeRelayUrl(relay));
-            scheduleFinalize();
+            const normalizedRelay = normalizeRelayUrl(relay);
+            eoseRelays.add(normalizedRelay);
+            tracker.markEose(normalizedRelay);
+            settle();
           },
-          onClosed: (reason) => {
-            if (finalizeTimer) clearTimeout(finalizeTimer);
-            reject(new Error(`Discovery subscription closed: ${reason}`));
+          onClosed: (reason = '', relay = '', meta = {}) => {
+            lastCloseReason = String(reason || lastCloseReason);
+            tracker.markClosed(reason, normalizeRelayUrl(relay), meta);
+            settle();
           }
         });
       });

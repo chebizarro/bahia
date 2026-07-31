@@ -1,7 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { SimplePool } from 'nostr-tools';
 import { publishFromPool } from './pool-publish.js';
-import { subscribeOnRelays } from './pool-subscriptions.js';
+import { subscribeOnRelays, subscribeWithRecoveryOnRelays } from './pool-subscriptions.js';
 import { summarizeRelayConnections, uniqueRelays, normalizeRelayUrl, messageFromError } from './pool-utils.js';
 
 export class PoolBackedClient {
@@ -182,6 +182,14 @@ export class PoolBackedClient {
 
   subscribeOnRelays(relays, filters, handlers = {}) {
     return subscribeOnRelays(this, relays, filters, handlers);
+  }
+
+  subscribeWithRecovery(filters, handlers = {}, recoveryOptions = {}) {
+    return this.subscribeWithRecoveryOnRelays(this.relays, filters, handlers, recoveryOptions);
+  }
+
+  subscribeWithRecoveryOnRelays(relays, filters, handlers = {}, recoveryOptions = {}) {
+    return subscribeWithRecoveryOnRelays(this, relays, filters, handlers, recoveryOptions);
   }
 
   async publish(event, options = {}) {

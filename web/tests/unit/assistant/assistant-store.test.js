@@ -32,7 +32,7 @@ const nostrMock = vi.hoisted(() => {
 
   return {
     connected: store(true),
-    subscribe: vi.fn()
+    subscribeWithRecovery: vi.fn()
   };
 });
 
@@ -84,7 +84,7 @@ describe('assistant store', () => {
       result: { session_id: 'assistant-session-1', status: 'completed', summary: 'Assistant completed.' },
       requestEventId: 'request-event-1'
     });
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       liveHandlers = handlers;
       // Simulate empty bootstrap: deliver EOSE immediately
       Promise.resolve().then(() => handlers?.onEose?.());
@@ -144,7 +144,7 @@ describe('assistant store', () => {
         content: { session_id: sessionId, status: 'blocked', message: 'relay closed' }
       })
     ];
-    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
       liveHandlers = handlers;
       Promise.resolve().then(() => {
         for (const evt of bootstrapEvents) handlers?.onEvent?.(evt);
@@ -171,7 +171,7 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-live-session';
 
-    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
       liveHandlers = handlers;
       Promise.resolve().then(() => {
         handlers?.onEvent?.(event({
@@ -223,7 +223,7 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-agentic-session';
 
-    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
       liveHandlers = handlers;
       Promise.resolve().then(() => {
         handlers?.onEvent?.(event({
@@ -399,7 +399,7 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-cached-session';
 
-    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
       liveHandlers = handlers;
       Promise.resolve().then(() => {
         handlers?.onEvent?.(event({
@@ -430,7 +430,7 @@ describe('assistant store', () => {
     expect(globalThis.localStorage.getItem(cacheKey)).toContain('Cached transcript survives reload');
 
     store.resetAssistantStore();
-    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
       liveHandlers = handlers;
       Promise.resolve().then(() => handlers?.onEose?.());
       return vi.fn();
@@ -459,7 +459,7 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const sessionId = 'assistant-stale-stream-session';
 
-    nostrMock.subscribe.mockImplementationOnce((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
       liveHandlers = handlers;
       Promise.resolve().then(() => {
         handlers?.onEvent?.(event({

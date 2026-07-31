@@ -77,16 +77,16 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
     }
   };
 
-  liveUnsubscribe = nostr.subscribe(readModelFilters(), {
+  liveUnsubscribe = nostr.subscribeWithRecovery(readModelFilters(), {
     onEvent: (event) => applyControlplaneEvent(event),
     onEose: (relay) => markRelayEose(relay),
-    onClosed: (reason, relay) => {
+    onClosed: (reason, relay, meta = {}) => {
       const message = reason || `subscription closed by ${relay}`;
       controlplaneConnection.lastError = message;
-      if (['syncing', 'live'].includes(controlplaneConnection.status)) {
-        controlplaneConnection.status = 'disconnected';
+      if (['syncing', 'live', 'reconnecting'].includes(controlplaneConnection.status)) {
+        controlplaneConnection.status = meta.disconnected ? 'disconnected' : 'reconnecting';
       }
-      if (generation === bootstrapSubscriptionGeneration && pendingEoseRelays.has(normalizeRelayUrl(relay))) {
+      if (meta.terminal && generation === bootstrapSubscriptionGeneration && pendingEoseRelays.has(normalizeRelayUrl(relay))) {
         settleEose(rejectEose, new Error(message));
       }
     }

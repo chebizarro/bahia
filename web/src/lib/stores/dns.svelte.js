@@ -596,7 +596,7 @@ function startRelayMonitorSubscription() {
   }
   const filters = relayMonitorFilters();
   if (filters.length === 0) return;
-  unsubscribeRelayMonitors = nostr.subscribe(filters, {
+  unsubscribeRelayMonitors = nostr.subscribeWithRecovery(filters, {
     onEvent: (event) => {
       validateInboundNostrEvent(event)
         .then(() => applyRelayMonitorEvent(event))
@@ -632,7 +632,7 @@ function startDNSReadModelSubscription(since = null) {
   dnsState.connection.eoseRelays = [];
   setCollectionLoading(true);
 
-  unsubscribeDNSReadModels = nostr.subscribe(dnsReadModelFilters(dnsState.connection.servicePubkey, { since }), {
+  unsubscribeDNSReadModels = nostr.subscribeWithRecovery(dnsReadModelFilters(dnsState.connection.servicePubkey, { since }), {
     onEvent: (event) => {
       applyDNSReadModelEvent(event);
     },
@@ -655,7 +655,7 @@ function startDNSReadModelSubscription(since = null) {
         ...(relay ? { [relay]: `closed: ${reason || 'closed'}` } : {})
       };
       if (meta?.terminal === false) {
-        dnsState.connection.status = 'reconnecting';
+        dnsState.connection.status = meta?.disconnected ? 'disconnected' : 'reconnecting';
         return;
       }
       if (String(reason).toLowerCase().includes('auth')) {

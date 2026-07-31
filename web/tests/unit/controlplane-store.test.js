@@ -32,7 +32,7 @@ const nostrMock = vi.hoisted(() => {
     setRelays: vi.fn(),
     connect: vi.fn(),
     queryUntilEose: vi.fn(),
-    subscribe: vi.fn()
+    subscribeWithRecovery: vi.fn()
   };
 });
 
@@ -92,7 +92,7 @@ describe('controlplane store', () => {
     subscriptionRegistered = new Promise((resolve) => {
       resolveSubscriptionRegistered = resolve;
     });
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       subscriptionHandlers.push(handlers);
       resolveSubscriptionRegistered(handlers);
       return vi.fn();
@@ -214,7 +214,7 @@ describe('controlplane store', () => {
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
-    expect(nostrMock.subscribe).toHaveBeenCalledWith(
+    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ kinds: expect.arrayContaining([CAS_STATE_KIND]), authors: ['b'.repeat(64)], limit: 1000 }),
         expect.objectContaining({ kinds: [10100], limit: 1000 }),
@@ -271,7 +271,7 @@ describe('controlplane store', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('Unable to determine connected relay URLs for bootstrap EOSE tracking');
     expect(store.controlplaneConnection.status).toBe('error');
-    expect(nostrMock.subscribe).not.toHaveBeenCalled();
+    expect(nostrMock.subscribeWithRecovery).not.toHaveBeenCalled();
   });
 
   it('applies LLM route, route-state, worker state, and eligibility read models from schema-routed relay events', async () => {
@@ -315,7 +315,7 @@ describe('controlplane store', () => {
 
   it('bridges canonical status events into relay-backed activity state', async () => {
     let liveHandlers;
-    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+    nostrMock.subscribeWithRecovery.mockImplementation((_filters, handlers) => {
       liveHandlers = handlers;
       subscriptionHandlers.push(handlers);
       resolveSubscriptionRegistered(handlers);

@@ -502,7 +502,7 @@ function subscribeToConnectionState() {
 function startSubscription(operatorPubkey, servicePubkey) {
   if (liveUnsubscribe) liveUnsubscribe();
   let historicalCatchupComplete = false;
-  liveUnsubscribe = nostr.subscribe(subscriptionFilters(operatorPubkey, servicePubkey), {
+  liveUnsubscribe = nostr.subscribeWithRecovery(subscriptionFilters(operatorPubkey, servicePubkey), {
     onEvent: (event) => applyAssistantEvent(event, { allowStreaming: historicalCatchupComplete }),
     onEose: () => {
       historicalCatchupComplete = true;
@@ -511,9 +511,11 @@ function startSubscription(operatorPubkey, servicePubkey) {
       assistantConnection.lastEoseAt = new Date().toISOString();
       refreshSessions();
     },
-    onClosed: (reason, relay) => {
+    onClosed: (reason, relay, meta = {}) => {
       assistantConnection.lastError = reason || `assistant subscription closed by ${relay}`;
-      if (assistantConnection.status === 'live') assistantConnection.status = 'disconnected';
+      if (['live', 'reconnecting'].includes(assistantConnection.status)) {
+        assistantConnection.status = meta.disconnected ? 'disconnected' : 'reconnecting';
+      }
     }
   });
 }
