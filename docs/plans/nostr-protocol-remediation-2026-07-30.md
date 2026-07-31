@@ -133,9 +133,51 @@ wired; config validation and defaults updated coherently; builds/tests pass.
 
 ---
 
-## Deferred — `bahia-fukea` (P2) — Observability follow-up
-Now unblocked (items 2 and 3 landed) but intentionally not dispatched in this round. Relay CLOSED-reason metrics in `RelayHealthTracker`/`HealthSnapshot`,
-uniform web store health fields, outbox-depth + stale-run alerts. Not dispatched in this round.
+## Work Item 6 — `bahia-fukea` (P2) — Observability — COMPLETE (all three parts)
+
+Governing rule (encoded in the bead): **transport health out-of-band (Prometheus), domain
+health on-bus (published Nostr events)**. Rationale: relay/publish-path failures cannot be
+reported over the failing bus (bootstrap problem); domain-state signals must reach the same
+subscribers as every other read model.
+
+### Part A — Transport health (Go, Prometheus)
+- [x] Status: DONE (commit 00846411). CLOSED-reason counts (bounded reason labels), re-REQ and reconnect-attempt counters in relay health snapshots, recorded across pool/subscriber/reactor/Loom recovery paths; bahia_nostr_relay_closed_total, bahia_nostr_relay_re_req/reconnect_attempts_total exported; CountUnpublished added to outbox repo (pg + in-memory) feeding an outbox-depth gauge with periodic refresh. Focused tests + go build green.
+CLOSED-reason counts + re-REQ/reconnect-attempt counters in `RelayHealthTracker`
+(`internal/adapters/nostr/relay_health.go`), exposed via `HealthSnapshot`, extending the
+existing `bahia_nostr_relay_*` gauge family in `internal/adapters/telemetry/telemetry.go`
+(hand-rendered Prometheus text endpoint, see `MetricsHandler`). Plus an outbox-depth gauge
+(unpublished rows in the `nostr_events` publish outbox, migration 000050; repository interface
+`NostrEventOutboxRepository` has `ListUnpublished`). Grafana alerts on these gauges are the
+transport alerting surface.
+**Done when:** counters recorded at the CLOSED/re-REQ sites (pool, subscriber, reactor, loom
+client recovery paths), snapshot + metrics exposed, outbox depth gauge wired, tests, build green.
+
+### Part B — Domain health (Go, published Nostr events — NOT a metric)
+- [x] Status: DONE (commit 4198bb06). deployment-run-stale-detector BackgroundRunner (internal/workflow, wired in app.go); detects >N-minute silence of kind-30100 per run via nostr_events audit table; publishes parameterized-replaceable kind 30315 NIP38Status (d=run id, e=LoomJobID) through the durable outbox; publishes recovered replacement on status resumption or terminal transition; restart hydration of last-published state from audit table; config nostr.stale_run_after (default 5m, validated). No metrics/REST added. Note: kind 30315 is already in subscriber DefaultInboundKinds and the web catalog status_live tier — consumers see the signal with no new subscriptions.
+Stale-run signal as a PUBLISHED event: deployment run in queued/running with no kind-30100 Loom
+status event for N minutes → publish a NIP38Status/Observation-style event (kinds exist in
+`internal/kinds`: NIP38Status, Observation, DegradedModeActivation) via the outbox-backed
+Publisher, correlated to the run (d/e tags to run id / LoomJobID), replaceable-or-idempotent so
+re-detection doesn't spam. Staleness derived from absence of status events (audit table /
+event stream). The detector loop itself is a legitimate operational timer; the *signal* rides
+the bus. No Grafana side-channel for domain state.
+**Done when:** detector runs as a BackgroundRunner, publishes correlated idempotent events,
+clears/updates when runs go terminal, tests, build green.
+
+### Part C — Web client protocol introspection (client-local)
+- [x] Status: DONE (commit 2f567a1c). subscribeWithRecovery emits onHealth snapshots (lastEoseAt, resubscribeAttempts, lastClosedReason); all four stores consume the same shape via Object.assign into their connection state. 83 tests passing across 5 touched files.
+Uniform per-store health fields (`lastEoseAt`, `resubscribeAttempts`, `lastClosedReason`)
+emitted by the `subscribeWithRecovery` helper (landed in bahia-jano7,
+`web/src/lib/nostr/pool-subscriptions.js` / `pool-client.js`) and exposed consistently across
+the migrated stores (controlplane bootstrap, assistant, dns, fips-mesh; dns/fips-mesh have
+partial precedents). Neither REST nor published — client-side introspection of protocol frames.
+**Done when:** helper emits the fields via callbacks/state, all four stores expose them
+uniformly, unit tests (fake timers), vitest green.
+
+### Coordination
+- Wave 1: Part A (Go) + Part C (web) in parallel — disjoint file sets.
+- Wave 2: Part B after A (both may touch `internal/app/app.go` wiring).
+- All parts verified; bead `bahia-fukea` closed.
 
 ---
 
