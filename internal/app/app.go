@@ -495,7 +495,7 @@ func New(cfg *config.Config) (*App, error) {
 			statusProjector: bahiaStatusProjector,
 			catalogVersion:  catalog.Version,
 		},
-	}}, RunnerTier(Tier0))
+	}}, RunnerTier(Tier0), RunnerRequired(false))
 
 	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
 		continuityHeartbeatMonitor,
