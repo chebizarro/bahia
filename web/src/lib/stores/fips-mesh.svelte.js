@@ -29,6 +29,8 @@ export const fipsMeshState = $state({
   relays: [],
   servicePubkey: '',
   lastEoseAt: null,
+  resubscribeAttempts: 0,
+  lastClosedReason: null,
   lastEventAt: null,
   lastClosed: null,
   nodes: [],
@@ -384,11 +386,11 @@ function startSubscription() {
   liveUnsubscribe = nostr.subscribeWithRecovery(fipsMeshReadModelFilters(), {
     onEvent: (event) => applyFipsMeshEvent(event),
     onEose: () => {
-      fipsMeshState.lastEoseAt = Date.now();
       fipsMeshState.bootstrapComplete = true;
       fipsMeshState.ready = true;
       fipsMeshState.status = 'live';
     },
+    onHealth: (health) => Object.assign(fipsMeshState, health),
     onClosed: (reason = '', relay = '', meta = {}) => {
       fipsMeshState.lastClosed = { reason: String(reason || ''), relay, terminal: meta?.terminal !== false, source: meta?.source || 'closed' };
       if (meta?.terminal === false) {
@@ -423,6 +425,8 @@ export function resetFipsMeshStore() {
   fipsMeshState.relays = [];
   fipsMeshState.servicePubkey = '';
   fipsMeshState.lastEoseAt = null;
+  fipsMeshState.resubscribeAttempts = 0;
+  fipsMeshState.lastClosedReason = null;
   fipsMeshState.lastEventAt = null;
   fipsMeshState.lastClosed = null;
 }

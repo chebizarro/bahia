@@ -96,6 +96,22 @@ describe('assistant store', () => {
     store.resetAssistantStore();
   });
 
+  it('exposes subscription recovery health', async () => {
+    await store.bootstrapAssistant({ force: true });
+
+    liveHandlers.onHealth({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
+
+    expect(store.assistantConnection).toMatchObject({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
+  });
+
   it('bootstraps session state from 30900/30315 relay backfill events', async () => {
     const operator = authMock.authState.pubkey;
     const service = controlplaneMock.controlplaneConnection.servicePubkey;

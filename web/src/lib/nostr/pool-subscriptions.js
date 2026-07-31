@@ -135,7 +135,7 @@ export function subscribeWithRecoveryOnRelays(
   client,
   relays,
   filters,
-  { onEvent, onEose, onClosed, onAuth } = {},
+  { onEvent, onEose, onClosed, onAuth, onHealth } = {},
   recoveryOptions = {}
 ) {
   const requestedRelays = uniqueRelays(relays);
@@ -157,7 +157,17 @@ export function subscribeWithRecoveryOnRelays(
     authPromise: Promise.resolve()
   }]));
   const seenEvents = new Set();
+  const health = {
+    lastEoseAt: null,
+    resubscribeAttempts: 0,
+    lastClosedReason: null
+  };
   let active = true;
+
+  const updateHealth = (updates) => {
+    Object.assign(health, updates);
+    onHealth?.({ ...health });
+  };
 
   const clearChild = (state) => {
     const childUnsubscribe = state.childUnsubscribe;
@@ -174,6 +184,7 @@ export function subscribeWithRecoveryOnRelays(
     const delayMs = recoveryDelay(state.failures, options);
     const disconnected = state.failures >= options.disconnectAfterFailures;
     if (disconnected) client.markRelayStatus(relayUrl, 'disconnected');
+    updateHealth({ lastClosedReason: String(reason || '') });
 
     onClosed?.(reason, relayUrl, {
       ...meta,
@@ -188,6 +199,7 @@ export function subscribeWithRecoveryOnRelays(
       if (!active || state.timer) return;
       state.timer = setTimeout(() => {
         state.timer = null;
+        updateHealth({ resubscribeAttempts: health.resubscribeAttempts + 1 });
         openRelay(relayUrl);
       }, delayMs);
     };
@@ -221,6 +233,7 @@ export function subscribeWithRecoveryOnRelays(
           if (!active || generation !== state.generation) return;
           state.failures = 0;
           client.markRelayStatus(relayUrl, 'connected');
+          updateHealth({ lastEoseAt: new Date().toISOString() });
           onEose?.(relay);
         },
         onClosed: (reason, relay, meta) => {

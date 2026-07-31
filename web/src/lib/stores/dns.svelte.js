@@ -75,6 +75,8 @@ export const dnsState = $state({
     relayMonitorErrors: [],
     eoseRelays: [],
     lastEoseAt: null,
+    resubscribeAttempts: 0,
+    lastClosedReason: null,
     lastEventAt: null
   },
   commandRuns: []
@@ -639,13 +641,13 @@ function startDNSReadModelSubscription(since = null) {
     onEose: (relay) => {
       if (relay) eoseRelays.add(relay);
       dnsState.connection.eoseRelays = Array.from(eoseRelays);
-      dnsState.connection.lastEoseAt = new Date().toISOString();
       if (connectedRelayCount === 0 || eoseRelays.size >= connectedRelayCount) {
         setCollectionLoading(false);
         dnsState.connection.status = 'live';
         markCollectionLoaded();
       }
     },
+    onHealth: (health) => Object.assign(dnsState.connection, health),
     onClosed: (reason = '', relay = '', meta = {}) => {
       const message = `DNS Nostr subscription closed${relay ? ` on ${relay}` : ''}: ${reason || 'closed'}`;
       dnsState.error.subscription = message;
@@ -863,6 +865,8 @@ export function resetDnsReadModels() {
   relayMonitorEvents.clear();
   seenRelayMonitorEventIds.clear();
   dnsState.connection.lastEoseAt = null;
+  dnsState.connection.resubscribeAttempts = 0;
+  dnsState.connection.lastClosedReason = null;
   dnsState.connection.lastEventAt = null;
   dnsState.connection.lastClosed = null;
 }

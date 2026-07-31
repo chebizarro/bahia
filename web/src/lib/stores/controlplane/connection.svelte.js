@@ -11,6 +11,8 @@ export const controlplaneConnection = $state({
   servicePubkey: '',
   lastError: null,
   lastEoseAt: null,
+  resubscribeAttempts: 0,
+  lastClosedReason: null,
   lastEventAt: null,
   reconnects: 0
 });
@@ -50,6 +52,8 @@ export function resetConnectionState() {
   controlplaneConnection.servicePubkey = '';
   controlplaneConnection.lastError = null;
   controlplaneConnection.lastEoseAt = null;
+  controlplaneConnection.resubscribeAttempts = 0;
+  controlplaneConnection.lastClosedReason = null;
   controlplaneConnection.lastEventAt = null;
   controlplaneConnection.reconnects = 0;
 }
@@ -89,6 +93,5 @@ export function setBootstrapError(message) {
 export function markBootstrapComplete() {
   controlplaneConnection.ready = true;
   controlplaneConnection.bootstrapComplete = true;
-  controlplaneConnection.lastEoseAt = new Date().toISOString();
   controlplaneConnection.status = 'live';
 }

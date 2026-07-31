@@ -107,7 +107,7 @@ describe('DNS dashboard Nostr subscription store', () => {
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledTimes(1);
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith([
       { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] }
-    ], expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function), onAuth: expect.any(Function) }));
+    ], expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onHealth: expect.any(Function), onClosed: expect.any(Function), onAuth: expect.any(Function) }));
   });
 
   it('keeps NIP-11 unavailable, malformed, and limiting metadata advisory', async () => {
@@ -243,6 +243,11 @@ describe('DNS dashboard Nostr subscription store', () => {
 
     callbacks.onEvent(zoneEvent(), 'relay-a');
     callbacks.onEvent(endpointEvent(), 'relay-a');
+    callbacks.onHealth({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
     callbacks.onEose('relay-a');
 
     expect(store.dnsState.zones).toEqual([expect.objectContaining({ name: 'prod.example', backend: 'coredns' })]);
@@ -250,6 +255,11 @@ describe('DNS dashboard Nostr subscription store', () => {
     expect(store.dnsState.loading.subscription).toBe(false);
     expect(store.dnsState.connection.status).toBe('live');
     expect(store.dnsState.connection.eoseRelays).toEqual(['relay-a']);
+    expect(store.dnsState.connection).toMatchObject({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
   });
 
   it('dedupes parameterized replaceable DNS events and applies tombstones', () => {

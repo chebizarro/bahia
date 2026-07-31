@@ -30,6 +30,8 @@ export const assistantConnection = $state({
   servicePubkey: '',
   lastError: null,
   lastEoseAt: null,
+  resubscribeAttempts: 0,
+  lastClosedReason: null,
   lastEventAt: null
 });
 
@@ -508,9 +510,9 @@ function startSubscription(operatorPubkey, servicePubkey) {
       historicalCatchupComplete = true;
       assistantConnection.ready = true;
       assistantConnection.status = 'live';
-      assistantConnection.lastEoseAt = new Date().toISOString();
       refreshSessions();
     },
+    onHealth: (health) => Object.assign(assistantConnection, health),
     onClosed: (reason, relay, meta = {}) => {
       assistantConnection.lastError = reason || `assistant subscription closed by ${relay}`;
       if (['live', 'reconnecting'].includes(assistantConnection.status)) {
@@ -540,6 +542,8 @@ export function resetAssistantStore() {
   assistantConnection.servicePubkey = '';
   assistantConnection.lastError = null;
   assistantConnection.lastEoseAt = null;
+  assistantConnection.resubscribeAttempts = 0;
+  assistantConnection.lastClosedReason = null;
   assistantConnection.lastEventAt = null;
   assistantUi.panelOpen = false;
   assistantUi.activeSessionId = '';

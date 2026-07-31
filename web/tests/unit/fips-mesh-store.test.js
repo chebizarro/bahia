@@ -119,6 +119,7 @@ describe('FIPS mesh store', () => {
     ]), expect.objectContaining({
       onEvent: expect.any(Function),
       onEose: expect.any(Function),
+      onHealth: expect.any(Function),
       onClosed: expect.any(Function)
     }));
     expect(store.fipsMeshState.bootstrapComplete).toBe(true);
@@ -131,11 +132,20 @@ describe('FIPS mesh store', () => {
     const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
 
     callbacks.onEvent(meshEndpoint({ id: 'live-endpoint', created_at: 120, content: { fqdn: 'live.mesh.example' } }), 'relay-a');
+    callbacks.onHealth({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
     callbacks.onEose('relay-a');
     callbacks.onClosed('rate-limited', 'relay-a', { terminal: true, source: 'closed' });
 
     expect(store.meshEndpoints.map((endpoint) => endpoint.fqdn)).toContain('live.mesh.example');
-    expect(store.fipsMeshState.lastEoseAt).toEqual(expect.any(Number));
+    expect(store.fipsMeshState).toMatchObject({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
     expect(store.fipsMeshState.lastClosed).toMatchObject({ reason: 'rate-limited', relay: 'relay-a', terminal: true });
     expect(store.fipsMeshState.status).toBe('degraded');
   });

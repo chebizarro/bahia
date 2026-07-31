@@ -220,7 +220,7 @@ describe('controlplane store', () => {
         expect.objectContaining({ kinds: [10100], limit: 1000 }),
         expect.objectContaining({ kinds: expect.arrayContaining([30315, 4903, 30078]), authors: ['b'.repeat(64)], limit: 100 })
       ]),
-      expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function) })
+      expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onHealth: expect.any(Function), onClosed: expect.any(Function) })
     );
     for (const relayEvent of bootstrapEvents) subscriptionHandlers[0].onEvent(relayEvent);
 
@@ -231,10 +231,20 @@ describe('controlplane store', () => {
     expect(store.states).toHaveLength(1);
     expect(store.workers).toHaveLength(1);
 
+    subscriptionHandlers[0].onHealth({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
     subscriptionHandlers[0].onEose('ws://localhost:10547/relay');
     const result = await resultPromise;
 
     expect(result.ok).toBe(true);
+    expect(store.controlplaneConnection).toMatchObject({
+      lastEoseAt: '2026-07-30T12:00:00.000Z',
+      resubscribeAttempts: 2,
+      lastClosedReason: 'rate-limited'
+    });
     expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
     expect(store.controlplaneConnection.status).toBe('live');
   });

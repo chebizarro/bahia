@@ -361,16 +361,18 @@ describe('Nostr Client - Parsing Functions', () => {
 
     it('re-REQs after CLOSED with a bounded replay cursor and resumes events', async () => {
       vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-30T12:00:00.000Z'));
       try {
         const relay = createRelay('ws://relay.example');
         const pool = createPool([relay]);
         const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool, validateEvent: null });
         const onEvent = vi.fn();
         const onClosed = vi.fn();
+        const onHealth = vi.fn();
 
         const unsubscribe = client.subscribeWithRecovery(
           [{ kinds: [30900] }],
-          { onEvent, onClosed },
+          { onEvent, onClosed, onHealth },
           { initialDelayMs: 100, maxDelayMs: 1000, jitterRatio: 0, disconnectAfterFailures: 3 }
         );
         await flushPromises();
@@ -387,15 +389,32 @@ describe('Nostr Client - Parsing Functions', () => {
           consecutiveFailures: 1,
           retryInMs: 100
         }));
+        expect(onHealth).toHaveBeenLastCalledWith({
+          lastEoseAt: null,
+          resubscribeAttempts: 0,
+          lastClosedReason: 'rate-limited'
+        });
 
         await vi.advanceTimersByTimeAsync(100);
         await flushPromises();
         expect(relay.subscriptions).toHaveLength(2);
         expect(relay.subscriptions[1].filters).toEqual([{ kinds: [30900], since: 99 }]);
+        expect(onHealth).toHaveBeenLastCalledWith({
+          lastEoseAt: null,
+          resubscribeAttempts: 1,
+          lastClosedReason: 'rate-limited'
+        });
 
         relay.subscriptions[1].params.onevent({ id: 'event-2', created_at: 101 });
+        relay.subscriptions[1].params.oneose();
+        await flushPromises();
         await flushPromises();
         expect(onEvent.mock.calls.map(([event]) => event.id)).toEqual(['event-1', 'event-2']);
+        expect(onHealth).toHaveBeenLastCalledWith({
+          lastEoseAt: '2026-07-30T12:00:00.100Z',
+          resubscribeAttempts: 1,
+          lastClosedReason: 'rate-limited'
+        });
 
         unsubscribe();
       } finally {

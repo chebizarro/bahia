@@ -80,6 +80,7 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
   liveUnsubscribe = nostr.subscribeWithRecovery(readModelFilters(), {
     onEvent: (event) => applyControlplaneEvent(event),
     onEose: (relay) => markRelayEose(relay),
+    onHealth: (health) => Object.assign(controlplaneConnection, health),
     onClosed: (reason, relay, meta = {}) => {
       const message = reason || `subscription closed by ${relay}`;
       controlplaneConnection.lastError = message;
