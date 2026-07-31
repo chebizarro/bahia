@@ -586,7 +586,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		placementSvc := service.NewLLMPlacementService(workerRepo, logger, service.WithLLMPlacementPressureThresholds(pressureThresholds))
 		coordOpts := []service.LLMProvisioningCoordinatorOption{
-			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
+			service.WithLLMCoordinatorRecoveryIntervals(cfg.LLM.RecoveryPollInterval, cfg.LLM.StaleRunTimeout),
 			service.WithLLMPromotionLock(service.NewPGLLMPromotionLock(pool, logger)),
 			service.WithLLMSecretResolver(llmSecretResolver),
 		}
@@ -595,6 +595,7 @@ func New(cfg *config.Config) (*App, error) {
 			coordOpts = append(coordOpts, service.WithLLMProvisioningResponder(llmResponder))
 		}
 		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
+		llmCoordinator.SetupSubscriptions(publisher)
 		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
 		bgManager.RegisterWithOptions(llmCoordinator, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))

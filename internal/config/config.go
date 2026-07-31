@@ -321,14 +321,14 @@ type PackageBackendConfig struct {
 
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
 type LLMControlplaneConfig struct {
-	Enabled                 bool                                `koanf:"enabled"`
-	AllowOperationalREST    bool                                `koanf:"allow_operational_rest"`
-	DefaultGatewayRef       string                              `koanf:"default_gateway_ref"`
-	CoordinatorPollInterval time.Duration                       `koanf:"coordinator_poll_interval"`
-	StaleRunTimeout         time.Duration                       `koanf:"stale_run_timeout"`
-	ReconcileInterval       time.Duration                       `koanf:"reconcile_interval"`
-	Gateways                map[string]LLMGatewayEndpointConfig `koanf:"gateways"`
-	OperatorAccessConfig    `koanf:",squash"`
+	Enabled              bool                                `koanf:"enabled"`
+	AllowOperationalREST bool                                `koanf:"allow_operational_rest"`
+	DefaultGatewayRef    string                              `koanf:"default_gateway_ref"`
+	RecoveryPollInterval time.Duration                       `koanf:"recovery_poll_interval"`
+	StaleRunTimeout      time.Duration                       `koanf:"stale_run_timeout"`
+	ReconcileInterval    time.Duration                       `koanf:"reconcile_interval"`
+	Gateways             map[string]LLMGatewayEndpointConfig `koanf:"gateways"`
+	OperatorAccessConfig `koanf:",squash"`
 }
 
 // LLMGatewayEndpointConfig describes one inference gateway admin endpoint.
@@ -797,12 +797,12 @@ func Defaults() *Config {
 			Endpoints:    map[string]RuntimeEndpointConfig{},
 		},
 		LLM: LLMControlplaneConfig{
-			Enabled:                 false,
-			AllowOperationalREST:    false,
-			CoordinatorPollInterval: 5 * time.Second,
-			StaleRunTimeout:         15 * time.Minute,
-			ReconcileInterval:       60 * time.Second,
-			Gateways:                map[string]LLMGatewayEndpointConfig{},
+			Enabled:              false,
+			AllowOperationalREST: false,
+			RecoveryPollInterval: 30 * time.Second,
+			StaleRunTimeout:      15 * time.Minute,
+			ReconcileInterval:    60 * time.Second,
+			Gateways:             map[string]LLMGatewayEndpointConfig{},
 		},
 		Assistant: AssistantConfig{
 			Enabled:    false,
@@ -1432,8 +1432,8 @@ func (c *Config) validateLLM() error {
 	if !c.LLM.Enabled {
 		return nil
 	}
-	if c.LLM.CoordinatorPollInterval <= 0 {
-		return fmt.Errorf("config validation failed: llm.coordinator_poll_interval must be > 0 when llm.enabled=true")
+	if c.LLM.RecoveryPollInterval <= 0 {
+		return fmt.Errorf("config validation failed: llm.recovery_poll_interval must be > 0 when llm.enabled=true")
 	}
 	if c.LLM.StaleRunTimeout <= 0 {
 		return fmt.Errorf("config validation failed: llm.stale_run_timeout must be > 0 when llm.enabled=true")

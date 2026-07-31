@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -24,28 +25,29 @@ type LLMProvisioningResponder interface {
 
 // LLMProvisioningCoordinator drains DB-backed LLM runs and promotes healthy backends into the gateway.
 type LLMProvisioningCoordinator struct {
-	registry          *LLMRegistryService
-	environments      repository.EnvironmentRepository
-	runs              repository.LLMDeploymentRunRepository
-	placement         *LLMPlacementService
-	provisioners      llmadapter.ProvisionerResolver
-	gateway           llmadapter.GatewayRouteManager
-	secrets           llmadapter.SecretResolver
-	gate              *LLMPromotionGate
-	promotionLock     LLMPromotionLocker
-	defaultGatewayRef string
-	responder         LLMProvisioningResponder
-	pollInterval      time.Duration
-	staleRunTimeout   time.Duration
-	logger            *zap.Logger
+	registry             *LLMRegistryService
+	environments         repository.EnvironmentRepository
+	runs                 repository.LLMDeploymentRunRepository
+	placement            *LLMPlacementService
+	provisioners         llmadapter.ProvisionerResolver
+	gateway              llmadapter.GatewayRouteManager
+	secrets              llmadapter.SecretResolver
+	gate                 *LLMPromotionGate
+	promotionLock        LLMPromotionLocker
+	defaultGatewayRef    string
+	responder            LLMProvisioningResponder
+	recoveryPollInterval time.Duration
+	staleRunTimeout      time.Duration
+	wake                 chan struct{}
+	logger               *zap.Logger
 }
 
 type LLMProvisioningCoordinatorOption func(*LLMProvisioningCoordinator)
 
-func WithLLMCoordinatorIntervals(pollInterval, staleRunTimeout time.Duration) LLMProvisioningCoordinatorOption {
+func WithLLMCoordinatorRecoveryIntervals(recoveryPollInterval, staleRunTimeout time.Duration) LLMProvisioningCoordinatorOption {
 	return func(c *LLMProvisioningCoordinator) {
-		if pollInterval > 0 {
-			c.pollInterval = pollInterval
+		if recoveryPollInterval > 0 {
+			c.recoveryPollInterval = recoveryPollInterval
 		}
 		if staleRunTimeout > 0 {
 			c.staleRunTimeout = staleRunTimeout
@@ -69,7 +71,7 @@ func NewLLMProvisioningCoordinator(registry *LLMRegistryService, envs repository
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	c := &LLMProvisioningCoordinator{registry: registry, environments: envs, runs: runs, placement: placement, provisioners: provisioners, gateway: gateway, gate: NewLLMPromotionGate(), defaultGatewayRef: defaultGatewayRef, pollInterval: 5 * time.Second, staleRunTimeout: 15 * time.Minute, logger: logger}
+	c := &LLMProvisioningCoordinator{registry: registry, environments: envs, runs: runs, placement: placement, provisioners: provisioners, gateway: gateway, gate: NewLLMPromotionGate(), defaultGatewayRef: defaultGatewayRef, recoveryPollInterval: 30 * time.Second, staleRunTimeout: 15 * time.Minute, wake: make(chan struct{}, 1), logger: logger}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -107,46 +109,85 @@ func (c *LLMProvisioningCoordinator) validateDependencies() error {
 	return nil
 }
 
-func (c *LLMProvisioningCoordinator) Name() string { return "llm-provisioning-coordinator" }
+func (c *LLMProvisioningCoordinator) Name() string { return "llm-provisioning-recovery" }
 
+// SetupSubscriptions makes persisted intent events the primary provisioning intake path.
+func (c *LLMProvisioningCoordinator) SetupSubscriptions(publisher events.Publisher) {
+	if c == nil || publisher == nil {
+		return
+	}
+	trigger := func(context.Context, events.Event) { c.trigger() }
+	publisher.Subscribe(events.EventLLMDeploymentIntentCreated, trigger)
+	publisher.Subscribe(events.EventLLMDeploymentIntentApproved, trigger)
+}
+
+func (c *LLMProvisioningCoordinator) trigger() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Run processes event-triggered intent work and periodically scans durable state for crash recovery.
 func (c *LLMProvisioningCoordinator) Run(ctx context.Context) error {
 	if err := c.validateDependencies(); err != nil {
 		return err
 	}
-	ticker := time.NewTicker(c.pollInterval)
+	c.runUntilIdle(ctx)
+	ticker := time.NewTicker(c.recoveryPollInterval)
 	defer ticker.Stop()
 	for {
-		if err := c.ProcessOnce(ctx); err != nil && ctx.Err() == nil {
-			c.logger.Warn("LLM provisioning coordinator tick failed", zap.Error(err))
-		}
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-c.wake:
+			c.runUntilIdle(ctx)
 		case <-ticker.C:
+			c.runUntilIdle(ctx)
+		}
+	}
+}
+
+func (c *LLMProvisioningCoordinator) runUntilIdle(ctx context.Context) {
+	for {
+		processed, err := c.processOnce(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				c.logger.Warn("LLM provisioning recovery scan failed", zap.Error(err))
+			}
+			return
+		}
+		if !processed {
+			return
 		}
 	}
 }
 
 // ProcessOnce performs one queue/create/claim/process cycle. It is exposed for focused tests.
 func (c *LLMProvisioningCoordinator) ProcessOnce(ctx context.Context) error {
+	_, err := c.processOnce(ctx)
+	return err
+}
+
+func (c *LLMProvisioningCoordinator) processOnce(ctx context.Context) (bool, error) {
 	if err := c.validateDependencies(); err != nil {
-		return err
+		return false, err
 	}
 	if c.staleRunTimeout > 0 {
 		if n, err := c.runs.RequeueStaleRunning(ctx, c.staleRunTimeout); err != nil {
-			return err
+			return false, err
 		} else if n > 0 {
 			c.logger.Warn("requeued stale LLM runs", zap.Int("count", n))
 		}
 	}
 	if _, err := c.runs.EnsureQueuedRunForNextReadyIntent(ctx); err != nil {
-		return err
+		return false, err
 	}
 	run, err := c.runs.ClaimNextQueuedRun(ctx)
 	if err != nil || run == nil {
-		return err
+		return false, err
 	}
-	return c.processRun(ctx, run)
+	return true, c.processRun(ctx, run)
 }
 
 func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain.LLMDeploymentRun) error {

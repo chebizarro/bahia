@@ -9,7 +9,7 @@ import (
 func validLLMConfigWithGateway(gateway LLMGatewayEndpointConfig) *Config {
 	cfg := Defaults()
 	cfg.LLM.Enabled = true
-	cfg.LLM.CoordinatorPollInterval = time.Second
+	cfg.LLM.RecoveryPollInterval = time.Second
 	cfg.LLM.StaleRunTimeout = time.Minute
 	cfg.LLM.ReconcileInterval = time.Second
 	cfg.LLM.DefaultGatewayRef = "fleet"

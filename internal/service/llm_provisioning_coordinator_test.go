@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
 )
 
@@ -245,6 +246,24 @@ func (g *fakeCoordinatorGateway) GetRoute(context.Context, string, string) (*llm
 }
 
 func (g *fakeCoordinatorGateway) DeleteRoute(context.Context, string, string) error { return nil }
+
+func TestLLMProvisioningCoordinatorIntentEventsTriggerWork(t *testing.T) {
+	publisher := events.NewInProcessPublisher(zap.NewNop())
+	coordinator := &LLMProvisioningCoordinator{wake: make(chan struct{}, 1)}
+	coordinator.SetupSubscriptions(publisher)
+
+	for _, eventType := range []events.EventType{
+		events.EventLLMDeploymentIntentCreated,
+		events.EventLLMDeploymentIntentApproved,
+	} {
+		publisher.Publish(context.Background(), events.Event{Type: eventType})
+		select {
+		case <-coordinator.wake:
+		case <-time.After(time.Second):
+			t.Fatalf("event %s did not trigger coordinator work", eventType)
+		}
+	}
+}
 
 func TestLLMProvisioningCoordinatorProcessOnceSuccessPublishesProgressAndCompletion(t *testing.T) {
 	ctx := context.Background()
