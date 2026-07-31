@@ -394,6 +394,9 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
+	if securityRepo != nil {
+		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger), RunnerTier(Tier3))
+	}
 	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 		if staleRunSource, ok := runRepo.(workflow.DeploymentRunHealthSource); ok {
 			bgManager.RegisterWithOptions(

@@ -34,6 +34,10 @@ type OCIUploadCleaner interface {
 	CleanupExpiredUploads(ctx context.Context, now time.Time) (int, error)
 }
 
+type OSVVulnerabilityCachePruner interface {
+	PruneExpiredOSVVulnerabilityCache(ctx context.Context, now time.Time) (int64, error)
+}
+
 type HiveCIRetryRepository interface {
 	ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error)
 	IncrementResultRetry(ctx context.Context, eventID string, at time.Time) (int, error)
@@ -165,6 +169,52 @@ func (r *OCIUploadCleanupRunner) Run(ctx context.Context) error {
 			}
 			if count > 0 {
 				r.logger.Info("cleaned expired oci uploads", zap.Int("count", count))
+			}
+		}
+	}
+}
+
+const defaultOSVVulnerabilityCacheCleanupInterval = time.Hour
+
+type OSVVulnerabilityCacheCleanupRunner struct {
+	pruner   OSVVulnerabilityCachePruner
+	interval time.Duration
+	logger   *zap.Logger
+}
+
+func NewOSVVulnerabilityCacheCleanupRunner(pruner OSVVulnerabilityCachePruner, interval time.Duration, logger *zap.Logger) *OSVVulnerabilityCacheCleanupRunner {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	if interval <= 0 {
+		interval = defaultOSVVulnerabilityCacheCleanupInterval
+	}
+	return &OSVVulnerabilityCacheCleanupRunner{pruner: pruner, interval: interval, logger: logger}
+}
+
+func (r *OSVVulnerabilityCacheCleanupRunner) Name() string {
+	return "osv-vulnerability-cache-cleanup"
+}
+
+func (r *OSVVulnerabilityCacheCleanupRunner) Run(ctx context.Context) error {
+	if r.pruner == nil {
+		return nil
+	}
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			count, err := r.pruner.PruneExpiredOSVVulnerabilityCache(ctx, time.Now())
+			if err != nil {
+				r.logger.Warn("osv vulnerability cache cleanup failed", zap.Error(err))
+				continue
+			}
+			if count > 0 {
+				r.logger.Info("pruned expired osv vulnerability cache", zap.Int64("count", count))
 			}
 		}
 	}

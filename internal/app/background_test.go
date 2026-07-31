@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type testRunner struct {
@@ -59,4 +61,73 @@ func TestBackgroundManager_EmptyStart(t *testing.T) {
 	mgr.Start(ctx)
 	cancel()
 	mgr.Wait() // should not block
+}
+
+type testOSVVulnerabilityCachePruner struct {
+	calls chan time.Time
+	count int64
+	err   error
+}
+
+func (p *testOSVVulnerabilityCachePruner) PruneExpiredOSVVulnerabilityCache(_ context.Context, now time.Time) (int64, error) {
+	select {
+	case p.calls <- now:
+	default:
+	}
+	return p.count, p.err
+}
+
+func TestOSVVulnerabilityCacheCleanupRunner_PrunesExpiredEntries(t *testing.T) {
+	pruner := &testOSVVulnerabilityCachePruner{calls: make(chan time.Time, 1), count: 3}
+	core, logs := observer.New(zap.InfoLevel)
+	runner := NewOSVVulnerabilityCacheCleanupRunner(pruner, time.Millisecond, zap.New(core))
+	require.Equal(t, "osv-vulnerability-cache-cleanup", runner.Name())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	select {
+	case now := <-pruner.calls:
+		require.False(t, now.IsZero())
+	case <-time.After(time.Second):
+		t.Fatal("runner did not prune expired OSV cache entries")
+	}
+	require.Eventually(t, func() bool {
+		return logs.FilterMessage("pruned expired osv vulnerability cache").Len() > 0
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+func TestOSVVulnerabilityCacheCleanupRunner_LogsFailureAndContinues(t *testing.T) {
+	pruner := &testOSVVulnerabilityCachePruner{
+		calls: make(chan time.Time, 2),
+		err:   errors.New("prune failed"),
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	runner := NewOSVVulnerabilityCacheCleanupRunner(pruner, time.Millisecond, zap.New(core))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	for range 2 {
+		select {
+		case <-pruner.calls:
+		case <-time.After(time.Second):
+			t.Fatal("runner stopped after prune failure")
+		}
+	}
+	require.GreaterOrEqual(t, logs.FilterMessage("osv vulnerability cache cleanup failed").Len(), 1)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+func TestOSVVulnerabilityCacheCleanupRunner_NilPrunerReturns(t *testing.T) {
+	runner := NewOSVVulnerabilityCacheCleanupRunner(nil, 0, nil)
+	require.Equal(t, defaultOSVVulnerabilityCacheCleanupInterval, runner.interval)
+	require.NoError(t, runner.Run(context.Background()))
 }
