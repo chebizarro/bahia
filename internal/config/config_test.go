@@ -70,6 +70,9 @@ func TestDefaults(t *testing.T) {
 	if len(cfg.Nostr.ContextVMRelays) != 0 {
 		t.Errorf("expected no default ContextVM relays, got %v", cfg.Nostr.ContextVMRelays)
 	}
+	if cfg.Nostr.StaleRunAfter != 5*time.Minute {
+		t.Errorf("default Nostr.StaleRunAfter = %v, want 5m", cfg.Nostr.StaleRunAfter)
+	}
 	if cfg.Nostr.Sidecar.MaxQueryLimit != 2000 {
 		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
 	}
@@ -672,6 +675,7 @@ func TestLoadFromEnvVars(t *testing.T) {
 		"BAHIA_SERVER_READ_TIMEOUT":                   "5s",
 		"BAHIA_SERVER_PORT":                           "3000",
 		"BAHIA_NOSTR_PUBLISH_ENABLED":                 "false",
+		"BAHIA_NOSTR_STALE_RUN_AFTER":                 "7m",
 		"BAHIA_RUNTIME_DOCKER_HOST":                   "tcp://remote:2375",
 		"BAHIA_LOG_LEVEL":                             "debug",
 		"BAHIA_RECONCILE_ENABLED":                     "false",
@@ -705,6 +709,9 @@ func TestLoadFromEnvVars(t *testing.T) {
 	}
 	if cfg.Nostr.PublishEnabled != false {
 		t.Error("Nostr.PublishEnabled should be false")
+	}
+	if cfg.Nostr.StaleRunAfter != 7*time.Minute {
+		t.Errorf("Nostr.StaleRunAfter = %v, want 7m", cfg.Nostr.StaleRunAfter)
 	}
 	if cfg.Runtime.DockerHost != "tcp://remote:2375" {
 		t.Errorf("Runtime.DockerHost = %q, want %q", cfg.Runtime.DockerHost, "tcp://remote:2375")

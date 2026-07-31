@@ -63,6 +63,9 @@ nostr:
   relay_auth_unavailable: "exclude_and_fail"
   # Locked-down default. MVP enablement is a deploy step with a deployment-provided signer key.
   publish_enabled: false
+  # Publish a replaceable domain-health event when a Loom-backed deployment run
+  # has no kind-30100 status update for this long.
+  stale_run_after: 5m
   # Retired request-kind history is blocked by the hardened Bahia sidecar.
   # Enable only when migrating from a separate relay that explicitly permits
   # author-scoped reads of legacy Bahia kinds.

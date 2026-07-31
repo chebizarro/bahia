@@ -441,6 +441,9 @@ type NostrConfig struct {
 
 	AuthorizedPubkeys []string `koanf:"authorized_pubkeys"`
 	PublishEnabled    bool     `koanf:"publish_enabled"`
+	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
+	// status events before Bahia publishes a domain-health status event.
+	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after"`
 	// LegacyRelayBackfill explicitly enables startup reads of retired Bahia
 	// request kinds from an external migration relay. The hardened Bahia
 	// sidecar intentionally refuses those reads, so this must remain opt-in.
@@ -768,6 +771,7 @@ func Defaults() *Config {
 		Nostr: NostrConfig{
 			ContextVMRelays:            []string{},
 			PublishEnabled:             true,
+			StaleRunAfter:              5 * time.Minute,
 			RelayAuthUnavailablePolicy: RelayAuthUnavailableExcludeAndFail,
 			RelayQuorum: RelayQuorumConfig{
 				FullMinHealthy:      2,
@@ -2181,6 +2185,9 @@ func validatePressureRatio(name string, value float64) error {
 }
 
 func (c *Config) validateNostrRelayPolicy() error {
+	if c.Nostr.StaleRunAfter <= 0 {
+		return fmt.Errorf("config validation failed: nostr.stale_run_after must be > 0")
+	}
 	switch c.Nostr.RelayAuthUnavailablePolicy {
 	case RelayAuthUnavailableExcludeAndFail:
 		return nil

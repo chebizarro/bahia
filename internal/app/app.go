@@ -394,6 +394,15 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
+	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+		if staleRunSource, ok := runRepo.(workflow.DeploymentRunHealthSource); ok {
+			bgManager.RegisterWithOptions(
+				workflow.NewStaleRunDetector(staleRunSource, nostrEventRepo, nostrPub, cfg.Nostr.StaleRunAfter, logger),
+				RunnerTier(Tier2),
+				RunnerRequired(false),
+			)
+		}
+	}
 	healthProvider := NewHealthProvider(policy, bgManager)
 	healthProvider.SetRelayQuorumConfig(RelayQuorumConfig{
 		FullMinHealthy:      cfg.Nostr.RelayQuorum.FullMinHealthy,

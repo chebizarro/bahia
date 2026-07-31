@@ -244,6 +244,7 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 }
 
 type publishAttempt struct {
+	results     []PublishResult
 	published   int
 	rateLimited bool
 	err         error
@@ -276,10 +277,10 @@ func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publ
 	if published > 0 {
 		if p.outboxRepo != nil {
 			if err := p.outboxRepo.MarkPublished(ctx, ev.ID.Hex(), time.Now().UTC()); err != nil {
-				return publishAttempt{published: published, err: err}
+				return publishAttempt{results: results, published: published, err: err}
 			}
 		}
-		return publishAttempt{published: published}
+		return publishAttempt{results: results, published: published}
 	}
 	return p.recordPublishFailure(ctx, ev.ID.Hex(), results, publishErr)
 }
@@ -308,7 +309,7 @@ func (p *Publisher) recordPublishFailure(ctx context.Context, eventID string, re
 			failure += "; persist publish failure: " + err.Error()
 		}
 	}
-	return publishAttempt{rateLimited: rateLimited, err: fmt.Errorf("%s", failure)}
+	return publishAttempt{results: results, rateLimited: rateLimited, err: fmt.Errorf("%s", failure)}
 }
 
 func eventFromNostrRecord(rec repository.NostrEventRecord) (nostr.Event, error) {
@@ -477,9 +478,11 @@ func (p *Publisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) err
 }
 
 // PublishSignedEventWithResults signs and publishes an arbitrary Nostr event,
-// returning per-relay publish outcomes from the underlying relay pool.
+// returning per-relay publish outcomes from the underlying relay pool. When an
+// outbox repository is configured, the signed event is durable before the first
+// relay attempt and failed delivery is left pending for the Publisher runner.
 func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]PublishResult, error) {
-	if p == nil || p.pool == nil || ev == nil {
+	if p == nil || ev == nil {
 		return nil, nil
 	}
 	if p.privateKey == "" {
@@ -488,7 +491,28 @@ func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr
 	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
 		return nil, err
 	}
-	return p.pool.PublishWithResults(ctx, *ev)
+
+	if p.eventRepo != nil {
+		rec := nostrEventRecordFromEvent(*ev, signedEventAuditLabel(*ev))
+		if p.outboxRepo != nil {
+			rec.PublishState = repository.NostrPublishStatePending
+		}
+		if _, err := p.eventRepo.Record(ctx, rec); err != nil {
+			return nil, fmt.Errorf("persist signed nostr event before publish: %w", err)
+		}
+	}
+
+	attempt := p.publishOutboxEvent(ctx, *ev)
+	return attempt.results, attempt.err
+}
+
+func signedEventAuditLabel(ev nostr.Event) string {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "t" && strings.TrimSpace(tag[1]) != "" {
+			return strings.TrimSpace(tag[1])
+		}
+	}
+	return "nostr.signed"
 }
 
 // Close shuts down the relay pool.

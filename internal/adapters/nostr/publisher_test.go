@@ -73,6 +73,45 @@ func (f *fakeOutboxRelayPool) callCount() int {
 	return len(f.calls)
 }
 
+func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	fakePool := &fakeOutboxRelayPool{
+		repo:        repo,
+		rateLimited: make(chan struct{}),
+		accepted:    make(chan struct{}),
+		responses: []fakePublishResponse{{
+			results: []PublishResult{{RelayURL: "wss://relay.example", Accepted: true}},
+		}},
+	}
+	publisher := NewPublisher(
+		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
+		NewRelayPool(nil, zap.NewNop()),
+		repo,
+		zap.NewNop(),
+	)
+	publisher.publishFn = fakePool.PublishWithResults
+
+	event := &gonostr.Event{
+		Kind:      gonostr.Kind(30315),
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "run-1"}, {"e", "loom-job-1"}, {"t", "deployment.run.health"}},
+		Content:   `{"state":"stale"}`,
+	}
+	results, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Accepted)
+
+	rec, err := repo.GetByID(ctx, event.ID.Hex())
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, "deployment.run.health", rec.EntityType)
+	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
+	require.Equal(t, 1, rec.PublishAttempts)
+	require.NotNil(t, rec.PublishedAt)
+}
+
 func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewInMemoryNostrEventRepository()
