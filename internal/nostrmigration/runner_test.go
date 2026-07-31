@@ -99,6 +99,29 @@ func TestRunnerSkipsAlreadyMigratedLegacyRecord(t *testing.T) {
 	require.Empty(t, publisher.events)
 }
 
+func TestRunnerDoesNotRemigrateCurrentMigrationOutput(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	tags, err := json.Marshal(gonostr.Tags{
+		{"d", "sbom:migrated:legacy-1"},
+		{"migrated-from", "legacy-1"},
+		{"migration", migrationID},
+	})
+	require.NoError(t, err)
+	_, err = repo.Record(ctx, &repository.NostrEventRecord{
+		ID:        "canonical-current",
+		Kind:      kinds.SBOMReference,
+		Content:   `{"legacy_event":{"id":"legacy-1"}}`,
+		Tags:      tags,
+		CreatedAt: time.Unix(101, 0).UTC(),
+	})
+	require.NoError(t, err)
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{Accepted: true}}}
+
+	require.NoError(t, NewRunner(repo, publisher, nil, Config{PrivateKey: deterministicPrivateKey(t)}, zap.NewNop()).Run(ctx))
+	require.Empty(t, publisher.events)
+}
+
 func TestRunnerPaginatesAllLocalRecordsAndPersistsCursor(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewInMemoryNostrEventRepository()

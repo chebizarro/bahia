@@ -222,6 +222,10 @@ func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *
 }
 
 func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRecord, summary *Summary) error {
+	if recordHasCurrentMigration(rec) {
+		summary.SkippedExisting++
+		return nil
+	}
 	disp, ok := ResolveDisposition(rec.Kind, rec.Tags, rec.Content)
 	if !ok {
 		return nil
@@ -351,14 +355,21 @@ func translatedObject(value any) map[string]any {
 
 func hasCurrentMigration(records []repository.NostrEventRecord) bool {
 	for _, rec := range records {
-		var tags [][]string
-		if json.Unmarshal(rec.Tags, &tags) != nil {
-			continue
+		if recordHasCurrentMigration(rec) {
+			return true
 		}
-		for _, tag := range tags {
-			if len(tag) >= 2 && tag[0] == "migration" && tag[1] == migrationID {
-				return true
-			}
+	}
+	return false
+}
+
+func recordHasCurrentMigration(rec repository.NostrEventRecord) bool {
+	var tags [][]string
+	if json.Unmarshal(rec.Tags, &tags) != nil {
+		return false
+	}
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == "migration" && tag[1] == migrationID {
+			return true
 		}
 	}
 	return false
