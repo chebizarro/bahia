@@ -1100,7 +1100,7 @@ func New(cfg *config.Config) (*App, error) {
 			assistantAgentLoop = agentLoop
 			assistantOrchestrator.SetAgentLoop(agentLoop)
 		}
-		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, AgentLoop: assistantAgentLoop, Logger: slog.Default()}), RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, AgentLoop: assistantAgentLoop, Logger: slog.Default()}), RunnerTier(Tier3), RunnerRequired(false))
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.Bool("agentic_enabled", cfg.Assistant.Agentic.Enabled))
 	}
 
@@ -1122,7 +1122,7 @@ func New(cfg *config.Config) (*App, error) {
 			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
 		}
 		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, docsPub, docsQuerier, logger)
-		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3), RunnerRequired(false))
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 

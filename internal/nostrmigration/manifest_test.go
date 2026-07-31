@@ -173,6 +173,30 @@ func TestResolveDispositionKeepsPrimaryMappingsWithoutWorkerEvidence(t *testing.
 	require.Equal(t, "system", discoveryWithCapabilities.Domain)
 }
 
+func TestResolveDispositionSkipsCanonicalBahiaRelaySets(t *testing.T) {
+	for _, dTag := range []string{"bahia-browser-v1", "bahia-contextvm-v1", "bahia-service-v1"} {
+		t.Run(dTag, func(t *testing.T) {
+			_, ok := ResolveDisposition(
+				kinds.RelaySetDiscovery,
+				tagsJSON(t, [][]string{{"d", dTag}, {"relay", "wss://bahia.example/relay"}}),
+				"",
+			)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestResolveDispositionKeepsLegacyRelaySetMapping(t *testing.T) {
+	disp, ok := ResolveDisposition(
+		kinds.RelaySetDiscovery,
+		tagsJSON(t, [][]string{{"d", "legacy-relays"}, {"relay", "wss://legacy.example"}}),
+		`{"relays":["wss://legacy.example"]}`,
+	)
+	require.True(t, ok)
+	require.Equal(t, CanonicalNIP51RelaySet, disp.CanonicalKind)
+	require.Equal(t, "bahia.relay-set.v1", disp.Schema)
+}
+
 func TestManifestDocumentsRequestedOmissionsAndAliases(t *testing.T) {
 	required := map[string]int{
 		"HiveCIWorkflowRun":              kinds.HiveCIWorkflowRun,

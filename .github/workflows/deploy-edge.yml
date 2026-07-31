@@ -130,6 +130,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          curl -fsS "http://${EDGE_HEALTH_HOST}:8080/health"
-          curl -fsS -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null
-          curl -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null
+          curl --retry 24 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            -fsS "http://${EDGE_HEALTH_HOST}:8080/ready"
+          curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            -fsS -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null
+          curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null

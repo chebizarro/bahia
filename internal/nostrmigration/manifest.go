@@ -134,13 +134,35 @@ func JustifiedConstantOmissions() map[string]KindJustification {
 // ResolveDisposition applies manifest coverage to a concrete legacy event. Most
 // legacy kinds are resolved solely by kind number. The four legacy worker
 // read-model aliases reused kind numbers that later became system/backup
-// projections, so worker-shaped tags/content are resolved to worker schemas;
-// otherwise the primary kind-number disposition remains in force.
+// projections, so worker-shaped tags/content are resolved to worker schemas.
+// Kind 30002 is likewise shared with Bahia's canonical NIP-51 topology events;
+// those canonical d-tags must never be fed back through legacy translation.
+// Otherwise the primary kind-number disposition remains in force.
 func ResolveDisposition(kind int, tagsJSON []byte, content string) (Disposition, bool) {
+	if kind == kinds.RelaySetDiscovery && hasCanonicalRelaySetDTag(tagsJSON) {
+		return Disposition{}, false
+	}
 	if alias, ok := legacyWorkerAliasDisposition(kind); ok && hasLegacyWorkerEvidence(kind, tagsJSON, content) {
 		return alias, true
 	}
 	return Lookup(kind)
+}
+
+func hasCanonicalRelaySetDTag(tagsJSON []byte) bool {
+	var tags [][]string
+	if len(tagsJSON) == 0 || json.Unmarshal(tagsJSON, &tags) != nil {
+		return false
+	}
+	for _, tag := range tags {
+		if len(tag) < 2 || tag[0] != "d" {
+			continue
+		}
+		switch tag[1] {
+		case "bahia-browser-v1", "bahia-contextvm-v1", "bahia-service-v1":
+			return true
+		}
+	}
+	return false
 }
 
 func LegacyKinds() []int {
