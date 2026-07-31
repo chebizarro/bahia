@@ -17,6 +17,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const retentionSweepInterval = 15 * time.Minute
+
 // Server wraps the Khatru relay used by Bahia's local sidecar topology.
 type Server struct {
 	cfg        config.RelaySidecarConfig
@@ -157,10 +159,21 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	sweepDone := make(chan struct{})
+	go func() {
+		defer close(sweepDone)
+		s.runRetentionSweeps(sweepCtx)
+	}()
+
 	select {
 	case err := <-errCh:
+		stopSweep()
+		<-sweepDone
 		return fmt.Errorf("relay sidecar server: %w", err)
 	case <-ctx.Done():
+		stopSweep()
+		<-sweepDone
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -173,4 +186,31 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.logger.Info("relay sidecar stopped")
 	return nil
+}
+
+func (s *Server) runRetentionSweeps(ctx context.Context) {
+	sweep := func() {
+		deleted, err := s.store.SweepRetention(ctx, time.Now(), s.cfg.EventRetention, s.cfg.RequestRetention)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.logger.Warn("relay sidecar retention sweep failed", zap.Error(err))
+			}
+			return
+		}
+		if deleted > 0 {
+			s.logger.Info("relay sidecar retention sweep completed", zap.Int64("deleted_events", deleted))
+		}
+	}
+
+	sweep()
+	ticker := time.NewTicker(retentionSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
 }

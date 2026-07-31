@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	_ "modernc.org/sqlite"
 )
 
@@ -130,6 +132,29 @@ func (s *sqliteStore) Delete(ctx context.Context, id nostr.ID) error {
 		return fmt.Errorf("delete relay event: %w", err)
 	}
 	return nil
+}
+
+func (s *sqliteStore) SweepRetention(ctx context.Context, now time.Time, eventRetention, requestRetention time.Duration) (int64, error) {
+	requestCutoff := now.Add(-requestRetention).Unix()
+	eventCutoff := now.Add(-eventRetention).Unix()
+	// ContextVM messages contain both requests and responses, while kinds 1059
+	// and 21059 are their persistent and ephemeral gift-wrap transports. These
+	// request-scoped transport kinds use the shorter request retention; durable
+	// observables and every other event kind use the general event retention.
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM events
+		WHERE (kind IN (?, ?, ?) AND created_at < ?)
+		   OR (kind NOT IN (?, ?, ?) AND created_at < ?)`,
+		kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, requestCutoff,
+		kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, eventCutoff)
+	if err != nil {
+		return 0, fmt.Errorf("sweep relay event retention: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count swept relay events: %w", err)
+	}
+	return deleted, nil
 }
 
 func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
