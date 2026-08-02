@@ -62,6 +62,7 @@ type ServiceCIConfigRequest struct {
 
 // CreateEnvironmentRequest represents a request to register a new environment.
 type CreateEnvironmentRequest struct {
+	OrgID              uuid.UUID                    `json:"org_id,omitempty"`
 	Name               string                       `json:"name"`
 	LoomWorkerSelector map[string]any               `json:"loom_worker_selector,omitempty"`
 	RuntimeConfig      map[string]any               `json:"runtime_config,omitempty"`
@@ -74,6 +75,7 @@ type CreateEnvironmentRequest struct {
 
 // UpdateEnvironmentRequest represents a request to update an environment.
 type UpdateEnvironmentRequest struct {
+	OrgID              *uuid.UUID                   `json:"org_id,omitempty"`
 	Name               *string                      `json:"name,omitempty"`
 	LoomWorkerSelector *map[string]any              `json:"loom_worker_selector,omitempty"`
 	RuntimeConfig      *map[string]any              `json:"runtime_config,omitempty"`

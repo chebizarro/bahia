@@ -134,6 +134,20 @@ func (r *RelayFirstRegistry) CreateEnvironment(ctx context.Context, env *domain.
 	return r.delegate.CreateEnvironment(ctx, env)
 }
 
+// CreateEnvironmentWithDeploymentUnits publishes the complete desired environment contract before atomically caching it.
+func (r *RelayFirstRegistry) CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if r.delegate == nil {
+		return fmt.Errorf("registry delegate is not configured")
+	}
+	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+		return err
+	}
+	if err := r.publishEnvironmentRegistryWithUnits(ctx, env, units, false); err != nil {
+		return err
+	}
+	return r.delegate.CreateEnvironmentWithDeploymentUnits(ctx, env, units)
+}
+
 func (r *RelayFirstRegistry) UpdateEnvironment(ctx context.Context, env *domain.Environment) error {
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
@@ -145,6 +159,20 @@ func (r *RelayFirstRegistry) UpdateEnvironment(ctx context.Context, env *domain.
 		return err
 	}
 	return r.delegate.UpdateEnvironment(ctx, env)
+}
+
+// UpdateEnvironmentWithDeploymentUnits publishes the complete desired environment contract before atomically caching it.
+func (r *RelayFirstRegistry) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if r.delegate == nil {
+		return fmt.Errorf("registry delegate is not configured")
+	}
+	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+		return err
+	}
+	if err := r.publishEnvironmentRegistryWithUnits(ctx, env, units, false); err != nil {
+		return err
+	}
+	return r.delegate.UpdateEnvironmentWithDeploymentUnits(ctx, env, units)
 }
 
 func (r *RelayFirstRegistry) DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error {
@@ -193,11 +221,24 @@ func (r *RelayFirstRegistry) publishServiceRegistry(ctx context.Context, svc *do
 }
 
 func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
+	return r.publishEnvironmentRegistryWithUnits(ctx, env, nil, deleted)
+}
+
+func (r *RelayFirstRegistry) publishEnvironmentRegistryWithUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, deleted bool) error {
 	content := map[string]any{"deleted": deleted, "id": env.ID.String()}
 	if !deleted {
+		if env.OrgID != uuid.Nil {
+			content["org_id"] = env.OrgID.String()
+		}
 		content["name"] = env.Name
+		content["loom_worker_selector"] = env.LoomWorkerSelector
+		content["runtime_config"] = env.RuntimeConfig
+		content["targeting"] = env.Targeting
 		content["protected"] = env.Protected
 		content["deploy_strategy"] = string(env.DeployStrategy)
+		if units != nil {
+			content["deployment_units"] = units
+		}
 		content["created_at"] = relayFirstFormatTime(env.CreatedAt)
 		content["updated_at"] = relayFirstFormatTime(env.UpdatedAt)
 	} else {

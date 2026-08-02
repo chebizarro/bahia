@@ -260,10 +260,15 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Registry service.
+	registryOptions := []service.RegistryOption{}
+	if dbAvailable && pool != nil {
+		registryOptions = append(registryOptions, service.WithRegistryTxExecutor(repository.NewPgTxExecutor(pool)))
+	}
 	registry := service.NewRegistryService(
 		serviceRepo, envRepo, buildRepo, artifactRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
 		verifier, publisher, logger,
+		registryOptions...,
 	)
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
 

@@ -1,15 +1,18 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
+	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -55,8 +58,10 @@ type SignatureVerifier interface {
 type RegistryMutationBackend interface {
 	CreateService(ctx context.Context, svc *domain.Service) error
 	CreateEnvironment(ctx context.Context, env *domain.Environment) error
+	CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
+	UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
 	DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error
 }
 
@@ -155,20 +160,28 @@ type encryptedServiceCreatePayload struct {
 }
 
 type encryptedEnvironmentCreatePayload struct {
-	Name               string          `json:"name"`
-	LoomWorkerSelector json.RawMessage `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      map[string]any  `json:"runtime_config,omitempty"`
-	DeployStrategy     string          `json:"deploy_strategy,omitempty"`
-	Protected          bool            `json:"protected,omitempty"`
+	OrgID              uuid.UUID                        `json:"org_id,omitempty"`
+	Name               string                           `json:"name"`
+	LoomWorkerSelector json.RawMessage                  `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any                   `json:"runtime_config,omitempty"`
+	Targeting          *dto.EnvironmentTargetingRequest `json:"targeting,omitempty"`
+	DeploymentUnits    []dto.DeploymentUnitRequest      `json:"deployment_units,omitempty"`
+	ReconcileMode      string                           `json:"reconcile_mode,omitempty"`
+	DeployStrategy     string                           `json:"deploy_strategy,omitempty"`
+	Protected          bool                             `json:"protected,omitempty"`
 }
 
 type encryptedEnvironmentUpdatePayload struct {
-	ID                 string          `json:"id"`
-	Name               string          `json:"name,omitempty"`
-	LoomWorkerSelector json.RawMessage `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      map[string]any  `json:"runtime_config,omitempty"`
-	DeployStrategy     string          `json:"deploy_strategy,omitempty"`
-	Protected          *bool           `json:"protected,omitempty"`
+	ID                 string                           `json:"id"`
+	OrgID              *uuid.UUID                       `json:"org_id,omitempty"`
+	Name               string                           `json:"name,omitempty"`
+	LoomWorkerSelector json.RawMessage                  `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any                   `json:"runtime_config,omitempty"`
+	Targeting          *dto.EnvironmentTargetingRequest `json:"targeting,omitempty"`
+	DeploymentUnits    []dto.DeploymentUnitRequest      `json:"deployment_units,omitempty"`
+	ReconcileMode      string                           `json:"reconcile_mode,omitempty"`
+	DeployStrategy     string                           `json:"deploy_strategy,omitempty"`
+	Protected          *bool                            `json:"protected,omitempty"`
 }
 
 type encryptedEnvironmentDeletePayload struct {
@@ -219,7 +232,7 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 		return nil, fmt.Errorf("environment registry mutation handling is not configured")
 	}
 	var payload encryptedEnvironmentCreatePayload
-	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, err
 	}
 	name := strings.TrimSpace(payload.Name)
@@ -243,16 +256,32 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 	}
 	env := &domain.Environment{
 		ID:                 uuid.New(),
+		OrgID:              payload.OrgID,
 		Name:               name,
 		LoomWorkerSelector: selector,
 		RuntimeConfig:      payload.RuntimeConfig,
+		Targeting:          environmentTargetingFromRequest(payload.Targeting),
 		DeployStrategy:     deployStrategy,
 		Protected:          payload.Protected,
 	}
-	if err := h.registry.CreateEnvironment(ctx, env); err != nil {
+	if err := applyEnvironmentReconcileMode(env, payload.ReconcileMode); err != nil {
+		return nil, err
+	}
+	units, err := deploymentUnitsFromRequests(env, payload.DeploymentUnits)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.authorizeEnvironmentOrg(ctx, request, env.OrgID); err != nil {
+		return nil, err
+	}
+	if payload.DeploymentUnits != nil {
+		if err := h.registry.CreateEnvironmentWithDeploymentUnits(ctx, env, units); err != nil {
+			return nil, fmt.Errorf("failed to create environment: %w", err)
+		}
+	} else if err := h.registry.CreateEnvironment(ctx, env); err != nil {
 		return nil, fmt.Errorf("failed to create environment: %w", err)
 	}
-	return map[string]any{"status": "created", "environment": env, "environment_id": env.ID.String()}, nil
+	return map[string]any{"status": "created", "environment": env, "environment_id": env.ID.String(), "deployment_units": units}, nil
 }
 
 func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -260,7 +289,7 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 		return nil, fmt.Errorf("environment registry mutation handling is not configured")
 	}
 	var payload encryptedEnvironmentUpdatePayload
-	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, err
 	}
 	id, err := parseEncryptedUUID(payload.ID, "environment ID")
@@ -277,6 +306,20 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 	if env == nil {
 		return nil, fmt.Errorf("environment not found")
 	}
+	if err := h.authorizeEnvironmentOrg(ctx, request, env.OrgID); err != nil {
+		return nil, err
+	}
+	if payload.OrgID != nil {
+		if *payload.OrgID == uuid.Nil {
+			return nil, fmt.Errorf("org_id must not be nil")
+		}
+		if *payload.OrgID != env.OrgID {
+			if err := h.authorizeEnvironmentOrg(ctx, request, *payload.OrgID); err != nil {
+				return nil, err
+			}
+			env.OrgID = *payload.OrgID
+		}
+	}
 	if strings.TrimSpace(payload.Name) != "" {
 		env.Name = strings.TrimSpace(payload.Name)
 	}
@@ -290,6 +333,12 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 	if payload.RuntimeConfig != nil {
 		env.RuntimeConfig = payload.RuntimeConfig
 	}
+	if payload.Targeting != nil {
+		env.Targeting = environmentTargetingFromRequest(payload.Targeting)
+	}
+	if err := applyEnvironmentReconcileMode(env, payload.ReconcileMode); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(payload.DeployStrategy) != "" {
 		strategy := domain.DeployStrategy(strings.TrimSpace(payload.DeployStrategy))
 		if err := domain.ValidateDeployStrategy(strategy); err != nil {
@@ -300,10 +349,18 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 	if payload.Protected != nil {
 		env.Protected = *payload.Protected
 	}
-	if err := h.registry.UpdateEnvironment(ctx, env); err != nil {
+	units, err := deploymentUnitsFromRequests(env, payload.DeploymentUnits)
+	if err != nil {
+		return nil, err
+	}
+	if payload.DeploymentUnits != nil {
+		if err := h.registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, units); err != nil {
+			return nil, fmt.Errorf("failed to update environment: %w", err)
+		}
+	} else if err := h.registry.UpdateEnvironment(ctx, env); err != nil {
 		return nil, fmt.Errorf("failed to update environment: %w", err)
 	}
-	return map[string]any{"status": "updated", "environment": env, "environment_id": env.ID.String()}, nil
+	return map[string]any{"status": "updated", "environment": env, "environment_id": env.ID.String(), "deployment_units": units}, nil
 }
 
 func (h *EncryptedRouteHandlers) DeleteEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -322,6 +379,121 @@ func (h *EncryptedRouteHandlers) DeleteEnvironment(ctx context.Context, request 
 		return nil, fmt.Errorf("failed to delete environment: %w", err)
 	}
 	return map[string]any{"status": "deleted", "environment_id": id.String()}, nil
+}
+
+func decodeStrictContextVMParams(params json.RawMessage, out any) error {
+	if len(params) == 0 || string(params) == "null" {
+		params = []byte(`{}`)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(params))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return fmt.Errorf("invalid environment params: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("invalid environment params: multiple JSON values")
+		}
+		return fmt.Errorf("invalid environment params: %w", err)
+	}
+	return nil
+}
+
+func environmentTargetingFromRequest(request *dto.EnvironmentTargetingRequest) domain.EnvironmentTargeting {
+	if request == nil {
+		return domain.EnvironmentTargeting{}
+	}
+	return domain.EnvironmentTargeting{
+		DefaultUnitKey:       strings.TrimSpace(request.DefaultUnitKey),
+		FailureDomainLabels:  request.FailureDomainLabels,
+		SecretScopeMode:      domain.SecretScopeMode(strings.TrimSpace(request.SecretScopeMode)),
+		DefaultReconcileMode: domain.ReconcileMode(strings.TrimSpace(request.DefaultReconcileMode)),
+	}
+}
+
+func applyEnvironmentReconcileMode(env *domain.Environment, value string) error {
+	if env == nil {
+		return fmt.Errorf("environment is nil")
+	}
+	mode := domain.ReconcileMode(strings.TrimSpace(value))
+	if err := domain.ValidateReconcileMode(mode); err != nil {
+		return fmt.Errorf("invalid reconcile_mode: %w", err)
+	}
+	if mode != "" {
+		env.Targeting.DefaultReconcileMode = mode
+	}
+	domain.NormalizeEnvironmentTargeting(env)
+	if err := domain.ValidateReconcileMode(env.Targeting.DefaultReconcileMode); err != nil {
+		return fmt.Errorf("invalid targeting.default_reconcile_mode: %w", err)
+	}
+	switch env.Targeting.SecretScopeMode {
+	case "", domain.SecretScopeModeService, domain.SecretScopeModeEnvironment, domain.SecretScopeModeUnit:
+	default:
+		return fmt.Errorf("invalid targeting.secret_scope_mode %q (allowed: service, environment, unit)", env.Targeting.SecretScopeMode)
+	}
+	return nil
+}
+
+func deploymentUnitsFromRequests(env *domain.Environment, requests []dto.DeploymentUnitRequest) ([]*domain.DeploymentUnit, error) {
+	if requests == nil {
+		return nil, nil
+	}
+	defaultRuntime := domain.RuntimeTypeFromRuntimeConfig(env.RuntimeConfig)
+	if defaultRuntime == "" {
+		defaultRuntime = domain.RuntimeTypeDocker
+	}
+	units := make([]*domain.DeploymentUnit, 0, len(requests))
+	keys := make(map[string]struct{}, len(requests))
+	for _, request := range requests {
+		unit := &domain.DeploymentUnit{
+			ID:             uuid.New(),
+			EnvironmentID:  env.ID,
+			Key:            strings.TrimSpace(request.Key),
+			DisplayName:    strings.TrimSpace(request.DisplayName),
+			RuntimeType:    domain.RuntimeType(strings.TrimSpace(request.RuntimeType)),
+			EndpointRef:    strings.TrimSpace(request.EndpointRef),
+			ComposeDir:     strings.TrimSpace(request.ComposeDir),
+			Namespace:      strings.TrimSpace(request.Namespace),
+			NetworkProfile: request.NetworkProfile,
+			ReconcileMode:  domain.ReconcileMode(strings.TrimSpace(request.ReconcileMode)),
+			OwnershipMode:  domain.OwnershipMode(strings.TrimSpace(request.OwnershipMode)),
+			RuntimeConfig:  request.RuntimeConfig,
+		}
+		if unit.RuntimeType == "" {
+			unit.RuntimeType = defaultRuntime
+		}
+		if unit.ReconcileMode == "" {
+			unit.ReconcileMode = env.Targeting.DefaultReconcileMode
+		}
+		domain.NormalizeDeploymentUnitTargeting(unit)
+		if err := domain.ValidateDeploymentUnit(unit); err != nil {
+			return nil, fmt.Errorf("invalid deployment unit %q: %w", unit.Key, err)
+		}
+		if _, duplicate := keys[unit.Key]; duplicate {
+			return nil, fmt.Errorf("duplicate deployment unit key %q", unit.Key)
+		}
+		keys[unit.Key] = struct{}{}
+		units = append(units, unit)
+	}
+	if len(units) > 0 {
+		if _, ok := keys[env.Targeting.DefaultUnitKey]; !ok {
+			return nil, fmt.Errorf("targeting.default_unit_key %q does not identify a deployment unit", env.Targeting.DefaultUnitKey)
+		}
+	}
+	return units, nil
+}
+
+func (h *EncryptedRouteHandlers) authorizeEnvironmentOrg(ctx context.Context, request ContextVMRequest, orgID uuid.UUID) error {
+	if orgID == uuid.Nil {
+		return nil
+	}
+	if h.rbac == nil {
+		return fmt.Errorf("environment RBAC is not configured")
+	}
+	if request.Event == nil {
+		return fmt.Errorf("signed environment request event is required")
+	}
+	return h.rbac.CheckPermission(ctx, requestPrincipal(EncryptedRequest{Event: request.Event}), orgID, domain.PermWriteEnvironments)
 }
 
 func parseLoomWorkerSelector(raw json.RawMessage) (map[string]any, error) {

@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -47,9 +48,20 @@ type RegistryService struct {
 	runs         repository.DeploymentRunRepository
 	observations repository.RuntimeObservationRepository
 	state        repository.EnvironmentServiceStateRepository
+	txExecutor   repository.TxExecutor
 	verifier     ImageVerifier
 	publisher    events.Publisher
 	logger       *zap.Logger
+}
+
+// RegistryOption configures optional registry capabilities.
+type RegistryOption func(*RegistryService)
+
+// WithRegistryTxExecutor enables atomic multi-repository registry mutations.
+func WithRegistryTxExecutor(executor repository.TxExecutor) RegistryOption {
+	return func(s *RegistryService) {
+		s.txExecutor = executor
+	}
 }
 
 // NewRegistryService creates a new RegistryService.
@@ -66,11 +78,12 @@ func NewRegistryService(
 	verifier ImageVerifier,
 	publisher events.Publisher,
 	logger *zap.Logger,
+	options ...RegistryOption,
 ) *RegistryService {
 	if verifier == nil {
 		verifier = &NoopImageVerifier{}
 	}
-	return &RegistryService{
+	registry := &RegistryService{
 		services:     services,
 		environments: environments,
 		builds:       builds,
@@ -83,6 +96,12 @@ func NewRegistryService(
 		publisher:    publisher,
 		logger:       logger,
 	}
+	for _, option := range options {
+		if option != nil {
+			option(registry)
+		}
+	}
+	return registry
 }
 
 // --- Service CRUD ---
@@ -292,17 +311,41 @@ func normalizeServiceRepositoryForRead(svc *domain.Service) {
 // --- Environment CRUD ---
 
 func (s *RegistryService) CreateEnvironment(ctx context.Context, env *domain.Environment) error {
-	if env.DeployStrategy == "" {
-		env.DeployStrategy = domain.DeployStrategyReplace
+	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
+		return err
 	}
 	if err := s.environments.Create(ctx, env); err != nil {
 		return err
 	}
-	s.publisher.Publish(ctx, events.Event{
-		Type:     events.EventEnvironmentCreated,
-		EntityID: env.ID.String(),
-		Data:     events.ResourceData{EnvironmentID: env.ID.String()},
-	})
+	s.publishEnvironmentMutation(ctx, events.EventEnvironmentCreated, env)
+	return nil
+}
+
+// CreateEnvironmentWithDeploymentUnits persists an environment and its explicit units in one transaction.
+func (s *RegistryService) CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+		return err
+	}
+	if s.txExecutor == nil {
+		return fmt.Errorf("environment deployment-unit transaction handling is not configured")
+	}
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Environments == nil || repos.DeploymentUnits == nil {
+			return fmt.Errorf("environment transaction repositories are not configured")
+		}
+		if err := repos.Environments.Create(ctx, env); err != nil {
+			return err
+		}
+		for _, unit := range units {
+			if err := repos.DeploymentUnits.Create(ctx, unit); err != nil {
+				return fmt.Errorf("creating deployment unit %q: %w", unit.Key, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.publishEnvironmentMutation(ctx, events.EventEnvironmentCreated, env)
 	return nil
 }
 
@@ -323,15 +366,161 @@ func (s *RegistryService) ListEnvironmentsByOrg(ctx context.Context, orgID uuid.
 }
 
 func (s *RegistryService) UpdateEnvironment(ctx context.Context, env *domain.Environment) error {
+	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
+		return err
+	}
 	if err := s.environments.Update(ctx, env); err != nil {
 		return err
 	}
+	s.publishEnvironmentMutation(ctx, events.EventEnvironmentUpdated, env)
+	return nil
+}
+
+// UpdateEnvironmentWithDeploymentUnits updates an environment and reconciles its complete explicit unit set atomically.
+func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+		return err
+	}
+	if s.txExecutor == nil {
+		return fmt.Errorf("environment deployment-unit transaction handling is not configured")
+	}
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Environments == nil || repos.DeploymentUnits == nil {
+			return fmt.Errorf("environment transaction repositories are not configured")
+		}
+		unitWriter, ok := repos.DeploymentUnits.(deploymentUnitMutationRepository)
+		if !ok {
+			return fmt.Errorf("deployment unit transactional mutation handling is not configured")
+		}
+		if err := repos.Environments.Update(ctx, env); err != nil {
+			return err
+		}
+		return reconcileExplicitDeploymentUnits(ctx, unitWriter, env.ID, units)
+	}); err != nil {
+		return err
+	}
+	s.publishEnvironmentMutation(ctx, events.EventEnvironmentUpdated, env)
+	return nil
+}
+
+type deploymentUnitMutationRepository interface {
+	repository.DeploymentUnitRepository
+	ListByEnvironmentForUpdate(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error)
+	Update(ctx context.Context, unit *domain.DeploymentUnit) error
+	DeleteIfUnreferenced(ctx context.Context, id uuid.UUID) error
+}
+
+func reconcileExplicitDeploymentUnits(ctx context.Context, repo deploymentUnitMutationRepository, environmentID uuid.UUID, requested []*domain.DeploymentUnit) error {
+	existing, err := repo.ListByEnvironmentForUpdate(ctx, environmentID)
+	if err != nil {
+		return fmt.Errorf("listing deployment units for update: %w", err)
+	}
+	existingByKey := make(map[string]domain.DeploymentUnit, len(existing))
+	for _, unit := range existing {
+		existingByKey[unit.Key] = unit
+	}
+
+	requestedKeys := make(map[string]struct{}, len(requested))
+	for _, unit := range requested {
+		requestedKeys[unit.Key] = struct{}{}
+		if persisted, ok := existingByKey[unit.Key]; ok {
+			unit.ID = persisted.ID
+			unit.CreatedAt = persisted.CreatedAt
+			if err := repo.Update(ctx, unit); err != nil {
+				return fmt.Errorf("updating deployment unit %q: %w", unit.Key, err)
+			}
+			continue
+		}
+		if err := repo.Create(ctx, unit); err != nil {
+			return fmt.Errorf("creating deployment unit %q: %w", unit.Key, err)
+		}
+	}
+
+	for _, unit := range existing {
+		if _, retained := requestedKeys[unit.Key]; retained {
+			continue
+		}
+		if err := repo.DeleteIfUnreferenced(ctx, unit.ID); err != nil {
+			if errors.Is(err, repository.ErrConflict) {
+				return fmt.Errorf("deployment unit %q cannot be removed because it is referenced by state, runs, intents, or observations: %w", unit.Key, err)
+			}
+			return fmt.Errorf("deleting deployment unit %q: %w", unit.Key, err)
+		}
+	}
+	return nil
+}
+
+func normalizeAndValidateEnvironmentMutation(env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if env == nil {
+		return fmt.Errorf("environment is nil")
+	}
+	if env.ID == uuid.Nil {
+		env.ID = uuid.New()
+	}
+	env.Name = strings.TrimSpace(env.Name)
+	if env.Name == "" {
+		return fmt.Errorf("%w: environment name must not be empty", domain.ErrEmptyField)
+	}
+	if env.DeployStrategy == "" {
+		env.DeployStrategy = domain.DeployStrategyReplace
+	}
+	if err := domain.ValidateDeployStrategy(env.DeployStrategy); err != nil {
+		return err
+	}
+	domain.NormalizeEnvironmentTargeting(env)
+	if err := domain.ValidateReconcileMode(env.Targeting.DefaultReconcileMode); err != nil {
+		return err
+	}
+	switch env.Targeting.SecretScopeMode {
+	case "", domain.SecretScopeModeService, domain.SecretScopeModeEnvironment, domain.SecretScopeModeUnit:
+	default:
+		return fmt.Errorf("%w: secret_scope_mode %q is not valid (allowed: service, environment, unit)", domain.ErrInvalidValue, env.Targeting.SecretScopeMode)
+	}
+
+	defaultRuntime := domain.RuntimeTypeFromRuntimeConfig(env.RuntimeConfig)
+	if defaultRuntime == "" {
+		defaultRuntime = domain.RuntimeTypeDocker
+	}
+	seenKeys := make(map[string]struct{}, len(units))
+	for _, unit := range units {
+		if unit == nil {
+			return fmt.Errorf("%w: deployment unit must not be nil", domain.ErrInvalidValue)
+		}
+		unit.EnvironmentID = env.ID
+		unit.Key = strings.TrimSpace(unit.Key)
+		unit.DisplayName = strings.TrimSpace(unit.DisplayName)
+		unit.EndpointRef = strings.TrimSpace(unit.EndpointRef)
+		unit.ComposeDir = strings.TrimSpace(unit.ComposeDir)
+		unit.Namespace = strings.TrimSpace(unit.Namespace)
+		if unit.RuntimeType == "" {
+			unit.RuntimeType = defaultRuntime
+		}
+		if unit.ReconcileMode == "" {
+			unit.ReconcileMode = env.Targeting.DefaultReconcileMode
+		}
+		domain.NormalizeDeploymentUnitTargeting(unit)
+		if err := domain.ValidateDeploymentUnit(unit); err != nil {
+			return fmt.Errorf("invalid deployment unit %q: %w", unit.Key, err)
+		}
+		if _, duplicate := seenKeys[unit.Key]; duplicate {
+			return fmt.Errorf("%w: duplicate deployment unit key %q", domain.ErrInvalidValue, unit.Key)
+		}
+		seenKeys[unit.Key] = struct{}{}
+	}
+	if len(units) > 0 {
+		if _, ok := seenKeys[env.Targeting.DefaultUnitKey]; !ok {
+			return fmt.Errorf("%w: targeting default_unit_key %q does not identify an explicit deployment unit", domain.ErrInvalidValue, env.Targeting.DefaultUnitKey)
+		}
+	}
+	return nil
+}
+
+func (s *RegistryService) publishEnvironmentMutation(ctx context.Context, eventType events.EventType, env *domain.Environment) {
 	s.publisher.Publish(ctx, events.Event{
-		Type:     events.EventEnvironmentUpdated,
+		Type:     eventType,
 		EntityID: env.ID.String(),
 		Data:     events.ResourceData{EnvironmentID: env.ID.String()},
 	})
-	return nil
 }
 
 // DeleteEnvironment deletes an environment after checking for dependent resources.

@@ -63,6 +63,59 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgDeploymentUnitRepositoryUpdateAndProtectedDelete(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgDeploymentUnitRepositoryWithDB(mock)
+	envID := uuid.New()
+	unitID := uuid.New()
+	unit := &domain.DeploymentUnit{
+		ID:            unitID,
+		EnvironmentID: envID,
+		Key:           "max",
+		RuntimeType:   domain.RuntimeTypeCompose,
+		EndpointRef:   "max",
+		ComposeDir:    "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"execution_mode": "sdk"},
+	}
+
+	mock.ExpectExec("UPDATE deployment_units").
+		WithArgs(unitID, "max", "", domain.RuntimeTypeCompose, "max", "/srv/bahia/gastown", "", pgxmock.AnyArg(), domain.ReconcileModeAutoApply, domain.OwnershipModeBahiaManaged, pgxmock.AnyArg(), pgxmock.AnyArg(), envID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	require.NoError(t, repo.Update(context.Background(), unit))
+
+	mock.ExpectExec("DELETE FROM deployment_units").
+		WithArgs(unitID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(unitID).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	err = repo.DeleteIfUnreferenced(context.Background(), unitID)
+	require.ErrorIs(t, err, ErrConflict)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgDeploymentUnitRepositoryListForUpdateLocksRows(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgDeploymentUnitRepositoryWithDB(mock)
+	envID := uuid.New()
+	mock.ExpectQuery("SELECT .+ FROM deployment_units.+FOR UPDATE").
+		WithArgs(envID).
+		WillReturnRows(pgxmock.NewRows(splitColumns(deploymentUnitColumns)))
+
+	units, err := repo.ListByEnvironmentForUpdate(context.Background(), envID)
+	require.NoError(t, err)
+	require.Empty(t, units)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgDeploymentUnitRepositoryResolveDefaultSynthesizesWhenMissing(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)

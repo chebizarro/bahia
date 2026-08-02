@@ -171,6 +171,7 @@ func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID,
 type fakeEncryptedRegistryMutations struct {
 	createdServices []*domain.Service
 	environments    map[uuid.UUID]*domain.Environment
+	deploymentUnits map[uuid.UUID][]*domain.DeploymentUnit
 }
 
 func (r *fakeEncryptedRegistryMutations) CreateService(_ context.Context, svc *domain.Service) error {
@@ -184,6 +185,13 @@ func (r *fakeEncryptedRegistryMutations) CreateEnvironment(_ context.Context, en
 		r.environments = map[uuid.UUID]*domain.Environment{}
 	}
 	r.environments[env.ID] = &copy
+	return nil
+}
+func (r *fakeEncryptedRegistryMutations) CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if err := r.CreateEnvironment(ctx, env); err != nil {
+		return err
+	}
+	r.deploymentUnits = copyEncryptedDeploymentUnits(r.deploymentUnits, env.ID, units)
 	return nil
 }
 func (r *fakeEncryptedRegistryMutations) GetEnvironment(_ context.Context, id uuid.UUID) (*domain.Environment, error) {
@@ -201,12 +209,33 @@ func (r *fakeEncryptedRegistryMutations) UpdateEnvironment(_ context.Context, en
 	r.environments[env.ID] = &copy
 	return nil
 }
+func (r *fakeEncryptedRegistryMutations) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if err := r.UpdateEnvironment(ctx, env); err != nil {
+		return err
+	}
+	r.deploymentUnits = copyEncryptedDeploymentUnits(r.deploymentUnits, env.ID, units)
+	return nil
+}
 func (r *fakeEncryptedRegistryMutations) DeleteEnvironment(_ context.Context, id uuid.UUID, _ bool) error {
 	if r.environments == nil || r.environments[id] == nil {
 		return repository.ErrNotFound
 	}
 	delete(r.environments, id)
+	delete(r.deploymentUnits, id)
 	return nil
+}
+
+func copyEncryptedDeploymentUnits(current map[uuid.UUID][]*domain.DeploymentUnit, environmentID uuid.UUID, units []*domain.DeploymentUnit) map[uuid.UUID][]*domain.DeploymentUnit {
+	if current == nil {
+		current = map[uuid.UUID][]*domain.DeploymentUnit{}
+	}
+	copied := make([]*domain.DeploymentUnit, 0, len(units))
+	for _, unit := range units {
+		unitCopy := *unit
+		copied = append(copied, &unitCopy)
+	}
+	current[environmentID] = copied
+	return current
 }
 
 func encryptedAuthDeps(t *testing.T, serviceID, orgID uuid.UUID, role domain.Role) (*fakeEncryptedServiceRepo, *auth.RBAC) {
@@ -399,6 +428,99 @@ func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodCreatesRegistryE
 	}
 }
 
+func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodPersistsRichContract(t *testing.T) {
+	orgID := uuid.New()
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	members := &fakeEncryptedMemberRepo{members: map[string]*domain.OrgMember{}}
+	_ = members.Add(context.Background(), &domain.OrgMember{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleAdmin})
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Registry: registry,
+		RBAC:     auth.NewRBAC(members),
+		Logger:   zap.NewNop(),
+	})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentCreate, map[string]any{
+		"org_id":         orgID.String(),
+		"name":           "max",
+		"runtime_config": map[string]any{"management_mode": "direct_runtime"},
+		"targeting": map[string]any{
+			"default_unit_key":       "max-compose",
+			"failure_domain_labels":  map[string]string{"host": "max"},
+			"secret_scope_mode":      "unit",
+			"default_reconcile_mode": "observe_only",
+		},
+		"reconcile_mode": "auto_apply",
+		"deployment_units": []map[string]any{{
+			"key":             "max-compose",
+			"display_name":    "Max Compose",
+			"runtime_type":    "compose",
+			"endpoint_ref":    "max",
+			"compose_dir":     "/srv/bahia/gastown",
+			"network_profile": map[string]string{"zone": "home"},
+			"ownership_mode":  "bahia_managed",
+			"runtime_config":  map[string]any{"execution_mode": "sdk"},
+		}},
+	}))
+
+	if len(registry.environments) != 1 {
+		t.Fatalf("created environments = %d, want 1", len(registry.environments))
+	}
+	var created *domain.Environment
+	for _, env := range registry.environments {
+		created = env
+	}
+	if created.OrgID != orgID || created.Targeting.DefaultUnitKey != "max-compose" || created.Targeting.DefaultReconcileMode != domain.ReconcileModeAutoApply {
+		t.Fatalf("unexpected rich environment contract: %#v", created)
+	}
+	if created.Targeting.SecretScopeMode != domain.SecretScopeModeUnit || created.Targeting.FailureDomainLabels["host"] != "max" {
+		t.Fatalf("unexpected environment targeting: %#v", created.Targeting)
+	}
+	units := registry.deploymentUnits[created.ID]
+	if len(units) != 1 {
+		t.Fatalf("deployment units = %d, want 1", len(units))
+	}
+	unit := units[0]
+	if unit.RuntimeType != domain.RuntimeTypeCompose || unit.EndpointRef != "max" || unit.ComposeDir != "/srv/bahia/gastown" {
+		t.Fatalf("unexpected deployment unit: %#v", unit)
+	}
+	if unit.ReconcileMode != domain.ReconcileModeAutoApply || unit.OwnershipMode != domain.OwnershipModeBahiaManaged || unit.RuntimeConfig["execution_mode"] != "sdk" {
+		t.Fatalf("unexpected deployment unit policy: %#v", unit)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["environment_id"] == "" || payload["status"] != "created" {
+		t.Fatalf("unexpected create response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_CreateEnvironmentRejectsDeploymentUnitSchemaViolations(t *testing.T) {
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	tests := []struct {
+		name   string
+		params string
+	}{
+		{name: "unknown field", params: `{"name":"prod","deployment_units":[{"key":"default","runtime_type":"compose","unknown":true}]}`},
+		{name: "invalid runtime", params: `{"name":"prod","deployment_units":[{"key":"default","runtime_type":"nomad"}]}`},
+		{name: "duplicate key", params: `{"name":"prod","deployment_units":[{"key":"default"},{"key":"default"}]}`},
+		{name: "missing targeted unit", params: `{"name":"prod","targeting":{"default_unit_key":"missing"},"deployment_units":[{"key":"default"}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := h.CreateEnvironment(context.Background(), ContextVMRequest{
+				RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(test.params)},
+			})
+			if err == nil {
+				t.Fatalf("expected validation error")
+			}
+		})
+	}
+	if len(registry.environments) != 0 {
+		t.Fatalf("invalid requests mutated registry: %#v", registry.environments)
+	}
+}
+
 func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSelector(t *testing.T) {
 	envID := uuid.New()
 	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
@@ -417,6 +539,44 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSel
 	}
 	if updated.LoomWorkerSelector["region"] != "us-west" || updated.LoomWorkerSelector["pubkey"] != "worker-1" {
 		t.Fatalf("unexpected selector: %#v", updated.LoomWorkerSelector)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["environment_id"] != envID.String() || payload["status"] != "updated" {
+		t.Fatalf("unexpected update response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodPersistsExplicitUnits(t *testing.T) {
+	envID := uuid.New()
+	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
+		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"type": "docker"}, DeployStrategy: domain.DeployStrategyReplace},
+	}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentUpdate, map[string]any{
+		"id":             envID.String(),
+		"reconcile_mode": "approval_required",
+		"targeting": map[string]any{
+			"default_unit_key":  "max",
+			"secret_scope_mode": "environment",
+		},
+		"deployment_units": []map[string]any{{
+			"key":            "max",
+			"runtime_type":   "compose",
+			"endpoint_ref":   "max",
+			"compose_dir":    "/srv/bahia/gastown",
+			"ownership_mode": "external",
+		}},
+	}))
+
+	updated := registry.environments[envID]
+	if updated.Targeting.DefaultUnitKey != "max" || updated.Targeting.DefaultReconcileMode != domain.ReconcileModeApprovalRequired {
+		t.Fatalf("unexpected updated targeting: %#v", updated.Targeting)
+	}
+	units := registry.deploymentUnits[envID]
+	if len(units) != 1 || units[0].Key != "max" || units[0].ReconcileMode != domain.ReconcileModeApprovalRequired || units[0].OwnershipMode != domain.OwnershipModeExternal {
+		t.Fatalf("unexpected updated deployment units: %#v", units)
 	}
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["environment_id"] != envID.String() || payload["status"] != "updated" {

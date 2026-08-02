@@ -108,11 +108,23 @@ func (r *PgDeploymentUnitRepository) GetByEnvironmentKey(ctx context.Context, en
 }
 
 func (r *PgDeploymentUnitRepository) ListByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	return r.listByEnvironment(ctx, environmentID, false)
+}
+
+// ListByEnvironmentForUpdate locks persisted units so references cannot race with unit-set reconciliation.
+func (r *PgDeploymentUnitRepository) ListByEnvironmentForUpdate(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	return r.listByEnvironment(ctx, environmentID, true)
+}
+
+func (r *PgDeploymentUnitRepository) listByEnvironment(ctx context.Context, environmentID uuid.UUID, forUpdate bool) ([]domain.DeploymentUnit, error) {
+	lockClause := ""
+	if forUpdate {
+		lockClause = " FOR UPDATE"
+	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+deploymentUnitColumns+` FROM deployment_units
 		WHERE environment_id = $1
-		ORDER BY unit_key
-	`, environmentID)
+		ORDER BY unit_key`+lockClause, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("listing deployment units: %w", err)
 	}
@@ -127,6 +139,71 @@ func (r *PgDeploymentUnitRepository) ListByEnvironment(ctx context.Context, envi
 		units = append(units, *unit)
 	}
 	return units, rows.Err()
+}
+
+// Update persists mutable deployment-unit targeting and ownership fields while preserving identity.
+func (r *PgDeploymentUnitRepository) Update(ctx context.Context, unit *domain.DeploymentUnit) error {
+	if unit == nil || unit.ID == uuid.Nil {
+		return fmt.Errorf("%w: deployment unit id", domain.ErrNilUUID)
+	}
+	domain.NormalizeDeploymentUnitTargeting(unit)
+	if err := domain.ValidateDeploymentUnit(unit); err != nil {
+		return err
+	}
+	unit.UpdatedAt = time.Now().UTC()
+
+	runtimeConfigJSON, err := marshalJSON(unit.RuntimeConfig, "deployment unit runtime config")
+	if err != nil {
+		return err
+	}
+	networkProfileJSON, err := marshalJSON(unit.NetworkProfile, "deployment unit network profile")
+	if err != nil {
+		return err
+	}
+
+	cmd, err := r.pool.Exec(ctx, `
+		UPDATE deployment_units
+		SET unit_key=$2, display_name=$3, runtime_type=$4, endpoint_ref=$5, compose_dir=$6,
+		    namespace=$7, network_profile=$8, reconcile_mode=$9, ownership_mode=$10,
+		    runtime_config=$11, updated_at=$12
+		WHERE id=$1 AND environment_id=$13
+	`, unit.ID, unit.Key, unit.DisplayName, unit.RuntimeType, unit.EndpointRef, unit.ComposeDir,
+		unit.Namespace, networkProfileJSON, unit.ReconcileMode, unit.OwnershipMode, runtimeConfigJSON,
+		unit.UpdatedAt, unit.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("updating deployment unit: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("updating deployment unit %s: %w", unit.ID, ErrNotFound)
+	}
+	return nil
+}
+
+// DeleteIfUnreferenced removes a unit only when no durable state, run, intent, or observation refers to it.
+func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, id uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx, `
+		DELETE FROM deployment_units du
+		WHERE du.id = $1
+		  AND NOT EXISTS (SELECT 1 FROM environment_service_state WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM deployment_runs WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM deployment_intents WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM runtime_observations WHERE deployment_unit_id = du.id)
+	`, id)
+	if err != nil {
+		return fmt.Errorf("deleting deployment unit: %w", err)
+	}
+	if cmd.RowsAffected() > 0 {
+		return nil
+	}
+
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deployment_units WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return fmt.Errorf("checking deployment unit after protected delete: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("deleting deployment unit %s: %w", id, ErrNotFound)
+	}
+	return fmt.Errorf("deployment unit %s is referenced by durable deployment state: %w", id, ErrConflict)
 }
 
 // ResolveDefault returns an explicitly persisted default unit when present;
