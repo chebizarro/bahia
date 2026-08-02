@@ -605,7 +605,7 @@ nostr:
     max_query_limit: 2000
 ```
 
-The retention sweep classifies ContextVM message and gift-wrap kinds `25910`, `1059`, and `21059` under the shorter request window if they are present in storage; for live relay traffic, persistent gift-wrap kind `1059` is the stored member of that set. Other stored observables use general event retention. Retention settings must be positive when the sidecar is enabled.
+The retention sweep classifies stored ContextVM gift-wrap kind `1059` under the shorter request window. Ephemeral kinds (`20000`–`29999`), including `25910` and `21059`, are broadcast-only, are never stored by the sidecar, and are unaffected by retention settings. Other stored observables use general event retention. Retention settings must be positive when the sidecar is enabled.
 
 ## Authentication
 
