@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
-	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -25,13 +25,25 @@ type deploymentLoomClient interface {
 	JobTimeout() time.Duration
 }
 
+type deploymentRuntimeLifecycle interface {
+	DeployDeploymentUnit(
+		context.Context,
+		uuid.UUID,
+		uuid.UUID,
+		*uuid.UUID,
+		*domain.DeploymentUnit,
+		*domain.DesiredServiceSpec,
+	) (*domain.RuntimeObservation, error)
+}
+
 type Coordinator struct {
-	registry        *service.RegistryService
-	loom            deploymentLoomClient
-	workerPolicy    *service.WorkerPolicyService
-	runtimeResolver runtimeadapter.RuntimeResolver
-	publisher       events.Publisher
-	logger          *zap.Logger
+	registry         *service.RegistryService
+	loom             deploymentLoomClient
+	workerPolicy     *service.WorkerPolicyService
+	deploymentUnits  repository.DeploymentUnitRepository
+	runtimeLifecycle deploymentRuntimeLifecycle
+	publisher        events.Publisher
+	logger           *zap.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -73,9 +85,12 @@ func WithWorkerPolicy(wp *service.WorkerPolicyService) CoordinatorOption {
 	return func(c *Coordinator) { c.workerPolicy = wp }
 }
 
-// WithRuntimeResolver enables direct runtime deployments for resolvable targets.
-func WithRuntimeResolver(resolver runtimeadapter.RuntimeResolver) CoordinatorOption {
-	return func(c *Coordinator) { c.runtimeResolver = resolver }
+// WithDeploymentUnitRouting enables unit-authoritative direct runtime routing.
+func WithDeploymentUnitRouting(units repository.DeploymentUnitRepository, lifecycle deploymentRuntimeLifecycle) CoordinatorOption {
+	return func(c *Coordinator) {
+		c.deploymentUnits = units
+		c.runtimeLifecycle = lifecycle
+	}
 }
 
 // RecoverNonTerminalRuns reattaches completion awaits for persisted Loom jobs
@@ -164,8 +179,12 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		resolvedImage = resolvedImage + ":" + tag
 	}
 
-	if c.shouldUseDirectRuntimeDeployment(svc, artifact) {
-		return c.executeDirectRuntimeDeployment(ctx, intentID, svc, env, resolvedImage)
+	unit, err := c.resolveDeploymentUnit(ctx, intent, env)
+	if err != nil {
+		return fmt.Errorf("resolving deployment unit: %w", err)
+	}
+	if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose {
+		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
 	}
 
 	// Select a worker using the environment's worker policy (if configured).
@@ -273,56 +292,132 @@ func (c *Coordinator) failDeploymentRunForDispatchAdmission(ctx context.Context,
 	return nil
 }
 
-func (c *Coordinator) shouldUseDirectRuntimeDeployment(svc *domain.Service, artifact *domain.Artifact) bool {
-	if c.runtimeResolver == nil || svc == nil || artifact == nil {
-		return false
+func (c *Coordinator) resolveDeploymentUnit(
+	ctx context.Context,
+	intent *domain.DeploymentIntent,
+	env *domain.Environment,
+) (*domain.DeploymentUnit, error) {
+	if intent == nil || env == nil {
+		return nil, fmt.Errorf("deployment intent and environment are required")
 	}
-	if svc.RuntimeType != domain.RuntimeTypeCompose {
-		return false
+
+	var unitID *uuid.UUID
+	if intent.DeploymentUnitID != nil && *intent.DeploymentUnitID != uuid.Nil {
+		id := *intent.DeploymentUnitID
+		unitID = &id
 	}
-	return isLocalImageRepo(artifact.ImageRepo)
+	if desired := intent.DesiredState; desired != nil && desired.DeploymentUnitID != nil && *desired.DeploymentUnitID != uuid.Nil {
+		if unitID != nil && *unitID != *desired.DeploymentUnitID {
+			return nil, fmt.Errorf("intent deployment unit %s does not match desired-state unit %s", *unitID, *desired.DeploymentUnitID)
+		}
+		id := *desired.DeploymentUnitID
+		unitID = &id
+	}
+
+	if c.deploymentUnits == nil {
+		if unitID != nil {
+			return nil, fmt.Errorf("deployment unit repository is required for explicit unit %s", *unitID)
+		}
+		return nil, nil
+	}
+
+	var (
+		unit *domain.DeploymentUnit
+		err  error
+	)
+	if unitID != nil {
+		unit, err = c.deploymentUnits.GetByID(ctx, *unitID)
+	} else {
+		unit, err = c.deploymentUnits.ResolveDefault(ctx, env)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if unit == nil {
+		if unitID != nil {
+			return nil, fmt.Errorf("deployment unit %s not found", *unitID)
+		}
+		return nil, fmt.Errorf("default deployment unit not found for environment %s", env.ID)
+	}
+	if unit.EnvironmentID != env.ID {
+		return nil, fmt.Errorf("deployment unit %q belongs to environment %s, not %s", unit.Key, unit.EnvironmentID, env.ID)
+	}
+
+	resolved := *unit
+	domain.NormalizeDeploymentUnitTargeting(&resolved)
+	if err := domain.ValidateDeploymentUnit(&resolved); err != nil {
+		return nil, fmt.Errorf("invalid deployment unit %q: %w", resolved.Key, err)
+	}
+	return &resolved, nil
 }
 
-func (c *Coordinator) executeDirectRuntimeDeployment(ctx context.Context, intentID uuid.UUID, svc *domain.Service, env *domain.Environment, image string) error {
-	rt, err := c.runtimeResolver.Resolve(svc, env)
-	if err != nil {
-		return fmt.Errorf("resolving runtime for direct deployment: %w", err)
+func (c *Coordinator) executeDirectRuntimeDeployment(
+	ctx context.Context,
+	intent *domain.DeploymentIntent,
+	svc *domain.Service,
+	env *domain.Environment,
+	unit *domain.DeploymentUnit,
+) error {
+	if unit == nil {
+		return fmt.Errorf("deployment unit is required for direct runtime deployment")
+	}
+	if unit.RuntimeType != domain.RuntimeTypeCompose {
+		return fmt.Errorf("deployment unit %q runtime type %q is not compose", unit.Key, unit.RuntimeType)
+	}
+	if unit.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		return fmt.Errorf("compose deployment unit %q is not Bahia-managed", unit.Key)
+	}
+	if strings.TrimSpace(unit.EndpointRef) == "" {
+		return fmt.Errorf("compose deployment unit %q requires a managed endpoint_ref", unit.Key)
+	}
+	if strings.TrimSpace(unit.ComposeDir) == "" {
+		return fmt.Errorf("compose deployment unit %q requires compose_dir", unit.Key)
+	}
+	if c.runtimeLifecycle == nil {
+		return fmt.Errorf("runtime lifecycle is required for compose deployment unit %q", unit.Key)
 	}
 
 	now := time.Now().UTC()
+	var deploymentUnitID *uuid.UUID
+	if unit.ID != uuid.Nil {
+		unitID := unit.ID
+		deploymentUnitID = &unitID
+	}
 	run := &domain.DeploymentRun{
-		DeploymentIntentID: intentID,
+		DeploymentIntentID: intent.ID,
+		DeploymentUnitID:   deploymentUnitID,
 		LoomJobID:          "runtime:direct",
 		Status:             domain.RunStatusQueued,
 		StartedAt:          &now,
 		Metadata: map[string]any{
-			"execution_mode": "direct-runtime",
-			"runtime_type":   string(rt.Type()),
+			"execution_mode":      "direct-runtime",
+			"runtime_type":        string(unit.RuntimeType),
+			"deployment_unit_key": unit.Key,
+			"endpoint_ref":        unit.EndpointRef,
 		},
 	}
 	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
 		return fmt.Errorf("creating deployment run: %w", err)
 	}
 
-	deployImage := image
-	if rt.Type() == domain.RuntimeTypeCompose && isLocalImageRef(image) {
-		deployImage = ""
-		run.Metadata["image_resolution"] = "compose-file"
-	}
-
-	c.logger.Info("executing direct runtime deployment",
-		zap.String("intent_id", intentID.String()),
+	c.logger.Info("executing deployment-unit runtime lifecycle",
+		zap.String("intent_id", intent.ID.String()),
 		zap.String("run_id", run.ID.String()),
 		zap.String("service", svc.Name),
 		zap.String("environment", env.Name),
-		zap.String("runtime_type", string(rt.Type())),
-		zap.String("requested_image", image),
-		zap.String("deploy_image", deployImage),
+		zap.String("deployment_unit", unit.Key),
+		zap.String("runtime_type", string(unit.RuntimeType)),
+		zap.String("endpoint_ref", unit.EndpointRef),
 	)
 
-	if err := rt.Deploy(ctx, svc.Name, deployImage, runtimeadapter.DeployOptions{
-		Labels: map[string]string{"bahia.service": svc.Name},
-	}); err != nil {
+	if _, err := c.runtimeLifecycle.DeployDeploymentUnit(
+		ctx,
+		intent.ServiceID,
+		intent.EnvironmentID,
+		&intent.ArtifactID,
+		unit,
+		intent.DesiredState,
+	); err != nil {
 		exitCode := 1
 		completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer completeCancel()
@@ -342,14 +437,6 @@ func (c *Coordinator) executeDirectRuntimeDeployment(ctx context.Context, intent
 	}
 
 	return nil
-}
-
-func isLocalImageRepo(repo string) bool {
-	return strings.HasPrefix(strings.TrimSpace(repo), "local/")
-}
-
-func isLocalImageRef(image string) bool {
-	return strings.HasPrefix(strings.TrimSpace(image), "local/")
 }
 
 func (c *Coordinator) startCompletionAwait(run *domain.DeploymentRun) {

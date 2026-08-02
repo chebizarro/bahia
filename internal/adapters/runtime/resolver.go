@@ -16,6 +16,13 @@ type RuntimeResolver interface {
 	Resolve(service *domain.Service, env *domain.Environment) (Runtime, error)
 }
 
+// DeploymentUnitRuntimeResolver resolves a concrete runtime from an explicit
+// deployment-unit target. Callers use this capability when unit placement,
+// rather than the service image or environment default alone, is authoritative.
+type DeploymentUnitRuntimeResolver interface {
+	ResolveDeploymentUnit(service *domain.Service, env *domain.Environment, unit *domain.DeploymentUnit) (Runtime, error)
+}
+
 // ConfigRuntimeResolver resolves runtime targets from global config plus
 // environment-scoped overrides and caches runtime instances per resolved target.
 type ConfigRuntimeResolver struct {
@@ -269,6 +276,58 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 	}, "\x00")
 }
 
+// ResolveDeploymentUnit resolves a runtime after overlaying the deployment
+// unit's target fields on the environment configuration. Explicit unit fields
+// win over environment defaults; endpoint aliases still resolve through the
+// managed runtime endpoint registry in Resolve.
+func (r *ConfigRuntimeResolver) ResolveDeploymentUnit(service *domain.Service, env *domain.Environment, unit *domain.DeploymentUnit) (Runtime, error) {
+	if service == nil {
+		return nil, fmt.Errorf("service is required for deployment-unit runtime resolution")
+	}
+	if env == nil {
+		return nil, fmt.Errorf("environment is required for deployment-unit runtime resolution")
+	}
+	if unit == nil {
+		return nil, fmt.Errorf("deployment unit is required for runtime resolution")
+	}
+	if unit.EnvironmentID != env.ID {
+		return nil, fmt.Errorf("deployment unit %q belongs to environment %s, not %s", unit.Key, unit.EnvironmentID, env.ID)
+	}
+
+	unitCopy := *unit
+	domain.NormalizeDeploymentUnitTargeting(&unitCopy)
+	if err := domain.ValidateDeploymentUnit(&unitCopy); err != nil {
+		return nil, fmt.Errorf("invalid deployment unit %q: %w", unitCopy.Key, err)
+	}
+
+	serviceCopy := *service
+	serviceCopy.RuntimeType = unitCopy.RuntimeType
+
+	envCopy := *env
+	envCopy.RuntimeConfig = make(map[string]any, len(env.RuntimeConfig)+len(unitCopy.RuntimeConfig)+6)
+	for key, value := range env.RuntimeConfig {
+		envCopy.RuntimeConfig[key] = value
+	}
+	for key, value := range unitCopy.RuntimeConfig {
+		envCopy.RuntimeConfig[key] = value
+	}
+	envCopy.RuntimeConfig["type"] = string(unitCopy.RuntimeType)
+	if unitCopy.EndpointRef != "" {
+		envCopy.RuntimeConfig["endpoint_ref"] = unitCopy.EndpointRef
+	}
+	if unitCopy.ComposeDir != "" {
+		envCopy.RuntimeConfig["compose_dir"] = unitCopy.ComposeDir
+	}
+	if unitCopy.Namespace != "" {
+		envCopy.RuntimeConfig["kube_namespace"] = unitCopy.Namespace
+	}
+	if unitCopy.OwnershipMode == domain.OwnershipModeBahiaManaged {
+		envCopy.RuntimeConfig["bahia_owned"] = true
+	}
+
+	return r.Resolve(&serviceCopy, &envCopy)
+}
+
 // ResolveDesiredStateApplier resolves a runtime for the given service and
 // environment using the full config overlay path (runtime.default, environment
 // overrides, service runtime type, endpoint alias resolution, TLS) and then
@@ -292,4 +351,7 @@ func (r *ConfigRuntimeResolver) ResolveDesiredStateApplier(service *domain.Servi
 	return applier, nil
 }
 
-var _ RuntimeResolver = (*ConfigRuntimeResolver)(nil)
+var (
+	_ RuntimeResolver               = (*ConfigRuntimeResolver)(nil)
+	_ DeploymentUnitRuntimeResolver = (*ConfigRuntimeResolver)(nil)
+)

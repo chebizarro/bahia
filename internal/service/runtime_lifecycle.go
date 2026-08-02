@@ -163,7 +163,24 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 
 // DeployWithStatus deploys an artifact and reports step progression through the callback.
 func (s *RuntimeLifecycleService) DeployWithStatus(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
-	return s.deployDesiredState(ctx, serviceID, envID, artifactID, statusFn, true)
+	return s.deployDesiredState(ctx, serviceID, envID, artifactID, nil, nil, statusFn, true)
+}
+
+// DeployDeploymentUnit executes an intent against an explicitly resolved,
+// Bahia-managed deployment unit. The supplied desired state is the canonical
+// intent snapshot; when absent the lifecycle builds it from the service and
+// artifact while preserving the resolved unit identity.
+func (s *RuntimeLifecycleService) DeployDeploymentUnit(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	artifactID *uuid.UUID,
+	unit *domain.DeploymentUnit,
+	desiredState *domain.DesiredServiceSpec,
+) (*domain.RuntimeObservation, error) {
+	if unit == nil {
+		return nil, fmt.Errorf("deployment unit is required")
+	}
+	return s.deployDesiredState(ctx, serviceID, envID, artifactID, unit, desiredState, nil, true)
 }
 
 // AutoRemediateDesiredState applies the currently persisted desired artifact for
@@ -171,14 +188,22 @@ func (s *RuntimeLifecycleService) DeployWithStatus(ctx context.Context, serviceI
 // deploys, but attempts the environment apply lock without blocking so active
 // user operations preempt scheduled remediation.
 func (s *RuntimeLifecycleService) AutoRemediateDesiredState(ctx context.Context, serviceID, envID uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
-	return s.deployDesiredState(ctx, serviceID, envID, nil, statusFn, false)
+	return s.deployDesiredState(ctx, serviceID, envID, nil, nil, nil, statusFn, false)
 }
 
 // deployDesiredState is the shared internal deploy helper used by deployment requests,
 // direct runtime action=deploy, and rollback-to-artifact. It acquires the environment
 // apply lock, builds deploy options, applies through the runtime adapter, observes,
 // persists the outcome, and publishes correlated events.
-func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback, waitForLock bool) (*domain.RuntimeObservation, error) {
+func (s *RuntimeLifecycleService) deployDesiredState(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	artifactID *uuid.UUID,
+	unit *domain.DeploymentUnit,
+	canonicalDesiredState *domain.DesiredServiceSpec,
+	statusFn DeployStatusCallback,
+	waitForLock bool,
+) (*domain.RuntimeObservation, error) {
 	start := time.Now()
 	notify := func(step DeployStep, msg string) {
 		if statusFn != nil {
@@ -189,7 +214,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	// Step: building_desired_state — resolve service, env, runtime, artifact, and build deploy options.
 	notify(DeployStepBuildingDesiredState, "Resolving service, environment, and artifact")
 
-	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
+	svc, env, rt, err := s.resolveForDeploymentUnit(ctx, serviceID, envID, unit)
 	if err != nil {
 		s.logRuntimeAction("deploy", nil, nil, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
@@ -216,13 +241,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	}
 
 	builder := NewDesiredStateBuilder()
-	targetSpec, err := builder.Build(BuildInput{
-		Service:       svc,
-		Environment:   env,
-		Artifact:      artifact,
-		RuntimeConfig: svc.RuntimeConfig,
-		Secrets:       secrets,
-	})
+	targetSpec, err := desiredStateForDeployment(builder, svc, env, artifact, unit, secrets, canonicalDesiredState)
 	if err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("building desired state: %w", err)
@@ -312,6 +331,12 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 			return nil, fmt.Errorf("applying desired state for runtime target %q: %w", targetName, err)
 		}
 	} else {
+		if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose {
+			err := fmt.Errorf("%w: resolved compose deployment unit %q", runtime.ErrDesiredStateNotSupported, unit.Key)
+			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
+			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			return nil, err
+		}
 		if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
 			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
@@ -327,6 +352,11 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	if err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after deploy: %w", targetName, err)
+	}
+
+	if unit != nil && unit.ID != uuid.Nil {
+		unitID := unit.ID
+		obs.DeploymentUnitID = &unitID
 	}
 
 	// Step: projecting — persist state and publish events.
@@ -439,6 +469,64 @@ func (s *RuntimeLifecycleService) acquireApplyLock(ctx context.Context, envID uu
 	return unlock, nil
 }
 
+func (s *RuntimeLifecycleService) resolveForDeploymentUnit(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	unit *domain.DeploymentUnit,
+) (*domain.Service, *domain.Environment, runtime.Runtime, error) {
+	if unit == nil {
+		return s.resolve(ctx, serviceID, envID)
+	}
+	if s.resolver == nil {
+		return nil, nil, nil, fmt.Errorf("runtime resolver is required")
+	}
+	svc, err := s.services.GetByID(ctx, serviceID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("looking up service: %w", err)
+	}
+	if svc == nil {
+		return nil, nil, nil, fmt.Errorf("service %s not found", serviceID)
+	}
+	env, err := s.environments.GetByID(ctx, envID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("looking up environment: %w", err)
+	}
+	if env == nil {
+		return nil, nil, nil, fmt.Errorf("environment %s not found", envID)
+	}
+
+	unitCopy := *unit
+	domain.NormalizeDeploymentUnitTargeting(&unitCopy)
+	if unitCopy.EnvironmentID != env.ID {
+		return nil, nil, nil, fmt.Errorf("deployment unit %q belongs to environment %s, not %s", unitCopy.Key, unitCopy.EnvironmentID, env.ID)
+	}
+	if unitCopy.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		return nil, nil, nil, fmt.Errorf("deployment unit %q is not Bahia-managed", unitCopy.Key)
+	}
+	if err := domain.ValidateDeploymentUnit(&unitCopy); err != nil {
+		return nil, nil, nil, fmt.Errorf("invalid deployment unit %q: %w", unitCopy.Key, err)
+	}
+	if err := s.validateDirectRuntimeState(ctx, svc.ID, env.ID); err != nil {
+		return nil, nil, nil, err
+	}
+
+	unitResolver, ok := s.resolver.(runtime.DeploymentUnitRuntimeResolver)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("runtime resolver does not support deployment-unit targets")
+	}
+	rt, err := unitResolver.ResolveDeploymentUnit(svc, env, &unitCopy)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("resolving deployment-unit runtime: %w", err)
+	}
+	if rt.Type() != unitCopy.RuntimeType {
+		return nil, nil, nil, fmt.Errorf("resolved runtime type %q does not match deployment unit %q type %q", rt.Type(), unitCopy.Key, unitCopy.RuntimeType)
+	}
+
+	svcCopy := *svc
+	svcCopy.RuntimeType = unitCopy.RuntimeType
+	return &svcCopy, env, rt, nil
+}
+
 func (s *RuntimeLifecycleService) resolve(ctx context.Context, serviceID, envID uuid.UUID) (*domain.Service, *domain.Environment, runtime.Runtime, error) {
 	if s.resolver == nil {
 		return nil, nil, nil, fmt.Errorf("runtime resolver is required")
@@ -505,6 +593,70 @@ func validateDirectRuntimeWorkload(svc *domain.Service, env *domain.Environment)
 		return fmt.Errorf(directRuntimeGuardrailMessage)
 	}
 	return nil
+}
+
+func desiredStateForDeployment(
+	builder *DesiredStateBuilder,
+	svc *domain.Service,
+	env *domain.Environment,
+	artifact *domain.Artifact,
+	unit *domain.DeploymentUnit,
+	secrets []domain.ServiceSecret,
+	canonical *domain.DesiredServiceSpec,
+) (*domain.DesiredServiceSpec, error) {
+	if canonical == nil {
+		return builder.Build(BuildInput{
+			Service:        svc,
+			Environment:    env,
+			Artifact:       artifact,
+			RuntimeConfig:  svc.RuntimeConfig,
+			DeploymentUnit: unit,
+			Secrets:        secrets,
+		})
+	}
+
+	spec := *canonical
+	switch {
+	case spec.ServiceID != svc.ID:
+		return nil, fmt.Errorf("desired state service %s does not match service %s", spec.ServiceID, svc.ID)
+	case spec.EnvironmentID != env.ID:
+		return nil, fmt.Errorf("desired state environment %s does not match environment %s", spec.EnvironmentID, env.ID)
+	case spec.ArtifactID != artifact.ID:
+		return nil, fmt.Errorf("desired state artifact %s does not match artifact %s", spec.ArtifactID, artifact.ID)
+	}
+
+	spec.Labels = copyStringMap(spec.Labels)
+	if unit != nil {
+		if spec.DeploymentUnitID != nil && *spec.DeploymentUnitID != uuid.Nil && unit.ID != uuid.Nil && *spec.DeploymentUnitID != unit.ID {
+			return nil, fmt.Errorf("desired state deployment unit %s does not match resolved unit %s", *spec.DeploymentUnitID, unit.ID)
+		}
+		var unitID *uuid.UUID
+		if unit.ID != uuid.Nil {
+			id := unit.ID
+			unitID = &id
+		}
+		domain.NormalizeDesiredServiceUnitIdentity(&spec, unitID, unit.Key, unit.RuntimeType)
+	}
+	if spec.Labels == nil {
+		spec.Labels = map[string]string{}
+	}
+	spec.Labels["bahia.managed"] = "true"
+	spec.Labels["bahia.service_id"] = svc.ID.String()
+	spec.Labels["bahia.environment_id"] = env.ID.String()
+	spec.Labels["bahia.artifact_id"] = artifact.ID.String()
+	spec.Labels["bahia.deployment_unit_key"] = spec.DeploymentUnitKey
+	if spec.DeploymentUnitID != nil {
+		spec.Labels["bahia.deployment_unit_id"] = spec.DeploymentUnitID.String()
+	}
+	if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose && spec.ComposeExtension == nil {
+		spec.ComposeExtension = &domain.ComposeExtension{}
+	}
+	spec.ComputeDesiredHash()
+	spec.Labels["bahia.desired_hash"] = spec.DesiredHash
+	if err := ValidateSpec(&spec); err != nil {
+		return nil, err
+	}
+	return &spec, nil
 }
 
 func (s *RuntimeLifecycleService) resolveDeployArtifact(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.Artifact, error) {
@@ -656,6 +808,10 @@ func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, ser
 	st.DesiredRuntimeState = desiredState
 	if desiredState != nil {
 		st.DesiredHash = desiredState.DesiredHash
+		if desiredState.DeploymentUnitID != nil {
+			unitID := *desiredState.DeploymentUnitID
+			st.DeploymentUnitID = &unitID
+		}
 	}
 	st.DriftStatus = domain.DriftStatusDeploying
 	return s.state.Upsert(ctx, st)

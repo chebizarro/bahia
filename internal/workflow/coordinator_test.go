@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -271,42 +272,146 @@ func (m *stubStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 	return nil, nil
 }
 
-// --- Mock Loom Client ---
-
-type stubRuntime struct {
-	runtimeType domain.RuntimeType
-	lastService string
-	lastImage   string
-	deployErr   error
-	deployCalls int
+type stubDeploymentUnitRepo struct {
+	units map[uuid.UUID]*domain.DeploymentUnit
 }
 
-func (s *stubRuntime) Type() domain.RuntimeType { return s.runtimeType }
-func (s *stubRuntime) Observe(_ context.Context, _, _ uuid.UUID, _ string) (*domain.RuntimeObservation, error) {
+func (r *stubDeploymentUnitRepo) Create(_ context.Context, unit *domain.DeploymentUnit) error {
+	if unit.ID == uuid.Nil {
+		unit.ID = uuid.New()
+	}
+	if r.units == nil {
+		r.units = map[uuid.UUID]*domain.DeploymentUnit{}
+	}
+	copy := *unit
+	r.units[unit.ID] = &copy
+	return nil
+}
+
+func (r *stubDeploymentUnitRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentUnit, error) {
+	return r.units[id], nil
+}
+
+func (r *stubDeploymentUnitRepo) GetByEnvironmentKey(_ context.Context, envID uuid.UUID, key string) (*domain.DeploymentUnit, error) {
+	for _, unit := range r.units {
+		if unit.EnvironmentID == envID && unit.Key == key {
+			copy := *unit
+			return &copy, nil
+		}
+	}
 	return nil, nil
 }
-func (s *stubRuntime) Deploy(_ context.Context, serviceName, image string, _ runtimeadapter.DeployOptions) error {
-	s.lastService = serviceName
-	s.lastImage = image
-	s.deployCalls++
-	return s.deployErr
-}
-func (s *stubRuntime) Undeploy(_ context.Context, _ string) error { return nil }
-func (s *stubRuntime) StreamLogs(_ context.Context, _ string, _ runtimeadapter.LogOptions) (<-chan runtimeadapter.LogEntry, error) {
-	return nil, nil
+
+func (r *stubDeploymentUnitRepo) ListByEnvironment(_ context.Context, envID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	var units []domain.DeploymentUnit
+	for _, unit := range r.units {
+		if unit.EnvironmentID == envID {
+			units = append(units, *unit)
+		}
+	}
+	return units, nil
 }
 
-type stubRuntimeResolver struct {
-	rt  runtimeadapter.Runtime
-	err error
+func (r *stubDeploymentUnitRepo) ResolveDefault(ctx context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
+	if unit, err := r.GetByEnvironmentKey(ctx, env.ID, domain.DefaultDeploymentUnitKey); err != nil || unit != nil {
+		return unit, err
+	}
+	return domain.NewImplicitDefaultDeploymentUnit(env)
 }
 
-func (s *stubRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtimeadapter.Runtime, error) {
+type stubDeploymentRuntimeLifecycle struct {
+	err  error
+	unit *domain.DeploymentUnit
+}
+
+func (s *stubDeploymentRuntimeLifecycle) DeployDeploymentUnit(
+	_ context.Context,
+	_, _ uuid.UUID,
+	_ *uuid.UUID,
+	unit *domain.DeploymentUnit,
+	_ *domain.DesiredServiceSpec,
+) (*domain.RuntimeObservation, error) {
+	s.unit = unit
 	if s.err != nil {
 		return nil, s.err
 	}
-	return s.rt, nil
+	return &domain.RuntimeObservation{}, nil
 }
+
+type unitRuntimeResolver struct {
+	rt   runtimeadapter.Runtime
+	unit *domain.DeploymentUnit
+}
+
+func (r *unitRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtimeadapter.Runtime, error) {
+	return nil, fmt.Errorf("environment-only resolver must not be used for deployment-unit routing")
+}
+
+func (r *unitRuntimeResolver) ResolveDeploymentUnit(_ *domain.Service, _ *domain.Environment, unit *domain.DeploymentUnit) (runtimeadapter.Runtime, error) {
+	copy := *unit
+	r.unit = &copy
+	return r.rt, nil
+}
+
+type renderingComposeRuntime struct {
+	rendered        *runtimeadapter.RenderResult
+	applyRequest    runtimeadapter.DesiredStateApplyRequest
+	imperativeCalls int
+}
+
+func (r *renderingComposeRuntime) Type() domain.RuntimeType { return domain.RuntimeTypeCompose }
+
+func (r *renderingComposeRuntime) Deploy(_ context.Context, _, _ string, _ runtimeadapter.DeployOptions) error {
+	r.imperativeCalls++
+	return nil
+}
+
+func (r *renderingComposeRuntime) Undeploy(_ context.Context, _ string) error { return nil }
+
+func (r *renderingComposeRuntime) StreamLogs(_ context.Context, _ string, _ runtimeadapter.LogOptions) (<-chan runtimeadapter.LogEntry, error) {
+	return nil, nil
+}
+
+func (r *renderingComposeRuntime) SupportsDesiredState() bool { return true }
+
+func (r *renderingComposeRuntime) ApplyDesiredState(ctx context.Context, req runtimeadapter.DesiredStateApplyRequest) (*runtimeadapter.DesiredStateApplyResult, error) {
+	r.applyRequest = req
+	req.EnvironmentPlan.NormalizeUnitIdentity()
+	req.EnvironmentPlan.GroupByDeploymentUnit()
+	for i := range req.EnvironmentPlan.UnitPlans {
+		unitPlan := &req.EnvironmentPlan.UnitPlans[i]
+		if req.TargetService.DeploymentUnitID != nil && unitPlan.DeploymentUnitID != nil &&
+			*req.TargetService.DeploymentUnitID == *unitPlan.DeploymentUnitID {
+			rendered, err := runtimeadapter.NewComposeRenderer().RenderDeploymentUnitPlan(ctx, req.EnvironmentPlan.EnvironmentID.String(), unitPlan)
+			if err != nil {
+				return nil, err
+			}
+			r.rendered = rendered
+			return &runtimeadapter.DesiredStateApplyResult{
+				Renderer:            "compose",
+				ExecutionMode:       runtimeadapter.ExecutionModeSDK,
+				DesiredHash:         req.TargetService.DesiredHash,
+				EnvironmentRevision: unitPlan.RevisionHash,
+				ResourceNames:       []string{req.TargetService.StableServiceKey},
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("target deployment unit missing from environment plan")
+}
+
+func (r *renderingComposeRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	return &domain.RuntimeObservation{
+		ServiceID:           serviceID,
+		EnvironmentID:       envID,
+		ObservedImageDigest: "sha256:max",
+		ObservedContainerID: serviceName + "-container",
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "max-compose-fixture",
+		ObservedAt:          time.Now().UTC(),
+	}, nil
+}
+
+// --- Mock Loom Client ---
 
 type stubLoomClient struct {
 	status       *loom.JobStatus
@@ -758,52 +863,151 @@ func TestExecuteDeployment_RejectsNonExistentIntent(t *testing.T) {
 	}
 }
 
-func TestExecuteDeployment_UsesDirectRuntimeForLocalComposeArtifact(t *testing.T) {
+func TestExecuteDeployment_MaxComposeUnitRendersFullDesiredState(t *testing.T) {
+	ctx := context.Background()
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 
-	svc := &domain.Service{Name: "gitea", ArtifactRepo: "local/gitea", RuntimeType: domain.RuntimeTypeCompose}
-	_ = svcRepo.Create(context.Background(), svc)
-	env := &domain.Environment{Name: "edge-01-staging", DeployStrategy: domain.DeployStrategyReplace}
-	_ = envRepo.Create(context.Background(), env)
-	art := &domain.Artifact{BuildID: uuid.New(), ServiceID: svc.ID, ImageRepo: "local/gitea", ImageTag: "migration", ImageDigest: "sha256:abc"}
-	_ = artRepo.Create(context.Background(), art)
+	svc := &domain.Service{Name: "gastown", ArtifactRepo: "ghcr.io/openagents/gastown", RuntimeType: domain.RuntimeTypeDocker}
+	if err := svcRepo.Create(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	env := &domain.Environment{Name: "max-production", DeployStrategy: domain.DeployStrategyReplace}
+	if err := envRepo.Create(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	art := &domain.Artifact{
+		BuildID: uuid.New(), ServiceID: svc.ID,
+		ImageRepo: "ghcr.io/openagents/gastown", ImageTag: "v2", ImageDigest: "sha256:max",
+	}
+	if err := artRepo.Create(ctx, art); err != nil {
+		t.Fatal(err)
+	}
+
+	unit := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           "max-compose",
+		DisplayName:   "max",
+		RuntimeType:   domain.RuntimeTypeCompose,
+		EndpointRef:   "max-managed",
+		ComposeDir:    "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"execution_mode": "sdk"},
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion:     domain.DesiredStateSchemaVersion,
+		ServiceID:         svc.ID,
+		EnvironmentID:     env.ID,
+		DeploymentUnitID:  &unit.ID,
+		DeploymentUnitKey: unit.Key,
+		UnitRuntimeType:   domain.RuntimeTypeCompose,
+		ArtifactID:        art.ID,
+		StableServiceKey:  "gastown",
+		ImageRef:          "ghcr.io/openagents/gastown:v2",
+		Env:               map[string]string{"APP_ENV": "max"},
+		SecretRefs: []domain.DesiredSecretRef{{
+			EnvVar:        "NSEC",
+			Name:          "nostr-signer",
+			SecretID:      uuid.New(),
+			RedactedValue: domain.RedactedPlaceholder("nostr-signer"),
+		}},
+		Volumes: []string{
+			"gastown-state:/app/state",
+			"/run/bahia/secrets/nsec:/run/secrets/nsec:ro",
+		},
+		RestartPolicy: "unless-stopped",
+		Healthcheck: &domain.HealthcheckConfig{
+			Test:     []string{"CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"},
+			Interval: "15s", Timeout: "3s", Retries: 5, StartPeriod: "20s",
+		},
+		ComposeExtension: &domain.ComposeExtension{
+			EnvFile:            ".bahia/env/gastown.env",
+			ProjectName:        "gastown-max",
+			VolumeDeclarations: []string{"gastown-state"},
+		},
+	}
+	desired.ComputeDesiredHash()
 
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	logger := zap.NewNop()
-	stubRT := &stubRuntime{runtimeType: domain.RuntimeTypeCompose}
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, logger, WithRuntimeResolver(&stubRuntimeResolver{rt: stubRT}))
+	renderingRuntime := &renderingComposeRuntime{}
+	resolver := &unitRuntimeResolver{rt: renderingRuntime}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artRepo, stateRepo, resolver,
+		&events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+	)
+	coord.loom = stubLoom
 
 	di := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
 		RequestedBy: "test", SourceKind: domain.SourceKindManual,
 		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+		DesiredState: desired, DesiredHash: desired.DesiredHash,
 	}
-	_ = registry.CreateDeploymentIntent(context.Background(), di)
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
 	intentRepo.mu.Lock()
 	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
 	intentRepo.mu.Unlock()
 
-	if err := coord.ExecuteDeployment(context.Background(), di.ID); err != nil {
+	if err := coord.ExecuteDeployment(ctx, di.ID); err != nil {
 		t.Fatalf("ExecuteDeployment() error = %v", err)
 	}
-	if stubRT.deployCalls != 1 {
-		t.Fatalf("expected 1 direct deploy call, got %d", stubRT.deployCalls)
+	if stubLoom.submitCalls != 0 {
+		t.Fatalf("Compose unit must not fall back to Loom, got %d submissions", stubLoom.submitCalls)
 	}
-	if stubRT.lastService != "gitea" {
-		t.Fatalf("expected service gitea, got %q", stubRT.lastService)
+	if renderingRuntime.imperativeCalls != 0 {
+		t.Fatalf("Compose unit must use desired-state apply, got %d imperative deploys", renderingRuntime.imperativeCalls)
 	}
-	if stubRT.lastImage != "" {
-		t.Fatalf("expected compose local artifact to resolve via compose file image, got %q", stubRT.lastImage)
+	if resolver.unit == nil || resolver.unit.ID != unit.ID || resolver.unit.EndpointRef != "max-managed" {
+		t.Fatalf("unit runtime resolution did not receive max target: %#v", resolver.unit)
 	}
+	if renderingRuntime.rendered == nil {
+		t.Fatal("expected rendered Compose project")
+	}
+
+	yaml := string(renderingRuntime.rendered.ComposeYAML)
+	for _, expected := range []string{
+		"env_file:",
+		".bahia/env/gastown.env",
+		"gastown-state:/app/state",
+		"/run/bahia/secrets/nsec:/run/secrets/nsec:ro",
+		"restart: unless-stopped",
+		"healthcheck:",
+		"CMD-SHELL",
+		"interval: 15s",
+	} {
+		if !strings.Contains(yaml, expected) {
+			t.Errorf("rendered Compose project missing %q:\n%s", expected, yaml)
+		}
+	}
+	envMaterial := renderingRuntime.rendered.EnvMaterial["gastown"]
+	if !strings.Contains(envMaterial, "APP_ENV=max") ||
+		!strings.Contains(envMaterial, "NSEC=REDACTED(nostr-signer)") {
+		t.Fatalf("rendered env material missing literals or secret reference: %q", envMaterial)
+	}
+	if strings.Contains(yaml, "NSEC") || strings.Contains(yaml, "nostr-signer") {
+		t.Fatalf("secret reference leaked into Compose YAML:\n%s", yaml)
+	}
+
 	if len(runRepo.runs) != 1 {
 		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
 	}
 	for _, run := range runRepo.runs {
-		if run.Status != domain.RunStatusSucceeded {
-			t.Fatalf("expected succeeded run, got %s", run.Status)
+		if run.Status != domain.RunStatusSucceeded || run.LoomJobID != "runtime:direct" {
+			t.Fatalf("unexpected direct run: %#v", run)
 		}
-		if run.LoomJobID != "runtime:direct" {
-			t.Fatalf("expected direct runtime marker, got %q", run.LoomJobID)
+		if run.DeploymentUnitID == nil || *run.DeploymentUnitID != unit.ID {
+			t.Fatalf("run deployment unit = %v, want %s", run.DeploymentUnitID, unit.ID)
 		}
 	}
 }
@@ -912,39 +1116,94 @@ func TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission(t *testing.T
 	}
 }
 
-func TestExecuteDeployment_DirectRuntimeFailureMarksRunFailed(t *testing.T) {
+func TestExecuteDeployment_ComposeUnitLifecycleFailureMarksRunFailedWithoutLoomFallback(t *testing.T) {
+	ctx := context.Background()
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
-
-	svc := &domain.Service{Name: "gitea", ArtifactRepo: "local/gitea", RuntimeType: domain.RuntimeTypeCompose}
-	_ = svcRepo.Create(context.Background(), svc)
-	env := &domain.Environment{Name: "edge-01-staging", DeployStrategy: domain.DeployStrategyReplace}
-	_ = envRepo.Create(context.Background(), env)
-	art := &domain.Artifact{BuildID: uuid.New(), ServiceID: svc.ID, ImageRepo: "local/gitea", ImageTag: "migration", ImageDigest: "sha256:abc"}
-	_ = artRepo.Create(context.Background(), art)
-
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "max-compose",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{err: fmt.Errorf("boom")}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	logger := zap.NewNop()
-	stubRT := &stubRuntime{runtimeType: domain.RuntimeTypeCompose, deployErr: fmt.Errorf("boom")}
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, logger, WithRuntimeResolver(&stubRuntimeResolver{rt: stubRT}))
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+	)
+	coord.loom = stubLoom
 
 	di := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
 		RequestedBy: "test", SourceKind: domain.SourceKindManual,
 		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
 	}
-	_ = registry.CreateDeploymentIntent(context.Background(), di)
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
 	intentRepo.mu.Lock()
 	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
 	intentRepo.mu.Unlock()
 
-	err := coord.ExecuteDeployment(context.Background(), di.ID)
+	err := coord.ExecuteDeployment(ctx, di.ID)
 	if err == nil || !containsSubstring(err.Error(), "direct runtime deploy failed") {
 		t.Fatalf("expected direct runtime failure, got %v", err)
+	}
+	if stubLoom.submitCalls != 0 {
+		t.Fatalf("Compose lifecycle failure must not fall back to Loom, got %d submissions", stubLoom.submitCalls)
 	}
 	for _, run := range runRepo.runs {
 		if run.Status != domain.RunStatusFailed {
 			t.Fatalf("expected failed run, got %s", run.Status)
 		}
+	}
+}
+
+func TestExecuteDeployment_ComposeUnitMissingManagedEndpointFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "compose-without-endpoint",
+		RuntimeType: domain.RuntimeTypeCompose, ComposeDir: "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+	)
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	err := coord.ExecuteDeployment(ctx, di.ID)
+	if err == nil || !strings.Contains(err.Error(), "managed endpoint_ref") {
+		t.Fatalf("expected missing endpoint failure, got %v", err)
+	}
+	if lifecycle.unit != nil {
+		t.Fatal("runtime lifecycle must not execute without a managed endpoint")
+	}
+	if stubLoom.submitCalls != 0 {
+		t.Fatalf("misconfigured Compose unit must not fall back to Loom, got %d submissions", stubLoom.submitCalls)
+	}
+	if len(runRepo.runs) != 0 {
+		t.Fatalf("routing validation should fail before creating a run, got %d", len(runRepo.runs))
 	}
 }
 

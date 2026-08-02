@@ -316,18 +316,6 @@ func New(cfg *config.Config) (*App, error) {
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
-	// Workflow coordinator.
-	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger,
-		workflow.WithWorkerPolicy(workerPolicySvc),
-		workflow.WithRuntimeResolver(runtimeResolver),
-	)
-	coord.SetupEventHandlers(publisher)
-	if dbAvailable && pool != nil {
-		if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
-			logger.Warn("failed to recover non-terminal deployment runs", zap.Error(err))
-		}
-	}
-
 	// Secret encryptor (uses Bahia's Nostr key for at-rest encryption).
 	var secretEncryptor *secretsAdapter.Encryptor
 	if cfg.Nostr.PrivateKey != "" {
@@ -365,6 +353,20 @@ func New(cfg *config.Config) (*App, error) {
 			registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger,
 			runtimeApplyLockOpts...,
 		)
+	}
+
+	// Workflow coordinator. Deployment-unit routing is wired even when direct
+	// runtime actions are disabled so Compose-targeted intents fail closed
+	// instead of falling back to Loom's bare container deploy.
+	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger,
+		workflow.WithWorkerPolicy(workerPolicySvc),
+		workflow.WithDeploymentUnitRouting(deploymentUnitRepo, runtimeLifecycleSvc),
+	)
+	coord.SetupEventHandlers(publisher)
+	if dbAvailable && pool != nil {
+		if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+			logger.Warn("failed to recover non-terminal deployment runs", zap.Error(err))
+		}
 	}
 
 	// Reconciler (created here but started in Run() with the lifecycle context).

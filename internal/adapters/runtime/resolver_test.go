@@ -245,6 +245,60 @@ func TestConfigRuntimeResolver_EndpointRef(t *testing.T) {
 	}
 }
 
+func TestConfigRuntimeResolver_DeploymentUnitTargetOverridesEnvironment(t *testing.T) {
+	composeDir := t.TempDir()
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{Type: "docker", ExecutionMode: "cli"},
+		Endpoints: map[string]config.RuntimeEndpointConfig{
+			"max-managed": {
+				DockerHost:         "tcp://max.internal:2376",
+				InsecureSkipVerify: true,
+			},
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeDocker)
+	env := resolverTestEnv("production", map[string]any{
+		"type":           "docker",
+		"endpoint_ref":   "other-target",
+		"execution_mode": "cli",
+	})
+	unit := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           "max-compose",
+		RuntimeType:   domain.RuntimeTypeCompose,
+		EndpointRef:   "max-managed",
+		ComposeDir:    composeDir,
+		ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{
+			"execution_mode": "sdk",
+		},
+	}
+
+	rt, err := resolver.ResolveDeploymentUnit(svc, env, unit)
+	if err != nil {
+		t.Fatalf("ResolveDeploymentUnit() error: %v", err)
+	}
+	compose, ok := rt.(*ComposeRuntime)
+	if !ok {
+		t.Fatalf("ResolveDeploymentUnit() returned %T, want *ComposeRuntime", rt)
+	}
+	if compose.projectDir != composeDir {
+		t.Fatalf("compose project dir = %q, want %q", compose.projectDir, composeDir)
+	}
+	if compose.dockerHost != "tcp://max.internal:2376" {
+		t.Fatalf("compose docker host = %q, want managed max endpoint", compose.dockerHost)
+	}
+	if compose.ExecutionMode() != ExecutionModeSDK {
+		t.Fatalf("compose execution mode = %q, want sdk", compose.ExecutionMode())
+	}
+	if err := compose.ValidateOwnership(ComposeOwnershipConfig{}); err != nil {
+		t.Fatalf("Bahia-managed unit should satisfy ownership gate: %v", err)
+	}
+}
+
 func TestConfigRuntimeResolver_UnknownEndpointRef(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
 	_, err := resolver.Resolve(
