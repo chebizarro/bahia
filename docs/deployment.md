@@ -175,6 +175,35 @@ Compose ownership is recordable per runtime target with `bahia_owned`. Set `bahi
 
 Generated Compose env files live under `.bahia/env/` inside the Bahia-owned project. They may contain resolved secret values required by Docker Compose, so operators must protect the directory with deployment-appropriate ownership and permissions and treat it as runtime secret material. Nostr events, apply metadata summaries, logs, desired-state snapshots, and normalized observations must use redacted secret refs or key-presence metadata instead of those values.
 
+### Max direct-runtime Compose target
+
+Model a host such as `max` as a normal Compose deployment unit, not as a new runtime type:
+
+```json
+{
+  "key": "max",
+  "display_name": "Max Compose",
+  "runtime_type": "compose",
+  "endpoint_ref": "max",
+  "compose_dir": "/srv/bahia/compose/gastown",
+  "ownership_mode": "bahia_managed",
+  "reconcile_mode": "approval_required",
+  "runtime_config": {
+    "execution_mode": "sdk"
+  }
+}
+```
+
+`endpoint_ref` must name a server-managed `runtime.endpoints` alias, and `compose_dir` must be a directory dedicated to Bahia's full-project rendering. Set `ownership_mode` to `bahia_managed`; the runtime ownership gate must also be satisfied by operator-approved `bahia_owned: true` configuration or a valid Bahia render marker. Choose the unit's reconcile policy explicitly (`observe_only`, `auto_apply`, `approval_required`, or `disabled`) and set `runtime_config.execution_mode` explicitly to `sdk` or `cli`.
+
+The workload desired state supplies the operational details that are not part of the deployment-unit record:
+
+- Use named-volume mounts such as `gastown-data:/var/lib/gastown` for durable state. Reapplying or restarting the Compose project must reuse the named volume rather than container-local storage.
+- Keep NIP-46 bunker URIs, persistent client keys, and other signer material out of command arguments and signed payloads. Materialize them as permission-restricted files, mount them read-only through desired-state volume entries, and configure the application with non-secret file-path environment variables. When a value must be injected as an environment variable, use a Bahia secret reference so apply writes it only to the protected generated env file under `.bahia/env/`; plaintext is excluded from desired state, events, metadata, and logs.
+- Set an explicit restart policy (for example, `unless-stopped`) and a real healthcheck in each critical service's desired state. A successful apply renders these into the Bahia-owned Compose project; subsequent observation and reconciliation use the persisted desired state.
+
+Compose routing is fail closed. Once the resolved deployment unit has `runtime_type: compose`, Bahia requires `ownership_mode: bahia_managed`, a non-empty managed `endpoint_ref`, a non-empty `compose_dir`, and an available runtime lifecycle. Missing or invalid configuration, render/apply errors, and unhealthy results fail the deployment; Bahia does not fall back to a Loom job or the obsolete bare `docker run` path.
+
 ## Deployment Units and Targeting
 
 Environment targeting is typed and additive. Each environment owns a `targeting` object with `default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, and `default_reconcile_mode`. `default_reconcile_mode` accepts `observe_only`, `auto_apply`, `approval_required`, or `disabled`; `secret_scope_mode` accepts `service`, `environment`, or `unit`.
@@ -191,7 +220,56 @@ Existing single-runtime environments do not need a persisted unit row. When no e
 
 Backward compatibility is read-tolerant and write-forward. Runtime fields moved into typed targeting are read from typed fields first and then from `runtime_config` (`default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, `default_reconcile_mode`, `reconcile_mode`, `type`, `endpoint_ref`, `compose_dir`, `namespace`, `kube_namespace`, and `network_profile`). Environment and unit writes normalize those values into typed targeting columns/JSON so new reads do not depend on raw runtime JSON alone.
 
-Unit persistence is intentionally transition-triggered, not write-triggered. Bahia persists a unit only when an operator explicitly creates one through `POST /environments/{id}/units`, or when the first multi-unit configuration change requires durable unit identities. Deploy, apply, observe, and ordinary environment writes must not materialize the implicit default unit on their own.
+Environment and deployment-unit writes are signer-first. An authorized signer publishes ContextVM `environment/create` or `environment/update` with this payload shape (create requires `name`; update requires `id`):
+
+```json
+{
+  "org_id": "organization-uuid",
+  "name": "production",
+  "id": "environment-uuid",
+  "loom_worker_selector": {},
+  "runtime_config": {},
+  "targeting": {
+    "default_unit_key": "max",
+    "failure_domain_labels": {},
+    "secret_scope_mode": "service",
+    "default_reconcile_mode": "approval_required"
+  },
+  "reconcile_mode": "approval_required",
+  "deployment_units": [
+    {
+      "key": "max",
+      "display_name": "Max Compose",
+      "runtime_type": "compose",
+      "endpoint_ref": "max",
+      "compose_dir": "/srv/bahia/compose/gastown",
+      "namespace": "",
+      "network_profile": {},
+      "ownership_mode": "bahia_managed",
+      "reconcile_mode": "approval_required",
+      "runtime_config": {"execution_mode": "sdk"}
+    }
+  ],
+  "deploy_strategy": "replace",
+  "protected": true
+}
+```
+
+`deployment_units` has complete-set semantics. Omitting it leaves the current unit set unchanged; providing it atomically replaces the complete explicit set; providing `[]` returns the environment to its implicit default. Bahia rejects removal of units referenced by state, runs, intents, or observations, and requires `targeting.default_unit_key` to identify a member of any non-empty explicit set. Deploy, apply, and observe do not materialize the implicit unit.
+
+Environment GET and list responses embed `deployment_units`. They contain the persisted explicit units when present; otherwise they contain the resolved default unit marked with `"implicit": true`.
+
+The CLI uses the same contract and never revives REST mutations:
+
+```bash
+bahia environments create --name production --units-file units.json
+bahia environments update <environment-id> --units-file units.json
+bahia environments units list <environment-id>
+bahia environments units create <environment-id> --file unit.json
+bahia environments units update <environment-id> max --file unit.json
+```
+
+The unit `create` and `update` helpers read the environment, merge the requested unit locally, and publish a signed `environment/update` carrying the complete explicit unit set. Use JSON files for unit specifications and secret-bearing configuration; do not place secrets in arguments.
 
 The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment. API request DTOs accept additive `deployment_unit_id`, `deployment_units`, `targeting`, and `reconcile_mode` fields. Canonical Nostr projections (`30900` state and `30078` app data) include additive `unit` tags; `NULL` placement is tagged as `default`. Historical `31961`, `31963`, `31967`, and `31968` projections are migration inventory only.
 

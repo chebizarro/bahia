@@ -18,10 +18,7 @@ Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1
 
 1. Navigate to **Environments** in the sidebar
 2. Click **New Environment**
-3. Fill in:
-   - **Name**: Human-readable name (e.g., "Production")
-   - **Slug**: URL-safe identifier (e.g., `production`)
-   - **Description**: Purpose of this environment
+3. Enter the required environment name and any supported targeting, deployment-unit, strategy, or protection settings
 4. Click **Create** to publish the signed Nostr command
 
 ### Nostr
@@ -32,12 +29,18 @@ Publish a ContextVM `environment/create` request as kind `25910` or inside an en
 
 | Property | Description | Required |
 |----------|-------------|----------|
-| `name` | Display name | Yes |
-| `slug` | URL-safe identifier | Yes |
-| `description` | Environment purpose | No |
-| `requires_approval` | Require deployment approval | No |
-| `auto_deploy` | Auto-deploy on new artifacts | No |
-| `runtime_target` | Deployment execution target | No |
+| `id` | Environment UUID | Update only |
+| `org_id` | Organization UUID; authorization is checked when creating or moving an environment | No |
+| `name` | Display name | Create only |
+| `loom_worker_selector` | Legacy/non-Compose worker-selection object | No |
+| `runtime_config` | Environment-level runtime compatibility settings | No |
+| `targeting` | Typed `default_unit_key`, failure-domain labels, secret scope, and default reconcile policy | No |
+| `reconcile_mode` | `observe_only`, `auto_apply`, `approval_required`, or `disabled` | No |
+| `deployment_units` | Complete desired explicit deployment-unit set | No |
+| `deploy_strategy` | `replace`, `blue_green`, or `canary` | No |
+| `protected` | Enables additional deployment protections | No |
+
+For `environment/update`, omitted fields remain unchanged. `deployment_units` is special: omission preserves the current set, a supplied array replaces the complete explicit set atomically, and `[]` returns the environment to an implicit default unit. If explicit units are supplied, `targeting.default_unit_key` must name one of them.
 
 ## Environment Types
 
@@ -64,73 +67,40 @@ For live traffic:
 
 ## Runtime Targets
 
-Environments connect to runtime targets for deployment execution:
+Runtime targets are represented by `targeting` plus `deployment_units`; there is no `runtime_target` property and `loom` is not a deployment-unit runtime type. Each unit accepts `docker`, `compose`, `kubernetes`, or `podman` and follows the schema in `schemas/deployment_unit.json`.
 
-### Kubernetes
-
-```yaml
-runtime_target:
-  type: kubernetes
-  config:
-    context: prod-cluster
-    namespace: default
+```json
+{
+  "name": "production",
+  "targeting": {
+    "default_unit_key": "max",
+    "failure_domain_labels": {"host": "max"},
+    "secret_scope_mode": "unit",
+    "default_reconcile_mode": "approval_required"
+  },
+  "deployment_units": [
+    {
+      "key": "max",
+      "display_name": "Max Compose",
+      "runtime_type": "compose",
+      "endpoint_ref": "max",
+      "compose_dir": "/srv/bahia/compose/gastown",
+      "network_profile": {},
+      "ownership_mode": "bahia_managed",
+      "reconcile_mode": "approval_required",
+      "runtime_config": {"execution_mode": "sdk"}
+    }
+  ],
+  "deploy_strategy": "replace",
+  "protected": true
+}
 ```
 
-### Docker
-
-```yaml
-runtime_target:
-  type: docker
-  config:
-    endpoint_ref: prod-docker
-```
-
-### Compose
-
-```yaml
-runtime_target:
-  type: compose
-  config:
-    project_name: myapp
-    compose_file: docker-compose.prod.yml
-```
-
-### Loom Workers
-
-Bahia delegates to Loom workers for actual deployment:
-
-```yaml
-runtime_target:
-  type: loom
-  config:
-    worker_pubkeys:
-      - "npub1worker..."
-```
+`endpoint_ref` names a server-managed endpoint alias; callers do not put raw Docker credentials in the signed payload. `compose_dir` is the Bahia-owned full-project directory on that endpoint. Non-Compose workloads can use `loom_worker_selector` for worker selection.
 
 ## Approval Policies
 
-Environments can require deployment approval:
-
-### Manual Approval
-
-```yaml
-requires_approval: true
-approvers:
-  - "npub1admin1..."
-  - "npub1admin2..."
-```
-
-### Policy-Based Approval
-
-Link to deployment policies:
-
-```yaml
-policies:
-  - "policy-require-tests"
-  - "policy-sbom-check"
-```
-
-See [Policies](policies.md) for details.
+Use the environment or unit reconcile mode to control automated drift remediation. Deployment approval requirements are defined by deployment policies rather than stale `requires_approval` or `approvers` environment properties. See [Policies](policies.md) for details.
 
 ## Viewing Environments
 
@@ -153,8 +123,17 @@ Click an environment to see:
 # List environments
 bahia environments list
 
-# Get environment details
-bahia environments get production
+# Get environment details, including explicit units or the marked implicit default
+bahia environments get <environment-id>
+
+# Create or update through signed ContextVM mutations
+bahia environments create --name production --units-file units.json
+bahia environments update <environment-id> --units-file units.json
+
+# Manage one unit through read-merge, complete-set signed updates
+bahia environments units list <environment-id>
+bahia environments units create <environment-id> --file unit.json
+bahia environments units update <environment-id> max --file unit.json
 
 # List state for an environment
 bahia state list --environment production
@@ -218,7 +197,7 @@ Environment updates are signer-first ContextVM intents. REST `PUT /api/v1/enviro
 
 ### Nostr
 
-Publish a ContextVM `environment/update` request.
+Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch.
 
 ## Deleting Environments
 

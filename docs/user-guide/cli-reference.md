@@ -104,19 +104,26 @@ bahia services actions stop --service svc-123 --environment env-456
 
 ### Environments
 
+Environment mutations publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers use the environment read model and publish the complete explicit unit set; they do not call REST mutation endpoints.
+
 ```bash
-# List environments
+# Read environments (GET responses include deployment_units)
 bahia environments list
+bahia environments get <environment-id>
 
-# Get environment by ID
-bahia environments get env-456
+# Create or update an environment from a complete unit-set file
+bahia environments create --name production --units-file units.json
+bahia environments update <environment-id> --units-file units.json
 
-# Transitional create command (deprecated; signer-first mutations are the canonical path)
-bahia environments create \
-  --name "production" \
-  --strategy replace \
-  --protected
+# List explicit units or the marked implicit default
+bahia environments units list <environment-id>
+
+# Create or update one unit using a JSON specification
+bahia environments units create <environment-id> --file unit.json
+bahia environments units update <environment-id> max --file unit.json
 ```
+
+Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Unit JSON follows `schemas/deployment_unit.json`.
 
 ### Deployments
 
