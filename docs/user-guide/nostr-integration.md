@@ -25,6 +25,8 @@ Bahia clients now separate private mutation intent from public observable truth.
 }
 ```
 
+Complete-set deployment-unit changes use `environment/update` with both `deployment_units` and `expected_updated_at` from the latest environment read. Stale revisions return ContextVM code `-32009` without mutating database or canonical registry state; clients reread, remerge, and sign a new bounded retry rather than sending an unguarded replacement.
+
 ### Event Categories
 
 | Category | Kind(s) | Purpose |

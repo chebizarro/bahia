@@ -30,6 +30,7 @@ Publish a ContextVM `environment/create` request as kind `25910` or inside an en
 | Property | Description | Required |
 |----------|-------------|----------|
 | `id` | Environment UUID | Update only |
+| `expected_updated_at` | Revision from the latest environment read; required when update supplies `deployment_units` | Complete-set update only |
 | `org_id` | Organization UUID; authorization is checked when creating or moving an environment | No |
 | `name` | Display name | Create only |
 | `loom_worker_selector` | Legacy/non-Compose worker-selection object | No |
@@ -40,7 +41,7 @@ Publish a ContextVM `environment/create` request as kind `25910` or inside an en
 | `deploy_strategy` | `replace`, `blue_green`, or `canary` | No |
 | `protected` | Enables additional deployment protections | No |
 
-For `environment/update`, omitted fields remain unchanged. `deployment_units` is special: omission preserves the current set, a supplied array replaces the complete explicit set atomically, and `[]` returns the environment to an implicit default unit. If explicit units are supplied, `targeting.default_unit_key` must name one of them.
+For `environment/update`, omitted fields remain unchanged. `deployment_units` is special: omission preserves the current set, a supplied array replaces the complete explicit set atomically, and `[]` returns the environment to an implicit default unit. A request that supplies `deployment_units` must include `expected_updated_at` from the latest read; stale revisions fail closed with ContextVM code `-32009` and no registry mutation. If explicit units are supplied, `targeting.default_unit_key` must name one of them.
 
 ## Environment Types
 
@@ -132,8 +133,8 @@ bahia environments update <environment-id> --units-file units.json
 
 # Manage one unit through read-merge, complete-set signed updates
 bahia environments units list <environment-id>
-bahia environments units create <environment-id> --file unit.json
-bahia environments units update <environment-id> max --file unit.json
+bahia environments units create <environment-id> --file unit.json --default-unit-key max
+bahia environments units update <environment-id> max --file unit.json --default-unit-key max
 
 # List state for an environment
 bahia state list --environment production
@@ -197,7 +198,7 @@ Environment updates are signer-first ContextVM intents. REST `PUT /api/v1/enviro
 
 ### Nostr
 
-Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch.
+Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The CLI retries a stale complete-set write by rereading and remerging up to three signed attempts; it then reports the conflict.
 
 ## Deleting Environments
 

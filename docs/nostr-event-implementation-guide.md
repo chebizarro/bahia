@@ -74,7 +74,10 @@ Examples:
 | Import adoption target | `adoption/import` |
 | Request Security scan | `security/scan` |
 | Request Security rescan | `security/rescan` |
+| Create/update environment | `environment/create`, `environment/update` |
 | Read Security findings or schedules | `security/findings-list`, `security/schedules-list` |
+
+For `environment/update`, a supplied `deployment_units` array is authoritative and requires `expected_updated_at` from the latest read. The service checks it while holding the environment row lock and returns JSON-RPC code `-32009` on stale input before database or canonical registry mutation. Only retry after a fresh read, deliberate remerge, and new signature.
 
 Do not create request/status/result kind triplets for new operations.
 

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -31,14 +33,15 @@ const (
 	// ContextVMWireVersion is the historical Nostr routing discriminator. It
 	// remains v1 for compatibility; discovery control_plane.wire_version carries
 	// the JSON-RPC payload/ack contract version.
-	ContextVMWireVersion                = "contextvm-jsonrpc-v1"
-	ContextVMProgressAckCapability      = "encrypted_controlplane.progress_ack"
-	ContextVMProgressAckWireVersion     = "contextvm-jsonrpc-v2"
-	ContextVMProgressNotificationMethod = "notifications/progress"
-	ContextVMProgressStatusProcessing   = "processing"
-	KindContextVMMessage                = kinds.ContextVMMessage
-	KindContextVMGiftWrap               = kinds.ContextVMGiftWrap
-	KindContextVMEphemeralWrap          = kinds.ContextVMEphemeralGiftWrap
+	ContextVMWireVersion                  = "contextvm-jsonrpc-v1"
+	ContextVMProgressAckCapability        = "encrypted_controlplane.progress_ack"
+	ContextVMEnvironmentConflictErrorCode = -32009
+	ContextVMProgressAckWireVersion       = "contextvm-jsonrpc-v2"
+	ContextVMProgressNotificationMethod   = "notifications/progress"
+	ContextVMProgressStatusProcessing     = "processing"
+	KindContextVMMessage                  = kinds.ContextVMMessage
+	KindContextVMGiftWrap                 = kinds.ContextVMGiftWrap
+	KindContextVMEphemeralWrap            = kinds.ContextVMEphemeralGiftWrap
 	// Deprecated compatibility aliases retained for callers/tests that still name
 	// the old encrypted transport API. They resolve to canonical ContextVM kinds;
 	// production subscriptions do not accept legacy Bahia encrypted events.
@@ -552,7 +555,11 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	response := cascontextvm.NewResponse(rpc.ID, result)
 	if err != nil {
 		response.Result = nil
-		response.Error = &JSONRPCError{Code: -32000, Message: err.Error()}
+		code := -32000
+		if errors.Is(err, repository.ErrStaleRevision) {
+			code = ContextVMEnvironmentConflictErrorCode
+		}
+		response.Error = &JSONRPCError{Code: code, Message: err.Error()}
 	}
 	t.cacheContextVMResponse(innerPubkey, progressToken, response)
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)

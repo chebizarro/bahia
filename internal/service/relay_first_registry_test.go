@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -67,6 +69,37 @@ func TestRelayFirstRegistryCreateServicePublishesBeforeDatabaseWrite(t *testing.
 	}
 	if svc.RuntimeType != domain.RuntimeTypeDocker || svc.DefaultBranch != "main" {
 		t.Fatalf("service defaults were not applied before publish: runtime=%q branch=%q", svc.RuntimeType, svc.DefaultBranch)
+	}
+}
+
+func TestRelayFirstRegistryCompleteSetConflictDoesNotPublishCanonicalState(t *testing.T) {
+	ctx := context.Background()
+	envs := newEnvironmentMutationEnvRepo()
+	units := newEnvironmentMutationUnitRepo()
+	env := &domain.Environment{ID: uuid.New(), Name: "prod"}
+	if err := envs.Create(ctx, env); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+	staleRevision := env.UpdatedAt
+	envs.environments[env.ID].UpdatedAt = staleRevision.Add(time.Second)
+
+	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
+	calls := []string{}
+	publisher := &relayFirstCapturePublisher{published: 1, calls: &calls}
+	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	requested := []*domain.DeploymentUnit{{
+		Key:           domain.DefaultDeploymentUnitKey,
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}}
+
+	err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested, staleRevision)
+	if !errors.Is(err, repository.ErrStaleRevision) {
+		t.Fatalf("error = %v, want stale revision", err)
+	}
+	if len(publisher.events) != 0 || len(calls) != 0 {
+		t.Fatalf("stale complete-set update published canonical state: events=%d calls=%v", len(publisher.events), calls)
 	}
 }
 

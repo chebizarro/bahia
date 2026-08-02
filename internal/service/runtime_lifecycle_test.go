@@ -121,6 +121,56 @@ func TestRuntimeLifecycleDeployFailureDoesNotMutateDesiredState(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredStateSnapshotSupportsBahiaManagedComposeUnitWithoutAdoption(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	svc.RuntimeConfig = &domain.ServiceRuntimeConfig{}
+	if err := svcRepo.Update(ctx, svc); err != nil {
+		t.Fatalf("remove adopted workload marker: %v", err)
+	}
+
+	unitRepo := newEnvironmentMutationUnitRepo()
+	unit := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           "max",
+		RuntimeType:   domain.RuntimeTypeCompose,
+		EndpointRef:   "max",
+		ComposeDir:    "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"execution_mode": "sdk"},
+	}
+	if err := unitRepo.Create(ctx, unit); err != nil {
+		t.Fatalf("seed deployment unit: %v", err)
+	}
+	env.Targeting.DefaultUnitKey = unit.Key
+	if err := envRepo.Update(ctx, env); err != nil {
+		t.Fatalf("update environment targeting: %v", err)
+	}
+
+	lifecycle := NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo,
+		&mockRuntimeResolver{rt: &lifecycleMockRuntime{}}, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	spec, err := lifecycle.BuildDesiredStateSnapshot(ctx, svc.ID, env.ID, artifact.ID, &unit.ID)
+	if err != nil {
+		t.Fatalf("BuildDesiredStateSnapshot: %v", err)
+	}
+	if spec.DeploymentUnitID == nil || *spec.DeploymentUnitID != unit.ID {
+		t.Fatalf("deployment unit ID = %v, want %s", spec.DeploymentUnitID, unit.ID)
+	}
+	if spec.DeploymentUnitKey != unit.Key || spec.UnitRuntimeType != domain.RuntimeTypeCompose {
+		t.Fatalf("unit identity = key %q runtime %q", spec.DeploymentUnitKey, spec.UnitRuntimeType)
+	}
+	if spec.ComposeExtension == nil {
+		t.Fatalf("Compose extension was not persisted in desired state")
+	}
+}
+
 func TestRuntimeLifecycleRejectsNonAdoptedOrNonDirectRuntimeWorkloads(t *testing.T) {
 	ctx := context.Background()
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()

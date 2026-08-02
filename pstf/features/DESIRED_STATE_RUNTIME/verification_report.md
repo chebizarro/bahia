@@ -29,6 +29,19 @@
 - PASS: `go test ./internal/repository -count=1`
 - Documentation closeout review: `docs/nostr-event-implementation-guide.md`, `docs/control-planes.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md`, `docs/user-guide/nostr-integration.md`, `docs/user-guide/features/deployments.md`, `docs/user-guide/features/services.md`, `docs/deployment.md`, and `docs/api.md` updated for additive desired-state metadata and Bahia-owned Compose/Docker behavior. No runtime code changed in this closeout.
 
+- PASS (2026-08-02 review remediation): `go test ./internal/repository ./internal/service ./internal/controlplane ./internal/workflow ./pkg/client ./cmd/cli`
+- PASS (2026-08-02 review remediation): `go build ./... && go vet ./...`
+- EXPECTED PRE-EXISTING FAILURE (2026-08-02): `go test ./...` fails only in `internal/soulfactory::TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods`, tracked as `bahia-csxyx`; isolated reproduction confirmed the same wrapper-method expectation mismatch.
+
+## 2026-08-02 Path A Review Remediation Evidence
+
+- **P0 default resolution:** repository tests prove normalized `targeting.default_unit_key` selects an explicit non-default unit, while missing configured keys and explicit sets without the configured default fail closed; implicit synthesis remains limited to the normalized `default` key with no explicit units.
+- **P0 pre-intent Path A snapshot:** runtime lifecycle tests prove a new, non-adopted service can build a desired-state snapshot through a Bahia-managed Compose unit and that the snapshot retains unit ID, key, and runtime type before intent creation.
+- **P1 complete-set concurrency:** repository/service/control-plane/client/CLI tests prove `expected_updated_at` is required for complete-set unit writes, checked under `FOR UPDATE`, stale writes return ContextVM code `-32009` without local mutation, event emission, or relay-first canonical publication, and the CLI rereads/remerges for at most three newly signed attempts while preserving unrelated concurrent units.
+- **P1 durable unit identity:** service tests prove run completion selects deployment-unit ID in order from run, intent, then desired state; coordinator routing also records the resolved explicit unit on non-Compose runs.
+- **P1 implicit-to-explicit targeting:** CLI tests prove unit create publishes `targeting.default_unit_key=max` and the single explicit `max` unit in one signed update, and both unit create/update expose `--default-unit-key`.
+- Contract documentation records authoritative complete-set semantics, the revision precondition/conflict code, bounded retry behavior, and atomic targeting changes without adding new Nostr kinds or exposing secrets.
+
 ## 2026-05-30 Task 1 Evidence
 
 - `internal/controlplane/reactor.go`: kind `5961` now builds a desired-state snapshot before intent persistence and invokes `RuntimeLifecycleService.DeployWithStatus` for approved intents.

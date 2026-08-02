@@ -412,10 +412,14 @@ type statusCapturingRuntimeStub struct {
 	capturedSteps *[]service.DeployStep
 }
 
-func (s *statusCapturingRuntimeStub) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+func (s *statusCapturingRuntimeStub) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID, _ *uuid.UUID) (*domain.DesiredServiceSpec, error) {
 	spec := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api:latest"}
 	spec.ComputeDesiredHash()
 	return spec, nil
+}
+
+func (s *statusCapturingRuntimeStub) DeployDesiredStateSnapshot(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, _ *domain.DesiredServiceSpec, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	return s.DeployWithStatus(ctx, serviceID, envID, artifactID, statusFn)
 }
 
 func (s *statusCapturingRuntimeStub) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
@@ -454,10 +458,14 @@ type allStepsRuntimeStub struct {
 	steps []service.DeployStep
 }
 
-func (s *allStepsRuntimeStub) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+func (s *allStepsRuntimeStub) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID, _ *uuid.UUID) (*domain.DesiredServiceSpec, error) {
 	spec := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api:latest"}
 	spec.ComputeDesiredHash()
 	return spec, nil
+}
+
+func (s *allStepsRuntimeStub) DeployDesiredStateSnapshot(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, _ *domain.DesiredServiceSpec, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	return s.DeployWithStatus(ctx, serviceID, envID, artifactID, statusFn)
 }
 
 func (s *allStepsRuntimeStub) Deploy(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (*domain.RuntimeObservation, error) {

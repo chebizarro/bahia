@@ -61,7 +61,7 @@ type RegistryMutationBackend interface {
 	CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
-	UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
+	UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, expectedUpdatedAt time.Time) error
 	DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error
 }
 
@@ -174,6 +174,7 @@ type encryptedEnvironmentCreatePayload struct {
 type encryptedEnvironmentUpdatePayload struct {
 	ID                 string                           `json:"id"`
 	OrgID              *uuid.UUID                       `json:"org_id,omitempty"`
+	ExpectedUpdatedAt  *time.Time                       `json:"expected_updated_at,omitempty"`
 	Name               string                           `json:"name,omitempty"`
 	LoomWorkerSelector json.RawMessage                  `json:"loom_worker_selector,omitempty"`
 	RuntimeConfig      map[string]any                   `json:"runtime_config,omitempty"`
@@ -354,7 +355,10 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 		return nil, err
 	}
 	if payload.DeploymentUnits != nil {
-		if err := h.registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, units); err != nil {
+		if payload.ExpectedUpdatedAt == nil || payload.ExpectedUpdatedAt.IsZero() {
+			return nil, fmt.Errorf("expected_updated_at is required when deployment_units is supplied")
+		}
+		if err := h.registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, units, *payload.ExpectedUpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to update environment: %w", err)
 		}
 	} else if err := h.registry.UpdateEnvironment(ctx, env); err != nil {

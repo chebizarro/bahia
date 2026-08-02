@@ -161,18 +161,19 @@ func (r *RelayFirstRegistry) UpdateEnvironment(ctx context.Context, env *domain.
 	return r.delegate.UpdateEnvironment(ctx, env)
 }
 
-// UpdateEnvironmentWithDeploymentUnits publishes the complete desired environment contract before atomically caching it.
-func (r *RelayFirstRegistry) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+// UpdateEnvironmentWithDeploymentUnits publishes the complete desired environment
+// contract after the revision has been checked under lock and before atomically
+// caching it.
+func (r *RelayFirstRegistry) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, expectedUpdatedAt time.Time) error {
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
 	}
 	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
 		return err
 	}
-	if err := r.publishEnvironmentRegistryWithUnits(ctx, env, units, false); err != nil {
-		return err
-	}
-	return r.delegate.UpdateEnvironmentWithDeploymentUnits(ctx, env, units)
+	return r.delegate.updateEnvironmentWithDeploymentUnits(ctx, env, units, expectedUpdatedAt, func() error {
+		return r.publishEnvironmentRegistryWithUnits(ctx, env, units, false)
+	})
 }
 
 func (r *RelayFirstRegistry) DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error {

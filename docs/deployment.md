@@ -227,6 +227,7 @@ Environment and deployment-unit writes are signer-first. An authorized signer pu
   "org_id": "organization-uuid",
   "name": "production",
   "id": "environment-uuid",
+  "expected_updated_at": "2026-08-02T08:00:00Z",
   "loom_worker_selector": {},
   "runtime_config": {},
   "targeting": {
@@ -255,7 +256,7 @@ Environment and deployment-unit writes are signer-first. An authorized signer pu
 }
 ```
 
-`deployment_units` has complete-set semantics. Omitting it leaves the current unit set unchanged; providing it atomically replaces the complete explicit set; providing `[]` returns the environment to its implicit default. Bahia rejects removal of units referenced by state, runs, intents, or observations, and requires `targeting.default_unit_key` to identify a member of any non-empty explicit set. Deploy, apply, and observe do not materialize the implicit unit.
+`deployment_units` has complete-set semantics. Omitting it leaves the current unit set unchanged; providing it atomically replaces the complete explicit set; providing `[]` returns the environment to its implicit default. Every update that supplies `deployment_units` must also supply `expected_updated_at` from the latest environment read. Bahia locks the environment row and rejects a stale revision with ContextVM error code `-32009` before publishing canonical registry state or writing the environment/unit transaction. Bahia also rejects removal of units referenced by state, runs, intents, or observations, and requires `targeting.default_unit_key` to identify a member of any non-empty explicit set. Deploy, apply, and observe do not materialize the implicit unit.
 
 Environment GET and list responses embed `deployment_units`. They contain the persisted explicit units when present; otherwise they contain the resolved default unit marked with `"implicit": true`.
 
@@ -265,11 +266,11 @@ The CLI uses the same contract and never revives REST mutations:
 bahia environments create --name production --units-file units.json
 bahia environments update <environment-id> --units-file units.json
 bahia environments units list <environment-id>
-bahia environments units create <environment-id> --file unit.json
-bahia environments units update <environment-id> max --file unit.json
+bahia environments units create <environment-id> --file unit.json --default-unit-key max
+bahia environments units update <environment-id> max --file unit.json --default-unit-key max
 ```
 
-The unit `create` and `update` helpers read the environment, merge the requested unit locally, and publish a signed `environment/update` carrying the complete explicit unit set. Use JSON files for unit specifications and secret-bearing configuration; do not place secrets in arguments.
+The unit `create` and `update` helpers read the environment, merge the requested unit locally, and publish a signed `environment/update` carrying the complete explicit unit set plus its `expected_updated_at` revision. On revision conflict the CLI rereads, deliberately remerges, and resigns at most three attempts so unrelated concurrent units are preserved; the final conflict is surfaced to the operator. `--default-unit-key` changes targeting in the same atomic update, including implicit-to-explicit transitions to a non-`default` key. Use JSON files for unit specifications and secret-bearing configuration; do not place secrets in arguments.
 
 The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment. API request DTOs accept additive `deployment_unit_id`, `deployment_units`, `targeting`, and `reconcile_mode` fields. Canonical Nostr projections (`30900` state and `30078` app data) include additive `unit` tags; `NULL` placement is tagged as `default`. Historical `31961`, `31963`, `31967`, and `31968` projections are migration inventory only.
 

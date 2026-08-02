@@ -206,18 +206,34 @@ func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, i
 	return fmt.Errorf("deployment unit %s is referenced by durable deployment state: %w", id, ErrConflict)
 }
 
-// ResolveDefault returns an explicitly persisted default unit when present;
-// otherwise it synthesizes the implicit default in memory without writing it.
+// ResolveDefault returns the configured explicit default unit when present.
+// It synthesizes the legacy implicit default only when the normalized default key
+// is "default" and the environment has no explicit units.
 func (r *PgDeploymentUnitRepository) ResolveDefault(ctx context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
 	if env == nil {
 		return nil, fmt.Errorf("%w: environment must not be nil", domain.ErrInvalidValue)
 	}
-	explicit, err := r.GetByEnvironmentKey(ctx, env.ID, domain.DefaultDeploymentUnitKey)
+	if env.ID == uuid.Nil {
+		return nil, fmt.Errorf("%w: environment_id", domain.ErrNilUUID)
+	}
+
+	envCopy := *env
+	domain.NormalizeEnvironmentTargeting(&envCopy)
+	units, err := r.ListByEnvironment(ctx, envCopy.ID)
 	if err != nil {
 		return nil, err
 	}
-	if explicit != nil {
-		return explicit, nil
+	for i := range units {
+		if units[i].Key == envCopy.Targeting.DefaultUnitKey {
+			unit := units[i]
+			return &unit, nil
+		}
 	}
-	return domain.NewImplicitDefaultDeploymentUnit(env)
+	if len(units) > 0 {
+		return nil, fmt.Errorf("environment %s default deployment unit %q is not present in the explicit unit set: %w", envCopy.ID, envCopy.Targeting.DefaultUnitKey, ErrConflict)
+	}
+	if envCopy.Targeting.DefaultUnitKey != domain.DefaultDeploymentUnitKey {
+		return nil, fmt.Errorf("environment %s configured default deployment unit %q was not found: %w", envCopy.ID, envCopy.Targeting.DefaultUnitKey, ErrConflict)
+	}
+	return domain.NewImplicitDefaultDeploymentUnit(&envCopy)
 }

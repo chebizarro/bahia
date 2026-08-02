@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
@@ -68,6 +70,26 @@ func (e *ControlPlaneRequestError) Unwrap() error {
 		return nil
 	}
 	return e.Cause
+}
+
+// ErrEnvironmentRevisionConflict marks a retryable expected_updated_at mismatch.
+var ErrEnvironmentRevisionConflict = errors.New("environment revision conflict")
+
+// ContextVMRemoteError preserves the stable JSON-RPC error code returned by Bahia.
+type ContextVMRemoteError struct {
+	Code    int
+	Message string
+}
+
+func (e *ContextVMRemoteError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+func (e *ContextVMRemoteError) Is(target error) bool {
+	return target == ErrEnvironmentRevisionConflict && e != nil && e.Code == controlplane.ContextVMEnvironmentConflictErrorCode
 }
 
 type operatorRelayTransport interface {
@@ -240,6 +262,7 @@ type CreateEnvironmentNostrRequest struct {
 type UpdateEnvironmentNostrRequest struct {
 	ID                 string                       `json:"id"`
 	OrgID              *string                      `json:"org_id,omitempty"`
+	ExpectedUpdatedAt  *time.Time                   `json:"expected_updated_at,omitempty"`
 	Name               *string                      `json:"name,omitempty"`
 	LoomWorkerSelector *map[string]any              `json:"loom_worker_selector,omitempty"`
 	RuntimeConfig      *map[string]any              `json:"runtime_config,omitempty"`
@@ -677,7 +700,12 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
 				}
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("%s", message)}
+				return nil, &ControlPlaneRequestError{
+					Phase:           "await operator ContextVM result",
+					RequestAccepted: true,
+					PublishedRelays: published,
+					Cause:           &ContextVMRemoteError{Code: rpc.Error.Code, Message: message},
+				}
 			}
 			if rpc.Result == nil {
 				continue

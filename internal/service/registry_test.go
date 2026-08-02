@@ -818,6 +818,85 @@ func TestCompleteDeploymentRun_RejectsAlreadyCompleted(t *testing.T) {
 	}
 }
 
+func TestCompleteDeploymentRunPreservesHistoricalDeploymentUnitIdentity(t *testing.T) {
+	tests := []struct {
+		name         string
+		runUnit      *uuid.UUID
+		intentUnit   *uuid.UUID
+		desiredUnit  *uuid.UUID
+		expectedUnit uuid.UUID
+	}{
+		{
+			name:        "run identity wins",
+			runUnit:     uuidPointer(uuid.New()),
+			intentUnit:  uuidPointer(uuid.New()),
+			desiredUnit: uuidPointer(uuid.New()),
+		},
+		{
+			name:        "intent identity is fallback",
+			intentUnit:  uuidPointer(uuid.New()),
+			desiredUnit: uuidPointer(uuid.New()),
+		},
+		{
+			name:        "desired state identity supports older intents",
+			desiredUnit: uuidPointer(uuid.New()),
+		},
+	}
+	for i := range tests {
+		test := &tests[i]
+		switch {
+		case test.runUnit != nil:
+			test.expectedUnit = *test.runUnit
+		case test.intentUnit != nil:
+			test.expectedUnit = *test.intentUnit
+		default:
+			test.expectedUnit = *test.desiredUnit
+		}
+		t.Run(test.name, func(t *testing.T) {
+			registry, _, _, _, _, intentRepo, _, _, stateRepo := newTestRegistryAll()
+			ctx := context.Background()
+			svc, env := seedServiceAndEnv(t, registry)
+			artifact := seedArtifact(t, registry, svc, "sha256:unit-identity")
+			desired := &domain.DesiredServiceSpec{
+				ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+				DeploymentUnitID: test.desiredUnit,
+			}
+			intent := &domain.DeploymentIntent{
+				ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+				DeploymentUnitID: test.intentUnit, DesiredState: desired,
+				RequestedBy: "test", SourceKind: domain.SourceKindManual,
+				ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+			}
+			if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+				t.Fatalf("CreateDeploymentIntent: %v", err)
+			}
+			intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+			run := &domain.DeploymentRun{
+				DeploymentIntentID: intent.ID,
+				DeploymentUnitID:   test.runUnit,
+				LoomJobID:          "unit-aware-run",
+			}
+			if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+				t.Fatalf("CreateDeploymentRun: %v", err)
+			}
+			if run.DeploymentUnitID == nil || *run.DeploymentUnitID != test.expectedUnit {
+				t.Fatalf("run deployment unit = %v, want %s", run.DeploymentUnitID, test.expectedUnit)
+			}
+			if err := registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+				t.Fatalf("CompleteDeploymentRun: %v", err)
+			}
+			state := stateRepo.states[stateKey(svc.ID, env.ID)]
+			if state == nil || state.DeploymentUnitID == nil || *state.DeploymentUnitID != test.expectedUnit {
+				t.Fatalf("deployment unit = %v, want %s", state.DeploymentUnitID, test.expectedUnit)
+			}
+		})
+	}
+}
+
+func uuidPointer(id uuid.UUID) *uuid.UUID {
+	return &id
+}
+
 func TestRollback_FindsPreviousSuccessfulArtifact(t *testing.T) {
 	registry, _, _, _, _, intentRepo, _ := newTestRegistry()
 	ctx := context.Background()

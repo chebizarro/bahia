@@ -376,10 +376,26 @@ func (s *RegistryService) UpdateEnvironment(ctx context.Context, env *domain.Env
 	return nil
 }
 
-// UpdateEnvironmentWithDeploymentUnits updates an environment and reconciles its complete explicit unit set atomically.
-func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+// UpdateEnvironmentWithDeploymentUnits updates an environment and reconciles its
+// complete explicit unit set atomically when expectedUpdatedAt still matches.
+func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, expectedUpdatedAt time.Time) error {
+	return s.updateEnvironmentWithDeploymentUnits(ctx, env, units, expectedUpdatedAt, nil)
+}
+
+// updateEnvironmentWithDeploymentUnits runs an optional signer-first publication
+// after locking and checking the environment revision, but before local writes.
+func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
+	ctx context.Context,
+	env *domain.Environment,
+	units []*domain.DeploymentUnit,
+	expectedUpdatedAt time.Time,
+	beforeWrite func() error,
+) error {
 	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
 		return err
+	}
+	if expectedUpdatedAt.IsZero() {
+		return fmt.Errorf("%w: expected_updated_at is required for complete-set deployment-unit updates", domain.ErrInvalidValue)
 	}
 	if s.txExecutor == nil {
 		return fmt.Errorf("environment deployment-unit transaction handling is not configured")
@@ -388,9 +404,37 @@ func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Conte
 		if repos.Environments == nil || repos.DeploymentUnits == nil {
 			return fmt.Errorf("environment transaction repositories are not configured")
 		}
+		envLocker, ok := repos.Environments.(environmentForUpdateRepository)
+		if !ok {
+			return fmt.Errorf("environment transactional revision locking is not configured")
+		}
+		current, err := envLocker.GetByIDForUpdate(ctx, env.ID)
+		if err != nil {
+			return fmt.Errorf("locking environment for unit reconciliation: %w", err)
+		}
+		if current == nil {
+			return fmt.Errorf("environment %s: %w", env.ID, repository.ErrNotFound)
+		}
+		if !current.UpdatedAt.Equal(expectedUpdatedAt) {
+			return fmt.Errorf(
+				"environment %s revision conflict (expected %s, actual %s): %w: %w",
+				env.ID,
+				expectedUpdatedAt.UTC().Format(time.RFC3339Nano),
+				current.UpdatedAt.UTC().Format(time.RFC3339Nano),
+				repository.ErrConflict,
+				repository.ErrStaleRevision,
+			)
+		}
+
 		unitWriter, ok := repos.DeploymentUnits.(deploymentUnitMutationRepository)
 		if !ok {
 			return fmt.Errorf("deployment unit transactional mutation handling is not configured")
+		}
+		env.CreatedAt = current.CreatedAt
+		if beforeWrite != nil {
+			if err := beforeWrite(); err != nil {
+				return err
+			}
 		}
 		if err := repos.Environments.Update(ctx, env); err != nil {
 			return err
@@ -401,6 +445,10 @@ func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Conte
 	}
 	s.publishEnvironmentMutation(ctx, events.EventEnvironmentUpdated, env)
 	return nil
+}
+
+type environmentForUpdateRepository interface {
+	GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 }
 
 type deploymentUnitMutationRepository interface {
@@ -748,6 +796,7 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 	state := &domain.EnvironmentServiceState{
 		ServiceID:           di.ServiceID,
 		EnvironmentID:       di.EnvironmentID,
+		DeploymentUnitID:    deploymentUnitIDForRunIntent(nil, di),
 		DesiredArtifactID:   &di.ArtifactID,
 		DesiredIntentID:     &di.ID,
 		DesiredRuntimeState: di.DesiredState,
@@ -950,6 +999,9 @@ func (s *RegistryService) CreateDeploymentRun(ctx context.Context, dr *domain.De
 			dr.DeploymentIntentID, intent.Status, domain.IntentStatusApproved, domain.IntentStatusDeploying)
 	}
 
+	if dr.DeploymentUnitID == nil {
+		dr.DeploymentUnitID = deploymentUnitIDForRunIntent(nil, intent)
+	}
 	if dr.Status == "" {
 		dr.Status = domain.RunStatusQueued
 	}
@@ -997,6 +1049,26 @@ func (s *RegistryService) ListNonTerminalDeploymentRuns(ctx context.Context) ([]
 		return nil, fmt.Errorf("deployment run repository does not support non-terminal recovery")
 	}
 	return lister.ListNonTerminal(ctx)
+}
+
+func deploymentUnitIDForRunIntent(run *domain.DeploymentRun, intent *domain.DeploymentIntent) *uuid.UUID {
+	candidates := []*uuid.UUID{}
+	if run != nil {
+		candidates = append(candidates, run.DeploymentUnitID)
+	}
+	if intent != nil {
+		candidates = append(candidates, intent.DeploymentUnitID)
+		if intent.DesiredState != nil {
+			candidates = append(candidates, intent.DesiredState.DeploymentUnitID)
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate != nil && *candidate != uuid.Nil {
+			id := *candidate
+			return &id
+		}
+	}
+	return nil
 }
 
 // CompleteDeploymentRun marks a deployment run as completed and updates related state.
@@ -1060,6 +1132,7 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 			state := &domain.EnvironmentServiceState{
 				ServiceID:           intent.ServiceID,
 				EnvironmentID:       intent.EnvironmentID,
+				DeploymentUnitID:    deploymentUnitIDForRunIntent(dr, intent),
 				DesiredArtifactID:   &intent.ArtifactID,
 				DesiredIntentID:     &intent.ID,
 				DesiredRuntimeState: intent.DesiredState,

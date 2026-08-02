@@ -1,7 +1,11 @@
 // Package dto defines request and response types for the Bahia API.
 package dto
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type EnvironmentTargetingRequest struct {
 	DefaultUnitKey       string            `json:"default_unit_key,omitempty"`
@@ -76,6 +80,7 @@ type CreateEnvironmentRequest struct {
 // UpdateEnvironmentRequest represents a request to update an environment.
 type UpdateEnvironmentRequest struct {
 	OrgID              *uuid.UUID                   `json:"org_id,omitempty"`
+	ExpectedUpdatedAt  *time.Time                   `json:"expected_updated_at,omitempty"`
 	Name               *string                      `json:"name,omitempty"`
 	LoomWorkerSelector *map[string]any              `json:"loom_worker_selector,omitempty"`
 	RuntimeConfig      *map[string]any              `json:"runtime_config,omitempty"`

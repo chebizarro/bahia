@@ -42,6 +42,8 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
 
+When `environment/update` includes `deployment_units`, the array is the authoritative complete explicit set and `expected_updated_at` is required. Bahia checks that revision under an environment row lock. A stale request returns JSON-RPC code `-32009` without database or canonical registry mutation; callers reread and deliberately remerge before publishing a newly signed retry.
+
 Soul Factory clients should submit new mutation intent through `soul-factory/provision` and `soul-factory/action`. Bahia validates those requests through the existing Soul Factory domain parsers and preserves the original `25910` event id as the correlation id while the staged reactor continues to emit its established lifecycle events. The JSON-RPC response is acceptance only. ContextVM provisioning progress and terminal outcomes are also projected to `30900` coordinates named `soul-factory:provisioning:<request-event-id>` with matching `4903` audit facts; lifecycle action projection remains staged work.
 
 ## Example: Deploy Service

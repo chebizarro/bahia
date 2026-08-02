@@ -409,6 +409,31 @@ func TestOperatorContextVMErrorIsPostAcceptanceFailure(t *testing.T) {
 	}
 }
 
+func TestOperatorContextVMEnvironmentConflictIsTyped(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMErrorCode(
+			t, replyKey, ev, controlplane.ContextVMEnvironmentConflictErrorCode,
+			"environment revision conflict",
+		)
+		return 1, nil
+	}
+	units := []DeploymentUnitRequest{{Key: "max", RuntimeType: "compose"}}
+	_, err := client.UpdateEnvironmentNostr(context.Background(), UpdateEnvironmentNostrRequest{
+		ID: "env-1", DeploymentUnits: &units,
+	}, nil)
+	if !errors.Is(err, ErrEnvironmentRevisionConflict) {
+		t.Fatalf("error = %T %v, want typed environment revision conflict", err, err)
+	}
+	var remote *ContextVMRemoteError
+	if !errors.As(err, &remote) || remote.Code != controlplane.ContextVMEnvironmentConflictErrorCode {
+		t.Fatalf("remote error = %#v", remote)
+	}
+}
+
 func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	transport := newFakeOperatorTransport()
@@ -752,8 +777,13 @@ func signedContextVMResult(t *testing.T, privateKey string, request nostr.Event,
 
 func signedContextVMError(t *testing.T, privateKey string, request nostr.Event, message string) *nostr.Event {
 	t.Helper()
+	return signedContextVMErrorCode(t, privateKey, request, -32000, message)
+}
+
+func signedContextVMErrorCode(t *testing.T, privateKey string, request nostr.Event, code int, message string) *nostr.Event {
+	t.Helper()
 	rpc := decodePublishedContextVMRequest(t, request)
-	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "error": map[string]any{"code": -32000, "message": message}})
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "error": map[string]any{"code": code, "message": message}})
 	if err != nil {
 		t.Fatalf("encode ContextVM error: %v", err)
 	}

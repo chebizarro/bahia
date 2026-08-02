@@ -50,9 +50,10 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
 	var params struct {
-		ServiceID     string `json:"service_id"`
-		EnvironmentID string `json:"environment_id"`
-		ArtifactID    string `json:"artifact_id"`
+		ServiceID        string `json:"service_id"`
+		EnvironmentID    string `json:"environment_id"`
+		DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
+		ArtifactID       string `json:"artifact_id"`
 	}
 	if err := json.Unmarshal(request.RPC.Params, &params); err != nil {
 		return nil, fmt.Errorf("decode service/deploy params: %w", err)
@@ -68,6 +69,14 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	artifactID, err := uuid.Parse(strings.TrimSpace(params.ArtifactID))
 	if err != nil {
 		return nil, fmt.Errorf("invalid artifact_id: %w", err)
+	}
+	var requestedUnitID *uuid.UUID
+	if raw := strings.TrimSpace(params.DeploymentUnitID); raw != "" {
+		unitID, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid deployment_unit_id: %w", err)
+		}
+		requestedUnitID = &unitID
 	}
 
 	evaluation, err := h.policy.Evaluate(ctx, artifactID, environmentID)
@@ -90,20 +99,21 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		return nil, fmt.Errorf("requester pubkey is required")
 	}
 
-	desiredState, err := h.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, environmentID, artifactID)
+	desiredState, err := h.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, environmentID, artifactID, requestedUnitID)
 	if err != nil {
 		return nil, fmt.Errorf("build desired state: %w", err)
 	}
 	intent := &domain.DeploymentIntent{
-		ID:            uuid.New(),
-		ServiceID:     serviceID,
-		EnvironmentID: environmentID,
-		ArtifactID:    artifactID,
-		RequestedBy:   requestedBy,
-		SourceKind:    domain.SourceKindEventTriggered,
-		Metadata:      metadata,
-		DesiredState:  desiredState,
-		DesiredHash:   desiredState.DesiredHash,
+		ID:               uuid.New(),
+		ServiceID:        serviceID,
+		EnvironmentID:    environmentID,
+		DeploymentUnitID: desiredState.DeploymentUnitID,
+		ArtifactID:       artifactID,
+		RequestedBy:      requestedBy,
+		SourceKind:       domain.SourceKindEventTriggered,
+		Metadata:         metadata,
+		DesiredState:     desiredState,
+		DesiredHash:      desiredState.DesiredHash,
 	}
 	if err := h.registry.CreateDeploymentIntent(ctx, intent); err != nil {
 		return nil, fmt.Errorf("create deployment intent: %w", err)
@@ -124,6 +134,7 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	run := &domain.DeploymentRun{
 		ID:                 uuid.New(),
 		DeploymentIntentID: intent.ID,
+		DeploymentUnitID:   desiredState.DeploymentUnitID,
 		Status:             domain.RunStatusRunning,
 		StartedAt:          &startedAt,
 		Metadata:           metadata,
@@ -135,7 +146,7 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	if err := h.registry.CreateDeploymentRun(ctx, run); err != nil {
 		return nil, fmt.Errorf("create deployment run: %w", err)
 	}
-	_, deployErr := h.runtimeLifecycle.Deploy(ctx, serviceID, environmentID, &artifactID)
+	_, deployErr := h.runtimeLifecycle.DeployDesiredStateSnapshot(ctx, serviceID, environmentID, &artifactID, desiredState, nil)
 	exitCode := 0
 	runStatus := domain.RunStatusSucceeded
 	if deployErr != nil {

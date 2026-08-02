@@ -39,7 +39,7 @@ type stubRuntimeLifecycleOperatorService struct {
 	emitSteps        bool
 }
 
-func (s *stubRuntimeLifecycleOperatorService) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+func (s *stubRuntimeLifecycleOperatorService) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID, _ *uuid.UUID) (*domain.DesiredServiceSpec, error) {
 	if s.buildErr != nil {
 		return nil, s.buildErr
 	}
@@ -49,6 +49,10 @@ func (s *stubRuntimeLifecycleOperatorService) BuildDesiredStateSnapshot(_ contex
 	spec := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api:latest"}
 	spec.ComputeDesiredHash()
 	return spec, nil
+}
+
+func (s *stubRuntimeLifecycleOperatorService) DeployDesiredStateSnapshot(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, _ *domain.DesiredServiceSpec, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	return s.DeployWithStatus(ctx, serviceID, envID, artifactID, statusFn)
 }
 
 func (s *stubRuntimeLifecycleOperatorService) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {

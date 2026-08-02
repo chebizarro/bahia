@@ -209,7 +209,7 @@ func (r *fakeEncryptedRegistryMutations) UpdateEnvironment(_ context.Context, en
 	r.environments[env.ID] = &copy
 	return nil
 }
-func (r *fakeEncryptedRegistryMutations) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
+func (r *fakeEncryptedRegistryMutations) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, _ time.Time) error {
 	if err := r.UpdateEnvironment(ctx, env); err != nil {
 		return err
 	}
@@ -563,15 +563,17 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSel
 
 func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodPersistsExplicitUnits(t *testing.T) {
 	envID := uuid.New()
+	revision := time.Now().UTC()
 	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
-		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"type": "docker"}, DeployStrategy: domain.DeployStrategyReplace},
+		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"type": "docker"}, DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: revision},
 	}}
 	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentUpdate, map[string]any{
-		"id":             envID.String(),
-		"reconcile_mode": "approval_required",
+		"id":                  envID.String(),
+		"expected_updated_at": revision.Format(time.RFC3339Nano),
+		"reconcile_mode":      "approval_required",
 		"targeting": map[string]any{
 			"default_unit_key":  "max",
 			"secret_scope_mode": "environment",
@@ -596,6 +598,21 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodPersistsExplicit
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["environment_id"] != envID.String() || payload["status"] != "updated" {
 		t.Fatalf("unexpected update response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_UpdateEnvironmentRequiresRevisionForCompleteUnitSet(t *testing.T) {
+	envID := uuid.New()
+	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
+		envID: {ID: envID, Name: "prod", DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: time.Now().UTC()},
+	}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+
+	_, err := h.UpdateEnvironment(context.Background(), ContextVMRequest{
+		RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"id":"` + envID.String() + `","deployment_units":[]}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected_updated_at is required") {
+		t.Fatalf("error = %v, want required revision precondition", err)
 	}
 }
 

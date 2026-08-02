@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -176,64 +177,66 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 				}
 				req.RuntimeConfig = &value
 			}
-			var details *client.EnvironmentDetails
-			loadDetails := func() (*client.EnvironmentDetails, error) {
-				if details != nil {
-					return details, nil
-				}
-				loaded, loadErr := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
-				if loadErr != nil {
-					return nil, loadErr
-				}
-				details = loaded
-				return details, nil
-			}
-			var currentTargeting *domain.EnvironmentTargeting
-			if anyFlagChanged(cmd, "default-unit-key", "failure-domain-label", "secret-scope-mode", "default-reconcile-mode") {
-				loaded, loadErr := loadDetails()
-				if loadErr != nil {
-					return loadErr
-				}
-				currentTargeting = &loaded.Targeting
-			}
-			targetingRequest, err := targeting.request(cmd, currentTargeting)
-			if err != nil {
-				return err
-			}
-			req.Targeting = targetingRequest
+			targetingChanged := anyFlagChanged(cmd, "default-unit-key", "failure-domain-label", "secret-scope-mode", "default-reconcile-mode")
 			units, err := requestedUnits(cmd, unitsFile, &unit)
 			if err != nil {
 				return err
 			}
-			if units != nil && strings.TrimSpace(unitsFile) == "" {
-				loaded, loadErr := loadDetails()
-				if loadErr != nil {
-					return loadErr
-				}
-				merged := explicitUnitRequests(loaded.DeploymentUnits)
-				for _, requested := range *units {
-					if current, found := findDeploymentUnit(loaded.DeploymentUnits, requested.Key); found {
-						requested, err = unit.overlay(cmd, "", deploymentUnitRequestFromDomain(current))
-						if err != nil {
-							return err
-						}
+			if units == nil {
+				if targetingChanged {
+					details, loadErr := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
+					if loadErr != nil {
+						return loadErr
 					}
-					replaced := false
-					for i := range merged {
-						if merged[i].Key == requested.Key {
-							merged[i] = requested
-							replaced = true
-							break
-						}
-					}
-					if !replaced {
-						merged = append(merged, requested)
+					req.Targeting, err = targeting.request(cmd, &details.Targeting)
+					if err != nil {
+						return err
 					}
 				}
-				units = &merged
+				result, updateErr := runEnvironmentUpdateNostr(cmd, req)
+				if updateErr != nil {
+					return updateErr
+				}
+				return outputSingle(result)
 			}
-			req.DeploymentUnits = units
-			result, err := runEnvironmentUpdateNostr(cmd, req)
+
+			result, err := runEnvironmentCompleteSetUpdateWithRetry(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
+				attempt := req
+				if targetingChanged {
+					var targetingErr error
+					attempt.Targeting, targetingErr = targeting.request(cmd, &details.Targeting)
+					if targetingErr != nil {
+						return client.UpdateEnvironmentNostrRequest{}, targetingErr
+					}
+				}
+				completeSet := append([]client.DeploymentUnitRequest(nil), (*units)...)
+				if strings.TrimSpace(unitsFile) == "" {
+					completeSet = explicitUnitRequests(details.DeploymentUnits)
+					for _, rawRequested := range *units {
+						requested := rawRequested
+						if current, found := findDeploymentUnit(details.DeploymentUnits, requested.Key); found {
+							var overlayErr error
+							requested, overlayErr = unit.overlay(cmd, "", deploymentUnitRequestFromDomain(current))
+							if overlayErr != nil {
+								return client.UpdateEnvironmentNostrRequest{}, overlayErr
+							}
+						}
+						replaced := false
+						for i := range completeSet {
+							if completeSet[i].Key == requested.Key {
+								completeSet[i] = requested
+								replaced = true
+								break
+							}
+						}
+						if !replaced {
+							completeSet = append(completeSet, requested)
+						}
+					}
+				}
+				attempt.DeploymentUnits = &completeSet
+				return attempt, nil
+			})
 			if err != nil {
 				return err
 			}
@@ -282,7 +285,7 @@ func newEnvironmentUnitsListCommand() *cobra.Command {
 
 func newEnvironmentUnitCreateCommand() *cobra.Command {
 	unit := deploymentUnitFlags{}
-	var specFile string
+	var specFile, defaultUnitKey string
 	cmd := &cobra.Command{
 		Use:   "create [environment-id]",
 		Short: "Add an explicit unit through a complete-set signed environment update",
@@ -295,18 +298,36 @@ func newEnvironmentUnitCreateCommand() *cobra.Command {
 			if strings.TrimSpace(request.Key) == "" {
 				return fmt.Errorf("unit key is required via --key or --file")
 			}
-			details, err := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			units := explicitUnitRequests(details.DeploymentUnits)
-			for _, existing := range units {
-				if existing.Key == request.Key {
-					return fmt.Errorf("deployment unit %q already exists", request.Key)
+			result, err := runEnvironmentCompleteSetUpdateWithRetry(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
+				units := explicitUnitRequests(details.DeploymentUnits)
+				for _, existing := range units {
+					if existing.Key == request.Key {
+						return client.UpdateEnvironmentNostrRequest{}, fmt.Errorf("deployment unit %q already exists", request.Key)
+					}
 				}
-			}
-			units = append(units, request)
-			result, err := runEnvironmentUpdateNostr(cmd, client.UpdateEnvironmentNostrRequest{ID: args[0], DeploymentUnits: &units})
+
+				desiredDefault := details.Targeting.DefaultUnitKey
+				targeting := (*client.EnvironmentTargetingRequest)(nil)
+				if cmd.Flags().Changed("default-unit-key") {
+					desiredDefault = strings.TrimSpace(defaultUnitKey)
+					targeting = environmentTargetingRequestFromDomain(details.Targeting)
+					targeting.DefaultUnitKey = desiredDefault
+				}
+				if len(units) == 0 && desiredDefault != request.Key {
+					for _, current := range details.DeploymentUnits {
+						if current.Implicit {
+							units = append(units, deploymentUnitRequestFromDomain(current))
+							break
+						}
+					}
+				}
+				units = append(units, request)
+				return client.UpdateEnvironmentNostrRequest{
+					ID:              args[0],
+					Targeting:       targeting,
+					DeploymentUnits: &units,
+				}, nil
+			})
 			if err != nil {
 				return err
 			}
@@ -314,51 +335,59 @@ func newEnvironmentUnitCreateCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&specFile, "file", "", "Read one deployment-unit JSON object from this file")
+	cmd.Flags().StringVar(&defaultUnitKey, "default-unit-key", "", "Set the environment default deployment-unit key atomically")
 	unit.bind(cmd)
 	return cmd
 }
 
 func newEnvironmentUnitUpdateCommand() *cobra.Command {
 	unit := deploymentUnitFlags{}
-	var specFile string
+	var specFile, defaultUnitKey string
 	cmd := &cobra.Command{
 		Use:   "update [environment-id] [key]",
 		Short: "Update one unit through a read-merge complete-set signed environment update",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			details, err := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
 			key := strings.TrimSpace(args[1])
-			current, found := findDeploymentUnit(details.DeploymentUnits, key)
-			if !found {
-				return fmt.Errorf("deployment unit %q not found", key)
-			}
-			request := deploymentUnitRequestFromDomain(current)
-			updated, err := unit.overlay(cmd, specFile, request)
-			if err != nil {
-				return err
-			}
-			if updated.Key == "" {
-				updated.Key = key
-			}
-			if updated.Key != key {
-				return fmt.Errorf("deployment unit update cannot change key %q to %q", key, updated.Key)
-			}
-			units := explicitUnitRequests(details.DeploymentUnits)
-			replaced := false
-			for i := range units {
-				if units[i].Key == key {
-					units[i] = updated
-					replaced = true
-					break
+			result, err := runEnvironmentCompleteSetUpdateWithRetry(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
+				current, found := findDeploymentUnit(details.DeploymentUnits, key)
+				if !found {
+					return client.UpdateEnvironmentNostrRequest{}, fmt.Errorf("deployment unit %q not found", key)
 				}
-			}
-			if !replaced {
-				units = append(units, updated)
-			}
-			result, err := runEnvironmentUpdateNostr(cmd, client.UpdateEnvironmentNostrRequest{ID: args[0], DeploymentUnits: &units})
+				request := deploymentUnitRequestFromDomain(current)
+				updated, err := unit.overlay(cmd, specFile, request)
+				if err != nil {
+					return client.UpdateEnvironmentNostrRequest{}, err
+				}
+				if updated.Key == "" {
+					updated.Key = key
+				}
+				if updated.Key != key {
+					return client.UpdateEnvironmentNostrRequest{}, fmt.Errorf("deployment unit update cannot change key %q to %q", key, updated.Key)
+				}
+				units := explicitUnitRequests(details.DeploymentUnits)
+				replaced := false
+				for i := range units {
+					if units[i].Key == key {
+						units[i] = updated
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					units = append(units, updated)
+				}
+				var targeting *client.EnvironmentTargetingRequest
+				if cmd.Flags().Changed("default-unit-key") {
+					targeting = environmentTargetingRequestFromDomain(details.Targeting)
+					targeting.DefaultUnitKey = strings.TrimSpace(defaultUnitKey)
+				}
+				return client.UpdateEnvironmentNostrRequest{
+					ID:              args[0],
+					Targeting:       targeting,
+					DeploymentUnits: &units,
+				}, nil
+			})
 			if err != nil {
 				return err
 			}
@@ -366,8 +395,59 @@ func newEnvironmentUnitUpdateCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&specFile, "file", "", "Read one deployment-unit JSON object from this file and overlay changed flags")
+	cmd.Flags().StringVar(&defaultUnitKey, "default-unit-key", "", "Set the environment default deployment-unit key atomically")
 	unit.bind(cmd)
 	return cmd
+}
+
+const environmentCompleteSetUpdateMaxAttempts = 3
+
+func runEnvironmentCompleteSetUpdateWithRetry(
+	cmd *cobra.Command,
+	environmentID string,
+	build func(*client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error),
+) (*client.EnvironmentCommandResult, error) {
+	for attempt := 1; attempt <= environmentCompleteSetUpdateMaxAttempts; attempt++ {
+		details, err := apiClient.GetEnvironmentDetails(cmd.Context(), environmentID)
+		if err != nil {
+			return nil, err
+		}
+		if details == nil || details.UpdatedAt.IsZero() {
+			return nil, fmt.Errorf("environment %s read response is missing updated_at", environmentID)
+		}
+		req, err := build(details)
+		if err != nil {
+			return nil, err
+		}
+		revision := details.UpdatedAt
+		req.ID = environmentID
+		req.ExpectedUpdatedAt = &revision
+		result, err := runEnvironmentUpdateNostr(cmd, req)
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, client.ErrEnvironmentRevisionConflict) {
+			return nil, err
+		}
+		if attempt == environmentCompleteSetUpdateMaxAttempts {
+			return nil, fmt.Errorf(
+				"environment %s changed during complete-set update after %d attempts: %w",
+				environmentID,
+				environmentCompleteSetUpdateMaxAttempts,
+				client.ErrEnvironmentRevisionConflict,
+			)
+		}
+	}
+	return nil, fmt.Errorf("environment %s complete-set update failed", environmentID)
+}
+
+func environmentTargetingRequestFromDomain(targeting domain.EnvironmentTargeting) *client.EnvironmentTargetingRequest {
+	return &client.EnvironmentTargetingRequest{
+		DefaultUnitKey:       targeting.DefaultUnitKey,
+		FailureDomainLabels:  targeting.FailureDomainLabels,
+		SecretScopeMode:      string(targeting.SecretScopeMode),
+		DefaultReconcileMode: string(targeting.DefaultReconcileMode),
+	}
 }
 
 func (f *environmentTargetingFlags) bind(cmd *cobra.Command) {

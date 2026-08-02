@@ -127,8 +127,8 @@ func TestPgDeploymentUnitRepositoryResolveDefaultSynthesizesWhenMissing(t *testi
 		RuntimeConfig: map[string]any{"type": "podman", "podman_host": "unix:///run/podman/podman.sock"},
 	}
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT "+deploymentUnitColumns+" FROM deployment_units\n\t\tWHERE environment_id = $1 AND unit_key = $2")).
-		WithArgs(env.ID, domain.DefaultDeploymentUnitKey).
+	mock.ExpectQuery("SELECT .+ FROM deployment_units.+WHERE environment_id = \\$1").
+		WithArgs(env.ID).
 		WillReturnRows(pgxmock.NewRows(splitColumns(deploymentUnitColumns)))
 
 	unit, err := repo.ResolveDefault(context.Background(), env)
@@ -139,4 +139,67 @@ func TestPgDeploymentUnitRepositoryResolveDefaultSynthesizesWhenMissing(t *testi
 	require.Equal(t, domain.RuntimeTypePodman, unit.RuntimeType)
 	require.Equal(t, domain.ReconcileModeObserveOnly, unit.ReconcileMode)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgDeploymentUnitRepositoryResolveDefaultUsesConfiguredExplicitKey(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgDeploymentUnitRepositoryWithDB(mock)
+	env := &domain.Environment{
+		ID:        uuid.New(),
+		Targeting: domain.EnvironmentTargeting{DefaultUnitKey: "max"},
+	}
+	unitID := uuid.New()
+	now := time.Now().UTC()
+	mock.ExpectQuery("SELECT .+ FROM deployment_units.+WHERE environment_id = \\$1").
+		WithArgs(env.ID).
+		WillReturnRows(pgxmock.NewRows(splitColumns(deploymentUnitColumns)).AddRow(
+			unitID, env.ID, "max", "Max", domain.RuntimeTypeCompose, "max", "/srv/bahia/gastown", "",
+			[]byte(`{}`), domain.ReconcileModeAutoApply, domain.OwnershipModeBahiaManaged, []byte(`{"execution_mode":"sdk"}`), now, now,
+		))
+
+	unit, err := repo.ResolveDefault(context.Background(), env)
+	require.NoError(t, err)
+	require.NotNil(t, unit)
+	require.Equal(t, unitID, unit.ID)
+	require.Equal(t, "max", unit.Key)
+	require.False(t, unit.Implicit)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgDeploymentUnitRepositoryResolveDefaultFailsClosedForMissingConfiguredKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		targetKey string
+		withUnit  bool
+	}{
+		{name: "non-default key with no explicit units", targetKey: "max"},
+		{name: "configured key missing from explicit set", targetKey: "max", withUnit: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+
+			repo := newPgDeploymentUnitRepositoryWithDB(mock)
+			env := &domain.Environment{ID: uuid.New(), Targeting: domain.EnvironmentTargeting{DefaultUnitKey: test.targetKey}}
+			rows := pgxmock.NewRows(splitColumns(deploymentUnitColumns))
+			if test.withUnit {
+				now := time.Now().UTC()
+				rows.AddRow(uuid.New(), env.ID, "default", "Default", domain.RuntimeTypeDocker, "", "", "",
+					[]byte(`{}`), domain.ReconcileModeObserveOnly, domain.OwnershipModeBahiaManaged, []byte(`{}`), now, now)
+			}
+			mock.ExpectQuery("SELECT .+ FROM deployment_units.+WHERE environment_id = \\$1").
+				WithArgs(env.ID).
+				WillReturnRows(rows)
+
+			unit, err := repo.ResolveDefault(context.Background(), env)
+			require.Nil(t, unit)
+			require.ErrorIs(t, err, ErrConflict)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }

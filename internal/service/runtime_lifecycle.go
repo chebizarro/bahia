@@ -132,10 +132,14 @@ func NewRuntimeLifecycleService(
 }
 
 // BuildDesiredStateSnapshot builds the canonical desired-state snapshot that a
-// deploy will apply. It is used before intent persistence so request records
-// carry the same deterministic desired hash as runtime state rows.
-func (s *RuntimeLifecycleService) BuildDesiredStateSnapshot(ctx context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
-	svc, env, _, err := s.resolve(ctx, serviceID, envID)
+// deploy will apply. It resolves the effective deployment unit before intent
+// persistence so routing identity and the desired hash describe the same target.
+func (s *RuntimeLifecycleService) BuildDesiredStateSnapshot(
+	ctx context.Context,
+	serviceID, envID, artifactID uuid.UUID,
+	requestedUnitID *uuid.UUID,
+) (*domain.DesiredServiceSpec, error) {
+	svc, env, unit, err := s.resolveDesiredStateDeploymentUnit(ctx, serviceID, envID, requestedUnitID)
 	if err != nil {
 		return nil, err
 	}
@@ -148,12 +152,69 @@ func (s *RuntimeLifecycleService) BuildDesiredStateSnapshot(ctx context.Context,
 		return nil, err
 	}
 	return NewDesiredStateBuilder().Build(BuildInput{
-		Service:       svc,
-		Environment:   env,
-		Artifact:      artifact,
-		RuntimeConfig: svc.RuntimeConfig,
-		Secrets:       secrets,
+		Service:        svc,
+		Environment:    env,
+		Artifact:       artifact,
+		RuntimeConfig:  svc.RuntimeConfig,
+		DeploymentUnit: unit,
+		Secrets:        secrets,
 	})
+}
+
+func (s *RuntimeLifecycleService) resolveDesiredStateDeploymentUnit(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	requestedUnitID *uuid.UUID,
+) (*domain.Service, *domain.Environment, *domain.DeploymentUnit, error) {
+	if s.units == nil {
+		return nil, nil, nil, fmt.Errorf("deployment unit repository is required to build desired state")
+	}
+	svc, err := s.services.GetByID(ctx, serviceID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("looking up service: %w", err)
+	}
+	if svc == nil {
+		return nil, nil, nil, fmt.Errorf("service %s not found", serviceID)
+	}
+	env, err := s.environments.GetByID(ctx, envID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("looking up environment: %w", err)
+	}
+	if env == nil {
+		return nil, nil, nil, fmt.Errorf("environment %s not found", envID)
+	}
+
+	var unit *domain.DeploymentUnit
+	if requestedUnitID != nil {
+		if *requestedUnitID == uuid.Nil {
+			return nil, nil, nil, fmt.Errorf("%w: deployment_unit_id", domain.ErrNilUUID)
+		}
+		unit, err = s.units.GetByID(ctx, *requestedUnitID)
+	} else {
+		unit, err = s.units.ResolveDefault(ctx, env)
+	}
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("resolving deployment unit: %w", err)
+	}
+	if unit == nil {
+		return nil, nil, nil, fmt.Errorf("deployment unit was not found")
+	}
+
+	unitCopy := *unit
+	domain.NormalizeDeploymentUnitTargeting(&unitCopy)
+	if unitCopy.EnvironmentID != env.ID {
+		return nil, nil, nil, fmt.Errorf("deployment unit %q belongs to environment %s, not %s", unitCopy.Key, unitCopy.EnvironmentID, env.ID)
+	}
+	if unitCopy.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		return nil, nil, nil, fmt.Errorf("deployment unit %q is not Bahia-managed", unitCopy.Key)
+	}
+	if err := domain.ValidateDeploymentUnit(&unitCopy); err != nil {
+		return nil, nil, nil, fmt.Errorf("invalid deployment unit %q: %w", unitCopy.Key, err)
+	}
+
+	svcCopy := *svc
+	svcCopy.RuntimeType = unitCopy.RuntimeType
+	return &svcCopy, env, &unitCopy, nil
 }
 
 // Deploy deploys an artifact directly through the resolved runtime and records a fresh observation.
@@ -181,6 +242,34 @@ func (s *RuntimeLifecycleService) DeployDeploymentUnit(
 		return nil, fmt.Errorf("deployment unit is required")
 	}
 	return s.deployDesiredState(ctx, serviceID, envID, artifactID, unit, desiredState, nil, true)
+}
+
+// DeployDesiredStateSnapshot applies a pre-intent unit-aware snapshot without
+// re-entering the legacy adopted-workload resolution path.
+func (s *RuntimeLifecycleService) DeployDesiredStateSnapshot(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	artifactID *uuid.UUID,
+	desiredState *domain.DesiredServiceSpec,
+	statusFn DeployStatusCallback,
+) (*domain.RuntimeObservation, error) {
+	if desiredState == nil {
+		return nil, fmt.Errorf("desired state is required")
+	}
+	_, _, unit, err := s.resolveDesiredStateDeploymentUnit(ctx, serviceID, envID, desiredState.DeploymentUnitID)
+	if err != nil {
+		return nil, err
+	}
+	if desiredState.DeploymentUnitID == nil && unit.ID != uuid.Nil {
+		return nil, fmt.Errorf("desired-state implicit deployment unit became explicit unit %s", unit.ID)
+	}
+	if desiredState.DeploymentUnitKey != "" && desiredState.DeploymentUnitKey != unit.Key {
+		return nil, fmt.Errorf("desired-state unit key %q does not match resolved unit %q", desiredState.DeploymentUnitKey, unit.Key)
+	}
+	if desiredState.UnitRuntimeType != "" && desiredState.UnitRuntimeType != unit.RuntimeType {
+		return nil, fmt.Errorf("desired-state runtime type %q does not match resolved unit %q type %q", desiredState.UnitRuntimeType, unit.Key, unit.RuntimeType)
+	}
+	return s.deployDesiredState(ctx, serviceID, envID, artifactID, unit, desiredState, statusFn, true)
 }
 
 // AutoRemediateDesiredState applies the currently persisted desired artifact for
@@ -627,8 +716,17 @@ func desiredStateForDeployment(
 
 	spec.Labels = copyStringMap(spec.Labels)
 	if unit != nil {
+		if spec.DeploymentUnitID == nil && unit.ID != uuid.Nil {
+			return nil, fmt.Errorf("desired state implicit deployment unit became explicit unit %s", unit.ID)
+		}
 		if spec.DeploymentUnitID != nil && *spec.DeploymentUnitID != uuid.Nil && unit.ID != uuid.Nil && *spec.DeploymentUnitID != unit.ID {
 			return nil, fmt.Errorf("desired state deployment unit %s does not match resolved unit %s", *spec.DeploymentUnitID, unit.ID)
+		}
+		if spec.DeploymentUnitKey != "" && spec.DeploymentUnitKey != unit.Key {
+			return nil, fmt.Errorf("desired state deployment unit key %q does not match resolved unit %q", spec.DeploymentUnitKey, unit.Key)
+		}
+		if spec.UnitRuntimeType != "" && spec.UnitRuntimeType != unit.RuntimeType {
+			return nil, fmt.Errorf("desired state runtime type %q does not match resolved unit %q type %q", spec.UnitRuntimeType, unit.Key, unit.RuntimeType)
 		}
 		var unitID *uuid.UUID
 		if unit.ID != uuid.Nil {

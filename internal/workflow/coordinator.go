@@ -230,8 +230,14 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 
 	// Create a deployment run record.
 	now := time.Now().UTC()
+	var deploymentUnitID *uuid.UUID
+	if unit != nil && unit.ID != uuid.Nil {
+		id := unit.ID
+		deploymentUnitID = &id
+	}
 	run := &domain.DeploymentRun{
 		DeploymentIntentID: intentID,
+		DeploymentUnitID:   deploymentUnitID,
 		LoomJobID:          jobEventID,
 		WorkerPubkey:       workerPubkey,
 		Status:             domain.RunStatusQueued,
@@ -347,6 +353,17 @@ func (c *Coordinator) resolveDeploymentUnit(
 	domain.NormalizeDeploymentUnitTargeting(&resolved)
 	if err := domain.ValidateDeploymentUnit(&resolved); err != nil {
 		return nil, fmt.Errorf("invalid deployment unit %q: %w", resolved.Key, err)
+	}
+	if desired := intent.DesiredState; desired != nil {
+		if desired.DeploymentUnitID == nil && resolved.ID != uuid.Nil {
+			return nil, fmt.Errorf("desired-state implicit deployment unit became explicit unit %s", resolved.ID)
+		}
+		if desired.DeploymentUnitKey != "" && desired.DeploymentUnitKey != resolved.Key {
+			return nil, fmt.Errorf("desired-state unit key %q does not match resolved unit %q", desired.DeploymentUnitKey, resolved.Key)
+		}
+		if desired.UnitRuntimeType != "" && desired.UnitRuntimeType != resolved.RuntimeType {
+			return nil, fmt.Errorf("desired-state runtime type %q does not match resolved unit %q type %q", desired.UnitRuntimeType, resolved.Key, resolved.RuntimeType)
+		}
 	}
 	return &resolved, nil
 }

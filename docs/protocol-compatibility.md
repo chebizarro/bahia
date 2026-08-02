@@ -62,6 +62,8 @@ Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `2
 
 A ContextVM response is command acknowledgment only. Clients must follow canonical observables for progress, terminal state, audit, and convergence.
 
+The `environment/update` complete-set unit contract uses optimistic concurrency: when `deployment_units` is present, `expected_updated_at` is required. A stale revision returns JSON-RPC code `-32009` before database or canonical registry mutation. Clients reread and deliberately remerge before signing a retry; they must not fall back to an unguarded write.
+
 ### 2. Canonical Nostr observables
 
 Desired-state runtime metadata is an additive observable contract, not a new protocol family. Compose/Docker deploys may add `step`, `desired_hash`, `renderer`, `target`, revision, apply-summary, and `observation_id` metadata to existing ContextVM responses, `30315` statuses, and `30900`/`30078` projections. Legacy custom result/read-model numbers remain migration inventory even when historical fixtures contain similar fields.

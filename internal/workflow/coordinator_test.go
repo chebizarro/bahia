@@ -313,10 +313,22 @@ func (r *stubDeploymentUnitRepo) ListByEnvironment(_ context.Context, envID uuid
 }
 
 func (r *stubDeploymentUnitRepo) ResolveDefault(ctx context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
-	if unit, err := r.GetByEnvironmentKey(ctx, env.ID, domain.DefaultDeploymentUnitKey); err != nil || unit != nil {
-		return unit, err
+	envCopy := *env
+	domain.NormalizeEnvironmentTargeting(&envCopy)
+	units, err := r.ListByEnvironment(ctx, envCopy.ID)
+	if err != nil {
+		return nil, err
 	}
-	return domain.NewImplicitDefaultDeploymentUnit(env)
+	for i := range units {
+		if units[i].Key == envCopy.Targeting.DefaultUnitKey {
+			unit := units[i]
+			return &unit, nil
+		}
+	}
+	if len(units) > 0 || envCopy.Targeting.DefaultUnitKey != domain.DefaultDeploymentUnitKey {
+		return nil, repository.ErrConflict
+	}
+	return domain.NewImplicitDefaultDeploymentUnit(&envCopy)
 }
 
 type stubDeploymentRuntimeLifecycle struct {
@@ -1113,6 +1125,59 @@ func TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission(t *testing.T
 	}
 	if len(runRepo.runs) != 1 {
 		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
+	}
+}
+
+func TestExecuteDeployment_DefaultChangeAfterSnapshotFailsBeforeRun(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion:     domain.DesiredStateSchemaVersion,
+		ServiceID:         svc.ID,
+		EnvironmentID:     env.ID,
+		ArtifactID:        art.ID,
+		DeploymentUnitKey: domain.DefaultDeploymentUnitKey,
+		UnitRuntimeType:   domain.RuntimeTypeDocker,
+	}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+		DesiredState: desired,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	env.Targeting.DefaultUnitKey = "max"
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "max",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+	)
+	coord.loom = stubLoom
+
+	err := coord.ExecuteDeployment(ctx, intent.ID)
+	if err == nil || !strings.Contains(err.Error(), "desired-state implicit deployment unit became explicit") {
+		t.Fatalf("ExecuteDeployment() error = %v, want fail-closed unit identity mismatch", err)
+	}
+	if len(runRepo.runs) != 0 {
+		t.Fatalf("unit identity mismatch must fail before run creation, got %d", len(runRepo.runs))
+	}
+	if stubLoom.submitCalls != 0 || lifecycle.unit != nil {
+		t.Fatalf("unit identity mismatch executed runtime: loom=%d lifecycle=%#v", stubLoom.submitCalls, lifecycle.unit)
 	}
 }
 

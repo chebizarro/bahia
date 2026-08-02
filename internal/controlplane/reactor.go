@@ -760,7 +760,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	r.publishStatus(ctx, event, "creating_intent", "Creating deployment intent")
 
 	// Create deployment intent
-	desiredState, err := r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID)
+	desiredState, err := r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID, req.DeploymentUnitID)
 	if err != nil {
 		logger.Error("failed to build desired state", "error", err)
 		run.Status = "failed"
@@ -771,15 +771,16 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		return
 	}
 	intent := &domain.DeploymentIntent{
-		ID:            uuid.New(),
-		ServiceID:     req.ServiceID,
-		EnvironmentID: req.EnvironmentID,
-		ArtifactID:    req.ArtifactID,
-		RequestedBy:   event.PubKey.Hex(),
-		SourceKind:    domain.SourceKindEventTriggered,
-		Metadata:      map[string]any{"nostr_event_id": event.ID.Hex()},
-		DesiredState:  desiredState,
-		DesiredHash:   desiredState.DesiredHash,
+		ID:               uuid.New(),
+		ServiceID:        req.ServiceID,
+		EnvironmentID:    req.EnvironmentID,
+		DeploymentUnitID: desiredState.DeploymentUnitID,
+		ArtifactID:       req.ArtifactID,
+		RequestedBy:      event.PubKey.Hex(),
+		SourceKind:       domain.SourceKindEventTriggered,
+		Metadata:         map[string]any{"nostr_event_id": event.ID.Hex()},
+		DesiredState:     desiredState,
+		DesiredHash:      desiredState.DesiredHash,
 	}
 
 	if err := r.registry.CreateDeploymentIntent(ctx, intent); err != nil {
@@ -809,6 +810,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	domainRun := &domain.DeploymentRun{
 		ID:                 run.ID,
 		DeploymentIntentID: intent.ID,
+		DeploymentUnitID:   desiredState.DeploymentUnitID,
 		Status:             domain.RunStatusRunning,
 		StartedAt:          &startedAt,
 		Metadata:           map[string]any{"nostr_event_id": event.ID},
@@ -830,7 +832,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 
 	r.publishStatus(ctx, event, "applying_desired_state", "Applying desired runtime state")
 	artifactID := req.ArtifactID
-	obs, err := r.runtimeLifecycle.DeployWithStatus(ctx, req.ServiceID, req.EnvironmentID, &artifactID, r.deploymentStatusCallbackFor(ctx, event))
+	obs, err := r.runtimeLifecycle.DeployDesiredStateSnapshot(ctx, req.ServiceID, req.EnvironmentID, &artifactID, desiredState, r.deploymentStatusCallbackFor(ctx, event))
 	if err != nil {
 		logger.Error("deployment execution failed", "error", err)
 		failureExitCode := 1
@@ -947,7 +949,7 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 
 	desiredState := intent.DesiredState
 	if desiredState == nil || intent.DesiredHash == "" {
-		desiredState, err = r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, envID, intent.ArtifactID)
+		desiredState, err = r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, envID, intent.ArtifactID, intent.DeploymentUnitID)
 		if err != nil {
 			logger.Error("failed to build rollback desired state", "error", err)
 			r.recordRollbackPreparationFailure(ctx, logger, event, intent, err)
@@ -988,7 +990,7 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 
 	r.publishStatus(ctx, event, "applying_desired_state", "Applying rollback desired runtime state")
 	artifactID := intent.ArtifactID
-	obs, err := r.runtimeLifecycle.DeployWithStatus(ctx, serviceID, envID, &artifactID, r.deploymentStatusCallbackFor(ctx, event))
+	obs, err := r.runtimeLifecycle.DeployDesiredStateSnapshot(ctx, serviceID, envID, &artifactID, desiredState, r.deploymentStatusCallbackFor(ctx, event))
 	if err != nil {
 		logger.Error("rollback deployment execution failed", "error", err)
 		failureExitCode := 1
@@ -2320,9 +2322,10 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 
 	// Parse from content JSON
 	var content struct {
-		ServiceID     string `json:"service_id"`
-		EnvironmentID string `json:"environment_id"`
-		ArtifactID    string `json:"artifact_id"`
+		ServiceID        string `json:"service_id"`
+		EnvironmentID    string `json:"environment_id"`
+		DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
+		ArtifactID       string `json:"artifact_id"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		return nil, fmt.Errorf("invalid JSON content: %w", err)
@@ -2343,14 +2346,22 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 	if err != nil {
 		return nil, fmt.Errorf("invalid artifact_id: %w", err)
 	}
+	if raw := strings.TrimSpace(content.DeploymentUnitID); raw != "" {
+		unitID, parseErr := uuid.Parse(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid deployment_unit_id: %w", parseErr)
+		}
+		req.DeploymentUnitID = &unitID
+	}
 
 	return &req, nil
 }
 
 type deployRequest struct {
-	ServiceID     uuid.UUID
-	EnvironmentID uuid.UUID
-	ArtifactID    uuid.UUID
+	ServiceID        uuid.UUID
+	EnvironmentID    uuid.UUID
+	DeploymentUnitID *uuid.UUID
+	ArtifactID       uuid.UUID
 }
 
 // --- Event Publishing ---

@@ -79,10 +79,23 @@ func (r *PgEnvironmentRepository) scanEnv(row pgx.Row) (*domain.Environment, err
 }
 
 func (r *PgEnvironmentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Environment, error) {
+	return r.getByID(ctx, id, false)
+}
+
+// GetByIDForUpdate loads and locks an environment row for a complete-set
+// deployment-unit reconciliation transaction.
+func (r *PgEnvironmentRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Environment, error) {
+	return r.getByID(ctx, id, true)
+}
+
+func (r *PgEnvironmentRepository) getByID(ctx context.Context, id uuid.UUID, forUpdate bool) (*domain.Environment, error) {
+	lockClause := ""
+	if forUpdate {
+		lockClause = " FOR UPDATE"
+	}
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
-		FROM environments WHERE id = $1
-	`, id)
+		FROM environments WHERE id = $1`+lockClause, id)
 	env, err := r.scanEnv(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {

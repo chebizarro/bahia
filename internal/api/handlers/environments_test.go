@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 type environmentReadUnitRepo struct {
@@ -27,8 +28,16 @@ func (r environmentReadUnitRepo) GetByEnvironmentKey(context.Context, uuid.UUID,
 func (r environmentReadUnitRepo) ListByEnvironment(context.Context, uuid.UUID) ([]domain.DeploymentUnit, error) {
 	return r.units, r.err
 }
-func (r environmentReadUnitRepo) ResolveDefault(context.Context, *domain.Environment) (*domain.DeploymentUnit, error) {
-	return nil, nil
+func (r environmentReadUnitRepo) ResolveDefault(_ context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	envCopy := *env
+	domain.NormalizeEnvironmentTargeting(&envCopy)
+	if len(r.units) > 0 || envCopy.Targeting.DefaultUnitKey != domain.DefaultDeploymentUnitKey {
+		return nil, repository.ErrConflict
+	}
+	return domain.NewImplicitDefaultDeploymentUnit(&envCopy)
 }
 
 func TestEnvironmentResponseEmbedsExplicitOrImplicitDeploymentUnits(t *testing.T) {
@@ -63,6 +72,15 @@ func TestEnvironmentResponseEmbedsExplicitOrImplicitDeploymentUnits(t *testing.T
 		}
 		if len(response.DeploymentUnits) != 1 || !response.DeploymentUnits[0].Implicit || response.DeploymentUnits[0].Key != "default" || response.DeploymentUnits[0].RuntimeType != domain.RuntimeTypeCompose {
 			t.Fatalf("deployment units = %#v", response.DeploymentUnits)
+		}
+	})
+
+	t.Run("missing configured non-default", func(t *testing.T) {
+		invalid := *env
+		invalid.Targeting.DefaultUnitKey = "max"
+		handler := &EnvironmentHandler{units: environmentReadUnitRepo{}}
+		if _, err := handler.environmentResponse(httptest.NewRequest("GET", "/", nil), &invalid); !errors.Is(err, repository.ErrConflict) {
+			t.Fatalf("environmentResponse() error = %v, want conflict", err)
 		}
 	})
 

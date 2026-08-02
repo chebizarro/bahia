@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -24,6 +26,13 @@ func (r *environmentMutationEnvRepo) Create(_ context.Context, env *domain.Envir
 	if _, exists := r.environments[env.ID]; exists {
 		return repository.ErrConflict
 	}
+	now := time.Now().UTC()
+	if env.CreatedAt.IsZero() {
+		env.CreatedAt = now
+	}
+	if env.UpdatedAt.IsZero() {
+		env.UpdatedAt = now
+	}
 	copy := *env
 	r.environments[env.ID] = &copy
 	return nil
@@ -36,6 +45,10 @@ func (r *environmentMutationEnvRepo) GetByID(_ context.Context, id uuid.UUID) (*
 	}
 	copy := *env
 	return &copy, nil
+}
+
+func (r *environmentMutationEnvRepo) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Environment, error) {
+	return r.GetByID(ctx, id)
 }
 
 func (r *environmentMutationEnvRepo) GetByName(_ context.Context, name string) (*domain.Environment, error) {
@@ -70,6 +83,7 @@ func (r *environmentMutationEnvRepo) Update(_ context.Context, env *domain.Envir
 	if r.environments[env.ID] == nil {
 		return repository.ErrNotFound
 	}
+	env.UpdatedAt = time.Now().UTC()
 	copy := *env
 	r.environments[env.ID] = &copy
 	return nil
@@ -158,11 +172,22 @@ func (r *environmentMutationUnitRepo) ListByEnvironmentForUpdate(ctx context.Con
 }
 
 func (r *environmentMutationUnitRepo) ResolveDefault(ctx context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
-	unit, err := r.GetByEnvironmentKey(ctx, env.ID, env.Targeting.DefaultUnitKey)
-	if err != nil || unit != nil {
-		return unit, err
+	envCopy := *env
+	domain.NormalizeEnvironmentTargeting(&envCopy)
+	units, err := r.ListByEnvironment(ctx, envCopy.ID)
+	if err != nil {
+		return nil, err
 	}
-	return domain.NewImplicitDefaultDeploymentUnit(env)
+	for i := range units {
+		if units[i].Key == envCopy.Targeting.DefaultUnitKey {
+			unit := units[i]
+			return &unit, nil
+		}
+	}
+	if len(units) > 0 || envCopy.Targeting.DefaultUnitKey != domain.DefaultDeploymentUnitKey {
+		return nil, repository.ErrConflict
+	}
+	return domain.NewImplicitDefaultDeploymentUnit(&envCopy)
 }
 
 func (r *environmentMutationUnitRepo) Update(_ context.Context, unit *domain.DeploymentUnit) error {
@@ -305,7 +330,7 @@ func TestRegistryServiceUpdateEnvironmentWithDeploymentUnitsTransitionsImplicitT
 	}
 
 	requested := []*domain.DeploymentUnit{{Key: domain.DefaultDeploymentUnitKey, RuntimeType: domain.RuntimeTypeCompose}}
-	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested); err != nil {
+	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested, env.UpdatedAt); err != nil {
 		t.Fatalf("UpdateEnvironmentWithDeploymentUnits: %v", err)
 	}
 	persisted, _ := units.ListByEnvironment(ctx, env.ID)
@@ -343,7 +368,7 @@ func TestRegistryServiceUpdateEnvironmentWithDeploymentUnitsPreservesExistingIde
 		EndpointRef:   "max",
 		OwnershipMode: domain.OwnershipModeBahiaManaged,
 	}}
-	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested); err != nil {
+	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested, env.UpdatedAt); err != nil {
 		t.Fatalf("UpdateEnvironmentWithDeploymentUnits: %v", err)
 	}
 	if requested[0].ID != existingID {
@@ -352,6 +377,55 @@ func TestRegistryServiceUpdateEnvironmentWithDeploymentUnitsPreservesExistingIde
 	persisted, _ := units.GetByID(ctx, existingID)
 	if persisted == nil || persisted.RuntimeType != domain.RuntimeTypeCompose || persisted.EndpointRef != "max" {
 		t.Fatalf("existing deployment unit was not updated in place: %#v", persisted)
+	}
+}
+
+func TestRegistryServiceUpdateEnvironmentWithDeploymentUnitsRejectsStaleRevisionBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	envs := newEnvironmentMutationEnvRepo()
+	units := newEnvironmentMutationUnitRepo()
+	publisher := &capturePublisher{}
+	registry := newEnvironmentMutationRegistry(envs, units, publisher)
+	env := &domain.Environment{ID: uuid.New(), Name: "prod"}
+	if err := envs.Create(ctx, env); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+	existing := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           domain.DefaultDeploymentUnitKey,
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	if err := units.Create(ctx, existing); err != nil {
+		t.Fatalf("seed unit: %v", err)
+	}
+
+	staleRevision := env.UpdatedAt
+	envs.environments[env.ID].UpdatedAt = staleRevision.Add(time.Second)
+	updated := *env
+	updated.Name = "production"
+	requested := []*domain.DeploymentUnit{{
+		Key:           domain.DefaultDeploymentUnitKey,
+		RuntimeType:   domain.RuntimeTypeCompose,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}}
+
+	err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, &updated, requested, staleRevision)
+	if !errors.Is(err, repository.ErrConflict) || !errors.Is(err, repository.ErrStaleRevision) {
+		t.Fatalf("error = %v, want revision conflict", err)
+	}
+	if envs.environments[env.ID].Name != "prod" {
+		t.Fatalf("stale update mutated environment: %#v", envs.environments[env.ID])
+	}
+	persisted, _ := units.GetByID(ctx, existing.ID)
+	if persisted == nil || persisted.RuntimeType != domain.RuntimeTypeDocker {
+		t.Fatalf("stale update mutated units: %#v", persisted)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("stale update published mutation event: %#v", publisher.events)
 	}
 }
 
@@ -379,7 +453,7 @@ func TestRegistryServiceUpdateEnvironmentWithDeploymentUnitsProtectsReferencedRe
 	updated := *original
 	updated.Name = "production"
 	requested := []*domain.DeploymentUnit{{Key: "default", RuntimeType: domain.RuntimeTypeCompose}}
-	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, &updated, requested); err == nil {
+	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, &updated, requested, original.UpdatedAt); err == nil {
 		t.Fatalf("expected referenced unit removal to fail")
 	}
 	if envs.environments[envID].Name != "prod" {

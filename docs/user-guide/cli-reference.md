@@ -119,11 +119,11 @@ bahia environments update <environment-id> --units-file units.json
 bahia environments units list <environment-id>
 
 # Create or update one unit using a JSON specification
-bahia environments units create <environment-id> --file unit.json
-bahia environments units update <environment-id> max --file unit.json
+bahia environments units create <environment-id> --file unit.json --default-unit-key max
+bahia environments units update <environment-id> max --file unit.json --default-unit-key max
 ```
 
-Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Unit JSON follows `schemas/deployment_unit.json`.
+Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI rereads and deliberately remerges at most three signed attempts before surfacing the conflict. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
 
 ### Deployments
 

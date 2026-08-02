@@ -88,9 +88,26 @@ func (h *EnvironmentHandler) environmentResponse(r *http.Request, env *domain.En
 		}
 	}
 	if len(units) == 0 {
-		implicit, err := domain.NewImplicitDefaultDeploymentUnit(env)
+		var (
+			implicit *domain.DeploymentUnit
+			err      error
+		)
+		if h.units != nil {
+			implicit, err = h.units.ResolveDefault(r.Context(), env)
+		} else {
+			envCopy := *env
+			domain.NormalizeEnvironmentTargeting(&envCopy)
+			if envCopy.Targeting.DefaultUnitKey != domain.DefaultDeploymentUnitKey {
+				err = fmt.Errorf("configured default deployment unit %q cannot be resolved without a deployment unit repository: %w", envCopy.Targeting.DefaultUnitKey, repository.ErrConflict)
+			} else {
+				implicit, err = domain.NewImplicitDefaultDeploymentUnit(&envCopy)
+			}
+		}
 		if err != nil {
-			return nil, fmt.Errorf("resolve implicit deployment unit for environment %s: %w", env.ID, err)
+			return nil, fmt.Errorf("resolve default deployment unit for environment %s: %w", env.ID, err)
+		}
+		if implicit == nil {
+			return nil, fmt.Errorf("default deployment unit was not found for environment %s", env.ID)
 		}
 		units = []domain.DeploymentUnit{*implicit}
 	}

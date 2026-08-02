@@ -54,6 +54,7 @@ Client mutation publication should use ContextVM JSON-RPC methods rather than Ba
 | Domain | Methods |
 |--------|---------|
 | `service` | `deploy`, `rollback`, `scale`, `restart`, `stop`, `update`, `delete` |
+| `environment` | `create`, `update`, `delete` |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update` |
 | `package` | `publish`, `promote`, `yank`, `deprecate`, `drift-detect` |
 | `dns` | `zone-create`, `zone-delete`, `record-set`, `policy-apply`, `drift-remediate` |
@@ -76,6 +77,8 @@ Example ContextVM request:
   }
 }
 ```
+
+For `environment/update`, `deployment_units` is an authoritative complete set. Such requests must carry `expected_updated_at` from the latest environment read. Bahia checks the revision while holding the environment row lock and returns JSON-RPC code `-32009` on conflict before any database or canonical registry mutation; clients must reread and deliberately remerge before signing a retry.
 
 The production cutover is complete: CLI/web/client mutations use the ContextVM method surface, and legacy Bahia request-kind publication is not a production runtime path. Legacy kind constants and fixtures may remain only for startup migration, historical conversion, and tests that prove old events fail closed or migrate to canonical events.
 
