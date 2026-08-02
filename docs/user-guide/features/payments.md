@@ -117,15 +117,17 @@ Navigate to **Payments** in the sidebar:
 - Filter by worker, date, status
 - See totals and trends
 
-### MCP Tool (Encrypted)
+### Web transport and MCP tool
 
-Payment history is sensitive — accessed via encrypted request:
+The browser requires encrypted-operation capability and uses the encrypted `payments.history` operation (the backend also accepts the `payments/history` alias). The server caps the requested limit at 250.
+
+The MCP tool is a separate authenticated per-tool call; MCP transport does not make this tool an encrypted ContextVM request:
 
 ```json
 {
   "tool": "bahia_get_payment_history",
   "arguments": {
-    "worker": "npub1worker...",
+    "worker_pubkey": "npub1worker...",
     "limit": 50
   }
 }

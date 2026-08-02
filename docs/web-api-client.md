@@ -1,360 +1,164 @@
-# Bahia Web API Client Reference
+# Bahia Web HTTP Client Reference
 
-The Bahia web app uses a unified API client (`web/src/lib/api/client.js`) for all backend communication.
+The browser HTTP compatibility client is `web/src/lib/api/client.js`. It is deliberately small: most shared state and control-plane mutations use Nostr stores and transport helpers, not methods on this class.
 
-## Overview
+## Construction and export
 
-**Location**: `web/src/lib/api/client.js`
-
-**Responsibilities**:
-- HTTP request/response handling
-- Direct NIP-98 authorization via an auth provider
-- Bahia API envelope unwrapping
-- Query parameter serialization
-- Error normalization
-
-**Singleton Export**:
 ```javascript
-import { api } from '$lib/api/client.js';
+import { BahiaClient, api } from '$lib/api/client.js';
 ```
 
-## Bahia Response Envelope
+`BahiaClient` can be constructed in tests. `api` is a browser-only singleton and is `null` during server-side rendering. The fixed base path is `/api/v1`.
 
-All Bahia API responses follow this envelope structure:
+## Request behavior
 
-```json
-{
-  "data": { /* actual response payload */ },
-  "error": "error message if present"
-}
-```
+`api.fetch(path, options)`:
 
-The client automatically:
-- Unwraps `data` for successful responses
-- Throws errors for failed responses (4xx, 5xx, or when `error` field is set)
-
-**Example**:
-```javascript
-// Backend returns: { "data": [{ "id": "svc-123", "name": "web-api" }] }
-const services = await api.listServices();
-// services = [{ "id": "svc-123", "name": "web-api" }]
-```
-
-## HTTP Authentication
-
-The first-party browser no longer stores `bahia_token` or exchanges NIP-98 events for JWTs. Protected requests use an auth provider that signs each HTTP request with direct NIP-98:
+1. builds the `/api/v1` URL;
+2. defaults to `GET`;
+3. adds `Content-Type: application/json`;
+4. asks the configured auth provider for a direct NIP-98 header unless the caller supplied Authorization;
+5. retries GET network failures and 5xx responses once by default;
+6. throws for non-2xx responses or a JSON envelope containing `error`;
+7. returns the envelope's `data`, or `null` for non-JSON success.
 
 ```javascript
 api.setAuthProvider({
   getAuthorizationHeader: async ({ method, url }) => {
-    return signHttpRequestWithNip07({ method, url }); // returns `Nostr <base64event>`
+    return `Nostr ${signedEventBase64}`;
   }
 });
 ```
 
-If no auth provider is configured, requests are sent without `Authorization` and protected endpoints will reject them when auth is enabled.
+No JWT exchange or `bahia_token` storage is performed.
 
-## Client Methods by Domain
-
-### Services
+### Retry overrides
 
 ```javascript
-// List all services
-await api.listServices();
-// Returns: [{ id, name, artifact_repo, runtime_type, ... }]
-
-// Get service by ID
-await api.getService(serviceId);
-// Returns: { id, name, artifact_repo, runtime_type, ... }
-```
-
-Service registry mutations are no longer exposed as REST-backed API client calls. Create/update/delete operations must be submitted as signed ContextVM/Nostr operator commands (`service/create`, `service/update`, `service/delete`) using an operator signer. Legacy REST/MCP mutation paths intentionally return migration errors so the app cannot create hidden direct registry writes.
-
-### Environments
-
-```javascript
-// List all environments
-await api.listEnvironments();
-// Returns: [{ id, name, loom_worker_selector, ... }]
-
-// Get environment by ID
-await api.getEnvironment(envId);
-// Returns: { id, name, loom_worker_selector, runtime_config, ... }
-```
-
-Environment registry mutations are no longer exposed as REST-backed API client calls. Create/update/delete operations must be submitted as signed ContextVM/Nostr operator commands (`environment/create`, `environment/update`, `environment/delete`) using an operator signer.
-
-### Deployments
-
-```javascript
-// List deployment intents for a service/environment pair
-await api.listIntents(serviceId, envId);
-// Returns: [{ id, status, artifact_id, requested_by, ... }]
-
-// Get deployment intent by ID
-await api.getIntent(intentId);
-// Returns: { id, status, artifact_id, ... }
-
-// Create deployment intent
-await api.createIntent(serviceId, envId, artifactId);
-// Returns: { id, status, ... }
-
-// Approve deployment intent
-await api.approveIntent(intentId);
-// Returns: { id, status: 'approved', ... }
-
-// Reject deployment intent
-await api.rejectIntent(intentId);
-// Returns: { id, status: 'rejected', ... }
-
-// List deployment runs
-await api.listRuns({ intent_id: intentId });
-// Returns: [{ id, status, started_at, exit_code, ... }]
-
-// Get deployment run by ID
-await api.getRun(runId);
-// Returns: { id, status, exit_code, logs, ... }
-
-// Rollback deployment
-await api.rollback({
-  service_id: serviceId,
-  environment_id: envId,
-  requested_by: 'user@example.com'
+await api.fetch('/example', {
+  retries: 3,
+  retryDelayMs: 250,
+  retryStatuses: [429, 503]
 });
-// Returns: { id, status, ... }
 ```
 
-### Policies
+These transport-only options are removed before global `fetch`. Mutating methods default to zero retries; opt in only when replay is safe.
+
+## Query serialization
+
+`query(params)` omits `null`, `undefined`, and empty strings; comma-joins arrays; stringifies other values; and URL-encodes keys/values.
 
 ```javascript
-// List all policies
-await api.listPolicies();
-// Returns: [{ id, name, environment_id, rules, ... }]
-
-// Get policy by ID
-await api.getPolicy(policyId);
-// Returns: { id, name, rules, enforcement, ... }
-
-// Create policy
-await api.createPolicy({
-  name: 'sbom-required',
-  environment_id: envId,
-  rules: [{ type: 'sbom_required' }],
-  enforcement: 'hard',
-  enabled: true
-});
-// Returns: { id, name, ... }
-
-// Update policy
-await api.updatePolicy(policyId, {
-  enforcement: 'soft'
-});
-// Returns: { id, name, ... }
-
-// Delete policy
-await api.deletePolicy(policyId);
-// Returns: null
+api.query({ status: 'running', tags: ['gpu', 'us-west'], empty: '' });
+// ?status=running&tags=gpu%2Cus-west
 ```
 
-### Secrets
+## Implemented domain methods
+
+The current client exposes only SBOM and Blossom compatibility methods.
+
+### SBOM
 
 ```javascript
-// List secrets for a service (names only, values hidden)
-await api.listSecrets(serviceId);
-// Returns: [{ id, name, created_at }]
-
-// Create secret
-await api.createSecret(serviceId, {
-  name: 'DATABASE_URL',
-  value: 'postgresql://...'
-});
-// Returns: { id, name }
-
-// Update secret value
-await api.updateSecret(serviceId, secretId, {
-  value: 'new-value'
-});
-// Returns: { id, name }
-
-// Delete secret
-await api.deleteSecret(serviceId, secretId);
-// Returns: null
-```
-
-### Builds & Artifacts
-
-```javascript
-// List builds for a service
-await api.listBuilds(serviceId);
-// Returns: [{ id, git_sha, git_ref, status, ... }]
-
-// Get build by ID
-await api.getBuild(buildId);
-// Returns: { id, git_sha, ci_run_id, status, ... }
-
-// List artifacts for a service
-await api.listArtifacts(serviceId);
-// Returns: [{ id, image_tag, image_digest, build_id, ... }]
-
-// Get artifact by ID
-await api.getArtifact(artifactId);
-// Returns: { id, image_repo, image_tag, sbom_ref, ... }
-```
-
-### SBOM & Signatures
-
-```javascript
-// Get SBOM for an artifact
 await api.getSBOM(artifactId);
-// Returns: { artifact_id, sbom_ref, package_count, ... }
-
-// Verify signatures for an artifact
-await api.verifySignatures(artifactId);
-// Returns: { verified: true, signatures: [...] }
+await api.getSBOMPackages(artifactId, { limit: 50, offset: 0 });
+await api.searchSBOMPackages({ name: 'openssl' });
+await api.ingestSBOM(artifactId, payload);
+await api.getSBOMAttestation(artifactId);
+await api.getSBOMNTIACompliance(artifactId);
 ```
 
-### Workers
+Paths:
+
+- `GET /api/v1/artifacts/{artifactId}/sbom`
+- `GET /api/v1/artifacts/{artifactId}/sbom/packages`
+- `GET /api/v1/sbom/search`
+- `POST /api/v1/artifacts/{artifactId}/sbom`
+- `GET /api/v1/artifacts/{artifactId}/sbom/attestation`
+- `GET /api/v1/artifacts/{artifactId}/sbom/ntia`
+
+### Blossom
 
 ```javascript
-// List all workers
-await api.listWorkers();
-// Returns: [{ pubkey, capabilities, region, ... }]
+await api.listBlossomBlobs();
+await api.listBlossomBlobs(pubkey);
+await api.getBlossomServers();
+await api.checkBlossomHealth();
+await api.getBlossomStats();
 
-// Get worker by pubkey
-await api.getWorker(pubkey);
-// Returns: { pubkey, capabilities, pricing, ... }
+const response = await api.fetchBlossomBlob(sha256);
+const blob = await response.blob();
 ```
 
-### State & Drift
+`listBlossomBlobs` uses `POST /api/v1/blossom/list` and normalizes empty data to `[]`. Server/health/stats methods normalize empty data to `[]` or `{}`.
 
-```javascript
-// List all environment states
-await api.listStates();
-// Returns: [{ service_id, environment_id, desired_image_digest, ... }]
+`fetchBlossomBlob` calls global `fetch` and returns the raw `Response` so callers choose `text()`, `json()`, or `blob()`.
 
-// List drifted states only
-await api.listDriftedStates();
-// Returns: [{ service_id, environment_id, drift_detected: true, ... }]
-```
+## What is not on this client
 
-### Authentication
+There are no `listServices`, `createService`, `listEnvironments`, deployment, policy, secret, worker, state, payment, notification, LLM, or SoulFactory methods on `BahiaClient`.
 
-```javascript
-api.setAuthProvider({
-  getAuthorizationHeader: async ({ method, url }) => `Nostr ${signedEventBase64}`
-});
-```
+Current browser paths use:
 
-`POST /api/v1/auth/nostr` and `api.exchangeNostrAuth()` have been removed; use direct NIP-98 request signing instead.
+- `web/src/lib/stores/collections/**` for relay-projected shared read models;
+- `web/src/lib/stores/public-controlplane.svelte.js` and domain helpers for public signed mutations;
+- `web/src/lib/nostr/encrypted-controlplane.js` plus sensitive-domain stores for encrypted ContextVM flows;
+- `web/src/lib/stores/souls.svelte.js` for SoulFactory;
+- `web/src/lib/nostr/pool-client.js` for relay subscriptions and publishing.
 
-## Error Handling
+Do not add a convenient REST method for a domain whose authoritative mutation path is ContextVM/Nostr.
 
-### HTTP Errors
-
-The client throws errors for:
-- **Non-2xx status codes**: `HTTP 404: Not Found`
-- **Backend error responses**: Unwraps `error` field from envelope
-- **Network failures**: `fetch failed`
-
-### Error Structure
+## Error handling
 
 ```javascript
 try {
-  await api.getService('invalid-id');
+  const sbom = await api.getSBOM(artifactId);
 } catch (error) {
   console.error(error.message);
-  // "HTTP 404: Not Found"
-  // or "Service not found"
 }
 ```
 
-### Best Practices
+For `{"error":"artifact not found"}`, the thrown message is `artifact not found`. If the body is not JSON, the fallback is `HTTP <status>: <statusText>`.
 
-**Always handle errors in UI components**:
-```javascript
-import { toasts } from '$lib/components/toast.js';
+## Extending the client
 
-async function deleteService(id) {
-  try {
-    await api.deleteService(id);
-    toasts.success('Service deleted');
-    // Refresh list or navigate away
-  } catch (error) {
-    toasts.error(`Failed to delete service: ${error.message}`);
-  }
-}
-```
-
-## Query Parameters
-
-The client includes a `query()` helper for serializing URL parameters:
+Only add a method when the endpoint is intentionally part of the HTTP surface.
 
 ```javascript
-api.listRuns({ intent_id: 'intent-123', status: 'running' });
-// GET /api/v1/runs?intent_id=intent-123&status=running
-```
-
-**Features**:
-- Omits `null`, `undefined`, and empty string values
-- Handles arrays via comma-joining: `tags: ['a', 'b']` → `tags=a,b`
-- URL-encodes keys and values
-
-## Extending the Client
-
-To add new API methods, follow this pattern:
-
-```javascript
-// In web/src/lib/api/client.js, inside BahiaClient class:
-
-myNewMethod(param) {
-  return this.fetch(`/my-endpoint/${encodeURIComponent(param)}`);
+getExample(id) {
+  return this.fetch(`/examples/${encodeURIComponent(id)}`);
 }
 
-myNewPost(payload) {
-  return this.fetch('/my-endpoint', {
+postExample(payload) {
+  return this.fetch('/examples', {
     method: 'POST',
     body: JSON.stringify(payload)
   });
 }
 ```
 
-**Rules**:
-- Always use `this.fetch()` (not global `fetch`)
-- Always `encodeURIComponent()` path parameters
-- Always `JSON.stringify()` request bodies
-- Return the Promise directly (don't add extra error handling)
+Requirements:
 
-## Testing the Client
+- encode path parameters;
+- stringify JSON bodies;
+- use `this.fetch()` unless raw response access is required;
+- document retry/idempotency;
+- add tests under `web/tests/unit/api-client*.test.js`;
+- do not bypass signer, capability, or transport gates.
 
-Unit tests mock the global `fetch` function:
+## Tests
 
-```javascript
-// tests/unit/api-client.test.js
-global.fetch = vi.fn();
-
-beforeEach(() => {
-  global.fetch.mockClear();
-});
-
-test('listServices calls correct endpoint', async () => {
-  global.fetch.mockResolvedValueOnce({
-    ok: true,
-    headers: new Headers({ 'content-type': 'application/json' }),
-    json: async () => ({ data: [{ id: 'svc-1' }] })
-  });
-
-  const result = await api.listServices();
-  
-  expect(global.fetch).toHaveBeenCalledWith(
-    '/api/v1/services',
-    expect.objectContaining({ headers: expect.any(Object) })
-  );
-  expect(result).toEqual([{ id: 'svc-1' }]);
-});
+```bash
+cd web
+pnpm exec vitest run \
+  tests/unit/api-client.test.js \
+  tests/unit/api-client-core.test.js \
+  tests/unit/api-client-extended.test.js \
+  tests/unit/api-client-retry-and-edges.test.js
 ```
 
-## Next Steps
+## Related documents
 
-- **Setup Guide**: See [web-app-setup.md](./web-app-setup.md)
-- **Component Library**: See [web-components.md](./web-components.md)
-- **Testing Guide**: See [web-testing.md](./web-testing.md)
+- [Web app setup](web-app-setup.md)
+- [Web components](web-components.md)
+- [Web testing](web-testing.md)

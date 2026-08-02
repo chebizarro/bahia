@@ -34,6 +34,7 @@ nostr:
 - `relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation and the operation fails if remaining relays cannot satisfy the success rule.
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
 - `request_retention` applies to ContextVM request/response transport kinds `25910`, `1059`, and `21059`; `event_retention` applies to every other kind. The sidecar sweeps expired events by their Nostr `created_at` timestamp at startup and every 15 minutes while running.
+- `max_query_limit` caps events yielded by one replay query after honoring a lower client `limit`. The default/current checked-in value is `2000`. `EOSE` completes only that bounded query; clients that may reach the cap must narrow resource tags and `since`/`until` windows, overlap windows, and deduplicate by event id.
 - When sidecar mode is enabled, Bahia's own ContextVM transport and canonical observable projectors use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps ContextVM `25910`, CEP-4/NIP-59 wrappers (`1059`/`21059`), canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`), and relevant interop traffic sidecar-first.
 - During the compatibility window, non-browser interop subscribers may still use `nostr.relays` as the upstream interop source unless `mirror_external=true`; service publish/backfill should prefer `service_relays`, browser bootstrap uses `browser_relays`, and ContextVM request/reply uses `contextvm_relays`. With mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private, Loom, repository/ngit, DM, and relay-administration relays stay direct and separate unless a deployment explicitly routes those purposes through the sidecar.
 
@@ -50,16 +51,20 @@ Browser flow:
 1. Bootstrap from ContextVM discovery (`11316`-`11320`) and NIP-51 relay sets (`30002`).
 2. Read the browser relay set and service pubkey.
 3. Connect to `/relay` WebSocket.
-4. Subscribe to scoped ContextVM responses/gift-wraps and canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and wait for EOSE.
+4. Subscribe to scoped ContextVM responses/gift-wraps and canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and wait for the bounded query's EOSE.
 5. Keep live subscriptions open.
 
 ## Policy
 
 The sidecar accepts storage and subscriptions for every Nostr event kind. It does not maintain event-kind, author, recipient, or filter-scope allowlists.
 
-Before persistence, it still enforces protocol validity: the event ID must match the serialized event, the Schnorr signature must verify, and `created_at` must fall within the configured operational timestamp bounds. Search remains disabled because the in-memory store does not implement NIP-50; ordinary NIP-01 filters, including filters without `kinds`, are accepted.
+Before persistence, it still enforces protocol validity: the event ID must match the serialized event, the Schnorr signature must verify, and `created_at` must fall within the configured operational timestamp bounds. Search remains disabled because the store does not implement NIP-50; ordinary NIP-01 filters, including filters without `kinds`, are accepted.
+
+Accepted history is durable SQLite state under `data_dir`, not an in-memory-only cache. ID, kind, author, `since`, and `until` filters are pushed into SQL before full NIP-01 matching. Replay uses a separate read pool so long queries cannot consume the single write connection needed to persist an event and return `OK`. The sidecar persists first, acknowledges promptly, and performs subscriber fanout asynchronously; slow subscribers therefore do not block unrelated publishers.
 
 Authorization belongs to consumers. Bahia validates signatures, authors, encryption, tags, capabilities, and application semantics before acting on an event. Relay admission is not an authorization boundary.
+
+Bahia's PostgreSQL Nostr publish outbox is separate from this sidecar store. The outbox retries service-authored outbound events; the sidecar preserves events it has already accepted for replay and retention.
 
 ## Upstream mirroring guardrail
 

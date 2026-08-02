@@ -180,7 +180,7 @@ $OPENCLAW_SOULFACTORY_ROOT/
 - `warnings`
 - operator/controller/runtime correlation fields when present in the invocation envelope
 
-`.openclaw/soulfactory.json` is workspace-owned provenance and records the resolved SoulFactory params, operator request, controller pubkey, runtime pubkey, and spec hash. It must not contain private keys.
+`.openclaw/soulfactory.json` is workspace-owned provenance and records the resolved SoulFactory params, operator request, controller pubkey, runtime pubkey, and spec hash. It must not contain private keys, an agent Signet bunker URI, or bunker connection secrets. SoulFactory removes that material before building the relay-visible runtime checkpoint; the wrapper also rejects inline private-secret fields in params.
 
 ## Provision flow
 
@@ -240,6 +240,12 @@ The wrapper produces these standard errors:
 - `execution_failed`: OpenClaw CLI command failed after validation, audit persistence failed, or input JSON was malformed.
 
 `rejected` means no local runtime mutation was performed. `failed` means validation passed but a local command failed, input could not be decoded into the command contract, or a persistence step failed.
+
+## Restart and reconciliation behavior
+
+The wrapper persists `state.json`, `last-invocation.json`, and `last-outcome.json`; the sidecar separately persists the `38384` idempotency fingerprint and signed-result payload. Exact replay after either process restarts returns/republishes the cached logical result without repeating OpenClaw commands. A reused key with different request identity or spec is rejected.
+
+Bahia may reconcile a valid late success `38386` after an earlier deploy-stage runtime timeout. That server-side path rebuilds the final public soul from the secret-free checkpoint embedded in `38384`; it does not call the wrapper or replay earlier provisioning stages.
 
 ## Verification plan
 

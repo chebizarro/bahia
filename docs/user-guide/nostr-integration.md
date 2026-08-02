@@ -587,6 +587,26 @@ Security status events use `schema=bahia.status.security-scan.v1`; summaries use
 
 Policy breach notifications use the existing notification dispatcher with event type `security.policy_breached`. Bahia sends that notification only when a persisted breach fingerprint is new or materially changed; unchanged recurring breaches do not generate duplicate notifications.
 
+## Durability, replay, and retention
+
+Bahia persists signed outbound events before publishing them when the event repository implements the outbox interface. A failed relay publish remains pending and the publisher retries unpublished records in batches of 100 with backoff; success updates the durable publish state. Monitor `bahia_nostr_outbox_depth` together with relay reconnect, re-request, and closed-reason metrics.
+
+The sidecar stores accepted non-ephemeral events in SQLite with WAL and full synchronous writes, so retained relay history survives process and container restarts until its retention window expires. Replaceable events retain only the newest event for their replaceable key. Live ephemeral kinds `25910` and `21059` are broadcast rather than stored by the relay.
+
+Backend subscribers resume from the newest persisted cursor with a one-second overlap and suppress duplicate event IDs. Their default catch-up limit is 1,000. Browser long-lived subscriptions use the same one-second overlap principle and preserve each original filter's cap. The Events view separately caps canonical read models at 1,000 and seven-day activity at 100.
+
+The sidecar applies a hard query ceiling through `nostr.sidecar.max_query_limit` (default 2,000), even if a client asks for more. Retention sweeps run at startup and every 15 minutes. Defaults are:
+
+```yaml
+nostr:
+  sidecar:
+    event_retention: 168h
+    request_retention: 24h
+    max_query_limit: 2000
+```
+
+The retention sweep classifies ContextVM message and gift-wrap kinds `25910`, `1059`, and `21059` under the shorter request window if they are present in storage; for live relay traffic, persistent gift-wrap kind `1059` is the stored member of that set. Other stored observables use general event retention. Retention settings must be positive when the sidecar is enabled.
+
 ## Authentication
 
 ### NIP-07 (Browser Extension)

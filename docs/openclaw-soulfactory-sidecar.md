@@ -1,42 +1,46 @@
 # OpenClaw SoulFactory Sidecar
 
-Bahia owns the OpenClaw SoulFactory adapter as a separate sidecar. It does not require direct upstream OpenClaw changes or REST lifecycle control APIs.
+Bahia owns the OpenClaw adapter as a separate sidecar. It does not require upstream OpenClaw changes or REST lifecycle APIs. Provisioned OpenClaw souls run in containers; the sidecar/wrapper must not launch a persistent bare-metal gateway or agent.
 
-Provisioned OpenClaw souls run in containerized OpenClaw runtimes. The sidecar/control wrapper may be invoked locally, but it must not launch persistent bare-metal OpenClaw gateway or agent processes for managed souls.
-
-Soul provisioning is initiated by signed Nostr events, not by REST. Operators publish a `31952` Soul draft and a correlated `5950` provisioning request; SoulFactory then drives OpenClaw with runtime control events and publishes observable progress/read-model events. Adding REST provisioning or lifecycle routes is a non-goal for this MVP.
+Operators publish signed `31952` drafts and correlated `5950` requests. SoulFactory sends runtime control over Nostr and publishes progress/read models. REST provisioning/lifecycle routes are a non-goal.
 
 ## Nostr contract
 
 The sidecar:
 
-- signs and publishes kind `30317` capability announcements with `runtime=openclaw`;
-- subscribes to addressed kind `38384` requests using scoped filters for trusted SoulFactory controller pubkeys and this runtime pubkey;
-- validates event ID/signature, schema, required tags, controller trust, runtime addressing, method params, idempotency key, and correlation fields before executing local side effects;
-- publishes signed, correlated kind `38386` results with `#e`, `#p`, `method`, `idempotency-key`, `soul`, `agent-id`, `spec-hash`, `schema`, and `status` tags;
-- uses EOSE only for backfill transition and never infers terminal completion from timeout, relay closure, or polling;
-- persists idempotency/result fingerprints in a local JSON store so exact replays after restart republish a cached result instead of repeating side effects.
+- signs kind-`30317` capability announcements with `runtime=openclaw`;
+- subscribes to addressed kind-`38384` from configured trusted controller pubkeys;
+- validates ID/signature, schema, tags/content agreement, addressing, controller trust, method, params, freshness, idempotency, and correlation before local effects;
+- publishes signed correlated kind-`38386` with request/controller/runtime context;
+- treats EOSE only as the stored/live boundary;
+- reconnects subscriptions with backoff and reissues after NIP-42 auth;
+- requires relay `OK` for publications;
+- persists request/result fingerprints so exact replay after restart returns cached `38386` without repeating effects.
 
-The browser/server provisioning request shape is:
+The browser/server request shape remains:
 
-- `31952` draft: editable desired soul spec, including runtime, relay policy, permissions, workspace, assets, and `spec_hash`.
-- `5950` request: tags include `agent-id`, `draft`, `draft-event`, `e=<draft-event-id>;marker=draft`, `spec-hash`, `runtime`, `runtime-pubkey`, `capability`, `method=soulfactory.provision`, and `request-kind=5950`; content includes `schema=soulfactory-provisioning/v1`, `method=soulfactory.provision`, identity fields, draft refs, `spec_hash`, `brief`, and `requested_at`.
-- `6950` progress and terminal `7950` result remain correlated to the operator request.
-- Final `31951` is the durable Soul read model; runtime truth comes from `38386` and the projected `31951`, not from an HTTP response.
+- `31952`: desired spec and `spec_hash`;
+- `5950`: draft/spec/runtime/capability correlation and `method=soulfactory.provision`;
+- `6950`/`7950`: progress and terminal result;
+- `31951`: authoritative soul read model;
+- `38384`/`38386`: runtime truth.
 
-Generated OpenClaw workspace config must use operator-supplied relays, controller pubkeys, model, and secret/config references. It must not embed placeholder relay URLs, controller keys, inline private keys, or fake MCP URLs.
+Generated workspace config uses operator-supplied relays, controllers, model, and secret references. It must not embed placeholder relays, inline keys, fake MCP URLs, or Signet bunker URIs. Agent bunker secrets are private handoff data and are removed from public SoulFactory artifacts before the sidecar sees the durable checkpoint.
 
-## Local OpenClaw control surface
+## Local control surface
 
-Run the sidecar with a local command driver. The command receives one JSON `OpenClawControlInvocation` on stdin and must return an `OpenClawControlOutcome` JSON on stdout. The default command-driver method set is intentionally conservative and matches the implemented wrapper:
+The sidecar command receives one `OpenClawControlInvocation` JSON document on stdin and returns one `OpenClawControlOutcome` on stdout.
+
+`OpenClawCommandDriver` defaults to the packaged wrapper's exact set:
 
 ```text
 soulfactory.provision
+soulfactory.update
 soulfactory.persona.update
 soulfactory.revoke
 ```
 
-Requests for other SoulFactory runtime-control methods are rejected with `unsupported_method` unless the operator explicitly configures a driver that implements and advertises those methods.
+Other methods are rejected unless the operator explicitly configures a driver that implements and advertises them.
 
 ```json
 {
@@ -54,23 +58,27 @@ Requests for other SoulFactory runtime-control methods are rejected with `unsupp
 }
 ```
 
-The packaged `openclaw-soulfactory-control` wrapper currently implements `soulfactory.provision`, `soulfactory.update`, `soulfactory.persona.update`, and `soulfactory.revoke`. It can run in dry-run mode for verification, or target an existing containerized OpenClaw gateway with `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and `OPENCLAW_SOULFACTORY_CONTAINER=<container>`. It does not expose or depend on a REST SoulFactory lifecycle API and does not launch a persistent bare-metal OpenClaw runtime.
+The wrapper supports dry-run verification or an existing container through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and `OPENCLAW_SOULFACTORY_CONTAINER`. It implements optimistic spec-hash checks for `soulfactory.update`.
 
-The sidecar advertises and accepts the methods returned by its driver. With `OpenClawCommandDriver`, operators may override the advertised/accepted method list with `-methods` or `OPENCLAW_SOULFACTORY_METHODS`; only configure methods that the command really implements. The command also receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH` environment variables for routing convenience.
+The command receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH`.
 
-See [`openclaw-soulfactory-control-wrapper.md`](openclaw-soulfactory-control-wrapper.md) for the host-local wrapper specification, supported method mapping, state layout, packaging path, and verification plan.
+## Key and store configuration
+
+Use `-private-key-file`/`OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE` for a file containing the sidecar nsec or hex key, or `OPENCLAW_SOULFACTORY_PRIVATE_KEY` for the environment source. Configure exactly one.
+
+The default idempotency store is under the user cache directory. Production services should supply a persistent `-idempotency-store` path.
 
 ## Example
 
 ```bash
 openclaw-soulfactory-sidecar \
   -relays wss://relay.example \
-  -private-key "$OPENCLAW_SOULFACTORY_PRIVATE_KEY" \
+  -private-key-file /etc/bahia/soulfactory/sidecar.key \
   -trusted-controller-pubkeys "$SOULFACTORY_CONTROLLER_PUBKEYS" \
   -control-relays wss://relay.example \
-  -idempotency-store ~/.cache/bahia/openclaw-soulfactory-sidecar-idempotency.json \
+  -idempotency-store /var/lib/bahia/openclaw-soulfactory-sidecar-idempotency.json \
   -command /usr/local/bin/openclaw-soulfactory-control \
   -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
 ```
 
-`openclaw-soulfactory-sidecar` and `openclaw-soulfactory-control` are built by `make build`, by the focused `make build-openclaw-soulfactory-sidecar` and `make build-openclaw-soulfactory-control` targets, and into `/usr/local/bin/` in the Bahia Docker image.
+See [the control wrapper](openclaw-soulfactory-control-wrapper.md), [runtime contract](soulfactory-runtime-control.md), and [deployment runbook](soul-factory-sidecar-runbook.md).

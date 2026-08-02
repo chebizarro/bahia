@@ -73,7 +73,7 @@ runtime: "vllm"
 **Via MCP:**
 ```json
 {
-  "tool": "bahia_ml_model_import",
+  "tool": "bahia_ml_import_model",
   "arguments": {
     "source": "huggingface",
     "uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct",
@@ -116,7 +116,7 @@ Recipes automate multi-step workflows:
 
 ```json
 {
-  "tool": "bahia_ml_recipe_run",
+  "tool": "bahia_ml_run_recipe",
   "arguments": {
     "recipe": "recipe:hf-vllm-import-deploy:1",
     "inputs": {
@@ -160,7 +160,7 @@ Publish a `38390` MLRecipeRunRequest:
 
 ```json
 {
-  "tool": "bahia_ml_inference_deploy",
+  "tool": "bahia_ml_deploy",
   "arguments": {
     "model_version_id": "mv-123",
     "environment_id": "env-prod",
@@ -195,7 +195,7 @@ If approval is required:
 
 ```json
 {
-  "tool": "bahia_ml_inference_rollback",
+  "tool": "bahia_ml_rollback",
   "arguments": {
     "endpoint": "endpoint:qwen-coder:prod"
   }
@@ -211,23 +211,9 @@ Navigate to **ML** in the sidebar:
 - **Endpoints**: View inference endpoints
 - **Recipes**: See available recipes
 
-### MCP Tools
+### MCP tools
 
-```json
-{
-  "tool": "bahia_ml_list_models",
-  "arguments": {}
-}
-```
-
-```json
-{
-  "tool": "bahia_ml_list_endpoints",
-  "arguments": {
-    "environment": "prod"
-  }
-}
-```
+Use `bahia_ml_list_state` to list inference endpoint state. Use `bahia_ml_get_state` with both `endpoint_id` and `environment_id` for one projected state, and `bahia_ml_get_provenance` with `artifact_id` for provenance edges.
 
 ## Read Models (Nostr)
 
@@ -240,7 +226,9 @@ Navigate to **ML** in the sidebar:
 | 31985 | `endpoint:<name>:<env>` | Endpoint registry |
 | 31986 | `endpoint-state:<name>:<env>` | Endpoint state |
 | 31988 | `artifact:<sha256>` | Provenance graph |
-| 31989 | `worker:<pubkey>:ai-capability` | Runtime capabilities |
+| 31989 | `worker:<pubkey>:ai-capability` | Legacy ML runtime-capability profile; not a Loom worker advertisement |
+
+New Loom worker discovery uses kind `10100`. Current projected worker state uses canonical kind `30900`; kind `31989` remains a compatibility input for legacy ML capability data.
 
 ## Nostr Event Kinds
 

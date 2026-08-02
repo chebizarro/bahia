@@ -182,15 +182,7 @@ bahia souls regenerate scout \
   --brief "Updated purpose and behavior..."
 ```
 
-```json
-{
-  "tool": "soul_factory_regenerate",
-  "arguments": {
-    "agent_id": "scout",
-    "new_brief": "Updated purpose and behavior..."
-  }
-}
-```
+The current MCP server does not register a `soul_factory_regenerate` tool. Use the verified CLI command above or the signer-first Soul Factory lifecycle methods supported by the configured runtime.
 
 ## Templates
 
@@ -245,6 +237,12 @@ Soul creation is signer-first and event-driven:
 REST provisioning and lifecycle routes are intentionally not part of SoulFactory. Do not integrate against a REST create/provision/suspend/resume path; use signed Nostr events and scoped subscriptions.
 
 The Bahia sidecar relay accepts every valid Nostr event kind without a numerical allowlist. Browser routes such as `/souls/new` can query `31950`, `31951`, `31952`, and `30317` through the sidecar, and operators/runtimes can publish correlated SoulFactory request, progress, and result events through the same relay boundary when their signatures and event IDs are valid.
+
+## Provisioning recovery
+
+On restart, the Soul Factory reactor backfills one globally newest provisioning request and one globally newest lifecycle action, not every workflow missed during downtime, then keeps its subscription open for new events. Terminal results are checked idempotently so those replays do not duplicate completed work.
+
+The same startup subscription backfills up to 100 runtime-control results and continues following new results. A late successful result can complete the public projection from a persisted checkpoint without repeating Signet identity creation, avatar generation, memory/workspace setup, or runtime provisioning. Recovery checkpoints do not expose the Signet bunker URI or raw signing material. Operators should not treat the one-request/one-action backfill as exhaustive recovery for multiple concurrent missed workflows.
 
 ## Agent Self-Provisioning
 

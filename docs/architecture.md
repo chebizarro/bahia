@@ -149,6 +149,8 @@ Runtime targets may include:
 ### Persistence
 Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in Blossom-backed storage.
 
+The main service-authored Nostr publisher also uses the `nostr_events` table as a durable outbound outbox. It records a signed event as `pending` before relay delivery, marks it `published` after at least one accepted (or duplicate) relay `OK`, and retries pending rows with backoff after transient failures. This outbox protects service-authored operational/audit publication; it does not turn a caller's ContextVM acknowledgment into terminal business truth.
+
 ---
 
 ## Key browser/runtime flows
@@ -169,17 +171,18 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 
 ### Encrypted action flow
 1. Browser encrypts a request to Bahia's service pubkey
-2. Request is published to encrypted-request relays
-3. Bahia decrypts, authorizes, and executes the operation
-4. Bahia encrypts the terminal result back to the requester
+2. Request is published to the ContextVM request relay policy
+3. Bahia decrypts, verifies the inner signer, authorizes, and executes the operation
+4. Bahia publishes the encrypted response through an isolated response pool on the same ContextVM relay policy
+5. Stored `1059` requests receive stored `1059` replies; ephemeral `21059` requests receive `21059` replies, correlated to the outer request with an `e` reply tag
 
 ### Deployment flow
 1. Build/artifact state exists or is ingested from CI
-2. Deployment intent is created
+2. A signed `service/deploy` request is policy-evaluated and creates a deployment intent with a desired-state snapshot
 3. Approval occurs when required
-4. Deployment run executes
-5. Runtime observation updates desired/observed state
-6. Drift is tracked and published
+4. Approved native deployments create a run and execute through the runtime lifecycle service, including deployment-unit targeting
+5. Runtime observation updates desired/observed state; failed apply or completion is recorded as failure rather than success
+6. Drift and operational status are projected to canonical Nostr observables
 
 ---
 
@@ -191,7 +194,8 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 | Shared browser state projection | Nostr canonical observables projected from persisted state |
 | Runtime observations | PostgreSQL (from runtime queries / action results) |
 | Workflow history | PostgreSQL |
-| Public audit/activity trail | Nostr relays |
+| Public audit/activity trail | Nostr relays (`4903` audit projections remain relay-queryable) |
+| Pending service-authored Nostr delivery | PostgreSQL `nostr_events` publish-state outbox |
 | Container image distribution | Bahia OCI registry and/or configured image registries |
 | Logs / blobs | Blossom-backed storage where configured |
 
@@ -205,3 +209,4 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 4. **Encrypted sensitive domains** — not all browser state belongs on public relays
 5. **REST as narrowed compatibility** — HTTP remains important, but is no longer the whole system model
 6. **Drift detection as first-class state** — runtime truth is continuously compared with desired state
+7. **Durable outbound publication** — service-authored events are persisted before relay delivery and retried without treating transport acceptance as business completion

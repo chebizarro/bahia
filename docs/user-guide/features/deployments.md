@@ -228,6 +228,14 @@ This creates a new intent to deploy the previously successful artifact.
 }
 ```
 
+## Rollout safety and verified rollback
+
+Canary and blue/green strategies require a runtime traffic controller. Bahia fails the rollout when the runtime cannot shift traffic, or when a follow-up read does not confirm the requested canary weight, blue/green primary slot, or restored rollback target. It does not treat an in-memory percentage change as production traffic movement.
+
+Health gates evaluate consecutive unhealthy observations. Observer errors count as unhealthy samples and fail the rollout when the configured failure threshold is reached; an unavailable observer is not converted into a healthy result.
+
+The rollout plan records the previous artifact and traffic state before it begins. If rollback is required, Bahia restores the previous artifact, restores or switches traffic to the previous primary, observes runtime health and artifact identity, performs cleanup, and persists the final state. A run is marked `rolled_back` only after that verification and persistence succeed. A failed verification publishes `rollout.rollback_failed` and leaves an explicit failure instead of claiming recovery.
+
 ## Deployment States
 
 | State | Description |

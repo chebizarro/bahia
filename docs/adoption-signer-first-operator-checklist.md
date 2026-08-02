@@ -25,7 +25,7 @@ Primary control surface under test:
 - signer-first adoption scan/import over public Nostr control-plane requests
 - signer-first direct-runtime `deploy` / `restart` / `stop`
 - operator pubkey authorization
-- status/result correlation via relay subscriptions
+- ContextVM progress/terminal response correlation via relay subscriptions
 - managed endpoint governance, redaction, rollback, concurrency, observability, and disable/rollback checks
 
 Secondary / compatibility-only:
@@ -53,7 +53,7 @@ Secondary / compatibility-only:
 | Target environment | `<fill>` |
 | Bahia API base URL | `<fill>` |
 | Control-plane relay URL(s) under test | `<fill>` |
-| Signer mode under test | `local keyer` / `NIP-46` / `<fill>` |
+| Signer mode under test | `local key` / `NIP-46 bunker + persistent client key` / `<fill>` |
 | Operator pubkey(s) | `<fill redacted if needed>` |
 | Execution start (UTC) | `<fill>` |
 | Execution end (UTC) | `<fill>` |
@@ -62,10 +62,11 @@ Secondary / compatibility-only:
 | Evidence bundle location | `<fill>` |
 | Local rehearsal artifact bundle | `<fill path + timestamp>` |
 | Managed endpoint refs under test | `<fill>` |
+| Import organization UUID / inference evidence | `<fill>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
 | ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) capability evidence | `<fill path + timestamp>` |
 | Relay `/relay` reachability evidence | `<fill path + timestamp or N/A>` |
-| Signer capability evidence (`signEvent`, request/result correlation path) | `<fill>` |
+| Signer capability evidence (`signEvent`, request/response correlation path) | `<fill>` |
 | Compatibility explicit relay configuration approved? | `yes` / `no` |
 
 ## Environment prerequisites
@@ -74,7 +75,7 @@ Check each box before SF-01 starts.
 
 - [ ] Release commit is deployed to staging/live-like environment.
 - [ ] Signer-first operator transport for adoption/import/direct-runtime is enabled.
-- [ ] Operator signer is available and can publish signed request events.
+- [ ] Operator signer is available and can publish signed request events. For NIP-46, bunker URI file and persistent client-key file are paired, their files are mode `0600` or stricter, and separate bunker relays are supplied with `--nostr-bunker-relay` when required.
 - [ ] Operator pubkeys are allowlisted for signer-first adoption/import/direct-runtime actions.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
@@ -83,7 +84,7 @@ Check each box before SF-01 starts.
 - [ ] A stored local Docker+relay signer-first rehearsal artifact exists for this release commit.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
-- [ ] Event/status/result subscriptions and observability capture are available for operators.
+- [ ] ContextVM response/progress subscriptions and canonical observability capture are available for operators.
 
 ## Evidence bundle requirements
 
@@ -93,8 +94,8 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] Redacted staging config excerpt
 - [ ] Signer/operator setup notes (no secrets)
 - [ ] Local rehearsal artifact bundle (Docker+relay simulation)
-- [ ] CLI transcript showing signer-first request publication and terminal result handling
-- [ ] Request event IDs and correlated status/result event IDs
+- [ ] CLI transcript showing signer-first request publication and terminal ContextVM response handling
+- [ ] Request event IDs and correlated progress/terminal ContextVM `25910` response IDs, plus canonical observable IDs where emitted
 - [ ] ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) capture
 - [ ] Relay `/relay` reachability capture when sidecar validation is in scope
 - [ ] Relevant logs with request IDs / event IDs / actor pubkey
@@ -112,7 +113,7 @@ Record release-commit results before manual SF rows begin.
 | Config and operator allowlist safety | `go test ./internal/config` | `<fill>` | `<fill>` |
 | Signer-first control-plane operator transport | `go test ./internal/controlplane` | `<fill>` | `<fill>` |
 | Managed endpoint governance and redaction | `go test ./internal/service -run 'TestAdoptionService.*Endpoint|TestAdoptionServiceRejectsRaw|TestAdoptionService.*Sensitive|Redacts' && go test ./internal/api/handlers -run Adoption` | `<fill>` | `<fill>` |
-| Transactional import and idempotency | `go test ./internal/service -run 'TestAdoptionServiceImportTransactional|TestAdoptionServiceImportRetries|TestAdoptionServiceImportSeeds'` | `<fill>` | `<fill>` |
+| Transactional import, org/unit binding, and idempotency | `go test ./internal/service -run 'TestAdoptionService.*Org|TestEnsureAdoptionDeploymentUnit|TestAdoptionServiceImportTransactional|TestAdoptionServiceImportRetries|TestAdoptionServiceImportSeeds'` | `<fill>` | `<fill>` |
 | Direct-runtime guardrails | `go test ./internal/service -run RuntimeLifecycle && go test ./internal/api/handlers -run RuntimeLifecycle` | `<fill>` | `<fill>` |
 | Signer-first operator client contract | `go test ./pkg/client -run 'Operator|SystemInfo|Adoption|RuntimeAction'` | `<fill>` | `<fill>` |
 | Signer-first CLI workflow | `go test ./cmd/cli -run 'Operator|Adoption'` | `<fill>` | `<fill>` |
@@ -133,13 +134,13 @@ Use one section per SF row. Fill every field.
   - malformed or unsigned request is rejected
   - valid signed non-operator request is rejected
   - valid signed operator request is accepted
-  - status/result events correlate to the originating request event id and operator pubkey
+  - progress/terminal ContextVM responses correlate to the originating request event id and operator pubkey
 - Actual result: `<fill>`
 - Evidence paths: `<fill>`
 - Follow-up issue(s): `<fill or none>`
 - Notes: `<fill>`
 
-### SF-02 — Relay routing and result/status correlation
+### SF-02 — Relay routing and response/progress correlation
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
 - Commands executed:
@@ -148,7 +149,7 @@ Use one section per SF row. Fill every field.
   ```
 - Checks:
   - signer-first request reaches the intended relay path/topology
-  - status/result events correlate to the request event id
+  - progress and terminal ContextVM `25910` responses correlate to the request event id
   - duplicate or unrelated events are ignored safely
   - operator sees terminal success/failure without HTTP polling assumptions
 - Evidence paths: `<fill>`
@@ -163,7 +164,7 @@ Use one section per SF row. Fill every field.
   ```
 - Checks:
   - scan can target at least two managed endpoint refs
-  - request/result surfaces use endpoint refs only
+  - request/response surfaces use endpoint refs only
   - no raw Docker host or cert material leaks into operator-visible surfaces
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
@@ -182,7 +183,7 @@ Use one section per SF row. Fill every field.
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
 
-### SF-05 — Redaction / secret import
+### SF-05 — Redaction / secret and org/unit import
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
 - Commands executed:
@@ -192,6 +193,8 @@ Use one section per SF row. Fill every field.
 - Checks:
   - scan/import responses expose only safe values and redacted key names
   - imported sensitive env exists only in Bahia secrets
+  - `--org <uuid>` is carried through signed import when supplied; ambiguous or cross-org imports fail closed
+  - imported state and initial observation reference the same per-service deployment unit
   - deploy merges secrets correctly
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
@@ -204,7 +207,7 @@ Use one section per SF row. Fill every field.
   <fill>
   ```
 - Checks:
-  - failed import reports failure through signer-first result flow
+  - failed import returns a correlated terminal ContextVM error response
   - no partial service/environment/build/artifact/state/observation rows remain
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
@@ -218,7 +221,7 @@ Use one section per SF row. Fill every field.
   ```
 - Checks:
   - concurrent signer-first imports converge to one canonical identity set
-  - no duplicate service/build/artifact identities remain
+  - no duplicate service/build/artifact/deployment-unit identities remain
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
 
@@ -264,7 +267,7 @@ Use one section per SF row. Fill every field.
   - typed adoption/runtime events publish after persistence
   - logs include request/event IDs, actor pubkey, endpoint ref, result
   - no secret leakage in logs/metrics/events
-  - operators can follow status/result progress without polling
+  - operators can follow ContextVM progress/terminal responses and canonical observables without HTTP polling
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
 

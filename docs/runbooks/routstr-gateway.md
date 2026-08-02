@@ -1,5 +1,11 @@
 # Routstr Gateway Runbook
 
+> **Status (2026-08-01): Legacy rollback-path runbook.** Fleet acceptance bead
+> `fp-397` is closed against the deployed Bahia → LiteLLM → fleet policy proxy →
+> `routstrd-auth` → `routstrd` path. The custom `fleet-routstr-gateway` described
+> here was stopped and retained only for rollback; use this procedure only if
+> intentionally restoring that legacy service.
+
 This runbook connects Bahia to the fleet-managed `fleet-routstr-gateway` service. The gateway is consumed as an OpenAI-compatible `external_api` LLM backend and remains internal-only behind Bahia.
 
 ## Gateway contract
@@ -9,7 +15,9 @@ Configure Bahia against the gateway's internal base URL:
 - `GET /healthz` reports process and wallet-store liveness only.
 - `GET /v1/models` lists Routstr-backed OpenAI-compatible models.
 - `POST /v1/chat/completions` accepts OpenAI-compatible chat completions with `Authorization: Bearer <gateway-client-token>`.
-- `GET /metrics` exposes gateway operational metrics.
+- `GET /metrics` exposes gateway operational metrics and requires the gateway
+  bearer token by default; set `ROUTSTR_AUTH_METRICS=false` only on a trusted
+  internal metrics network.
 
 Per-request budget and balance failures on `POST /v1/chat/completions` return 402 or 429 responses. Do not include those conditions in `/healthz`; Bahia's `ExternalAPIProvisioner.Observe` probes `external_backend.health_url` only, so route health stays tied to gateway liveness rather than request budget state.
 
@@ -24,7 +32,9 @@ Bahia does not keep a checked-in Kubernetes or Compose manifest convention for s
   - gateway client bearer token for Bahia callers;
   - Routstr wallet seed or encrypted wallet bootstrap material.
 - Health check: `GET /healthz`.
-- Metrics scrape path: `GET /metrics` on the internal service network.
+- Metrics scrape path: `GET /metrics` on the internal service network, with
+  `Authorization: Bearer <gateway-client-token>` unless
+  `ROUTSTR_AUTH_METRICS=false` is explicitly set.
 
 The gateway's wallet float should use:
 

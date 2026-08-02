@@ -26,6 +26,7 @@ Bahia's **purpose** is still deployment/runtime control, but the **current inter
 - **Narrowed HTTP compatibility surfaces** — REST and MCP still exist, but they are no longer the whole product story
 
 If you are integrating with Bahia, start with:
+- [`docs/user-guide/index.md`](docs/user-guide/index.md)
 - [`docs/control-planes.md`](docs/control-planes.md)
 - [`docs/relay-sidecar.md`](docs/relay-sidecar.md)
 - [`docs/nostr-commands.md`](docs/nostr-commands.md)
@@ -86,7 +87,8 @@ For a fuller architectural description, see [`docs/architecture.md`](docs/archit
 - ✅ Runtime observation and drift detection (Docker, Podman, Compose, Kubernetes)
 - ✅ Nostr-native control plane with canonical request/status/result/read-model kinds
 - ✅ Sidecar-first relay discovery via ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`)
-- ✅ Signer-first browser auth and direct NIP-98 HTTP compatibility auth
+- ✅ Durable relay history with bounded replay/retention and a retrying outbound Nostr publish outbox
+- ✅ Signer-first browser auth, NIP-46 CLI operator signing, and direct NIP-98 HTTP compatibility auth
 - ✅ Encrypted Nostr request/result flows for sensitive domains
 - ✅ PostgreSQL persistence
 - ✅ Native MCP transport at `/mcp` and `/api/v1/mcp`
@@ -187,6 +189,7 @@ Some operator flows are signer-first and relay-driven. See:
 ## Documentation
 
 ### Start here
+- [User Guide](docs/user-guide/index.md) — task-oriented product documentation
 - [Control Planes](docs/control-planes.md) — current transport and control-plane contract
 - [Relay Sidecar](docs/relay-sidecar.md) — sidecar topology and boundaries
 - [Nostr Commands](docs/nostr-commands.md) — canonical Nostr request kinds
@@ -201,7 +204,3 @@ Some operator flows are signer-first and relay-driven. See:
 ### Operational docs
 - [Adoption Production Rollout](docs/adoption-production-rollout.md) — signer-first adoption/import + direct-runtime rollout
 - [Protocol Compatibility](docs/protocol-compatibility.md) — protocol support status and compatibility notes
-
-## License
-
-See [LICENSE](LICENSE) for details.

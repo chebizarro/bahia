@@ -1,5 +1,9 @@
 # btc-01 ContextVM Adoption Proof Runbook
 
+> **Status (2026-08-01): Operator proof procedure, not rollout evidence.** The
+> acceptance checklist remains an explicit manual gate; this document does not
+> assert that btc-01 adoption has been executed.
+
 Scope: operator-gated proof for btc-01 over canonical ContextVM kind `25910`. This runbook is procedural only; do not execute it from unattended agent sessions. Keep `bitcoind` and `lnd` out of scope.
 
 ## Preconditions

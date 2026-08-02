@@ -204,9 +204,23 @@ bahia adopt import --target prod-docker --all
 
 Raw Docker hosts are a compatibility path only. They require the server to set `adoption.allow_raw_docker_hosts: true` and the CLI to use `--raw-target alias=dockerHost`.
 
-For production rollout, follow the signer-first operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: configure signer/operator pubkeys and relay discovery, keep raw-host mode off, run a signer-first scan-only dry run, import a single low-risk workload first, then monitor correlated adoption/runtime events, logs, and `/metrics` before expanding.
+For production rollout, follow the signer-first operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: configure signer/operator pubkeys and relay discovery, keep raw-host mode off, run a signer-first scan-only dry run, import a single low-risk workload first, then monitor correlated adoption/runtime events, logs, and `/metrics` before expanding. Use `bahia adopt import --org <organization-uuid>` whenever the organization cannot be inferred unambiguously.
+
+A successful import creates or reuses a deployment unit for the imported service and binds both `environment_service_state` and the initial runtime observation to it. Cross-organization service/environment reuse is rejected. Explicit import may take over a same-name legacy service that has no adopted-runtime identity, but an already-adopted same-name service on a different target remains a conflict.
 
 Signer-first adoption/import and direct-runtime events remain subject to relay, authorization, and reactor-side operator controls; the legacy per-IP REST mutation limiters are no longer mounted.
+
+## Rollout and Runtime Failure Semantics
+
+Canary and blue/green plans require a runtime implementing verifiable traffic transitions. Bahia checks the runtime-reported target slot and weight after a shift/switch; unsupported runtimes, rejected changes, or mismatched reported state fail the step instead of logging success.
+
+Before rollout, Bahia captures the prior primary artifact. Automatic rollback restores progressive traffic, restores or removes the primary as appropriate, verifies artifact identity and healthy runtime state, and cleans up canary/green slots. Only a fully persisted verified restoration emits `rollout.rolled_back`; any restoration, cleanup, observation, or persistence error produces terminal `rollback_failed` state and a `rollout.rollback_failed` event.
+
+Health-observer errors count toward the configured consecutive failure threshold just like unhealthy observations, so an unavailable observer fails fast instead of waiting for the full gate timeout.
+
+Native encrypted `service/deploy` accepts UUID service/environment/artifact IDs, evaluates deployment policy, creates an intent with a desired-state snapshot, and executes the runtime lifecycle immediately only when approval policy marks the intent approved. The run is completed as failed when runtime apply fails.
+
+Loom-backed non-terminal runs are monitored for missing kind-`30100` status. After `nostr.stale_run_after` (default `5m`), Bahia publishes replaceable NIP-38 `30315` health state with schema `bahia.deployment-run-health.v1`; it publishes a `recovered` transition when Loom status resumes, the job changes, or the run becomes terminal.
 
 ## Desired-State Persistence
 
@@ -329,7 +343,7 @@ Enable automatic CI event ingestion:
 hiveci:
   enabled: true
   
-  # Trusted CI dispatcher pubkeys (canonical CI dispatch events; legacy 5401 is migration inventory only)
+  # Trusted CI dispatcher pubkeys for external Hive-CI kind-5401 workflow-run events
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
   
@@ -346,7 +360,7 @@ hiveci:
 
 ## Monitoring
 
-- Health check: `GET /health`
-- Readiness check: `GET /ready`
+- Liveness/health snapshot: `GET /health`
+- Active-tier readiness: `GET /ready` (`503` when required checks fail)
 - Drift detection: `GET /api/v1/state/drifted`
 - Registry API: `GET /v2/`

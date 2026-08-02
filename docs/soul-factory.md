@@ -1,292 +1,174 @@
 # Soul Factory
 
-Soul Factory is a Nostr-native agent provisioning system integrated into bahia. It creates AI agents with cryptographic identities, generated personalities, and full infrastructure (memory, workspace, deployment).
+Soul Factory is Bahia's Nostr-native agent provisioning and lifecycle subsystem. It turns signed soul drafts and requests into Signet-custodied identities, runtime bindings, Bahia service/deployment records, and durable relay-visible read models.
 
-## Overview
+## Control planes and event kinds
 
-Soul Factory provides:
-- **LLM-driven soul generation** from templates or custom prompts
-- **Nostr-native API** using events for all operations
-- **Cryptographic identity** via NIP-46 bunker (Signet)
-- **Full infrastructure** setup (avatar, memory, workspace, deployment)
-- **Lifecycle management** (suspend, resume, revoke, regenerate)
+| Kind | Role |
+| --- | --- |
+| `25910` | Canonical ContextVM request transport for `soul-factory/provision` and `soul-factory/action` |
+| `31950` | Parameterized replaceable soul template |
+| `31951` | Parameterized replaceable authoritative soul read model |
+| `31952` | Parameterized replaceable editable soul draft |
+| `5950` | SoulFactory provisioning interoperability request |
+| `1950` | Soul lifecycle action request |
+| `6950` | Correlated provisioning or lifecycle progress |
+| `7950` | Correlated terminal provisioning or lifecycle result |
+| `30317` | Runtime capability announcement |
+| `38384` / `38386` | Runtime control request/result |
+| `30900` / `4903` | Canonical provisioning state/audit projections for ContextVM-originated provisioning |
 
-## Event Kinds
+The canonical ContextVM methods are `soul-factory/provision` and `soul-factory/action`. The JSON-RPC response acknowledges dispatch only. Progress and terminal truth remain the correlated `6950`/`7950` events, final `31951`, and—when the request arrived through ContextVM—the `30900` state and `4903` audit projections.
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 31950 | SoulTemplate | Prepared templates for generating agents |
-| 31951 | AgentSoul | Fully provisioned agent identity |
-| 31952 | SoulDraft | Work-in-progress soul before provisioning |
-| 5950 | ProvisioningRequest | DVM request to provision a soul |
-| 6950 | ProvisioningStatus | Progress updates during provisioning |
-| 7950 | ProvisioningResult | Final result (success or failure) |
-| 1950 | SoulAction | Lifecycle actions (suspend, resume, etc.) |
+Lifecycle results use `7950`. Kind `1951` is a migration-only legacy alias.
 
-## CLI Commands
+## CLI
 
-### List Souls
-
-```bash
-bahia souls list
-bahia souls list --status active
-bahia souls list -o json
-```
-
-### Get Soul Details
+The `bahia souls` command in `cmd/cli/soulfactory.go` uses relay-backed reads and signed Nostr requests rather than REST lifecycle endpoints.
 
 ```bash
+bahia souls list --status active --limit 20
 bahia souls get scout
-bahia souls get scout -o yaml
-```
 
-### Provision a Soul
+bahia souls provision scout --brief "Research and synthesize findings" --tier standard --follow
+bahia souls provision scout --brief-file ./agent-brief.md --follow
+bahia souls provision scout --template 31950:<template-pubkey>:research-agent --follow
 
-```bash
-# From a template
-bahia souls provision my-agent --template 31950:pubkey:research-agent --follow
+bahia souls suspend scout --reason "Maintenance"
+bahia souls resume scout
+bahia souls redeploy scout
+bahia souls revoke scout --reason "No longer needed"
+bahia souls regenerate scout --brief-file ./replacement-brief.md
 
-# Custom brief
-bahia souls provision my-agent --brief "An agent that helps with research" --tier standard
-
-# From brief file
-bahia souls provision my-agent --brief-file ./agent-brief.md --follow
-```
-
-### Lifecycle Actions
-
-```bash
-# Suspend
-bahia souls suspend my-agent --reason "Maintenance"
-
-# Resume
-bahia souls resume my-agent
-
-# Revoke (permanent)
-bahia souls revoke my-agent --reason "No longer needed"
-
-# Redeploy
-bahia souls redeploy my-agent
-
-# Regenerate with new brief
-bahia souls regenerate my-agent --brief "Updated purpose..."
-```
-
-### Templates
-
-```bash
-bahia souls templates list
+bahia souls templates list --tier standard
 bahia souls templates get research-agent
 ```
 
-## MCP Tools
+Global output flags such as `-o json` apply where supported by the root command. `revoke` prompts for the agent ID unless `--force` is supplied.
 
-Soul Factory exposes MCP tools for agent interactions:
+## Package-local MCP surface
 
-### soul_factory_list_souls
+`internal/soulfactory/mcp_server.go` defines:
 
-List all provisioned agent souls.
+- `soul_factory_list_souls`
+- `soul_factory_get_soul`
+- `soul_factory_list_templates`
+- `soul_factory_provision`
+- `soul_factory_action`
+- `soul_factory_regenerate`
+- `soul_factory_get_status`
 
-```json
-{
-  "status": "active",
-  "limit": 50
-}
-```
+This package-local server is tested, but it is not registered in the standard Bahia application's external MCP tool registry. Do not assume those names are remotely available without explicit integration wiring. The CLI and web UI use signed Nostr paths.
 
-### soul_factory_get_soul
+## Provisioning workflow
 
-Get details for a specific agent.
+The full provisioner executes eight stages:
 
-```json
-{
-  "agent_id": "scout"
-}
-```
+1. **Generate** — resolve a signed draft/template/inline brief; invoke the LLM only when no signed draft supplies the authoritative snapshot.
+2. **Signet** — provision the agent identity and allowed kinds through Signet.
+3. **Avatar** — generate/store an avatar when configured; otherwise record the stage as skipped.
+4. **Profile** — publish the agent's kind-`0` profile using Signet-held signing.
+5. **Qdrant** — create the vector collection when configured.
+6. **Memory** — register and seed agent-memory when configured.
+7. **Workspace** — initialize the workspace repository when configured.
+8. **Deploy** — register NIP-05, store the soul snapshot, bind the runtime through `38384`/`38386`, create Bahia service/deployment records, and publish final `31951`.
 
-### soul_factory_provision
+A signed `31952` draft is authoritative: SoulFactory verifies its event reference and `spec_hash` and does not regenerate that approved snapshot through the LLM.
 
-Provision a new agent soul.
+Runtime success is not inferred from timeout, EOSE, or relay closure. The terminal `38386` must be signed by the selected runtime and correlate to the `38384`, operator request, method, idempotency key, and spec hash.
 
-```json
-{
-  "agent_id": "my-agent",
-  "name": "My Agent",
-  "brief": "An agent that helps with...",
-  "tier": "standard",
-  "template": "31950:pubkey:research-agent"
-}
-```
+## Recovery and reconciliation
 
-### soul_factory_action
+The reactor keeps a live multi-relay subscription with reconnect/backoff behavior and uses EOSE only to mark completion of the stored-event phase.
 
-Execute lifecycle action.
+At startup it requests the newest `5950`, newest `1950`, and up to 100 stored `38386` events. Existing terminal-result checks prevent repeated side effects. This backfill is intentionally bounded to the newest request and newest action globally; it is not a full historical queue scan.
 
-```json
-{
-  "agent_id": "my-agent",
-  "action": "suspend",
-  "reason": "Maintenance"
-}
-```
+If a runtime operation first produces a deploy-stage timeout/error but a valid success `38386` arrives later, the reactor validates the full correlation chain, restores the public-safe soul checkpoint embedded in `38384`, republishes active `31951`, and replaces the terminal provisioning result. It does not repeat Signet, avatar, memory, workspace, or runtime side effects.
 
-### soul_factory_regenerate
+## NIP-29 group assignment and NIP-42
 
-Regenerate soul with new brief.
-
-```json
-{
-  "agent_id": "my-agent",
-  "new_brief": "Updated purpose and behavior..."
-}
-```
-
-## Provisioning Workflow
-
-When a soul is provisioned, Soul Factory executes 8 steps:
-
-1. **Generate** - LLM generates soul content (SOUL.md, IDENTITY.md, permissions)
-2. **Signet** - Registers keypair with NIP-46 bunker
-3. **Avatar** - Generates avatar image via FLUX
-4. **Profile** - Publishes Nostr profile (kind:0)
-5. **Qdrant** - Creates vector memory collection
-6. **Memory** - Seeds initial context in agent-memory
-7. **Workspace** - Initializes git repo with soul files
-8. **Deploy** - Registers with bahia, publishes soul event
-
-## Resource Tiers
-
-| Tier | Description | Use Case |
-|------|-------------|----------|
-| lightweight | Fast, minimal resources | Simple tasks, monitoring |
-| standard | Balanced capabilities | Most use cases |
-| heavy | Maximum resources | Complex workloads, multi-step |
-
-## Templates
-
-Templates provide pre-configured starting points:
-
-- **research-agent** - Investigates topics and synthesizes findings
-- **code-reviewer** - Reviews code for quality and security
-- **monitor-agent** - Monitors systems and alerts on issues
-- **coordinator-agent** - Orchestrates other agents
-- **assistant-agent** - General-purpose assistant
-- **builder-agent** - Builds and deploys software
-
-## Web UI
-
-Access the Soul Gallery at `/souls`:
-
-- **Gallery View** - Browse all souls with filtering
-- **Soul Designer** - Create new souls with wizard flow
-- **Soul Detail** - View identity, permissions, infrastructure
-- **Lifecycle Actions** - Suspend, resume, redeploy buttons
-
-## Integration with bahia
-
-Provisioned souls are automatically:
-- Registered as bahia Services
-- Given initial DeploymentIntents
-- Status synced between bahia and Nostr events
-- Lifecycle actions flow through to bahia deployments
-
-## Authorization
-
-Provisioning requires authorization. Add pubkeys to the authorized list:
-
-```go
-AuthorizedProvisioners = []string{
-    "cdee943cbb19c51ab847a66d5d774373aa9f63d287246bb59b0827fa5e637400",
-    // Add more authorized pubkeys
-}
-```
-
-## Configuration
-
-Soul Factory is configured through the bahia config:
+Configure `soul_factory.nip29_groups`:
 
 ```yaml
 soul_factory:
+  nip29_groups:
+    - relay: wss://groups.example.com
+      id: operators
+```
+
+During the Signet stage, SoulFactory authenticates to each group relay with NIP-42 and publishes controller-signed kind-`9000` put-user events with `h=<group-id>` and `p=<agent-pubkey>`. Every configured group must accept the write; assignment fails closed otherwise. The relay adapter waits briefly for a late challenge, and group assignment retries a write once if it races the AUTH acknowledgement.
+
+## Signet transport and secret handling
+
+The controller identity is obtained from the configured Signet bunker and authorizes management requests.
+
+Signet management JSON-RPC is carried privately as a NIP-17 kind-`14` rumor, placed in a seal signed by the Signet-controlled service identity, and NIP-59 gift-wrapped as kind `1059`. The response subscription is established before publish. Responses require decryption, valid seal verification by the bunker identity, and JSON-RPC request-ID correlation.
+
+A returned agent `bunker_uri` may contain a one-time connection secret. It is retained only for private runtime handoff and removed from public `31951` tags, public `7950` content, and the relay-visible `38384` soul checkpoint. Public artifacts expose agent pubkey/npub and runtime references, never agent private keys or bunker secrets.
+
+## Runtime integration
+
+Runtime choices are capability-gated by compatible `30317` announcements. The packaged OpenClaw wrapper supports:
+
+- `soulfactory.provision`
+- `soulfactory.update`
+- `soulfactory.persona.update`
+- `soulfactory.revoke`
+
+See [runtime control](soulfactory-runtime-control.md), [OpenClaw sidecar](openclaw-soulfactory-sidecar.md), [control wrapper](openclaw-soulfactory-control-wrapper.md), and [deployment runbook](soul-factory-sidecar-runbook.md).
+
+## Web UI
+
+- `/souls` loads `31951` souls and filters/searches the gallery.
+- `/souls/new` saves signed `31952`, selects compatible `30317`, publishes `5950`, and tracks `6950`/`7950`.
+- Drafts whose `agent_id` already has a provisioned `31951` are removed from the unresolved-drafts view.
+- Capability choices must be compatible and advertise the requested method.
+- Soul updates use signed `1950` actions with previous/new spec hashes and merge/replace parameters.
+
+## Configuration
+
+The current `soul_factory` block is defined in `internal/config/config.go`:
+
+```yaml
+soul_factory:
+  enabled: true
   relays:
-    - wss://relay.sharegap.net
-    - wss://armada.sharegap.net
-  additional_relays:
-    - wss://encrypted.relay.example.com
-  signet_bunker_uri: bunker://...
-  blossom_url: https://blossom.example.com
-  qdrant_url: http://localhost:6333
-  agent_memory_url: http://localhost:3000
-  lemmy_url: http://localhost:8188
+    - wss://relay.example.com
+  additional_relays: []
+  nip05_relays:
+    - wss://relay.example.com
+  nip29_groups: []
+  authorized_pubkeys:
+    - <64-char-operator-pubkey>
+  soul_factory_pubkey: <64-char-controller-pubkey>
+  signet_bunker_uri: bunker://<signet-pubkey>?relay=wss%3A%2F%2Fsignet-relay.example
+  signet_client_secret_key: <controller-client-secret>
+  startup_timeout: 30s
+  llm_base_url: https://llm.example.com
+  llm_model: <model-name>
+  llm_api_key: <secret>
+  llm_timeout: 2m
 ```
 
-## Examples
-
-### Provision a Research Agent
-
-```bash
-bahia souls provision scout \
-  --name "Scout" \
-  --template 31950:pubkey:research-agent \
-  --tier standard \
-  --follow
-```
-
-### Provision Custom Agent
-
-```bash
-cat > agent-brief.md << 'EOF'
-You are a code review specialist focused on:
-- Security vulnerabilities
-- Performance issues
-- Code style consistency
-
-You respond thoughtfully and provide specific, actionable feedback.
-EOF
-
-bahia souls provision code-reviewer \
-  --name "CodeBot" \
-  --brief-file agent-brief.md \
-  --tier heavy \
-  --follow
-```
-
-### Agent Self-Provisioning
-
-Agents can provision other agents using the MCP tools:
-
-```json
-{
-  "tool": "soul_factory_provision",
-  "arguments": {
-    "agent_id": "sub-agent",
-    "name": "Sub Agent",
-    "brief": "A specialized agent for specific tasks",
-    "tier": "lightweight"
-  }
-}
-```
+When enabled outside development mode, validation requires at least one relay, a Signet bunker URI, at least one authorized pubkey, positive timeouts, and a valid LLM origin/model/key. Workspace fields are optional but jointly constrained when `workspace_gitea_url` is set.
 
 ## Troubleshooting
 
-### Provisioning Fails at Signet Step
+### No provisioning result
 
-Check Signet bunker connectivity:
-```bash
-bahia auth login --nip46 "bunker://..."
-```
+- Confirm a relay accepted the signed request.
+- Check the operator is in `authorized_pubkeys`.
+- Inspect correlated `6950`, `7950`, `38384`, and `38386`; EOSE alone is not completion.
+- Confirm selected `30317` advertises `soulfactory.provision`.
 
-### Avatar Generation Fails
+### Late runtime success
 
-Avatar generation is optional. If it fails, a placeholder is used. Check Lemmy/ComfyUI availability.
+A later valid success `38386` can reconcile a deploy-stage runtime timeout. The original `5950`, `38384`, and `38386` must remain queryable and signatures must match.
 
-### Soul Not Appearing
+### NIP-29 failure
 
-Souls are published to relays. Check relay connectivity:
-```bash
-# Verify relays
-curl -X GET wss://relay.sharegap.net
-```
+Verify group relay/ID, controller authorization, NIP-42 support, and relay `OK`. Assignment fails closed.
 
-### Status Not Syncing
+### Soul absent from UI
 
-Ensure bahia integration is configured with the agent environment ID.
+Verify the factory-authored final `31951` exists on a browser-visible read-model relay. A draft or runtime result alone is not the final soul read model.

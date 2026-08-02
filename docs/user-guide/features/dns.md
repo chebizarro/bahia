@@ -63,37 +63,9 @@ Navigate to **DNS** in the sidebar:
 - **Policies**: Routing policies
 - **FIPS Mesh**: Federated identity endpoints
 
-### CLI
+### CLI and MCP
 
-```bash
-# List zones
-bahia dns zones list
-
-# List endpoints
-bahia dns endpoints list
-bahia dns endpoints list --family service
-
-# List policies
-bahia dns policies list
-```
-
-### MCP Tools
-
-```json
-{
-  "tool": "bahia_dns_list_zones",
-  "arguments": {}
-}
-```
-
-```json
-{
-  "tool": "bahia_dns_list_endpoints",
-  "arguments": {
-    "family": "service"
-  }
-}
-```
+The current CLI does not register a `bahia dns` group. Use the web UI for zones and policies. In an embedding that explicitly configures external MCP authorization, `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and the `bahia_assistant_dns_*` tools are available as listed in the [MCP reference](../mcp-tools.md).
 
 ## MCP Resources
 
@@ -118,45 +90,15 @@ Agents can query these resources for service discovery.
 
 ## Creating DNS Records
 
-### Zones
+### Zones, policies, and overrides
 
-```bash
-bahia dns zones create \
-  --name "services.example.com" \
-  --backend-id backend-123
-```
+Use the DNS web mutation flows or the registered assistant tools:
 
-Nostr (signer-first):
-```json
-{
-  "kind": 5941,
-  "content": {
-    "name": "services.example.com"
-  },
-  "tags": [
-    ["t", "dns-zone-create"]
-  ]
-}
-```
+- `bahia_assistant_dns_zone_create`
+- `bahia_assistant_dns_policy_apply`
+- `bahia_assistant_dns_record_override`
 
-### Policies
-
-```bash
-bahia dns policies apply \
-  --name "geo-routing" \
-  --type weighted \
-  --config rules="..."
-```
-
-### Record Overrides
-
-```bash
-bahia dns records override \
-  --zone "services.example.com" \
-  --name "api" \
-  --type A \
-  --value "10.0.1.200"
-```
+Each publishes the corresponding signed Nostr request and returns correlation metadata.
 
 ## Endpoint Projection
 
@@ -189,12 +131,9 @@ Bahia automatically projects endpoints from:
 
 The FIPS mesh provides federated identity endpoints:
 
-### Viewing FIPS Mesh
+### Viewing FIPS mesh
 
-```bash
-bahia fips mesh status
-bahia fips nodes list
-```
+Use the web panel or `bahia_fips_mesh_status` and `bahia_fips_list_mesh_nodes` through MCP.
 
 ### Web UI
 
@@ -254,20 +193,9 @@ DNS drift is detected when:
 - Endpoints are missing or extra
 - Health status changes
 
-### Drift Remediation
+### Drift remediation
 
-```bash
-bahia dns drift remediate --zone services.example.com
-```
-
-```json
-{
-  "kind": 5944,
-  "content": {
-    "zone": "services.example.com"
-  }
-}
-```
+Use `bahia_assistant_dns_drift_remediate` and follow its correlation metadata to the status/result projection.
 
 ## Best Practices
 

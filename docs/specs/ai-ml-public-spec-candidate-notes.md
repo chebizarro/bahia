@@ -1,5 +1,11 @@
 # AI/ML Public Spec Candidate Notes
 
+> **Status annotation (2026-08-01): Superseded production transport candidate.**
+> Bahia retains these numeric kinds as legacy compatibility inventory, but the
+> production AI/ML mutation path now uses ContextVM kind `25910` and canonical
+> status/control-state/audit observables (`30315`, `30900`, `4903`). Do not use
+> the `38390-38399` or `31980-31989` ranges as current discovery guidance.
+
 > Status: Draft implementation guidance
 > Date: 2026-05-16
 > Related tasks: `bahia-66ax.5.3`, `bahia-66ax.5.3.1`

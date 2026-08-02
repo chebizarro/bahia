@@ -10,14 +10,22 @@ interface.
 | Target | Internal endpoint | Metrics | Required |
 |---|---|---|---|
 | Bahia control plane | `bahia:8080/metrics` | Fleet health, drift, workers, relays, audit, authorization, runtime operations | Yes |
-| Routstr gateway | `fleet-routstr-gateway:<port>/metrics` | Requests, spend, wallet, routing | When `fp-397` is deployed |
+| Legacy Routstr gateway | `fleet-routstr-gateway:<port>/metrics` | Requests, spend, wallet, routing | Only when the legacy custom gateway is intentionally deployed |
 | Loom | deployment-specific `/metrics` | Job lifecycle | When an authenticated internal endpoint exists |
 
 The initial production target is Bahia only. On `edge-01`, Bahia is currently
 published on host port 8080, but Prometheus must use `bahia:8080` on the
 internal Compose network. Host-published ports are diagnostic facts, not
 stable scrape addresses. Add optional targets only after their service name,
-port, ownership, and label cardinality have been verified.
+port, ownership, auth mode, and label cardinality have been verified.
+
+The checked-in `prometheus.yml` contains no credentials. When Bahia auth is
+enabled, `/metrics` uses the same NIP-98 middleware boundary as the application;
+production scraping therefore requires the fresh-request signing/proxy bridge
+tracked by `fp-obs.1`, not a static bearer token in Git. The accepted `fp-397`
+Routstr deployment uses Bahia → LiteLLM → fleet policy proxy → `routstrd-auth` →
+`routstrd`; the stopped custom `fleet-routstr-gateway` is a legacy rollback path,
+not a current required scrape target.
 
 Do not place agent IDs, event IDs, pubkeys, free-form errors, repository names,
 URLs, or secrets in target labels. Use bounded labels such as `environment`
@@ -28,6 +36,8 @@ and `service`.
 - [ ] Build and pin a Bahia image containing the `fp-obs-1` metrics.
 - [ ] Validate `deploy/observability/prometheus.yml` and
       `deploy/observability/bahia-alerts.yml` with `promtool`.
+- [ ] If Bahia auth is enabled, configure and verify the fresh NIP-98 scrape
+      bridge outside Git before expecting the Bahia target to be `UP`.
 - [ ] Run `deploy/observability/bahia-alerts.test.yml`.
 - [ ] Confirm `/metrics` returns all zero-valued fleet-health series before
       relying on absence-based alerts.
@@ -44,7 +54,8 @@ and `service`.
 ## Rollout
 
 1. Deploy Prometheus with the checked-in scrape configuration and rules.
-2. Verify target `bahia:8080` is `UP` and inspect label cardinality.
+2. Verify target `bahia:8080` is `UP` through the configured auth boundary and
+   inspect label cardinality.
 3. Deploy Alertmanager and confirm Prometheus reports it as reachable.
 4. Provision Grafana with the checked-in datasource and dashboard bundle.
 5. Confirm dashboard UID `bahia-fleet-health-v1` loads without missing-series

@@ -1,578 +1,188 @@
-# Bahia Web Component Library
+# Bahia Web Component Reference
 
-This guide documents the reusable Svelte components available in the Bahia web app.
+Reusable Svelte components live in `web/src/lib/components/`. This page describes current source contracts; route-specific components remain documented by source and tests.
 
-**Location**: `web/src/lib/components/`
+The codebase mixes legacy non-runes components and Svelte 5 runes components. Follow each component's actual callback/slot contract rather than assuming every component dispatches Svelte events.
 
-## Form Components
+## Form primitives
 
-### Input
+| Component | Current props |
+| --- | --- |
+| `Input` | `id`, `name`, `type`, `value`, `placeholder`, `disabled`, `required`, `error`, `oninput`, `onchange`, `onblur`, `onkeydown` |
+| `Select` | `id`, `name`, `value`, `options`, `disabled`, `required`, `error`, `placeholder`, `onchange`, `onblur` |
+| `Textarea` | `id`, `name`, `value`, `placeholder`, `disabled`, `required`, `error`, `rows`, `oninput`, `onchange`, `onblur` |
+| `Checkbox` | `id`, `name`, `checked`, `disabled`, `label`, `onchange`; default slot when `label` is empty |
+| `FormField` | `label`, `id`, `error`, `hint`, `required`; default slot |
+| `LoadingButton` | `type`, `variant`, `loading`, `disabled`, `fullWidth`, `onclick`; default slot |
 
-**Purpose**: Text input field with label, validation, and error display.
+Labels and hints/errors belong in `FormField`; `Input`, `Select`, and `Textarea` render only native controls.
 
-**Props**:
-- `label` (string): Field label text
-- `id` (string): HTML `id` attribute
-- `type` (string, default `'text'`): Input type (`text`, `email`, `password`, `number`, etc.)
-- `value` (string): Bound input value
-- `placeholder` (string, optional): Placeholder text
-- `required` (boolean, default `false`): Adds required indicator
-- `disabled` (boolean, default `false`): Disables input
-- `error` (string, optional): Error message to display below input
-- `autocomplete` (string, optional): HTML autocomplete attribute
-
-**Events**:
-- `input`: Fires on value change (use `bind:value` for two-way binding)
-
-**Example**:
 ```svelte
-<Input
-  label="Service Name"
-  id="service-name"
-  bind:value={serviceName}
-  required
-  error={errors.name}
-  placeholder="e.g., web-api"
-/>
-```
-
-**Accessibility**:
-- Associates label with input via `for`/`id`
-- Displays error with `aria-invalid` and `aria-describedby`
-- Required fields marked with `*`
-
----
-
-### Select
-
-**Purpose**: Dropdown select field with label and validation.
-
-**Props**:
-- `label` (string): Field label text
-- `id` (string): HTML `id` attribute
-- `value` (string): Bound selected value
-- `options` (array): Options list `[{ value, label }, ...]`
-- `required` (boolean, default `false`): Adds required indicator
-- `disabled` (boolean, default `false`): Disables select
-- `error` (string, optional): Error message
-
-**Events**:
-- `change`: Fires on selection change (use `bind:value`)
-
-**Example**:
-```svelte
-<Select
-  label="Runtime Type"
-  id="runtime-type"
-  bind:value={runtimeType}
-  options={[
-    { value: 'docker', label: 'Docker' },
-    { value: 'wasm', label: 'WebAssembly' }
-  ]}
-  required
-/>
-```
-
----
-
-### Textarea
-
-**Purpose**: Multi-line text input with label and validation.
-
-**Props**:
-- `label` (string): Field label text
-- `id` (string): HTML `id` attribute
-- `value` (string): Bound textarea value
-- `placeholder` (string, optional): Placeholder text
-- `rows` (number, default `4`): Number of visible rows
-- `required` (boolean, default `false`): Adds required indicator
-- `disabled` (boolean, default `false`): Disables textarea
-- `error` (string, optional): Error message
-
-**Events**:
-- `input`: Fires on value change (use `bind:value`)
-
-**Example**:
-```svelte
-<Textarea
-  label="Runtime Config (JSON)"
-  id="runtime-config"
-  bind:value={configJson}
-  rows={8}
-  placeholder='{  "timeout": 300 }'
-/>
-```
-
----
-
-### Checkbox
-
-**Purpose**: Checkbox input with label.
-
-**Props**:
-- `label` (string): Checkbox label text
-- `id` (string): HTML `id` attribute
-- `checked` (boolean): Bound checked state
-- `disabled` (boolean, default `false`): Disables checkbox
-
-**Events**:
-- `change`: Fires on check/uncheck (use `bind:checked`)
-
-**Example**:
-```svelte
-<Checkbox
-  label="Protected Environment"
-  id="protected"
-  bind:checked={isProtected}
-/>
-```
-
----
-
-### FormField
-
-**Purpose**: Generic form field wrapper with label and error display.
-
-**Props**:
-- `label` (string): Field label text
-- `for` (string): Associates label with input `id`
-- `required` (boolean, default `false`): Shows `*` indicator
-- `error` (string, optional): Error message
-
-**Slots**:
-- `default`: Input element content
-
-**Example**:
-```svelte
-<FormField label="Custom Field" for="custom" required error={errors.custom}>
-  <input id="custom" type="text" bind:value={customValue} />
+<FormField label="Service name" id="service-name" required error={errors.name}>
+  <Input
+    id="service-name"
+    name="name"
+    bind:value={serviceName}
+    required
+    onblur={validateName}
+  />
 </FormField>
+
+<LoadingButton loading={saving} onclick={save}>Save</LoadingButton>
 ```
 
----
+Use callback props such as `onclick` and `onchange`; these components do not dispatch custom `click` or `change` events.
 
-### LoadingButton
+## Feedback and empty/error states
 
-**Purpose**: Button with loading spinner and disabled state during async operations.
+### Toast and ToastContainer
 
-**Props**:
-- `loading` (boolean): Shows spinner, disables button
-- `disabled` (boolean, default `false`): Disables button
-- `type` (string, default `'button'`): Button type (`button`, `submit`)
-- `variant` (string, default `'primary'`): Style variant (`primary`, `secondary`, `danger`)
+`Toast` accepts `id`, `type`, `title`, `message`, and `onClose`. Duration is managed by the store, not the component. Use the store exported through `$lib/components/toast.js`. `ToastContainer` takes no props and belongs once in the root layout.
 
-**Slots**:
-- `default`: Button text/content
+### ErrorBoundary and ErrorState
 
-**Events**:
-- `click`: Fires on button click (if not loading/disabled)
+`ErrorBoundary` is an imperative wrapper. Props: `fallbackTitle`, `fallbackMessage`, `resetLabel`, `onReset`, and `onError`. A parent can bind it and call exported `showError(error, info)`. It does not automatically catch arbitrary descendant exceptions.
 
-**Example**:
-```svelte
-<script>
-  let saving = false;
-  
-  async function save() {
-    saving = true;
-    try {
-      await submitSignedOperatorCommand('service/create', data);
-    } finally {
-      saving = false;
-    }
-  }
-</script>
-
-<LoadingButton loading={saving} on:click={save} variant="primary">
-  Save Service
-</LoadingButton>
-```
-
-Service and environment create/update/delete flows must use signer-first ContextVM/Nostr operator commands. REST-backed API client mutation helpers and direct MCP registry writes are deprecated and return migration errors.
-
----
-
-## Feedback Components
-
-### Toast
-
-**Purpose**: Temporary notification message (success, error, info, warning).
-
-**Props**:
-- `type` (string): Message type (`success`, `error`, `info`, `warning`)
-- `message` (string): Notification text
-- `duration` (number, default `3000`): Auto-dismiss duration in ms (0 = no auto-dismiss)
-
-**Events**:
-- `dismiss`: Fires when toast is dismissed
-
-**Example**:
-```svelte
-<Toast type="success" message="Service created successfully" duration={3000} />
-```
-
-**Usage with Toast Store**:
-```javascript
-import { toasts } from '$lib/components/toast.js';
-
-// Show toast
-toasts.success('Operation succeeded');
-toasts.error('Operation failed');
-toasts.info('FYI: something happened');
-toasts.warning('Be careful!');
-```
-
----
-
-### ToastContainer
-
-**Purpose**: Container that displays active toasts from the global toast store.
-
-**Props**: None
-
-**Placement**: Include once in `+layout.svelte`:
-```svelte
-<script>
-  import ToastContainer from '$lib/components/ToastContainer.svelte';
-</script>
-
-<ToastContainer />
-<slot />
-```
-
----
-
-### ErrorBoundary
-
-**Purpose**: Catches errors in child components and displays fallback UI.
-
-**Props**:
-- None (wraps child content)
-
-**Slots**:
-- `default`: Protected component tree
-- `error`: Custom error UI (optional, receives `{error}`)
-
-**Example**:
-```svelte
-<ErrorBoundary>
-  <slot name="error" let:error>
-    <ErrorState message={error.message} />
-  </slot>
-  
-  <MyComponentThatMightThrow />
-</ErrorBoundary>
-```
-
----
-
-### ErrorState
-
-**Purpose**: Displays an error message with optional retry action.
-
-**Props**:
-- `title` (string, default `'Something went wrong'`): Error title
-- `message` (string): Error description
-- `retryable` (boolean, default `false`): Shows retry button
-- `retryText` (string, default `'Try Again'`): Retry button label
-
-**Events**:
-- `retry`: Fires when retry button is clicked
-
-**Example**:
-```svelte
-<ErrorState
-  title="Failed to load services"
-  message={error.message}
-  retryable
-  on:retry={loadServices}
-/>
-```
-
----
+`ErrorState` accepts `title`, `message`, `details`, `resetLabel`, `showIcon`, and `onReset`, plus a default slot.
 
 ### EmptyState
 
-**Purpose**: Displays a message when no data is available, with optional action.
+`EmptyState` is a Svelte 5 component with `title`, `message`, `icon` or `iconComponent`, `showIcon`, `actionLabel` plus `onAction`, and optional `action`/`children` snippets.
 
-**Props**:
-- `title` (string): Empty state title
-- `message` (string): Description text
-- `actionLabel` (string, optional): Action button text
-- `icon` (string, optional): Icon name/emoji
-
-**Events**:
-- `action`: Fires when action button is clicked
-
-**Example**:
 ```svelte
 <EmptyState
-  title="No services yet"
-  message="Create your first service to get started"
-  actionLabel="Create Service"
-  icon="📦"
-  on:action={openCreateModal}
+  title="No souls"
+  message="Create the first soul."
+  actionLabel="Create soul"
+  onAction={() => goto('/souls/new')}
 />
 ```
 
----
-
-## Modal & Dialog Components
+## Dialogs
 
 ### Modal
 
-**Purpose**: Full-featured modal dialog with header, body, footer, and backdrop.
+Props:
 
-**Props**:
-- `open` (boolean): Controls modal visibility (use `bind:open`)
-- `title` (string): Modal header title
-- `size` (string, default `'md'`): Modal width (`sm`, `md`, `lg`, `xl`)
-- `closeOnBackdrop` (boolean, default `true`): Click backdrop to close
-- `closeOnEscape` (boolean, default `true`): Press ESC to close
+- bindable `open`;
+- `title`, `titleIcon`;
+- `size`: `sm`, `md`, `lg`, or `xl`;
+- `closeOnBackdrop`, `closeOnEscape`;
+- `onClose`, `onOpened`, `onClosed`.
 
-**Slots**:
-- `default`: Modal body content
-- `footer`: Modal footer (buttons, actions)
+Content is one default slot; there is no footer slot. The component focuses the dialog on open, restores previous focus on close, handles Escape/backdrop according to props, and declares dialog ARIA roles.
 
-**Events**:
-- `close`: Fires when modal is closed
-
-**Example**:
 ```svelte
-<Modal bind:open={showCreateModal} title="Create Service" size="lg" on:close={resetForm}>
-  <form on:submit|preventDefault={handleSubmit}>
-    <Input label="Name" bind:value={name} />
-    <!-- More fields -->
+<Modal bind:open={showDialog} title="Create service" onClose={reset}>
+  <form on:submit|preventDefault={save}>
+    <!-- fields and buttons -->
   </form>
-  
-  <svelte:fragment slot="footer">
-    <button on:click={() => showCreateModal = false}>Cancel</button>
-    <LoadingButton loading={saving} on:click={handleSubmit}>Create</LoadingButton>
-  </svelte:fragment>
 </Modal>
 ```
 
-**Accessibility**:
-- Focus trap: keeps keyboard focus inside modal
-- `aria-modal="true"` and `role="dialog"`
-- ESC key closes modal
-- Restores focus to trigger element on close
-
----
-
 ### ConfirmDialog
 
-**Purpose**: Simple confirmation dialog with confirm/cancel actions.
+Props are `open`, `title`, `titleIcon`, `message`, `confirmLabel`, `cancelLabel`, `variant`, `loading`, `onConfirm`, `onCancel`, and `onClose`. It also accepts a default slot.
 
-**Props**:
-- `open` (boolean): Controls dialog visibility (use `bind:open`)
-- `title` (string): Dialog title
-- `message` (string): Confirmation message
-- `confirmText` (string, default `'Confirm'`): Confirm button label
-- `cancelText` (string, default `'Cancel'`): Cancel button label
-- `variant` (string, default `'danger'`): Button variant (`primary`, `danger`)
-
-**Events**:
-- `confirm`: Fires when confirmed
-- `cancel`: Fires when cancelled
-
-**Example**:
 ```svelte
 <ConfirmDialog
-  bind:open={showDeleteConfirm}
-  title="Delete Service"
-  message="Are you sure you want to delete '{serviceName}'? This cannot be undone."
-  confirmText="Delete"
+  bind:open={confirmDelete}
+  title="Delete service"
+  message="This cannot be undone."
+  confirmLabel="Delete"
   variant="danger"
-  on:confirm={deleteService}
-  on:cancel={() => showDeleteConfirm = false}
+  onConfirm={removeService}
 />
 ```
 
----
-
-## Layout & Data Components
+## Layout and data
 
 ### Card
 
-**Purpose**: Container with border, padding, and optional header/footer.
-
-**Props**:
-- `title` (string, optional): Card header title
-- `padding` (string, default `'md'`): Padding size (`sm`, `md`, `lg`)
-
-**Slots**:
-- `header`: Custom header content (overrides `title` prop)
-- `default`: Card body content
-- `footer`: Card footer content
-
-**Example**:
-```svelte
-<Card title="Recent Deployments">
-  <Table data={deployments} />
-  
-  <svelte:fragment slot="footer">
-    <a href="/deployments">View all →</a>
-  </svelte:fragment>
-</Card>
-```
-
----
+`Card` has `title`, `titleIcon`, `value`, `subtitle`, `status`, and a `children` snippet. It does not implement named header/footer slots or a padding prop.
 
 ### Table
 
-**Purpose**: Simple data table with headers and rows.
+`Table` accepts:
 
-**Props**:
-- `data` (array): Array of row objects
-- `columns` (array): Column definitions `[{ key, label, format? }, ...]`
-- `emptyMessage` (string, default `'No data'`): Message when `data` is empty
+- `columns` with `key`, `label`, and optional `text`, `icon`, or `render`;
+- `data`;
+- `onRowClick`;
+- `rowClickable`, defaulting from `onRowClick`.
 
-**Slots**:
-- `cell`: Custom cell renderer (receives `{row, column, value}`)
+The empty row text is fixed to `No data`. `render(row)` returns trusted HTML and must not receive untrusted content.
 
-**Example**:
 ```svelte
 <Table
   data={services}
   columns={[
     { key: 'name', label: 'Service' },
-    { key: 'runtime_type', label: 'Runtime' },
-    { key: 'created_at', label: 'Created', format: (val) => new Date(val).toLocaleDateString() }
+    { key: 'runtime_type', label: 'Runtime' }
   ]}
+  onRowClick={(row) => goto('/services/' + row.id)}
 />
 ```
-
----
 
 ### Badge
 
-**Purpose**: Small colored label/tag for status, type, or metadata.
+`Badge` accepts `variant` and `size`; text is the default slot.
 
-**Props**:
-- `variant` (string): Color variant (`success`, `error`, `warning`, `info`, `default`)
-- `text` (string): Badge text
-
-**Example**:
 ```svelte
-<Badge variant="success" text="Running" />
-<Badge variant="error" text="Failed" />
-<Badge variant="info" text="Pending" />
+<Badge variant="success">Running</Badge>
 ```
 
-**Usage in Tables**:
-```svelte
-<Table data={deployments}>
-  <svelte:fragment slot="cell" let:row let:column>
-    {#if column.key === 'status'}
-      <Badge variant={statusVariant(row.status)} text={row.status} />
-    {:else}
-      {row[column.key]}
-    {/if}
-  </svelte:fragment>
-</Table>
-```
+## ConnectionStatus
 
----
+`ConnectionStatus` exposes subscription health in the app shell.
 
-## Soul Factory Components
+Props:
+
+- `connection`, defaulting to `controlplaneConnection`;
+- `retry`, defaulting to control-plane `manualRetry`.
+
+The expanded panel shows relay count/list, `lastEventAt`, `lastEoseAt`, and `lastError`, with manual retry for error/disconnected states. The connection object also carries `resubscribeAttempts`, `lastClosedReason`, and reconnect state.
+
+## SoulFactory components
 
 ### ProvisioningProgress
 
-**Purpose**: Displays real-time provisioning progress for Soul Factory operations.
+Props are `run` and optional `onComplete`. `run` contains `status`, `step`, `progress`, `message`, and terminal `result`. The component knows all eight stages and never decides completion from EOSE.
 
-**Props**:
-- `runId` (string): Provisioning run ID
-- `events` (array): Array of progress events
-
-**Example**:
 ```svelte
-<ProvisioningProgress runId={$currentRun.id} events={$currentRun.events} />
-```
-
----
-
-### SoulCard
-
-**Purpose**: Card component displaying a Soul's details and status.
-
-**Props**:
-- `soul` (object): Soul object with `{ name, status, pubkey, ... }`
-
-**Events**:
-- `click`: Fires when card is clicked
-
-**Example**:
-```svelte
-<SoulCard soul={soulData} on:click={() => goto(`/souls/${soul.id}`)} />
-```
-
----
-
-### TemplateSelector
-
-**Purpose**: Grid selector for Soul Factory templates.
-
-**Props**:
-- `templates` (array): Array of template objects
-- `selected` (string): Currently selected template ID
-
-**Events**:
-- `select`: Fires when a template is selected (detail: `{ templateId }`)
-
-**Example**:
-```svelte
-<TemplateSelector
-  templates={$templates}
-  selected={selectedTemplate}
-  on:select={(e) => selectedTemplate = e.detail.templateId}
+<ProvisioningProgress
+  run={provisioningRuns.get(requestId)}
+  onComplete={() => goto('/souls/' + agentId)}
 />
 ```
 
----
+### SoulCard
 
-## Accessibility Guidelines
+`SoulCard` accepts only `soul`. It renders its own link to `/souls/{soul.agentId}`; it does not emit a custom click event. It displays soul, deployment, runtime-target, and runtime-state badges.
 
-All components follow these accessibility principles:
+```svelte
+<SoulCard {soul} />
+```
 
-1. **Semantic HTML**: Use appropriate elements (`<button>`, `<a>`, `<label>`)
-2. **Keyboard Navigation**: All interactive elements are keyboard-accessible
-3. **Focus Management**: Modals trap focus, buttons have visible focus states
-4. **ARIA Attributes**: Form errors use `aria-invalid`, `aria-describedby`
-5. **Color Contrast**: All text meets WCAG 2.1 AA contrast requirements
-6. **Screen Reader Support**: Labels, error messages, and state changes are announced
+### TemplateSelector
 
-### Testing Accessibility
+`TemplateSelector` accepts `selected` and `onSelect`. It loads templates from the SoulFactory store; callers do not pass a `templates` prop. The callback receives the template object or `null` for custom.
 
-Use these tools to verify accessibility:
+```svelte
+<TemplateSelector bind:selected onSelect={(template) => selected = template} />
+```
 
-- **axe DevTools**: Browser extension for automated accessibility testing
-- **Keyboard Navigation**: Tab through all interactive elements
-- **Screen Reader**: Test with VoiceOver (macOS), NVDA (Windows), or JAWS
+Souls routes also use `AvatarStudio`, `PersonalityBuilder`, `VoiceStudio`, and top-level `MemoryConfig`. Consult their `$props()` and tests before reuse.
 
-## Styling Conventions
+## Svelte conventions
 
-Components use utility-first CSS with these conventions:
+- For `runes={false}` components, use exported props, default slots, and explicit callback props.
+- For runes components, use the `$props()` contract and snippets where defined.
+- Prefer callback props over new event-dispatcher APIs.
+- Label native controls through `FormField`.
+- Update unit tests whenever a public prop contract changes.
 
-- **Spacing**: `gap-2`, `p-4`, `mb-2` (Tailwind-like)
-- **Colors**: `text-red-600`, `bg-blue-50`, `border-gray-300`
-- **Typography**: `text-sm`, `font-medium`, `leading-tight`
-- **Responsive**: Mobile-first, `md:`, `lg:` breakpoints
+## Related documents
 
-**Customization**: Component styles are scoped within `<style>` blocks. Override via CSS custom properties or wrapper classes.
-
-## Adding New Components
-
-When creating new reusable components:
-
-1. **Place in** `web/src/lib/components/`
-2. **Export props** with clear names and defaults
-3. **Emit events** for user interactions (`on:click`, `on:submit`, etc.)
-4. **Add slots** for flexible composition
-5. **Document** props, events, slots, and examples (add to this guide)
-6. **Test** for accessibility and keyboard navigation
-
-## Next Steps
-
-- **Setup Guide**: See [web-app-setup.md](./web-app-setup.md)
-- **API Client Reference**: See [web-api-client.md](./web-api-client.md)
-- **Testing Guide**: See [web-testing.md](./web-testing.md)
+- [Web app setup](web-app-setup.md)
+- [Web HTTP client](web-api-client.md)
+- [Web testing](web-testing.md)

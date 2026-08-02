@@ -75,55 +75,15 @@ Operational controls are available on list and detail pages:
 - **Probe repository** publishes `backup/repository-probe`.
 - **Approve/Reject restore** publishes `approval/backup-restore-approve`.
 
-### CLI
+### CLI and MCP
 
-```bash
-bahia backup definitions create \
-  --name "database-daily" \
-  --target type=postgresql,connection="postgres://..." \
-  --schedule "0 2 * * *" \
-  --policy-id policy-123 \
-  --repository-id repo-456
-```
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_backup_definition_apply",
-  "arguments": {
-    "name": "database-daily",
-    "target": {
-      "type": "postgresql"
-    },
-    "schedule": "0 2 * * *"
-  }
-}
-```
+The current CLI does not register a `bahia backup` group. Use the web UI or signer-first backup operations. In an embedding that explicitly configures external MCP authorization, use `apply_backup_definition` / `bahia_apply_backup_definition`; its schema requires the definition name plus repository, policy, and recipe identities.
 
 ## Backup Runs
 
-### Manual Trigger
+### Manual trigger
 
-```bash
-bahia backup run database-daily
-```
-
-```json
-{
-  "tool": "bahia_backup_run",
-  "arguments": {
-    "definition": "database-daily"
-  }
-}
-```
-
-### Viewing Runs
-
-```bash
-bahia backup runs list
-bahia backup runs get run-123
-```
+Use `request_backup_run` (or `bahia_request_backup_run`) with a recipe identity and an `idempotency_key`. Use `list_backup_runs` and `inspect_backup_run` for projected run state.
 
 ### Run Status
 
@@ -139,20 +99,9 @@ bahia backup runs get run-123
 
 Verify backups are restorable:
 
-### Trigger Verification
+### Trigger verification
 
-```bash
-bahia backup verify run-123
-```
-
-```json
-{
-  "tool": "bahia_backup_verify",
-  "arguments": {
-    "run_id": "run-123"
-  }
-}
-```
+Call `request_backup_verification` or `bahia_request_backup_verification` with `backup_run_id`, an `idempotency_key`, and optional `mode: "kopia_snapshot_verify"`.
 
 ### Verification Process
 
@@ -176,49 +125,23 @@ verification:
 
 ## Restore
 
-### Initiating Restore
+### Initiating restore
 
-```bash
-bahia backup restore run-123 \
-  --target "postgres://restore-db/..."
-```
+Call `request_backup_restore` or `bahia_request_backup_restore` with `backup_run_id`, `restore_target_ref`, and an `idempotency_key`.
 
-```json
-{
-  "tool": "bahia_backup_restore",
-  "arguments": {
-    "run_id": "run-123",
-    "target": "postgres://restore-db/..."
-  }
-}
-```
+### Restore approval
 
-### Restore Approval
+Production restores may require approval. Use `approve_backup_restore` or `reject_backup_restore` (and their `bahia_` aliases) with the restore ID and idempotency key.
 
-Production restores may require approval:
+### Restore status
 
-```bash
-bahia backup restore approve restore-456
-bahia backup restore reject restore-456 --reason "Wrong target"
-```
-
-### Restore Status
-
-```bash
-bahia backup restores list
-bahia backup restores get restore-456
-```
+Use `list_backup_restores` and `inspect_backup_restore`.
 
 ## Backup Policies
 
-### Creating Policies
+### Creating policies
 
-```bash
-bahia backup policies create \
-  --name "production-policy" \
-  --retention daily=7,weekly=4,monthly=12 \
-  --verification required=true,frequency=weekly
-```
+Use the web mutation panel or `apply_backup_policy` / `bahia_apply_backup_policy`. The CLI does not register a backup group.
 
 ### Retention Rules
 
@@ -251,20 +174,13 @@ verification:
 | `local` | Local filesystem |
 | `blossom` | Blossom blob storage |
 
-### Creating Repository
+### Creating a repository
 
-```bash
-bahia backup repositories create \
-  --name "s3-backups" \
-  --type s3 \
-  --config bucket=my-backups,region=us-east-1
-```
+Use the web mutation panel or `apply_backup_repository` / `bahia_apply_backup_repository`.
 
-### Repository Health
+### Repository health
 
-```bash
-bahia backup repositories probe repo-456
-```
+Use `probe_backup_repository` / `bahia_probe_backup_repository` with a repository identity and idempotency key.
 
 ## Nostr Event Kinds
 

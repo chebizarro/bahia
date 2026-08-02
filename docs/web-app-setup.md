@@ -4,8 +4,8 @@ This guide covers setting up and running the Bahia SvelteKit web application.
 
 ## Prerequisites
 
-- **Node.js**: v18+ (v20 recommended)
-- **pnpm**: v8+ (`npm install -g pnpm`)
+- **Node.js**: `^20.19.0`, `^22.12.0`, or `>=24.0.0` (required by the current Vite dependency)
+- **pnpm**: use a version compatible with `web/pnpm-lock.yaml`
 - **Bahia Backend**: Running locally or remotely (default: `http://localhost:8080`)
 - **NIP-07 Browser Extension** (optional): For direct browser signing (NIP-07)
 - **NIP-46 Signer/Bunker** (optional): For remote signing via Nostr Connect
@@ -46,7 +46,7 @@ The web app connects to the Bahia backend API via `/api/v1` routes. The base URL
 const BASE_URL = '/api/v1';
 ```
 
-For local development, the SvelteKit dev server proxies API requests to `http://localhost:8080` (configured in `svelte.config.js` if needed).
+For local development, Vite proxies `/api` to `http://localhost:8080` in `web/vite.config.js`.
 
 For production deployments, configure your reverse proxy/ingress to route `/api/*` to the Bahia backend service.
 
@@ -63,6 +63,22 @@ The web app uses compile-time environment variables for Nostr bootstrap discover
 | `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |
 
 The Settings page shows the web app as a separately packaged frontend component and shows backend-side packaged components advertised by Bahia system discovery. Release builds should stamp versions as `0.1.0-<commit-hash>` unless release automation intentionally provides another SemVer-compatible value.
+
+### Relay subscriptions, health, and caches
+
+Long-lived app stores use `PoolBackedClient.subscribeWithRecovery()`: relay `CLOSED`/connection failures reissue REQ with capped jittered backoff and a last-seen replay cursor. EOSE marks the stored/live boundary; it does not close the subscription or imply terminal workflow completion.
+
+The connection indicator exposes relay count/list, last event, last EOSE, errors, and manual retry. Store-local health also tracks resubscribe attempts and the last close reason.
+
+Control-plane collections hydrate from a TTL-bounded IndexedDB cache before relay sync. Persistence snapshots Svelte reactive proxies to plain structured-clone-safe objects and intentionally skips high-churn collections. Discovery/docs caches use browser storage separately.
+
+Branch and relay-document reads resolve their initial EOSE/degraded result while retaining recovery subscriptions for live follow-up events. The pre-auth NIP-65/metadata lookup is the intentional bounded exception.
+
+### Current LLM and Souls UI
+
+The `/llm` UI can configure external LiteLLM-backed releases with `metadata.litellm_model`. Authorization headers are secret references (`header_secret_refs` / `health_header_secret_refs`), never literal secret values.
+
+The Souls gallery reconciles provisioned read models with drafts: a draft whose `agent_id` already has a final `31951` is not shown as unresolved. Runtime choices remain gated by compatible `30317` capabilities and advertised methods.
 
 ## Authentication & Authorization
 
@@ -138,7 +154,7 @@ Compatibility notes for renamed keys:
 **Solutions**:
 - Check the relay connection status indicator (top-right corner)
 - Verify ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertises `relay_sidecar` and `relay_read_models`
-- Open DevTools → Network and confirm the `/relay` WebSocket is connected
+- Open DevTools → Network and confirm WebSocket connections to the relay URLs advertised by discovery
 - Check Bahia and relay sidecar logs for publish/subscribe errors
 
 ### Development Server Issues
@@ -148,7 +164,7 @@ Compatibility notes for renamed keys:
 **Solutions**:
 - Clear `.svelte-kit/` build cache: `rm -rf .svelte-kit`
 - Delete `node_modules` and reinstall: `rm -rf node_modules && pnpm install`
-- Check Node.js version: `node -v` (must be v18+)
+- Check Node.js version: `node -v` (must satisfy the current Vite engine: `^20.19.0`, `^22.12.0`, or `>=24`)
 - Check for port conflicts on 5173
 
 ### Test Failures
@@ -173,7 +189,7 @@ The web app is tested on:
 - **NIP-07 on Mobile**: Limited browser extension support (use Nostore on iOS Safari)
 - **Compatibility-gated pages**: Some routes still depend on backend direct NIP-98 compatibility while migration to fully Nostr-native read/write flows continues
 - **WebSocket relay**: Required for live control-plane updates
-- **localStorage**: Stores non-secret session metadata; private browsing may clear sessions on close
+- **Browser storage**: IndexedDB caches read-model collections; localStorage holds discovery/docs caches and non-secret session metadata. Private browsing or storage eviction may clear them
 
 ## Next Steps
 

@@ -49,13 +49,16 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Environments](features/environments.md) | Configure deployment targets (staging, production) |
 | [Deployments](features/deployments.md) | Deploy artifacts with intents, approvals, and runs |
 | [Artifacts](features/artifacts.md) | Container images and build outputs |
-| [Notifications](features/notifications.md) | Alert channels (webhook, email, Slack, Nostr) |
+| [Notifications](features/notifications.md) | Organization-scoped webhook and Nostr DM delivery |
 | [Organizations](features/organizations.md) | Team management and access control |
 | [LLM Routes](features/llm-routes.md) | Manage and deploy LLM inference endpoints (feature-gated; disabled by default) |
 | [ML Models](features/ml-models.md) | AI/ML model registry, recipes, and inference |
 | [Souls](features/souls.md) | AI agent provisioning with Soul Factory (feature-gated; disabled by default) |
 | [Workers](features/workers.md) | Loom workers for deployment execution |
 | [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
+| [Continuity](features/continuity.md) | Failover readiness, topology, and local simulation |
+| [Events](features/events.md) | Live inspection of Nostr control-plane and read-model events |
+| [Environment States](features/environment-states.md) | Desired-versus-observed state and drift inspection |
 | [Backup](features/backup.md) | Backup definitions, policies, and recovery |
 | [DNS](features/dns.md) | DNS zone and endpoint management (feature-gated; disabled by default) |
 | [Packages](features/packages.md) | Package repository management |

@@ -1,8 +1,8 @@
 # Bahia Web App Production Readiness Plan
 
-> **⚠️ Historical planning document with a stale snapshot section**
+> **⚠️ Historical planning document with a dated current-state delta**
 >
-> This file mixes a preserved web-app roadmap with a short 2026-04-29 status snapshot. It is **not** the source of truth for Bahia's current auth, transport, or control-plane behavior.
+> This file preserves the original web-app roadmap and 2026-04-29 snapshot. A verified 2026-08-01 delta is included below, but this file is still not a product contract. It is **not** the source of truth for Bahia's current auth, transport, or control-plane behavior.
 >
 > Current authoritative docs:
 > - `docs/control-planes.md`
@@ -15,10 +15,23 @@
 >
 > **Status**: Historical planning artifact; not current product contract
 > **Created**: 2026-04-29  
-> **Updated**: 2026-05-05 (reclassified as historical / non-authoritative)
+> **Updated**: 2026-08-01 (current-state delta; historical roadmap preserved)
 > **Scope**: Historical web planning, migration staging, and roadmap context
 
 ---
+
+## Verified current-state delta — 2026-08-01
+
+This delta records material behavior added after the historical snapshot. The authoritative implementation remains `web/src` and the current docs linked above.
+
+- **Subscription recovery**: shared `subscribeWithRecovery` reissues relay subscriptions after `CLOSED`/connection failure with capped jittered backoff, last-seen replay cursors, overlap deduplication, and NIP-42-aware retry.
+- **Client health**: migrated stores expose last EOSE, resubscribe attempts, and last close reason; the app-shell connection indicator shows relay/event/sync/error state and manual retry.
+- **EOSE correctness**: discovery drains queued events before normalization; control-plane bootstrap gates readiness on connected-relay EOSE and stays live; branches and relay docs use persistent recovery subscriptions after initial EOSE/degraded completion.
+- **Encrypted ordering**: requester-scoped ContextVM result subscription and pending waiter are installed before encrypted publish, preventing loss of fast/ephemeral results; the relay harness uses event-driven readiness instead of sleep.
+- **Collection cache**: read-model collections persist per collection in IndexedDB with TTLs/caps; `$state.snapshot()` converts reactive proxies before structured clone; high-churn collections are skipped.
+- **LLM configuration**: `/llm` supports external LiteLLM model metadata and secret-reference-backed Authorization headers for route and external-health configuration.
+- **Souls reconciliation**: the gallery hides drafts already represented by provisioned `31951` souls and preserves capability/method gating.
+- **HTTP client scope**: `BahiaClient` is no longer a full-domain CRUD client; its implemented methods are SBOM/Blossom compatibility helpers. Shared domains use relay collections and signed public/encrypted control planes.
 
 ## Snapshot Note
 

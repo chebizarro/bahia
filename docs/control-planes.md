@@ -86,19 +86,21 @@ The production cutover is complete: CLI/web/client mutations use the ContextVM m
 Every long-running control-plane write surface returns a `CommandReceipt`-compatible object after the request event has been signed and at least one relay has accepted it. The canonical fields are:
 
 - `request_event_id`: signed Nostr request event id.
-- `request_kind`: legacy Nostr request kind when a migration fixture path is still used; ContextVM clients should instead expose `method` and ContextVM `request_event_id`.
-- `status_kind` / `result_kind`: legacy progress and terminal event kinds when fixture paths are still used; canonical clients should follow `30900`, `4903`, `30315`, domain NIPs, and correlated ContextVM responses.
+- `request_kind`: `25910` for canonical ContextVM-backed writes (legacy values may appear only in migration fixtures).
+- `status_kind` / `result_kind`: normally `30315` and correlated ContextVM `25910` for canonical service writes; clients also follow `30900`, `4903`, domain NIPs, and receipt-provided read-model coordinates.
 - `idempotency_key`: the Nostr `d` tag used to collapse retries of the same logical command.
 - `status`: `submitted` when the request was accepted; `error` when only a partial publish succeeded.
 - `published_relays`: number of relays that accepted the request.
 - `timeout_seconds`: publish-and-wait compatibility timeout; default is 30 seconds unless configured by the caller.
 - `error` / `retry_hint`: present for partial failure or relay-unreachable failures.
 
-Publish-and-wait compatibility is not terminal truth. Clients must subscribe with scoped filters using `request_event_id`, `request_kind`, `status_kind`, `result_kind`, requester `p`, and relevant resource tags; EOSE only marks historical catch-up complete. Relay-unreachable failures return immediately with a retry hint because no relay accepted the command. Partial relay failures return a receipt with `status=error` and the accepted relay count so callers can avoid unsafe fallback once any relay has accepted the event.
+Publish-and-wait compatibility is not terminal truth. Clients must subscribe with scoped filters using `request_event_id`, requester `p`, relevant resource tags, and canonical response/status/state/audit kinds; EOSE only marks historical catch-up complete. Relay-unreachable failures return immediately with a retry hint because no relay accepted the command. Partial relay failures return a receipt with `status=error` and the accepted relay count so callers can avoid unsafe fallback once any relay has accepted the event.
 
-Command publishers and reactors use idempotency keys as Nostr `d` tags. If a caller does not provide one, publishers generate one; CLI signer-first operator commands derive deterministic keys from the command kind, scoped tags, and payload. The reactor deduplicates both event ids and `(kind, pubkey, d-tag)` command replays before executing business logic; persistence exposes lookups by that coordinate so replay protection survives process restarts when the Nostr event audit repository is configured.
+Command publishers and reactors use idempotency keys as Nostr `d` tags. If a caller does not provide one, publishers generate one; CLI signer-first operator commands derive deterministic keys from the ContextVM method, scoped tags, and payload. The reactor deduplicates both event ids and `(kind, pubkey, d-tag)` command replays before executing business logic; persistence exposes lookups by that coordinate so replay protection survives process restarts when the Nostr event audit repository is configured.
 
-MCP runtime/deployment, LLM, AI/ML, DNS, adoption, and remediation tools return uniform receipt fields. REST long-running Nostr-backed AI/ML routes return `202 Accepted` with `CommandReceipt`; legacy REST registry routes that frontend clients still consume synchronously remain compatibility routes until their clients are migrated.
+Separately, Bahia's main service-authored Nostr adapter persists signed outbound events as pending `nostr_events` rows before publishing. Accepted or duplicate relay `OK` marks a row published; otherwise a background runner retries it with backoff. `bahia_nostr_outbox_depth` reports pending depth. This guarantee is limited to publishers wired through the outbox adapter and does not make a ContextVM receipt terminal truth.
+
+MCP runtime/deployment, LLM, AI/ML, DNS, adoption, and remediation tools return the common count-based receipt fields above. The operator-assistant planner has a separate normalized receipt whose `published_relays` field is a URL list; clients must not deserialize that assistant-specific shape as `CommandReceipt`. REST long-running Nostr-backed AI/ML routes return `202 Accepted` with `CommandReceipt`; legacy REST registry routes that frontend clients still consume synchronously remain compatibility routes until their clients are migrated.
 
 ---
 
@@ -110,7 +112,7 @@ Browser and Bahia control-plane traffic should target the relay sidecar first.
 - Bahia backend connection: `nostr.sidecar.backend_url` when set, otherwise `nostr.sidecar.public_url`
 - Bahia-owned control-plane reactor/projector traffic uses only the sidecar backend URL in sidecar mode.
 - Upstream relays: configure `nostr.relays` for public interop/audit traffic. If `nostr.sidecar.mirror_external=true`, Bahia treats the sidecar as the upstream mirror boundary and does not also connect directly to those URLs.
-- Encrypted-request relay URLs and Loom relays remain explicitly configured for their own traffic and are not used for Bahia read-model publication.
+- ContextVM requests and replies use the ContextVM relay policy. Bahia gives encrypted replies a separate relay-pool connection so response publication cannot interfere with request subscriptions; Loom and other protocol relays remain separately configured.
 
 This avoids duplicate event loops: Bahia publishes canonical observables (`30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext, ContextVM discovery `11316`-`11320`, relay sets `30002`, and app data `30078`) to the sidecar pool only, while optional upstream mirroring is isolated behind the sidecar boundary.
 
@@ -121,7 +123,7 @@ Relay URLs are physical endpoints; Bahia relay purpose is policy. A deployment m
 | Purpose | Owner | Canonical mechanism | Boundary |
 |---|---|---|---|
 | Public browser bootstrap/read models | Bahia service | NIP-51 `30002`, `d=bahia-browser-v1` | Public browser bootstrap and read-model relay boundary. |
-| ContextVM request/reply | Bahia service | NIP-51 `30002`, `d=bahia-contextvm-v1` | ContextVM mutation traffic; clients prefer it when present and may fall back to browser relays only with degraded metadata. |
+| ContextVM request/reply | Bahia service | NIP-51 `30002`, `d=bahia-contextvm-v1` | ContextVM mutation traffic. Request and isolated response pools share this policy; clients prefer it and may fall back to browser relays only with degraded metadata. |
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service publication and historical backfill; not automatically exposed to browsers. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing preferences, not Bahia service-strategy authorization. |
 | Repository/ngit | Repository maintainer or SoulFactory | NIP-34 `30617` `relays` tags and `30618` state | Repository-specific relay hints, preferred before global Bahia relay policy for repository operations. |
@@ -144,7 +146,7 @@ Production runtime subscribes to ContextVM `25910` messages and canonical observ
 |--------|-------|-----------------|
 | ContextVM CRU | `25910` inside `1059`/`21059` where supported | Browser/CLI/agent JSON-RPC mutation methods and correlated responses |
 | Canonical state | `30900`, `30078` | Control-plane state projections and NIP-78 app-specific data; SBOM references use `30078` with `schema=bahia.sbom.ref.v1` |
-| Canonical audit/status | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
+| Canonical audit/status | `4903`, `30315` | Relay-queryable immutable audit facts and NIP-38 operational statuses |
 | Assistant transcript | `30316` | Assistant conversation/tool transcript entries encrypted as service-held symmetric-key AEAD envelopes with key-reference/rotation tags |
 | ContextVM discovery | `11316`-`11320` | Server, tool, resource, prompt, and template announcements |
 | Relay sets and curation sets | `30002`, `30004` | NIP-51 relay topology/bootstrap sets and complete SBOM availability lists |
@@ -179,6 +181,7 @@ Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecyc
 4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext for assistant flows, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
 5. Treat EOSE as historical catch-up only; keep subscriptions open for realtime convergence. Deduplicate by event id and use replaceable semantics for `(kind, pubkey, d-tag)` state events.
 6. Handle `CLOSED` and `AUTH` explicitly. Auth-related closures fail distinctly; non-auth closures fail only when all known result/observable relays close before a correlated terminal state/audit/status event.
+7. For encrypted replies, preserve wrapper lifetime (`1059` request → `1059` reply; `21059` request → `21059` reply) and correlate the outer reply to the outer request with `e=<outer-request-id>,reply`.
 
 SBOM methods (`sbom/generate` and `sbom/import`) are explicit asynchronous-ack methods. Their ContextVM JSON-RPC result is an acceptance coordinate, not a run result:
 
@@ -297,7 +300,7 @@ Authorization uses the verified inner ContextVM event pubkey after unwrap:
 
 #### Adoption scan/import
 
-Adoption requests use ContextVM methods `adoption/scan` and `adoption/import`. Targets must reference server-managed runtime endpoints; raw Docker transport material is forbidden. Historical `5978`/`5979` events may be consumed only by startup migration/fixtures.
+Adoption requests use ContextVM methods `adoption/scan` and `adoption/import`. Targets must reference server-managed runtime endpoints; raw Docker transport material is forbidden. Signed imports accept `org_id` (CLI `--org <uuid>`); the service infers it only when existing target environments or the organization catalog are unambiguous and otherwise fails closed. Imports create or reuse a per-service deployment unit, bind both state and the initial observation to it, and reject cross-organization name reuse. A legacy non-adopted service with the selected name may be taken over only by explicit import; an already-adopted service pointing at another target remains a conflict. Historical `5978`/`5979` events may be consumed only by startup migration/fixtures.
 
 #### Direct-runtime actions
 

@@ -116,7 +116,8 @@ Use Bahia audit.
 - Include `e` for source/correlation when possible.
 - Include `p` for responsible or requesting actors where appropriate.
 - Include resource tags such as `service`, `environment`, `artifact`, `worker`, `package`, `dns_zone`, or `run`.
-- Audit events should be treated as protected and long-retention. They are not normal delete targets.
+- Audit events should be treated as protected and long-retention. They are not normal delete targets, but relay availability is still bounded by configured `event_retention`; compliance evidence needs appropriate retention or archival storage.
+- `protected=true` is Bahia audit metadata. Projected audits currently omit the NIP-70 `-` tag; that tag governs authenticated author publication, not read visibility.
 
 Use NIP-58 badges for permission or capability grants; use `4903` for the audit trail describing the grant or revocation.
 
@@ -420,6 +421,14 @@ Common tags across fleet events:
 
 Do not rely on relay indexing for multi-character tags unless the sidecar or target relay explicitly supports it. Still include semantic tags for consumers and internal sidecar indexing.
 
+## Publication, replay, and retention invariants
+
+- For service-authored events using `internal/adapters/nostr.Publisher`, persist the fully signed event as a pending `nostr_events` outbox row before relay delivery. Mark it published only after an accepted or duplicate relay `OK`; retain and retry failures with backoff.
+- Do not generalize that outbox guarantee to every relay pool or client publisher. A caller request with zero accepted relays is not accepted, and a ContextVM receipt is not terminal business truth.
+- Sidecar persistence precedes `OK`. Subscriber fanout must remain off the acknowledgment path so a slow subscriber cannot stall writes.
+- Replay filters for IDs, kinds, authors, `since`, and `until` should be scoped in storage before full filter matching. Keep replay reads isolated from the write connection and enforce `max_query_limit`; `EOSE` ends only the bounded query, so clients that may hit the cap must narrow resource/time filters, overlap windows, and deduplicate.
+- Retain ContextVM transport (`25910`, `1059`, `21059`) according to `request_retention`; retain observables and all other kinds according to `event_retention`.
+
 ## Migration app rules
 
 Bahia has already deployed older events. Legacy events are migrated by a startup migration module rather than by keeping legacy runtime behavior alive.
@@ -442,7 +451,7 @@ Before adding or changing Nostr event code:
 - [ ] Verify that consumers validate authors, signatures, encryption, tags, and application semantics without relying on relay admission.
 - [ ] Add or update event shape tests for required tags, content schema, and projection family decoding.
 - [ ] Add idempotency and dedupe behavior for handlers.
-- [ ] Verify relay `OK`, `CLOSED`, and `AUTH` paths.
+- [ ] Verify relay `OK`, duplicate-`OK`, `CLOSED`, and `AUTH` paths; verify outbox state only when using the outbox-backed publisher.
 - [ ] Subscribe with scoped filters and handle EOSE as historical catch-up, not completion.
 - [ ] Update docs when event kinds, tags, schemas, or migration behavior change.
 - [ ] Create Beads for deferred work rather than leaving comments or TODOs.

@@ -74,7 +74,7 @@ The checked-in workflow is `.github/workflows/deploy-edge.yml`. It:
 10. invokes `scripts/deploy_edge_compose_update.py` to update the live Compose images and docs mount;
 11. validates the resulting Compose file with `docker compose -f "$COMPOSE_FILE" config --quiet`;
 12. runs `docker compose -f "$COMPOSE_FILE" up -d bahia relay web`;
-13. verifies:
+13. verifies liveness and endpoint reachability (the checked-in workflow currently does **not** call `/ready` or automatically restore the Compose backup on failure):
 
 ```bash
 curl -fsS http://127.0.0.1:8080/health
@@ -137,6 +137,8 @@ python3 -m unittest discover -s test/scripts -p 'test_*.py'
 
 ### Operational Notes
 
+- `/health` is liveness, not the active-tier readiness gate. Before declaring the edge rollout ready, operators must also require `curl -fsS http://127.0.0.1:8080/ready`; Bahia returns `503` when required readiness checks fail.
+- The current workflow backs up Compose before mutation but does not automatically restore that backup when post-deploy checks fail. A red workflow is not a verified rollback; restore the prior Compose file/image tags, run `docker compose up -d bahia relay web`, and re-check `/ready`, relay NIP-11, and the web endpoint.
 - Keep `cancel-in-progress: false`; interrupted production deploys are worse than serialized deploys.
 - The workflow updates the existing compose file in place, after backing it up.
 - The workflow uses local images because the current live stack already uses local tags.
@@ -346,4 +348,4 @@ The direct compose-mutating workflow can be removed when:
 - Bahia registers artifacts from `5402`;
 - Bahia creates or accepts deployment intents for the target environment;
 - deployment execution updates the same live compose stack safely;
-- rollback is verified from a previous artifact.
+- rollback is verified from a previous artifact and the restored stack passes `/ready` (not merely `/health`).

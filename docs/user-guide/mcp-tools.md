@@ -1,244 +1,24 @@
 # MCP Tools Reference
 
-Bahia exposes tools via the **Model Context Protocol (MCP)** for AI agent integration.
+Bahia exposes Model Context Protocol (MCP) over `/mcp` and `/api/v1/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
 
-## Overview
-
-MCP provides:
-- **Tool discovery** — List available tools
-- **Tool invocation** — Execute operations
-- **Resource access** — Read DNS/FIPS state
-- **Nostr correlation** — Follow async operations
-
-## Endpoints
-
-| Path | Description |
-|------|-------------|
-| `/mcp` | Primary MCP endpoint |
-| `/api/v1/mcp` | Alternate endpoint |
-
-## Protocol
-
-MCP uses **JSON-RPC 2.0** over HTTP. Mutating tools return Nostr correlation receipts rather than synchronous domain objects. Some domains use ContextVM JSON-RPC on kind `25910`; policy CRUD/evaluate and tool approval decisions use Bahia public command kinds (`5986`-`5989`, `7977`) and still follow ContextVM replies/read-model observables for durable truth.
-
-```bash
-curl -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-```
-
-## Discovery
-
-### List Tools
+## Connect and discover
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "tools/list"
+  "method": "tools/list",
+  "params": {}
 }
 ```
 
-### List Resources
+Call a discovered tool with its advertised schema:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 2,
-  "method": "resources/list"
-}
-```
-
-## Tool Categories
-
-### Service Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_list_services` | List all services |
-| `bahia_get_service` | Get service details |
-| `bahia_create_service` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `service/create` |
-| `bahia_update_service` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `service/update` |
-| `bahia_delete_service` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `service/delete` |
-
-### Environment Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_list_environments` | List environments |
-| `bahia_get_environment` | Get environment details |
-| `bahia_create_environment` | Deprecated direct registry write helper; Bahia returns a signer-first mutation-unavailable result and points clients to ContextVM `environment/create` |
-
-### Deployment Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_deploy` | Publish signed ContextVM `service/deploy` deployment intent and return Nostr correlation receipt |
-| `bahia_rollback` | Publish signed ContextVM `service/rollback` intent and return Nostr correlation receipt |
-| `bahia_list_intents` | List deployment intents |
-| `bahia_get_intent` | Get intent details |
-| `bahia_approve_intent` | Publish signed ContextVM `approval/approve` request and return Nostr correlation receipt |
-| `bahia_reject_intent` | Publish signed ContextVM `approval/reject` request and return Nostr correlation receipt |
-| `bahia_list_runs` | List deployment runs |
-| `bahia_get_run` | Get run details |
-| `bahia_get_run_logs` | Get run logs (encrypted) |
-
-### Artifact Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_list_artifacts` | List artifacts |
-| `bahia_get_artifact` | Get artifact details |
-| `bahia_register_artifact` | Publish signed kind `5985` ArtifactRegister event and return relay acceptance receipt |
-| `bahia_get_sbom` | Get artifact SBOM compatibility projection backed by canonical SBOM manifests |
-| `bahia_get_sbom_packages` | List packages indexed from an artifact SBOM projection |
-| `bahia_search_sbom_packages` | Search indexed SBOM packages by name |
-| `bahia_ingest_sbom` | Compatibility SBOM ingest for artifacts; canonical generation/import uses ContextVM `sbom/generate` and `sbom/import` |
-| `bahia_verify_signatures` | Verify signatures |
-
-### LLM Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_llm_list_routes` | List LLM routes |
-| `bahia_llm_create_route` | Create LLM route |
-| `bahia_llm_update_route` | Update LLM route metadata |
-| `bahia_llm_register_release` | Register release |
-| `bahia_llm_list_routes` | List LLM routes |
-| `bahia_llm_list_releases` | List releases for a route |
-| `bahia_llm_deploy` | Deploy LLM release |
-| `bahia_llm_approve_deployment` | Approve deployment |
-| `bahia_llm_reject_deployment` | Reject deployment |
-| `bahia_llm_rollback` | Roll back an LLM route deployment |
-
-### ML Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_ml_import_model` | Import ML model |
-| `bahia_ml_run_recipe` | Run ML recipe |
-| `bahia_ml_deploy` | Deploy inference |
-| `bahia_ml_rollback` | Roll back inference |
-| `bahia_ml_list_state` | List ML inference endpoint state |
-| `bahia_ml_get_state` | Get ML inference endpoint state |
-| `bahia_ml_get_provenance` | Get ML artifact provenance edges |
-
-### Soul Factory operations
-
-Soul Factory does not currently expose `soul_factory_*` MCP tools. Use the signer-first Nostr and CLI flows documented in [Souls](features/souls.md).
-
-### Worker Tools
-
-| Tool | Description | ContextVM method |
-|------|-------------|------------------|
-| `bahia_list_workers` | List workers from canonical read models (`30900`/`30078`) | read-only resource |
-| `bahia_get_worker` | Get worker details from canonical read models | read-only resource |
-| `bahia_worker_drain` | Drain worker | `worker/drain` |
-| `bahia_worker_undrain` | Resume worker | `worker/undrain` |
-| `bahia_worker_cordon` | Cordon worker | `worker/cordon` |
-| `bahia_worker_uncordon` | Uncordon worker | `worker/uncordon` |
-
-### Backup Tools
-
-| Tool | Description |
-|------|-------------|
-| `apply_backup_definition` / `bahia_apply_backup_definition` | Apply backup definition |
-| `apply_backup_policy` / `bahia_apply_backup_policy` | Apply backup policy |
-| `request_backup_run` / `bahia_request_backup_run` | Trigger backup |
-| `request_backup_verification` / `bahia_request_backup_verification` | Verify backup |
-| `request_backup_restore` / `bahia_request_backup_restore` | Restore backup |
-
-### DNS Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_dns_list_endpoints` | List DNS endpoints |
-| `bahia_dns_list_drift` | List DNS endpoint drift |
-| `bahia_assistant_dns_zone_create` | Create zone |
-| `bahia_assistant_dns_policy_apply` | Apply DNS policy |
-
-### Package Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_package_repository_apply` | Apply repository |
-| `bahia_package_repository_delete` | Delete repository |
-| `bahia_package_upload` | Upload package artifact |
-| `bahia_package_promote` | Promote package |
-| `bahia_package_yank` | Yank package |
-| `bahia_package_drift_detect` | Detect drift |
-| `bahia_package_list` | List package repositories or artifacts |
-| `bahia_package_get` | Get a package repository or artifact |
-| `bahia_package_status` | Get package intent or promotion status |
-
-### Policy Tools
-
-Policy list/get tools are read-only. Policy create/update/delete/evaluate tools are signer-first mutations: they publish signed public policy events, verify relay `OK` acceptance, and return `request_event_id`, `request_kind`, `result_kind`, read-model kinds, `d_tag`, and accepted relay count so MCP clients can subscribe instead of polling.
-
-| Tool | Description |
-|------|-------------|
-| `bahia_list_policies` | List policies (read-only) |
-| `bahia_get_policy` | Get policy details (read-only) |
-| `bahia_create_policy` | Publish signed `PolicyCreate` (`5986`) |
-| `bahia_update_policy` | Publish signed `PolicyUpdate` (`5987`) |
-| `bahia_delete_policy` | Publish signed `PolicyDelete` (`5988`) |
-| `bahia_evaluate_policy` | Publish signed `PolicyEvaluate` (`5989`) |
-
-### Tool Provisioning Approval Tools
-
-Tool provisioning status and denylist tools are not the same semantic mutation as approval/rejection. `bahia_tool_provision_status` is read-only. `bahia_tool_denylist_add` and `bahia_tool_denylist_remove` remain direct denylist administration paths until a separate tool-denylist command kind is specified. Approval and rejection are semantic tool provisioning decisions and therefore publish signed `ToolApprovalResponse` (`7977`) events with relay acceptance receipts.
-
-| Tool | Description |
-|------|-------------|
-| `bahia_tool_provision_status` | Read tool provisioning intent status |
-| `bahia_tool_provision_approve` | Publish signed `ToolApprovalResponse` (`7977`) approval |
-| `bahia_tool_provision_reject` | Publish signed `ToolApprovalResponse` (`7977`) rejection |
-| `bahia_tool_denylist_add` | Direct denylist administration, not approval semantics |
-| `bahia_tool_denylist_remove` | Direct denylist administration, not approval semantics |
-
-### Security Tools
-
-Security scan and read operations use encrypted ContextVM methods, not MCP HTTP tools. There are no `bahia_security_*` MCP tools. Use ContextVM kind `25910` (normally wrapped in `1059`/`21059`) to invoke the following methods:
-
-| ContextVM Method | Description |
-|------------------|-------------|
-| `security/scan` | Request an explicit OSV scan for an SBOM reference, package, PURL, or Git commit |
-| `security/rescan` | Request a new scan run for a known target |
-| `security/findings-list` | Read persisted findings by target, run, severity, or OSV ID |
-| `security/schedules-list` | Read policy-derived scan schedules and freshness state |
-
-Mutation responses acknowledge intent only. Follow Security observables (`30315`, `30900`, `30078`, `4903` with `#domain=security`) for durable scan progress and results. See [Security](features/security.md) for full documentation.
-
-### Payment Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_estimate_cost` | Estimate run cost |
-| `bahia_get_run_cost` | Get actual cost |
-| `bahia_get_payment_history` | Get history (encrypted) |
-
-### Notification Tools
-
-| Tool | Description |
-|------|-------------|
-| `bahia_list_notification_channels` | List channels |
-| `bahia_create_notification_channel` | Create channel |
-| `bahia_update_notification_channel` | Update channel |
-| `bahia_delete_notification_channel` | Delete channel |
-| `bahia_test_notification_channel` | Test channel |
-
-### Organization operations
-
-Bahia does not currently expose `bahia_org_*` MCP tools. Organization management uses the encrypted request/result facade over Nostr (`5980` requests and `7980` terminal results), as described in [Organizations](features/organizations.md).
-
-## Tool Invocation
-
-### Synchronous Tools
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 3,
   "method": "tools/call",
   "params": {
     "name": "bahia_list_services",
@@ -247,134 +27,125 @@ Bahia does not currently expose `bahia_org_*` MCP tools. Organization management
 }
 ```
 
-Response:
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 3,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "[{\"id\":\"svc-123\",\"name\":\"payment-api\"}]"
-      }
-    ]
-  }
-}
+## Authorization
+
+Every `tools/call` request is authorized independently. There is no unauthenticated development bypass for tool execution.
+
+For external callers:
+
+1. the request context must contain an authenticated principal, normally established with a valid NIP-98 `Authorization: Nostr …` header;
+2. the principal must have a normalized Nostr pubkey;
+3. that pubkey must appear in the server's explicit MCP `AuthorizedPubkeys` set.
+
+An empty external allowlist denies all external tool calls. The standard app constructor currently leaves the MCP external allowlist empty, so its HTTP MCP endpoint fails closed for external `tools/call` requests. Embeddings that intentionally expose external calls must populate `ServerDeps.AuthorizedPubkeys`; this is not inferred from a broad authentication toggle.
+
+An internal system principal is allowed only when it carries the explicit admin role; merely labeling a caller “system” is insufficient. For authorized external callers, secret create, update, and delete calls additionally resolve the target service's organization and require `secrets:write` through organization RBAC. Cross-tenant service/secret access fails closed. Explicit system-admin callers bypass that tenant check.
+
+```bash
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Nostr <base64-signed-nip98-event>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bahia_list_services","arguments":{}}}'
 ```
 
-### Async Tools (Nostr-Backed)
+Listing protocol metadata is not permission to execute a listed tool. Always handle authorization failures from `tools/call`.
 
-Long-running tools return correlation metadata:
+## Registered tool inventory
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 4,
-  "method": "tools/call",
-  "params": {
-    "name": "bahia_deploy",
-    "arguments": {
-      "service_id": "svc-123",
-      "environment_id": "env-456",
-      "artifact_id": "art-789"
-    }
-  }
-}
-```
+The names below are verified against the current `internal/mcp` registries. Some registries are enabled only when their backing service or feature is configured, so a deployed instance can expose a subset.
 
-Response includes Nostr correlation:
-```json
-{
-  "result": {
-    "content": [{
-      "type": "text",
-      "text": "{\"request_event_id\":\"abc...\",\"method\":\"service/deploy\",\"request_kind\":25910,\"observable_kinds\":[30900,4903,30315]}"
-    }]
-  }
-}
-```
+### Services, environments, state, and observations
 
-Use these to subscribe for ContextVM responses and canonical observable completion.
+- Services: `bahia_list_services`, `bahia_get_service`, `bahia_create_service`, `bahia_update_service`, `bahia_delete_service`
+- Environments: `bahia_list_environments`, `bahia_get_environment`, `bahia_create_environment`, `bahia_update_environment`, `bahia_delete_environment`
+- State: `bahia_list_states`, `bahia_list_drifted`, `bahia_get_observation`
 
-## Resources
+Signer-first mutations can return transport/correlation metadata rather than a completed domain object. Follow the canonical Nostr observables named in the result.
+
+### Deployments and runs
+
+- Intent workflow: `bahia_deploy`, `bahia_rollback`, `bahia_list_intents`, `bahia_get_intent`, `bahia_approve_intent`, `bahia_reject_intent`
+- Compatibility names: `bahia_create_intent`, `bahia_approve_deployment`, `bahia_reject_deployment`, `bahia_get_deployment_status`
+- Runs: `bahia_list_runs`, `bahia_get_run`, `bahia_create_run`, `bahia_complete_run`, `bahia_get_run_logs`
+
+Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for assistant-oriented asynchronous receipts.
+
+### Builds, artifacts, SBOMs, and signatures
+
+- Builds: `bahia_list_builds`, `bahia_get_build`, `bahia_register_build`, `bahia_update_build_status`
+- Artifacts: `bahia_list_artifacts`, `bahia_get_artifact`, `bahia_register_artifact`
+- SBOM: `bahia_get_sbom`, `bahia_get_sbom_packages`, `bahia_search_sbom_packages`, `bahia_ingest_sbom`
+- Signatures: `bahia_list_signatures`, `bahia_get_signature`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, `bahia_verify_signatures`
+
+### Policies, secrets, workers, and payments
+
+- Policies: `bahia_list_policies`, `bahia_get_policy`, `bahia_create_policy`, `bahia_update_policy`, `bahia_delete_policy`, `bahia_evaluate_policy`
+- Secrets: `bahia_list_secrets`, `bahia_create_secret`, `bahia_update_secret`, `bahia_delete_secret`
+- Worker reads and cost: `bahia_list_workers`, `bahia_get_worker`, `bahia_get_worker_pricing`, `bahia_estimate_cost`, `bahia_get_run_cost`, `bahia_get_payment_history`
+- Worker control: `bahia_worker_cordon`, `bahia_worker_uncordon`, `bahia_worker_drain`, `bahia_worker_undrain`, `bahia_worker_maintenance_enter`, `bahia_worker_maintenance_exit`, `bahia_worker_labels_update`, `bahia_worker_preview_eligibility`
+- Worker assignment/drain reads: `bahia_worker_get_assignments`, `bahia_worker_list_assignments`, `bahia_worker_get_drain_status`, `bahia_worker_list_drain_status`
+
+### Notification channels and logs
+
+- Channels: `bahia_list_notification_channels`, `bahia_get_notification_channel`, `bahia_create_notification_channel`, `bahia_update_notification_channel`, `bahia_delete_notification_channel`, `bahia_test_notification_channel`
+- Logs: `bahia_list_notifications`, `bahia_get_notification`, `bahia_mark_notification_read`, `bahia_dismiss_notification`
+
+`bahia_get_notification` and `bahia_dismiss_notification` are registered compatibility tools but currently return unsupported. `bahia_mark_notification_read` searches recent logs and overwrites delivery status to `sent`; its read/unread behavior is a compatibility mapping, not a separate receipt model.
+
+### LLM and ML
+
+- LLM: `bahia_llm_list_routes`, `bahia_llm_create_route`, `bahia_llm_update_route`, `bahia_llm_register_release`, `bahia_llm_list_releases`, `bahia_llm_deploy`, `bahia_llm_approve_deployment`, `bahia_llm_reject_deployment`, `bahia_llm_rollback`
+- Assistant LLM: `bahia_assistant_llm_deploy`, `bahia_assistant_llm_approve_deployment`, `bahia_assistant_llm_rollback`
+- ML: `bahia_ml_import_model`, `bahia_ml_run_recipe`, `bahia_ml_deploy`, `bahia_ml_rollback`, `bahia_ml_list_state`, `bahia_ml_get_state`, `bahia_ml_get_provenance`
+- Assistant ML: `bahia_assistant_ml_deploy`, `bahia_assistant_ml_approve_deployment`, `bahia_assistant_ml_rollback`
+
+Use the names above exactly; the older model-import and recipe-run spellings are not registered.
+
+### Package management
+
+`bahia_package_repository_apply`, `bahia_package_repository_delete`, `bahia_package_upload`, `bahia_package_promote`, `bahia_package_yank`, `bahia_package_list`, `bahia_package_get`, `bahia_package_status`, and `bahia_package_drift_detect`.
+
+### DNS and FIPS
+
+- DNS reads: `bahia_dns_list_endpoints`, `bahia_dns_list_drift`
+- DNS assistant operations: `bahia_assistant_dns_zone_create`, `bahia_assistant_dns_policy_apply`, `bahia_assistant_dns_record_override`, `bahia_assistant_dns_drift_remediate`, `bahia_assistant_dns_list_endpoints`, `bahia_assistant_dns_list_drift`
+- FIPS: `bahia_fips_list_mesh_nodes`, `bahia_fips_mesh_status`
+
+### Tool provisioning and policy
+
+`bahia_tool_provision_request`, `bahia_tool_provision_status`, `bahia_tool_provision_approve`, `bahia_tool_provision_reject`, `bahia_tool_profile_get`, `bahia_tool_denylist_list`, `bahia_tool_denylist_add`, and `bahia_tool_denylist_remove`.
+
+### Backup
+
+When the backup registry is configured, the server registers both the base name and a `bahia_`-prefixed alias for each operation:
+
+- apply: `apply_backup_repository`, `apply_backup_policy`, `apply_backup_recipe`, `apply_backup_definition`
+- request/approval: `request_backup_run`, `request_backup_verification`, `request_backup_restore`, `approve_backup_restore`, `reject_backup_restore`, `request_backup_retention`
+- probe: `probe_backup_repository`
+- list: `list_backup_repositories`, `list_backup_policies`, `list_backup_recipes`, `list_backup_definitions`, `list_backup_runs`, `list_backup_restores`, `list_backup_retention_runs`
+- inspect: `inspect_backup_repository`, `inspect_backup_policy`, `inspect_backup_recipe`, `inspect_backup_definition`, `inspect_backup_run`, `inspect_backup_restore`, `inspect_backup_retention_run`
+
+The verified prefixed aliases are: `bahia_apply_backup_repository`, `bahia_apply_backup_policy`, `bahia_apply_backup_recipe`, `bahia_apply_backup_definition`, `bahia_probe_backup_repository`, `bahia_request_backup_run`, `bahia_request_backup_verification`, `bahia_request_backup_restore`, `bahia_approve_backup_restore`, `bahia_reject_backup_restore`, `bahia_request_backup_retention`, `bahia_list_backup_repositories`, `bahia_list_backup_policies`, `bahia_list_backup_recipes`, `bahia_list_backup_definitions`, `bahia_list_backup_runs`, `bahia_list_backup_restores`, `bahia_list_backup_retention_runs`, `bahia_inspect_backup_repository`, `bahia_inspect_backup_policy`, `bahia_inspect_backup_recipe`, `bahia_inspect_backup_definition`, `bahia_inspect_backup_run`, `bahia_inspect_backup_restore`, `bahia_inspect_backup_retention_run`.
 
 ### Documentation
 
-Bahia exposes the user guide as MCP resources backed by the same central catalog used by the web `/docs` interface.
+- `bahia_docs_list` lists the generated user-guide catalog.
+- `bahia_docs_read` reads a topic by its catalog slug.
 
-```json
-{
-  "uri": "bahia://docs/features-services",
-  "name": "docs:features-services",
-  "description": "Services",
-  "mimeType": "text/markdown",
-  "metadata": {
-    "topic": "features-services",
-    "path": "features/services.md",
-    "category": "feature",
-    "href": "/docs/features-services"
-  }
-}
-```
+The catalog scans `docs/user-guide/**/*.md`; new guide files become MCP documentation resources and `/docs/<topic>` pages from the same source.
 
-Use `bahia_docs_list` to discover the current scanned topic list, then call `bahia_docs_read` with a topic name:
+## Resources
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 6,
-  "method": "tools/call",
-  "params": {
-    "name": "bahia_docs_list",
-    "arguments": {}
-  }
-}
-```
+Use `resources/list` and `resources/read` rather than assuming a static resource set. Current registries can expose:
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 7,
-  "method": "tools/call",
-  "params": {
-    "name": "bahia_docs_read",
-    "arguments": { "topic": "features-services" }
-  }
-}
-```
-
-The docs catalog is not a hardcoded MCP list. It scans `docs/user-guide/**/*.md`, so new user-facing guide files become MCP resources and `/docs/<topic>` web pages from the same source.
-
-### DNS Endpoints
-
-```json
-{
-  "uri": "bahia://dns/endpoint/payment-api.prod.example.com",
-  "name": "payment-api (prod)",
-  "description": "Payment API endpoint",
-  "mimeType": "application/json",
-  "metadata": {
-    "protocol": "https",
-    "address": "10.0.1.100",
-    "port": 8080
-  }
-}
-```
-
-### FIPS Mesh Nodes
-
-```json
-{
-  "uri": "bahia://fips/node/node-123",
-  "name": "fips-node-123",
-  "metadata": {
-    "status": "online"
-  }
-}
-```
-
-### Reading Resources
+- `bahia://service/<id>`
+- `bahia://environment/<id>`
+- `bahia://worker/<pubkey>`
+- `bahia://artifact/<id>`
+- `bahia://policy/<id>`
+- `bahia://docs/<topic>`
+- DNS endpoint resources
+- FIPS mesh-node resources
 
 ```json
 {
@@ -382,79 +153,47 @@ The docs catalog is not a hardcoded MCP list. It scans `docs/user-guide/**/*.md`
   "id": 5,
   "method": "resources/read",
   "params": {
-    "uri": "bahia://dns/endpoint/payment-api.prod.example.com"
+    "uri": "bahia://docs/features-deployments"
   }
 }
 ```
 
-## Authentication
+## Asynchronous completion
 
-### With NIP-98
+A successful tool response may mean that Bahia validated and published a request, not that the workflow completed. Follow returned request IDs and canonical observables:
 
-```bash
-curl -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Nostr <base64-signed-event>" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{...}}'
-```
+- `30900` for current state;
+- `30315` for operational status;
+- `4903` for audit facts;
+- domain-specific NIP-51/NIP-78 or standard-NIP events where the result identifies them.
 
-### Without Auth (Development)
+Relay `OK` confirms transport acceptance only.
 
-When `auth.enabled=false`:
-```bash
-curl -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{...}}'
-```
+## Errors
 
-## ContextVM Nostr Transport
-
-ContextVM clients discover Bahia with kind `11316` server announcements and capability announcements `11317`-`11320`, then invoke the same JSON-RPC methods over Nostr kind `25910` with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) where supported. Long-running tool responses are acknowledgments; agents should follow canonical observable kinds `30900`, `4903`, `30315`, NIP-51 `30002`, NIP-78 `30078`, standard NIPs, and NIP-09 kind `5` deletions where applicable for final state.
-
-Production runtime no longer exposes legacy Bahia request/status/result kinds as the live MCP transport. Legacy kind references are migration fixtures only; new MCP clients should require ContextVM method names and canonical observables.
-
-## Error Handling
-
-### Tool Error Response
+Tool failures normally return MCP content with `isError: true`; malformed JSON-RPC can return a protocol error. Check both.
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "content": [{
-      "type": "text",
-      "text": "{\"error\":\"service not found\"}"
-    }],
+    "content": [{"type": "text", "text": "{\"error\":\"service not found\"}"}],
     "isError": true
   }
 }
 ```
 
-### JSON-RPC Error
+## Best practices
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 3,
-  "error": {
-    "code": -32602,
-    "message": "Invalid params"
-  }
-}
-```
-
-## Best Practices
-
-1. **List tools first** — Discover available capabilities
-2. **List docs before reading** — Use `bahia_docs_list` instead of assuming a static topic list.
-3. **Follow async operations** — Use Nostr correlation
-4. **Handle errors** — Check `isError` field
-5. **Use typed arguments** — Match expected schema
-6. **Authenticate for production** — Use NIP-98
+1. Call `tools/list` and use its input schemas.
+2. Authenticate every tool call and handle fail-closed authorization.
+3. Use `bahia_docs_list` before assuming a documentation topic.
+4. Correlate asynchronous requests with durable Nostr observables.
+5. Check `isError` even when JSON-RPC itself succeeded.
 
 ## Related
 
-- [Nostr Integration](nostr-integration.md) — Event model
-- [Control Planes](../control-planes.md) — Full specification
-- [API Reference](../api.md) — HTTP API
+- [Nostr Integration](nostr-integration.md) — Event model and durable completion
+- [CLI Reference](cli-reference.md) — Operator commands
+- [Notifications](features/notifications.md) — Tenant-scoped channel behavior

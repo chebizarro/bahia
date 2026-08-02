@@ -1,5 +1,10 @@
 # REST API Deprecation Plan
 
+> **Status (2026-08-01): Completed migration record.** The 25 mutation endpoints
+> marked for deletion below are no longer mounted. Endpoint inventories, handler
+> names, line numbers, and future-consideration sections are point-in-time
+> planning context; verify the current surface in `internal/api/router/router.go`.
+
 > **Bahia is Nostr-first.** REST APIs should only exist when absolutely necessary to interoperate with non-Nostr services. This document tracks which REST endpoints have Nostr analogs and should be removed.
 
 ## Status Legend

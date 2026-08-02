@@ -45,11 +45,11 @@ A non-encrypted ContextVM request is a signed Nostr event with JSON-RPC content:
   "tags": [
     ["p", "<bahia-service-pubkey>"],
     ["method", "service/deploy"],
-    ["service", "api"],
-    ["environment", "prod"],
-    ["artifact", "api:v2"]
+    ["service", "<service-uuid>"],
+    ["environment", "<environment-uuid>"],
+    ["artifact", "<artifact-uuid>"]
   ],
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-api-prod-01\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"api\",\"environment_id\":\"prod\",\"artifact_id\":\"api:v2\",\"_meta\":{\"progressToken\":\"deploy-api-prod-01\"}}}"
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-api-prod-01\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"<service-uuid>\",\"environment_id\":\"<environment-uuid>\",\"artifact_id\":\"<artifact-uuid>\",\"_meta\":{\"progressToken\":\"deploy-api-prod-01\"}}}"
 }
 ```
 
@@ -98,13 +98,13 @@ Kind `30900` is addressable. The `d` tag identifies the entity coordinate, and `
 {
   "kind": 30900,
   "pubkey": "<bahia-service-pubkey>",
-  "content": "{\"service_id\":\"api\",\"environment_id\":\"prod\",\"status\":\"healthy\"}",
+  "content": "{\"service_id\":\"<service-uuid>\",\"environment_id\":\"<environment-uuid>\",\"status\":\"healthy\"}",
   "tags": [
-    ["d", "service:api:prod"],
+    ["d", "service:<service-uuid>:<environment-uuid>"],
     ["domain", "service"],
     ["schema", "bahia.service-state.v1"],
-    ["service", "api"],
-    ["environment", "prod"],
+    ["service", "<service-uuid>"],
+    ["environment", "<environment-uuid>"],
     ["status", "healthy"]
   ]
 }
@@ -118,16 +118,18 @@ Desired-state runtime projections may add `desired_hash`, renderer/target metada
 
 Bahia uses NIP-38 status events for operational status and progress where a status fact is more appropriate than a full state replacement. Desired-state deploy status uses additive `step` metadata on this same kind; the shared Compose/Docker sequence is `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`.
 
+Loom-backed deployment runs also publish replaceable `30315` domain-health transitions with `domain=deployment`, `entity=run`, `t=deployment.run.health`, `d=<run-uuid>`, `e=<loom-job-id>`, and `status=stale|recovered`. Content schema `bahia.deployment-run-health.v1` records the reason, Loom job/run IDs, configured stale threshold, and last Loom `30100` status time when known.
+
 ```json
 {
   "kind": 30315,
   "pubkey": "<bahia-service-pubkey>",
-  "content": "deploying api to prod",
+  "content": "deploying <service-uuid> to <environment-uuid>",
   "tags": [
-    ["d", "cascadia:service:api:prod"],
+    ["d", "cascadia:service:<service-uuid>:<environment-uuid>"],
     ["status", "deploying"],
-    ["service", "api"],
-    ["environment", "prod"],
+    ["service", "<service-uuid>"],
+    ["environment", "<environment-uuid>"],
     ["e", "<contextvm-request-event-id>", "", "reply"]
   ]
 }
@@ -141,19 +143,27 @@ Audit events are append-only facts for provenance, compliance, deployment eviden
 {
   "kind": 4903,
   "pubkey": "<bahia-service-pubkey>",
-  "content": "{\"action\":\"deployment.completed\",\"service_id\":\"api\",\"environment_id\":\"prod\"}",
+  "content": "{\"action\":\"deployment.completed\",\"service_id\":\"<service-uuid>\",\"environment_id\":\"<environment-uuid>\"}",
   "tags": [
     ["domain", "deployment"],
     ["type", "change-record"],
     ["schema", "bahia.audit.deployment.v1"],
-    ["service", "api"],
-    ["environment", "prod"],
+    ["service", "<service-uuid>"],
+    ["environment", "<environment-uuid>"],
     ["e", "<contextvm-request-event-id>"]
   ]
 }
 ```
 
-Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review.
+Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review. Bahia tags projected audit events with `protected=true` as semantic metadata but does not add the NIP-70 `-` tag, which governs authenticated author publication rather than read visibility. Relay queryability lasts only through the configured `event_retention`; compliance-grade preservation requires a suitable retention policy or archival storage.
+
+## Delivery, Replay, and Retention
+
+The configured Bahia service publisher persists events to its SQL outbox before relay delivery, marks accepted or duplicate `OK` responses as published, and retries pending rows with bounded backoff. This durability guarantee applies to publishers wired through that adapter; direct relay clients must implement their own retry and acknowledgment handling.
+
+The relay sidecar persists accepted events to SQLite before asynchronous subscriber fanout. Queries are SQL-scoped and capped at 2,000 results. Retention cleanup runs at startup and every 15 minutes; request and gift-wrap kinds `25910`, `1059`, and `21059` use the shorter request-retention window.
+
+Consumers replay stored `EVENT` messages until `EOSE`, then keep subscriptions open for realtime convergence. `EOSE` completes only that bounded query; if the 2,000-event cap may be reached, narrow filters by resource tags and time windows, overlap windows, and deduplicate by event id. Apply replacement semantics by `(kind, pubkey, d)` where the event kind is replaceable.
 
 ## Discovery and Relay Topology
 

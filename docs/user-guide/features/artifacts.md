@@ -92,16 +92,7 @@ Or from a service:
 
 ### CLI
 
-```bash
-# List artifacts for a service
-bahia artifacts list --service-id svc-123
-
-# Get artifact details
-bahia artifacts get art-456
-
-# Output as JSON
-bahia artifacts get art-456 -o json
-```
+The current CLI does not register `bahia artifacts` or `bahia builds` commands. Use the web UI or signer-first Nostr flows. The MCP tools below are usable only in an embedding that explicitly configures external MCP authorization.
 
 ### MCP Tool
 
@@ -174,16 +165,7 @@ That endpoint delegates to the SBOM import service, uploads/verifies the payload
 
 The artifact SBOM view is a compatibility projection. Canonical SBOM reference and availability events are not mutated after publication; when Security OSV completes a successful scan, Bahia refreshes the projection's `vulnerability_count`, `critical_count`, and `high_count` from the latest Security scan so existing policy/UI consumers continue to see current aggregate counts. If no Security scan exists, the original SBOM aggregate counts remain visible.
 
-```bash
-# Get SBOM compatibility projection
-bahia artifacts sbom art-456
-
-# List indexed packages
-bahia artifacts sbom art-456 --packages
-
-# Search package projections
-bahia sbom search --package "log4j" --version "<2.17.0"
-```
+Use `bahia_get_sbom` for the compatibility projection, `bahia_get_sbom_packages` for indexed packages, and `bahia_search_sbom_packages` for package searches. These are MCP tools, not CLI commands.
 
 ### Web UI
 
@@ -198,33 +180,15 @@ bahia sbom search --package "log4j" --version "<2.17.0"
 
 Artifacts can have cryptographic signatures for provenance.
 
-### Viewing Signatures
+### Viewing and verifying signatures
 
-```bash
-# List signatures
-bahia artifacts signatures art-456
+Use `bahia_list_signatures`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, and `bahia_verify_signatures` through MCP. Verification discovers supported signatures, evaluates configured trust roots, stores results, and returns status.
 
-# Check verification status
-bahia artifacts signatures art-456 --verified
-```
-
-### Verifying Signatures
-
-```bash
-bahia artifacts verify art-456
-```
-
-This:
-1. Discovers signatures from registries (Cosign, Notation)
-2. Verifies against configured trust roots
-3. Stores verification results
-4. Returns verification status
-
-### MCP Tool (Encrypted)
+### MCP Tool
 
 ```json
 {
-  "tool": "bahia_verify_artifact_signatures",
+  "tool": "bahia_verify_signatures",
   "arguments": {
     "artifact_id": "art-456"
   }
@@ -245,11 +209,7 @@ metadata:
   coverage: "85%"
 ```
 
-Query by metadata:
-
-```bash
-bahia artifacts list --service-id svc-123 --metadata tested=true
-```
+Query artifact projections with `bahia_list_artifacts`, then apply supported service filters in the MCP request or filter returned metadata in the client.
 
 ## Builds and Artifacts
 
@@ -261,16 +221,7 @@ Build (CI run) → produces → Artifact (container image)
 
 ### Registering Builds
 
-Builds are typically auto-registered via CI integration:
-
-```bash
-bahia builds register \
-  --service-id svc-123 \
-  --workflow-id "ci-run-456" \
-  --commit-sha "abc123" \
-  --branch "main" \
-  --status "completed"
-```
+Builds are typically registered by CI integration with the `bahia_register_build` MCP tool or the canonical signed build-registration event. The current CLI does not register a build command.
 
 ### Linking to Artifacts
 

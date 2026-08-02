@@ -35,8 +35,8 @@ When Bahia HTTP auth is enabled:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/ready` | Readiness check |
+| GET | `/health` | Liveness/health snapshot |
+| GET | `/ready` | Readiness snapshot; returns `503` when active-tier required checks fail |
 
 ## Discovery and tooling bootstrap
 
@@ -71,8 +71,9 @@ Long-running HTTP writes that publish canonical Nostr command events return `202
 {
   "data": {
     "request_event_id": "<nostr-event-id>",
-    "request_kind": 38391,
-    "result_kind": 38396,
+    "request_kind": 25910,
+    "status_kind": 30315,
+    "result_kind": 25910,
     "d_tag": "ml-inference-deploy:<key>",
     "idempotency_key": "ml-inference-deploy:<key>",
     "status": "submitted",
@@ -87,7 +88,9 @@ Long-running HTTP writes that publish canonical Nostr command events return `202
 
 Idempotency keys are represented as the Nostr `d` tag. Clients may provide `idempotency_key`; otherwise publishers generate one and signer-first CLI operator requests derive deterministic keys from the command kind, scoped tags, and payload. Consumers should subscribe for the receipt's status/result kinds using `request_event_id` and resource tags rather than polling REST for completion.
 
-Compatibility note: representative transitional REST mutation routes for services, deployment intents, LLM route creation, policy writes, and ML writes are Nostr-backed `202` receipt routes. They publish signed ContextVM/Nostr commands, verify relay `OK` acceptance through publisher receipts, and return command metadata. Durable completion still comes from scoped Nostr subscriptions to the receipt's status/result/read-model kinds. Legacy synchronous REST consumers outside those documented routes remain compatibility responses until explicitly migrated.
+For canonical ContextVM-backed writes, `request_kind` is `25910`, `status_kind` is normally `30315`, and `result_kind` is the correlated ContextVM response kind `25910`; state/audit convergence uses `30900` and `4903` (plus domain-specific standard NIPs). Some receipt fields remain for compatibility, but clients must not substitute historical `69xx`/`79xx` kinds.
+
+Compatibility note: representative transitional REST mutation routes for services, deployment intents, LLM route creation, policy writes, and ML writes are Nostr-backed `202` receipt routes. They publish signed ContextVM/Nostr commands, verify relay `OK` acceptance through publisher receipts, and return command metadata. Durable completion still comes from scoped Nostr subscriptions to the receipt's canonical response/status/state/audit coordinates. Legacy synchronous REST consumers outside those documented routes remain compatibility responses until explicitly migrated.
 
 ## Core registry routes
 

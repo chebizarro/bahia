@@ -151,17 +151,17 @@ Legacy Bahia request/status/result kinds and legacy REST-backed service action e
 Services can have encrypted secrets for configuration:
 
 ```bash
-# Create a secret
-bahia services secrets create payment-api \
-  --name "DATABASE_URL" \
-  --value "postgres://..."
+# Set a secret
+bahia secrets set payment-api DATABASE_URL postgres://example
 
-# List secrets (values hidden)
-bahia services secrets list payment-api
+# List secret metadata (values hidden)
+bahia secrets list payment-api
 
-# Reveal a secret value
-bahia services secrets reveal payment-api --name "DATABASE_URL"
+# Delete by secret ID
+bahia secrets delete payment-api secret-456
 ```
+
+The CLI does not register a reveal command. MCP secret writes additionally require organization `secrets:write` authorization and fail closed for cross-tenant services.
 
 Secrets are:
 - Encrypted at rest
@@ -174,11 +174,7 @@ See [Secrets Management](#secrets-management) for details.
 
 Use tags to organize services by publishing a ContextVM `service/update` intent with the updated metadata.
 
-Query services by tag:
-
-```bash
-bahia services list --tag team=payments
-```
+The CLI service list has no tag flag. Use `bahia_list_services` through MCP and filter the returned metadata in the client.
 
 ## Deleting a Service
 

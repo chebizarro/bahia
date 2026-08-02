@@ -254,6 +254,7 @@ Historical `31961`/`31963` read models are startup migration inputs only.
 ## Related
 
 - [Services](services.md) — Applications to deploy
+- [Environment States](environment-states.md) — Compare desired and observed state
 - [Deployments](deployments.md) — Deployment workflows
 - [Policies](policies.md) — Approval rules
 - [Notifications](notifications.md) — Alert channels

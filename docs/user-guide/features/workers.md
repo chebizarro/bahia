@@ -163,7 +163,7 @@ Workers publish capability announcements:
 
 ```json
 {
-  "kind": 31989,
+  "kind": 10100,
   "content": {
     "capabilities": ["docker", "kubernetes"],
     "hardware": {
@@ -172,7 +172,6 @@ Workers publish capability announcements:
     }
   },
   "tags": [
-    ["d", "worker:npub1worker...:ai-capability"],
     ["t", "loom-worker"]
   ]
 }
@@ -200,32 +199,28 @@ Workers publish capability announcements:
 }
 ```
 
-### Nostr Events
+### Nostr events
 
-Worker command events go through the Nostr control plane:
-
-| Kind | Name | Description |
-|------|------|-------------|
-| 5976 | ToolProvisionRequest | Request tool setup |
-| 6976 | ToolProvisionStatus | Provisioning progress |
-| 7976 | ToolProvisionResult | Provisioning result |
+Worker mutations use signed ContextVM requests and canonical `30900`, `30315`, and `4903` observables. Historical `5976`/`6976`/`7976` tool-provision events are migration inputs, not the current production transport.
 
 ## Read Models
 
 Worker state is published as Nostr events:
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31989 | `worker:<pubkey>:ai-capability` | Worker capabilities |
+| Kind | Content |
+|------|---------|
+| 10100 | Loom worker advertisement and capabilities |
+| 30900 | Canonical projected worker state |
 
-Subscribe for updates:
+Subscribe to kind `10100` for Loom advertisements:
 
 ```json
 {
-  "kinds": [31989],
-  "#t": ["loom-worker"]
+  "kinds": [10100]
 }
 ```
+
+Kind `31989` is a legacy ML runtime-capability profile, not the Loom worker advertisement kind.
 
 ## Health Monitoring
 
@@ -238,16 +233,7 @@ Workers send periodic heartbeats:
 
 ### Notifications
 
-Configure alerts for worker issues:
-
-```yaml
-notifications:
-  channels:
-    - type: slack
-      events:
-        - worker.offline
-        - worker.online
-```
+Configure an organization-scoped webhook or Nostr DM channel for the worker event types emitted by your deployment. See [Notifications](notifications.md); Slack is not a distinct Bahia channel type.
 
 ## Best Practices
 

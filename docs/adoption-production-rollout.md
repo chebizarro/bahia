@@ -16,6 +16,9 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 - explicit relay configuration is explicit only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is safe only before any relay accepts the signed request.
 - Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
 - Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
+- Signed imports must resolve one organization. Pass `--org <organization-uuid>` when target environments/the organization catalog do not make the choice unambiguous; Bahia rejects cross-org reuse.
+- Each imported service is bound to a deployment unit, and its initial state plus observation carry that unit identity.
+- Importing a same-name legacy service with no adopted-runtime identity is an explicit takeover. An already-adopted same-name service on a different target remains a hard conflict.
 
 ## Enablement checklist
 
@@ -56,13 +59,13 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 3. Confirm signer-first discovery and topology evidence:
    - ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is captured for the release candidate
    - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or trusted ContextVM/NIP-51 discovery (`bahia-contextvm-v1` preferred, `bahia-browser-v1` fallback)
-   - if encrypted request/result web validation is in scope, verify ContextVM discovery plus NIP-51 relay sets advertise `nostr.browser_relays` / `nostr.contextvm_relays` and `features.encrypted_nostr_requests`
+   - if encrypted request/response web validation is in scope, verify ContextVM discovery plus NIP-51 relay sets advertise `nostr.browser_relays` / `nostr.contextvm_relays` and `features.encrypted_nostr_requests`
    - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
 
 4. Prepare signer/operator execution inputs:
-   - signer key material is available via `--nsec`, `--privkey`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`
+   - local signer key material is available via `--nsec`, `--privkey`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`; or NIP-46 is configured with `--nostr-bunker-file` and `--nostr-client-key-file` (plus repeatable `--nostr-bunker-relay` when needed)
    - operators know whether compatibility explicit relay configuration is approved for this rollout
-   - evidence capture includes request event IDs and correlated status/result event IDs
+   - evidence capture includes request event IDs and correlated progress/terminal ContextVM `25910` response IDs, plus canonical observable IDs where emitted
 
 ## Dry-run scan
 
@@ -87,13 +90,14 @@ Validate:
 2. Import by explicit selection before using `--all`:
 
    ```bash
-   bahia --relay wss://relay.example/relay adopt import --target prod-docker --select prod-docker/<container-id>=<name>
+   bahia --relay wss://relay.example/relay adopt import --org <organization-uuid> --target prod-docker --select prod-docker/<container-id>=<name>
    ```
 
 3. Confirm:
 
-   - service, environment, build, artifact, state, and runtime observation rows exist;
-   - request, status, and terminal result event IDs are captured;
+   - service, environment, build, artifact, deployment unit, state, and runtime observation rows exist;
+   - service/environment organization IDs match `--org`, and state/observation rows reference the imported deployment unit;
+   - the request event ID and correlated terminal ContextVM `25910` response event ID are captured, along with any progress or canonical observable event IDs;
    - metrics advanced: `bahia_adoption_imports_total`, success/failure counters, redaction counters;
    - no raw sensitive env values are present in results or logs.
 
@@ -113,7 +117,7 @@ bahia --relay wss://relay.example/relay services actions deploy --service <servi
 
 Monitor:
 
-- correlated `6963` action status and `7962` terminal result events;
+- the correlated ContextVM `25910` response plus canonical `30315` status, `4903` audit, and `30900` state events; legacy `6963`/`7962` are migration inventory only;
 - `bahia_runtime_actions_total` and duration metrics;
 - logs with `service_id`, `environment_id`, optional `artifact_id`, `target_name`, `endpoint_ref`, `result`, `request_id`, and request event id.
 

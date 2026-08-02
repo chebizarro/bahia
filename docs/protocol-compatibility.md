@@ -34,7 +34,7 @@ For the canonical control-plane contract, prefer:
 | CEP-4 / NIP-59 gift-wrap | Sensitive ContextVM message encryption | ✅ primary for sensitive mutation payloads |
 | NIP-98 | Bahia HTTP authentication and OCI push auth | ✅ implemented |
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
-| NIP-46 | Signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains compatibility work |
+| NIP-46 | Signer / bunker support | ✅ implemented in Signet, browser signer flows, and signer-first operator CLI (including relay-pool and NIP-42 AUTH signing) |
 | NIP-51 / NIP-65 | Relay sets, SBOM availability lists, and relay list metadata | ✅ canonical bootstrap/routing and curated SBOM availability inputs |
 | Security OSV/SBOM | ContextVM scan intent plus canonical status, state, finding, and audit observables | 🟡 contract defined; implementation tracked under `bahia-65q8` |
 | NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
@@ -46,7 +46,7 @@ For the canonical control-plane contract, prefer:
 | Hive-CI | Workflow event ingestion protocol | ✅ implemented as external protocol interop |
 | OCI Distribution API | Registry push/pull | ✅ implemented |
 | Blossom | Blob/log storage backend | ✅ implemented |
-| Cashu | Worker payment surface | ✅ implemented |
+| Cashu | Worker payment surface | ⛔ unsupported; `cashu.enabled=true` fails configuration validation rather than simulating mint-backed flows |
 | REST API | Narrowed CRUD/query/log compatibility surface | ✅ implemented |
 | HTTP MCP | Tooling surface with async Nostr correlation metadata | ✅ implemented |
 
@@ -72,7 +72,7 @@ Desired-state runtime metadata is an additive observable contract, not a new pro
 | `30078` | NIP-78 app-specific configuration, registries, UI/operator projection data, SBOM reference app-data (`schema=bahia.sbom.ref.v1`), and Security finding details (`schema=bahia.security.findings.v1`) |
 | `30004` | NIP-51 Curation Set for complete SBOM availability lists (`schema=bahia.sbom.available-list.v1`) |
 | `30315` | NIP-38 operational status |
-| `4903` | Immutable audit fact / attestation / provenance breadcrumb |
+| `4903` | Immutable audit fact / attestation / provenance breadcrumb; `protected=true` is Bahia semantic metadata, while the omitted NIP-70 `-` tag governs authenticated author publication rather than read visibility |
 | `11316`-`11320` | ContextVM discovery and capability announcements |
 | `30002` | NIP-51 relay sets; canonical Bahia bootstrap relay topology |
 | `10002` | NIP-65 service relay preferences; advisory wider-Nostr read/write hints only |
@@ -91,7 +91,13 @@ SoulFactory uses Nostr rather than REST lifecycle endpoints. New mutation client
 
 NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured, and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
 
-### 4. REST and HTTP MCP
+### 4. Delivery durability and replay
+
+The service-authored Nostr adapter persists signed outbound events in PostgreSQL before delivery and retries pending rows with backoff until at least one relay returns an accepted or duplicate `OK`. The `bahia_nostr_outbox_depth` gauge exposes pending depth. This durability applies to publishers wired through that adapter; it does not make a request receipt terminal truth or permit fallback after any relay accepted a command.
+
+The relay sidecar persists accepted history in SQLite across restarts. Replay queries push ID, kind, author, `since`, and `until` filters into SQL, use a separate read pool so long replays do not block the write/`OK` path, and cap each query at `nostr.sidecar.max_query_limit` (default `2000`). `EOSE` therefore completes only a bounded query; clients near the cap must narrow resource/time filters, overlap windows, and deduplicate. ContextVM transport kinds `25910`, `1059`, and `21059` use `request_retention`; other events, including `4903` audits, use `event_retention`, so longer-lived evidence requires suitable retention or archival storage.
+
+### 5. REST and HTTP MCP
 
 - HTTP MCP (`/mcp`, `/api/v1/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
 - REST remains for narrowed CRUD/query/log/registry compatibility.
@@ -174,7 +180,7 @@ Clients and agents should:
 
 1. Bootstrap via ContextVM discovery (`11316`-`11320`) and NIP-51 relay sets (`30002`).
 2. Publish mutations as ContextVM `25910`, encrypted with `1059`/`21059` for sensitive payloads.
-3. Require relay `OK` for the signed event.
+3. Require relay `OK` for the signed event; do not confuse the service's outbound retry outbox with acceptance of the caller's request.
 4. Subscribe to canonical observables with scoped filters before or immediately after publishing.
 5. Wait for `EOSE` for historical catch-up, then keep subscriptions open.
 6. Treat ContextVM responses as acknowledgments, not durable long-running completion.

@@ -70,6 +70,12 @@ openrouter/anthropic/claude-sonnet-4
 
 Leave the field blank for Routstr and other OpenAI-compatible base URL backends.
 
+### Secret-backed request headers
+
+Route releases can define literal `headers` and secret references in `header_secret_refs`. External health probes use the corresponding `health_headers` and `health_header_secret_refs` fields. The same header name cannot appear as both a literal and a secret reference.
+
+Bahia resolves secret references only while applying a release or probing health, records the resolution in audit data, and persists the reference rather than plaintext. In the web release form, use the **Authorization secret UUID** and **Health authorization secret UUID** controls instead of pasting bearer tokens into route metadata.
+
 ### Deployment
 
 Deploying a release to an environment makes it live.

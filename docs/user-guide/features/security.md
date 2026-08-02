@@ -72,6 +72,21 @@ From both the dashboard and detail pages, you can trigger a rescan of any target
 
 Security scan breaches (findings that violate policy thresholds) are routed through the [Notifications](/notifications) system. Configure notification channels to receive alerts when critical or high-severity vulnerabilities are detected.
 
+## Authentication and route access
+
+Browser authentication is fail-closed:
+
+- a restored NIP-07 session is kept only when the extension still returns the stored pubkey;
+- a restored NIP-46 session must reconnect successfully and return the stored remote-signer pubkey;
+- failed reconnects and failed logins clear stale session state;
+- NIP-46 does not fall back to `window.nostr`.
+
+NIP-98 backend readiness is established only after a signed `GET /orgs` succeeds with a 2xx response; capability advertisement alone is provisional.
+
+The browser route guard currently covers `/souls`, `/services`, `/deployments`, `/policies`, `/environments`, `/workers`, `/fleet-health`, `/llm`, `/artifacts`, `/payments`, `/notifications`, `/events`, `/orgs`, and `/settings`. It checks authentication only. Backend handlers, organization membership, signed-event validation, and encrypted-operation authorization remain authoritative. Production-only auth overrides are not compiled into production builds.
+
+The `/security` route itself is not in that prefix list, but its encrypted ContextVM operations still require a valid signer and backend authorization. Route visibility never grants mutation authority.
+
 ## Nostr Event Semantics
 
 Security scan operations follow Bahia's Nostr-native architecture:

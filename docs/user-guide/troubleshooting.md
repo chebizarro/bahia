@@ -69,10 +69,7 @@ Common issues and solutions when using Bahia.
        - "your-pubkey-hex"
    ```
 
-2. Ensure your signer is connected:
-   ```bash
-   bahia auth status
-   ```
+2. Ensure the selected browser signer is connected and still returns the pubkey stored in the session. For CLI remote signing, confirm the bunker URI, relay pool, and persistent client key file are configured.
 
 3. Check the pubkey is in the appropriate allowlist.
 
@@ -112,10 +109,7 @@ Common issues and solutions when using Bahia.
 - No progress after creation
 
 **Solutions:**
-1. Check if approval is required:
-   ```bash
-   bahia deployments get intent-123
-   ```
+1. Check whether approval is required in the Deployments UI or with `bahia_get_intent` through MCP.
 
 2. Verify policies by publishing a signed `PolicyEvaluate` event for the artifact and environment, or use a UI flow backed by the Nostr control plane.
 
@@ -130,10 +124,7 @@ Common issues and solutions when using Bahia.
 - Error in deployment logs
 
 **Solutions:**
-1. Check run logs:
-   ```bash
-   bahia deployments logs run-456
-   ```
+1. Check the run in the Deployments UI or call `bahia_get_run_logs` through MCP.
 
 2. Verify artifact exists and is pullable:
    ```bash
@@ -414,10 +405,7 @@ Common issues and solutions when using Bahia.
 
 2. Confirm the breach is new or materially changed — unchanged recurring breaches are intentionally suppressed to avoid alert fatigue.
 
-3. Check notification delivery logs:
-   ```bash
-   bahia notifications log --status failed
-   ```
+3. Check organization-scoped delivery logs in the Notifications UI or call `bahia_list_notifications` through MCP.
 
 4. Verify breach was detected by checking `4903` audit facts with `type=security-policy-breach`.
 

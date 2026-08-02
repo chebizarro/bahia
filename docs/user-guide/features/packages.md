@@ -47,25 +47,14 @@ Packages can move through stages:
 
 **CLI:**
 ```bash
-bahia packages repositories create \
-  --name "internal-npm" \
-  --type npm \
-  --url "https://npm.example.com"
+bahia package repo apply \
+  --name internal-npm \
+  --format npm \
+  --backend-ref nexus-main \
+  --backend-type nexus
 ```
 
-**MCP Tool:**
-```json
-{
-  "tool": "bahia_package_repository_apply",
-  "arguments": {
-    "name": "internal-npm",
-    "type": "npm",
-    "config": {
-      "url": "https://npm.example.com"
-    }
-  }
-}
-```
+The equivalent MCP tool is `bahia_package_repository_apply`; its required fields are `name`, `format`, and `backend_ref`.
 
 ### Repository Types
 
@@ -73,22 +62,23 @@ bahia packages repositories create \
 |------|-------------|
 | `npm` | Node.js packages |
 | `pypi` | Python packages |
-| `maven` | Java/Maven artifacts |
-| `cargo` | Rust crates |
-| `apt` | Debian packages |
+| `conan` | C/C++ packages |
+| `deb` | Debian packages |
 | `rpm` | RPM packages |
-| `helm` | Helm charts |
+| `pub` | Dart/Flutter packages |
+| `go_modules` | Go modules |
+| `gradle` | Gradle artifacts |
 
-### Listing Repositories
+Registered backend types are `nexus`, `pulp`, and `filesystem_mock`.
+
+### Listing repositories
+
+Use the Packages UI or `bahia_package_list`.
+
+### Deleting a repository
 
 ```bash
-bahia packages repositories list
-```
-
-### Deleting Repository
-
-```bash
-bahia packages repositories delete internal-npm
+bahia package repo delete --name internal-npm
 ```
 
 ```json
@@ -105,43 +95,16 @@ bahia packages repositories delete internal-npm
 ### CLI
 
 ```bash
-bahia packages publish \
+bahia package upload \
   --repository internal-npm \
-  --name "@company/utils" \
+  --package "@company/utils" \
   --version "1.2.3" \
   --file ./utils-1.2.3.tgz
 ```
 
-### MCP Tool
+### MCP tool
 
-```json
-{
-  "tool": "bahia_package_publish",
-  "arguments": {
-    "repository": "internal-npm",
-    "name": "@company/utils",
-    "version": "1.2.3"
-  }
-}
-```
-
-### Nostr Event
-
-```json
-{
-  "kind": 5xxx,
-  "content": {
-    "repository": "internal-npm",
-    "name": "@company/utils",
-    "version": "1.2.3"
-  },
-  "tags": [
-    ["repository", "internal-npm"],
-    ["package", "@company/utils"],
-    ["version", "1.2.3"]
-  ]
-}
-```
+In an embedding that configures external MCP authorization, use `bahia_package_upload` with destination `repository_name` (or `repository_id`) plus required `package_name`, `version`, `filename`, `source_url`, `sha256`, and `size_bytes`. It publishes the signed package intent and returns correlation metadata; follow canonical observables for completion.
 
 ## Package Promotion
 
@@ -150,48 +113,30 @@ Move packages between stages:
 ### Promoting Package
 
 ```bash
-bahia packages promote \
-  --repository internal-npm \
-  --name "@company/utils" \
+bahia package promote \
+  --source-repository internal-npm \
+  --target-repository stable-npm \
+  --package "@company/utils" \
   --version "1.2.3" \
-  --to stable
+  --filename utils-1.2.3.tgz
 ```
 
-```json
-{
-  "tool": "bahia_package_promote",
-  "arguments": {
-    "repository": "internal-npm",
-    "name": "@company/utils",
-    "version": "1.2.3",
-    "target_stage": "stable"
-  }
-}
-```
+The equivalent MCP tool is `bahia_package_promote`. Supply source `repository_name` (or `repository_id`) and required `target_repository_name`, `package_name`, `version`, and `filename`.
 
 ### Yanking Package
 
 Remove a package version:
 
 ```bash
-bahia packages yank \
+bahia package yank \
   --repository internal-npm \
-  --name "@company/utils" \
+  --package "@company/utils" \
   --version "1.2.3" \
+  --filename utils-1.2.3.tgz \
   --reason "Security vulnerability"
 ```
 
-```json
-{
-  "tool": "bahia_package_yank",
-  "arguments": {
-    "repository": "internal-npm",
-    "name": "@company/utils",
-    "version": "1.2.3",
-    "reason": "Security vulnerability"
-  }
-}
-```
+The equivalent MCP tool is `bahia_package_yank`.
 
 ## Package SBOMs
 
@@ -239,18 +184,9 @@ Click a package to see:
 - Checksums
 - Stage/promotion status
 
-### CLI
+### CLI and MCP
 
-```bash
-# List packages in repository
-bahia packages list --repository internal-npm
-
-# Get package details
-bahia packages get internal-npm/@company/utils
-
-# List versions
-bahia packages versions --repository internal-npm --name "@company/utils"
-```
+The CLI package group publishes mutations but does not register list/get/version commands. Use the web UI or the `bahia_package_list` and `bahia_package_get` MCP tools.
 
 ### MCP Tool
 
@@ -268,7 +204,7 @@ bahia packages versions --repository internal-npm --name "@company/utils"
 Detect inconsistencies in package state:
 
 ```bash
-bahia packages drift-detect --repository internal-npm
+bahia package drift --repository internal-npm
 ```
 
 ```json

@@ -55,15 +55,17 @@ Inner ContextVM request:
   "tags": [
     ["p", "<bahia-service-pubkey>"],
     ["method", "service/deploy"],
-    ["service", "api"],
-    ["environment", "prod"],
-    ["artifact", "api:v2"]
+    ["service", "<service-uuid>"],
+    ["environment", "<environment-uuid>"],
+    ["artifact", "<artifact-uuid>"]
   ],
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-api-prod-01\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"api\",\"environment_id\":\"prod\",\"artifact_id\":\"api:v2\",\"_meta\":{\"progressToken\":\"deploy-api-prod-01\"}}}"
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-api-prod-01\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"<service-uuid>\",\"environment_id\":\"<environment-uuid>\",\"artifact_id\":\"<artifact-uuid>\",\"_meta\":{\"progressToken\":\"deploy-api-prod-01\"}}}"
 }
 ```
 
-When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey.
+When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey. Bahia's native encrypted `service/deploy` handler requires UUID `service_id`, `environment_id`, and `artifact_id`, evaluates deployment policy, creates the intent and desired-state snapshot, and executes immediately only when the intent is approved.
+
+CLI operators may sign with a local identity key or NIP-46. NIP-46 mode requires `--nostr-bunker-file` plus `--nostr-client-key-file`; add repeatable `--nostr-bunker-relay` when the bunker URI does not contain a relay. NIP-46 signs both the ContextVM request and any NIP-42 relay AUTH challenge, and it must not be mixed with local identity-key flags.
 
 ## Observable Follow-up
 
@@ -73,8 +75,8 @@ A successful ContextVM response is an acknowledgment that Bahia accepted or reje
 {
   "kinds": [30900, 30315, 4903, 30078, 30004],
   "authors": ["<bahia-service-pubkey>"],
-  "#service": ["api"],
-  "#environment": ["prod"]
+  "#service": ["<service-uuid>"],
+  "#environment": ["<environment-uuid>"]
 }
 ```
 
@@ -86,6 +88,9 @@ Use these rules:
 4. Deduplicate by event id.
 5. Apply replaceable semantics for `(kind, pubkey, d)` on `30900`, `30078`, `11316`-`11320`, `30002`, and `30004`.
 6. Treat relay `OK`, `CLOSED`, and `AUTH` messages as protocol outcomes, not log noise.
+7. For wrapped replies, correlate the outer reply `e` tag to the outer request event; stored `1059` requests receive stored `1059` replies and ephemeral `21059` requests receive `21059` replies.
+
+Service-authored events sent through Bahia's main Nostr adapter are persisted in the PostgreSQL publish outbox before delivery and retried with backoff after transient failures. That retry path protects service-originated publication; it does not mean a client request with zero accepted relays was accepted.
 
 ## Desired-State Runtime Metadata
 

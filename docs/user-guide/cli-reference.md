@@ -21,7 +21,11 @@ make build
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BAHIA_SERVER` | Bahia server URL | `http://localhost:8080` |
-| `BAHIA_NOSTR_KEY_FILE` | File containing the Nostr private key used for signer-first operations | unset |
+| `BAHIA_NOSTR_KEY_FILE` | File containing a local Nostr private key for signer-first operations | unset |
+| `BAHIA_NOSTR_BUNKER_FILE` / `BAHIA_NOSTR_BUNKER_URI` | File containing, or direct value of, the NIP-46 bunker URI | unset |
+| `BAHIA_NOSTR_BUNKER_RELAYS` | Comma-separated NIP-46 signer relay URLs | unset |
+| `BAHIA_NOSTR_CLIENT_KEY_FILE` | Persistent NIP-46 client private-key file | unset |
+| `BAHIA_NOSTR_CLIENT_PRIVATE_KEY` | Raw persistent NIP-46 client private key | unset |
 | `BAHIA_NOSTR_NSEC` | Nostr private key in `nsec` form | unset |
 | `BAHIA_NOSTR_PRIVATE_KEY` | Raw Nostr private key hex | unset |
 | `BAHIA_NOSTR_RELAYS` | Comma-separated final relay URLs for signer-first operator transport | unset |
@@ -38,7 +42,9 @@ The CLI does not implement interactive `login` commands. The only built-in auth 
 bahia auth inspect
 ```
 
-Use `--nostr-key-file`, `BAHIA_NOSTR_KEY_FILE`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY` when a signer-first command needs a private key.
+For local signing, use `--nostr-key-file`, `BAHIA_NOSTR_KEY_FILE`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`.
+
+For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FILE` / `BAHIA_NOSTR_BUNKER_URI`), at least one signer relay from the bunker URI, repeatable `--nostr-bunker-relay`, or `BAHIA_NOSTR_BUNKER_RELAYS`, and a persistent client key via `--nostr-client-key-file`, `BAHIA_NOSTR_CLIENT_KEY_FILE`, or `BAHIA_NOSTR_CLIENT_PRIVATE_KEY`. The CLI refuses simultaneous local-key and bunker configuration and does not generate a throwaway NIP-46 identity.
 
 ## Nostr-native transport
 
@@ -278,12 +284,14 @@ bahia souls templates get research-agent
 ### Adoption
 
 ```bash
-# Scan for containers
-bahia adopt scan --target name=prod,endpoint_ref=prod-docker
+# Scan for containers (target syntax is alias=endpointRef)
+bahia adopt scan --target prod=prod-docker
 
-# Import discovered containers
-bahia adopt import --target name=prod,endpoint_ref=prod-docker --all
+# Import discovered containers and bind the signed request to an organization
+bahia adopt import --target prod=prod-docker --all --org 11111111-1111-1111-1111-111111111111
 ```
+
+`--org` is part of the signed import request. Use the destination organization UUID; it is not client-only display metadata.
 
 ## Output formats
 
@@ -303,7 +311,10 @@ bahia services get svc-123 -o yaml
 | Flag | Description |
 |------|-------------|
 | `--server` | Override Bahia server URL |
-| `--nostr-key-file` | Read the Nostr private key from a file (use `-` for stdin) |
+| `--nostr-key-file` | Read a local Nostr private key from a file (use `-` for stdin) |
+| `--nostr-bunker-file` | Read a NIP-46 bunker URI from a file |
+| `--nostr-bunker-relay` | Add a NIP-46 signer relay (repeatable) |
+| `--nostr-client-key-file` | Read the persistent NIP-46 client key from a file |
 | `--relay` | Specify final operator relay (repeatable; highest priority) |
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |

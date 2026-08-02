@@ -1,154 +1,81 @@
 # Notifications
 
-**Notifications** in Bahia alert you about deployment events, drift detection, and system status.
+**Notifications** alert an organization about operational events and retain delivery results for investigation.
 
-## Overview
+## Supported channels
 
-Bahia supports multiple notification channels:
-- **Webhook** — HTTP POST to any endpoint
-- **Email** — SMTP-based alerts
-- **Slack** — Slack incoming webhooks
-- **Nostr** — Direct messages via Nostr
+Bahia currently implements two channel types:
 
-## Notification Events
+| Type | Value | Configuration |
+|---|---|---|
+| Webhook | `webhook` | An HTTPS endpoint, with optional headers or signing secret |
+| Nostr direct message | `nostr_dm` | The recipient's Nostr pubkey |
 
-| Event | Description |
-|-------|-------------|
-| `deployment.started` | Deployment run began |
-| `deployment.completed` | Deployment succeeded |
-| `deployment.failed` | Deployment failed |
-| `deployment.approval_required` | Intent awaiting approval |
-| `drift.detected` | Observed state differs from desired |
-| `drift.resolved` | Drift was corrected |
-| `worker.offline` | Worker became unreachable |
-| `worker.online` | Worker reconnected |
-| `security.policy_breached` | A Security OSV policy breach is new or materially changed |
+Email and Slack are not registered channel types. A Slack incoming-webhook URL can be targeted through a generic webhook channel, but Bahia does not provide a separate Slack sender.
 
-## Creating Notification Channels
+The Nostr DM sender is available only when the server has a Nostr private key. Invalid or unsupported channel types fail validation instead of being accepted silently.
+
+## Organization scope and authorization
+
+Encrypted browser channel and log operations belong to an organization. The authenticated caller must be a member of the selected organization; those repository queries are qualified by that organization so another tenant's channel or log is not visible or mutable.
+
+The direct MCP notification handlers do not accept an `org_id` and currently use the server's unqualified notification repository. The standard app also leaves external MCP authorization fail-closed. Do not use these direct tools as a cross-tenant operator surface; prefer the tenant-scoped browser/encrypted operations. See [MCP Tools Reference](../mcp-tools.md#authorization).
+
+## Creating a channel
 
 ### Web UI
 
-1. Navigate to **Notifications** in the sidebar
-2. Click **New Channel**
-3. Select channel type:
-   - Webhook, Email, Slack, or Nostr
-4. Configure the channel
-5. Click **Create**
+1. Open **Notifications**.
+2. Select the current organization.
+3. Choose **New Channel**.
+4. Select **Webhook** or **Nostr DM**, enter its configuration and event filter, and save.
+5. Use **Test** before relying on the channel.
 
-### CLI
+The browser performs channel and log operations with encrypted control-plane methods:
 
-```bash
-# Webhook channel
-bahia notifications channels create \
-  --name "Deploy Alerts" \
-  --type webhook \
-  --config url="https://hooks.example.com/bahia" \
-  --events deployment.completed,deployment.failed
+- `notifications.channels.list`, `get`, `create`, `update`, `delete`, and `test`
+- `notifications.logs.list`
 
-# Slack channel
-bahia notifications channels create \
-  --name "Slack Deploys" \
-  --type slack \
-  --config webhook_url="https://hooks.slack.com/services/..." \
-  --events deployment.completed
-```
+### MCP
 
-### MCP Tool
+The CLI does not register a `bahia notifications` command. Use the tenant-scoped web UI. The registered direct MCP tools are available only to explicitly authorized embeddings and are not organization-qualified.
 
 ```json
 {
   "tool": "bahia_create_notification_channel",
   "arguments": {
-    "name": "Deploy Alerts",
-    "type": "webhook",
+    "name": "deployment-alerts",
+    "channel_type": "webhook",
     "config": {
       "url": "https://hooks.example.com/bahia"
     },
-    "events": ["deployment.completed", "deployment.failed"]
+    "event_filter": {
+      "type": "deployment.failed"
+    }
   }
 }
 ```
 
-## Channel Types
+For a Nostr DM channel, use `"channel_type": "nostr_dm"` and provide the recipient pubkey required by the channel configuration.
 
-### Webhook
+## Managing and testing channels
 
-Send HTTP POST requests to any endpoint:
+The registered channel tools are:
 
-```yaml
-type: webhook
-config:
-  url: "https://hooks.example.com/bahia"
-  secret: "webhook-secret"  # HMAC signature
-  headers:
-    Authorization: "Bearer token"
-```
+| Tool | Purpose |
+|---|---|
+| `bahia_list_notification_channels` | List channels in the caller's organization |
+| `bahia_get_notification_channel` | Read one organization-scoped channel |
+| `bahia_create_notification_channel` | Create a channel |
+| `bahia_update_notification_channel` | Replace channel fields such as config, filter, or enabled state |
+| `bahia_delete_notification_channel` | Delete a channel |
+| `bahia_test_notification_channel` | Deliver a test through that exact channel |
 
-Payload format:
-```json
-{
-  "event": "deployment.completed",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "data": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "artifact_id": "art-789",
-    "status": "completed"
-  }
-}
-```
+Testing a disabled channel or a delivery that cannot be accepted returns an error. The test path does not report success merely because the request was queued.
 
-### Email
+## Event filters
 
-SMTP-based email notifications:
-
-```yaml
-type: email
-config:
-  recipients:
-    - "team@example.com"
-    - "oncall@example.com"
-  subject_prefix: "[Bahia]"
-```
-
-Requires SMTP configuration in Bahia server.
-
-### Slack
-
-Slack incoming webhooks:
-
-```yaml
-type: slack
-config:
-  webhook_url: "https://hooks.slack.com/services/T00/B00/xxx"
-  channel: "#deployments"  # Optional override
-  username: "Bahia"
-```
-
-### Nostr
-
-Direct messages via Nostr:
-
-```yaml
-type: nostr
-config:
-  recipient_pubkeys:
-    - "npub1..."
-    - "npub2..."
-```
-
-## Filtering Notifications
-
-### By Event Type
-
-```yaml
-events:
-  - deployment.completed
-  - deployment.failed
-  - drift.detected
-```
-
-Security OSV notifications are breach-only. Configure channels for `security.policy_breached` to receive notifications when a policy breach fingerprint is new or materially changed; unchanged recurring breaches and clean scans do not dispatch notifications.
+A channel's `event_filter` controls which application events it receives. For example:
 
 ```json
 {
@@ -156,155 +83,58 @@ Security OSV notifications are breach-only. Configure channels for `security.pol
 }
 ```
 
-### By Service
+Security OSV notifications are breach-only: a new or materially changed breach fingerprint dispatches, while unchanged recurring breaches and clean scans do not.
 
-```yaml
-filters:
-  service_ids:
-    - "svc-123"
-    - "svc-456"
-```
+## Delivery behavior and logs
 
-### By Environment
+The dispatcher creates an organization-scoped log record for each attempted notification and then calls the selected sender. Send and log-update failures are returned to the caller rather than converted into success.
 
-```yaml
-filters:
-  environment_ids:
-    - "env-prod"
-```
+For Nostr DMs, zero relay acceptances count as a delivery failure. For webhooks, connection, TLS, authentication, and non-success response failures remain visible in the log's status and error fields.
 
-### By Tags
+Use the Notifications log view or these MCP tools:
 
-```yaml
-filters:
-  tags:
-    team: "payments"
-    criticality: "high"
-```
-
-## Managing Channels
-
-### Listing Channels
-
-```bash
-bahia notifications channels list
-```
-
-### Viewing Channel
-
-```bash
-bahia notifications channels get channel-123
-```
-
-### Updating Channel
-
-```bash
-bahia notifications channels update channel-123 \
-  --events deployment.completed,deployment.failed,drift.detected
-```
-
-### Deleting Channel
-
-```bash
-bahia notifications channels delete channel-123
-```
-
-## Testing Channels
-
-Send a test notification to verify configuration:
-
-### Web UI
-
-1. Go to channel detail
-2. Click **Test Channel**
-3. Verify notification received
-
-### CLI
-
-```bash
-bahia notifications channels test channel-123
-```
-
-### MCP Tool
+| Tool | Purpose |
+|---|---|
+| `bahia_list_notifications` | List recent logs; supports status and event-type filters |
+| `bahia_get_notification` | Registered compatibility operation; direct get-by-ID is unsupported, so use list |
+| `bahia_mark_notification_read` | Compatibility mutation that finds a recent log and overwrites its status to `sent` |
+| `bahia_dismiss_notification` | Registered compatibility operation; dismissal is unsupported |
 
 ```json
 {
-  "tool": "bahia_test_notification_channel",
+  "tool": "bahia_list_notifications",
   "arguments": {
-    "channel_id": "channel-123"
+    "status": "unread",
+    "event_type": "deployment.failed",
+    "limit": 50
   }
 }
 ```
 
-## Notification Logs
+The MCP status filter maps `read` to sent records and `unread` to pending or retrying records. This is a delivery-status compatibility mapping, not a separate user-read receipt. Although dismissal treats logs as immutable audit records, the current mark-read compatibility handler does mutate the stored delivery status to `sent`.
 
-View notification delivery history:
+## Sensitive configuration
 
-### Web UI
-
-1. Go to **Notifications** → **Log**
-2. Filter by channel, event, or status
-3. View delivery attempts and errors
-
-### CLI
-
-```bash
-# Recent logs
-bahia notifications log --limit 50
-
-# Logs for specific channel
-bahia notifications log --channel-id channel-123
-
-# Failed deliveries
-bahia notifications log --status failed
-```
-
-## Encrypted Transport
-
-Notification channel configuration is **sensitive** — webhook secrets, URLs, etc.
-
-In the Nostr-native model:
-- Channel CRUD uses encrypted request/result events (5980/7980)
-- Secrets are never sent to public relays
-- Requires NIP-44 capable signer
-
-## Best Practices
-
-1. **Use multiple channels** — Redundancy for critical alerts
-2. **Filter appropriately** — Avoid alert fatigue
-3. **Test before relying** — Verify channels work
-4. **Secure webhooks** — Use secrets and HTTPS
-5. **Monitor delivery** — Check logs for failures
+Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD uses encrypted request/result events and requires a NIP-44-capable signer. Do not publish channel configuration in public Nostr events or logs.
 
 ## Troubleshooting
 
-### Notifications Not Received
+### A channel test fails
 
-- Check channel configuration
-- Verify events are enabled
-- Check notification logs for errors
-- Test the channel
+- Confirm the channel is enabled.
+- For webhooks, verify outbound connectivity, TLS, credentials, and the endpoint response.
+- For Nostr DMs, verify the server signing key, recipient pubkey, and relay acceptance.
+- Inspect the organization-scoped delivery log for the stored error.
 
-### Webhook Failures
+### Expected events do not dispatch
 
-- Verify URL is reachable from Bahia
-- Check for TLS/certificate issues
-- Verify authentication if required
-
-### Email Not Delivered
-
-- Check SMTP configuration
-- Verify recipient addresses
-- Check spam folders
-
-### Slack Not Posting
-
-- Verify webhook URL is current
-- Check Slack app permissions
-- Test webhook directly with curl
+- Confirm the channel's event filter matches the exact event type.
+- Confirm the channel belongs to the active organization.
+- For `security.policy_breached`, confirm the breach is new or materially changed.
 
 ## Related
 
 - [Services](services.md) — Notification sources
-- [Deployments](deployments.md) — Deployment events
-- [Organizations](organizations.md) — Team alerts
+- [Deployments](deployments.md) — Deployment outcomes
+- [Security](security.md) — OSV breach notifications
+- [Organizations](organizations.md) — Tenant membership and access

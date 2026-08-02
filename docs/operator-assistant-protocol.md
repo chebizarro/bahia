@@ -262,18 +262,20 @@ The planner output MUST be validated against this catalog before a plan is shown
 
 ```go
 type AsyncToolReceipt struct {
-    ToolName        string
-    Method          string
-    RequestEventID  string
-    ObservableKinds []int
-    DTag            string
-    ResourceTags    map[string]string
-    IdempotencyKey  string
-    PublishedRelays []string
+    ToolName        string            `json:"tool_name"`
+    RequestEventID  string            `json:"request_event_id"`
+    RequestKind     int               `json:"request_kind"`
+    StatusKinds     []int             `json:"status_kinds"`
+    ResultKinds     []int             `json:"result_kinds"`
+    ReadModelKinds  []int             `json:"read_model_kinds,omitempty"`
+    DTag            string            `json:"d_tag,omitempty"`
+    ResourceTags    map[string]string `json:"resource_tags,omitempty"`
+    IdempotencyKey  string            `json:"idempotency_key"`
+    PublishedRelays []string          `json:"published_relays,omitempty"`
 }
 ```
 
-The receipt records the ContextVM request event and the exact canonical kinds/tags the assistant observes for progress and terminal outcomes. Legacy `request_kind`, `status_kind`, `result_kind`, and read-model kind fields may appear only in migration fixtures or historical conversion reports.
+The receipt records the ContextVM request event and the exact canonical kinds/tags the assistant observes for progress and terminal outcomes. In this assistant-specific normalized shape, `published_relays` is a list of relay URLs; the common `CommandReceipt` uses the same JSON field name for an accepted-relay count, so consumers must not deserialize the two shapes interchangeably. Legacy `request_kind`, `status_kind`, `result_kind`, and read-model kind fields may appear only in migration fixtures or historical conversion reports.
 
 ## Signing model
 
