@@ -428,6 +428,12 @@ func (c *Client) StopServiceRuntime(ctx context.Context, serviceID, envID string
 
 // --- Environments ---
 
+// EnvironmentDetails is the environment read model with its resolved deployment units.
+type EnvironmentDetails struct {
+	domain.Environment
+	DeploymentUnits []domain.DeploymentUnit `json:"deployment_units"`
+}
+
 // ListEnvironments returns all environments.
 func (c *Client) ListEnvironments(ctx context.Context) ([]domain.Environment, error) {
 	var envs []domain.Environment
@@ -439,7 +445,16 @@ func (c *Client) ListEnvironments(ctx context.Context) ([]domain.Environment, er
 
 // GetEnvironment returns an environment by ID.
 func (c *Client) GetEnvironment(ctx context.Context, id string) (*domain.Environment, error) {
-	var env domain.Environment
+	details, err := c.GetEnvironmentDetails(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &details.Environment, nil
+}
+
+// GetEnvironmentDetails returns an environment with explicit or resolved implicit deployment units.
+func (c *Client) GetEnvironmentDetails(ctx context.Context, id string) (*EnvironmentDetails, error) {
+	var env EnvironmentDetails
 	if err := c.do(ctx, http.MethodGet, "/api/v1/environments/"+id, nil, &env); err != nil {
 		return nil, err
 	}

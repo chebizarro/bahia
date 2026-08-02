@@ -494,6 +494,21 @@ func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodPersistsRichCont
 	}
 }
 
+func TestDecodeStrictContextVMParamsAllowsOnlyTransportMeta(t *testing.T) {
+	var payload encryptedEnvironmentCreatePayload
+	if err := decodeStrictContextVMParams(json.RawMessage(`{"name":"prod","_meta":{"progressToken":"environment-create-1"}}`), &payload); err != nil {
+		t.Fatalf("decode transport metadata: %v", err)
+	}
+	if payload.Name != "prod" {
+		t.Fatalf("name = %q, want prod", payload.Name)
+	}
+
+	err := decodeStrictContextVMParams(json.RawMessage(`{"name":"prod","unknown":true,"_meta":{"progressToken":"environment-create-1"}}`), &payload)
+	if err == nil || !strings.Contains(err.Error(), `unknown field "unknown"`) {
+		t.Fatalf("unknown business field error = %v", err)
+	}
+}
+
 func TestEncryptedRouteHandlers_CreateEnvironmentRejectsDeploymentUnitSchemaViolations(t *testing.T) {
 	registry := &fakeEncryptedRegistryMutations{}
 	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})

@@ -257,54 +257,7 @@ func serviceActionsCommands() *cobra.Command {
 // --- Environments Commands ---
 
 func environmentsCommands() *cobra.Command {
-	cmd := &cobra.Command{Use: "environments", Short: "Manage environments", Aliases: []string{"env"}}
-
-	listCmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all environments",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			envs, err := apiClient.ListEnvironments(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return output(envs, []string{"ID", "NAME", "STRATEGY", "PROTECTED"}, func(e domain.Environment) []string {
-				prot := ""
-				if e.Protected {
-					prot = "yes"
-				}
-				return []string{e.ID.String(), e.Name, string(e.DeployStrategy), prot}
-			})
-		},
-	}
-
-	getCmd := &cobra.Command{
-		Use:   "get [id]",
-		Short: "Get an environment by ID",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := apiClient.GetEnvironment(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return outputSingle(env)
-		},
-	}
-
-	createCmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a new environment (deprecated: signer-first Nostr only)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return signerFirstMutationUnavailable("environment/create")
-		},
-	}
-	createCmd.Flags().String("name", "", "Environment name")
-	createCmd.Flags().String("strategy", string(domain.DeployStrategyReplace), "Deploy strategy: replace, blue_green, canary")
-	createCmd.Flags().Bool("protected", false, "Require extra protections for deployments")
-	_ = createCmd.MarkFlagRequired("name")
-
-	cmd.AddCommand(listCmd, getCmd, createCmd)
-	return cmd
+	return newEnvironmentsCommand()
 }
 
 // --- State Commands ---

@@ -1311,6 +1311,7 @@ func New(cfg *config.Config) (*App, error) {
 			Runs:             runRepo,
 			Services:         serviceRepo,
 			Environments:     envRepo,
+			DeploymentUnits:  deploymentUnitRepo,
 			EnvStates:        stateRepo,
 			RuntimeResolver:  runtimeResolver,
 			Payments:         paymentSvc,

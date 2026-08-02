@@ -4,7 +4,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+// EnvironmentResponse includes an environment and its resolved deployment-unit read model.
+type EnvironmentResponse struct {
+	domain.Environment
+	DeploymentUnits []domain.DeploymentUnit `json:"deployment_units"`
+}
 
 // APIResponse is a standard JSON wrapper for API responses.
 type APIResponse struct {

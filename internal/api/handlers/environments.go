@@ -1,20 +1,24 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
 // EnvironmentHandler handles HTTP requests for environments.
 type EnvironmentHandler struct {
 	registry *service.RegistryService
+	units    repository.DeploymentUnitRepository
 }
 
-func NewEnvironmentHandler(registry *service.RegistryService) *EnvironmentHandler {
-	return &EnvironmentHandler{registry: registry}
+func NewEnvironmentHandler(registry *service.RegistryService, units repository.DeploymentUnitRepository) *EnvironmentHandler {
+	return &EnvironmentHandler{registry: registry, units: units}
 }
 
 func (h *EnvironmentHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +40,12 @@ func (h *EnvironmentHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "environment not found")
 		return
 	}
-	writeData(w, http.StatusOK, env)
+	response, err := h.environmentResponse(r, env)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeData(w, http.StatusOK, response)
 }
 
 func (h *EnvironmentHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -54,5 +63,36 @@ func (h *EnvironmentHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeData(w, http.StatusOK, environments)
+	responses := make([]dto.EnvironmentResponse, 0, len(environments))
+	for i := range environments {
+		response, responseErr := h.environmentResponse(r, &environments[i])
+		if responseErr != nil {
+			writeError(w, http.StatusInternalServerError, responseErr.Error())
+			return
+		}
+		responses = append(responses, *response)
+	}
+	writeData(w, http.StatusOK, responses)
+}
+
+func (h *EnvironmentHandler) environmentResponse(r *http.Request, env *domain.Environment) (*dto.EnvironmentResponse, error) {
+	if env == nil {
+		return nil, fmt.Errorf("environment is nil")
+	}
+	var units []domain.DeploymentUnit
+	if h.units != nil {
+		var err error
+		units, err = h.units.ListByEnvironment(r.Context(), env.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list deployment units for environment %s: %w", env.ID, err)
+		}
+	}
+	if len(units) == 0 {
+		implicit, err := domain.NewImplicitDefaultDeploymentUnit(env)
+		if err != nil {
+			return nil, fmt.Errorf("resolve implicit deployment unit for environment %s: %w", env.ID, err)
+		}
+		units = []domain.DeploymentUnit{*implicit}
+	}
+	return &dto.EnvironmentResponse{Environment: *env, DeploymentUnits: units}, nil
 }

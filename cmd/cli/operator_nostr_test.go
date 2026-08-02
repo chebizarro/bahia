@@ -440,11 +440,25 @@ func TestOperatorStatusCallbackWritesOnlyInTableModeToStderr(t *testing.T) {
 }
 
 type fakeCLIOperatorClient struct {
-	restartErr   error
-	policyCreate func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
+	restartErr        error
+	policyCreate      func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
+	environmentCreate func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
+	environmentUpdate func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 }
 
 func (f fakeCLIOperatorClient) Close() {}
+func (f fakeCLIOperatorClient) CreateEnvironmentNostr(_ context.Context, req client.CreateEnvironmentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error) {
+	if f.environmentCreate != nil {
+		return f.environmentCreate(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) UpdateEnvironmentNostr(_ context.Context, req client.UpdateEnvironmentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error) {
+	if f.environmentUpdate != nil {
+		return f.environmentUpdate(req)
+	}
+	return nil, errors.New("not implemented")
+}
 func (f fakeCLIOperatorClient) DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
 	return nil, errors.New("not implemented")
 }

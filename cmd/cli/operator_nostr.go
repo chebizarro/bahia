@@ -18,6 +18,8 @@ import (
 
 type cliOperatorClient interface {
 	Close()
+	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
+	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	CreateDeploymentIntentNostr(context.Context, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RollbackDeploymentNostr(context.Context, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
@@ -78,6 +80,24 @@ var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (
 		return nil, "", nil, err
 	}
 	return &cliNIP46Signer{client: signetClient, pubkey: pubkey}, pubkey, signetClient.Close, nil
+}
+
+func runEnvironmentCreateNostr(cmd *cobra.Command, req client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.CreateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment create"))
+}
+
+func runEnvironmentUpdateNostr(cmd *cobra.Command, req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.UpdateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment update"))
 }
 
 func runDeploymentIntentNostr(cmd *cobra.Command, serviceID, envID, artifactID, requestedBy string) (*client.DeploymentCommandResult, error) {

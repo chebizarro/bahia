@@ -40,7 +40,12 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 		{
 			name: "environments",
 			cmd:  environmentsCommands(),
-			want: []string{"list", "get", "create"},
+			want: []string{"list", "get", "create", "update", "units"},
+		},
+		{
+			name: "environment units",
+			cmd:  newEnvironmentUnitsCommand(),
+			want: []string{"list", "create", "update"},
 		},
 		{
 			name: "auth",

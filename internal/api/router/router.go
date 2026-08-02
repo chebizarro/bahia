@@ -41,6 +41,7 @@ type RouterDeps struct {
 	Runs             repository.DeploymentRunRepository
 	Services         repository.ServiceRepository
 	Environments     repository.EnvironmentRepository
+	DeploymentUnits  repository.DeploymentUnitRepository
 	EnvStates        repository.EnvironmentServiceStateRepository
 	RuntimeResolver  runtimeadapter.RuntimeResolver
 	Payments         *service.PaymentService
@@ -149,7 +150,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Create handlers.
 	svcH := handlers.NewServiceHandler(registry)
-	envH := handlers.NewEnvironmentHandler(registry)
+	envH := handlers.NewEnvironmentHandler(registry, deps.DeploymentUnits)
 	buildH := handlers.NewBuildHandler(registry)
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)

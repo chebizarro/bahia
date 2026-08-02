@@ -13,6 +13,127 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
+func TestOperatorEnvironmentCreateUpdateRequestConstruction(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		run    func(context.Context, *OperatorControlPlaneClient) (*EnvironmentCommandResult, error)
+		assert func(*testing.T, contextVMRPCRequest)
+	}{
+		{
+			name:   "create",
+			method: controlplane.ContextVMMethodEnvironmentCreate,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*EnvironmentCommandResult, error) {
+				units := []DeploymentUnitRequest{{
+					Key:           "max",
+					RuntimeType:   "compose",
+					EndpointRef:   "max",
+					ComposeDir:    "/srv/bahia/gastown",
+					OwnershipMode: "bahia_managed",
+					ReconcileMode: "auto_apply",
+					RuntimeConfig: map[string]any{"execution_mode": "sdk"},
+				}}
+				return c.CreateEnvironmentNostr(ctx, CreateEnvironmentNostrRequest{
+					OrgID:           "31ee612f-93a8-418d-a377-eee0a5cd26dc",
+					Name:            "production",
+					Targeting:       &EnvironmentTargetingRequest{DefaultUnitKey: "max", SecretScopeMode: "environment", DefaultReconcileMode: "auto_apply"},
+					ReconcileMode:   "auto_apply",
+					DeploymentUnits: &units,
+					DeployStrategy:  "replace",
+					Protected:       true,
+				}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				if got := rpc.Params["name"]; got != "production" {
+					t.Fatalf("name = %#v", got)
+				}
+				targeting, _ := rpc.Params["targeting"].(map[string]any)
+				if targeting["default_unit_key"] != "max" || targeting["secret_scope_mode"] != "environment" {
+					t.Fatalf("targeting = %#v", targeting)
+				}
+				units, _ := rpc.Params["deployment_units"].([]any)
+				if len(units) != 1 {
+					t.Fatalf("deployment_units = %#v", rpc.Params["deployment_units"])
+				}
+				unit, _ := units[0].(map[string]any)
+				runtimeConfig, _ := unit["runtime_config"].(map[string]any)
+				if unit["runtime_type"] != "compose" || unit["endpoint_ref"] != "max" || runtimeConfig["execution_mode"] != "sdk" {
+					t.Fatalf("unit = %#v", unit)
+				}
+			},
+		},
+		{
+			name:   "update preserves explicit empty complete set",
+			method: controlplane.ContextVMMethodEnvironmentUpdate,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*EnvironmentCommandResult, error) {
+				empty := []DeploymentUnitRequest{}
+				protected := false
+				return c.UpdateEnvironmentNostr(ctx, UpdateEnvironmentNostrRequest{
+					ID:              "env-1",
+					DeploymentUnits: &empty,
+					Protected:       &protected,
+				}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				units, exists := rpc.Params["deployment_units"]
+				if !exists {
+					t.Fatal("deployment_units was omitted")
+				}
+				if values, ok := units.([]any); !ok || len(values) != 0 {
+					t.Fatalf("deployment_units = %#v, want explicit empty array", units)
+				}
+				if protected, ok := rpc.Params["protected"].(bool); !ok || protected {
+					t.Fatalf("protected = %#v, want false", rpc.Params["protected"])
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestKey := nostr.Generate().Hex()
+			replyKey := nostr.Generate().Hex()
+			transport := newFakeOperatorTransport()
+			c := newTestOperatorClient(t, requestKey, transport)
+			transport.publishFn = func(ctx context.Context, event nostr.Event) (int, error) {
+				transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{
+					"status":  "success",
+					"payload": map[string]any{"status": "updated", "environment_id": "env-1"},
+				})
+				return 1, nil
+			}
+			result, err := test.run(context.Background(), c)
+			if err != nil {
+				t.Fatalf("environment mutation error = %v", err)
+			}
+			if result.EnvironmentID != "env-1" {
+				t.Fatalf("environment_id = %q", result.EnvironmentID)
+			}
+			published := transport.onlyPublished(t)
+			rpc := decodePublishedContextVMRequest(t, published)
+			if rpc.Method != test.method {
+				t.Fatalf("method = %q, want %q", rpc.Method, test.method)
+			}
+			test.assert(t, rpc)
+			assertTagValue(t, published.Tags, "method", test.method)
+		})
+	}
+}
+
+func TestOperatorEnvironmentMutationsValidateRequiredFieldsBeforePublish(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	c := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	if _, err := c.CreateEnvironmentNostr(context.Background(), CreateEnvironmentNostrRequest{}, nil); err == nil {
+		t.Fatal("CreateEnvironmentNostr expected name validation error")
+	}
+	if _, err := c.UpdateEnvironmentNostr(context.Background(), UpdateEnvironmentNostrRequest{}, nil); err == nil {
+		t.Fatal("UpdateEnvironmentNostr expected id validation error")
+	}
+	if len(transport.published) != 0 {
+		t.Fatalf("published %d events for invalid requests", len(transport.published))
+	}
+}
+
 func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesContextVMProgressResultDedup(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()

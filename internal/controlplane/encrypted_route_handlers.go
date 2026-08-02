@@ -385,7 +385,16 @@ func decodeStrictContextVMParams(params json.RawMessage, out any) error {
 	if len(params) == 0 || string(params) == "null" {
 		params = []byte(`{}`)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(params))
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(params, &envelope); err != nil {
+		return fmt.Errorf("invalid environment params: %w", err)
+	}
+	delete(envelope, "_meta")
+	businessParams, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("invalid environment params: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(businessParams))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
 		return fmt.Errorf("invalid environment params: %w", err)

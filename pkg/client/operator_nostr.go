@@ -13,6 +13,7 @@ import (
 	canonicalnostr "fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
@@ -200,6 +201,64 @@ func (c *OperatorControlPlaneClient) Close() {
 	}
 }
 
+// EnvironmentTargetingRequest configures environment-level placement defaults.
+type EnvironmentTargetingRequest struct {
+	DefaultUnitKey       string            `json:"default_unit_key,omitempty"`
+	FailureDomainLabels  map[string]string `json:"failure_domain_labels,omitempty"`
+	SecretScopeMode      string            `json:"secret_scope_mode,omitempty"`
+	DefaultReconcileMode string            `json:"default_reconcile_mode,omitempty"`
+}
+
+// DeploymentUnitRequest is one desired explicit environment deployment unit.
+type DeploymentUnitRequest struct {
+	Key            string            `json:"key"`
+	DisplayName    string            `json:"display_name,omitempty"`
+	RuntimeType    string            `json:"runtime_type,omitempty"`
+	EndpointRef    string            `json:"endpoint_ref,omitempty"`
+	ComposeDir     string            `json:"compose_dir,omitempty"`
+	Namespace      string            `json:"namespace,omitempty"`
+	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	OwnershipMode  string            `json:"ownership_mode,omitempty"`
+	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
+	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+}
+
+// CreateEnvironmentNostrRequest is the signer-first environment/create payload.
+type CreateEnvironmentNostrRequest struct {
+	OrgID              string                       `json:"org_id,omitempty"`
+	Name               string                       `json:"name"`
+	LoomWorkerSelector map[string]any               `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any               `json:"runtime_config,omitempty"`
+	Targeting          *EnvironmentTargetingRequest `json:"targeting,omitempty"`
+	ReconcileMode      string                       `json:"reconcile_mode,omitempty"`
+	DeploymentUnits    *[]DeploymentUnitRequest     `json:"deployment_units,omitempty"`
+	DeployStrategy     string                       `json:"deploy_strategy,omitempty"`
+	Protected          bool                         `json:"protected"`
+}
+
+// UpdateEnvironmentNostrRequest is the signer-first environment/update payload.
+type UpdateEnvironmentNostrRequest struct {
+	ID                 string                       `json:"id"`
+	OrgID              *string                      `json:"org_id,omitempty"`
+	Name               *string                      `json:"name,omitempty"`
+	LoomWorkerSelector *map[string]any              `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      *map[string]any              `json:"runtime_config,omitempty"`
+	Targeting          *EnvironmentTargetingRequest `json:"targeting,omitempty"`
+	ReconcileMode      *string                      `json:"reconcile_mode,omitempty"`
+	DeploymentUnits    *[]DeploymentUnitRequest     `json:"deployment_units,omitempty"`
+	DeployStrategy     *string                      `json:"deploy_strategy,omitempty"`
+	Protected          *bool                        `json:"protected,omitempty"`
+}
+
+// EnvironmentCommandResult is the terminal acknowledgment for signer-first environment mutations.
+type EnvironmentCommandResult struct {
+	Status          string                  `json:"status,omitempty"`
+	Environment     *domain.Environment     `json:"environment,omitempty"`
+	EnvironmentID   string                  `json:"environment_id,omitempty"`
+	DeploymentUnits []domain.DeploymentUnit `json:"deployment_units,omitempty"`
+	Message         string                  `json:"message,omitempty"`
+}
+
 // DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
 type DeploymentCommandResult struct {
 	Status        string `json:"status,omitempty"`
@@ -221,6 +280,65 @@ func (c *OperatorControlPlaneClient) PublishPolicyCreateNostr(ctx context.Contex
 		return nil, &ControlPlaneRequestError{Phase: "publish PolicyCreate request", RequestAccepted: false, Cause: err}
 	}
 	return receipt, nil
+}
+
+// CreateEnvironmentNostr publishes a signer-first environment/create mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) CreateEnvironmentNostr(ctx context.Context, req CreateEnvironmentNostrRequest, onStatus func(OperatorStatusEvent)) (*EnvironmentCommandResult, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate environment create request", RequestAccepted: false, Cause: fmt.Errorf("name is required")}
+	}
+	req.OrgID = strings.TrimSpace(req.OrgID)
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodEnvironmentCreate,
+		Tags:    nostr.Tags{{"environment_name", req.Name}},
+		Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result EnvironmentCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode environment create result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "created"
+	}
+	if result.EnvironmentID == "" && result.Environment != nil {
+		result.EnvironmentID = result.Environment.ID.String()
+	}
+	return &result, nil
+}
+
+// UpdateEnvironmentNostr publishes a signer-first environment/update mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) UpdateEnvironmentNostr(ctx context.Context, req UpdateEnvironmentNostrRequest, onStatus func(OperatorStatusEvent)) (*EnvironmentCommandResult, error) {
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate environment update request", RequestAccepted: false, Cause: fmt.Errorf("id is required")}
+	}
+	if req.OrgID != nil {
+		trimmed := strings.TrimSpace(*req.OrgID)
+		req.OrgID = &trimmed
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodEnvironmentUpdate,
+		Tags:    nostr.Tags{{"environment", req.ID}},
+		Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result EnvironmentCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode environment update result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "updated"
+	}
+	if result.EnvironmentID == "" {
+		result.EnvironmentID = req.ID
+	}
+	return &result, nil
 }
 
 // DeployServiceRuntimeNostr requests a direct runtime deploy over Nostr.
