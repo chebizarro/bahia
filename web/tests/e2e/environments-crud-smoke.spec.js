@@ -3,6 +3,7 @@ import { installE2EMocks } from './helpers.js';
 import { SERVICE_PUBKEY, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
+const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const initialState = createPublicState({
   services: [
     { id: 'svc-1', name: 'api-service', runtime_type: 'docker', artifact_repo: 'ghcr.io/example/api', deleted: false, created_at: '2026-05-03T10:00:00.000Z' },
@@ -11,23 +12,46 @@ const initialState = createPublicState({
   environments: [
     {
       id: 'env-1',
+      org_id: ORG_ID,
       name: 'production',
       loom_worker_selector: 'role=prod',
       runtime_config: { cpu_limit: '2', memory_limit: '4Gi' },
+      targeting: {
+        default_unit_key: 'max',
+        secret_scope_mode: 'unit',
+        default_reconcile_mode: 'approval_required'
+      },
+      reconcile_mode: 'approval_required',
+      deployment_units: [{
+        id: 'unit-max',
+        environment_id: 'env-1',
+        key: 'max',
+        display_name: 'Max Compose',
+        runtime_type: 'compose',
+        endpoint_ref: 'max',
+        compose_dir: '/srv/bahia/compose/gastown',
+        ownership_mode: 'bahia_managed',
+        reconcile_mode: 'approval_required',
+        runtime_config: { execution_mode: 'sdk' },
+        implicit: false
+      }],
       deploy_strategy: 'replace',
       protected: true,
       deleted: false,
-      created_at: '2026-05-03T10:02:00.000Z'
+      created_at: '2026-05-03T10:02:00.000Z',
+      updated_at: '2026-05-03T10:02:30.000Z'
     },
     {
       id: 'env-2',
+      org_id: ORG_ID,
       name: 'staging',
       loom_worker_selector: 'role=staging',
       runtime_config: { cpu_limit: '1', memory_limit: '2Gi' },
       deploy_strategy: 'canary',
       protected: false,
       deleted: false,
-      created_at: '2026-05-03T10:03:00.000Z'
+      created_at: '2026-05-03T10:03:00.000Z',
+      updated_at: '2026-05-03T10:03:30.000Z'
     }
   ],
   serviceStates: [
@@ -121,6 +145,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     await page.getByRole('button', { name: 'Create Environment' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Create Environment' })).toBeVisible();
+    await expect(page.getByLabel('Organization *')).toBeVisible();
     await expect(page.getByLabel('Name *')).toBeVisible();
     await expect(page.getByLabel('Loom Worker Selector')).toBeVisible();
     await expect(page.getByLabel('Runtime Config (JSON)')).toBeVisible();
@@ -143,6 +168,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
     await expect(dialog).toBeVisible();
 
+    await page.getByLabel('Organization *').selectOption(ORG_ID);
     await page.getByLabel('Name *').fill('development');
     await page.getByLabel('Loom Worker Selector').fill('role=dev');
     await page.getByLabel('Runtime Config (JSON)').fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
@@ -182,6 +208,85 @@ test.describe('Environments CRUD Smoke Test', () => {
     await expect(page.locator('text=Drifted Services')).toBeVisible();
     await expect(page.locator('text=In-Sync Services')).toBeVisible();
     await expect(page.locator('button:has-text("Edit"), a:has-text("Edit")').first()).toBeVisible();
+  });
+
+  test('should create a max-like Compose target entirely in the environment UI', async ({ page }) => {
+    await page.goto('/environments');
+    await page.getByRole('button', { name: 'Create Environment' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Create Environment' });
+
+    await page.getByLabel('Organization *').selectOption(ORG_ID);
+    await page.getByLabel('Name *').fill('max-production');
+    await page.getByLabel('Create an explicit Bahia-managed Compose deployment unit').check();
+    await page.getByLabel('Unit key *').fill('max');
+    await page.getByLabel('Display name').fill('Max Compose');
+    await page.getByLabel('Endpoint alias *').fill('max');
+    await page.getByLabel('Compose directory *').fill('/srv/bahia/compose/gastown');
+    await page.getByLabel('Reconcile mode *').selectOption('approval_required');
+    await page.getByLabel('Compose execution *').selectOption('sdk');
+    await dialog.getByRole('button', { name: 'Create' }).click();
+
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole('cell', { name: 'max-production', exact: true })).toBeVisible();
+    const request = await expectContextVMOperation(page, 'environment/create');
+    expect(request.payload).toMatchObject({
+      org_id: ORG_ID,
+      targeting: {
+        default_unit_key: 'max',
+        secret_scope_mode: 'unit',
+        default_reconcile_mode: 'approval_required'
+      },
+      deployment_units: [{
+        key: 'max',
+        runtime_type: 'compose',
+        endpoint_ref: 'max',
+        compose_dir: '/srv/bahia/compose/gastown',
+        ownership_mode: 'bahia_managed',
+        reconcile_mode: 'approval_required',
+        runtime_config: { execution_mode: 'sdk' }
+      }]
+    });
+  });
+
+  test('should list and edit a protected Compose unit through a confirmed full-set update', async ({ page }) => {
+    await page.goto('/environments/env-1');
+
+    await expect(page.getByRole('heading', { name: 'Deployment Units (1)' })).toBeVisible();
+    await expect(page.getByText('Max Compose').first()).toBeVisible();
+    await expect(page.getByText('max', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('/srv/bahia/compose/gastown')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Edit Unit' }).click();
+    const editor = page.getByRole('dialog', { name: 'Edit Deployment Unit' });
+    await editor.getByLabel('Endpoint alias *').fill('max-west');
+    await editor.getByRole('button', { name: 'Review Protected Change' }).click();
+
+    const confirm = page.getByRole('dialog', { name: 'Confirm Protected Target Change' });
+    await expect(confirm.getByText('max-west', { exact: true })).toBeVisible();
+    await confirm.getByRole('button', { name: 'Sign Target Update' }).click();
+
+    await expect(editor).not.toBeVisible();
+    const request = await expectContextVMOperation(page, 'environment/update');
+    expect(request.payload.expected_updated_at).toBe('2026-05-03T10:02:30.000Z');
+    expect(request.payload.deployment_units).toHaveLength(1);
+    expect(request.payload.deployment_units[0]).toMatchObject({
+      key: 'max',
+      endpoint_ref: 'max-west',
+      runtime_type: 'compose',
+      ownership_mode: 'bahia_managed'
+    });
+  });
+
+  test('should reject endpoint URLs before publishing a target update', async ({ page }) => {
+    await page.goto('/environments/env-1');
+    await page.getByRole('button', { name: 'Edit Unit' }).click();
+    const editor = page.getByRole('dialog', { name: 'Edit Deployment Unit' });
+    await editor.getByLabel('Endpoint alias *').fill('tcp://docker.example:2376');
+    await editor.getByRole('button', { name: 'Review Protected Change' }).click();
+
+    await expect(editor.getByRole('alert')).toContainText('URLs and credentials');
+    const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
+    expect(operations).not.toContain('environment/update');
   });
 
   test('should update environment through ContextVM and canonical 30900 projection', async ({ page }) => {

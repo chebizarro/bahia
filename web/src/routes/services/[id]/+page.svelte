@@ -49,6 +49,11 @@
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
   import {
+    deploymentTargetIssue,
+    deploymentUnitsForEnvironment,
+    explicitDeploymentUnits
+  } from '$lib/deployment-units.js';
+  import {
     createServiceSecret,
     deleteServiceSecret,
     listServiceSecrets,
@@ -151,6 +156,7 @@
   let deployEstimatedDurationSecs = $state(DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS);
   let deployForm = $state({
     environment_id: '',
+    deployment_unit_id: '',
     artifact_id: ''
   });
 
@@ -524,6 +530,7 @@
   function openDeployModal() {
     deployForm = {
       environment_id: '',
+      deployment_unit_id: '',
       artifact_id: ''
     };
     deployError = null;
@@ -541,7 +548,7 @@
     resetDeployCostEstimate();
   }
 
-  async function loadDeploymentPolicyPreview(environmentId, artifactId) {
+  async function loadDeploymentPolicyPreview(environmentId, artifactId, deploymentUnitId = '') {
     const requestToken = ++deployPolicyPreviewRequestToken;
     deployPolicyPreview = null;
     deployPolicyPreviewError = null;
@@ -549,8 +556,10 @@
 
     try {
       const preview = await evaluatePolicy({
-        artifact_id: artifactId,
-        environment_id: environmentId
+        service_id: serviceId,
+        environment_id: environmentId,
+        ...(deploymentUnitId ? { deployment_unit_id: deploymentUnitId } : {}),
+        artifact_id: artifactId
       });
       if (deployPolicyPreviewRequestToken === requestToken) {
         deployPolicyPreview = preview;
@@ -575,6 +584,10 @@
       deployError = 'Select an artifact';
       return;
     }
+    if (deployTargetError) {
+      deployError = deployTargetError;
+      return;
+    }
 
     if (deployPolicyGateError) {
       deployError = deployPolicyGateError;
@@ -585,7 +598,12 @@
     deployError = null;
 
     try {
-      await createDeploymentIntent(serviceId, deployForm.environment_id, deployForm.artifact_id);
+      await createDeploymentIntent(
+        serviceId,
+        deployForm.environment_id,
+        deployForm.artifact_id,
+        deployForm.deployment_unit_id
+      );
       deployOpen = false;
       goto('/deployments');
     } catch (err) {
@@ -917,17 +935,38 @@
   })));
   let selectedDeployEnvironment = $derived(environments.find(environment => environment.id === deployForm.environment_id));
   let selectedDeployArtifact = $derived(artifacts.find(artifact => artifact.id === deployForm.artifact_id));
+  let deployEnvironmentUnits = $derived(deploymentUnitsForEnvironment(selectedDeployEnvironment));
+  let deployExplicitUnits = $derived(explicitDeploymentUnits(selectedDeployEnvironment));
+  let deployUnitOptions = $derived(deployExplicitUnits.map((unit) => ({
+    value: unit.id || '',
+    disabled: !unit.id,
+    label: `${unit.display_name || unit.key} · ${unit.key}${unit.key === selectedDeployEnvironment?.targeting?.default_unit_key ? ' · default' : ''} · endpoint alias ${unit.endpoint_ref || 'missing'}`
+  })));
+  let selectedDeployUnit = $derived.by(() => {
+    if (deployForm.deployment_unit_id) {
+      return deployExplicitUnits.find((unit) => unit.id === deployForm.deployment_unit_id) || null;
+    }
+    if (deployExplicitUnits.length === 1) return deployExplicitUnits[0];
+    if (deployExplicitUnits.length === 0 && deployEnvironmentUnits.length === 1) return deployEnvironmentUnits[0];
+    return null;
+  });
+  let deployTargetError = $derived(
+    deployForm.environment_id
+      ? deploymentTargetIssue(service, selectedDeployEnvironment, deployForm.deployment_unit_id)
+      : ''
+  );
   let selectedRollbackEnvironment = $derived(environments.find(environment => environment.id === rollbackForm.environment_id));
   let selectedRollbackArtifact = $derived(artifacts.find(artifact => artifact.id === rollbackForm.artifact_id));
   let deployPolicyGateError = $derived.by(() => {
     if (!deployForm.environment_id || !deployForm.artifact_id) return '';
+    if (deployTargetError) return deployTargetError;
     if (deployPolicyPreviewLoading) return 'Policy preview must finish before you can create an intent.';
     if (deployPolicyPreviewError) return `Policy preview must succeed before you can create an intent: ${deployPolicyPreviewError}`;
     if (!deployPolicyPreview) return 'Policy preview is required before you can create an intent.';
     if (policyPreviewBlocked(deployPolicyPreview)) return 'Resolve policy blockers before you can create an intent.';
     return '';
   });
-  let deployCreateDisabled = $derived(!deployForm.environment_id || !deployForm.artifact_id || Boolean(deployPolicyGateError));
+  let deployCreateDisabled = $derived(!deployForm.environment_id || !deployForm.artifact_id || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
   let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
   let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
   let selectedDeployArtifactBuild = $derived.by(() => {
@@ -938,13 +977,27 @@
 
   $effect(() => {
     if (!deployOpen) return;
+    const currentId = deployForm.deployment_unit_id;
+    const singleExplicitId = deployExplicitUnits.length === 1 ? String(deployExplicitUnits[0]?.id || '') : '';
+    const currentStillExists = deployExplicitUnits.some((unit) => unit.id === currentId);
+    if (singleExplicitId && currentId !== singleExplicitId) {
+      untrack(() => { deployForm.deployment_unit_id = singleExplicitId; });
+    } else if (currentId && !currentStillExists) {
+      untrack(() => { deployForm.deployment_unit_id = ''; });
+    }
+  });
+
+  $effect(() => {
+    if (!deployOpen) return;
     const environmentId = deployForm.environment_id;
     const artifactId = deployForm.artifact_id;
-    if (!environmentId || !artifactId) {
+    const deploymentUnitId = deployForm.deployment_unit_id;
+    const targetIssue = deployTargetError;
+    if (!environmentId || !artifactId || targetIssue) {
       untrack(() => resetDeployPreview());
       return;
     }
-    void untrack(() => loadDeploymentPolicyPreview(environmentId, artifactId));
+    void untrack(() => loadDeploymentPolicyPreview(environmentId, artifactId, deploymentUnitId));
   });
 
   let buildColumns = $derived([
@@ -1263,6 +1316,51 @@
       <span class="field-hint">Deployment intent will target the selected environment.</span>
     </div>
 
+    {#if selectedDeployEnvironment && deployExplicitUnits.length > 1}
+      <div class="form-field">
+        <label for="deploy-unit">Deployment unit *</label>
+        <Select
+          id="deploy-unit"
+          bind:value={deployForm.deployment_unit_id}
+          options={deployUnitOptions}
+          placeholder="Select an explicit deployment unit"
+          required
+          disabled={deploying}
+        />
+        <span class="field-hint">Multi-unit environments require an explicit target. The default is labeled but is not selected automatically.</span>
+      </div>
+    {:else if selectedDeployEnvironment && selectedDeployUnit}
+      <div class="resolved-target">
+        <strong>Deployment unit:</strong>
+        <span>{selectedDeployUnit.display_name || selectedDeployUnit.key} (<code>{selectedDeployUnit.key}</code>)</span>
+      </div>
+    {:else if selectedDeployEnvironment}
+      <div class="resolved-target">
+        <strong>Deployment unit:</strong>
+        <span>Backend-resolved unambiguous default</span>
+      </div>
+    {/if}
+
+    {#if selectedDeployUnit}
+      <div class="resolved-endpoint" role="status">
+        <strong>Resolved endpoint alias:</strong>
+        <code>{selectedDeployUnit.endpoint_ref || 'Missing'}</code>
+        <span>Underlying Docker host credentials remain server-side.</span>
+      </div>
+    {/if}
+
+    {#if selectedDeployEnvironment?.protected}
+      <div class="deploy-input-warning" role="status">
+        <p>This protected environment requires approval before runtime apply.</p>
+      </div>
+    {/if}
+
+    {#if deployTargetError}
+      <div class="deploy-input-warning" role="alert">
+        <p>{deployTargetError}</p>
+      </div>
+    {/if}
+
     <div class="form-field">
       <label for="deploy-artifact">Artifact from recent builds *</label>
       <Select
@@ -1285,6 +1383,14 @@
           <div>
             <dt>Environment</dt>
             <dd>{selectedDeployEnvironment ? environmentDisplayName(selectedDeployEnvironment) : 'Select an environment'}</dd>
+          </div>
+          <div>
+            <dt>Unit</dt>
+            <dd>{selectedDeployUnit ? (selectedDeployUnit.display_name || selectedDeployUnit.key) : 'Backend-resolved default'}</dd>
+          </div>
+          <div>
+            <dt>Endpoint alias</dt>
+            <dd>{selectedDeployUnit?.endpoint_ref || 'Resolved by Bahia'}</dd>
           </div>
           <div>
             <dt>Artifact</dt>
@@ -1312,7 +1418,9 @@
           {/if}
         </div>
         {#if !deployForm.environment_id || !deployForm.artifact_id}
-          <p class="preview-muted">Select an environment and artifact to preview policy evaluation.</p>
+          <p class="preview-muted">Select an environment, deployment unit, and artifact to preview policy evaluation.</p>
+        {:else if deployTargetError}
+          <p class="preview-warning">{deployTargetError}</p>
         {:else if deployPolicyPreviewLoading}
           <p class="preview-muted">Evaluating policies...</p>
         {:else if deployPolicyPreviewError}
@@ -1924,7 +2032,9 @@
     line-height: 1.5;
   }
   .deploy-input-warning,
-  .deploy-summary {
+  .deploy-summary,
+  .resolved-target,
+  .resolved-endpoint {
     padding: 1rem;
     background: var(--hover-bg);
     border: 1px solid var(--border-color);
@@ -1940,6 +2050,22 @@
   }
   .deploy-input-warning p + p {
     margin-top: 0.5rem;
+  }
+  .resolved-target,
+  .resolved-endpoint {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+  }
+  .resolved-endpoint {
+    border-color: var(--primary);
+  }
+  .resolved-endpoint span {
+    color: var(--text-muted);
+    font-size: 0.75rem;
   }
   .deploy-summary h3,
   .preview-card h3 {

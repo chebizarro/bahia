@@ -11,8 +11,18 @@
   import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
   import { environments, loading, loadEnvironments, workers, loadWorkers } from '$lib/stores';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
+  import { orgsState } from '$lib/stores/orgs.svelte.js';
   import { parseKeyValueLines } from '../ml/page-model.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
+  import {
+    DEPLOYMENT_UNIT_EXECUTION_OPTIONS,
+    DEPLOYMENT_UNIT_OWNERSHIP_MODE,
+    DEPLOYMENT_UNIT_RECONCILE_OPTIONS,
+    DEPLOYMENT_UNIT_RUNTIME_TYPE,
+    deploymentUnitForm,
+    deploymentUnitWriteShape,
+    validateDeploymentUnitForm
+  } from '$lib/deployment-units.js';
 
   $effect(() => {
     void Promise.all([loadEnvironments(), loadWorkers()]);
@@ -24,6 +34,7 @@
   let createError = $state(null);
 
   let createForm = $state({
+    org_id: '',
     name: '',
     loom_worker_selector: '',
     runtime_config: '{}',
@@ -32,7 +43,9 @@
     rollout_from_labels: '',
     rollout_to_labels: '',
     deploy_strategy: 'rolling',
-    protected: false
+    protected: false,
+    unit_enabled: false,
+    unit: deploymentUnitForm()
   });
 
   const deployStrategyOptions = [
@@ -45,6 +58,19 @@
     { value: '', label: 'Any eligible worker' },
     ...workers.map((worker) => ({ value: worker.pubkey, label: `${worker.name || worker.pubkey?.slice(0, 16) + '…'} (${String(worker.pubkey || '').slice(0, 12)}…)` }))
   ]);
+
+  let organizationOptions = $derived.by(() => {
+    const byId = new Map();
+    for (const org of orgsState.orgs || []) {
+      const id = String(org?.id || org?.org_id || '').trim();
+      if (id) byId.set(id, { value: id, label: org.display_name || org.name || id });
+    }
+    for (const environment of environments) {
+      const id = String(environment?.org_id || environment?.owner_org_id || '').trim();
+      if (id && !byId.has(id)) byId.set(id, { value: id, label: id });
+    }
+    return Array.from(byId.values());
+  });
 
   const deployStrategyApiMap = {
     rolling: 'replace',
@@ -74,6 +100,7 @@
     createError = null;
     // Reset form
     createForm = {
+      org_id: '',
       name: '',
       loom_worker_selector: '',
       runtime_config: '{}',
@@ -82,7 +109,9 @@
       rollout_from_labels: '',
       rollout_to_labels: '',
       deploy_strategy: 'rolling',
-      protected: false
+      protected: false,
+      unit_enabled: false,
+      unit: deploymentUnitForm()
     };
   }
 
@@ -93,7 +122,14 @@
       return;
     }
 
+    if (!createForm.org_id.trim()) {
+      createError = 'Organization is required';
+      return;
+    }
+
     let parsedRuntimeConfig;
+    let deploymentUnits;
+    let targeting;
     try {
       parsedRuntimeConfig = parseRuntimeConfig(createForm.runtime_config);
       const workerPolicy = buildWorkerPolicy(createForm);
@@ -101,6 +137,25 @@
         parsedRuntimeConfig.worker_policy = {
           ...(parsedRuntimeConfig.worker_policy && typeof parsedRuntimeConfig.worker_policy === 'object' ? parsedRuntimeConfig.worker_policy : {}),
           ...workerPolicy
+        };
+      }
+      if (createForm.unit_enabled) {
+        const unitValidation = validateDeploymentUnitForm(createForm.unit, { protectedEnvironment: createForm.protected });
+        if (!unitValidation.success) throw new Error(unitValidation.error);
+        if (parsedRuntimeConfig.type && parsedRuntimeConfig.type !== DEPLOYMENT_UNIT_RUNTIME_TYPE) {
+          throw new Error(`Environment runtime "${parsedRuntimeConfig.type}" conflicts with deployment unit runtime "compose".`);
+        }
+        const unit = deploymentUnitWriteShape({
+          ...unitValidation.data,
+          runtime_type: DEPLOYMENT_UNIT_RUNTIME_TYPE,
+          ownership_mode: DEPLOYMENT_UNIT_OWNERSHIP_MODE,
+          runtime_config: { execution_mode: unitValidation.data.execution_mode }
+        });
+        deploymentUnits = [unit];
+        targeting = {
+          default_unit_key: unit.key,
+          secret_scope_mode: 'unit',
+          default_reconcile_mode: unit.reconcile_mode
         };
       }
     } catch (err) {
@@ -113,9 +168,12 @@
 
     try {
       await createEnvironmentCommand({
+        org_id: createForm.org_id.trim(),
         name: createForm.name.trim(),
         loom_worker_selector: createForm.loom_worker_selector.trim(),
         runtime_config: parsedRuntimeConfig,
+        ...(targeting ? { targeting, reconcile_mode: targeting.default_reconcile_mode } : {}),
+        ...(deploymentUnits ? { deployment_units: deploymentUnits } : {}),
         deploy_strategy: deployStrategyApiMap[createForm.deploy_strategy] || createForm.deploy_strategy,
         protected: createForm.protected
       });
@@ -174,8 +232,31 @@
   {/if}
 </div>
 
-<Modal bind:open={createOpen} title="Create Environment" onClose={closeCreateModal}>
+<Modal bind:open={createOpen} title="Create Environment" size="lg" onClose={closeCreateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
+    <div class="form-field">
+      <label for="env-org">Organization *</label>
+      {#if organizationOptions.length > 0}
+        <Select
+          id="env-org"
+          bind:value={createForm.org_id}
+          options={organizationOptions}
+          placeholder="Select organization"
+          required
+          disabled={creating}
+        />
+      {:else}
+        <Input
+          id="env-org"
+          bind:value={createForm.org_id}
+          placeholder="Organization UUID"
+          required
+          disabled={creating}
+        />
+      {/if}
+      <span class="field-hint">Environment mutations are authorized against this organization.</span>
+    </div>
+
     <div class="form-field">
       <label for="env-name">Name *</label>
       <Input
@@ -263,6 +344,76 @@
       />
     </div>
 
+    <div class="form-field target-toggle">
+      <Checkbox
+        id="create-explicit-unit"
+        bind:checked={createForm.unit_enabled}
+        disabled={creating}
+        label="Create an explicit Bahia-managed Compose deployment unit"
+      />
+      <span class="field-hint">Use this for a named direct-runtime target such as Max. The endpoint remains a server-managed alias.</span>
+    </div>
+
+    {#if createForm.unit_enabled}
+      <fieldset class="unit-fields">
+        <legend>Compose deployment unit</legend>
+        <div class="placement-grid">
+          <div class="form-field">
+            <label for="create-unit-key">Unit key *</label>
+            <Input id="create-unit-key" bind:value={createForm.unit.key} placeholder="max" required disabled={creating} />
+            <span class="field-hint">Stable target key and Compose project boundary.</span>
+          </div>
+          <div class="form-field">
+            <label for="create-unit-display">Display name</label>
+            <Input id="create-unit-display" bind:value={createForm.unit.display_name} placeholder="Max Compose" disabled={creating} />
+          </div>
+        </div>
+
+        <div class="placement-grid">
+          <div class="form-field">
+            <label for="create-unit-runtime">Runtime type</label>
+            <Input id="create-unit-runtime" value={DEPLOYMENT_UNIT_RUNTIME_TYPE} disabled />
+          </div>
+          <div class="form-field">
+            <label for="create-unit-ownership">Ownership mode</label>
+            <Input id="create-unit-ownership" value={DEPLOYMENT_UNIT_OWNERSHIP_MODE} disabled />
+          </div>
+        </div>
+
+        <div class="form-field">
+          <label for="create-unit-endpoint">Endpoint alias *</label>
+          <Input id="create-unit-endpoint" bind:value={createForm.unit.endpoint_ref} placeholder="max" required disabled={creating} />
+          <span class="field-hint">Server-managed alias only. Docker URLs, certificates, and credentials are never entered here.</span>
+        </div>
+
+        <div class="form-field">
+          <label for="create-unit-dir">Compose directory *</label>
+          <Input id="create-unit-dir" bind:value={createForm.unit.compose_dir} placeholder="/srv/bahia/compose/gastown" required disabled={creating} />
+          <span class="field-hint">Absolute directory dedicated to Bahia's rendered full Compose project.</span>
+        </div>
+
+        <div class="placement-grid">
+          <div class="form-field">
+            <label for="create-unit-reconcile">Reconcile mode *</label>
+            <Select
+              id="create-unit-reconcile"
+              bind:value={createForm.unit.reconcile_mode}
+              options={DEPLOYMENT_UNIT_RECONCILE_OPTIONS.map((option) => ({
+                ...option,
+                disabled: createForm.protected && option.value === 'auto_apply'
+              }))}
+              required
+              disabled={creating}
+            />
+          </div>
+          <div class="form-field">
+            <label for="create-unit-execution">Compose execution *</label>
+            <Select id="create-unit-execution" bind:value={createForm.unit.execution_mode} options={DEPLOYMENT_UNIT_EXECUTION_OPTIONS} required disabled={creating} />
+          </div>
+        </div>
+      </fieldset>
+    {/if}
+
     <div class="form-field">
       <Checkbox
         id="protected"
@@ -343,6 +494,29 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 1rem;
+  }
+  .field-hint {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+  .unit-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem;
+  }
+  .unit-fields legend {
+    color: var(--text-primary);
+    font-weight: 600;
+    padding: 0 0.4rem;
+  }
+  .target-toggle {
+    padding: 0.75rem;
+    border-radius: 6px;
+    background: var(--hover-bg);
   }
   .form-actions {
     display: flex;

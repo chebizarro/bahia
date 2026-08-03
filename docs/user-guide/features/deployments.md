@@ -91,9 +91,12 @@ If the deployment intent has no desired-state hash, provide an explicit `subject
 2. Click **Deploy**
 3. Select:
    - **Environment**: Where to deploy
-   - **Artifact**: Which version to deploy
-   - **Reason**: Why you're deploying (optional)
-4. Click **Create Deployment**
+   - **Deployment unit**: The explicit runtime boundary (required when the environment has multiple units)
+   - **Artifact**: Which immutable version to deploy
+4. Review the resolved endpoint alias and any protected-environment warning
+5. Click **Create Intent**
+
+For a single explicit unit, the wizard selects its durable ID automatically. For multiple units, even the environment default is not auto-selected: the operator must choose a unit explicitly. The browser shows only the unit's `endpoint_ref` alias; it never resolves or displays the Docker host, TLS certificate paths, keys, or credentials. Runtime conflicts, missing Bahia-managed ownership, missing endpoint aliases, and missing durable unit IDs block preview and intent creation with a clear error.
 
 ### CLI and MCP
 
@@ -106,12 +109,13 @@ Publish a ContextVM `service/deploy` request as kind `25910` or inside an encryp
 ```json
 {
   "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-svc-123-env-456\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"artifact_id\":\"art-789\",\"_meta\":{\"progressToken\":\"deploy-svc-123-env-456\"}}}",
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-svc-123-env-456\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"deployment_unit_id\":\"unit-max\",\"artifact_id\":\"art-789\",\"_meta\":{\"progressToken\":\"deploy-svc-123-env-456\"}}}",
   "tags": [
     ["p", "<bahia-service-pubkey>"],
     ["method", "service/deploy"],
     ["service", "svc-123"],
     ["environment", "env-456"],
+    ["unit", "unit-max"],
     ["artifact", "art-789"]
   ]
 }

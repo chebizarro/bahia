@@ -23,6 +23,25 @@ export const serviceFormSchema = z.object({
   runtimeType: requiredString('Runtime type is required')
 });
 
+export const deploymentUnitFormSchema = z.object({
+  key: requiredString('Deployment unit key is required'),
+  display_name: z.string().trim().optional().default(''),
+  runtime_type: z.literal('compose', { error: 'Runtime type must be Compose' }),
+  endpoint_ref: requiredString('Endpoint alias is required').refine(
+    (value) => /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value) && !value.includes('://') && !value.includes('@'),
+    'Endpoint alias must name a server-managed runtime endpoint; URLs and credentials are not allowed'
+  ),
+  compose_dir: requiredString('Compose directory is required').refine(
+    (value) => value.startsWith('/') && !value.split('/').includes('..'),
+    'Compose directory must be an absolute server path without parent traversal'
+  ),
+  ownership_mode: z.literal('bahia_managed', { error: 'Compose deployment units must use Bahia-managed ownership' }),
+  reconcile_mode: z.enum(['observe_only', 'approval_required', 'auto_apply'], {
+    error: 'Reconcile mode must be Observe only, Approval required, or Auto apply'
+  }),
+  execution_mode: z.enum(['sdk', 'cli'], { error: 'Execution mode must be Docker SDK or Docker CLI' })
+});
+
 export const environmentFormSchema = z.object({
   name: requiredString('Name is required'),
   deploy_strategy: requiredString('Deploy strategy is required'),

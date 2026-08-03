@@ -35,13 +35,23 @@ export function resultContent(event) {
   return unwrapCommandPayload(parseJsonContent(event, {}));
 }
 
-export function throwIfErrorResult(event) {
+export function throwIfErrorResult(event, operation = '') {
   const rawContent = parseJsonContent(event, {});
   const status = String(getTagValue(event, 'status') || rawContent?.status || '').toLowerCase();
   if (status === 'error' || status === 'failed') {
-    const error = rawContent?.error;
-    const message = typeof error === 'object' && error !== null ? error.message : error;
-    throw new Error(getTagValue(event, 'error') || message || rawContent?.message || event.content || 'Nostr command failed');
+    const payloadError = rawContent?.error;
+    const message = typeof payloadError === 'object' && payloadError !== null ? payloadError.message : payloadError;
+    const error = new Error(getTagValue(event, 'error') || message || rawContent?.message || event.content || 'Nostr command failed');
+    const code = typeof payloadError === 'object' && payloadError !== null
+      ? payloadError.code
+      : rawContent?.code ?? rawContent?.error_code;
+    const data = typeof payloadError === 'object' && payloadError !== null
+      ? payloadError.data
+      : rawContent?.data;
+    if (code !== undefined) error.code = code;
+    if (data !== undefined) error.data = data;
+    if (operation) error.operation = operation;
+    throw error;
   }
   return event;
 }
@@ -63,7 +73,7 @@ export async function publishCommand({ operation, tags = [], content = {}, paylo
     signal,
     timeoutMs
   });
-  return throwIfErrorResult(operationResultEvent(response));
+  return throwIfErrorResult(operationResultEvent(response), operation);
 }
 
 /**
@@ -114,11 +124,22 @@ export function deleteEnvironment(id, force = false) {
   return publishCommand({ operation: 'environment/delete', tags: [['environment', id]], content: { id, force } });
 }
 
-export function createDeploymentIntent(serviceId, environmentId, artifactId) {
+export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '') {
+  const unitId = String(deploymentUnitId || '').trim();
   return publishCommand({
     operation: 'service/deploy',
-    tags: [['service', serviceId], ['environment', environmentId], ['artifact', artifactId]],
-    content: { service_id: serviceId, environment_id: environmentId, artifact_id: artifactId }
+    tags: [
+      ['service', serviceId],
+      ['environment', environmentId],
+      ...(unitId ? [['unit', unitId]] : []),
+      ['artifact', artifactId]
+    ],
+    content: {
+      service_id: serviceId,
+      environment_id: environmentId,
+      ...(unitId ? { deployment_unit_id: unitId } : {}),
+      artifact_id: artifactId
+    }
   });
 }
 
@@ -421,7 +442,16 @@ export function deletePolicy(id) {
 }
 
 export async function evaluatePolicy(payload) {
-  const event = await publishCommand({ operation: 'policy/evaluate', tags: [['artifact', payload.artifact_id], ['environment', payload.environment_id]], content: payload });
+  const event = await publishCommand({
+    operation: 'policy/evaluate',
+    tags: [
+      ['service', payload.service_id],
+      ['environment', payload.environment_id],
+      ['unit', payload.deployment_unit_id],
+      ['artifact', payload.artifact_id]
+    ].filter((tag) => tag[1]),
+    content: payload
+  });
   return resultContent(event);
 }
 

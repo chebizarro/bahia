@@ -31,7 +31,7 @@ Publish a ContextVM `environment/create` request as kind `25910` or inside an en
 |----------|-------------|----------|
 | `id` | Environment UUID | Update only |
 | `expected_updated_at` | Revision from the latest environment read; required when update supplies `deployment_units` | Complete-set update only |
-| `org_id` | Organization UUID; authorization is checked when creating or moving an environment | No |
+| `org_id` | Organization UUID; authorization is checked before any tenant mutation | Create only |
 | `name` | Display name | Create only |
 | `loom_worker_selector` | Legacy/non-Compose worker-selection object | No |
 | `runtime_config` | Environment-level runtime compatibility settings | No |
@@ -113,10 +113,13 @@ The **Environments** page shows:
 - Health summary
 
 Click an environment to see:
+- **Deployment Units**: Explicit and implicit runtime boundaries, safe endpoint aliases, Compose directories, ownership, and reconcile modes
 - **Services**: Services deployed here
 - **State**: Current state of all services
 - **History**: Deployment activity
 - **Settings**: Edit environment
+
+Authorized signers can create or edit an explicit Compose unit from the **Deployment Units** section. The browser publishes one revision-guarded `environment/update` containing the complete explicit set; it does not call a deployment-unit CRUD endpoint. Protected environments require a confirmation step and do not permit `auto_apply` from this editor. Endpoint references are aliases only—Docker hosts, TLS files, and credentials are never resolved or displayed in the browser.
 
 ### CLI
 
@@ -192,9 +195,11 @@ Environment updates are signer-first ContextVM intents. REST `PUT /api/v1/enviro
 ### Web UI
 
 1. Go to the environment detail page
-2. Click **Settings**
-3. Modify properties
-4. Click **Save** to publish the signed ContextVM intent
+2. Click **Edit** for environment properties, or use **Deployment Units** to create/edit an explicit Compose target
+3. For a target, review the unit key, server-managed endpoint alias, dedicated Compose directory, Bahia-managed ownership, execution mode, and reconcile mode
+4. Click **Save Unit** (or confirm the protected-environment summary) to publish the signed ContextVM intent
+
+If the canonical environment revision changes while a target draft is open, Bahia disables submission and requires the operator to reload and review instead of silently rebasing the signed full set.
 
 ### Nostr
 

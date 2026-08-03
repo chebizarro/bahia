@@ -11,6 +11,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import DeploymentUnitsSection from './DeploymentUnitsSection.svelte';
   import {
     environments,
     states as allStates,
@@ -108,6 +109,17 @@
     const id = environmentId;
     if (!id) return;
     void loadEnvironment(id);
+  });
+
+  $effect(() => {
+    const id = environmentId;
+    const latest = environments.find((candidate) => candidate.id === id);
+    if (!latest || !environment) return;
+    const latestRevision = latest.updated_at || latest.updatedAt || '';
+    const currentRevision = environment.updated_at || environment.updatedAt || '';
+    if (latest !== environment && (latestRevision !== currentRevision || latest.deployment_units !== environment.deployment_units)) {
+      environment = latest;
+    }
   });
 
   async function loadEnvironment(id) {
@@ -447,6 +459,11 @@
       </div>
       <p class="hint">Changes publish <code>worker-policy.apply.request</code> and wait for a Nostr result before the environment read model refreshes.</p>
     </section>
+
+    <DeploymentUnitsSection
+      {environment}
+      onRefresh={() => loadEnvironment(environmentId)}
+    />
 
     <section>
       <h2 class="section-title"><EnvironmentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Runtime Configuration</span></h2>

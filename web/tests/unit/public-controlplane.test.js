@@ -81,6 +81,25 @@ describe('public controlplane command helpers', () => {
     });
   });
 
+  it('targets deployment intents at an explicit deployment unit', async () => {
+    await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-max');
+
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'service/deploy',
+      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['unit', 'unit-max'], ['artifact', 'artifact-1']],
+      payload: {
+        service_id: 'svc-1',
+        environment_id: 'env-1',
+        deployment_unit_id: 'unit-max',
+        artifact_id: 'artifact-1'
+      },
+      kind: 25910,
+      resultKinds: [25910],
+      signal: undefined,
+      timeoutMs: undefined
+    });
+  });
+
   it('approves deployment intents through canonical ContextVM approval requests', async () => {
     await api.approveDeploymentIntent('intent-1');
 
@@ -363,7 +382,7 @@ describe('public controlplane command helpers', () => {
 
     expect(requestEncryptedResultMock).toHaveBeenCalledWith({
       operation: 'policy/evaluate',
-      tags: [['artifact', 'artifact-1'], ['environment', 'env-1']],
+      tags: [['environment', 'env-1'], ['artifact', 'artifact-1']],
       payload: { artifact_id: 'artifact-1', environment_id: 'env-1' },
       kind: 25910,
       resultKinds: [25910],
@@ -376,6 +395,36 @@ describe('public controlplane command helpers', () => {
       blockers: 0,
       results: [{ policy_id: 'sig-required', passed: true }]
     });
+  });
+
+  it('preserves structured ContextVM error metadata for revision handling', async () => {
+    requestEncryptedResultMock.mockResolvedValueOnce({
+      requestEventId: 'req-1',
+      result: {
+        status: 'error',
+        error: {
+          code: -32009,
+          message: 'environment revision conflict',
+          data: { expected_updated_at: 'old' }
+        }
+      }
+    });
+
+    let thrown;
+    try {
+      await api.updateEnvironment('env-1', {
+        expected_updated_at: 'old',
+        deployment_units: []
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      message: 'environment revision conflict',
+      code: -32009,
+      operation: 'environment/update'
+    });
+    expect(thrown.data).toEqual({ expected_updated_at: 'old' });
   });
 
   it('surfaces terminal error results from ContextVM command replies', async () => {

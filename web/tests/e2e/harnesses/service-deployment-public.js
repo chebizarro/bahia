@@ -488,13 +488,25 @@ export async function installPublicServiceDeploymentHarness(
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
       const environment = {
         id: `env-created-${state.environments.length + 1}`,
+        org_id: payload.org_id || '',
         name: payload.name,
         loom_worker_selector: payload.loom_worker_selector || '',
         runtime_config: payload.runtime_config || {},
+        targeting: payload.targeting || {},
+        reconcile_mode: payload.reconcile_mode || '',
+        deployment_units: Array.isArray(payload.deployment_units)
+          ? payload.deployment_units.map((unit, index) => ({
+              ...unit,
+              id: `unit-created-${state.environments.length + 1}-${index + 1}`,
+              environment_id: `env-created-${state.environments.length + 1}`,
+              implicit: false
+            }))
+          : [],
         deploy_strategy: payload.deploy_strategy || 'replace',
         protected: Boolean(payload.protected),
         deleted: false,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       };
       state.environments = [...state.environments, environment];
       persistReadModelEvents();
@@ -524,7 +536,41 @@ export async function installPublicServiceDeploymentHarness(
         };
       }
       const current = state.environments[index];
-      const next = { ...current, ...payload, updated_at: new Date().toISOString() };
+      if (Array.isArray(payload.deployment_units) && payload.expected_updated_at !== current.updated_at) {
+        return {
+          projections: [],
+          resultEvent: () => nostrEvent({
+            id: `result-${requestEvent.id}`,
+            kind: KIND_CONTEXTVM,
+            tags: [['e', requestEvent.id], ['status', 'failed'], ['error', 'environment revision conflict']],
+            content: {
+              status: 'failed',
+              error: {
+                code: -32009,
+                message: 'environment revision conflict',
+                data: { current_updated_at: current.updated_at }
+              }
+            }
+          })
+        };
+      }
+      const deploymentUnits = Array.isArray(payload.deployment_units)
+        ? payload.deployment_units.map((unit, unitIndex) => {
+            const existing = (current.deployment_units || []).find((candidate) => candidate.key === unit.key);
+            return {
+              ...unit,
+              id: existing?.id || `unit-${current.id}-${unitIndex + 1}`,
+              environment_id: current.id,
+              implicit: false
+            };
+          })
+        : current.deployment_units;
+      const next = {
+        ...current,
+        ...payload,
+        ...(Array.isArray(payload.deployment_units) ? { deployment_units: deploymentUnits } : {}),
+        updated_at: new Date().toISOString()
+      };
       state.environments = state.environments.map((environment, i) => (i === index ? next : environment));
       persistReadModelEvents();
       return {
@@ -632,6 +678,7 @@ export async function installPublicServiceDeploymentHarness(
         service_id: payload.service_id,
         environment_id: payload.environment_id,
         artifact_id: payload.artifact_id,
+        deployment_unit_id: payload.deployment_unit_id || '',
         approval_status: 'pending',
         deployment_status: 'pending',
         requested_by: requestEvent.pubkey,
@@ -644,7 +691,7 @@ export async function installPublicServiceDeploymentHarness(
         projections: [nostrEvent({
           id: `intent-reg-live-${intent.id}`,
           kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id]],
+          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ...(intent.deployment_unit_id ? [['unit', intent.deployment_unit_id]] : []), ['artifact', intent.artifact_id]],
           content: { schema: STATE_SCHEMAS.intent, ...intent }
         })],
         resultEvent: () => nostrEvent({
@@ -871,7 +918,7 @@ export async function installPublicServiceDeploymentHarness(
         }
         window.__BAHIA_E2E_PUBLIC_PUBLISHES.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind });
         window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(requestEvent.kind);
-        window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: requestEvent.kind, operation: decodedRequest.operation, eventId: requestEvent.id, tags: requestEvent.tags || [], content: requestEvent.content || '' });
+        window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: requestEvent.kind, operation: decodedRequest.operation, eventId: requestEvent.id, tags: requestEvent.tags || [], content: requestEvent.content || '', payload: decodedRequest.payload || {} });
         window.__BAHIA_E2E_PUBLIC_OKS.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind, sent: true, accepted: true, message: '' });
         persistPublicTrace();
         originalSend.call(this, data);
