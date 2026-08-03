@@ -59,12 +59,12 @@ func testPlan() *domain.DesiredEnvironmentPlan {
 						RedactedValue: domain.RedactedPlaceholder("session-secret"),
 					},
 				},
-				Ports:         []string{"443:443", "80:80"},
-				Volumes:       []string{"/data/web/static:/usr/share/nginx/html:ro", "/data/web/certs:/etc/nginx/certs:ro"},
+				Ports:   []string{"443:443", "80:80"},
+				Volumes: []string{"/data/web/static:/usr/share/nginx/html:ro", "/data/web/certs:/etc/nginx/certs:ro"},
 				Labels: map[string]string{
-					"bahia.managed":      "true",
-					"bahia.service_id":   svcB.String(),
-					"bahia.environment":  "production",
+					"bahia.managed":     "true",
+					"bahia.service_id":  svcB.String(),
+					"bahia.environment": "production",
 				},
 				Healthcheck: &domain.HealthcheckConfig{
 					Test:        []string{"CMD", "curl", "-f", "http://localhost:80/health"},
@@ -117,10 +117,10 @@ func testPlan() *domain.DesiredEnvironmentPlan {
 				Ports:   []string{"8080:8080"},
 				Volumes: []string{"api-data:/app/data"},
 				Labels: map[string]string{
-					"bahia.managed":      "true",
-					"bahia.service_id":   svcA.String(),
-					"bahia.environment":  "production",
-					"bahia.artifact_id":  artA.String(),
+					"bahia.managed":     "true",
+					"bahia.service_id":  svcA.String(),
+					"bahia.environment": "production",
+					"bahia.artifact_id": artA.String(),
 				},
 				Healthcheck: &domain.HealthcheckConfig{
 					Test:     []string{"CMD-SHELL", "curl -f http://localhost:8080/healthz || exit 1"},
@@ -631,6 +631,18 @@ func TestComposeRenderer_EnvMaterialOrdering(t *testing.T) {
 		}
 		prevAPI = apiEnv
 		prevWeb = webEnv
+	}
+}
+
+func TestComposeRenderer_ManagedResourceLimits(t *testing.T) {
+	rendered := NewComposeRenderer().buildComposeService(domain.DesiredServiceSpec{
+		ResourceLimits: &domain.RuntimeResourceLimits{CPUMillis: 500, MemoryBytes: 268435456},
+	})
+	if rendered.CPUs != "0.5" {
+		t.Fatalf("CPUs = %q, want 0.5", rendered.CPUs)
+	}
+	if rendered.MemLimit != "268435456b" {
+		t.Fatalf("MemLimit = %q, want 268435456b", rendered.MemLimit)
 	}
 }
 

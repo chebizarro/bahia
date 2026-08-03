@@ -14,7 +14,7 @@ import (
 
 // DesiredStateSchemaVersion is the current schema version for desired-state serialization.
 // Bump this when the canonical hash inputs change.
-const DesiredStateSchemaVersion = "2"
+const DesiredStateSchemaVersion = "3"
 
 // ---------------------------------------------------------------------------
 // Secret handling types
@@ -47,6 +47,10 @@ func RedactedPlaceholder(name string) string {
 // renderers. Renderer-specific overrides live in the extension types.
 type HealthcheckConfig struct {
 	Test        []string `json:"test"`
+	Protocol    string   `json:"protocol,omitempty"`
+	Method      string   `json:"method,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Port        int      `json:"port,omitempty"`
 	Interval    string   `json:"interval,omitempty"`
 	Timeout     string   `json:"timeout,omitempty"`
 	Retries     int      `json:"retries,omitempty"`
@@ -599,9 +603,10 @@ type DesiredServiceSpec struct {
 	SecretRefs []DesiredSecretRef `json:"secret_refs,omitempty"`
 
 	// Resources
-	Ports   []string          `json:"ports,omitempty"`
-	Volumes []string          `json:"volumes,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
+	Ports          []string               `json:"ports,omitempty"`
+	Volumes        []string               `json:"volumes,omitempty"`
+	Labels         map[string]string      `json:"labels,omitempty"`
+	ResourceLimits *RuntimeResourceLimits `json:"resource_limits,omitempty"`
 
 	// Health
 	Healthcheck *HealthcheckConfig `json:"healthcheck,omitempty"`
@@ -833,28 +838,29 @@ func NormalizeServiceKeyWithSuffix(name string, serviceID uuid.UUID) string {
 // (struct field order is stable in encoding/json). Volatile fields like
 // DesiredHash itself, extensions, and timestamps are excluded.
 type hashInput struct {
-	SchemaVersion     string             `json:"schema_version"`
-	ServiceID         uuid.UUID          `json:"service_id"`
-	EnvironmentID     uuid.UUID          `json:"environment_id"`
-	DeploymentUnitID  *uuid.UUID         `json:"deployment_unit_id,omitempty"`
-	DeploymentUnitKey string             `json:"deployment_unit_key"`
-	UnitRuntimeType   RuntimeType        `json:"unit_runtime_type,omitempty"`
-	ArtifactID        uuid.UUID          `json:"artifact_id"`
-	StableServiceKey  string             `json:"stable_service_key"`
-	ImageRef          string             `json:"image_ref"`
-	Command           []string           `json:"command"`
-	Entrypoint        []string           `json:"entrypoint"`
-	WorkDir           string             `json:"work_dir"`
-	Env               map[string]string  `json:"env"`
-	SecretRefKeys     []string           `json:"secret_ref_keys"`
-	Ports             []string           `json:"ports"`
-	Volumes           []string           `json:"volumes"`
-	Labels            map[string]string  `json:"labels"`
-	Healthcheck       *HealthcheckConfig `json:"healthcheck"`
-	DependsOn         []string           `json:"depends_on"`
-	NetworkMode       string             `json:"network_mode"`
-	RestartPolicy     string             `json:"restart_policy"`
-	PullPolicy        string             `json:"pull_policy"`
+	SchemaVersion     string                 `json:"schema_version"`
+	ServiceID         uuid.UUID              `json:"service_id"`
+	EnvironmentID     uuid.UUID              `json:"environment_id"`
+	DeploymentUnitID  *uuid.UUID             `json:"deployment_unit_id,omitempty"`
+	DeploymentUnitKey string                 `json:"deployment_unit_key"`
+	UnitRuntimeType   RuntimeType            `json:"unit_runtime_type,omitempty"`
+	ArtifactID        uuid.UUID              `json:"artifact_id"`
+	StableServiceKey  string                 `json:"stable_service_key"`
+	ImageRef          string                 `json:"image_ref"`
+	Command           []string               `json:"command"`
+	Entrypoint        []string               `json:"entrypoint"`
+	WorkDir           string                 `json:"work_dir"`
+	Env               map[string]string      `json:"env"`
+	SecretRefKeys     []string               `json:"secret_ref_keys"`
+	Ports             []string               `json:"ports"`
+	Volumes           []string               `json:"volumes"`
+	Labels            map[string]string      `json:"labels"`
+	ResourceLimits    *RuntimeResourceLimits `json:"resource_limits"`
+	Healthcheck       *HealthcheckConfig     `json:"healthcheck"`
+	DependsOn         []string               `json:"depends_on"`
+	NetworkMode       string                 `json:"network_mode"`
+	RestartPolicy     string                 `json:"restart_policy"`
+	PullPolicy        string                 `json:"pull_policy"`
 }
 
 // ComputeDesiredHash computes the deterministic hash of a DesiredServiceSpec.
@@ -921,6 +927,7 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 		Ports:             ports,
 		Volumes:           volumes,
 		Labels:            labels,
+		ResourceLimits:    s.ResourceLimits,
 		Healthcheck:       s.Healthcheck,
 		DependsOn:         deps,
 		NetworkMode:       s.NetworkMode,

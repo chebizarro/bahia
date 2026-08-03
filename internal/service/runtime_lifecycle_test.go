@@ -18,6 +18,35 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestDesiredSecretBindingsSelectsOnlyReviewedManagedReferences(t *testing.T) {
+	selectedID := uuid.New()
+	unselectedID := uuid.New()
+	bindings, err := desiredSecretBindings(&domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{
+		SecretID: selectedID,
+		EnvVar:   "API_TOKEN",
+	}}}, true)
+	if err != nil {
+		t.Fatalf("desiredSecretBindings: %v", err)
+	}
+	if len(bindings) != 1 || bindings[selectedID] != "API_TOKEN" {
+		t.Fatalf("unexpected managed secret bindings: %#v", bindings)
+	}
+	if _, exists := bindings[unselectedID]; exists {
+		t.Fatal("unreviewed secret must not be selected")
+	}
+}
+
+func TestDesiredSecretBindingsRejectsDuplicateManagedSecretID(t *testing.T) {
+	secretID := uuid.New()
+	_, err := desiredSecretBindings(&domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{
+		{SecretID: secretID, EnvVar: "TOKEN_ONE"},
+		{SecretID: secretID, EnvVar: "TOKEN_TWO"},
+	}}, true)
+	if err == nil {
+		t.Fatal("expected duplicate managed secret ID to fail")
+	}
+}
+
 func TestRuntimeLifecycleDeployUsesAdoptedTargetAndRecordsObservation(t *testing.T) {
 	ctx := context.Background()
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()

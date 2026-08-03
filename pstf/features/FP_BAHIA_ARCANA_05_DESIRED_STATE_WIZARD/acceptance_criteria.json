@@ -1,0 +1,10 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_05_DESIRED_STATE_WIZARD",
+  "criteria": [
+    {"id":"AC1","statement":"The Compose Deploy dialog is a stepwise wizard covering target, immutable artifact, service/process configuration, literal environment, secret references, healthcheck, restart, volumes, resources, policy, and cost.","verification":["web/src/routes/services/[id]/+page.svelte","web/tests/e2e/deployment-unit-targeting.spec.js"]},
+    {"id":"AC2","statement":"An operator can assemble an Arcana-ready port 8080 and GET /healthz desired state without Arcana-specific generic defaults.","verification":["web/tests/unit/deployment-desired-state.test.js","web/tests/e2e/deployment-unit-targeting.spec.js"]},
+    {"id":"AC3","statement":"The exact backend-canonical non-secret desired state, current-to-proposed diff, and hash are displayed, and service/deploy signs that same hash.","verification":["internal/controlplane/encrypted_service_handlers.go","web/tests/unit/public-controlplane.test.js","web/tests/e2e/deployment-unit-targeting.spec.js"]},
+    {"id":"AC4","statement":"Only registered full SHA-256 artifact digests and opaque secret references are accepted; secret values never enter the desired-state payload.","verification":["internal/service/runtime_desired_state_builder_test.go","internal/domain/managed_runtime_config_test.go","web/tests/unit/deployment-desired-state.test.js"]},
+    {"id":"AC5","statement":"Submission is signer-first, idempotent, rejects stale reviewed hashes, and routes through existing policy and approval handling.","verification":["internal/controlplane/encrypted_service_handlers.go","internal/controlplane/encrypted_transport_test.go","web/tests/unit/public-controlplane.test.js","web/tests/e2e/service-deployment-policy-gate.spec.js"]}
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -619,29 +620,46 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 	}
 }
 
-func TestRegisterServiceContextVMHandlers_RegistersDeployMethod(t *testing.T) {
-	publisher := &mockEncryptedPublisher{}
-	responder := newResponder(t, publisher)
-	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"deploy-registration","method":"service/deploy","params":{}}`)
+func TestRegisterServiceContextVMHandlers_RegistersDeployMethods(t *testing.T) {
+	for _, method := range []string{ContextVMMethodServiceDeployPreview, ContextVMMethodServiceDeploy} {
+		t.Run(method, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			responder := newResponder(t, publisher)
+			requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+			transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+			RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
+			event := makeContextVMEvent(t, testRequesterKey, fmt.Sprintf(`{"jsonrpc":"2.0","id":"deploy-registration","method":%q,"params":{}}`, method))
 
-	transport.HandleEvent(context.Background(), event)
+			transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 2 {
-		t.Fatalf("expected progress acknowledgement and ContextVM response, got %d events", len(publisher.events))
+			if len(publisher.events) != 2 {
+				t.Fatalf("expected progress acknowledgement and ContextVM response, got %d events", len(publisher.events))
+			}
+			assertContextVMProgressAck(t, publisher.events[0], event)
+			response := contextVMResponse(t, publisher.events[1])
+			if response.Error == nil {
+				t.Fatal("expected missing dependency error")
+			}
+			if response.Error.Message == "method not found" {
+				t.Fatalf("%s was not registered: %+v", method, response.Error)
+			}
+			if response.Error.Message != "service deployment control plane is not configured" {
+				t.Fatalf("unexpected error: %+v", response.Error)
+			}
+		})
 	}
-	assertContextVMProgressAck(t, publisher.events[0], event)
-	response := contextVMResponse(t, publisher.events[1])
-	if response.Error == nil {
-		t.Fatal("expected missing dependency error")
+}
+
+func TestDesiredStateHashesEqual(t *testing.T) {
+	hash := "sha256:" + strings.Repeat("ab", 32)
+	if !desiredStateHashesEqual(hash, strings.TrimPrefix(hash, "sha256:")) {
+		t.Fatal("equivalent desired-state hashes should match")
 	}
-	if response.Error.Message == "method not found" {
-		t.Fatalf("service/deploy was not registered: %+v", response.Error)
+	if desiredStateHashesEqual(hash, "sha256:"+strings.Repeat("cd", 32)) {
+		t.Fatal("different desired-state hashes must not match")
 	}
-	if response.Error.Message != "service deployment control plane is not configured" {
-		t.Fatalf("unexpected error: %+v", response.Error)
+	if desiredStateHashesEqual("not-a-hash", hash) {
+		t.Fatal("malformed desired-state hashes must not match")
 	}
 }
 

@@ -59,6 +59,7 @@ Examples:
 
 | Operation | ContextVM method |
 |---|---|
+| Preview managed service desired state | `service/deploy-preview` |
 | Deploy service | `service/deploy` |
 | Restart service | `service/restart` |
 | Roll back service | `service/rollback` |

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,6 +140,34 @@ func (s *RuntimeLifecycleService) BuildDesiredStateSnapshot(
 	serviceID, envID, artifactID uuid.UUID,
 	requestedUnitID *uuid.UUID,
 ) (*domain.DesiredServiceSpec, error) {
+	return s.buildDesiredStateSnapshot(ctx, serviceID, envID, artifactID, requestedUnitID, nil)
+}
+
+// PreviewDesiredStateSnapshot builds the authoritative snapshot using a proposed
+// managed definition without persisting it. Signed preview and deploy therefore
+// share the same builder, artifact, unit, secret-reference, and hash semantics.
+func (s *RuntimeLifecycleService) PreviewDesiredStateSnapshot(
+	ctx context.Context,
+	serviceID, envID, artifactID uuid.UUID,
+	requestedUnitID *uuid.UUID,
+	managed *domain.ManagedRuntimeConfig,
+) (*domain.DesiredServiceSpec, error) {
+	if managed == nil {
+		return nil, fmt.Errorf("managed runtime configuration is required for preview")
+	}
+	managed = domain.NormalizeManagedRuntimeConfig(managed)
+	if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
+		return nil, fmt.Errorf("invalid managed runtime configuration: %w", err)
+	}
+	return s.buildDesiredStateSnapshot(ctx, serviceID, envID, artifactID, requestedUnitID, managed)
+}
+
+func (s *RuntimeLifecycleService) buildDesiredStateSnapshot(
+	ctx context.Context,
+	serviceID, envID, artifactID uuid.UUID,
+	requestedUnitID *uuid.UUID,
+	managed *domain.ManagedRuntimeConfig,
+) (*domain.DesiredServiceSpec, error) {
 	svc, env, unit, err := s.resolveDesiredStateDeploymentUnit(ctx, serviceID, envID, requestedUnitID)
 	if err != nil {
 		return nil, err
@@ -151,11 +180,23 @@ func (s *RuntimeLifecycleService) BuildDesiredStateSnapshot(
 	if err != nil {
 		return nil, err
 	}
+	runtimeConfig := svc.RuntimeConfig
+	if managed != nil {
+		svcCopy := *svc
+		configCopy := domain.ServiceRuntimeConfig{}
+		if svc.RuntimeConfig != nil {
+			configCopy = *svc.RuntimeConfig
+		}
+		configCopy.Managed = domain.NormalizeManagedRuntimeConfig(managed)
+		svcCopy.RuntimeConfig = &configCopy
+		svc = &svcCopy
+		runtimeConfig = svc.RuntimeConfig
+	}
 	return NewDesiredStateBuilder().Build(BuildInput{
 		Service:        svc,
 		Environment:    env,
 		Artifact:       artifact,
-		RuntimeConfig:  svc.RuntimeConfig,
+		RuntimeConfig:  runtimeConfig,
 		DeploymentUnit: unit,
 		Secrets:        secrets,
 	})
@@ -182,6 +223,11 @@ func (s *RuntimeLifecycleService) resolveDesiredStateDeploymentUnit(
 	}
 	if env == nil {
 		return nil, nil, nil, fmt.Errorf("environment %s not found", envID)
+	}
+	if svc.OrgID != uuid.Nil || env.OrgID != uuid.Nil {
+		if svc.OrgID == uuid.Nil || env.OrgID == uuid.Nil || svc.OrgID != env.OrgID {
+			return nil, nil, nil, fmt.Errorf("service and environment must belong to the same organization")
+		}
 	}
 
 	var unit *domain.DeploymentUnit
@@ -317,11 +363,6 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 
 	targetName := svc.RuntimeTargetName()
 	opts := deployOptionsFromServiceRuntimeConfig(svc)
-	secretAccesses, err := s.mergeEffectiveSecrets(ctx, serviceID, envID, &opts)
-	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
-		return nil, err
-	}
 
 	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
 	if err != nil {
@@ -334,6 +375,11 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	if err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("building desired state: %w", err)
+	}
+	secretAccesses, err := s.mergeEffectiveSecrets(ctx, secrets, &opts, targetSpec, svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil)
+	if err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		return nil, err
 	}
 	plan, err := NewEnvironmentPlanAssembler(EnvironmentPlanAssemblerDeps{
 		StateLoader: s.state,
@@ -797,12 +843,15 @@ func (l secretListerOrEmpty) ListEffective(ctx context.Context, serviceID, envID
 	return l.repo.ListEffective(ctx, serviceID, envID)
 }
 
-func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID, opts *runtime.DeployOptions) ([]domain.SecretAccessManifest, error) {
-	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
+func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, secrets []domain.ServiceSecret, opts *runtime.DeployOptions, desiredState *domain.DesiredServiceSpec, managed bool) ([]domain.SecretAccessManifest, error) {
+	bindings, err := desiredSecretBindings(desiredState, managed)
 	if err != nil {
-		return nil, fmt.Errorf("loading effective secrets: %w", err)
+		return nil, err
 	}
 	if len(secrets) == 0 {
+		if len(bindings) > 0 {
+			return nil, fmt.Errorf("managed desired state references unavailable secrets")
+		}
 		return nil, nil
 	}
 	if s.secretEncryptor == nil {
@@ -812,8 +861,18 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, ser
 		opts.Environment = map[string]string{}
 	}
 	accesses := make([]domain.SecretAccessManifest, 0, len(secrets))
+	resolvedBindings := make(map[uuid.UUID]struct{}, len(bindings))
 	for _, secret := range secrets {
-		if secret.Name == "" {
+		envVar := secret.Name
+		if managed {
+			var selected bool
+			envVar, selected = bindings[secret.ID]
+			if !selected {
+				continue
+			}
+			resolvedBindings[secret.ID] = struct{}{}
+		}
+		if secret.Name == "" || envVar == "" {
 			continue
 		}
 		version, err := s.secrets.GetCurrentVersion(ctx, secret.ID)
@@ -859,9 +918,32 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, ser
 		if decryptErr != nil {
 			return accesses, fmt.Errorf("decrypting effective secret %q version %d: %w", secret.Name, version.Version, decryptErr)
 		}
-		opts.Environment[secret.Name] = value
+		opts.Environment[envVar] = value
+	}
+	if managed && len(resolvedBindings) != len(bindings) {
+		return accesses, fmt.Errorf("managed desired state references unavailable secrets")
 	}
 	return accesses, nil
+}
+
+func desiredSecretBindings(desiredState *domain.DesiredServiceSpec, managed bool) (map[uuid.UUID]string, error) {
+	if !managed {
+		return nil, nil
+	}
+	if desiredState == nil {
+		return nil, fmt.Errorf("managed desired state is required to resolve secrets")
+	}
+	bindings := make(map[uuid.UUID]string, len(desiredState.SecretRefs))
+	for _, ref := range desiredState.SecretRefs {
+		if ref.SecretID == uuid.Nil || strings.TrimSpace(ref.EnvVar) == "" {
+			return nil, fmt.Errorf("managed desired state contains an invalid secret reference")
+		}
+		if _, exists := bindings[ref.SecretID]; exists {
+			return nil, fmt.Errorf("managed desired state contains a duplicate secret reference")
+		}
+		bindings[ref.SecretID] = ref.EnvVar
+	}
+	return bindings, nil
 }
 
 func (s *RuntimeLifecycleService) recordRuntimeApplySecretAudit(ctx context.Context, accesses []domain.SecretAccessManifest, outcome domain.SecretAccessOutcome, applyErr error) {

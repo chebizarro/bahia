@@ -56,7 +56,7 @@ export function throwIfErrorResult(event, operation = '') {
   return event;
 }
 
-export async function publishCommand({ operation, tags = [], content = {}, payload, signal, timeoutMs } = {}) {
+export async function publishCommand({ operation, tags = [], content = {}, payload, signal, timeoutMs, requestId } = {}) {
   if (typeof operation !== 'string' || !operation.trim()) {
     throw new Error('ContextVM operation is required for Nostr control-plane commands');
   }
@@ -71,7 +71,8 @@ export async function publishCommand({ operation, tags = [], content = {}, paylo
     kind: CONTEXTVM_MESSAGE_KIND,
     resultKinds: [CONTEXTVM_MESSAGE_KIND],
     signal,
-    timeoutMs
+    timeoutMs,
+    ...(requestId ? { requestId } : {})
   });
   return throwIfErrorResult(operationResultEvent(response), operation);
 }
@@ -105,7 +106,13 @@ export function createService(payload) {
 }
 
 export function updateService(id, payload) {
-  return publishCommand({ operation: 'service/update', tags: [['service', id]], content: { ...payload, id } });
+  const content = { ...payload, id };
+  return publishCommand({
+    operation: 'service/update',
+    tags: [['service', id]],
+    content,
+    ...(content.idempotency_key ? { requestId: content.idempotency_key } : {})
+  });
 }
 
 export function deleteService(id, force = false) {
@@ -124,8 +131,34 @@ export function deleteEnvironment(id, force = false) {
   return publishCommand({ operation: 'environment/delete', tags: [['environment', id]], content: { id, force } });
 }
 
-export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '') {
+export async function previewServiceDeployment(payload) {
+  const unitId = String(payload?.deployment_unit_id || '').trim();
+  const event = await publishCommand({
+    operation: 'service/deploy-preview',
+    tags: [
+      ['service', payload?.service_id],
+      ['environment', payload?.environment_id],
+      ...(unitId ? [['unit', unitId]] : []),
+      ['artifact', payload?.artifact_id]
+    ].filter((tag) => tag[1]),
+    content: {
+      ...payload,
+      ...(unitId ? { deployment_unit_id: unitId } : {})
+    }
+  });
+  return resultContent(event);
+}
+
+export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '', expectedDesiredStateHash = '') {
   const unitId = String(deploymentUnitId || '').trim();
+  const expectedHash = String(expectedDesiredStateHash || '').trim();
+  const content = {
+    service_id: serviceId,
+    environment_id: environmentId,
+    ...(unitId ? { deployment_unit_id: unitId } : {}),
+    artifact_id: artifactId,
+    ...(expectedHash ? { expected_desired_state_hash: expectedHash, idempotency_key: expectedHash } : {})
+  };
   return publishCommand({
     operation: 'service/deploy',
     tags: [
@@ -134,12 +167,8 @@ export function createDeploymentIntent(serviceId, environmentId, artifactId, dep
       ...(unitId ? [['unit', unitId]] : []),
       ['artifact', artifactId]
     ],
-    content: {
-      service_id: serviceId,
-      environment_id: environmentId,
-      ...(unitId ? { deployment_unit_id: unitId } : {}),
-      artifact_id: artifactId
-    }
+    content,
+    ...(expectedHash ? { requestId: expectedHash } : {})
   });
 }
 

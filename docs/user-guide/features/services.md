@@ -137,6 +137,20 @@ Desired-state fields are additive. Compose/Docker deploys store a canonical desi
 4. **Healthy** — Desired matches observed
 5. **Drifted** — Desired doesn't match observed
 
+## Managed Compose Runtime Configuration
+
+For Compose services, the Deploy wizard persists a versioned `runtime_config.managed` definition through signed `service/update`. It contains only runtime-safe, non-secret configuration:
+
+- Compose service name, ports, command arguments, and literal environment values
+- Opaque service-secret IDs mapped to environment variable names
+- Semantic HTTP `GET` healthcheck settings
+- Restart policy, volume mappings, and CPU/memory limits
+- Pull policy
+
+The artifact image is not typed into the runtime definition. Bahia derives an immutable `repository@sha256:digest` reference from the registered artifact selected in the wizard. Secret plaintext is likewise never accepted in managed desired state; Bahia resolves selected secret IDs server-side only during runtime apply.
+
+The same normalized managed definition is projected by the backend into the canonical non-secret desired state used for preview, hashing, persistence, rendering, policy, and apply. Browser code does not independently calculate the desired-state hash.
+
 ## Service Actions
 
 Deploy, restart, and stop are signer-first Nostr control-plane operations.

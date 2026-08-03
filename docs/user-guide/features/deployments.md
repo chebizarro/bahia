@@ -87,16 +87,22 @@ If the deployment intent has no desired-state hash, provide an explicit `subject
 
 ### Web UI
 
-1. Go to **Services** → select your service
-2. Click **Deploy**
-3. Select:
-   - **Environment**: Where to deploy
-   - **Deployment unit**: The explicit runtime boundary (required when the environment has multiple units)
-   - **Artifact**: Which immutable version to deploy
-4. Review the resolved endpoint alias and any protected-environment warning
-5. Click **Create Intent**
+For a Compose service:
 
-For a single explicit unit, the wizard selects its durable ID automatically. For multiple units, even the environment default is not auto-selected: the operator must choose a unit explicitly. The browser shows only the unit's `endpoint_ref` alias; it never resolves or displays the Docker host, TLS certificate paths, keys, or credentials. Runtime conflicts, missing Bahia-managed ownership, missing endpoint aliases, and missing durable unit IDs block preview and intent creation with a clear error.
+1. Go to **Services** and select the service, then click **Deploy**.
+2. Select the environment, an explicit deployment unit when the environment is ambiguous, and a registered artifact with a full immutable `sha256` digest.
+3. Enter the Compose service name, port mappings, command arguments, and literal non-secret environment values.
+4. Select service secrets by opaque reference and choose the environment variable name for each. Secret values are never placed in the signed payload or desired-state preview.
+5. Configure the HTTP `GET` healthcheck, restart policy, volumes, and CPU/memory limits.
+6. Review the backend-canonical non-secret desired-state diff, exact JSON, SHA-256 hash, policy result, and cost estimate.
+7. Click **Sign & submit idempotently**. The browser signer first persists the reviewed managed configuration with `service/update`, then signs `service/deploy` with that exact displayed hash as `expected_desired_state_hash` and its idempotency key.
+
+For an Arcana-ready deployment, operators can enter a `8080:8080` port mapping and enable `GET /healthz` on port `8080`; these are operator-entered values, not product-specific defaults in the generic wizard.
+
+Bahia rebuilds the desired state after the signed update and rejects the deploy if its hash differs from the reviewed hash. Passing policy continues through the existing protected-environment approval flow; policy blockers prevent submission.
+
+For a single explicit unit, the wizard selects its durable ID automatically. For multiple units, even the environment default is not auto-selected: the operator must choose a unit explicitly. The browser shows only the unit's `endpoint_ref` alias; it never resolves or displays the Docker host, TLS certificate paths, keys, or credentials. Runtime conflicts, missing Bahia-managed ownership, missing endpoint aliases, missing durable unit IDs, and mutable or unregistered artifacts block preview and intent creation with a clear error.
+
 
 ### CLI and MCP
 
@@ -104,7 +110,9 @@ Deployment intent creation is signer-first. CLI, MCP, web, and agent flows use C
 
 ### Nostr (ContextVM)
 
-Publish a ContextVM `service/deploy` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper:
+The browser obtains its authoritative review through signed `service/deploy-preview`. That method accepts the selected IDs plus `managed_runtime_config` and returns the exact sanitized `current_desired_state`, proposed `desired_state`, `desired_state_hash`, and policy evaluation. It does not persist or apply runtime state.
+
+After signed `service/update` persists the same normalized managed configuration, publish a ContextVM `service/deploy` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper:
 
 ```json
 {

@@ -100,6 +100,76 @@ describe('public controlplane command helpers', () => {
     });
   });
 
+  it('previews proposed managed desired state through the configured signer', async () => {
+    const managed = { schema_version: '1', service_name: 'web', restart_policy: 'unless-stopped', pull_policy: 'always' };
+    requestEncryptedResultMock.mockResolvedValueOnce({
+      requestEventId: 'preview-1',
+      result: { status: 'ok', payload: { desired_state_hash: `sha256:${'a'.repeat(64)}` } }
+    });
+
+    const result = await api.previewServiceDeployment({
+      service_id: 'svc-1',
+      environment_id: 'env-1',
+      deployment_unit_id: 'unit-1',
+      artifact_id: 'artifact-1',
+      managed_runtime_config: managed
+    });
+
+    expect(result.desired_state_hash).toBe(`sha256:${'a'.repeat(64)}`);
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
+      operation: 'service/deploy-preview',
+      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['unit', 'unit-1'], ['artifact', 'artifact-1']],
+      payload: {
+        service_id: 'svc-1',
+        environment_id: 'env-1',
+        deployment_unit_id: 'unit-1',
+        artifact_id: 'artifact-1',
+        managed_runtime_config: managed
+      },
+      kind: 25910,
+      resultKinds: [25910],
+      signal: undefined,
+      timeoutMs: undefined
+    });
+  });
+
+  it('signs the displayed desired-state hash into an idempotent deploy request', async () => {
+    const hash = `sha256:${'b'.repeat(64)}`;
+    await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-1', hash);
+
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
+      operation: 'service/deploy',
+      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['unit', 'unit-1'], ['artifact', 'artifact-1']],
+      payload: {
+        service_id: 'svc-1',
+        environment_id: 'env-1',
+        deployment_unit_id: 'unit-1',
+        artifact_id: 'artifact-1',
+        expected_desired_state_hash: hash,
+        idempotency_key: hash
+      },
+      kind: 25910,
+      resultKinds: [25910],
+      signal: undefined,
+      timeoutMs: undefined,
+      requestId: hash
+    });
+  });
+
+  it('uses the desired-state hash to idempotently persist managed service configuration', async () => {
+    const hash = `sha256:${'c'.repeat(64)}`;
+    await api.updateService('svc-1', {
+      managed_runtime_config: { schema_version: '1', service_name: 'web' },
+      idempotency_key: hash
+    });
+
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      operation: 'service/update',
+      requestId: hash,
+      payload: expect.objectContaining({ id: 'svc-1', idempotency_key: hash })
+    }));
+  });
+
   it('approves deployment intents through canonical ContextVM approval requests', async () => {
     await api.approveDeploymentIntent('intent-1');
 

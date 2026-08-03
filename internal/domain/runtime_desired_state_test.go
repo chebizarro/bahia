@@ -639,7 +639,7 @@ func TestDesiredServiceSpec_GoldenHash(t *testing.T) {
 	// This is the golden hash. If this changes, canonical serialization has broken.
 	// To update: run the test, get the new hash, verify the serialization change
 	// is intentional, bump DesiredStateSchemaVersion, and update this value.
-	want := "sha256:8ca65902196c5983f49c14be60d8368f8a92d239bd0abc76b267e46619e55e80"
+	want := "sha256:b1624502760b159c0a3d7769ef24d71855b70f85c411991814539cb7c76326de"
 	if got != want {
 		t.Fatalf("golden desired hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
 	}
@@ -689,7 +689,7 @@ func TestDesiredServiceSpec_GoldenHash_Minimal(t *testing.T) {
 	}
 
 	got := spec.ComputeDesiredHash()
-	want := "sha256:ef26e7506549ae9258556d0f97a75ce74bfb62fad60865bad5c76fc2eaca0691"
+	want := "sha256:2dd5a513aec93faa0beefb81e69298c6de7569f94625c829c8cabfb3fddf85c7"
 	if got != want {
 		t.Fatalf("minimal golden desired hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
 	}

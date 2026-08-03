@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
+import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, reachDesiredStateReview } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 const initialState = createPublicState({
@@ -96,8 +96,8 @@ test.describe('Explicit deployment-unit targeting', () => {
 
     await dialog.getByLabel('Environment *').selectOption('env-multi');
     await expect(dialog.getByLabel('Deployment unit *')).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Create Intent' })).toBeDisabled();
-    await expect(dialog.getByRole('alert')).toContainText('Select an explicit deployment unit');
+    await dialog.getByRole('button', { name: 'Continue' }).click();
+    await expect(dialog.getByText('Select an explicit deployment unit for this multi-unit environment.')).toBeVisible();
 
     await dialog.getByLabel('Deployment unit *').selectOption('unit-max');
     await expect(dialog.getByText('Resolved endpoint alias:')).toBeVisible();
@@ -107,27 +107,37 @@ test.describe('Explicit deployment-unit targeting', () => {
     await expect(dialog).not.toContainText('CLIENT_KEY');
 
     await dialog.getByLabel('Artifact from recent builds *').selectOption('artifact-arcana');
-    await expect(dialog.getByRole('button', { name: 'Create Intent' })).toBeEnabled();
-    await dialog.getByRole('button', { name: 'Create Intent' }).click();
+    await reachDesiredStateReview(dialog, { ports: '8080:8080', healthPath: '/healthz', healthPort: 8080 });
+    await expect(dialog.getByText('Exact signed desired state')).toBeVisible();
+    await expect(dialog.getByText(`sha256:${'d'.repeat(64)}`, { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Sign & submit idempotently' }).click();
 
     await expect(page).toHaveURL(/\/deployments$/);
     const trace = await page.evaluate(() => ({
       requests: window.__BAHIA_E2E_PUBLIC_REQUESTS,
       intent: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents[0]
     }));
-    const preview = trace.requests.find((request) => request.operation === 'policy/evaluate');
+    const preview = trace.requests.find((request) => request.operation === 'service/deploy-preview');
     const deploy = trace.requests.find((request) => request.operation === 'service/deploy');
     expect(preview.payload).toMatchObject({
       service_id: 'svc-compose',
       environment_id: 'env-multi',
       deployment_unit_id: 'unit-max',
-      artifact_id: 'artifact-arcana'
+      artifact_id: 'artifact-arcana',
+      managed_runtime_config: expect.objectContaining({
+        service_name: 'arcana',
+        ports: ['8080:8080'],
+        healthcheck: expect.objectContaining({ method: 'GET', path: '/healthz', port: 8080 }),
+        restart_policy: 'unless-stopped'
+      })
     });
     expect(deploy.payload).toMatchObject({
       service_id: 'svc-compose',
       environment_id: 'env-multi',
       deployment_unit_id: 'unit-max',
-      artifact_id: 'artifact-arcana'
+      artifact_id: 'artifact-arcana',
+      expected_desired_state_hash: `sha256:${'d'.repeat(64)}`,
+      idempotency_key: `sha256:${'d'.repeat(64)}`
     });
     expect(deploy.tags).toEqual(expect.arrayContaining([['unit', 'unit-max']]));
     expect(trace.intent.deployment_unit_id).toBe('unit-max');
@@ -142,10 +152,11 @@ test.describe('Explicit deployment-unit targeting', () => {
     await dialog.getByLabel('Environment *').selectOption('env-invalid');
     await expect(dialog.getByRole('alert')).toContainText('Bahia-managed ownership');
     await dialog.getByLabel('Artifact from recent builds *').selectOption('artifact-arcana');
-    await expect(dialog.getByRole('button', { name: 'Create Intent' })).toBeDisabled();
+    await dialog.getByRole('button', { name: 'Continue' }).click();
+    await expect(dialog.getByText('Compose deployment units must use Bahia-managed ownership.', { exact: true }).last()).toBeVisible();
 
     const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
-    expect(operations).not.toContain('policy/evaluate');
+    expect(operations).not.toContain('service/deploy-preview');
     expect(operations).not.toContain('service/deploy');
   });
 });

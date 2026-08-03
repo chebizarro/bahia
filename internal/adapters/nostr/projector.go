@@ -2335,6 +2335,7 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
 	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models", "encrypted_controlplane.progress_ack"}
 	methods := []string{
+		"service/deploy-preview",
 		"service/deploy",
 		"service/rollback",
 		"worker/cordon",

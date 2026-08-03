@@ -431,6 +431,79 @@ func TestValidateSpec(t *testing.T) {
 	}
 }
 
+func TestDesiredStateBuilderBuildsManagedComposeDefinition(t *testing.T) {
+	input := makeTestInput()
+	input.Artifact.ImageDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	secretID := input.Secrets[0].ID
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "arcana-web",
+		Ports:         []string{"8080:8080"},
+		Command:       []string{"nginx", "-g", "daemon off;"},
+		Environment:   map[string]string{"PUBLIC_MODE": "production"},
+		SecretRefs:    []domain.ManagedSecretReference{{EnvVar: "API_TOKEN", SecretID: secretID}},
+		Healthcheck: &domain.ManagedHTTPHealthcheck{
+			Protocol: "http", Method: "GET", Path: "/healthz", Port: 8080,
+			Interval: "30s", Timeout: "5s", Retries: 3,
+		},
+		RestartPolicy:  "unless-stopped",
+		ResourceLimits: &domain.RuntimeResourceLimits{CPUMillis: 500, MemoryBytes: 268435456},
+		PullPolicy:     "always",
+	}
+	input.Service.RuntimeConfig = &domain.ServiceRuntimeConfig{Managed: managed}
+	input.RuntimeConfig = input.Service.RuntimeConfig
+
+	spec, err := NewDesiredStateBuilder().Build(input)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if spec.StableServiceKey != "arcana-web" || spec.ImageRef != "ghcr.io/org/my-app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("managed identity or immutable image mismatch: %#v", spec)
+	}
+	if spec.Healthcheck == nil || spec.Healthcheck.Method != "GET" || spec.Healthcheck.Path != "/healthz" || spec.Healthcheck.Port != 8080 {
+		t.Fatalf("managed healthcheck mismatch: %#v", spec.Healthcheck)
+	}
+	if len(spec.SecretRefs) != 1 || spec.SecretRefs[0].EnvVar != "API_TOKEN" || spec.SecretRefs[0].RedactedValue != "REDACTED(API_TOKEN)" {
+		t.Fatalf("secret references mismatch: %#v", spec.SecretRefs)
+	}
+	if spec.ResourceLimits == nil || spec.ResourceLimits.CPUMillis != 500 || spec.ResourceLimits.MemoryBytes != 268435456 {
+		t.Fatalf("resource limits mismatch: %#v", spec.ResourceLimits)
+	}
+	if spec.Env["PUBLIC_MODE"] != "production" || spec.DesiredHash == "" {
+		t.Fatalf("managed literals or desired hash missing: %#v", spec)
+	}
+}
+
+func TestDesiredStateBuilderRejectsUnavailableManagedSecretReference(t *testing.T) {
+	input := makeTestInput()
+	input.Artifact.ImageDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	input.RuntimeConfig = &domain.ServiceRuntimeConfig{Managed: &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "web",
+		SecretRefs:    []domain.ManagedSecretReference{{EnvVar: "TOKEN", SecretID: uuid.New()}},
+		RestartPolicy: "unless-stopped",
+		PullPolicy:    "always",
+	}}
+	input.Service.RuntimeConfig = input.RuntimeConfig
+	if _, err := NewDesiredStateBuilder().Build(input); err == nil {
+		t.Fatal("expected unavailable secret reference to fail")
+	}
+}
+
+func TestDesiredStateBuilderRejectsMutableManagedArtifact(t *testing.T) {
+	input := makeTestInput()
+	input.RuntimeConfig = &domain.ServiceRuntimeConfig{Managed: &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "web",
+		RestartPolicy: "unless-stopped",
+		PullPolicy:    "always",
+	}}
+	input.Service.RuntimeConfig = input.RuntimeConfig
+	if _, err := NewDesiredStateBuilder().Build(input); err == nil {
+		t.Fatal("expected mutable managed artifact to fail")
+	}
+}
+
 func TestDesiredStateBuilder_NormalizeServiceKey(t *testing.T) {
 	tests := []struct {
 		name     string

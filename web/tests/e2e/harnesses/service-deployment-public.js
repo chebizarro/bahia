@@ -32,7 +32,7 @@ export function createPublicState(overrides = {}) {
         name: 'existing-service',
         repo_url: '',
         artifact_repo: 'ghcr.io/example/existing-service',
-        runtime_type: 'docker',
+        runtime_type: 'compose',
         default_branch: 'main',
         deleted: false,
         created_at: '2026-05-03T10:00:00.000Z'
@@ -74,6 +74,27 @@ export function createPublicState(overrides = {}) {
     deploymentIntents: (overrides.deploymentIntents || []).map((item) => ({ ...item })),
     deploymentRuns: (overrides.deploymentRuns || []).map((item) => ({ ...item }))
   };
+}
+
+export async function advanceDesiredStateWizardToReliability(dialog, { ports = '' } = {}) {
+  await dialog.getByRole('button', { name: 'Continue' }).click();
+  if (ports) await dialog.getByLabel('Port mappings').fill(ports);
+  await dialog.getByRole('button', { name: 'Continue' }).click();
+  await dialog.getByRole('button', { name: 'Continue' }).click();
+}
+
+export async function reachDesiredStateReview(dialog, {
+  ports = '',
+  healthPath = '',
+  healthPort = ''
+} = {}) {
+  await advanceDesiredStateWizardToReliability(dialog, { ports });
+  if (healthPath || healthPort) {
+    await dialog.getByLabel('Enable HTTP healthcheck').check();
+    if (healthPath) await dialog.getByLabel('Path *').fill(healthPath);
+    if (healthPort) await dialog.getByLabel('Port *').fill(String(healthPort));
+  }
+  await dialog.getByRole('button', { name: 'Continue' }).click();
 }
 
 export async function installPublicServiceDeploymentHarness(
@@ -671,6 +692,71 @@ export async function installPublicServiceDeploymentHarness(
       };
     }
 
+    function buildDesiredStatePreviewResultEvent(requestEvent, payload, mode) {
+      if (mode === 'error') return buildPolicyEvaluateResultEvent(requestEvent, payload, mode);
+      const policyContent = JSON.parse(buildPolicyEvaluateResultEvent(requestEvent, payload, mode).content);
+      const { status: _status, ...policy } = policyContent;
+      const state = window.__BAHIA_E2E_PUBLIC_STATE;
+      const artifact = state.artifacts.find((candidate) => candidate.id === payload.artifact_id) || {};
+      const managed = payload.managed_runtime_config || {};
+      const hash = `sha256:${'d'.repeat(64)}`;
+      const healthcheck = managed.healthcheck
+        ? {
+            test: ['CMD', 'wget', '-q', '--spider', `http://localhost:${managed.healthcheck.port}${managed.healthcheck.path}`],
+            ...managed.healthcheck
+          }
+        : undefined;
+      const desiredState = {
+        schema_version: '3',
+        service_id: payload.service_id,
+        environment_id: payload.environment_id,
+        ...(payload.deployment_unit_id ? { deployment_unit_id: payload.deployment_unit_id } : {}),
+        artifact_id: payload.artifact_id,
+        stable_service_key: managed.service_name,
+        image_ref: `${artifact.image_repo}@${artifact.image_digest}`,
+        command: managed.command || null,
+        env: managed.environment || {},
+        secret_refs: (managed.secret_refs || []).map((ref) => ({
+          env_var: ref.env_var,
+          name: ref.env_var,
+          secret_id: ref.secret_id,
+          redacted_value: `REDACTED(${ref.env_var})`
+        })),
+        ports: managed.ports || null,
+        volumes: managed.volumes || null,
+        ...(healthcheck ? { healthcheck } : {}),
+        ...(managed.resource_limits ? { resource_limits: managed.resource_limits } : {}),
+        restart_policy: managed.restart_policy,
+        pull_policy: managed.pull_policy,
+        desired_hash: hash
+      };
+      return nostrEvent({
+        id: `result-${requestEvent.id}`,
+        kind: KIND_CONTEXTVM,
+        tags: [['e', requestEvent.id]],
+        content: {
+          status: 'ok',
+          desired_state: desiredState,
+          current_desired_state: null,
+          desired_state_hash: hash,
+          policy
+        }
+      });
+    }
+
+    function desiredStatePreviewResult(requestEvent, payload) {
+      if (policyPreviewMode === 'delay') {
+        return {
+          projections: [],
+          delayedResultEvent: () => buildDesiredStatePreviewResultEvent(requestEvent, payload, 'allow')
+        };
+      }
+      return {
+        projections: [],
+        resultEvent: () => buildDesiredStatePreviewResultEvent(requestEvent, payload, policyPreviewMode)
+      };
+    }
+
     function deployIntentResult(requestEvent, payload) {
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
       const intent = {
@@ -831,6 +917,7 @@ export async function installPublicServiceDeploymentHarness(
     function handlePublicRequest(requestEvent) {
       const { operation, payload } = parseContextVMRequest(requestEvent);
       switch (operation) {
+        case 'service/deploy-preview': return desiredStatePreviewResult(requestEvent, payload);
         case 'service/deploy': return deployIntentResult(requestEvent, payload);
         case 'service/rollback': return rollbackResult(requestEvent, payload);
         case 'service/create': return serviceCreateResult(payload);
@@ -901,6 +988,7 @@ export async function installPublicServiceDeploymentHarness(
         const requestEvent = message[1];
         const decodedRequest = parseContextVMRequest(requestEvent);
         if (![
+          'service/deploy-preview',
           'service/deploy',
           'service/rollback',
           'service/create',
@@ -929,6 +1017,7 @@ export async function installPublicServiceDeploymentHarness(
         if (delayedResultEvent) {
           window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.set(requestEvent.id, {
             requestEvent,
+            operation: decodedRequest.operation,
             payload: decodedRequest.payload || {}
           });
           window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW = (requestEventIdOrMode = 'allow', maybeMode = 'allow') => {
@@ -942,7 +1031,10 @@ export async function installPublicServiceDeploymentHarness(
             if (!pending) {
               return false;
             }
-            queueRelayEvent(contextVMResultEvent(pending.requestEvent, JSON.parse(buildPolicyEvaluateResultEvent(pending.requestEvent, pending.payload, mode).content || '{}')), {
+            const pendingResult = pending.operation === 'service/deploy-preview'
+              ? buildDesiredStatePreviewResultEvent(pending.requestEvent, pending.payload, mode)
+              : buildPolicyEvaluateResultEvent(pending.requestEvent, pending.payload, mode);
+            queueRelayEvent(contextVMResultEvent(pending.requestEvent, JSON.parse(pendingResult.content || '{}')), {
               requireCorrelationId: pending.requestEvent.id,
               traceAs: 'result'
             });

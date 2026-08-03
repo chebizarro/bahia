@@ -290,6 +290,31 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 		}
 		svc.RuntimeType = runtimeType
 	}
+	if svc.RuntimeType != domain.RuntimeTypeCompose && svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil && payload.ManagedRuntimeConfig == nil {
+		return nil, fmt.Errorf("cannot change a service with managed runtime configuration away from compose")
+	}
+	if payload.ManagedRuntimeConfig != nil {
+		if svc.RuntimeType != domain.RuntimeTypeCompose {
+			return nil, fmt.Errorf("managed runtime configuration requires runtime_type compose")
+		}
+		managed := domain.NormalizeManagedRuntimeConfig(payload.ManagedRuntimeConfig)
+		if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
+			return nil, fmt.Errorf("invalid managed runtime configuration: %w", err)
+		}
+		if len(managed.SecretRefs) > 0 && h.secrets == nil {
+			return nil, fmt.Errorf("secret repository is required to validate managed secret references")
+		}
+		for _, ref := range managed.SecretRefs {
+			secret, err := h.secrets.GetByID(ctx, ref.SecretID)
+			if err != nil || secret == nil || secret.ServiceID != svc.ID {
+				return nil, fmt.Errorf("managed runtime configuration contains an unavailable secret reference")
+			}
+		}
+		if svc.RuntimeConfig == nil {
+			svc.RuntimeConfig = &domain.ServiceRuntimeConfig{}
+		}
+		svc.RuntimeConfig.Managed = managed
+	}
 	if err := h.registry.UpdateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("failed to update service: %w", err)
 	}

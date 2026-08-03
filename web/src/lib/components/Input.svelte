@@ -5,6 +5,10 @@
   export let type = 'text';
   export let value = '';
   export let placeholder = '';
+  export let min = undefined;
+  export let max = undefined;
+  export let step = undefined;
+  export let ariaLabel = undefined;
   export let disabled = false;
   export let required = false;
   export let error = '';
@@ -32,6 +36,10 @@
   {name}
   {type}
   {placeholder}
+  {min}
+  {max}
+  {step}
+  aria-label={ariaLabel}
   {disabled}
   {required}
   bind:value

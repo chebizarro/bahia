@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
+import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, reachDesiredStateReview } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 const initialState = createPublicState();
@@ -36,7 +36,10 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
     await expect(page.getByRole('dialog', { name: 'Create Deployment Intent' })).toBeVisible();
     await page.locator('#deploy-environment').selectOption('env-prod');
     await page.locator('#deploy-artifact').selectOption('artifact-existing-1');
-    await page.getByRole('button', { name: 'Create Intent' }).click();
+    const deployDialog = page.getByRole('dialog', { name: 'Create Deployment Intent' });
+    await reachDesiredStateReview(deployDialog);
+    await expect(deployDialog.getByText('Exact signed desired state')).toBeVisible();
+    await deployDialog.getByRole('button', { name: 'Sign & submit idempotently' }).click();
 
     await expect.poll(() => page.evaluate(() => ({
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
@@ -90,7 +93,7 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
 
     const canonicalRequests = transportTrace.requests.filter((request) => request.kind === 25910);
     expect(transportTrace.relays.length).toBeGreaterThanOrEqual(4);
-    expect(transportTrace.requests.map((request) => request.operation)).toEqual(expect.arrayContaining(['service/create', 'policy/evaluate', 'service/deploy', 'approval/approve']));
+    expect(transportTrace.requests.map((request) => request.operation)).toEqual(expect.arrayContaining(['service/create', 'service/deploy-preview', 'service/update', 'service/deploy', 'approval/approve']));
     expect(transportTrace.kinds).toEqual(expect.arrayContaining([25910]));
     expect(transportTrace.kinds).not.toContain(5980);
     expect(canonicalRequests.length).toBeGreaterThanOrEqual(4);

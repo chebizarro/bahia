@@ -55,21 +55,45 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	// Build image reference from artifact.
 	imageRef := imageRefForArtifact(input.Artifact)
 
-	// Resolve process fields from adopted runtime config.
+	// Resolve process fields from the persisted managed definition, falling
+	// back to adopted workload metadata only for legacy adopted services.
 	var (
-		command     []string
-		entrypoint  []string
-		workDir     string
-		restart     string
-		networkMode string
-		ports       []string
-		volumes     []string
-		labels      map[string]string
-		envLiterals map[string]string
+		command        []string
+		entrypoint     []string
+		workDir        string
+		restart        string
+		networkMode    string
+		pullPolicy     string
+		ports          []string
+		volumes        []string
+		labels         map[string]string
+		envLiterals    map[string]string
+		healthcheck    *domain.HealthcheckConfig
+		resourceLimits *domain.RuntimeResourceLimits
 	)
 
+	managed := managedConfig(input.RuntimeConfig)
 	adopted := adoptedConfig(input.RuntimeConfig)
-	if adopted != nil {
+	if managed != nil {
+		managed = domain.NormalizeManagedRuntimeConfig(managed)
+		if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
+			return nil, fmt.Errorf("invalid managed runtime configuration: %w", err)
+		}
+		if err := domain.ValidateImageDigest(input.Artifact.ImageDigest); err != nil {
+			return nil, fmt.Errorf("managed artifact must use an immutable digest: %w", err)
+		}
+		command = copySlice(managed.Command)
+		restart = managed.RestartPolicy
+		pullPolicy = managed.PullPolicy
+		ports = copySlice(managed.Ports)
+		volumes = copySlice(managed.Volumes)
+		envLiterals = copyStringMap(managed.Environment)
+		healthcheck = desiredHealthcheck(managed.Healthcheck)
+		if managed.ResourceLimits != nil {
+			limits := *managed.ResourceLimits
+			resourceLimits = &limits
+		}
+	} else if adopted != nil {
 		command = copySlice(adopted.Command)
 		entrypoint = copySlice(adopted.Entrypoint)
 		workDir = adopted.WorkingDir
@@ -90,9 +114,15 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	// Split env into literals vs secret refs. Secret names that exist
 	// in the environment map are removed from literals.
 	secretNames := make(map[string]bool, len(input.Secrets))
-	for _, s := range input.Secrets {
-		if s.Name != "" {
-			secretNames[s.Name] = true
+	if managed != nil {
+		for _, ref := range managed.SecretRefs {
+			secretNames[ref.EnvVar] = true
+		}
+	} else {
+		for _, s := range input.Secrets {
+			if s.Name != "" {
+				secretNames[s.Name] = true
+			}
 		}
 	}
 
@@ -103,18 +133,38 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		}
 	}
 
-	// Build secret refs — never include plaintext.
+	// Build secret refs — never include plaintext. Managed services select an
+	// explicit subset by opaque ID; adopted services retain the legacy all-effective behavior.
 	secretRefs := make([]domain.DesiredSecretRef, 0, len(input.Secrets))
-	for _, s := range input.Secrets {
-		if s.Name == "" {
-			continue
+	if managed != nil {
+		secretsByID := make(map[uuid.UUID]domain.ServiceSecret, len(input.Secrets))
+		for _, secret := range input.Secrets {
+			secretsByID[secret.ID] = secret
 		}
-		secretRefs = append(secretRefs, domain.DesiredSecretRef{
-			EnvVar:        s.Name,
-			Name:          s.Name,
-			SecretID:      s.ID,
-			RedactedValue: domain.RedactedPlaceholder(s.Name),
-		})
+		for _, ref := range managed.SecretRefs {
+			secret, ok := secretsByID[ref.SecretID]
+			if !ok || secret.Name == "" {
+				return nil, fmt.Errorf("managed secret reference for %q is not effective for this service and environment", ref.EnvVar)
+			}
+			secretRefs = append(secretRefs, domain.DesiredSecretRef{
+				EnvVar:        ref.EnvVar,
+				Name:          secret.Name,
+				SecretID:      secret.ID,
+				RedactedValue: domain.RedactedPlaceholder(ref.EnvVar),
+			})
+		}
+	} else {
+		for _, s := range input.Secrets {
+			if s.Name == "" {
+				continue
+			}
+			secretRefs = append(secretRefs, domain.DesiredSecretRef{
+				EnvVar:        s.Name,
+				Name:          s.Name,
+				SecretID:      s.ID,
+				RedactedValue: domain.RedactedPlaceholder(s.Name),
+			})
+		}
 	}
 	// Sort secret refs for deterministic output.
 	sort.Slice(secretRefs, func(i, j int) bool {
@@ -156,7 +206,10 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		Ports:             ports,
 		Volumes:           volumes,
 		Labels:            labels,
+		Healthcheck:       healthcheck,
+		ResourceLimits:    resourceLimits,
 		RestartPolicy:     restart,
+		PullPolicy:        pullPolicy,
 		NetworkMode:       networkMode,
 	}
 
@@ -210,6 +263,30 @@ func buildRendererExtensions(spec *domain.DesiredServiceSpec, svc *domain.Servic
 
 	case domain.RuntimeTypeK8s:
 		spec.KubernetesExtension = domain.KubernetesExtensionFromDeploymentUnit(unit)
+	}
+}
+
+func managedConfig(cfg *domain.ServiceRuntimeConfig) *domain.ManagedRuntimeConfig {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.Managed
+}
+
+func desiredHealthcheck(input *domain.ManagedHTTPHealthcheck) *domain.HealthcheckConfig {
+	if input == nil {
+		return nil
+	}
+	return &domain.HealthcheckConfig{
+		Test:        []string{"CMD", "wget", "-q", "--spider", fmt.Sprintf("http://localhost:%d%s", input.Port, input.Path)},
+		Protocol:    input.Protocol,
+		Method:      input.Method,
+		Path:        input.Path,
+		Port:        input.Port,
+		Interval:    input.Interval,
+		Timeout:     input.Timeout,
+		Retries:     input.Retries,
+		StartPeriod: input.StartPeriod,
 	}
 }
 

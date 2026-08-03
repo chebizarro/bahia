@@ -134,6 +134,9 @@ type Service struct {
 
 // RuntimeTargetName returns the concrete runtime target for this service.
 func (s *Service) RuntimeTargetName() string {
+	if s != nil && s.RuntimeConfig != nil && s.RuntimeConfig.Managed != nil && s.RuntimeConfig.Managed.ServiceName != "" {
+		return s.RuntimeConfig.Managed.ServiceName
+	}
 	if s != nil && s.RuntimeConfig != nil && s.RuntimeConfig.Adopted != nil && s.RuntimeConfig.Adopted.TargetName != "" {
 		return s.RuntimeConfig.Adopted.TargetName
 	}
@@ -145,6 +148,7 @@ func (s *Service) RuntimeTargetName() string {
 
 // ServiceRuntimeConfig contains service-scoped runtime settings.
 type ServiceRuntimeConfig struct {
+	Managed *ManagedRuntimeConfig `json:"managed,omitempty"`
 	Adopted *AdoptedRuntimeConfig `json:"adopted,omitempty"`
 }
 

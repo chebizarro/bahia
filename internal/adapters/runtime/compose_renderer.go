@@ -215,6 +215,8 @@ type composeService struct {
 	Networks      []string
 	Restart       string
 	PullPolicy    string
+	CPUs          string
+	MemLimit      string
 }
 
 type composeHealthcheck struct {
@@ -329,6 +331,15 @@ func (r *ComposeRenderer) buildComposeService(svc domain.DesiredServiceSpec) com
 		cs.DependsOn = make(map[string]composeDependsOn, len(svc.DependsOn))
 		for _, depKey := range svc.DependsOn {
 			cs.DependsOn[depKey] = composeDependsOn{Condition: "service_started"}
+		}
+	}
+
+	if svc.ResourceLimits != nil {
+		if svc.ResourceLimits.CPUMillis > 0 {
+			cs.CPUs = formatComposeCPUs(svc.ResourceLimits.CPUMillis)
+		}
+		if svc.ResourceLimits.MemoryBytes > 0 {
+			cs.MemLimit = fmt.Sprintf("%db", svc.ResourceLimits.MemoryBytes)
 		}
 	}
 
@@ -598,6 +609,15 @@ func buildServiceNode(svc composeService) *yaml.Node {
 		addSequencePair(node, "networks", svc.Networks)
 	}
 
+	// Resource limits use service-level Compose fields so non-Swarm Compose
+	// runtimes enforce the same values represented in desired state.
+	if svc.CPUs != "" {
+		addScalarPair(node, "cpus", svc.CPUs)
+	}
+	if svc.MemLimit != "" {
+		addScalarPair(node, "mem_limit", svc.MemLimit)
+	}
+
 	// restart
 	if svc.Restart != "" {
 		addScalarPair(node, "restart", svc.Restart)
@@ -663,6 +683,15 @@ func sortedKeysFromSet(m map[string]struct{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func formatComposeCPUs(millis int64) string {
+	whole := millis / 1000
+	fraction := millis % 1000
+	if fraction == 0 {
+		return fmt.Sprintf("%d", whole)
+	}
+	return strings.TrimRight(fmt.Sprintf("%d.%03d", whole, fraction), "0")
 }
 
 func sortedCopy(s []string) []string {

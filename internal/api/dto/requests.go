@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 type EnvironmentTargetingRequest struct {
@@ -41,14 +42,15 @@ type CreateServiceRequest struct {
 
 // UpdateServiceRequest represents a request to update a service.
 type UpdateServiceRequest struct {
-	ID             uuid.UUID             `json:"id"`
-	Name           *string               `json:"name,omitempty"`
-	RepoURL        *string               `json:"repo_url,omitempty"`
-	Repository     *RepositoryRefRequest `json:"repository,omitempty"`
-	ArtifactRepo   *string               `json:"artifact_repo,omitempty"`
-	DefaultBranch  *string               `json:"default_branch,omitempty"`
-	RuntimeType    *string               `json:"runtime_type,omitempty"`
-	IdempotencyKey string                `json:"idempotency_key,omitempty"`
+	ID                   uuid.UUID                    `json:"id"`
+	Name                 *string                      `json:"name,omitempty"`
+	RepoURL              *string                      `json:"repo_url,omitempty"`
+	Repository           *RepositoryRefRequest        `json:"repository,omitempty"`
+	ArtifactRepo         *string                      `json:"artifact_repo,omitempty"`
+	DefaultBranch        *string                      `json:"default_branch,omitempty"`
+	RuntimeType          *string                      `json:"runtime_type,omitempty"`
+	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
+	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
 }
 
 // DeleteServiceRequest deletes a service through the signer-first control plane.
@@ -138,11 +140,23 @@ type RegisterArtifactRequest struct {
 // policy permits, execute a deployment intent. RequestedBy is intentionally
 // absent: handlers derive it from the verified request event.
 type ServiceDeployRequest struct {
-	ServiceID        uuid.UUID  `json:"service_id"`
-	EnvironmentID    uuid.UUID  `json:"environment_id"`
-	DeploymentUnitID *uuid.UUID `json:"deployment_unit_id,omitempty"`
-	ArtifactID       uuid.UUID  `json:"artifact_id"`
-	IdempotencyKey   string     `json:"idempotency_key,omitempty"`
+	ServiceID                uuid.UUID  `json:"service_id"`
+	EnvironmentID            uuid.UUID  `json:"environment_id"`
+	DeploymentUnitID         *uuid.UUID `json:"deployment_unit_id,omitempty"`
+	ArtifactID               uuid.UUID  `json:"artifact_id"`
+	ExpectedDesiredStateHash string     `json:"expected_desired_state_hash,omitempty"`
+	IdempotencyKey           string     `json:"idempotency_key,omitempty"`
+}
+
+// ServiceDeployPreviewRequest builds a canonical non-secret desired state from
+// a proposed managed runtime definition without persisting or applying it.
+type ServiceDeployPreviewRequest struct {
+	ServiceID            uuid.UUID                    `json:"service_id"`
+	EnvironmentID        uuid.UUID                    `json:"environment_id"`
+	DeploymentUnitID     *uuid.UUID                   `json:"deployment_unit_id,omitempty"`
+	ArtifactID           uuid.UUID                    `json:"artifact_id"`
+	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config"`
+	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
 }
 
 // DeploymentDecisionRequest approves or rejects a pending deployment intent.

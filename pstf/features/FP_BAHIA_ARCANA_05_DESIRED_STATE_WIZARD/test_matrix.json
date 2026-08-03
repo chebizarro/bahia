@@ -1,0 +1,12 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_05_DESIRED_STATE_WIZARD",
+  "tests": [
+    {"name":"Managed runtime contract and canonical hashing","command":"go test ./internal/domain ./internal/service","criteria":["AC2","AC3","AC4"]},
+    {"name":"Signed preview, stale-hash guard, and policy flow","command":"go test ./internal/controlplane","criteria":["AC3","AC5"]},
+    {"name":"Compose rendering and discovery","command":"go test ./internal/adapters/runtime ./internal/adapters/nostr","criteria":["AC1","AC3"]},
+    {"name":"Wizard payload unit tests","command":"cd web && npm run test:unit -- --run tests/unit/deployment-desired-state.test.js tests/unit/public-controlplane.test.js","criteria":["AC2","AC3","AC4","AC5"]},
+    {"name":"Wizard browser acceptance","command":"cd web && npx playwright test tests/e2e/deployment-unit-targeting.spec.js tests/e2e/service-deployment-policy-gate.spec.js tests/e2e/service-deployment-public-smoke.spec.js","criteria":["AC1","AC2","AC3","AC5"]},
+    {"name":"Svelte static checks and production build","command":"cd web && npm run lint && npm run build","criteria":["AC1","AC3"]},
+    {"name":"Go production build","command":"go build ./...","criteria":["AC3","AC5"]}
+  ]
+}

@@ -27,7 +27,7 @@
   import {
     updateService,
     deleteService,
-    evaluatePolicy,
+    previewServiceDeployment,
     createDeploymentIntent,
     rollbackDeployment
   } from '$lib/stores/public-controlplane.svelte.js';
@@ -47,6 +47,12 @@
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
+  import {
+    buildManagedRuntimeConfig,
+    createManagedRuntimeForm,
+    desiredStateChanges,
+    isRegisteredImmutableArtifact
+  } from '$lib/deployment-desired-state.js';
   import {
     deploymentTargetIssue,
     deploymentUnitsForEnvironment,
@@ -153,6 +159,11 @@
   let deployCostEstimateError = $state(null);
   let deployCostEstimateSequence = 0;
   let deployEstimatedDurationSecs = $state(DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS);
+  let deployStep = $state(1);
+  let deployRuntimeForm = $state(createManagedRuntimeForm());
+  let deployManagedConfigPreview = $state(null);
+  let deployDesiredStatePreview = $state(null);
+  let deployCurrentDesiredState = $state(null);
   let deployForm = $state({
     environment_id: '',
     deployment_unit_id: '',
@@ -513,6 +524,9 @@
     deployPolicyPreview = null;
     deployPolicyPreviewError = null;
     deployPolicyPreviewLoading = false;
+    deployManagedConfigPreview = null;
+    deployDesiredStatePreview = null;
+    deployCurrentDesiredState = null;
   }
 
   function openDeployModal() {
@@ -521,6 +535,8 @@
       deployment_unit_id: '',
       artifact_id: ''
     };
+    deployStep = 1;
+    deployRuntimeForm = createManagedRuntimeForm(service);
     deployError = null;
     resetDeployPreview();
     resetDeployCostEstimate();
@@ -543,24 +559,79 @@
     deployPolicyPreviewLoading = true;
 
     try {
-      const preview = await evaluatePolicy({
+      const managedRuntimeConfig = buildManagedRuntimeConfig(deployRuntimeForm);
+      const preview = await previewServiceDeployment({
         service_id: serviceId,
         environment_id: environmentId,
         ...(deploymentUnitId ? { deployment_unit_id: deploymentUnitId } : {}),
-        artifact_id: artifactId
+        artifact_id: artifactId,
+        managed_runtime_config: managedRuntimeConfig
       });
       if (deployPolicyPreviewRequestToken === requestToken) {
-        deployPolicyPreview = preview;
+        deployManagedConfigPreview = managedRuntimeConfig;
+        deployDesiredStatePreview = preview?.desired_state || null;
+        deployCurrentDesiredState = preview?.current_desired_state || null;
+        deployPolicyPreview = preview?.policy || null;
       }
     } catch (err) {
       if (deployPolicyPreviewRequestToken === requestToken) {
-        deployPolicyPreviewError = err.message || 'Policy preview is not available';
+        deployPolicyPreviewError = err.message || 'Desired-state preview is not available';
       }
     } finally {
       if (deployPolicyPreviewRequestToken === requestToken) {
         deployPolicyPreviewLoading = false;
       }
     }
+  }
+
+  function isDeploySecretSelected(secretId) {
+    return deployRuntimeForm.secret_refs.some((ref) => ref.secret_id === secretId);
+  }
+
+  function deploySecretEnvVar(secretId) {
+    return deployRuntimeForm.secret_refs.find((ref) => ref.secret_id === secretId)?.env_var || '';
+  }
+
+  function toggleDeploySecret(secret, checked) {
+    const refs = deployRuntimeForm.secret_refs.filter((ref) => ref.secret_id !== secret.id);
+    if (checked) refs.push({ secret_id: secret.id, env_var: secret.name, enabled: true });
+    deployRuntimeForm.secret_refs = refs;
+    resetDeployPreview();
+  }
+
+  function updateDeploySecretEnvVar(secretId, value) {
+    deployRuntimeForm.secret_refs = deployRuntimeForm.secret_refs.map((ref) => ref.secret_id === secretId ? { ...ref, env_var: value } : ref);
+    resetDeployPreview();
+  }
+
+  async function nextDeployStep() {
+    deployError = null;
+    if (deployStep === 1) {
+      if (!deployForm.environment_id) return void (deployError = 'Select an environment');
+      if (!deployForm.artifact_id) return void (deployError = 'Select a registered immutable artifact');
+      if (deployTargetError) return void (deployError = deployTargetError);
+    }
+    if (deployStep >= 2) {
+      try {
+        buildManagedRuntimeConfig(deployRuntimeForm);
+      } catch (err) {
+        deployError = err.message;
+        return;
+      }
+    }
+    if (deployStep === 4) {
+      await loadDeploymentPolicyPreview(deployForm.environment_id, deployForm.artifact_id, deployForm.deployment_unit_id);
+      if (deployPolicyPreviewError || !deployDesiredStatePreview) {
+        deployError = deployPolicyPreviewError || 'Desired-state preview did not return a canonical state';
+        return;
+      }
+    }
+    deployStep = Math.min(5, deployStep + 1);
+  }
+
+  function previousDeployStep() {
+    deployError = null;
+    deployStep = Math.max(1, deployStep - 1);
   }
 
   async function handleDeploy() {
@@ -586,11 +657,20 @@
     deployError = null;
 
     try {
+      const desiredHash = deployDesiredStatePreview?.desired_hash;
+      if (!desiredHash || !deployManagedConfigPreview) {
+        throw new Error('Review the canonical desired state before signing and submitting');
+      }
+      await updateService(serviceId, {
+        managed_runtime_config: deployManagedConfigPreview,
+        idempotency_key: desiredHash
+      });
       await createDeploymentIntent(
         serviceId,
         deployForm.environment_id,
         deployForm.artifact_id,
-        deployForm.deployment_unit_id
+        deployForm.deployment_unit_id,
+        desiredHash
       );
       deployOpen = false;
       goto('/deployments');
@@ -843,7 +923,8 @@
     value: environment.id,
     label: environmentDisplayName(environment)
   })));
-  let deployArtifactOptions = $derived(artifacts.map(artifact => ({
+  let deployImmutableArtifacts = $derived(artifacts.filter(isRegisteredImmutableArtifact));
+  let deployArtifactOptions = $derived(deployImmutableArtifacts.map(artifact => ({
     value: artifact.id,
     label: artifactOptionLabel(artifact)
   })));
@@ -880,7 +961,8 @@
     if (policyPreviewBlocked(deployPolicyPreview)) return 'Resolve policy blockers before you can create an intent.';
     return '';
   });
-  let deployCreateDisabled = $derived(!deployForm.environment_id || !deployForm.artifact_id || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
+  let deployCreateDisabled = $derived(deployStep !== 5 || !deployDesiredStatePreview?.desired_hash || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
+  let deployDesiredStateDiff = $derived(desiredStateChanges(deployCurrentDesiredState, deployDesiredStatePreview));
   let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
   let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
   let selectedDeployArtifactBuild = $derived.by(() => {
@@ -902,16 +984,11 @@
   });
 
   $effect(() => {
-    if (!deployOpen) return;
-    const environmentId = deployForm.environment_id;
-    const artifactId = deployForm.artifact_id;
-    const deploymentUnitId = deployForm.deployment_unit_id;
-    const targetIssue = deployTargetError;
-    if (!environmentId || !artifactId || targetIssue) {
-      untrack(() => resetDeployPreview());
-      return;
-    }
-    void untrack(() => loadDeploymentPolicyPreview(environmentId, artifactId, deploymentUnitId));
+    if (!deployOpen || deployStep === 5) return;
+    deployForm.environment_id;
+    deployForm.artifact_id;
+    deployForm.deployment_unit_id;
+    untrack(() => resetDeployPreview());
   });
 
   let buildColumns = $derived([
@@ -1199,8 +1276,14 @@
 <Modal bind:open={deployOpen} title="Create Deployment Intent" titleIcon={DeploymentIcon} size="lg" onClose={closeDeployModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleDeploy(); }} class="deploy-form">
     <p class="modal-intro">
-      Choose where to deploy <strong>{service?.name}</strong> and which recent artifact should be promoted.
+      Assemble, review, sign, and submit the exact non-secret desired state for <strong>{service?.name}</strong>.
     </p>
+
+    <ol class="wizard-steps" aria-label="Deployment wizard progress">
+      {#each ['Target', 'Service', 'Configuration', 'Reliability', 'Review & sign'] as label, index}
+        <li class:active={deployStep === index + 1} class:complete={deployStep > index + 1}>{index + 1}. {label}</li>
+      {/each}
+    </ol>
 
     {#if environmentsLoadError || artifactsLoadError}
       <div class="deploy-input-warning" role="alert">
@@ -1213,6 +1296,7 @@
       </div>
     {/if}
 
+    {#if deployStep === 1}
     <div class="form-field">
       <label for="deploy-environment">Environment *</label>
       <Select
@@ -1318,6 +1402,109 @@
         </dl>
       </div>
     {/if}
+
+    {/if}
+
+    {#if deployStep === 2}
+      <div class="wizard-panel">
+        <div class="form-field">
+          <label for="deploy-service-name">Compose service name *</label>
+          <Input id="deploy-service-name" bind:value={deployRuntimeForm.service_name} disabled={deploying} />
+          <span class="field-hint">Used as the stable Compose service and container name.</span>
+        </div>
+        <div class="form-field">
+          <label for="deploy-ports">Port mappings</label>
+          <Textarea id="deploy-ports" bind:value={deployRuntimeForm.ports} rows={4} placeholder="host:container, one mapping per line" disabled={deploying} />
+        </div>
+        <div class="form-field">
+          <label for="deploy-command">Command arguments</label>
+          <Textarea id="deploy-command" bind:value={deployRuntimeForm.command} rows={4} placeholder="one argument per line; blank uses the image command" disabled={deploying} />
+        </div>
+      </div>
+    {:else if deployStep === 3}
+      <div class="wizard-panel">
+        <div class="form-field">
+          <label for="deploy-environment-values">Non-secret environment values</label>
+          <Textarea id="deploy-environment-values" bind:value={deployRuntimeForm.environment} rows={6} placeholder="NAME=value, one per line" disabled={deploying} />
+          <span class="field-hint">Only literal non-secret values belong here.</span>
+        </div>
+        <div class="form-field">
+          <p class="form-label">Secret references</p>
+          {#if secretsLoading}
+            <p class="preview-muted">Loading secret references...</p>
+          {:else if secrets.length === 0}
+            <p class="preview-muted">No service secrets are available. Add secrets outside the wizard, then select their opaque references here.</p>
+          {:else}
+            <div class="secret-reference-list">
+              {#each secrets as secret}
+                <div class="secret-reference-row">
+                  <label>
+                    <input type="checkbox" checked={isDeploySecretSelected(secret.id)} onchange={(event) => toggleDeploySecret(secret, event.currentTarget.checked)} disabled={deploying} />
+                    {secret.name}
+                  </label>
+                  {#if isDeploySecretSelected(secret.id)}
+                    <Input value={deploySecretEnvVar(secret.id)} oninput={(event) => updateDeploySecretEnvVar(secret.id, event.currentTarget.value)} ariaLabel={`Environment variable for ${secret.name}`} disabled={deploying} />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+          <span class="field-hint">The signed payload contains IDs and environment variable names only, never secret values.</span>
+        </div>
+      </div>
+    {:else if deployStep === 4}
+      <div class="wizard-panel">
+        <Checkbox id="deploy-health-enabled" bind:checked={deployRuntimeForm.health_enabled} label="Enable HTTP healthcheck" disabled={deploying} />
+        {#if deployRuntimeForm.health_enabled}
+          <div class="runtime-grid">
+            <div class="form-field"><label for="deploy-health-method">Method</label><Input id="deploy-health-method" bind:value={deployRuntimeForm.health_method} disabled /></div>
+            <div class="form-field"><label for="deploy-health-path">Path *</label><Input id="deploy-health-path" bind:value={deployRuntimeForm.health_path} placeholder="/health" disabled={deploying} /></div>
+            <div class="form-field"><label for="deploy-health-port">Port *</label><Input id="deploy-health-port" type="number" bind:value={deployRuntimeForm.health_port} min="1" max="65535" disabled={deploying} /></div>
+            <div class="form-field"><label for="deploy-health-interval">Interval</label><Input id="deploy-health-interval" bind:value={deployRuntimeForm.health_interval} disabled={deploying} /></div>
+            <div class="form-field"><label for="deploy-health-timeout">Timeout</label><Input id="deploy-health-timeout" bind:value={deployRuntimeForm.health_timeout} disabled={deploying} /></div>
+            <div class="form-field"><label for="deploy-health-retries">Retries</label><Input id="deploy-health-retries" type="number" bind:value={deployRuntimeForm.health_retries} min="0" max="100" disabled={deploying} /></div>
+          </div>
+        {/if}
+        <div class="form-field">
+          <label for="deploy-restart-policy">Restart policy</label>
+          <Select id="deploy-restart-policy" bind:value={deployRuntimeForm.restart_policy} options={[
+            { value: 'unless-stopped', label: 'Unless stopped' },
+            { value: 'always', label: 'Always' },
+            { value: 'on-failure', label: 'On failure' },
+            { value: 'no', label: 'No restart' }
+          ]} disabled={deploying} />
+        </div>
+        <div class="form-field"><label for="deploy-volumes">Volume mappings</label><Textarea id="deploy-volumes" bind:value={deployRuntimeForm.volumes} rows={4} placeholder="source:target, one mapping per line" disabled={deploying} /></div>
+        <div class="runtime-grid">
+          <div class="form-field"><label for="deploy-cpu">CPU limit (millicores)</label><Input id="deploy-cpu" type="number" bind:value={deployRuntimeForm.cpu_millis} min="1" placeholder="500" disabled={deploying} /></div>
+          <div class="form-field"><label for="deploy-memory">Memory limit (MiB)</label><Input id="deploy-memory" type="number" bind:value={deployRuntimeForm.memory_mib} min="1" placeholder="256" disabled={deploying} /></div>
+        </div>
+      </div>
+    {:else if deployStep === 5}
+      <section class="desired-state-review">
+        <div class="preview-card-header">
+          <h3 class="subsection-title">Exact signed desired state</h3>
+          <span class="status-pill success">Canonical</span>
+        </div>
+        <p class="desired-state-hash"><strong>SHA-256</strong> <code>{deployDesiredStatePreview?.desired_hash}</code></p>
+        <p class="preview-muted">This hash is included in the signed deploy request and re-built by Bahia before policy or runtime mutation.</p>
+        <details open>
+          <summary>Non-secret desired-state diff ({deployDesiredStateDiff.length} changes)</summary>
+          {#if deployDesiredStateDiff.length > 0}
+            <ul class="desired-state-diff">
+              {#each deployDesiredStateDiff as change}
+                <li><code>{change.path}</code><span>{JSON.stringify(change.before) ?? 'absent'} → {JSON.stringify(change.after) ?? 'absent'}</span></li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="preview-muted">No change from the currently persisted desired state.</p>
+          {/if}
+        </details>
+        <details>
+          <summary>Exact canonical non-secret JSON</summary>
+          <pre>{JSON.stringify(deployDesiredStatePreview, null, 2)}</pre>
+        </details>
+      </section>
 
     <div class="preview-grid">
       <section class="preview-card">
@@ -1434,28 +1621,22 @@
         {/if}
       </section>
     </div>
+    {/if}
 
     {#if deployError}
       <p class="error">{deployError}</p>
     {/if}
 
-    <div class="form-actions">
-      <LoadingButton
-        type="button"
-        variant="secondary"
-        onclick={closeDeployModal}
-        disabled={deploying}
-      >
-        Cancel
-      </LoadingButton>
-      <LoadingButton
-        type="submit"
-        variant="primary"
-        loading={deploying}
-        disabled={deployCreateDisabled}
-      >
-        Create Intent
-      </LoadingButton>
+    <div class="form-actions wizard-actions">
+      <LoadingButton type="button" variant="secondary" onclick={closeDeployModal} disabled={deploying || deployPolicyPreviewLoading}>Cancel</LoadingButton>
+      {#if deployStep > 1}
+        <LoadingButton type="button" variant="secondary" onclick={previousDeployStep} disabled={deploying || deployPolicyPreviewLoading}>Back</LoadingButton>
+      {/if}
+      {#if deployStep < 5}
+        <LoadingButton type="button" variant="primary" onclick={nextDeployStep} loading={deployPolicyPreviewLoading} disabled={deploying}>Continue</LoadingButton>
+      {:else}
+        <LoadingButton type="submit" variant="primary" loading={deploying} disabled={deployCreateDisabled}>Sign & submit idempotently</LoadingButton>
+      {/if}
     </div>
   </form>
 </Modal>
@@ -1938,6 +2119,36 @@
     color: var(--text-primary);
     font-size: 0.875rem;
   }
+  .wizard-steps {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.4rem;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .wizard-steps li {
+    padding: 0.55rem 0.4rem;
+    border-bottom: 2px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    text-align: center;
+  }
+  .wizard-steps li.active { border-color: var(--primary); color: var(--text-primary); font-weight: 700; }
+  .wizard-steps li.complete { border-color: #2e7d32; color: #2e7d32; }
+  .wizard-panel { display: flex; flex-direction: column; gap: 1rem; }
+  .runtime-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .secret-reference-list { display: flex; flex-direction: column; gap: 0.65rem; }
+  .secret-reference-row { display: grid; grid-template-columns: minmax(180px, 0.7fr) 1fr; gap: 0.75rem; align-items: center; }
+  .secret-reference-row label { display: flex; align-items: center; gap: 0.5rem; }
+  .desired-state-review { margin: 0; background: var(--hover-bg); }
+  .desired-state-hash { display: flex; flex-direction: column; gap: 0.35rem; word-break: break-all; }
+  .desired-state-review details { margin-top: 1rem; }
+  .desired-state-review summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+  .desired-state-review pre { max-height: 22rem; overflow: auto; padding: 0.75rem; background: var(--bg); border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.72rem; }
+  .desired-state-diff { display: flex; flex-direction: column; gap: 0.65rem; list-style: none; padding: 0; }
+  .desired-state-diff li { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.78rem; word-break: break-word; }
+  .wizard-actions { position: sticky; bottom: 0; padding-top: 0.75rem; background: var(--card-bg); }
   .preview-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.8fr);

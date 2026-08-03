@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -48,9 +50,92 @@ func RegisterServiceContextVMHandlers(transport *EncryptedRequestTransport, cfg 
 	if h.logger == nil {
 		h.logger = zap.NewNop()
 	}
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDeployPreview, h.previewDeploy)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, h.deploy)
 	transport.RegisterContextVMHandler(ContextVMMethodApprovalApprove, h.approve)
 	transport.RegisterContextVMHandler(ContextVMMethodApprovalReject, h.reject)
+}
+
+func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil || h.runtimeLifecycle == nil || h.policy == nil {
+		return nil, fmt.Errorf("service deployment control plane is not configured")
+	}
+	var params dto.ServiceDeployPreviewRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
+		return nil, fmt.Errorf("decode service/deploy-preview params: %w", err)
+	}
+	if params.ServiceID == uuid.Nil || params.EnvironmentID == uuid.Nil || params.ArtifactID == uuid.Nil || params.ManagedRuntimeConfig == nil {
+		return nil, fmt.Errorf("service_id, environment_id, artifact_id, and managed_runtime_config are required")
+	}
+	if params.DeploymentUnitID != nil && *params.DeploymentUnitID == uuid.Nil {
+		return nil, fmt.Errorf("deployment_unit_id must not be nil")
+	}
+	svc, _, err := h.authorizer.authorizeServiceEnvironment(
+		ctx,
+		request.Event,
+		params.ServiceID,
+		params.EnvironmentID,
+		domain.PermWriteDeployments,
+		domain.PermWriteDeployments,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if svc.RuntimeType != domain.RuntimeTypeCompose {
+		return nil, fmt.Errorf("desired-state wizard requires a Compose service")
+	}
+	managed := domain.NormalizeManagedRuntimeConfig(params.ManagedRuntimeConfig)
+	if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
+		return nil, fmt.Errorf("invalid managed runtime configuration: %w", err)
+	}
+	desiredState, err := h.runtimeLifecycle.PreviewDesiredStateSnapshot(ctx, params.ServiceID, params.EnvironmentID, params.ArtifactID, params.DeploymentUnitID, managed)
+	if err != nil {
+		return nil, fmt.Errorf("build desired-state preview: %w", err)
+	}
+	currentDesiredState, err := h.latestDeployedDesiredState(ctx, params.ServiceID, params.EnvironmentID, desiredState.DeploymentUnitID)
+	if err != nil {
+		return nil, fmt.Errorf("load current desired state: %w", err)
+	}
+	evaluation, err := h.policy.Evaluate(ctx, params.ArtifactID, params.EnvironmentID)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate deployment policy: %w", err)
+	}
+	return map[string]any{
+		"service_id":            params.ServiceID.String(),
+		"environment_id":        params.EnvironmentID.String(),
+		"artifact_id":           params.ArtifactID.String(),
+		"deployment_unit_id":    desiredState.DeploymentUnitID,
+		"desired_state":         desiredState,
+		"current_desired_state": currentDesiredState,
+		"desired_state_hash":    desiredState.DesiredHash,
+		"policy":                evaluation,
+		"idempotency_key":       effectiveIdempotencyKey(request, params.IdempotencyKey),
+	}, nil
+}
+
+func (h *encryptedServiceHandlers) latestDeployedDesiredState(ctx context.Context, serviceID, environmentID uuid.UUID, unitID *uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	intents, err := h.registry.ListDeploymentIntents(ctx, serviceID, environmentID, 50, 0)
+	if err != nil {
+		return nil, err
+	}
+	for i := range intents {
+		intent := &intents[i]
+		if intent.Status != domain.IntentStatusDeployed || intent.DesiredState == nil {
+			continue
+		}
+		if !optionalUUIDsEqual(intent.DeploymentUnitID, unitID) {
+			continue
+		}
+		return intent.DesiredState, nil
+	}
+	return nil, nil
+}
+
+func optionalUUIDsEqual(left, right *uuid.UUID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -67,14 +152,15 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	if params.DeploymentUnitID != nil && *params.DeploymentUnitID == uuid.Nil {
 		return nil, fmt.Errorf("deployment_unit_id must not be nil")
 	}
-	if _, _, err := h.authorizer.authorizeServiceEnvironment(
+	svc, _, err := h.authorizer.authorizeServiceEnvironment(
 		ctx,
 		request.Event,
 		params.ServiceID,
 		params.EnvironmentID,
 		domain.PermWriteDeployments,
 		domain.PermWriteDeployments,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
 	}
 
@@ -82,6 +168,16 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	environmentID := params.EnvironmentID
 	artifactID := params.ArtifactID
 	requestedUnitID := params.DeploymentUnitID
+	if params.ExpectedDesiredStateHash != "" && svc.RuntimeType != domain.RuntimeTypeCompose {
+		return nil, fmt.Errorf("reviewed desired-state deploy requires a Compose service")
+	}
+	desiredState, err := h.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, environmentID, artifactID, requestedUnitID)
+	if err != nil {
+		return nil, fmt.Errorf("build desired state: %w", err)
+	}
+	if params.ExpectedDesiredStateHash != "" && !desiredStateHashesEqual(params.ExpectedDesiredStateHash, desiredState.DesiredHash) {
+		return nil, fmt.Errorf("desired state changed after review; refresh the preview before submitting")
+	}
 	evaluation, err := h.policy.Evaluate(ctx, artifactID, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate deployment policy: %w", err)
@@ -102,10 +198,6 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		return nil, fmt.Errorf("requester pubkey is required")
 	}
 
-	desiredState, err := h.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, environmentID, artifactID, requestedUnitID)
-	if err != nil {
-		return nil, fmt.Errorf("build desired state: %w", err)
-	}
 	intent := &domain.DeploymentIntent{
 		ID:               uuid.New(),
 		ServiceID:        serviceID,
@@ -122,11 +214,14 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		return nil, fmt.Errorf("create deployment intent: %w", err)
 	}
 	result := map[string]any{
-		"status":         string(intent.Status),
-		"intent_id":      intent.ID.String(),
-		"service_id":     serviceID.String(),
-		"environment_id": environmentID.String(),
-		"artifact_id":    artifactID.String(),
+		"status":             string(intent.Status),
+		"intent_id":          intent.ID.String(),
+		"service_id":         serviceID.String(),
+		"environment_id":     environmentID.String(),
+		"artifact_id":        artifactID.String(),
+		"deployment_unit_id": desiredState.DeploymentUnitID,
+		"desired_state_hash": desiredState.DesiredHash,
+		"idempotency_key":    effectiveIdempotencyKey(request, params.IdempotencyKey),
 	}
 	if intent.Status != domain.IntentStatusApproved {
 		result["message"] = "deployment intent created; approval required"
@@ -170,6 +265,17 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	result["run_id"] = run.ID.String()
 	result["message"] = "desired state applied"
 	return result, nil
+}
+
+func desiredStateHashesEqual(expected, actual string) bool {
+	expected = strings.TrimPrefix(strings.TrimSpace(expected), "sha256:")
+	actual = strings.TrimPrefix(strings.TrimSpace(actual), "sha256:")
+	expectedBytes, expectedErr := hex.DecodeString(expected)
+	actualBytes, actualErr := hex.DecodeString(actual)
+	if expectedErr != nil || actualErr != nil || len(expectedBytes) != 32 || len(actualBytes) != 32 {
+		return false
+	}
+	return subtle.ConstantTimeCompare(expectedBytes, actualBytes) == 1
 }
 
 func (h *encryptedServiceHandlers) approve(ctx context.Context, request ContextVMRequest) (any, error) {

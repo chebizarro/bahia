@@ -1,0 +1,21 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_05_DESIRED_STATE_WIZARD",
+  "beads": ["bahia-g4x6t"],
+  "external_ledger_item": "fp-bahia-arcana-05-wizard",
+  "title": "Signed desired-state deployment wizard for Compose services",
+  "intended_behavior": [
+    "Operators assemble a managed Compose desired state from target, immutable artifact, process configuration, secret references, reliability settings, volumes, and resources.",
+    "Bahia returns the authoritative exact non-secret desired state, deployed baseline, policy result, and SHA-256 hash through signed service/deploy-preview.",
+    "The browser persists reviewed configuration with signed service/update and submits signed service/deploy using the displayed hash for concurrency and idempotency.",
+    "Secret plaintext never enters managed runtime configuration, preview, desired state, deployment intent, or public observables.",
+    "Protected environments continue through the existing policy and approval flow."
+  ],
+  "scope": [
+    "internal/domain/managed_runtime_config.go",
+    "internal/service/runtime_desired_state_builder.go",
+    "internal/controlplane/encrypted_service_handlers.go",
+    "internal/adapters/runtime/compose_renderer.go",
+    "web/src/routes/services/[id]/+page.svelte",
+    "web/src/lib/deployment-desired-state.js"
+  ]
+}
