@@ -7,6 +7,7 @@ Fleet task `fp-bahia-relay-policy-durability`, item 2 of 4: relay-policy UI/API 
 ## Verification
 
 - `go test ./internal/controlplane -count=1` — passed.
+- 2026-08-03 Apply-boundary hardening: `go test -count=1 ./internal/controlplane` and `go build ./...` — passed.
 - `npm run test:unit -- --run tests/unit/relay-settings-controlplane.test.js tests/unit/relay-override-storage.test.js` — 18 tests passed.
 - `npm run lint` — Svelte diagnostics passed with 0 errors and 0 warnings.
 - `npx playwright test tests/e2e/settings-relay-visibility.spec.js` — 12 tests passed.
@@ -22,4 +23,4 @@ Fleet task `fp-bahia-relay-policy-durability`, item 2 of 4: relay-policy UI/API 
 
 ## Security
 
-The touched browser persistence accepts only credential-free `ws://`/`wss://` override URLs without query strings or fragments. Malformed legacy values are not echoed to logs. Replacement evidence uses a fixed public reason code plus a bounded non-secret change/incident reference and is never persisted in browser storage. Mutations remain encrypted signer-first ContextVM; confirmation evidence is emitted by the service signer in kind `4903` before the canonical replacement.
+Browser persistence and the server Apply boundary accept only credential-free `ws://`/`wss://` relay URLs without query strings or fragments. Malformed legacy values are not echoed to logs. Replacement evidence uses a fixed public reason code plus a bounded non-secret change/incident reference and is never persisted in browser storage. Mutations remain encrypted signer-first ContextVM; confirmation evidence is emitted by the service signer in kind `4903` before the canonical replacement.

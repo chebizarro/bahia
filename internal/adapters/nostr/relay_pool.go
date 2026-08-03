@@ -876,6 +876,10 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 					closeEOSE.Do(func() { close(eoseChan) })
 				}
 			}
+			// A subscription that terminates before protocol EOSE is still terminal
+			// for this catch-up attempt. Counting it prevents one dead relay from
+			// wedging the merged subscription while surviving relays continue.
+			defer markEOSE()
 
 			for eoseCh != nil || eventsCh != nil || closedCh != nil {
 				if closedCh != nil {

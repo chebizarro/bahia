@@ -43,13 +43,22 @@ func (s *memoryRelayPolicyProjectionStore) Promote(_ context.Context, candidate 
 	if s.promoteErr != nil {
 		return false, s.promoteErr
 	}
+	confirmedAt := candidate.EventAcceptedAt.UTC()
 	if s.projection != nil {
 		current := s.projection
-		if candidate.EventCreatedAt.Before(current.EventCreatedAt) ||
-			(candidate.EventCreatedAt.Equal(current.EventCreatedAt) && candidate.EventID >= current.EventID) {
+		if !repository.RelayPolicyProjectionShouldReplace(*current, candidate) {
 			return false, nil
 		}
+		if current.EventID == candidate.EventID {
+			promoted := cloneTestProjection(current)
+			promoted.SourceRelay = candidate.SourceRelay
+			promoted.LastSyncAt = candidate.LastSyncAt
+			promoted.RelayConfirmedAt = &confirmedAt
+			s.projection = promoted
+			return true, nil
+		}
 	}
+	candidate.RelayConfirmedAt = &confirmedAt
 	s.projection = cloneTestProjection(&candidate)
 	return true, nil
 }
@@ -175,6 +184,102 @@ func TestRelaySettingsHydratorLoadsDurableProjectionWhenRelaysUnavailable(t *tes
 	after, ok := h.Snapshot()
 	if !ok || strings.Join(after.BrowserRelays, ",") != "wss://durable.example" {
 		t.Fatalf("outage invalidated durable head: %#v", after)
+	}
+}
+
+func TestRelaySettingsHydratorResubscribesAfterAllRelayOutageAndRecovers(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	store := &memoryRelayPolicyProjectionStore{}
+	recovered := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
+		Pool:            nostradapter.NewRelayPool([]string{"wss://relay.example"}, zap.NewNop()),
+		ServicePubkey:   servicePubkey,
+		ProjectionStore: store,
+		Logger:          zap.NewNop(),
+		Now:             func() time.Time { return time.Unix(2_000, 0).UTC() },
+		OnSnapshotApplied: func(context.Context, RelayPolicyState) error {
+			select {
+			case recovered <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	})
+	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0), RelayPolicyState{
+		Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://recovered.example"},
+	})
+
+	var callsMu sync.Mutex
+	calls := 0
+	setRelaySettingsSubscription(t, func(context.Context) *nostradapter.MergedSubscription {
+		callsMu.Lock()
+		calls++
+		call := calls
+		callsMu.Unlock()
+		events := make(chan *nostr.Event, 1)
+		relayEOSE := make(chan nostradapter.RelayEOSE)
+		closed := make(chan nostradapter.RelayClosed)
+		allEOSE := make(chan struct{})
+		if call == 1 {
+			close(events)
+			close(relayEOSE)
+			close(closed)
+			return &nostradapter.MergedSubscription{Events: events, EndOfStoredEvents: allEOSE, RelayEOSE: relayEOSE, Closed: closed}
+		}
+		events <- event
+		close(events)
+		close(relayEOSE)
+		close(closed)
+		close(allEOSE)
+		return &nostradapter.MergedSubscription{Events: events, EndOfStoredEvents: allEOSE, RelayEOSE: relayEOSE, Closed: closed}
+	})
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- h.Run(ctx) }()
+	select {
+	case <-recovered:
+		cancel()
+	case <-time.After(4 * time.Second):
+		t.Fatal("hydrator did not resubscribe and recover after relay outage")
+	}
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	callsMu.Lock()
+	gotCalls := calls
+	callsMu.Unlock()
+	if gotCalls < 2 {
+		t.Fatalf("subscription attempts = %d, want at least 2", gotCalls)
+	}
+	projection, err := store.Get(context.Background(), servicePubkey)
+	if err != nil || projection == nil || projection.RelayConfirmedAt == nil {
+		t.Fatalf("recovered projection was not relay-confirmed: projection=%#v err=%v", projection, err)
+	}
+}
+
+func TestRelaySettingsHydratorRestoredCachedEventCanBeRelayConfirmedWithoutRestart(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	store := &memoryRelayPolicyProjectionStore{}
+	h := newTestRelaySettingsHydrator(t, servicePubkey, store)
+	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0), RelayPolicyState{
+		Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://restored.example"},
+	})
+	if !h.handleEventFromRelay(context.Background(), event, "wss://relay.example") {
+		t.Fatal("initial relay observation did not promote")
+	}
+
+	store.mu.Lock()
+	store.projection.RelayConfirmedAt = nil
+	store.mu.Unlock()
+
+	if !h.handleEventFromRelay(context.Background(), event, "wss://relay.example") {
+		t.Fatal("restored cached event was blocked by in-process dedupe")
+	}
+	projection, err := store.Get(context.Background(), servicePubkey)
+	if err != nil || projection == nil || projection.RelayConfirmedAt == nil {
+		t.Fatalf("restored projection was not relay-confirmed: projection=%#v err=%v", projection, err)
 	}
 }
 

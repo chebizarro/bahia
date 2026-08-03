@@ -101,6 +101,62 @@ func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
 	}
 }
 
+func TestRelaySettingsApplyRejectsCredentialAndQueryBearingPublicURLs(t *testing.T) {
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	tests := []struct {
+		name  string
+		state RelayPolicyState
+	}{
+		{name: "relay userinfo", state: RelayPolicyState{BrowserRelays: []string{"wss://user:secret@relay.example"}}},
+		{name: "relay query", state: RelayPolicyState{BrowserRelays: []string{"wss://relay.example?token=secret"}}},
+		{name: "relay fragment", state: RelayPolicyState{BrowserRelays: []string{"wss://relay.example#secret"}}},
+		{name: "administration relay userinfo", state: RelayPolicyState{
+			BrowserRelays: []string{"wss://browser.example"},
+			RelayAdministration: RelayPolicyAdministration{Enabled: true, Targets: []RelayPolicyAdminTarget{{
+				Ref: "sidecar", RelayURL: "wss://user:secret@relay.example",
+				Authorization: config.RelayAdministrationBahiaOwned, AdministratorPubkeys: []string{requesterPubkey},
+			}}},
+		}},
+		{name: "administration HTTP query", state: RelayPolicyState{
+			BrowserRelays: []string{"wss://browser.example"},
+			RelayAdministration: RelayPolicyAdministration{Enabled: true, Targets: []RelayPolicyAdminTarget{{
+				Ref: "sidecar", RelayURL: "wss://relay.example", HTTPURL: "https://relay.example/admin?token=secret",
+				Authorization: config.RelayAdministrationBahiaOwned, AdministratorPubkeys: []string{requesterPubkey},
+			}}},
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			signer, err := NewPrivateKeySigner(testServiceKey)
+			if err != nil {
+				t.Fatalf("signer: %v", err)
+			}
+			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+				Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{},
+				ServicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey), Logger: zap.NewNop(),
+			})
+			h.publisher = publisher
+			h.signer = signer
+			raw, err := json.Marshal(tt.state)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			_, err = h.ApplyPolicy(context.Background(), ContextVMRequest{
+				Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)},
+				RPC:   ContextVMJSONRPCRequest{Params: raw},
+			})
+			if err == nil {
+				t.Fatal("ApplyPolicy accepted a URL that could expose secrets in a public signed event")
+			}
+			if len(publisher.events) != 0 {
+				t.Fatalf("published %d events for rejected URL", len(publisher.events))
+			}
+		})
+	}
+}
+
 func TestRelaySettingsApplyDoesNotMutateRuntimeConfig(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	signer, _ := NewPrivateKeySigner(testServiceKey)

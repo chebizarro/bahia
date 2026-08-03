@@ -732,13 +732,16 @@ func validateWebsocketRelayURLForSettings(raw string) error {
 	if parsed.Scheme != "wss" && parsed.Scheme != "ws" {
 		return fmt.Errorf("relay URL %q must use ws or wss", raw)
 	}
-	return nil
+	return validatePublicRelayURLComponentsForSettings(parsed, raw)
 }
 
 func validateRelayAdministrationRelayURLForSettings(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return fmt.Errorf("relay administration URL %q must be an absolute ws/wss URL", raw)
+	}
+	if err := validatePublicRelayURLComponentsForSettings(parsed, raw); err != nil {
+		return err
 	}
 	switch parsed.Scheme {
 	case "wss":
@@ -758,6 +761,9 @@ func validateRelayAdministrationHTTPURLForSettings(raw string) error {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return fmt.Errorf("relay administration HTTP URL %q must be absolute", raw)
 	}
+	if err := validatePublicRelayURLComponentsForSettings(parsed, raw); err != nil {
+		return err
+	}
 	switch parsed.Scheme {
 	case "https":
 		return nil
@@ -769,6 +775,19 @@ func validateRelayAdministrationHTTPURLForSettings(raw string) error {
 	default:
 		return fmt.Errorf("relay administration HTTP URL %q must use http or https", raw)
 	}
+}
+
+func validatePublicRelayURLComponentsForSettings(parsed *url.URL, raw string) error {
+	if parsed.User != nil {
+		return fmt.Errorf("relay URL %q must not include userinfo", raw)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return fmt.Errorf("relay URL %q must not include a query", raw)
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("relay URL %q must not include a fragment", raw)
+	}
+	return nil
 }
 
 func isLoopbackHostForSettings(host string) bool {

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -31,4 +32,23 @@ type RelayPolicyProjectionRepository interface {
 	Get(ctx context.Context, authorPubkey string) (*RelayPolicyProjection, error)
 	Promote(ctx context.Context, projection RelayPolicyProjection) (bool, error)
 	MarkSynced(ctx context.Context, authorPubkey string, syncedAt time.Time) error
+}
+
+// RelayPolicyProjectionShouldReplace is the executable form of the PostgreSQL
+// ON CONFLICT ordering predicate used by Promote and RestoreCached.
+func RelayPolicyProjectionShouldReplace(current, candidate RelayPolicyProjection) bool {
+	if current.EventCreatedAt.Before(candidate.EventCreatedAt) {
+		return true
+	}
+	if !current.EventCreatedAt.Equal(candidate.EventCreatedAt) {
+		return false
+	}
+	if current.EventID > candidate.EventID {
+		return true
+	}
+	return current.EventID == candidate.EventID &&
+		current.Schema == candidate.Schema &&
+		bytes.Equal(current.CanonicalPayload, candidate.CanonicalPayload) &&
+		current.PayloadHash == candidate.PayloadHash &&
+		current.RelayConfirmedAt == nil
 }

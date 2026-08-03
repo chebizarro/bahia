@@ -230,6 +230,9 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 	}
 
 	for {
+		if eventsCh == nil && eoseCh == nil && closedCh == nil && allEOSECh != nil {
+			return fmt.Errorf("relay settings subscription sources closed before EOSE")
+		}
 		if eventsCh == nil && eoseCh == nil && allEOSECh == nil && closedCh == nil && drainCh == nil {
 			return nil
 		}
@@ -367,7 +370,14 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 	_, seen := h.seenEventIDs[eventID]
 	h.mu.Unlock()
 	if seen {
-		return false
+		current, getErr := h.store.Get(ctx, h.servicePubkey)
+		if getErr != nil {
+			h.logger.Warn("checking duplicate relay settings event confirmation state", zap.String("event_id", eventID), zap.Error(getErr))
+			return false
+		}
+		if current == nil || current.EventID != eventID || current.RelayConfirmedAt != nil {
+			return false
+		}
 	}
 
 	acceptedAt := h.now().UTC()

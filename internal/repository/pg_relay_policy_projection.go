@@ -16,6 +16,62 @@ type PgRelayPolicyProjectionRepository struct {
 	pool pgQueryer
 }
 
+const promoteRelayPolicyProjectionSQL = `
+		INSERT INTO relay_policy_projections (
+			author_pubkey, event_id, event_created_at, event_accepted_at, schema,
+			canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $4)
+		ON CONFLICT (author_pubkey) DO UPDATE SET
+			event_id = EXCLUDED.event_id,
+			event_created_at = EXCLUDED.event_created_at,
+			event_accepted_at = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.event_accepted_at ELSE EXCLUDED.event_accepted_at END,
+			schema = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.schema ELSE EXCLUDED.schema END,
+			canonical_payload = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.canonical_payload ELSE EXCLUDED.canonical_payload END,
+			payload_hash = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.payload_hash ELSE EXCLUDED.payload_hash END,
+			source_relay = EXCLUDED.source_relay,
+			last_sync_at = EXCLUDED.last_sync_at,
+			relay_confirmed_at = EXCLUDED.relay_confirmed_at
+		WHERE relay_policy_projections.event_created_at < EXCLUDED.event_created_at
+			OR (relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.event_id > EXCLUDED.event_id)
+			OR (relay_policy_projections.event_id = EXCLUDED.event_id
+				AND relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.schema = EXCLUDED.schema
+				AND relay_policy_projections.canonical_payload = EXCLUDED.canonical_payload
+				AND relay_policy_projections.payload_hash = EXCLUDED.payload_hash
+				AND relay_policy_projections.relay_confirmed_at IS NULL)
+		RETURNING event_id
+	`
+
+const restoreCachedRelayPolicyProjectionSQL = `
+		INSERT INTO relay_policy_projections (
+			author_pubkey, event_id, event_created_at, event_accepted_at, schema,
+			canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
+		ON CONFLICT (author_pubkey) DO UPDATE SET
+			event_id = EXCLUDED.event_id,
+			event_created_at = EXCLUDED.event_created_at,
+			event_accepted_at = EXCLUDED.event_accepted_at,
+			schema = EXCLUDED.schema,
+			canonical_payload = EXCLUDED.canonical_payload,
+			payload_hash = EXCLUDED.payload_hash,
+			source_relay = EXCLUDED.source_relay,
+			last_sync_at = EXCLUDED.last_sync_at,
+			relay_confirmed_at = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.relay_confirmed_at ELSE NULL END
+		WHERE relay_policy_projections.event_created_at < EXCLUDED.event_created_at
+			OR (relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.event_id > EXCLUDED.event_id)
+			OR (relay_policy_projections.event_id = EXCLUDED.event_id
+				AND relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.schema = EXCLUDED.schema
+				AND relay_policy_projections.canonical_payload = EXCLUDED.canonical_payload
+				AND relay_policy_projections.payload_hash = EXCLUDED.payload_hash
+				AND relay_policy_projections.relay_confirmed_at IS NULL)
+		RETURNING event_id
+	`
+
 func NewPgRelayPolicyProjectionRepository(pool *pgxpool.Pool) *PgRelayPolicyProjectionRepository {
 	return newPgRelayPolicyProjectionRepositoryWithDB(pool)
 }
@@ -60,33 +116,7 @@ func (r *PgRelayPolicyProjectionRepository) Get(ctx context.Context, authorPubke
 
 func (r *PgRelayPolicyProjectionRepository) Promote(ctx context.Context, projection RelayPolicyProjection) (bool, error) {
 	var promotedEventID string
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO relay_policy_projections (
-			author_pubkey, event_id, event_created_at, event_accepted_at, schema,
-			canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $4)
-		ON CONFLICT (author_pubkey) DO UPDATE SET
-			event_id = EXCLUDED.event_id,
-			event_created_at = EXCLUDED.event_created_at,
-			event_accepted_at = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.event_accepted_at ELSE EXCLUDED.event_accepted_at END,
-			schema = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.schema ELSE EXCLUDED.schema END,
-			canonical_payload = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.canonical_payload ELSE EXCLUDED.canonical_payload END,
-			payload_hash = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.payload_hash ELSE EXCLUDED.payload_hash END,
-			source_relay = EXCLUDED.source_relay,
-			last_sync_at = EXCLUDED.last_sync_at,
-			relay_confirmed_at = EXCLUDED.relay_confirmed_at
-		WHERE relay_policy_projections.event_created_at < EXCLUDED.event_created_at
-			OR (relay_policy_projections.event_created_at = EXCLUDED.event_created_at
-				AND relay_policy_projections.event_id > EXCLUDED.event_id)
-			OR (relay_policy_projections.event_id = EXCLUDED.event_id
-				AND relay_policy_projections.event_created_at = EXCLUDED.event_created_at
-				AND relay_policy_projections.schema = EXCLUDED.schema
-				AND relay_policy_projections.canonical_payload = EXCLUDED.canonical_payload
-				AND relay_policy_projections.payload_hash = EXCLUDED.payload_hash
-				AND relay_policy_projections.relay_confirmed_at IS NULL)
-		RETURNING event_id
-	`, projection.AuthorPubkey, projection.EventID, projection.EventCreatedAt.UTC(),
+	err := r.pool.QueryRow(ctx, promoteRelayPolicyProjectionSQL, projection.AuthorPubkey, projection.EventID, projection.EventCreatedAt.UTC(),
 		projection.EventAcceptedAt.UTC(), projection.Schema, []byte(projection.CanonicalPayload),
 		projection.PayloadHash, projection.SourceRelay, projection.LastSyncAt.UTC()).Scan(&promotedEventID)
 	if err != nil {
@@ -115,33 +145,7 @@ func (r *PgRelayPolicyProjectionRepository) RestoreCached(ctx context.Context, b
 		return false, fmt.Errorf("restoring relay policy projection: %w", err)
 	}
 	var restoredEventID string
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO relay_policy_projections (
-			author_pubkey, event_id, event_created_at, event_accepted_at, schema,
-			canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
-		ON CONFLICT (author_pubkey) DO UPDATE SET
-			event_id = EXCLUDED.event_id,
-			event_created_at = EXCLUDED.event_created_at,
-			event_accepted_at = EXCLUDED.event_accepted_at,
-			schema = EXCLUDED.schema,
-			canonical_payload = EXCLUDED.canonical_payload,
-			payload_hash = EXCLUDED.payload_hash,
-			source_relay = EXCLUDED.source_relay,
-			last_sync_at = EXCLUDED.last_sync_at,
-			relay_confirmed_at = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.relay_confirmed_at ELSE NULL END
-		WHERE relay_policy_projections.event_created_at < EXCLUDED.event_created_at
-			OR (relay_policy_projections.event_created_at = EXCLUDED.event_created_at
-				AND relay_policy_projections.event_id > EXCLUDED.event_id)
-			OR (relay_policy_projections.event_id = EXCLUDED.event_id
-				AND relay_policy_projections.event_created_at = EXCLUDED.event_created_at
-				AND relay_policy_projections.schema = EXCLUDED.schema
-				AND relay_policy_projections.canonical_payload = EXCLUDED.canonical_payload
-				AND relay_policy_projections.payload_hash = EXCLUDED.payload_hash
-				AND relay_policy_projections.relay_confirmed_at IS NULL)
-		RETURNING event_id
-	`, strings.ToLower(strings.TrimSpace(backup.AuthorPubkey)),
+	err := r.pool.QueryRow(ctx, restoreCachedRelayPolicyProjectionSQL, strings.ToLower(strings.TrimSpace(backup.AuthorPubkey)),
 		strings.ToLower(strings.TrimSpace(backup.EventID)), backup.EventCreatedAt.UTC(),
 		backup.EventAcceptedAt.UTC(), backup.PolicySchema, []byte(backup.CanonicalPayload),
 		strings.ToLower(strings.TrimSpace(backup.PayloadHash)), strings.TrimSpace(backup.SourceRelay),

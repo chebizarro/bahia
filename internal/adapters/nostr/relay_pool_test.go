@@ -47,7 +47,7 @@ func TestMergeSubscriptionsClosesEOSEAfterAllRelaysEOSE(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestMergeSubscriptionsDoesNotSignalEOSEWhenRelayClosesBeforeEOSE(t *testing.T) {
+func TestMergeSubscriptionsTreatsRelayTerminationAsTerminalEOSE(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -57,12 +57,7 @@ func TestMergeSubscriptionsDoesNotSignalEOSEWhenRelayClosesBeforeEOSE(t *testing
 
 	_, ok := <-merged.Events
 	require.False(t, ok)
-
-	select {
-	case <-merged.EndOfStoredEvents:
-		t.Fatal("EOSE must not close when a relay ends before sending EOSE")
-	default:
-	}
+	<-merged.EndOfStoredEvents
 }
 
 func TestMergeSubscriptionsForwardsEventsWithoutWaitingForEOSE(t *testing.T) {
