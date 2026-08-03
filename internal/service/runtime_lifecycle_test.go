@@ -18,6 +18,38 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestDesiredStateForDeploymentRejectsRecomputedHashMismatch(t *testing.T) {
+	svc := &domain.Service{ID: uuid.New()}
+	env := &domain.Environment{ID: uuid.New()}
+	artifact := &domain.Artifact{ID: uuid.New()}
+	unit := &domain.DeploymentUnit{ID: uuid.New(), Key: "arcana", RuntimeType: domain.RuntimeTypeCompose}
+	canonical := &domain.DesiredServiceSpec{
+		SchemaVersion:     domain.DesiredStateSchemaVersion,
+		ServiceID:         svc.ID,
+		EnvironmentID:     env.ID,
+		DeploymentUnitID:  &unit.ID,
+		DeploymentUnitKey: unit.Key,
+		UnitRuntimeType:   unit.RuntimeType,
+		ArtifactID:        artifact.ID,
+		Env:               map[string]string{"MODE": "reviewed"},
+		Labels: map[string]string{
+			"bahia.managed":             "true",
+			"bahia.service_id":          svc.ID.String(),
+			"bahia.environment_id":      env.ID.String(),
+			"bahia.artifact_id":         artifact.ID.String(),
+			"bahia.deployment_unit_key": unit.Key,
+			"bahia.deployment_unit_id":  unit.ID.String(),
+		},
+	}
+	canonical.ComputeDesiredHash()
+	canonical.Env["MODE"] = "changed-after-signing"
+
+	_, err := desiredStateForDeployment(NewDesiredStateBuilder(), svc, env, artifact, unit, nil, canonical)
+	if err == nil || !strings.Contains(err.Error(), "does not match signed intent hash") {
+		t.Fatalf("desiredStateForDeployment error = %v", err)
+	}
+}
+
 func TestDesiredSecretBindingsSelectsOnlyReviewedManagedReferences(t *testing.T) {
 	selectedID := uuid.New()
 	unselectedID := uuid.New()

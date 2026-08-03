@@ -7,7 +7,7 @@
 - Policy re-evaluation at approval and explicit prior-artifact rollback through a fresh protected-environment-aware intent.
 - Safe intent/run/state projections with deployment target, digest, policy, phase, failure, health, observation, and environment-specific state coordinates.
 - Deterministic browser merging across relay delay, reconnect, duplicate projection, corrected coordinates, and tombstones.
-- One linkable deployment aggregate and run/log view with approval, runtime observation, drift, completion, and one-click health-failure rollback.
+- One linkable deployment aggregate and run/log view with approval, runtime observation, drift, completion, and one-click rollback for health timeout, desired-state mismatch, terminal failed/timeout runs, or unhealthy observations.
 - Stored log redaction across retained referenced-secret versions before tailing or stream filtering.
 
 ## Verification
@@ -16,6 +16,7 @@
 - `go test ./internal/mcp -run TestCallTool_RunLifecycle` — PASS.
 - `go build ./...` — PASS.
 - `npm run test:unit` in `web/` — PASS (80 files, 623 tests).
+- `npm run test:unit -- tests/unit/deployment-observability.test.js` in `web/` — PASS (5 tests), including `starting` plus `health_check_timeout` rollback eligibility.
 - `npm run lint` in `web/` — PASS (0 errors, 0 warnings).
 - `npm run build` in `web/` — PASS.
 - `go test ./...` — all deployment-observability and other packages pass; the suite remains non-green only because of the known unrelated `internal/soulfactory.TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods` failure tracked by `bahia-csxyx`.

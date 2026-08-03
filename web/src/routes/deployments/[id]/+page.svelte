@@ -37,6 +37,7 @@
     WarningIcon
   } from '$lib/icons/domain-icons.js';
   import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
+  import { deploymentCanRollback, deploymentHealthFailed } from '$lib/deployment-observability.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -77,11 +78,8 @@
   let rollbackArtifact = $derived(rollbackTargetIntent
     ? artifacts.find((item) => item.id === rollbackTargetIntent.artifact_id) || null
     : null);
-  let healthFailed = $derived(
-    failure?.code === 'health_check_timeout' ||
-    ['unhealthy', 'failed'].includes(String(runtimeState?.health_status || latestRun?.health_status || '').toLowerCase())
-  );
-  let canRollback = $derived(Boolean(intent && rollbackTargetIntent && healthFailed));
+  let healthFailed = $derived(deploymentHealthFailed(latestRun, runtimeState));
+  let canRollback = $derived(deploymentCanRollback(intent, rollbackTargetIntent, latestRun, runtimeState));
 
   $effect(() => {
     const id = intentId;

@@ -1089,6 +1089,14 @@ func TestExecuteDeployment_MaxComposeUnitRendersFullDesiredState(t *testing.T) {
 		StableServiceKey:  "gastown",
 		ImageRef:          "ghcr.io/openagents/gastown:v2",
 		Env:               map[string]string{"APP_ENV": "max"},
+		Labels: map[string]string{
+			"bahia.managed":             "true",
+			"bahia.service_id":          svc.ID.String(),
+			"bahia.environment_id":      env.ID.String(),
+			"bahia.artifact_id":         art.ID.String(),
+			"bahia.deployment_unit_key": unit.Key,
+			"bahia.deployment_unit_id":  unit.ID.String(),
+		},
 		SecretRefs: []domain.DesiredSecretRef{{
 			EnvVar:        "NSEC",
 			Name:          "nostr-signer",

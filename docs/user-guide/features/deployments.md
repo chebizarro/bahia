@@ -99,7 +99,7 @@ For a Compose service:
 
 For an Arcana-ready deployment, operators can enter a `8080:8080` port mapping and enable `GET /healthz` on port `8080`; these are operator-entered values, not product-specific defaults in the generic wizard.
 
-Bahia rebuilds the desired state after the signed update and rejects the deploy if its hash differs from the reviewed hash. Passing policy continues through the existing protected-environment approval flow; policy blockers prevent submission.
+Bahia requires `expected_desired_state_hash` for managed deploy requests, rebuilds the desired state after the signed update, and rejects the deploy if its hash differs from the reviewed hash. Runtime apply recomputes the canonical hash again and fails before mutation if it differs from the signed intent. Passing policy continues through the existing protected-environment approval flow; policy blockers prevent submission.
 
 For a single explicit unit, the wizard selects its durable ID automatically. For multiple units, even the environment default is not auto-selected: the operator must choose a unit explicitly. The browser shows only the unit's `endpoint_ref` alias; it never resolves or displays the Docker host, TLS certificate paths, keys, or credentials. Runtime conflicts, missing Bahia-managed ownership, missing endpoint aliases, missing durable unit IDs, and mutable or unregistered artifacts block preview and intent creation with a clear error.
 
@@ -207,7 +207,7 @@ Roll back to a previous artifact:
 
 1. Open the failed deployment's linkable detail page.
 2. Review the displayed prior deployed artifact and immutable digest.
-3. Click **Rollback**. Bahia creates a fresh desired-state intent for that explicit artifact, evaluates current policy, and requests approval again when the environment is protected.
+3. Click **Rollback**. Bahia creates a fresh desired-state intent for that explicit artifact, carries any existing signed public-route plan into the rollback hash, evaluates current policy, and requests approval again when the environment is protected.
 
 ### Nostr
 

@@ -506,6 +506,10 @@ func (c *Coordinator) applyDirectRuntimeRun(
 			}
 		}
 	}
+	if deployErr == nil && intent.DesiredState != nil &&
+		strings.TrimSpace(intent.DesiredState.DesiredHash) != strings.TrimSpace(intent.DesiredHash) {
+		deployErr = fmt.Errorf("persisted desired state hash does not match signed deployment intent hash")
+	}
 	if deployErr == nil {
 		applicationAttempted = true
 		obs, deployErr = c.runtimeLifecycle.DeployDeploymentUnitWithStatus(

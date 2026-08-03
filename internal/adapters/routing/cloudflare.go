@@ -155,17 +155,13 @@ func (b *CloudflareBackend) Apply(ctx context.Context, plan *domain.DesiredPubli
 	rollback := func(cause error) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), b.cfg.Timeout)
 		defer cancel()
-		var rollbackErrors []string
-		if err := b.putTunnelConfig(cleanupCtx, previousConfig); err != nil {
-			rollbackErrors = append(rollbackErrors, "restore tunnel: "+err.Error())
-		}
 		if dnsChanged {
 			if err := b.restoreDNS(cleanupCtx, plan, previousDNS); err != nil {
-				rollbackErrors = append(rollbackErrors, "restore DNS: "+err.Error())
+				return fmt.Errorf("%w; DNS compensation failed and tunnel ingress was retained for retry: %v", cause, err)
 			}
 		}
-		if len(rollbackErrors) > 0 {
-			return fmt.Errorf("%w; compensation failed: %s", cause, strings.Join(rollbackErrors, "; "))
+		if err := b.putTunnelConfig(cleanupCtx, previousConfig); err != nil {
+			return fmt.Errorf("%w; compensation failed restoring tunnel after DNS withdrawal: %v", cause, err)
 		}
 		return fmt.Errorf("%w; previous public route restored", cause)
 	}

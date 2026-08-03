@@ -8,11 +8,13 @@
 - Compose projection and rendering for process, health, restart, volume, and resource configuration.
 - Five-step signer-first browser wizard with policy/cost review, signed update, stale-hash-protected idempotent deploy, and existing approval routing.
 - Arcana-shaped browser acceptance coverage for port 8080 and HTTP GET /healthz without Arcana defaults in generic code.
+- Post-review hardening requires `expected_desired_state_hash` on managed deploy protocol requests and rejects runtime recomputation that differs from the signed intent hash.
 
 ## Verification
 
 - PASS: `go test ./internal/domain ./internal/service ./internal/controlplane ./internal/adapters/runtime ./internal/adapters/nostr`.
 - PASS: `go build ./...`.
+- PASS: post-review regression `go test ./internal/service ./internal/controlplane ./internal/workflow`.
 - PASS: `cd web && npm run test:unit -- --run tests/unit/deployment-desired-state.test.js tests/unit/public-controlplane.test.js` (2 files, 23 tests).
 - PASS: `cd web && npm run lint` (0 errors, 0 warnings).
 - PASS: `cd web && npm run build`.

@@ -117,12 +117,65 @@ func TestCloudflareCheckAllowsOwnedRouteOriginUpdate(t *testing.T) {
 	}
 }
 
+func TestCloudflareApplyRetainsTunnelWhenDNSCompensationFails(t *testing.T) {
+	plan := cloudflareTestPlan()
+	published := false
+	tunnelWrites := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/configurations") && r.Method == http.MethodGet:
+			writeCFResult(t, w, cfTunnelResult{Config: map[string]any{"ingress": []map[string]any{{"service": "http_status:404"}}}})
+		case strings.Contains(r.URL.Path, "/configurations") && r.Method == http.MethodPut:
+			tunnelWrites++
+			writeCFResult(t, w, map[string]any{})
+		case strings.HasSuffix(r.URL.Path, "/dns_records") && r.Method == http.MethodGet:
+			if published {
+				writeCFResult(t, w, []cfDNSRecord{{ID: "created", Name: plan.Hostname, Comment: plan.DNS.SourceCoordinate}})
+			} else {
+				writeCFResult(t, w, []cfDNSRecord{})
+			}
+		case strings.HasSuffix(r.URL.Path, "/dns_records") && r.Method == http.MethodPost:
+			published = true
+			writeCFResult(t, w, cfDNSRecord{ID: "created"})
+		case strings.Contains(r.URL.Path, "/dns_records/") && r.Method == http.MethodDelete:
+			http.Error(w, "temporary provider failure", http.StatusServiceUnavailable)
+		default:
+			t.Fatalf("unexpected API request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudflareBackend(CloudflareConfig{
+		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
+	}, server.Client())
+	if err != nil {
+		t.Fatalf("NewCloudflareBackend: %v", err)
+	}
+	backend.verifyClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+
+	err = backend.Apply(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "DNS compensation failed and tunnel ingress was retained for retry") {
+		t.Fatalf("Apply error = %v", err)
+	}
+	if tunnelWrites != 1 {
+		t.Fatalf("tunnel writes = %d, want only the initial apply while DNS compensation remains retryable", tunnelWrites)
+	}
+	if !published {
+		t.Fatal("test setup did not retain the published DNS record")
+	}
+}
+
 func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 	plan := cloudflareTestPlan()
 	initialIngress := []map[string]any{{"hostname": "existing.example.com", "service": "http://existing:80"}, {"service": "http_status:404"}}
 	currentIngress := initialIngress
 	var currentDNS []cfDNSRecord
 	var ingressWrites, dnsCreates, dnsDeletes int
+	var operations []string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -144,6 +197,7 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 			}
 			currentIngress = body.Config.Ingress
 			ingressWrites++
+			operations = append(operations, "tunnel")
 			writeCFResult(t, w, map[string]any{})
 		case strings.HasSuffix(r.URL.Path, "/dns_records") && r.Method == http.MethodGet:
 			writeCFResult(t, w, currentDNS)
@@ -155,10 +209,12 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 			record.ID = "created"
 			currentDNS = []cfDNSRecord{record}
 			dnsCreates++
+			operations = append(operations, "dns_publish")
 			writeCFResult(t, w, record)
 		case strings.Contains(r.URL.Path, "/dns_records/") && r.Method == http.MethodDelete:
 			currentDNS = nil
 			dnsDeletes++
+			operations = append(operations, "dns_restore")
 			writeCFResult(t, w, map[string]any{})
 		default:
 			t.Fatalf("unexpected API request: %s %s", r.Method, r.URL.Path)
@@ -186,5 +242,9 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 	}
 	if len(currentIngress) != len(initialIngress) || currentIngress[0]["hostname"] != initialIngress[0]["hostname"] {
 		t.Fatalf("tunnel ingress was not restored: %#v", currentIngress)
+	}
+	wantOperations := []string{"tunnel", "dns_publish", "dns_restore", "tunnel"}
+	if strings.Join(operations, ",") != strings.Join(wantOperations, ",") {
+		t.Fatalf("operation order = %v, want %v", operations, wantOperations)
 	}
 }

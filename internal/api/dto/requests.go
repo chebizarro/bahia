@@ -144,7 +144,7 @@ type ServiceDeployRequest struct {
 	EnvironmentID            uuid.UUID                  `json:"environment_id"`
 	DeploymentUnitID         *uuid.UUID                 `json:"deployment_unit_id,omitempty"`
 	ArtifactID               uuid.UUID                  `json:"artifact_id"`
-	ExpectedDesiredStateHash string                     `json:"expected_desired_state_hash,omitempty"`
+	ExpectedDesiredStateHash string                     `json:"expected_desired_state_hash"`
 	PublicRoute              *domain.PublicRouteRequest `json:"public_route,omitempty"`
 	IdempotencyKey           string                     `json:"idempotency_key,omitempty"`
 }

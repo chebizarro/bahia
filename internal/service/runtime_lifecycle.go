@@ -917,6 +917,10 @@ func desiredStateForDeployment(
 		})
 	}
 
+	reviewedHash := strings.TrimSpace(canonical.DesiredHash)
+	if reviewedHash == "" {
+		return nil, fmt.Errorf("canonical desired state has no signed intent hash")
+	}
 	spec := *canonical
 	switch {
 	case spec.ServiceID != svc.ID:
@@ -963,6 +967,9 @@ func desiredStateForDeployment(
 		spec.ComposeExtension = &domain.ComposeExtension{}
 	}
 	spec.ComputeDesiredHash()
+	if spec.DesiredHash != reviewedHash {
+		return nil, fmt.Errorf("recomputed desired state hash %s does not match signed intent hash %s", spec.DesiredHash, reviewedHash)
+	}
 	spec.Labels["bahia.desired_hash"] = spec.DesiredHash
 	if err := ValidateSpec(&spec); err != nil {
 		return nil, err

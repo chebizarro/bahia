@@ -182,13 +182,13 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		return nil, err
 	}
 
+	if err := validateManagedDeployReviewHash(svc, params.ExpectedDesiredStateHash); err != nil {
+		return nil, err
+	}
 	serviceID := params.ServiceID
 	environmentID := params.EnvironmentID
 	artifactID := params.ArtifactID
 	requestedUnitID := params.DeploymentUnitID
-	if params.ExpectedDesiredStateHash != "" && svc.RuntimeType != domain.RuntimeTypeCompose {
-		return nil, fmt.Errorf("reviewed desired-state deploy requires a Compose service")
-	}
 	desiredState, err := h.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, serviceID, environmentID, artifactID, requestedUnitID)
 	if err != nil {
 		return nil, fmt.Errorf("build desired state: %w", err)
@@ -332,6 +332,7 @@ func (h *encryptedServiceHandlers) rollback(ctx context.Context, request Context
 	if err != nil {
 		return nil, fmt.Errorf("build rollback desired state: %w", err)
 	}
+	carryForwardRollbackPublicRoute(desiredState, superseded)
 	evaluation, err := h.policy.Evaluate(ctx, params.TargetArtifactID, params.EnvironmentID)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate rollback policy: %w", err)
@@ -387,6 +388,25 @@ func (h *encryptedServiceHandlers) rollback(ctx context.Context, request Context
 		"idempotency_key":      effectiveIdempotencyKey(request, params.IdempotencyKey),
 		"message":              message,
 	}, nil
+}
+
+func validateManagedDeployReviewHash(svc *domain.Service, expectedHash string) error {
+	expectedHash = strings.TrimSpace(expectedHash)
+	if svc != nil && svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil && expectedHash == "" {
+		return fmt.Errorf("expected_desired_state_hash is required for managed deploys")
+	}
+	if expectedHash != "" && (svc == nil || svc.RuntimeType != domain.RuntimeTypeCompose) {
+		return fmt.Errorf("reviewed desired-state deploy requires a Compose service")
+	}
+	return nil
+}
+
+func carryForwardRollbackPublicRoute(desiredState *domain.DesiredServiceSpec, superseded *domain.DeploymentIntent) {
+	if desiredState == nil || superseded == nil || superseded.DesiredState == nil || superseded.DesiredState.PublicRoute == nil {
+		return
+	}
+	desiredState.PublicRoute = superseded.DesiredState.PublicRoute
+	desiredState.ComputeDesiredHash()
 }
 
 func (h *encryptedServiceHandlers) deploymentIntentMetadata(
