@@ -235,6 +235,20 @@ Use `probe_backup_repository` / `bahia_probe_backup_repository` with a repositor
 - Check target permissions
 - Review restore logs
 
+## Relay-policy projection provenance
+
+Signed backup runs export the current validated relay-policy projection into the
+durable run metadata before snapshot execution. The envelope contains only the
+public canonical payload and its event ID, payload hash, author, event/acceptance
+timestamps, source relay, and sync timestamp; credentials and private keys are
+never included.
+
+An approved signer-first backup restore validates the envelope and restores it
+as cached last-known-good state. Cached state remains usable across restart or
+relay outage, but is not marked relay-confirmed until the hydrator receives the
+same or a newer valid canonical event from a relay. A corrupt hash or regressive
+restore fails closed.
+
 ## Related
 
 - [Services](services.md) — Backup targets

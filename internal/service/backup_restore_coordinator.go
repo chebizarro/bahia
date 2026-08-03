@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,12 +39,14 @@ type BackupRestoreCoordinatorConfig struct {
 
 // BackupRestoreCoordinator executes approved restore runs from durable queued state.
 type BackupRestoreCoordinator struct {
-	registry        *BackupRegistryService
-	queue           BackupRestoreQueueRepository
-	backendResolver BackupBackendResolver
-	responder       BackupRestoreResponder
-	logger          *zap.Logger
-	config          BackupRestoreCoordinatorConfig
+	registry           *BackupRegistryService
+	queue              BackupRestoreQueueRepository
+	backendResolver    BackupBackendResolver
+	responder          BackupRestoreResponder
+	logger             *zap.Logger
+	config             BackupRestoreCoordinatorConfig
+	relayPolicyBackups repository.RelayPolicyProjectionBackupRepository
+	relayPolicyAuthor  string
 
 	restoreGroup singleflight.Group
 	locksMu      sync.Mutex
@@ -72,6 +75,15 @@ func WithBackupRestoreCoordinatorConfig(cfg BackupRestoreCoordinatorConfig) Back
 
 func WithBackupRestoreHealthCheck(enabled bool) BackupRestoreCoordinatorOption {
 	return func(c *BackupRestoreCoordinator) { c.config.HealthCheckBeforeRun = enabled }
+}
+
+// WithRelayPolicyProjectionRestore enables cached-only projection restore after
+// an approved signed backup restore completes successfully.
+func WithRelayPolicyProjectionRestore(store repository.RelayPolicyProjectionBackupRepository, authorPubkey string) BackupRestoreCoordinatorOption {
+	return func(c *BackupRestoreCoordinator) {
+		c.relayPolicyBackups = store
+		c.relayPolicyAuthor = strings.ToLower(strings.TrimSpace(authorPubkey))
+	}
 }
 
 func NewBackupRestoreCoordinator(registry *BackupRegistryService, backendResolver BackupBackendResolver, logger *zap.Logger, opts ...BackupRestoreCoordinatorOption) *BackupRestoreCoordinator {
@@ -237,6 +249,9 @@ func (c *BackupRestoreCoordinator) processBackupRestoreLocked(ctx context.Contex
 	if result == nil {
 		return c.completeFailed(ctx, restore, "restoring", fmt.Errorf("%w: backup backend returned no restore result", ErrBackupBackendExecution))
 	}
+	if err := c.restoreRelayPolicyProjection(ctx, sourceRun); err != nil {
+		return c.completeFailed(ctx, restore, "restoring", err)
+	}
 	if created {
 		resultJSON, err := json.Marshal(result)
 		if err != nil {
@@ -255,6 +270,33 @@ func (c *BackupRestoreCoordinator) processBackupRestoreLocked(ctx context.Contex
 		return fmt.Errorf("%w: %s", ErrBackupBackendExecution, completed.Error)
 	}
 	c.publishResult(ctx, completed, "backup restore completed")
+	return nil
+}
+
+func (c *BackupRestoreCoordinator) restoreRelayPolicyProjection(ctx context.Context, sourceRun *domain.BackupRun) error {
+	if c.relayPolicyBackups == nil || sourceRun == nil || sourceRun.Metadata == nil {
+		return nil
+	}
+	raw, exists := sourceRun.Metadata["relay_policy_projection_backup"]
+	if !exists {
+		return nil
+	}
+	backup, err := repository.DecodeRelayPolicyProjectionBackup(raw)
+	if err != nil {
+		return fmt.Errorf("validate restored relay policy projection provenance: %w", err)
+	}
+	if c.relayPolicyAuthor == "" || !strings.EqualFold(backup.AuthorPubkey, c.relayPolicyAuthor) {
+		return fmt.Errorf("validate restored relay policy projection provenance: author is not the configured service")
+	}
+	restored, err := c.relayPolicyBackups.RestoreCached(ctx, backup)
+	if err != nil {
+		return fmt.Errorf("restore cached relay policy projection: %w", err)
+	}
+	if !restored {
+		// A same-or-newer head already exists. Restore is idempotent and must
+		// never regress or demote the live projection.
+		return nil
+	}
 	return nil
 }
 

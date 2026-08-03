@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-b2lc7",
+  "mappings": [
+    {"criterion": "AC1", "tests": ["RolloutGateTests.test_hash_mismatch_at_baseline_timestamp_is_rejected", "RolloutGateTests.test_older_projection_is_rejected", "RolloutGateTests.test_empty_by_absence_is_rejected", "RolloutGateTests.test_same_projection_survives_relay_outage_as_cached", "RolloutGateTests.test_newer_valid_projection_is_accepted"]},
+    {"criterion": "AC2", "tests": ["DeployEdgeComposeUpdateTests.test_updates_images_and_docs_mount_preserving_unrelated_content", "DeployEdgeComposeUpdateTests.test_missing_service_fails_without_writing", "workflow pre/post gate and rollback shell steps"]},
+    {"criterion": "AC3", "tests": ["TestRelayPolicyProjectionBackupRestoreRoundTripPreservesProvenanceAndStaysCached", "TestPgRelayPolicyProjectionRestoreCachedPreservesProvenanceAndClearsConfirmation"]},
+    {"criterion": "AC4", "tests": ["TestRelayPolicyProjectionBackupRestoreRoundTripPreservesProvenanceAndStaysCached", "TestPgRelayPolicyProjectionPromoteUsesAtomicReplaceableOrdering"]},
+    {"criterion": "AC5", "tests": ["RolloutGateTests.test_same_projection_survives_relay_outage_as_cached", "application relay_policy_projection readiness check", "existing fail-safe projection hydration tests from prerequisite 343cf06a"]},
+    {"criterion": "AC6", "tests": ["relay backup envelope validation", "trusted-author restore validation", "source-relay credential/query/fragment rejection"]}
+  ]
+}

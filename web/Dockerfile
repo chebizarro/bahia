@@ -29,6 +29,12 @@ RUN npm run build
 # Runtime stage
 FROM nginx:alpine
 
+ARG PUBLIC_BAHIA_GIT_COMMIT="dev"
+ARG PUBLIC_BAHIA_WEB_VERSION=""
+LABEL org.opencontainers.image.source="https://github.com/openagentsinc/bahia" \
+      org.opencontainers.image.revision="${PUBLIC_BAHIA_GIT_COMMIT}" \
+      org.opencontainers.image.version="${PUBLIC_BAHIA_WEB_VERSION}"
+
 # Copy built static files
 COPY --from=builder /app/build /usr/share/nginx/html
 

@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-b2lc7",
+  "criteria": [
+    {"id": "AC1", "statement": "A pre/post rollout policy hash mismatch, older event, or empty projection fails the deployment health gate and invokes rollback; the same valid event or a canonically newer event succeeds."},
+    {"id": "AC2", "statement": "Production Compose deployment accepts only immutable digest references and backend/web images carry OCI source, revision, and version metadata."},
+    {"id": "AC3", "statement": "Backup export and approved restore preserve the canonical public signed payload plus event ID, hash, author, event/acceptance timestamps, schema, source, and sync provenance."},
+    {"id": "AC4", "statement": "Restored policy is cached last-known-good, not live, until relay confirmation of the same signed event or a canonically newer event."},
+    {"id": "AC5", "statement": "Backend restart or image replacement hydrates the durable last-known-good policy and reports structured projection readiness while the canonical relay is unavailable."},
+    {"id": "AC6", "statement": "No credential, private key, credential-bearing relay URL, query token, or fragment is emitted in health evidence or projection backup data; restore mutation stays signer-first and approval-gated."}
+  ]
+}

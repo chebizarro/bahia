@@ -329,6 +329,18 @@ Historical `31961`/`31967`/`31968`, `6961`, and `7961` events are startup migrat
 - Check runtime target health
 - Verify container is running
 
+## Relay-policy rollout invariant
+
+Production Bahia rollouts capture the hydrated relay-policy event ID, payload
+hash, author, and event timestamp from the structured readiness check before
+changing images. Post-rollout readiness must expose the same valid projection or
+a newer event. Absence, an older event, or a same-timestamp event/hash mismatch
+fails the gate and restores the previous digest-pinned Compose state.
+
+Production image references use `repository@sha256:<digest>`; tags are build
+handles only. Backend and web images also carry OCI source, revision, and version
+labels so the running artifact can be tied to its source commit.
+
 ## Related
 
 - [Services](services.md) — What you deploy

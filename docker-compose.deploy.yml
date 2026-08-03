@@ -1,5 +1,7 @@
 services:
   bahia:
-    image: ${BAHIA_IMAGE:?BAHIA_IMAGE is required}
+    image: ${BAHIA_IMAGE_DIGEST:?BAHIA_IMAGE_DIGEST must be repo@sha256 digest-pinned}
   relay:
-    image: ${BAHIA_RELAY_IMAGE:-${BAHIA_IMAGE:?BAHIA_IMAGE is required}}
+    image: ${BAHIA_RELAY_IMAGE_DIGEST:-${BAHIA_IMAGE_DIGEST:?BAHIA_IMAGE_DIGEST must be repo@sha256 digest-pinned}}
+  web:
+    image: ${BAHIA_WEB_IMAGE_DIGEST:?BAHIA_WEB_IMAGE_DIGEST must be repo@sha256 digest-pinned}

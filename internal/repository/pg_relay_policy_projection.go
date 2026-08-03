@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,12 +27,12 @@ func newPgRelayPolicyProjectionRepositoryWithDB(db pgQueryer) *PgRelayPolicyProj
 func (r *PgRelayPolicyProjectionRepository) Get(ctx context.Context, authorPubkey string) (*RelayPolicyProjection, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT author_pubkey, event_id, event_created_at, event_accepted_at, schema,
-		       canonical_payload, payload_hash, source_relay, last_sync_at
+				canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
 		FROM relay_policy_projections
 		WHERE author_pubkey = $1
 	`, authorPubkey)
-
 	projection := &RelayPolicyProjection{}
+	var relayConfirmedAt sql.NullTime
 	if err := row.Scan(
 		&projection.AuthorPubkey,
 		&projection.EventID,
@@ -41,6 +43,7 @@ func (r *PgRelayPolicyProjectionRepository) Get(ctx context.Context, authorPubke
 		&projection.PayloadHash,
 		&projection.SourceRelay,
 		&projection.LastSyncAt,
+		&relayConfirmedAt,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -48,6 +51,10 @@ func (r *PgRelayPolicyProjectionRepository) Get(ctx context.Context, authorPubke
 		return nil, fmt.Errorf("querying relay policy projection: %w", err)
 	}
 	projection.CanonicalPayload = append([]byte(nil), projection.CanonicalPayload...)
+	if relayConfirmedAt.Valid {
+		confirmedAt := relayConfirmedAt.Time.UTC()
+		projection.RelayConfirmedAt = &confirmedAt
+	}
 	return projection, nil
 }
 
@@ -56,9 +63,64 @@ func (r *PgRelayPolicyProjectionRepository) Promote(ctx context.Context, project
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO relay_policy_projections (
 			author_pubkey, event_id, event_created_at, event_accepted_at, schema,
-			canonical_payload, payload_hash, source_relay, last_sync_at
+			canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $4)
+		ON CONFLICT (author_pubkey) DO UPDATE SET
+			event_id = EXCLUDED.event_id,
+			event_created_at = EXCLUDED.event_created_at,
+			event_accepted_at = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.event_accepted_at ELSE EXCLUDED.event_accepted_at END,
+			schema = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.schema ELSE EXCLUDED.schema END,
+			canonical_payload = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.canonical_payload ELSE EXCLUDED.canonical_payload END,
+			payload_hash = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.payload_hash ELSE EXCLUDED.payload_hash END,
+			source_relay = EXCLUDED.source_relay,
+			last_sync_at = EXCLUDED.last_sync_at,
+			relay_confirmed_at = EXCLUDED.relay_confirmed_at
+		WHERE relay_policy_projections.event_created_at < EXCLUDED.event_created_at
+			OR (relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.event_id > EXCLUDED.event_id)
+			OR (relay_policy_projections.event_id = EXCLUDED.event_id
+				AND relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.schema = EXCLUDED.schema
+				AND relay_policy_projections.canonical_payload = EXCLUDED.canonical_payload
+				AND relay_policy_projections.payload_hash = EXCLUDED.payload_hash
+				AND relay_policy_projections.relay_confirmed_at IS NULL)
+		RETURNING event_id
+	`, projection.AuthorPubkey, projection.EventID, projection.EventCreatedAt.UTC(),
+		projection.EventAcceptedAt.UTC(), projection.Schema, []byte(projection.CanonicalPayload),
+		projection.PayloadHash, projection.SourceRelay, projection.LastSyncAt.UTC()).Scan(&promotedEventID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("promoting relay policy projection: %w", err)
+	}
+	return promotedEventID == projection.EventID, nil
+}
+
+func (r *PgRelayPolicyProjectionRepository) Export(ctx context.Context, authorPubkey string, exportedAt time.Time) (*RelayPolicyProjectionBackup, error) {
+	projection, err := r.Get(ctx, strings.ToLower(strings.TrimSpace(authorPubkey)))
+	if err != nil || projection == nil {
+		return nil, err
+	}
+	backup, err := NewRelayPolicyProjectionBackup(*projection, exportedAt)
+	if err != nil {
+		return nil, fmt.Errorf("exporting relay policy projection: %w", err)
+	}
+	return &backup, nil
+}
+
+func (r *PgRelayPolicyProjectionRepository) RestoreCached(ctx context.Context, backup RelayPolicyProjectionBackup) (bool, error) {
+	if err := ValidateRelayPolicyProjectionBackup(backup); err != nil {
+		return false, fmt.Errorf("restoring relay policy projection: %w", err)
+	}
+	var restoredEventID string
+	err := r.pool.QueryRow(ctx, `
+		INSERT INTO relay_policy_projections (
+			author_pubkey, event_id, event_created_at, event_accepted_at, schema,
+			canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
 		ON CONFLICT (author_pubkey) DO UPDATE SET
 			event_id = EXCLUDED.event_id,
 			event_created_at = EXCLUDED.event_created_at,
@@ -67,31 +129,30 @@ func (r *PgRelayPolicyProjectionRepository) Promote(ctx context.Context, project
 			canonical_payload = EXCLUDED.canonical_payload,
 			payload_hash = EXCLUDED.payload_hash,
 			source_relay = EXCLUDED.source_relay,
-			last_sync_at = EXCLUDED.last_sync_at
+			last_sync_at = EXCLUDED.last_sync_at,
+			relay_confirmed_at = CASE WHEN relay_policy_projections.event_id = EXCLUDED.event_id THEN relay_policy_projections.relay_confirmed_at ELSE NULL END
 		WHERE relay_policy_projections.event_created_at < EXCLUDED.event_created_at
-		   OR (
-				relay_policy_projections.event_created_at = EXCLUDED.event_created_at
-				AND relay_policy_projections.event_id > EXCLUDED.event_id
-		   )
+			OR (relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.event_id > EXCLUDED.event_id)
+			OR (relay_policy_projections.event_id = EXCLUDED.event_id
+				AND relay_policy_projections.event_created_at = EXCLUDED.event_created_at
+				AND relay_policy_projections.schema = EXCLUDED.schema
+				AND relay_policy_projections.canonical_payload = EXCLUDED.canonical_payload
+				AND relay_policy_projections.payload_hash = EXCLUDED.payload_hash
+				AND relay_policy_projections.relay_confirmed_at IS NULL)
 		RETURNING event_id
-	`,
-		projection.AuthorPubkey,
-		projection.EventID,
-		projection.EventCreatedAt.UTC(),
-		projection.EventAcceptedAt.UTC(),
-		projection.Schema,
-		[]byte(projection.CanonicalPayload),
-		projection.PayloadHash,
-		projection.SourceRelay,
-		projection.LastSyncAt.UTC(),
-	).Scan(&promotedEventID)
+	`, strings.ToLower(strings.TrimSpace(backup.AuthorPubkey)),
+		strings.ToLower(strings.TrimSpace(backup.EventID)), backup.EventCreatedAt.UTC(),
+		backup.EventAcceptedAt.UTC(), backup.PolicySchema, []byte(backup.CanonicalPayload),
+		strings.ToLower(strings.TrimSpace(backup.PayloadHash)), strings.TrimSpace(backup.SourceRelay),
+		backup.LastSyncAt.UTC()).Scan(&restoredEventID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, nil
 		}
-		return false, fmt.Errorf("promoting relay policy projection: %w", err)
+		return false, fmt.Errorf("restoring cached relay policy projection: %w", err)
 	}
-	return promotedEventID == projection.EventID, nil
+	return restoredEventID == strings.ToLower(strings.TrimSpace(backup.EventID)), nil
 }
 
 func (r *PgRelayPolicyProjectionRepository) MarkSynced(ctx context.Context, authorPubkey string, syncedAt time.Time) error {

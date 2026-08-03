@@ -583,8 +583,14 @@ func New(cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring backup backend resolver: %w", err)
 	}
-	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRunResponder(backupResponder))
-	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRestoreResponder(backupRestoreResponder))
+	backupRunOptions := []service.BackupRunCoordinatorOption{service.WithBackupRunResponder(backupResponder)}
+	backupRestoreOptions := []service.BackupRestoreCoordinatorOption{service.WithBackupRestoreResponder(backupRestoreResponder)}
+	if relayPolicyBackupRepo, ok := relayPolicyProjectionRepo.(repository.RelayPolicyProjectionBackupRepository); ok && servicePubkey != "" {
+		backupRunOptions = append(backupRunOptions, service.WithRelayPolicyProjectionBackup(relayPolicyBackupRepo, servicePubkey))
+		backupRestoreOptions = append(backupRestoreOptions, service.WithRelayPolicyProjectionRestore(relayPolicyBackupRepo, servicePubkey))
+	}
+	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, backupRunOptions...)
+	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, backupRestoreOptions...)
 	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
 	bgManager.RegisterWithOptions(backupCoordinator, RunnerTier(Tier3))
 	bgManager.RegisterWithOptions(backupRestoreCoordinator, RunnerTier(Tier3))
@@ -1197,6 +1203,34 @@ func New(cfg *config.Config) (*App, error) {
 		if err := relaySettingsHydrator.LoadProjection(ctx); err != nil {
 			return nil, fmt.Errorf("loading durable relay settings projection before control-plane activation: %w", err)
 		}
+		healthProvider.RegisterCheck("relay_policy_projection", int(Tier1), func() HealthCheck {
+			projection, projected := relaySettingsHydrator.Projection()
+			_, hydrated := relaySettingsHydrator.Snapshot()
+			check := HealthCheck{
+				Name:    "relay_policy_projection",
+				Status:  HealthStatusFail,
+				Message: "validated relay policy is unavailable to API hydration",
+				Tier:    int(Tier1),
+			}
+			if !projected || !hydrated {
+				return check
+			}
+			confirmation := "cached"
+			if projection.RelayConfirmedAt != nil {
+				confirmation = "relay_confirmed"
+			}
+			check.Status = HealthStatusPass
+			check.Message = "validated relay policy projection is hydrated"
+			check.Details = map[string]string{
+				"availability":     "available",
+				"event_id":         projection.EventID,
+				"hash":             projection.PayloadHash,
+				"author":           projection.AuthorPubkey,
+				"event_created_at": projection.EventCreatedAt.UTC().Format(time.RFC3339Nano),
+				"confirmation":     confirmation,
+			}
+			return check
+		})
 		bgManager.RegisterWithOptions(relaySettingsHydrator, RunnerTier(Tier1))
 		logger.Info("durable relay settings projection hydrator registered",
 			zap.Int("eligible_relay_count", len(relayPolicyHydrationPool.URLs())),

@@ -73,12 +73,14 @@ type BackupRunCoordinatorConfig struct {
 
 // BackupRunCoordinator executes fixed-step backup runs from durable queued state.
 type BackupRunCoordinator struct {
-	registry        *BackupRegistryService
-	queue           BackupRunQueueRepository
-	backendResolver BackupBackendResolver
-	responder       BackupRunResponder
-	logger          *zap.Logger
-	config          BackupRunCoordinatorConfig
+	registry           *BackupRegistryService
+	queue              BackupRunQueueRepository
+	backendResolver    BackupBackendResolver
+	responder          BackupRunResponder
+	logger             *zap.Logger
+	config             BackupRunCoordinatorConfig
+	relayPolicyBackups repository.RelayPolicyProjectionBackupRepository
+	relayPolicyAuthor  string
 
 	runGroup singleflight.Group
 	locksMu  sync.Mutex
@@ -117,6 +119,15 @@ func WithBackupRunCoordinatorConfig(cfg BackupRunCoordinatorConfig) BackupRunCoo
 
 func WithBackupRunHealthCheck(enabled bool) BackupRunCoordinatorOption {
 	return func(c *BackupRunCoordinator) { c.config.HealthCheckBeforeRun = enabled }
+}
+
+// WithRelayPolicyProjectionBackup includes public signed relay-policy provenance
+// in durable backup-run metadata before the backend snapshot starts.
+func WithRelayPolicyProjectionBackup(store repository.RelayPolicyProjectionBackupRepository, authorPubkey string) BackupRunCoordinatorOption {
+	return func(c *BackupRunCoordinator) {
+		c.relayPolicyBackups = store
+		c.relayPolicyAuthor = strings.ToLower(strings.TrimSpace(authorPubkey))
+	}
 }
 
 func NewBackupRunCoordinator(registry *BackupRegistryService, backendResolver BackupBackendResolver, logger *zap.Logger, opts ...BackupRunCoordinatorOption) *BackupRunCoordinator {
@@ -254,6 +265,9 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 		}
 	}
 	if !run.SnapshotCreated || strings.TrimSpace(run.SnapshotID) == "" {
+		if err := c.attachRelayPolicyProjectionBackup(ctx, run); err != nil {
+			return c.completeFailed(ctx, run, nil, "snapshotting", err)
+		}
 		c.publishStatus(ctx, run, "snapshotting", "creating backup snapshot")
 		var snapshot *BackupSnapshotResult
 		checkpoint, created, err := c.queue.StartBackupOperation(ctx, repository.BackupOperationSnapshot, run.ID, uuid.New())
@@ -329,6 +343,29 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 		return err
 	}
 	c.publishResult(ctx, completed, verification, "backup run completed and verified")
+	return nil
+}
+
+func (c *BackupRunCoordinator) attachRelayPolicyProjectionBackup(ctx context.Context, run *domain.BackupRun) error {
+	if c.relayPolicyBackups == nil || c.relayPolicyAuthor == "" || run == nil {
+		return nil
+	}
+	if run.Metadata != nil {
+		if _, exists := run.Metadata["relay_policy_projection_backup"]; exists {
+			return nil
+		}
+	}
+	backup, err := c.relayPolicyBackups.Export(ctx, c.relayPolicyAuthor, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("export relay policy projection for backup: %w", err)
+	}
+	if backup == nil {
+		return fmt.Errorf("export relay policy projection for backup: projection is unavailable")
+	}
+	backupSetRunMetadata(run, map[string]any{"relay_policy_projection_backup": backup})
+	if err := c.registry.CreateOrUpdateBackupRun(ctx, run); err != nil {
+		return fmt.Errorf("persist relay policy projection backup provenance: %w", err)
+	}
 	return nil
 }
 

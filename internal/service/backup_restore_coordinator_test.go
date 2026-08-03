@@ -2,15 +2,125 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRelayPolicyProjectionBackupRestoreRoundTripPreservesProvenanceAndStaysCached(t *testing.T) {
+	ctx := context.Background()
+	registry, repo, run := backupCoordinatorFixture(t, true)
+	payload := []byte(`{"schema":"bahia.relay-settings.v1","browser_relays":["wss://relay.example"]}`)
+	sum := sha256.Sum256(payload)
+	now := time.Date(2026, 8, 3, 6, 0, 0, 0, time.UTC)
+	confirmedAt := now
+	projectionStore := &memoryRelayPolicyBackupStore{projection: repository.RelayPolicyProjection{
+		AuthorPubkey:     strings.Repeat("a", 64),
+		EventID:          strings.Repeat("b", 64),
+		EventCreatedAt:   now.Add(-time.Minute),
+		EventAcceptedAt:  now,
+		Schema:           "bahia.relay-settings.v1",
+		CanonicalPayload: payload,
+		PayloadHash:      hex.EncodeToString(sum[:]),
+		SourceRelay:      "wss://relay.example",
+		LastSyncAt:       now,
+		RelayConfirmedAt: &confirmedAt,
+	}}
+	backend := &projectionRoundTripBackupBackend{}
+	backupCoordinator := NewBackupRunCoordinator(
+		registry,
+		MustBackupBackendResolver(backend),
+		nil,
+		WithBackupRunHealthCheck(false),
+		WithRelayPolicyProjectionBackup(projectionStore, projectionStore.projection.AuthorPubkey),
+	)
+	require.NoError(t, backupCoordinator.ProcessBackupRun(ctx, run.ID))
+	sourceRun, err := repo.GetBackupRun(ctx, run.ID)
+	require.NoError(t, err)
+	require.True(t, domain.BackupRunRestoreEligible(sourceRun))
+	require.Contains(t, sourceRun.Metadata, "relay_policy_projection_backup")
+
+	restore, _, err := registry.CreateBackupRestoreIfAbsent(ctx, validRestoreRequest(sourceRun, "restore-policy-event"))
+	require.NoError(t, err)
+	restore, _, err = registry.ApplyBackupRestoreApproval(ctx, restore.ID, true, "approval-policy-event", "operator", "approved")
+	require.NoError(t, err)
+	restoreCoordinator := NewBackupRestoreCoordinator(
+		registry,
+		MustBackupBackendResolver(backend),
+		nil,
+		WithBackupRestoreHealthCheck(false),
+		WithRelayPolicyProjectionRestore(projectionStore, projectionStore.projection.AuthorPubkey),
+	)
+	require.NoError(t, restoreCoordinator.ProcessBackupRestore(ctx, restore.ID))
+	require.NotNil(t, projectionStore.restored)
+	require.Equal(t, projectionStore.projection.EventID, projectionStore.restored.EventID)
+	require.Equal(t, projectionStore.projection.PayloadHash, projectionStore.restored.PayloadHash)
+	require.Equal(t, projectionStore.projection.AuthorPubkey, projectionStore.restored.AuthorPubkey)
+	require.Equal(t, projectionStore.projection.EventCreatedAt, projectionStore.restored.EventCreatedAt)
+	require.Nil(t, projectionStore.restored.RelayConfirmedAt)
+}
+
+type memoryRelayPolicyBackupStore struct {
+	projection repository.RelayPolicyProjection
+	restored   *repository.RelayPolicyProjection
+}
+
+func (s *memoryRelayPolicyBackupStore) Export(_ context.Context, author string, exportedAt time.Time) (*repository.RelayPolicyProjectionBackup, error) {
+	if author != s.projection.AuthorPubkey {
+		return nil, errors.New("unexpected relay policy author")
+	}
+	backup, err := repository.NewRelayPolicyProjectionBackup(s.projection, exportedAt)
+	return &backup, err
+}
+
+func (s *memoryRelayPolicyBackupStore) RestoreCached(_ context.Context, backup repository.RelayPolicyProjectionBackup) (bool, error) {
+	if err := repository.ValidateRelayPolicyProjectionBackup(backup); err != nil {
+		return false, err
+	}
+	s.restored = &repository.RelayPolicyProjection{
+		AuthorPubkey:     backup.AuthorPubkey,
+		EventID:          backup.EventID,
+		EventCreatedAt:   backup.EventCreatedAt,
+		EventAcceptedAt:  backup.EventAcceptedAt,
+		Schema:           backup.PolicySchema,
+		CanonicalPayload: append([]byte(nil), backup.CanonicalPayload...),
+		PayloadHash:      backup.PayloadHash,
+		SourceRelay:      backup.SourceRelay,
+		LastSyncAt:       backup.LastSyncAt,
+		RelayConfirmedAt: nil,
+	}
+	return true, nil
+}
+
+type projectionRoundTripBackupBackend struct{}
+
+func (*projectionRoundTripBackupBackend) BackendKind() domain.BackupBackendKind {
+	return domain.BackupBackendKopia
+}
+func (*projectionRoundTripBackupBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{SnapshotCreate: true, SnapshotVerify: true, Restore: true, Probe: true}
+}
+func (*projectionRoundTripBackupBackend) Health(context.Context, *domain.BackupRepository) error {
+	return nil
+}
+func (*projectionRoundTripBackupBackend) CreateSnapshot(context.Context, BackupSnapshotRequest) (*BackupSnapshotResult, error) {
+	return &BackupSnapshotResult{SnapshotID: "relay-policy-snapshot"}, nil
+}
+func (*projectionRoundTripBackupBackend) VerifySnapshot(context.Context, BackupVerifyRequest) (*BackupVerifyResult, error) {
+	return &BackupVerifyResult{Verified: true, Status: domain.BackupVerificationSucceeded}, nil
+}
+func (*projectionRoundTripBackupBackend) Restore(context.Context, BackupRestoreRequest) (*BackupRestoreResult, error) {
+	return &BackupRestoreResult{}, nil
+}
 
 func TestBackupRestoreCoordinatorProcessOnceCompletesApprovedRestore(t *testing.T) {
 	ctx := context.Background()

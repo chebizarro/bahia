@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-b2lc7",
+  "fleet_task": "fp-bahia-relay-policy-durability",
+  "fleet_item": "3 of 4",
+  "title": "Enforce relay-policy rollout invariant and provenance-safe restore",
+  "scope": "Backend projection durability, structured readiness evidence, deployment rollback gating, digest-pinned production images, source-version image metadata, signed backup export, cached-only restore, docs, and deterministic regressions. Settings UI components and stores are excluded.",
+  "intended_behavior": [
+    "A rollout captures the pre-change relay-policy event ID, canonical payload hash, ordering timestamp, and projection health, then accepts the replacement only when readiness exposes the same valid policy or a canonically newer one.",
+    "Projection absence, regression, or a hash mismatch for the same policy event fails the deployment gate and restores the prior Compose configuration.",
+    "Production deployment inputs are immutable image digests, and backend and web images expose OCI source, revision, and version labels.",
+    "Backup export preserves the signed public relay-policy payload and event ID, payload hash, author, acceptance/event timestamps, schema, source relay, and sync timestamp without credentials or private keys.",
+    "Restore enters PostgreSQL only as cached last-known-good state and becomes relay-confirmed only after the same signed event or a canonically newer event is observed from a relay.",
+    "Restart or image replacement can hydrate cached last-known-good policy while the canonical relay is unavailable."
+  ],
+  "security": "Projection mutation remains behind the signer-first approved ContextVM restore flow. Health evidence and backups contain only public signed policy provenance; source relay validation rejects credentials, query strings, and fragments."
+}

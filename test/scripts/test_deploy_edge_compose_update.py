@@ -13,6 +13,8 @@ SPEC.loader.exec_module(deploy_edge_compose_update)
 
 VALID_TAG = "github-1a2b3c4"
 VALID_RELEASE_DIR = f"/srv/data/bahia-controlplane/releases/{VALID_TAG}"
+BACKEND_IMAGE = "local/bahia-controlplane-bahia@sha256:" + "a" * 64
+WEB_IMAGE = "local/bahia-controlplane-web@sha256:" + "b" * 64
 
 
 BASE_COMPOSE = """version: "3.9"
@@ -47,11 +49,11 @@ networks:
 class DeployEdgeComposeUpdateTests(unittest.TestCase):
     def test_updates_images_and_docs_mount_preserving_unrelated_content(self):
         updated = deploy_edge_compose_update.update_compose_text(
-            BASE_COMPOSE, VALID_TAG, VALID_RELEASE_DIR
+            BASE_COMPOSE, VALID_TAG, VALID_RELEASE_DIR, BACKEND_IMAGE, WEB_IMAGE
         )
 
-        self.assertIn(f"image: local/bahia-controlplane-bahia:{VALID_TAG}", updated)
-        self.assertIn(f"image: local/bahia-controlplane-web:{VALID_TAG}", updated)
+        self.assertIn(f"image: {BACKEND_IMAGE}", updated)
+        self.assertIn(f"image: {WEB_IMAGE}", updated)
         self.assertIn(f"- {VALID_RELEASE_DIR}/docs:/docs:ro", updated)
         self.assertIn("image: postgres:16", updated)
         self.assertIn("POSTGRES_DB: bahia", updated)
@@ -106,6 +108,10 @@ class DeployEdgeComposeUpdateTests(unittest.TestCase):
                     tag,
                     "--release-dir",
                     release_dir,
+                    "--backend-image",
+                    BACKEND_IMAGE,
+                    "--web-image",
+                    WEB_IMAGE,
                 ]
             )
 
@@ -114,7 +120,9 @@ class DeployEdgeComposeUpdateTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 deploy_edge_compose_update.ComposeUpdateError, expected_message
             ):
-                deploy_edge_compose_update.update_compose_text(compose, tag, release_dir)
+                deploy_edge_compose_update.update_compose_text(
+                    compose, tag, release_dir, BACKEND_IMAGE, WEB_IMAGE
+                )
 
 
 if __name__ == "__main__":

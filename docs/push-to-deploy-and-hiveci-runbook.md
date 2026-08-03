@@ -70,14 +70,14 @@ The checked-in workflow is `.github/workflows/deploy-edge.yml`. It:
 6. builds `local/bahia-controlplane-bahia:github-<shortsha>` from the repository root;
 7. builds `local/bahia-controlplane-web:github-<shortsha>` from `web/Dockerfile`;
 8. stages the checkout to `/srv/data/bahia-controlplane/releases/github-<shortsha>` with `rsync -a --delete --exclude .git`;
-9. backs up `/srv/data/bahia-controlplane/docker-compose.yml` to `/srv/data/bahia-controlplane/backups/compose-github-<shortsha>-<utc timestamp>.yml`;
-10. invokes `scripts/deploy_edge_compose_update.py` to update the live Compose images and docs mount;
-11. validates the resulting Compose file with `docker compose -f "$COMPOSE_FILE" config --quiet`;
-12. runs `docker compose -f "$COMPOSE_FILE" up -d bahia relay web`;
-13. verifies liveness and endpoint reachability (the checked-in workflow currently does **not** call `/ready` or automatically restore the Compose backup on failure):
+9. captures the pre-rollout validated relay-policy event ID/hash/author/timestamp and backs up the live Compose file;
+10. resolves the locally built backend and web image IDs and writes immutable `repository@sha256:<digest>` references;
+11. validates and applies the updated Compose file;
+12. waits for `/ready`, then requires the same-or-newer hydrated relay-policy projection plus relay and web reachability;
+13. automatically restores the previous Compose file and services if any post-mutation gate fails:
 
 ```bash
-curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/ready
 curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/relay >/dev/null
 curl -fsS http://127.0.0.1:8081/ >/dev/null
 ```
@@ -110,13 +110,15 @@ docker build \
 python3 scripts/deploy_edge_compose_update.py \
   --compose-file /srv/data/bahia-controlplane/docker-compose.yml \
   --tag github-<7 lowercase hex characters> \
-  --release-dir /srv/data/bahia-controlplane/releases/github-<7 lowercase hex characters>
+  --release-dir /srv/data/bahia-controlplane/releases/github-<7 lowercase hex characters> \
+  --backend-image sha256:<64 hex local image ID> \
+  --web-image sha256:<64 hex local image ID>
 ```
 
 It updates exactly:
 
-- `bahia.image` and `relay.image` to `local/bahia-controlplane-bahia:<tag>`;
-- `web.image` to `local/bahia-controlplane-web:<tag>`;
+- `bahia.image` and `relay.image` to the supplied backend digest reference;
+- `web.image` to the supplied web digest reference;
 - the single `/srv/data/bahia-controlplane/releases/.../docs:/docs:ro` mount to `<release-dir>/docs:/docs:ro`.
 
 It refuses to write when any of these safety checks fail:
@@ -138,10 +140,10 @@ python3 -m unittest discover -s test/scripts -p 'test_*.py'
 ### Operational Notes
 
 - `/health` is liveness, not the active-tier readiness gate. Before declaring the edge rollout ready, operators must also require `curl -fsS http://127.0.0.1:8080/ready`; Bahia returns `503` when required readiness checks fail.
-- The current workflow backs up Compose before mutation but does not automatically restore that backup when post-deploy checks fail. A red workflow is not a verified rollback; restore the prior Compose file/image tags, run `docker compose up -d bahia relay web`, and re-check `/ready`, relay NIP-11, and the web endpoint.
+- The workflow automatically restores the prior Compose file and restarts the three services when the post-rollout readiness, projection, relay, or web gate fails.
 - Keep `cancel-in-progress: false`; interrupted production deploys are worse than serialized deploys.
 - The workflow updates the existing compose file in place, after backing it up.
-- The workflow uses local images because the current live stack already uses local tags.
+- Builds retain local tags as handles, but the live Compose file is updated with immutable digest references.
 - This path bypasses Bahia's deployment model. It is acceptable only until the durable Hive-CI path tracked by `bahia-fj0z` satisfies the retirement conditions below.
 
 ## Durable Path: Hive CI Artifact Publishing

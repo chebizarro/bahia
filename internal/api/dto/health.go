@@ -13,10 +13,11 @@ type HealthResponse struct {
 }
 
 type HealthCheckDTO struct {
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
-	Tier    int    `json:"tier"`
+	Name    string            `json:"name"`
+	Status  string            `json:"status"`
+	Message string            `json:"message,omitempty"`
+	Tier    int               `json:"tier"`
+	Details map[string]string `json:"details,omitempty"`
 }
 
 type RunnerStatusDTO struct {

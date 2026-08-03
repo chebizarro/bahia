@@ -18,6 +18,7 @@ BACKEND_IMAGE = "local/bahia-controlplane-bahia"
 WEB_IMAGE = "local/bahia-controlplane-web"
 RELEASE_ROOT = "/srv/data/bahia-controlplane/releases"
 TAG_PATTERN = re.compile(r"^github-[0-9a-f]{7}$")
+DIGEST_IMAGE_PATTERN = re.compile(r"^(?:[a-z0-9./_-]+@)?sha256:[0-9a-f]{64}$")
 SERVICE_HEADER_PATTERN = re.compile(r"^(?P<indent>\s*)(?P<name>[A-Za-z0-9_.-]+):(?:\s*(?:#.*)?)$")
 
 
@@ -36,6 +37,11 @@ def validate_tag(tag: str) -> None:
         raise ComposeUpdateError(
             "tag must match github-<7 lowercase hex characters>; got " + repr(tag)
         )
+
+
+def validate_digest_image(image: str, name: str) -> None:
+    if not DIGEST_IMAGE_PATTERN.fullmatch(image):
+        raise ComposeUpdateError(f"{name} must be an immutable sha256 image ID or repo@sha256 manifest reference")
 
 
 def validate_release_dir(release_dir: str, tag: str) -> None:
@@ -67,9 +73,13 @@ def service_from_line(line: str, required_indent: int | None) -> ServiceScope | 
     return ServiceScope(name=match.group("name"), indent=indent)
 
 
-def update_compose_text(text: str, tag: str, release_dir: str) -> str:
+def update_compose_text(
+    text: str, tag: str, release_dir: str, backend_image: str, web_image: str
+) -> str:
     validate_tag(tag)
     validate_release_dir(release_dir, tag)
+    validate_digest_image(backend_image, "backend image")
+    validate_digest_image(web_image, "web image")
 
     lines, had_terminal_newline = split_lines_preserving_terminal_newline(text)
     updated_lines: list[str] = []
@@ -116,8 +126,8 @@ def update_compose_text(text: str, tag: str, release_dir: str) -> str:
         if current_service is not None and current_service.name in TARGET_SERVICES:
             if stripped.startswith("image:"):
                 image_counts[current_service.name] += 1
-                image_name = BACKEND_IMAGE if current_service.name in TARGET_BACKEND_SERVICES else WEB_IMAGE
-                replacement = f"{line[:indent]}image: {image_name}:{tag}"
+                image_ref = backend_image if current_service.name in TARGET_BACKEND_SERVICES else web_image
+                replacement = f"{line[:indent]}image: {image_ref}"
 
         if RELEASE_ROOT in line and ":/docs:ro" in line:
             docs_mount_count += 1
@@ -148,9 +158,9 @@ def update_compose_text(text: str, tag: str, release_dir: str) -> str:
     return updated
 
 
-def update_compose_file(path: Path, tag: str, release_dir: str) -> None:
+def update_compose_file(path: Path, tag: str, release_dir: str, backend_image: str, web_image: str) -> None:
     original = path.read_text(encoding="utf-8")
-    updated = update_compose_text(original, tag, release_dir)
+    updated = update_compose_text(original, tag, release_dir, backend_image, web_image)
     path.write_text(updated, encoding="utf-8")
 
 
@@ -161,13 +171,15 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--compose-file", required=True, type=Path)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--release-dir", required=True)
+    parser.add_argument("--backend-image", required=True)
+    parser.add_argument("--web-image", required=True)
     return parser.parse_args(list(argv))
 
 
 def main(argv: Iterable[str] = sys.argv[1:]) -> int:
     args = parse_args(argv)
     try:
-        update_compose_file(args.compose_file, args.tag, args.release_dir)
+        update_compose_file(args.compose_file, args.tag, args.release_dir, args.backend_image, args.web_image)
     except (OSError, ComposeUpdateError) as exc:
         print(f"deploy_edge_compose_update: {exc}", file=sys.stderr)
         return 1

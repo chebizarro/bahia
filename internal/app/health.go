@@ -22,6 +22,7 @@ type HealthCheck struct {
 	Status  string
 	Message string
 	Tier    int
+	Details map[string]string
 }
 
 type HealthSnapshot struct {

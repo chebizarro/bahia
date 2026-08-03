@@ -57,6 +57,13 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
 # Runtime stage
 FROM alpine:3.21
 
+ARG VERSION_BASE=0.1.0
+ARG GIT_COMMIT=dev
+ARG VERSION=0.1.0-dev
+LABEL org.opencontainers.image.source="https://github.com/openagentsinc/bahia" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.version="${VERSION}"
+
 RUN apk add --no-cache ca-certificates tzdata docker-cli docker-cli-compose wget
 
 COPY --from=builder /bin/bahia-server /usr/local/bin/bahia-server

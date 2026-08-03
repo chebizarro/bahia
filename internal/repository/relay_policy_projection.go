@@ -19,6 +19,9 @@ type RelayPolicyProjection struct {
 	PayloadHash      string
 	SourceRelay      string
 	LastSyncAt       time.Time
+	// RelayConfirmedAt is nil after restore. Only promotion of a valid
+	// same-or-newer canonical relay event may mark the projection live again.
+	RelayConfirmedAt *time.Time
 }
 
 // RelayPolicyProjectionRepository persists the last-known-good validated relay

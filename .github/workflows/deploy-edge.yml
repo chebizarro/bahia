@@ -69,6 +69,7 @@ jobs:
           test -f web/Dockerfile
           test -d docs
           test -f scripts/deploy_edge_compose_update.py
+          test -f scripts/relay_policy_rollout_gate.py
           test -f "$COMPOSE_FILE"
           test -w "$CONTROLPLANE_ROOT"
           mkdir -p "$RELEASE_ROOT" "$CONTROLPLANE_ROOT/backups"
@@ -110,32 +111,64 @@ jobs:
           mkdir -p "$release_dir"
           rsync -a --delete --exclude .git ./ "$release_dir/"
 
-      - name: Update live compose and deploy edge services
+      - name: Deploy with relay-policy invariant and rollback
         run: |
           set -euo pipefail
 
           tag="github-${GITHUB_SHA::7}"
           release_dir="$RELEASE_ROOT/$tag"
-          backup="$CONTROLPLANE_ROOT/backups/compose-${tag}-$(date -u +%Y%m%dT%H%M%SZ).yml"
+          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          backup="$CONTROLPLANE_ROOT/backups/compose-${tag}-${timestamp}.yml"
+          baseline="$CONTROLPLANE_ROOT/backups/relay-policy-${tag}-${timestamp}.json"
+          ready_url="http://${EDGE_HEALTH_HOST}:8080/ready"
 
+          # Capture only public signed provenance; never policy payloads or credentials.
+          python3 scripts/relay_policy_rollout_gate.py capture --url "$ready_url" --baseline "$baseline"
           cp "$COMPOSE_FILE" "$backup"
+
+          backend_id="$(docker image inspect --format '{{.Id}}' "local/bahia-controlplane-bahia:$tag")"
+          web_id="$(docker image inspect --format '{{.Id}}' "local/bahia-controlplane-web:$tag")"
+          [[ "$backend_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$web_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          backend_image="${backend_id}"
+          web_image="${web_id}"
+
+          rollback_armed=1
+          rollback() {
+            status=$?
+            if [[ "$rollback_armed" == "1" ]]; then
+              echo "Rollout health gate failed; restoring previous digest-pinned Compose state" >&2
+              cp "$backup" "$COMPOSE_FILE"
+              docker compose -f "$COMPOSE_FILE" config --quiet
+              docker compose -f "$COMPOSE_FILE" up -d bahia relay web
+              curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null || true
+              python3 scripts/relay_policy_rollout_gate.py verify --url "$ready_url" --baseline "$baseline" || true
+              curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS \
+                -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null || true
+              curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
+                -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null || true
+            fi
+            exit "$status"
+          }
+          trap rollback EXIT
+
           python3 scripts/deploy_edge_compose_update.py \
             --compose-file "$COMPOSE_FILE" \
             --tag "$tag" \
-            --release-dir "$release_dir"
+            --release-dir "$release_dir" \
+            --backend-image "$backend_image" \
+            --web-image "$web_image"
           docker compose -f "$COMPOSE_FILE" config --quiet
           docker compose -f "$COMPOSE_FILE" up -d bahia relay web
 
-      - name: Verify edge health
-        run: |
-          set -euo pipefail
-
-          # Tier-0 performs durable migration and relay bootstrap before the
-          # service is ready. Large one-time upgrades can legitimately take
-          # several minutes, so retain a bounded 30-minute readiness window.
-          curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused \
-            -fsS "http://${EDGE_HEALTH_HOST}:8080/ready"
+          # Tier-0 migration/bootstrap may take several minutes. The projection
+          # gate additionally rejects absence, regression, and same-time hash changes.
+          curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null
+          python3 scripts/relay_policy_rollout_gate.py verify --url "$ready_url" --baseline "$baseline"
           curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
             -fsS -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null
           curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
             -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null
+
+          rollback_armed=0
+          trap - EXIT

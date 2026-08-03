@@ -516,6 +516,7 @@ func healthChecksFromSnapshot(checksValue reflect.Value) []dto.HealthCheckDTO {
 			Status:  stringField(check, "Status"),
 			Message: stringField(check, "Message"),
 			Tier:    intField(check, "Tier"),
+			Details: stringMapField(check, "Details"),
 		})
 	}
 	return checks
@@ -543,6 +544,21 @@ func stringField(value reflect.Value, name string) string {
 		return ""
 	}
 	return field.String()
+}
+
+func stringMapField(value reflect.Value, name string) map[string]string {
+	field := exportedField(value, name)
+	if !field.IsValid() || field.Kind() != reflect.Map || field.IsNil() {
+		return nil
+	}
+	result := make(map[string]string, field.Len())
+	iter := field.MapRange()
+	for iter.Next() {
+		if iter.Key().Kind() == reflect.String && iter.Value().Kind() == reflect.String {
+			result[iter.Key().String()] = iter.Value().String()
+		}
+	}
+	return result
 }
 
 func intField(value reflect.Value, name string) int {
