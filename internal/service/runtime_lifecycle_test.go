@@ -182,7 +182,7 @@ func TestBuildDesiredStateSnapshotSupportsBahiaManagedComposeUnitWithoutAdoption
 
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo,
-		&mockRuntimeResolver{rt: &lifecycleMockRuntime{}}, &events.NoopPublisher{}, zap.NewNop(),
+		&mockRuntimeResolver{rt: &desiredStateLifecycleMockRuntime{}}, &events.NoopPublisher{}, zap.NewNop(),
 		WithRuntimeLifecycleDeploymentUnits(unitRepo),
 	)
 	spec, err := lifecycle.BuildDesiredStateSnapshot(ctx, svc.ID, env.ID, artifact.ID, &unit.ID)
@@ -197,6 +197,9 @@ func TestBuildDesiredStateSnapshotSupportsBahiaManagedComposeUnitWithoutAdoption
 	}
 	if spec.ComposeExtension == nil {
 		t.Fatalf("Compose extension was not persisted in desired state")
+	}
+	if _, _, _, err := lifecycle.resolveForDeploymentUnit(ctx, svc.ID, env.ID, unit); err != nil {
+		t.Fatalf("first deployment to Bahia-managed unit must not require adopted state: %v", err)
 	}
 }
 
@@ -509,6 +512,8 @@ type desiredStateLifecycleMockRuntime struct {
 	applyResultNames []string
 	lastDesiredHash  string
 	applied          bool
+	observeStatuses  []domain.HealthStatus
+	observeCalls     int
 }
 
 func (m *desiredStateLifecycleMockRuntime) Type() domain.RuntimeType {
@@ -545,17 +550,57 @@ func (m *desiredStateLifecycleMockRuntime) ApplyDesiredState(_ context.Context, 
 	}, nil
 }
 func (m *desiredStateLifecycleMockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	health := domain.HealthStatusHealthy
+	if len(m.observeStatuses) > 0 {
+		index := m.observeCalls
+		if index >= len(m.observeStatuses) {
+			index = len(m.observeStatuses) - 1
+		}
+		health = m.observeStatuses[index]
+	}
+	m.observeCalls++
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageDigest: "sha256:target",
 		ObservedImageRepo:   "ghcr.io/org/api",
 		ObservedContainerID: serviceName + "-container",
-		HealthStatus:        domain.HealthStatusHealthy,
+		HealthStatus:        health,
 		Source:              "desired-state-mock",
 		NormalizedHash:      m.lastDesiredHash,
 		ObservedAt:          time.Now().UTC(),
 	}, nil
+}
+
+func TestObserveDeploymentHealthConvergesFromStartingToHealthy(t *testing.T) {
+	rt := &desiredStateLifecycleMockRuntime{observeStatuses: []domain.HealthStatus{
+		domain.HealthStatusStarting,
+		domain.HealthStatusHealthy,
+	}}
+	lifecycle := &RuntimeLifecycleService{healthTimeout: 50 * time.Millisecond, healthInterval: time.Millisecond}
+	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true)
+	if err != nil {
+		t.Fatalf("observeDeploymentHealth: %v", err)
+	}
+	if obs == nil || obs.HealthStatus != domain.HealthStatusHealthy || rt.observeCalls != 2 {
+		t.Fatalf("health convergence = obs:%#v calls:%d", obs, rt.observeCalls)
+	}
+}
+
+func TestObserveDeploymentHealthTimeoutReturnsSafeFailureAndLatestObservation(t *testing.T) {
+	rt := &desiredStateLifecycleMockRuntime{observeStatuses: []domain.HealthStatus{domain.HealthStatusUnhealthy}}
+	lifecycle := &RuntimeLifecycleService{healthTimeout: 4 * time.Millisecond, healthInterval: time.Millisecond}
+	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true)
+	if obs == nil || obs.HealthStatus != domain.HealthStatusUnhealthy {
+		t.Fatalf("timeout did not preserve latest observation: %#v", obs)
+	}
+	healthErr, ok := err.(*DeploymentHealthError)
+	if !ok || healthErr.Code != "health_check_timeout" {
+		t.Fatalf("timeout error = %#v, want safe health_check_timeout", err)
+	}
+	if strings.Contains(healthErr.Message, "arcana") {
+		t.Fatalf("safe failure message leaked runtime target: %q", healthErr.Message)
+	}
 }
 
 var _ runtime.DesiredStateApplier = (*desiredStateLifecycleMockRuntime)(nil)
@@ -565,6 +610,10 @@ type mockRuntimeResolver struct {
 }
 
 func (r *mockRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtime.Runtime, error) {
+	return r.rt, nil
+}
+
+func (r *mockRuntimeResolver) ResolveDeploymentUnit(_ *domain.Service, _ *domain.Environment, _ *domain.DeploymentUnit) (runtime.Runtime, error) {
 	return r.rt, nil
 }
 

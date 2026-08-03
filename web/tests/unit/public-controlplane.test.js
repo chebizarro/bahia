@@ -156,6 +156,29 @@ describe('public controlplane command helpers', () => {
     });
   });
 
+  it('submits the reviewed public route in the signed idempotent deploy request', async () => {
+    const hash = `sha256:${'d'.repeat(64)}`;
+    const publicRoute = {
+      hostname: 'arcana.example.com',
+      upstream_scheme: 'http',
+      upstream_port: 8080,
+      health_path: '/healthz',
+      tls: 'managed'
+    };
+
+    await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-1', hash, publicRoute);
+
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      operation: 'service/deploy',
+      payload: expect.objectContaining({
+        expected_desired_state_hash: hash,
+        idempotency_key: hash,
+        public_route: publicRoute
+      }),
+      requestId: hash
+    }));
+  });
+
   it('uses the desired-state hash to idempotently persist managed service configuration', async () => {
     const hash = `sha256:${'c'.repeat(64)}`;
     await api.updateService('svc-1', {

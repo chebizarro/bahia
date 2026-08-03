@@ -52,6 +52,13 @@ func (r *fakeEncryptedSecretRepo) GetCurrentVersion(_ context.Context, secretID 
 	}
 	return nil, nil
 }
+func (r *fakeEncryptedSecretRepo) ListVersions(ctx context.Context, secretID uuid.UUID) ([]domain.SecretVersion, error) {
+	version, err := r.GetCurrentVersion(ctx, secretID)
+	if err != nil || version == nil {
+		return nil, err
+	}
+	return []domain.SecretVersion{*version}, nil
+}
 func (r *fakeEncryptedSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	out := []domain.ServiceSecret{}
 	for _, s := range r.records {
@@ -820,6 +827,63 @@ func TestEncryptedRouteHandlers_GetRunLogsSuccessAndInProgressError(t *testing.T
 	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
 	if response.Error == nil {
 		t.Fatalf("expected ContextVM error for running logs, got %+v", response)
+	}
+}
+
+func TestEncryptedRouteHandlers_GetRunLogsRedactsReferencedSecretsBeforeTailing(t *testing.T) {
+	runID := uuid.New()
+	serviceID := uuid.New()
+	intentID := uuid.New()
+	secretID := uuid.New()
+	servicesRepo, rbac := encryptedAuthDeps(t, serviceID, uuid.New(), domain.RoleViewer)
+	encryptor, err := secrets.NewEncryptor(testServiceKey)
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	secretValue := "pa\"ssword"
+	ciphertext, err := encryptor.Encrypt(secretValue, domain.EncryptionAES256)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	secretRepo := newFakeEncryptedSecretRepo()
+	secretRepo.records[secretID] = &domain.ServiceSecret{
+		ID: secretID, ServiceID: serviceID, Name: "DATABASE_PASSWORD",
+		EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256, Version: 1,
+	}
+	intent := &domain.DeploymentIntent{
+		ID:        intentID,
+		ServiceID: serviceID,
+		DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{
+			EnvVar: "DATABASE_PASSWORD", Name: "DATABASE_PASSWORD", SecretID: secretID,
+		}}},
+	}
+	run := &domain.DeploymentRun{ID: runID, DeploymentIntentID: intentID, Status: domain.RunStatusSucceeded}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Secrets:   secretRepo,
+		Encryptor: encryptor,
+		Runs:      &fakeEncryptedRunRepo{run: run},
+		RunLogs: fakeEncryptedRunLogs{logs: &adapterruntime.RunLogs{
+			RunID:  runID,
+			Stdout: "boot\nDATABASE_PASSWORD=" + secretValue + "\nready",
+			Stderr: "json=pa\\\"ssword",
+		}},
+		Services: servicesRepo,
+		Intents:  &fakeEncryptedIntentRepo{intent: intent},
+		RBAC:     rbac,
+		Logger:   zap.NewNop(),
+	})
+	transport, publisher := encryptedRouteTransport(t, h)
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodDeploymentRunLogsGet, map[string]any{
+		"run_id": runID.String(), "tail": 2, "stream": "merged",
+	}))
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	logs := payload["logs"].(map[string]any)
+	serialized, _ := json.Marshal(logs)
+	if strings.Contains(string(serialized), secretValue) || strings.Contains(string(serialized), "pa\\\\\\\"ssword") {
+		t.Fatalf("run logs leaked referenced secret: %s", serialized)
+	}
+	if stdout, _ := logs["stdout"].(string); stdout != "DATABASE_PASSWORD=[REDACTED]\nready" {
+		t.Fatalf("stdout was not redacted before tailing: %q", stdout)
 	}
 }
 

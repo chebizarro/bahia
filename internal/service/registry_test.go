@@ -914,6 +914,105 @@ func TestCompleteDeploymentRunPreservesHistoricalDeploymentUnitIdentity(t *testi
 	}
 }
 
+func TestCompleteDeploymentRunPreservesHealthyInSyncObservation(t *testing.T) {
+	registry, _, _, _, _, intentRepo, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	artifact := seedArtifact(t, registry, svc, "sha256:healthy")
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		DesiredHash: "sha256:desired",
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		DesiredState: desired, DesiredHash: desired.DesiredHash,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+	run := &domain.DeploymentRun{DeploymentIntentID: intent.ID, LoomJobID: "runtime:direct"}
+	if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	observationID := uuid.New()
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		DesiredArtifactID: &artifact.ID, DesiredIntentID: &intent.ID,
+		DesiredRuntimeState: desired, DesiredHash: desired.DesiredHash,
+		CurrentObservationID: &observationID, DriftStatus: domain.DriftStatusInSync,
+	}
+	if err := registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		t.Fatal(err)
+	}
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("completion regressed drift status to %q", state.DriftStatus)
+	}
+	if state.CurrentObservationID == nil || *state.CurrentObservationID != observationID {
+		t.Fatalf("completion lost current observation: %v", state.CurrentObservationID)
+	}
+}
+
+func TestRecordObservationStartingDoesNotClaimInSync(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		DesiredHash:         "sha256:same",
+		DesiredRuntimeState: &domain.DesiredServiceSpec{DesiredHash: "sha256:same"},
+	}
+	obs := &domain.RuntimeObservation{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		NormalizedHash: "sha256:same", HealthStatus: domain.HealthStatusStarting,
+		ObservedAt: time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(ctx, obs); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusDeploying {
+		t.Fatalf("starting observation drift = %q, want deploying", got)
+	}
+}
+
+func TestRecordObservationDelayedProjectionCannotRegressCurrentState(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		DesiredHash:         "sha256:same",
+		DesiredRuntimeState: &domain.DesiredServiceSpec{DesiredHash: "sha256:same"},
+	}
+	newer := &domain.RuntimeObservation{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		NormalizedHash: "sha256:same", HealthStatus: domain.HealthStatusHealthy,
+		ObservedAt: time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	older := &domain.RuntimeObservation{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		NormalizedHash: "sha256:old", HealthStatus: domain.HealthStatusUnhealthy,
+		ObservedAt: newer.ObservedAt.Add(-time.Minute),
+	}
+	if err := registry.RecordObservation(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state.CurrentObservationID == nil || *state.CurrentObservationID != newer.ID {
+		t.Fatalf("delayed observation replaced current observation: %v", state.CurrentObservationID)
+	}
+	if state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("delayed observation regressed drift to %q", state.DriftStatus)
+	}
+}
+
 func uuidPointer(id uuid.UUID) *uuid.UUID {
 	return &id
 }
@@ -1462,7 +1561,7 @@ func TestRecordObservation_NonDesiredStateArtifactDigestPathStillWorks(t *testin
 		ServiceID:           svc.ID,
 		EnvironmentID:       env.ID,
 		ObservedImageDigest: artifact.ImageDigest,
-		HealthStatus:        domain.HealthStatusStopped,
+		HealthStatus:        domain.HealthStatusHealthy,
 		Source:              "docker",
 		ObservedAt:          time.Now().UTC(),
 	}

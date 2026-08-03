@@ -312,6 +312,29 @@ Legend: **E2E** = signed browser-store operation through registered backend and 
 | Secret-safe Loom submission | Unsafe | **Hardened** | Raw secrets/payment tokens and bunker URLs in cmd/args/env/params rejected without echo. Reference resolution still missing. |
 | Browser wizard | Missing | Missing | Explicitly outside item 01; no UI added. |
 
+## Item 06 implementation status (2026-08-02)
+
+Item `fp-bahia-arcana-06-routing` closes the hostname workflow gap recorded above:
+
+- the signed deployment wizard has a distinct public-route step and exact non-secret DNS, remote Tunnel, proxy, TLS, ordering, and rollback review;
+- managed-zone ownership, protected-zone policy, provider collision, signed port exposure/allowlist, upstream HTTP, and managed TLS validations fail before mutation;
+- the production provider uses Cloudflare APIs for the fleet's remote-managed Tunnel and proxied DNS without shell-editing connector, nginx, or Cloudflare files;
+- a healthy application apply precedes route publication, HTTPS verification gates success, and provider/application compensation protects the prior public route on failure;
+- route-bearing recovery replays the idempotent app-first route flow rather than declaring success from application observation alone.
+
+## Item 07 implementation status (2026-08-02)
+
+Item `fp-bahia-arcana-07-observability` closes the deployment lifecycle gaps recorded above while preserving this contract's security boundary:
+
+- approved intents, including protected-environment approvals, execute only through the workflow coordinator; rejected intents create no run and do not touch runtime state;
+- direct Compose runs persist deterministic phases, resume non-terminal work after restart, wait for a healthy observation, and preserve the resulting `in_sync` state;
+- intent/run/state projections expose the safe unit key/endpoint alias, immutable digest, desired hash, normalized policy result, phase history, classified failure, health, observed digest/hash, and reconciliation timestamps;
+- `/deployments/<intent-id>` is the linkable browser aggregate, with per-run redacted logs and an explicit rollback target;
+- `service/rollback` now requires a previously successful artifact for the same unit and creates a fresh desired-state, current-policy-evaluated intent that again respects protected-environment approval; and
+- browser projections merge corrected and legacy relay coordinates by logical identity and domain timestamp, retaining tombstone watermarks across reconnect replay.
+
+Stored logs fail closed unless every retained version of each desired-state secret reference can be decrypted and redacted before tailing. Public hostname, DNS, proxy, and TLS readiness remain owned by item 06; durable idempotency across process restarts remains a later contract gap.
+
 ## Later-subtask acceptance boundary
 
 The journey becomes browser-first only when later work:

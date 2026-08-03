@@ -26,14 +26,19 @@ type deploymentLoomClient interface {
 }
 
 type deploymentRuntimeLifecycle interface {
-	DeployDeploymentUnit(
+	DeployDeploymentUnitWithStatus(
 		context.Context,
 		uuid.UUID,
 		uuid.UUID,
 		*uuid.UUID,
 		*domain.DeploymentUnit,
 		*domain.DesiredServiceSpec,
+		service.DeployStatusCallback,
 	) (*domain.RuntimeObservation, error)
+}
+
+type publicRouteLifecycle interface {
+	Apply(context.Context, *domain.DesiredPublicRoutePlan) error
 }
 
 type Coordinator struct {
@@ -42,12 +47,16 @@ type Coordinator struct {
 	workerPolicy     *service.WorkerPolicyService
 	deploymentUnits  repository.DeploymentUnitRepository
 	runtimeLifecycle deploymentRuntimeLifecycle
+	publicRoutes     publicRouteLifecycle
 	publisher        events.Publisher
 	logger           *zap.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	executionMu      sync.Mutex
+	activeExecutions map[uuid.UUID]struct{}
 }
 
 // NewCoordinator creates a new workflow Coordinator.
@@ -64,12 +73,13 @@ func NewCoordinator(
 		loomAdapter = loomClient
 	}
 	c := &Coordinator{
-		registry:  registry,
-		loom:      loomAdapter,
-		publisher: publisher,
-		logger:    logger,
-		ctx:       ctx,
-		cancel:    cancel,
+		registry:         registry,
+		loom:             loomAdapter,
+		publisher:        publisher,
+		logger:           logger,
+		ctx:              ctx,
+		cancel:           cancel,
+		activeExecutions: make(map[uuid.UUID]struct{}),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -93,10 +103,15 @@ func WithDeploymentUnitRouting(units repository.DeploymentUnitRepository, lifecy
 	}
 }
 
+// WithPublicRoutes applies signed edge plans after a healthy direct-runtime deploy.
+func WithPublicRoutes(routes publicRouteLifecycle) CoordinatorOption {
+	return func(c *Coordinator) { c.publicRoutes = routes }
+}
+
 // RecoverNonTerminalRuns reattaches completion awaits for persisted Loom jobs
 // left queued or running by a previous process instance.
 func (c *Coordinator) RecoverNonTerminalRuns(ctx context.Context) error {
-	if c.registry == nil || c.loom == nil {
+	if c.registry == nil {
 		return nil
 	}
 	runs, err := c.registry.ListNonTerminalDeploymentRuns(ctx)
@@ -107,11 +122,14 @@ func (c *Coordinator) RecoverNonTerminalRuns(ctx context.Context) error {
 	recovered := 0
 	for i := range runs {
 		run := runs[i]
-		if !isLoomDeploymentJob(run.LoomJobID) {
-			continue
+		switch {
+		case strings.TrimSpace(run.LoomJobID) == "runtime:direct":
+			c.startDirectRuntimeRecovery(&run)
+			recovered++
+		case c.loom != nil && isLoomDeploymentJob(run.LoomJobID):
+			c.startCompletionAwait(&run)
+			recovered++
 		}
-		c.startCompletionAwait(&run)
-		recovered++
 	}
 	c.logger.Info("deployment run recovery initialized", zap.Int("recovered_runs", recovered))
 	return nil
@@ -185,6 +203,9 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}
 	if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose {
 		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
+	}
+	if intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
+		return fmt.Errorf("signed public routes require a Bahia-managed Compose deployment unit")
 	}
 
 	// Select a worker using the environment's worker policy (if configured).
@@ -395,6 +416,10 @@ func (c *Coordinator) executeDirectRuntimeDeployment(
 	}
 
 	now := time.Now().UTC()
+	desiredSchemaVersion := ""
+	if intent.DesiredState != nil {
+		desiredSchemaVersion = intent.DesiredState.SchemaVersion
+	}
 	var deploymentUnitID *uuid.UUID
 	if unit.ID != uuid.Nil {
 		unitID := unit.ID
@@ -412,6 +437,14 @@ func (c *Coordinator) executeDirectRuntimeDeployment(
 			"deployment_unit_key": unit.Key,
 			"endpoint_ref":        unit.EndpointRef,
 		},
+		ApplyMetadata: map[string]any{
+			"desired_hash":                 intent.DesiredHash,
+			"desired_state_schema_version": desiredSchemaVersion,
+			"deployment_unit_key":          unit.Key,
+			"endpoint_ref":                 unit.EndpointRef,
+			"phase_sequence":               0,
+			"phases":                       []map[string]any{},
+		},
 	}
 	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
 		return fmt.Errorf("creating deployment run: %w", err)
@@ -427,33 +460,281 @@ func (c *Coordinator) executeDirectRuntimeDeployment(
 		zap.String("endpoint_ref", unit.EndpointRef),
 	)
 
-	if _, err := c.runtimeLifecycle.DeployDeploymentUnit(
-		ctx,
-		intent.ServiceID,
-		intent.EnvironmentID,
-		&intent.ArtifactID,
-		unit,
-		intent.DesiredState,
-	); err != nil {
+	return c.applyDirectRuntimeRun(ctx, run, intent, unit)
+}
+
+func (c *Coordinator) applyDirectRuntimeRun(
+	ctx context.Context,
+	run *domain.DeploymentRun,
+	intent *domain.DeploymentIntent,
+	unit *domain.DeploymentUnit,
+) error {
+	if run == nil || intent == nil || unit == nil {
+		return fmt.Errorf("run, intent, and deployment unit are required")
+	}
+	if run.ApplyMetadata == nil {
+		run.ApplyMetadata = map[string]any{}
+	}
+	statusFn := func(statusCtx context.Context, step service.DeployStep, _ string) {
+		c.recordDirectRunPhase(statusCtx, run, string(step), "running")
+	}
+	var (
+		previousDesired      *domain.DesiredServiceSpec
+		obs                  *domain.RuntimeObservation
+		deployErr            error
+		applicationAttempted bool
+	)
+	if intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
+		if c.publicRoutes == nil {
+			deployErr = fmt.Errorf("public route lifecycle is required for a signed public route")
+		} else {
+			previousDesired, deployErr = c.latestDeployedDesiredState(ctx, intent)
+			if deployErr != nil {
+				deployErr = fmt.Errorf("load previous desired state for route compensation: %w", deployErr)
+			}
+		}
+	}
+	if deployErr == nil {
+		applicationAttempted = true
+		obs, deployErr = c.runtimeLifecycle.DeployDeploymentUnitWithStatus(
+			ctx,
+			intent.ServiceID,
+			intent.EnvironmentID,
+			&intent.ArtifactID,
+			unit,
+			intent.DesiredState,
+			statusFn,
+		)
+	}
+	if deployErr != nil && errors.Is(deployErr, context.Canceled) {
+		return deployErr
+	}
+	if deployErr != nil && applicationAttempted && previousDesired != nil {
+		c.recordDirectRunPhase(context.WithoutCancel(ctx), run, "rollback_application", "running")
+		deployErr = c.restorePreviousApplication(intent, unit, previousDesired, deployErr)
+	}
+	if deployErr == nil && intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
+		c.recordDirectRunPhase(ctx, run, "routing", "running")
+		if routeErr := c.publicRoutes.Apply(ctx, intent.DesiredState.PublicRoute); routeErr != nil {
+			deployErr = fmt.Errorf("public route apply failed: %w", routeErr)
+			if previousDesired != nil {
+				c.recordDirectRunPhase(context.WithoutCancel(ctx), run, "rollback_application", "running")
+				deployErr = c.restorePreviousApplication(intent, unit, previousDesired, deployErr)
+			}
+		}
+	}
+
+	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer completeCancel()
+	if deployErr != nil {
+		code, message := safeDeploymentFailure(deployErr)
+		c.finishDirectRunProgress(completeCtx, run, obs, code, message)
 		exitCode := 1
-		completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer completeCancel()
 		if completeErr := c.registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusFailed, &exitCode); completeErr != nil {
 			c.logger.Error("failed to mark direct runtime deployment as failed",
 				zap.String("run_id", run.ID.String()),
 				zap.Error(completeErr),
 			)
 		}
-		return fmt.Errorf("direct runtime deploy failed: %w", err)
+		return fmt.Errorf("direct runtime deploy failed: %w", deployErr)
 	}
 
-	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer completeCancel()
+	c.finishDirectRunProgress(completeCtx, run, obs, "", "")
 	if err := c.registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
 		return fmt.Errorf("completing direct runtime deployment run: %w", err)
 	}
-
 	return nil
+}
+
+func (c *Coordinator) restorePreviousApplication(intent *domain.DeploymentIntent, unit *domain.DeploymentUnit, previous *domain.DesiredServiceSpec, cause error) error {
+	rollbackCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, rollbackErr := c.runtimeLifecycle.DeployDeploymentUnitWithStatus(
+		rollbackCtx,
+		intent.ServiceID,
+		intent.EnvironmentID,
+		&previous.ArtifactID,
+		unit,
+		previous,
+		nil,
+	)
+	if rollbackErr != nil {
+		return fmt.Errorf("%w; application rollback failed: %v", cause, rollbackErr)
+	}
+	return fmt.Errorf("%w; previous application desired state restored", cause)
+}
+
+func (c *Coordinator) latestDeployedDesiredState(ctx context.Context, current *domain.DeploymentIntent) (*domain.DesiredServiceSpec, error) {
+	if current == nil {
+		return nil, nil
+	}
+	intents, err := c.registry.ListDeploymentIntents(ctx, current.ServiceID, current.EnvironmentID, 50, 0)
+	if err != nil {
+		return nil, err
+	}
+	var latest *domain.DeploymentIntent
+	for i := range intents {
+		candidate := &intents[i]
+		if candidate.ID == current.ID || candidate.Status != domain.IntentStatusDeployed || candidate.DesiredState == nil {
+			continue
+		}
+		if !deploymentUnitIDsEqual(candidate.DeploymentUnitID, current.DeploymentUnitID) {
+			continue
+		}
+		if latest == nil || candidate.CreatedAt.After(latest.CreatedAt) {
+			latest = candidate
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	return latest.DesiredState, nil
+}
+
+func deploymentUnitIDsEqual(left, right *uuid.UUID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func (c *Coordinator) recordDirectRunPhase(ctx context.Context, run *domain.DeploymentRun, phase, status string) {
+	if run == nil {
+		return
+	}
+	sequence := metadataInt(run.ApplyMetadata["phase_sequence"]) + 1
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	phases := metadataPhases(run.ApplyMetadata["phases"])
+	if len(phases) > 0 && phases[len(phases)-1]["status"] == "running" {
+		phases[len(phases)-1]["status"] = "completed"
+		phases[len(phases)-1]["finished_at"] = now
+	}
+	phases = append(phases, map[string]any{"step": phase, "status": status, "started_at": now})
+	run.ApplyMetadata["phase"] = phase
+	run.ApplyMetadata["phase_sequence"] = sequence
+	run.ApplyMetadata["phases"] = phases
+	if err := c.registry.UpdateDeploymentRunApplyMetadata(ctx, run.ID, run.ApplyMetadata); err != nil {
+		c.logger.Warn("persist deployment run phase failed", zap.String("run_id", run.ID.String()), zap.Error(err))
+	}
+}
+
+func (c *Coordinator) finishDirectRunProgress(ctx context.Context, run *domain.DeploymentRun, obs *domain.RuntimeObservation, failureCode, failureMessage string) {
+	if run == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	phases := metadataPhases(run.ApplyMetadata["phases"])
+	if len(phases) > 0 {
+		if failureCode != "" {
+			phases[len(phases)-1]["status"] = "failed"
+		} else {
+			phases[len(phases)-1]["status"] = "completed"
+		}
+		phases[len(phases)-1]["finished_at"] = now
+	}
+	run.ApplyMetadata["phases"] = phases
+	if obs != nil {
+		run.ApplyMetadata["observation_id"] = obs.ID.String()
+		run.ApplyMetadata["health_status"] = string(obs.HealthStatus)
+	}
+	if failureCode != "" {
+		run.ApplyMetadata["failure"] = map[string]any{
+			"code":    failureCode,
+			"message": failureMessage,
+			"phase":   run.ApplyMetadata["phase"],
+		}
+	}
+	if err := c.registry.UpdateDeploymentRunApplyMetadata(ctx, run.ID, run.ApplyMetadata); err != nil {
+		c.logger.Warn("persist deployment run outcome failed", zap.String("run_id", run.ID.String()), zap.Error(err))
+	}
+}
+
+func safeDeploymentFailure(err error) (string, string) {
+	if healthErr, ok := err.(*service.DeploymentHealthError); ok {
+		return healthErr.Code, healthErr.Message
+	}
+	return "runtime_apply_failed", "Bahia could not apply the reviewed desired state."
+}
+
+func metadataInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func metadataPhases(value any) []map[string]any {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		result := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if phase, ok := item.(map[string]any); ok {
+				result = append(result, phase)
+			}
+		}
+		return result
+	default:
+		return []map[string]any{}
+	}
+}
+
+func (c *Coordinator) startDirectRuntimeRecovery(run *domain.DeploymentRun) {
+	if run == nil {
+		return
+	}
+	runCopy := *run
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		intent, err := c.registry.GetDeploymentIntent(c.ctx, runCopy.DeploymentIntentID)
+		if err != nil || intent == nil {
+			c.logger.Error("recover direct runtime run: load intent failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+			return
+		}
+		env, err := c.registry.GetEnvironment(c.ctx, intent.EnvironmentID)
+		if err != nil || env == nil {
+			c.logger.Error("recover direct runtime run: load environment failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+			return
+		}
+		unit, err := c.resolveDeploymentUnit(c.ctx, intent, env)
+		if err != nil {
+			c.logger.Error("recover direct runtime run: resolve unit failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+			return
+		}
+		if c.directRunAlreadyConverged(c.ctx, intent) {
+			completeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			c.finishDirectRunProgress(completeCtx, &runCopy, nil, "", "")
+			if err := c.registry.CompleteDeploymentRun(completeCtx, runCopy.ID, domain.RunStatusSucceeded, nil); err != nil {
+				c.logger.Error("recover direct runtime run: completion failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+			}
+			return
+		}
+		if err := c.applyDirectRuntimeRun(c.ctx, &runCopy, intent, unit); err != nil && !errors.Is(err, context.Canceled) {
+			c.logger.Error("recover direct runtime run failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+		}
+	}()
+}
+
+func (c *Coordinator) directRunAlreadyConverged(ctx context.Context, intent *domain.DeploymentIntent) bool {
+	if intent == nil || (intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil) {
+		// Runtime convergence alone cannot prove DNS, Tunnel, proxy, and HTTPS
+		// convergence. Recovery safely replays the idempotent app-first route flow.
+		return false
+	}
+	state, err := c.registry.GetEnvironmentServiceState(ctx, intent.ServiceID, intent.EnvironmentID)
+	if err != nil || state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID ||
+		state.DesiredHash == "" || state.DesiredHash != intent.DesiredHash || state.DriftStatus != domain.DriftStatusInSync {
+		return false
+	}
+	obs, err := c.registry.GetLatestObservation(ctx, intent.ServiceID, intent.EnvironmentID)
+	return err == nil && obs != nil && obs.HealthStatus == domain.HealthStatusHealthy
 }
 
 func (c *Coordinator) startCompletionAwait(run *domain.DeploymentRun) {
@@ -553,35 +834,37 @@ func mapLoomStatus(s string) domain.DeploymentRunStatus {
 
 // SetupEventHandlers registers event-driven workflow triggers.
 func (c *Coordinator) SetupEventHandlers(pub events.Publisher) {
-	autoExecute := func(ctx context.Context, e events.Event) {
+	pub.Subscribe(events.EventDeploymentIntentApproved, func(_ context.Context, e events.Event) {
 		id, err := uuid.Parse(e.EntityID)
 		if err != nil {
 			return
 		}
+		c.startExecution(id)
+	})
+}
 
-		intent, err := c.registry.GetDeploymentIntent(ctx, id)
-		if err != nil {
-			c.logger.Error("failed to load deployment intent for auto-execute",
-				zap.String("intent_id", e.EntityID),
-				zap.Error(err),
-			)
-			return
-		}
-		if intent == nil || intent.Status != domain.IntentStatusApproved {
-			return
-		}
-
-		if err := c.ExecuteDeployment(ctx, id); err != nil {
-			c.logger.Error("auto-execute deployment failed",
-				zap.String("intent_id", e.EntityID),
-				zap.String("event_type", string(e.Type)),
-				zap.Error(err),
-			)
-		}
+func (c *Coordinator) startExecution(intentID uuid.UUID) {
+	c.executionMu.Lock()
+	if _, active := c.activeExecutions[intentID]; active {
+		c.executionMu.Unlock()
+		return
 	}
+	c.activeExecutions[intentID] = struct{}{}
+	c.executionMu.Unlock()
 
-	// Auto-execute explicitly approved intents and intents that are born approved
-	// (for example, non-protected environments).
-	pub.Subscribe(events.EventDeploymentIntentCreated, autoExecute)
-	pub.Subscribe(events.EventDeploymentIntentApproved, autoExecute)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		defer func() {
+			c.executionMu.Lock()
+			delete(c.activeExecutions, intentID)
+			c.executionMu.Unlock()
+		}()
+		if err := c.ExecuteDeployment(c.ctx, intentID); err != nil && !errors.Is(err, context.Canceled) {
+			c.logger.Error("auto-execute deployment failed",
+				zap.String("intent_id", intentID.String()),
+				zap.Error(err),
+			)
+		}
+	}()
 }

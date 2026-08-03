@@ -151,6 +151,40 @@ The artifact image is not typed into the runtime definition. Bahia derives an im
 
 The same normalized managed definition is projected by the backend into the canonical non-secret desired state used for preview, hashing, persistence, rendering, policy, and apply. Browser code does not independently calculate the desired-state hash.
 
+## Managed Public Hostnames
+
+The Deploy wizard has a separate **Public route** step. Enable Bahia-managed HTTPS, then enter a fully qualified hostname, the container target port exposed by the signed runtime configuration, and an HTTPS health path. The final review shows the exact non-secret proxied CNAME, remote Tunnel ingress, proxy origin, TLS expectation, provider configuration hash, ordered operations, and compensation plan. Those fields are part of the desired-state hash and the signed deploy request.
+
+Bahia rejects hostnames outside configured zones, organizations not authorized for a zone, unmanaged DNS or Tunnel collisions, ports that are not both configured and exposed, TLS passthrough, and protected-zone use from an unprotected environment. Protected zones continue through deployment approval before any app or route mutation.
+
+The production provider uses the Cloudflare API for the fleet's remote-managed Tunnel and proxied DNS. It does not edit connector files, nginx, or Cloudflare configuration with shell commands. The application is applied and observed healthy first; Bahia then updates Tunnel ingress, publishes DNS, and requires an HTTPS 2xx response at the requested health path. Route/TLS failure restores the prior provider state and, when available, the prior application desired state.
+
+Configure the backend with server-side values under `edge_routing`:
+
+```yaml
+edge_routing:
+  enabled: true
+  provider: cloudflare_tunnel
+  backend_ref: public-edge
+  api_base_url: https://api.cloudflare.com/client/v4
+  api_token_ref: "<opaque Bahia secret UUID>"
+  account_id: "<Cloudflare account ID>"
+  tunnel_id: "<remote-managed Tunnel UUID>"
+  verify_timeout: 30s
+  zones:
+    - name: example.com
+      zone_id: "<Cloudflare zone ID>"
+      allowed_org_ids: ["<Bahia organization UUID>"]
+      protected: true
+      ttl: 1
+  origins:
+    - deployment_unit_id: "<Bahia deployment unit UUID>"
+      host: edge-01.internal
+      allowed_ports: [8080]
+```
+
+The referenced credential may be a raw API token or a JSON secret containing `api_token`, `token`, or `APIToken`. It is resolved only on the Bahia server and never appears in route previews or provider errors. Direct runtime actions must also be enabled because public routes target an explicit Bahia-managed deployment unit.
+
 ## Service Actions
 
 Deploy, restart, and stop are signer-first Nostr control-plane operations.

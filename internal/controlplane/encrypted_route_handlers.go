@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,10 @@ type RunLogFetcher interface {
 // SignatureVerifier is the encrypted request contract for artifact signature verification.
 type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
+}
+
+type secretVersionHistoryLister interface {
+	ListVersions(ctx context.Context, secretID uuid.UUID) ([]domain.SecretVersion, error)
 }
 
 // RegistryMutationBackend is the ContextVM contract for dashboard registry
@@ -967,7 +972,8 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 	if run == nil {
 		return nil, fmt.Errorf("deployment run not found")
 	}
-	if err := h.authorizeRunPermission(ctx, request, run, domain.PermReadLogs); err != nil {
+	intent, err := h.authorizeRunPermission(ctx, request, run, domain.PermReadLogs)
+	if err != nil {
 		return nil, err
 	}
 	if !isTerminalEncryptedRunStatus(run.Status) {
@@ -980,6 +986,10 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 	}
 	if logs == nil {
 		logs = &adapterruntime.RunLogs{RunID: runID}
+	}
+	if err := h.redactRunLogSecrets(ctx, intent, logs); err != nil {
+		h.logger.Error("failed to redact encrypted request run logs", zap.String("run_id", runID.String()), zap.Error(err))
+		return nil, fmt.Errorf("failed to safely prepare logs")
 	}
 	if payload.Tail > 0 {
 		logs.Stdout = adapterruntime.TailLogs(logs.Stdout, payload.Tail)
@@ -1002,21 +1012,85 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 	return map[string]any{"logs": logs, "stream": stream}, nil
 }
 
-func (h *EncryptedRouteHandlers) authorizeRunPermission(ctx context.Context, request EncryptedRequest, run *domain.DeploymentRun, permission domain.Permission) error {
+func (h *EncryptedRouteHandlers) authorizeRunPermission(ctx context.Context, request EncryptedRequest, run *domain.DeploymentRun, permission domain.Permission) (*domain.DeploymentIntent, error) {
 	if h.intents == nil {
-		return fmt.Errorf("deployment intent lookup is not configured")
+		return nil, fmt.Errorf("deployment intent lookup is not configured")
 	}
 	intent, err := h.intents.GetByID(ctx, run.DeploymentIntentID)
 	if err != nil {
 		if err == repository.ErrNotFound {
-			return fmt.Errorf("deployment intent not found")
+			return nil, fmt.Errorf("deployment intent not found")
 		}
-		return fmt.Errorf("failed to fetch deployment intent")
+		return nil, fmt.Errorf("failed to fetch deployment intent")
 	}
 	if intent == nil {
-		return fmt.Errorf("deployment intent not found")
+		return nil, fmt.Errorf("deployment intent not found")
 	}
-	return h.authorizeServicePermission(ctx, request, intent.ServiceID, permission)
+	if err := h.authorizeServicePermission(ctx, request, intent.ServiceID, permission); err != nil {
+		return nil, err
+	}
+	return intent, nil
+}
+
+func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent *domain.DeploymentIntent, logs *adapterruntime.RunLogs) error {
+	if intent == nil || intent.DesiredState == nil || len(intent.DesiredState.SecretRefs) == 0 {
+		return nil
+	}
+	if h.secrets == nil || h.encryptor == nil {
+		return fmt.Errorf("secret redaction dependencies are not configured")
+	}
+	values := make([]string, 0, len(intent.DesiredState.SecretRefs))
+	seen := make(map[uuid.UUID]struct{}, len(intent.DesiredState.SecretRefs))
+	for _, ref := range intent.DesiredState.SecretRefs {
+		if ref.SecretID == uuid.Nil {
+			return fmt.Errorf("desired secret reference is incomplete")
+		}
+		if _, ok := seen[ref.SecretID]; ok {
+			continue
+		}
+		seen[ref.SecretID] = struct{}{}
+		versions := make([]domain.SecretVersion, 0, 1)
+		if history, ok := h.secrets.(secretVersionHistoryLister); ok {
+			listed, err := history.ListVersions(ctx, ref.SecretID)
+			if err != nil {
+				return fmt.Errorf("load referenced secret history")
+			}
+			versions = append(versions, listed...)
+		} else {
+			version, err := h.secrets.GetCurrentVersion(ctx, ref.SecretID)
+			if err != nil || version == nil {
+				return fmt.Errorf("load referenced secret version")
+			}
+			versions = append(versions, *version)
+		}
+		if len(versions) == 0 {
+			return fmt.Errorf("referenced secret has no retained versions")
+		}
+		for i := range versions {
+			value, err := h.encryptor.Decrypt(versions[i].EncryptedValue, versions[i].EncryptionMethod)
+			if err != nil {
+				return fmt.Errorf("decrypt referenced secret")
+			}
+			if value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	// Longest first prevents a short secret that is a substring of another from
+	// leaving a partially-redacted value behind.
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	redact := func(input string) string {
+		for _, value := range values {
+			input = strings.ReplaceAll(input, value, "[REDACTED]")
+			if encoded, err := json.Marshal(value); err == nil && len(encoded) >= 2 {
+				input = strings.ReplaceAll(input, string(encoded[1:len(encoded)-1]), "[REDACTED]")
+			}
+		}
+		return input
+	}
+	logs.Stdout = redact(logs.Stdout)
+	logs.Stderr = redact(logs.Stderr)
+	return nil
 }
 
 func isTerminalEncryptedRunStatus(status domain.DeploymentRunStatus) bool {

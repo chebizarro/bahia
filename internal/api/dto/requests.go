@@ -140,12 +140,24 @@ type RegisterArtifactRequest struct {
 // policy permits, execute a deployment intent. RequestedBy is intentionally
 // absent: handlers derive it from the verified request event.
 type ServiceDeployRequest struct {
-	ServiceID                uuid.UUID  `json:"service_id"`
-	EnvironmentID            uuid.UUID  `json:"environment_id"`
-	DeploymentUnitID         *uuid.UUID `json:"deployment_unit_id,omitempty"`
-	ArtifactID               uuid.UUID  `json:"artifact_id"`
-	ExpectedDesiredStateHash string     `json:"expected_desired_state_hash,omitempty"`
-	IdempotencyKey           string     `json:"idempotency_key,omitempty"`
+	ServiceID                uuid.UUID                  `json:"service_id"`
+	EnvironmentID            uuid.UUID                  `json:"environment_id"`
+	DeploymentUnitID         *uuid.UUID                 `json:"deployment_unit_id,omitempty"`
+	ArtifactID               uuid.UUID                  `json:"artifact_id"`
+	ExpectedDesiredStateHash string                     `json:"expected_desired_state_hash,omitempty"`
+	PublicRoute              *domain.PublicRouteRequest `json:"public_route,omitempty"`
+	IdempotencyKey           string                     `json:"idempotency_key,omitempty"`
+}
+
+// ServiceRollbackRequest creates a fresh, policy-checked deployment intent for
+// an explicit previously healthy artifact.
+type ServiceRollbackRequest struct {
+	ServiceID          uuid.UUID  `json:"service_id"`
+	EnvironmentID      uuid.UUID  `json:"environment_id"`
+	DeploymentUnitID   *uuid.UUID `json:"deployment_unit_id,omitempty"`
+	TargetArtifactID   uuid.UUID  `json:"target_artifact_id"`
+	SupersedesIntentID uuid.UUID  `json:"supersedes_intent_id"`
+	IdempotencyKey     string     `json:"idempotency_key,omitempty"`
 }
 
 // ServiceDeployPreviewRequest builds a canonical non-secret desired state from
@@ -156,6 +168,7 @@ type ServiceDeployPreviewRequest struct {
 	DeploymentUnitID     *uuid.UUID                   `json:"deployment_unit_id,omitempty"`
 	ArtifactID           uuid.UUID                    `json:"artifact_id"`
 	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config"`
+	PublicRoute          *domain.PublicRouteRequest   `json:"public_route,omitempty"`
 	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
 }
 

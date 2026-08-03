@@ -1,0 +1,15 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_06_ROUTING",
+  "beads": ["bahia-75pt0"],
+  "external_ledger_item": "fp-bahia-arcana-06-routing",
+  "title": "Signed public hostname and managed edge routing provisioning",
+  "intended_behavior": [
+    "The deployment wizard offers a distinct public-route step for an operator-selected fully qualified hostname, target port, and HTTPS health path.",
+    "Bahia validates managed-zone ownership, protected-zone policy, provider collisions, signed runtime port exposure, upstream HTTP, and managed edge TLS before intent creation.",
+    "The authoritative preview contains exact non-secret DNS, remote-tunnel, proxy, TLS, apply-order, rollback, and provider-configuration hash data inside the desired-state hash.",
+    "A healthy application is applied before remote Cloudflare Tunnel ingress and proxied DNS; HTTPS verification completes the run.",
+    "Provider mutations compensate on failure, and a route failure restores the previous application desired state when one exists."
+  ],
+  "scope": ["internal/domain/public_route.go", "internal/adapters/routing", "internal/service/public_route.go", "internal/controlplane/encrypted_service_handlers.go", "internal/workflow/coordinator.go", "web/src/routes/services/[id]/+page.svelte"],
+  "deferred": ["bahia-5teth"]
+}

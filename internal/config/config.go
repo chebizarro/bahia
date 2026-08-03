@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -50,6 +51,7 @@ type Config struct {
 	Packages       PackageControlplaneConfig `koanf:"packages"`
 	Assistant      AssistantConfig           `koanf:"assistant"`
 	DNS            DNSConfig                 `koanf:"dns"`
+	EdgeRouting    EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
 	FIPS           FIPSConfig                `koanf:"fips"`
 	SoulFactory    SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
 }
@@ -114,6 +116,34 @@ type FIPSConfig struct {
 	AutoRegisterWorkers  bool     `koanf:"auto_register_workers"`
 	AllowedNpubs         []string `koanf:"allowed_npubs"`
 	OverlayAddressPrefix string   `koanf:"overlay_address_prefix"`
+}
+
+// EdgeRoutingConfig controls signed public hostname provisioning through a managed provider.
+type EdgeRoutingConfig struct {
+	Enabled       bool                      `koanf:"enabled" yaml:"enabled"`
+	Provider      string                    `koanf:"provider" yaml:"provider"`
+	BackendRef    string                    `koanf:"backend_ref" yaml:"backend_ref"`
+	APIBaseURL    string                    `koanf:"api_base_url" yaml:"api_base_url"`
+	APITokenRef   string                    `koanf:"api_token_ref" yaml:"api_token_ref"`
+	AccountID     string                    `koanf:"account_id" yaml:"account_id"`
+	TunnelID      string                    `koanf:"tunnel_id" yaml:"tunnel_id"`
+	VerifyTimeout time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout"`
+	Zones         []EdgeRoutingZoneConfig   `koanf:"zones" yaml:"zones"`
+	Origins       []EdgeRoutingOriginConfig `koanf:"origins" yaml:"origins"`
+}
+
+type EdgeRoutingZoneConfig struct {
+	Name          string   `koanf:"name" yaml:"name"`
+	ZoneID        string   `koanf:"zone_id" yaml:"zone_id"`
+	AllowedOrgIDs []string `koanf:"allowed_org_ids" yaml:"allowed_org_ids"`
+	Protected     bool     `koanf:"protected" yaml:"protected"`
+	TTL           int      `koanf:"ttl" yaml:"ttl"`
+}
+
+type EdgeRoutingOriginConfig struct {
+	DeploymentUnitID string `koanf:"deployment_unit_id" yaml:"deployment_unit_id"`
+	Host             string `koanf:"host" yaml:"host"`
+	AllowedPorts     []int  `koanf:"allowed_ports" yaml:"allowed_ports"`
 }
 
 // DNSConfig controls DNS orchestration projection and backend settings.
@@ -1148,6 +1178,9 @@ func (c *Config) validate() error {
 	if err := c.validateDNS(); err != nil {
 		return err
 	}
+	if err := c.validateEdgeRouting(); err != nil {
+		return err
+	}
 	if err := c.validateFIPS(); err != nil {
 		return err
 	}
@@ -1995,6 +2028,96 @@ func (c *Config) validateDNS() error {
 		}
 		if _, ok := zoneNames[meshZone]; !ok {
 			return fmt.Errorf("config validation failed: dns.projection.mesh_zone %q references unknown zone", meshZone)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateEdgeRouting() error {
+	r := &c.EdgeRouting
+	if !r.Enabled {
+		return nil
+	}
+	if !c.DirectRuntime.Enabled {
+		return fmt.Errorf("config validation failed: direct_runtime_actions.enabled=true is required when edge_routing.enabled=true")
+	}
+	r.Provider = strings.ToLower(strings.TrimSpace(r.Provider))
+	r.BackendRef = strings.TrimSpace(r.BackendRef)
+	r.APIBaseURL = strings.TrimRight(strings.TrimSpace(r.APIBaseURL), "/")
+	r.APITokenRef = strings.TrimSpace(r.APITokenRef)
+	r.AccountID = strings.TrimSpace(r.AccountID)
+	r.TunnelID = strings.TrimSpace(r.TunnelID)
+	if r.Provider != "cloudflare_tunnel" {
+		return fmt.Errorf("config validation failed: edge_routing.provider must be cloudflare_tunnel")
+	}
+	if r.BackendRef == "" || r.APITokenRef == "" || r.AccountID == "" || r.TunnelID == "" {
+		return fmt.Errorf("config validation failed: edge_routing backend_ref, api_token_ref, account_id, and tunnel_id are required")
+	}
+	if _, err := uuid.Parse(r.APITokenRef); err != nil {
+		return fmt.Errorf("config validation failed: edge_routing.api_token_ref must be an opaque secret UUID")
+	}
+	if r.APIBaseURL != "" {
+		parsed, err := url.Parse(r.APIBaseURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(c.DevMode && parsed.Scheme == "http")) {
+			return fmt.Errorf("config validation failed: edge_routing.api_base_url must use HTTPS (HTTP is allowed only in dev_mode)")
+		}
+	}
+	if r.VerifyTimeout <= 0 {
+		r.VerifyTimeout = 30 * time.Second
+	}
+	if len(r.Zones) == 0 || len(r.Origins) == 0 {
+		return fmt.Errorf("config validation failed: edge_routing zones and origins are required")
+	}
+	seenZones := map[string]struct{}{}
+	for i := range r.Zones {
+		z := &r.Zones[i]
+		var err error
+		z.Name, err = domain.NormalizePublicHostname(z.Name)
+		if err != nil {
+			return fmt.Errorf("config validation failed: edge_routing.zones[%d].name: %w", i, err)
+		}
+		z.ZoneID = strings.TrimSpace(z.ZoneID)
+		if z.ZoneID == "" || len(z.AllowedOrgIDs) == 0 {
+			return fmt.Errorf("config validation failed: edge_routing.zones[%d] requires zone_id and allowed_org_ids", i)
+		}
+		if _, exists := seenZones[z.Name]; exists {
+			return fmt.Errorf("config validation failed: duplicate edge routing zone %s", z.Name)
+		}
+		seenZones[z.Name] = struct{}{}
+		for _, raw := range z.AllowedOrgIDs {
+			if _, err := uuid.Parse(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("config validation failed: edge_routing.zones[%d] has invalid organization ID", i)
+			}
+		}
+		if z.TTL <= 0 {
+			z.TTL = 1
+		}
+	}
+	seenUnits := map[string]struct{}{}
+	for i := range r.Origins {
+		o := &r.Origins[i]
+		id, err := uuid.Parse(strings.TrimSpace(o.DeploymentUnitID))
+		if err != nil {
+			return fmt.Errorf("config validation failed: edge_routing.origins[%d].deployment_unit_id is invalid", i)
+		}
+		o.DeploymentUnitID = id.String()
+		o.Host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(o.Host)), ".")
+		if o.Host == "" || len(o.AllowedPorts) == 0 {
+			return fmt.Errorf("config validation failed: edge_routing.origins[%d] requires host and allowed_ports", i)
+		}
+		if net.ParseIP(o.Host) == nil {
+			if normalized, err := domain.NormalizePublicHostname(o.Host); err != nil || normalized != o.Host {
+				return fmt.Errorf("config validation failed: edge_routing.origins[%d].host must be an IP address or fully qualified DNS name", i)
+			}
+		}
+		if _, exists := seenUnits[o.DeploymentUnitID]; exists {
+			return fmt.Errorf("config validation failed: duplicate edge routing origin for deployment unit %s", o.DeploymentUnitID)
+		}
+		seenUnits[o.DeploymentUnitID] = struct{}{}
+		for _, port := range o.AllowedPorts {
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("config validation failed: edge_routing.origins[%d] has invalid port", i)
+			}
 		}
 	}
 	return nil

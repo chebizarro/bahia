@@ -21,6 +21,9 @@ const (
 	runtimeActionStopEvent    = events.EventRuntimeStop
 
 	directRuntimeGuardrailMessage = "direct runtime actions are only allowed for adopted direct_runtime workloads"
+
+	defaultRuntimeHealthTimeout  = 2 * time.Minute
+	defaultRuntimeHealthInterval = 2 * time.Second
 )
 
 // DeployStep represents a step in the desired-state deploy lifecycle.
@@ -38,6 +41,28 @@ const (
 // DeployStatusCallback is called during deploy to report step progression.
 // Implementations should be non-blocking and best-effort.
 type DeployStatusCallback func(ctx context.Context, step DeployStep, message string)
+
+// DeploymentHealthError is safe to project to operators. Cause details remain
+// server-side and are never included in Nostr run metadata.
+type DeploymentHealthError struct {
+	Code    string
+	Message string
+}
+
+func (e *DeploymentHealthError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+// DeploymentTargetSummary contains only non-secret deployment-unit identity.
+type DeploymentTargetSummary struct {
+	UnitID      *uuid.UUID         `json:"unit_id,omitempty"`
+	UnitKey     string             `json:"unit_key"`
+	RuntimeType domain.RuntimeType `json:"runtime_type"`
+	EndpointRef string             `json:"endpoint_ref"`
+}
 
 // EnvironmentApplyLocker serializes deploy operations per environment.
 type EnvironmentApplyLocker interface {
@@ -70,6 +95,8 @@ type RuntimeLifecycleService struct {
 	applyLock    EnvironmentApplyLocker
 
 	secretEncryptor *secretsAdapter.Encryptor
+	healthTimeout   time.Duration
+	healthInterval  time.Duration
 }
 
 // RuntimeLifecycleOption configures runtime lifecycle behavior.
@@ -98,6 +125,18 @@ func WithRuntimeLifecycleDeploymentUnits(repo repository.DeploymentUnitRepositor
 	}
 }
 
+// WithRuntimeHealthConvergence configures the bounded post-apply health check.
+func WithRuntimeHealthConvergence(timeout, interval time.Duration) RuntimeLifecycleOption {
+	return func(s *RuntimeLifecycleService) {
+		if timeout > 0 {
+			s.healthTimeout = timeout
+		}
+		if interval > 0 {
+			s.healthInterval = interval
+		}
+	}
+}
+
 // NewRuntimeLifecycleService creates a RuntimeLifecycleService.
 func NewRuntimeLifecycleService(
 	registry *RegistryService,
@@ -117,14 +156,16 @@ func NewRuntimeLifecycleService(
 		publisher = &events.NoopPublisher{}
 	}
 	svc := &RuntimeLifecycleService{
-		registry:     registry,
-		services:     services,
-		environments: environments,
-		artifacts:    artifacts,
-		state:        state,
-		resolver:     resolver,
-		publisher:    publisher,
-		logger:       logger,
+		registry:       registry,
+		services:       services,
+		environments:   environments,
+		artifacts:      artifacts,
+		state:          state,
+		resolver:       resolver,
+		publisher:      publisher,
+		logger:         logger,
+		healthTimeout:  defaultRuntimeHealthTimeout,
+		healthInterval: defaultRuntimeHealthInterval,
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -263,6 +304,29 @@ func (s *RuntimeLifecycleService) resolveDesiredStateDeploymentUnit(
 	return &svcCopy, env, &unitCopy, nil
 }
 
+// ResolveDeploymentTargetSummary resolves only safe unit identity for intent projections.
+func (s *RuntimeLifecycleService) ResolveDeploymentTargetSummary(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	requestedUnitID *uuid.UUID,
+) (*DeploymentTargetSummary, error) {
+	_, _, unit, err := s.resolveDesiredStateDeploymentUnit(ctx, serviceID, envID, requestedUnitID)
+	if err != nil {
+		return nil, err
+	}
+	var unitID *uuid.UUID
+	if unit.ID != uuid.Nil {
+		id := unit.ID
+		unitID = &id
+	}
+	return &DeploymentTargetSummary{
+		UnitID:      unitID,
+		UnitKey:     unit.Key,
+		RuntimeType: unit.RuntimeType,
+		EndpointRef: unit.EndpointRef,
+	}, nil
+}
+
 // Deploy deploys an artifact directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
 	return s.DeployWithStatus(ctx, serviceID, envID, artifactID, nil)
@@ -284,10 +348,22 @@ func (s *RuntimeLifecycleService) DeployDeploymentUnit(
 	unit *domain.DeploymentUnit,
 	desiredState *domain.DesiredServiceSpec,
 ) (*domain.RuntimeObservation, error) {
+	return s.DeployDeploymentUnitWithStatus(ctx, serviceID, envID, artifactID, unit, desiredState, nil)
+}
+
+// DeployDeploymentUnitWithStatus executes a unit deployment and reports durable phases.
+func (s *RuntimeLifecycleService) DeployDeploymentUnitWithStatus(
+	ctx context.Context,
+	serviceID, envID uuid.UUID,
+	artifactID *uuid.UUID,
+	unit *domain.DeploymentUnit,
+	desiredState *domain.DesiredServiceSpec,
+	statusFn DeployStatusCallback,
+) (*domain.RuntimeObservation, error) {
 	if unit == nil {
 		return nil, fmt.Errorf("deployment unit is required")
 	}
-	return s.deployDesiredState(ctx, serviceID, envID, artifactID, unit, desiredState, nil, true)
+	return s.deployDesiredState(ctx, serviceID, envID, artifactID, unit, desiredState, statusFn, true)
 }
 
 // DeployDesiredStateSnapshot applies a pre-intent unit-aware snapshot without
@@ -483,12 +559,15 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	// Step: observing — observe the runtime state after deploy.
 	notify(DeployStepObserving, "Observing runtime state after deploy")
 
-	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
-	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
-		return nil, fmt.Errorf("observing runtime target %q after deploy: %w", targetName, err)
+	waitForHealthy := unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose && targetSpec.Healthcheck != nil
+	obs, observeErr := s.observeDeploymentHealth(ctx, rt, serviceID, envID, targetName, waitForHealthy)
+	if obs == nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
+		return nil, observeErr
 	}
-
+	if obs.ObservedAt.IsZero() {
+		obs.ObservedAt = time.Now().UTC()
+	}
 	if unit != nil && unit.ID != uuid.Nil {
 		unitID := unit.ID
 		obs.DeploymentUnitID = &unitID
@@ -505,6 +584,18 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("recording deploy observation: %w", err)
 	}
+	if observeErr != nil {
+		failureCode := "runtime_observation_failed"
+		if healthErr, ok := observeErr.(*DeploymentHealthError); ok {
+			failureCode = healthErr.Code
+		}
+		s.publishFailure(ctx, svc, env, obs, map[string]any{
+			"artifact_id":    artifact.ID,
+			"failure_reason": failureCode,
+		})
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
+		return obs, observeErr
+	}
 	actionData := map[string]any{"artifact_id": artifact.ID, "desired_hash": targetSpec.DesiredHash, "environment_revision": plan.RevisionHash}
 	if applyResult != nil {
 		actionData["renderer"] = applyResult.Renderer
@@ -515,6 +606,69 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	s.publishAction(ctx, runtimeActionDeployEvent, svc, env, obs, actionData)
 	s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
 	return obs, nil
+}
+
+func (s *RuntimeLifecycleService) observeDeploymentHealth(
+	ctx context.Context,
+	rt runtime.Runtime,
+	serviceID, envID uuid.UUID,
+	targetName string,
+	waitForHealthy bool,
+) (*domain.RuntimeObservation, error) {
+	var latest *domain.RuntimeObservation
+	for {
+		obs, err := rt.Observe(ctx, serviceID, envID, targetName)
+		if err == nil && obs != nil {
+			latest = obs
+			if !waitForHealthy || obs.HealthStatus == domain.HealthStatusHealthy {
+				return obs, nil
+			}
+		} else if !waitForHealthy {
+			return nil, fmt.Errorf("observing runtime target %q after deploy: %w", targetName, err)
+		}
+
+		if !waitForHealthy {
+			return latest, nil
+		}
+		timeout := s.healthTimeout
+		if timeout <= 0 {
+			timeout = defaultRuntimeHealthTimeout
+		}
+		interval := s.healthInterval
+		if interval <= 0 {
+			interval = defaultRuntimeHealthInterval
+		}
+		deadline := time.NewTimer(timeout)
+		defer deadline.Stop()
+		for {
+			retry := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				retry.Stop()
+				return latest, ctx.Err()
+			case <-deadline.C:
+				retry.Stop()
+				if latest != nil {
+					return latest, &DeploymentHealthError{
+						Code:    "health_check_timeout",
+						Message: "The deployed service did not become healthy before the health deadline.",
+					}
+				}
+				return nil, &DeploymentHealthError{
+					Code:    "runtime_observation_failed",
+					Message: "Bahia could not confirm the deployed service health.",
+				}
+			case <-retry.C:
+				obs, err := rt.Observe(ctx, serviceID, envID, targetName)
+				if err == nil && obs != nil {
+					latest = obs
+					if obs.HealthStatus == domain.HealthStatusHealthy {
+						return obs, nil
+					}
+				}
+			}
+		}
+	}
 }
 
 // Restart restarts a service directly through the resolved runtime and records a fresh observation.
@@ -641,10 +795,8 @@ func (s *RuntimeLifecycleService) resolveForDeploymentUnit(
 	if err := domain.ValidateDeploymentUnit(&unitCopy); err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid deployment unit %q: %w", unitCopy.Key, err)
 	}
-	if err := s.validateDirectRuntimeState(ctx, svc.ID, env.ID); err != nil {
-		return nil, nil, nil, err
-	}
-
+	// Explicit Bahia-managed deployment units are provisionable on first deploy;
+	// adopted-workload state guardrails remain in the legacy environment-only path.
 	unitResolver, ok := s.resolver.(runtime.DeploymentUnitRuntimeResolver)
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("runtime resolver does not support deployment-unit targets")

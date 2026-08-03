@@ -1,0 +1,11 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_06_ROUTING",
+  "criteria": [
+    {"id":"AC1","statement":"The deployment wizard has a distinct public-route step where an operator selects an Arcana hostname, target port, health path, and managed HTTPS, or explicitly leaves the deployment private.","verification":["web/src/routes/services/[id]/+page.svelte","web/tests/unit/public-controlplane.test.js"]},
+    {"id":"AC2","statement":"Preview returns the exact non-secret DNS, tunnel, proxy, TLS, provider configuration hash, ordered apply operations, and rollback operations included in the canonical signed desired-state hash.","verification":["internal/domain/public_route.go","internal/service/public_route.go","internal/domain/public_route_test.go"]},
+    {"id":"AC3","statement":"Hostname syntax, managed-zone ownership, protected-zone policy, collisions, allowed/exposed target ports, upstream scheme, and TLS expectations fail closed before mutation.","verification":["internal/service/public_route_test.go","internal/adapters/routing/cloudflare_test.go","internal/config/config.go"]},
+    {"id":"AC4","statement":"The production adapter uses the Cloudflare API for remote-managed tunnel ingress and proxied DNS without shell-editing nginx, connector, or Cloudflare configuration files; credentials remain server-side.","verification":["internal/adapters/routing/cloudflare.go","internal/app/app.go"]},
+    {"id":"AC5","statement":"Application apply and health precede route publication; provider mutations compensate on route/TLS failure and the prior application desired state is restored when available.","verification":["internal/adapters/routing/cloudflare_test.go","internal/workflow/coordinator_test.go"]},
+    {"id":"AC6","statement":"A successful full flow verifies an HTTPS 2xx response at the intended hostname before marking the direct-runtime deployment run successful.","verification":["internal/adapters/routing/cloudflare.go","internal/workflow/coordinator.go"]}
+  ]
+}

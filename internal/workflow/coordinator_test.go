@@ -138,8 +138,23 @@ func (m *stubIntentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Deplo
 	defer m.mu.Unlock()
 	return m.intents[id], nil
 }
-func (m *stubIntentRepo) ListByServiceEnv(_ context.Context, _, _ uuid.UUID, _, _ int) ([]domain.DeploymentIntent, error) {
-	return nil, nil
+func (m *stubIntentRepo) ListByServiceEnv(_ context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]domain.DeploymentIntent, 0, len(m.intents))
+	for _, intent := range m.intents {
+		if intent.ServiceID == serviceID && intent.EnvironmentID == envID {
+			items = append(items, *intent)
+		}
+	}
+	if offset >= len(items) {
+		return nil, nil
+	}
+	items = items[offset:]
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 func (m *stubIntentRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error {
 	m.mu.Lock()
@@ -213,6 +228,14 @@ func (m *stubRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domai
 	if dr, ok := m.runs[id]; ok {
 		dr.Status = status
 		dr.ExitCode = exitCode
+	}
+	return nil
+}
+func (m *stubRunRepo) UpdateApplyMetadata(_ context.Context, id uuid.UUID, metadata map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if dr, ok := m.runs[id]; ok {
+		dr.ApplyMetadata = metadata
 	}
 	return nil
 }
@@ -332,22 +355,49 @@ func (r *stubDeploymentUnitRepo) ResolveDefault(ctx context.Context, env *domain
 }
 
 type stubDeploymentRuntimeLifecycle struct {
-	err  error
-	unit *domain.DeploymentUnit
+	err   error
+	errs  []error
+	unit  *domain.DeploymentUnit
+	calls int
+	specs []*domain.DesiredServiceSpec
 }
 
-func (s *stubDeploymentRuntimeLifecycle) DeployDeploymentUnit(
+func (s *stubDeploymentRuntimeLifecycle) DeployDeploymentUnitWithStatus(
 	_ context.Context,
 	_, _ uuid.UUID,
 	_ *uuid.UUID,
 	unit *domain.DeploymentUnit,
-	_ *domain.DesiredServiceSpec,
+	desiredState *domain.DesiredServiceSpec,
+	statusFn service.DeployStatusCallback,
 ) (*domain.RuntimeObservation, error) {
 	s.unit = unit
+	s.calls++
+	s.specs = append(s.specs, desiredState)
+	if statusFn != nil {
+		statusFn(context.Background(), service.DeployStep("applying"), "")
+	}
+	if s.calls <= len(s.errs) && s.errs[s.calls-1] != nil {
+		return nil, s.errs[s.calls-1]
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &domain.RuntimeObservation{}, nil
+	if statusFn != nil {
+		statusFn(context.Background(), service.DeployStep("observing"), "")
+	}
+	return &domain.RuntimeObservation{HealthStatus: domain.HealthStatusHealthy}, nil
+}
+
+type stubPublicRouteLifecycle struct {
+	err   error
+	calls int
+	plan  *domain.DesiredPublicRoutePlan
+}
+
+func (s *stubPublicRouteLifecycle) Apply(_ context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	s.calls++
+	s.plan = plan
+	return s.err
 }
 
 type unitRuntimeResolver struct {
@@ -805,6 +855,60 @@ func TestRecoverNonTerminalRuns_ReattachesPersistedLoomJob(t *testing.T) {
 	}
 }
 
+func TestRecoverNonTerminalRuns_ResumesDirectRuntimeAndPersistsPhases(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "arcana",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "arcana-local", ComposeDir: "/srv/arcana",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		DesiredHash: "sha256:reviewed",
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+		DesiredState: desired, DesiredHash: desired.DesiredHash,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intent.ID, DeploymentUnitID: &unit.ID,
+		LoomJobID: "runtime:direct", Status: domain.RunStatusRunning, StartedAt: &now,
+		ApplyMetadata: map[string]any{"phases": []map[string]any{}, "phase_sequence": 0},
+	}
+	if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, lifecycle))
+	if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+		t.Fatalf("RecoverNonTerminalRuns: %v", err)
+	}
+	coord.wg.Wait()
+	updated, err := registry.GetDeploymentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != domain.RunStatusSucceeded || lifecycle.calls != 1 {
+		t.Fatalf("direct recovery = status:%s calls:%d", updated.Status, lifecycle.calls)
+	}
+	if phases := metadataPhases(updated.ApplyMetadata["phases"]); len(phases) < 2 {
+		t.Fatalf("recovered run phases were not persisted: %#v", updated.ApplyMetadata)
+	}
+}
+
 func TestMapLoomStatus(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -1223,6 +1327,137 @@ func TestExecuteDeployment_ComposeUnitLifecycleFailureMarksRunFailedWithoutLoomF
 		if run.Status != domain.RunStatusFailed {
 			t.Fatalf("expected failed run, got %s", run.Status)
 		}
+	}
+}
+
+func TestExecuteDeployment_PublicRouteFailureRestoresPreviousApplication(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "max-compose",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	routes := &stubPublicRouteLifecycle{err: fmt.Errorf("TLS verification failed; previous public route restored")}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+
+	previousDesired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "arcana-previous",
+	}
+	previous := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual, Status: domain.IntentStatusDeployed,
+		DesiredState: previousDesired,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[previous.ID].Status = domain.IntentStatusDeployed
+	intentRepo.mu.Unlock()
+
+	plan := &domain.DesiredPublicRoutePlan{Hostname: "arcana.example.com"}
+	currentDesired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "arcana-current", PublicRoute: plan,
+	}
+	current := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual, Status: domain.IntentStatusApproved,
+		DesiredState: currentDesired,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[current.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+		WithPublicRoutes(routes),
+	)
+	err := coord.ExecuteDeployment(ctx, current.ID)
+	if err == nil || !strings.Contains(err.Error(), "public route apply failed") {
+		t.Fatalf("expected compensated public route failure, got %v", err)
+	}
+	if routes.calls != 1 || routes.plan != plan {
+		t.Fatalf("signed route plan was not applied exactly once: calls=%d plan=%#v", routes.calls, routes.plan)
+	}
+	if lifecycle.calls != 2 || lifecycle.specs[0] != currentDesired || lifecycle.specs[1] != previousDesired {
+		t.Fatalf("application apply/rollback sequence = calls:%d specs:%#v", lifecycle.calls, lifecycle.specs)
+	}
+	for _, run := range runRepo.runs {
+		if run.Status != domain.RunStatusFailed {
+			t.Fatalf("route verification failure must fail the run, got %s", run.Status)
+		}
+	}
+}
+
+func TestExecuteDeployment_PublicRouteAppFailureRestoresPreviousBeforeEdgeMutation(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "max-compose",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{errs: []error{fmt.Errorf("partial application failure"), nil}}
+	routes := &stubPublicRouteLifecycle{}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+
+	previousDesired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "arcana-previous",
+	}
+	previous := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual, DesiredState: previousDesired,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[previous.ID].Status = domain.IntentStatusDeployed
+	intentRepo.mu.Unlock()
+
+	currentDesired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "arcana-current",
+		PublicRoute: &domain.DesiredPublicRoutePlan{Hostname: "arcana.example.com"},
+	}
+	current := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual, DesiredState: currentDesired,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[current.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle), WithPublicRoutes(routes))
+	err := coord.ExecuteDeployment(ctx, current.ID)
+	if err == nil || !strings.Contains(err.Error(), "partial application failure") || !strings.Contains(err.Error(), "previous application desired state restored") {
+		t.Fatalf("expected compensated application failure, got %v", err)
+	}
+	if routes.calls != 0 {
+		t.Fatalf("edge route mutated after failed application apply: %d calls", routes.calls)
+	}
+	if lifecycle.calls != 2 || lifecycle.specs[0] != currentDesired || lifecycle.specs[1] != previousDesired {
+		t.Fatalf("application apply/rollback sequence = calls:%d specs:%#v", lifecycle.calls, lifecycle.specs)
 	}
 }
 

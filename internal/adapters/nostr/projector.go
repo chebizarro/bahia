@@ -2473,6 +2473,16 @@ func (p *Projector) publishDeploymentIntentRegistry(ctx context.Context, intent 
 	}
 	tags := gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}, {"unit", unitTagValue(intent.DeploymentUnitID)}}
 	content := map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "deployment_unit_id": uuidStringPtr(intent.DeploymentUnitID), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}
+	if intent.SupersedesIntentID != nil {
+		content["supersedes_intent_id"] = intent.SupersedesIntentID.String()
+	}
+	if intent.Metadata != nil {
+		for _, key := range []string{"artifact_digest", "deployment_target", "policy"} {
+			if value, ok := intent.Metadata[key]; ok {
+				content[key] = value
+			}
+		}
+	}
 	// Desired-state metadata (additive — old decoders ignore unknown fields).
 	if intent.DesiredHash != "" {
 		content["desired_hash"] = intent.DesiredHash
@@ -2515,6 +2525,13 @@ func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domai
 		}
 		if obsID, ok := run.ApplyMetadata["observation_id"].(string); ok && obsID != "" {
 			content["observation_id"] = obsID
+		}
+		// Only explicitly non-secret operator fields are promoted. The full
+		// ApplyMetadata map is intentionally never projected.
+		for _, key := range []string{"phase", "phase_sequence", "phases", "failure", "health_status", "deployment_unit_key", "endpoint_ref", "artifact_digest"} {
+			if value, ok := run.ApplyMetadata[key]; ok {
+				content[key] = value
+			}
 		}
 	}
 	return p.publishReplaceableJSON(ctx, KindDeploymentRunRegistry, run.ID.String(), tags, content, "deployment_run.projection", &run.ID)
@@ -3221,7 +3238,19 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	if state.DesiredHash != "" {
 		content["desired_hash"] = state.DesiredHash
 	}
-	observedHash := p.latestObservedHash(ctx, state)
+	observation := p.latestObservation(ctx, state)
+	observedHash := ""
+	if observation != nil {
+		if observation.NormalizedState != nil {
+			observedHash = observation.NormalizedState.ObservationHash
+		}
+		if observedHash == "" {
+			observedHash = observation.NormalizedHash
+		}
+		content["health_status"] = string(observation.HealthStatus)
+		content["observed_image_digest"] = observation.ObservedImageDigest
+		content["observed_at"] = formatTime(observation.ObservedAt)
+	}
 	if observedHash != "" {
 		content["observed_hash"] = observedHash
 	}
@@ -3235,7 +3264,7 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	}
 
 	contentJSON, _ := json.Marshal(content)
-	dTag := fmt.Sprintf("service:%s", state.ServiceID)
+	dTag := fmt.Sprintf("service:%s:environment:%s", state.ServiceID, state.EnvironmentID)
 	tags := gonostr.Tags{
 		{"d", dTag},
 		{"service", state.ServiceID.String()},
@@ -3263,9 +3292,9 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{"domain", "service"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindServiceState)}}, tags...), string(contentJSON), "state.projection", &state.ServiceID)
 }
 
-func (p *Projector) latestObservedHash(ctx context.Context, state *domain.EnvironmentServiceState) string {
+func (p *Projector) latestObservation(ctx context.Context, state *domain.EnvironmentServiceState) *domain.RuntimeObservation {
 	if p == nil || state == nil || state.CurrentObservationID == nil {
-		return ""
+		return nil
 	}
 	for _, source := range []any{p.snapshotSource(), p.source} {
 		obsSource, ok := source.(latestObservationSource)
@@ -3273,17 +3302,11 @@ func (p *Projector) latestObservedHash(ctx context.Context, state *domain.Enviro
 			continue
 		}
 		obs, err := obsSource.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
-		if err != nil || obs == nil || obs.ID != *state.CurrentObservationID {
-			continue
-		}
-		if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
-			return obs.NormalizedState.ObservationHash
-		}
-		if obs.NormalizedHash != "" {
-			return obs.NormalizedHash
+		if err == nil && obs != nil && obs.ID == *state.CurrentObservationID {
+			return obs
 		}
 	}
-	return ""
+	return nil
 }
 
 func (p *Projector) publishStateTombstone(ctx context.Context, res events.ResourceData) error {

@@ -149,7 +149,7 @@ export async function previewServiceDeployment(payload) {
   return resultContent(event);
 }
 
-export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '', expectedDesiredStateHash = '') {
+export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '', expectedDesiredStateHash = '', publicRoute = null) {
   const unitId = String(deploymentUnitId || '').trim();
   const expectedHash = String(expectedDesiredStateHash || '').trim();
   const content = {
@@ -157,6 +157,7 @@ export function createDeploymentIntent(serviceId, environmentId, artifactId, dep
     environment_id: environmentId,
     ...(unitId ? { deployment_unit_id: unitId } : {}),
     artifact_id: artifactId,
+    ...(publicRoute ? { public_route: publicRoute } : {}),
     ...(expectedHash ? { expected_desired_state_hash: expectedHash, idempotency_key: expectedHash } : {})
   };
   return publishCommand({
@@ -172,11 +173,25 @@ export function createDeploymentIntent(serviceId, environmentId, artifactId, dep
   });
 }
 
-export function rollbackDeployment(serviceId, environmentId) {
+export function rollbackDeployment(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return Promise.reject(new Error('Rollback requires an explicit artifact target from deployment history.'));
+  }
+  const serviceId = payload.service_id;
+  const environmentId = payload.environment_id;
+  const unitId = payload.deployment_unit_id;
+  const artifactId = payload.target_artifact_id;
+  const supersedesIntentId = payload.supersedes_intent_id;
   return publishCommand({
     operation: 'service/rollback',
-    tags: [['service', serviceId], ['environment', environmentId]],
-    content: { service_id: serviceId, environment_id: environmentId }
+    tags: [
+      ['service', serviceId],
+      ['environment', environmentId],
+      ...(unitId ? [['unit', unitId]] : []),
+      ['artifact', artifactId],
+      ['intent', supersedesIntentId]
+    ],
+    content: payload
   });
 }
 

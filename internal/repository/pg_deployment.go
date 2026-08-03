@@ -326,3 +326,19 @@ func (r *PgDeploymentRunRepository) UpdateStatus(ctx context.Context, id uuid.UU
 	}
 	return nil
 }
+
+// UpdateApplyMetadata persists safe, non-secret deployment progress metadata.
+func (r *PgDeploymentRunRepository) UpdateApplyMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) error {
+	metadataJSON, err := marshalJSON(metadata, "run apply metadata")
+	if err != nil {
+		return err
+	}
+	cmd, err := r.pool.Exec(ctx, `UPDATE deployment_runs SET apply_metadata = $2, updated_at = $3 WHERE id = $1`, id, metadataJSON, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("updating deployment run apply metadata: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("updating deployment run %s apply metadata: %w", id, ErrNotFound)
+	}
+	return nil
+}

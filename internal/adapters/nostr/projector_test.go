@@ -768,7 +768,7 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 	if got, want := eventKindInt(&stateEvent), cascadia.CAS_CP_STATE; got != want {
 		t.Fatalf("service state wire kind = %d, want %d", got, want)
 	}
-	assertTag(t, stateEvent, "d", "service:"+serviceID.String())
+	assertTag(t, stateEvent, "d", "service:"+serviceID.String()+":environment:"+envID.String())
 	assertTag(t, stateEvent, "domain", "service")
 	assertTag(t, stateEvent, "service", serviceID.String())
 	assertTag(t, stateEvent, "environment", envID.String())

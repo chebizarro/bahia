@@ -25,6 +25,7 @@ type BuildInput struct {
 	Artifact       *domain.Artifact
 	RuntimeConfig  *domain.ServiceRuntimeConfig
 	DeploymentUnit *domain.DeploymentUnit
+	PublicRoute    *domain.DesiredPublicRoutePlan
 	// Secrets are decrypted secret name→value pairs resolved for this
 	// service+environment. The builder will separate them into SecretRefs
 	// and will NEVER include plaintext values in the returned spec.
@@ -211,6 +212,15 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		RestartPolicy:     restart,
 		PullPolicy:        pullPolicy,
 		NetworkMode:       networkMode,
+		PublicRoute:       input.PublicRoute,
+	}
+	if spec.PublicRoute != nil {
+		if err := domain.ValidateDesiredPublicRoute(spec.PublicRoute); err != nil {
+			return nil, fmt.Errorf("invalid public route: %w", err)
+		}
+		if spec.PublicRoute.ServiceID != spec.ServiceID || spec.PublicRoute.EnvironmentID != spec.EnvironmentID || spec.DeploymentUnitID == nil || spec.PublicRoute.DeploymentUnitID != *spec.DeploymentUnitID {
+			return nil, fmt.Errorf("public route identity does not match desired service identity")
+		}
 	}
 
 	// Build renderer extensions based on runtime type.

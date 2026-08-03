@@ -1197,6 +1197,10 @@ type nonTerminalDeploymentRunLister interface {
 	ListNonTerminal(context.Context) ([]domain.DeploymentRun, error)
 }
 
+type deploymentRunApplyMetadataUpdater interface {
+	UpdateApplyMetadata(context.Context, uuid.UUID, map[string]any) error
+}
+
 func (s *RegistryService) CreateDeploymentRun(ctx context.Context, dr *domain.DeploymentRun) error {
 	// Guard: verify the intent exists and is in an approved state.
 	intent, err := s.intents.GetByID(ctx, dr.DeploymentIntentID)
@@ -1248,6 +1252,31 @@ func (s *RegistryService) GetDeploymentRun(ctx context.Context, id uuid.UUID) (*
 
 func (s *RegistryService) ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error) {
 	return s.runs.ListByIntent(ctx, intentID)
+}
+
+// UpdateDeploymentRunApplyMetadata persists non-secret lifecycle progress and
+// republishes the canonical run projection.
+func (s *RegistryService) UpdateDeploymentRunApplyMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) error {
+	updater, ok := s.runs.(deploymentRunApplyMetadataUpdater)
+	if !ok {
+		return fmt.Errorf("deployment run repository does not support apply metadata updates")
+	}
+	if err := updater.UpdateApplyMetadata(ctx, id, metadata); err != nil {
+		return err
+	}
+	run, err := s.runs.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("deployment run %s not found", id)
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventDeploymentRunStatusChanged,
+		EntityID: id.String(),
+		Data:     events.ResourceData{IntentID: run.DeploymentIntentID.String(), RunID: id.String()},
+	})
+	return nil
 }
 
 // ListNonTerminalDeploymentRuns returns persisted queued/running runs when the
@@ -1341,18 +1370,24 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 		}
 		if intent != nil {
 			now := time.Now().UTC()
-			state := &domain.EnvironmentServiceState{
-				ServiceID:           intent.ServiceID,
-				EnvironmentID:       intent.EnvironmentID,
-				DeploymentUnitID:    deploymentUnitIDForRunIntent(dr, intent),
-				DesiredArtifactID:   &intent.ArtifactID,
-				DesiredIntentID:     &intent.ID,
-				DesiredRuntimeState: intent.DesiredState,
-				DesiredHash:         intent.DesiredHash,
-				LastSuccessfulRunID: &id,
-				DriftStatus:         domain.DriftStatusUnknown,
-				LastReconciledAt:    &now,
+			state, stateErr := s.state.Get(ctx, intent.ServiceID, intent.EnvironmentID)
+			if stateErr != nil && !errors.Is(stateErr, repository.ErrNotFound) {
+				return fmt.Errorf("loading environment state after successful run: %w", stateErr)
 			}
+			if state == nil || errors.Is(stateErr, repository.ErrNotFound) {
+				state = &domain.EnvironmentServiceState{
+					ServiceID:     intent.ServiceID,
+					EnvironmentID: intent.EnvironmentID,
+					DriftStatus:   domain.DriftStatusUnknown,
+				}
+			}
+			state.DeploymentUnitID = deploymentUnitIDForRunIntent(dr, intent)
+			state.DesiredArtifactID = &intent.ArtifactID
+			state.DesiredIntentID = &intent.ID
+			state.DesiredRuntimeState = intent.DesiredState
+			state.DesiredHash = intent.DesiredHash
+			state.LastSuccessfulRunID = &id
+			state.LastReconciledAt = &now
 			if err := s.state.Upsert(ctx, state); err != nil {
 				s.logger.Error("failed to upsert environment service state after successful run",
 					zap.String("service_id", intent.ServiceID.String()),
@@ -1484,8 +1519,20 @@ func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UU
 
 func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.RuntimeObservation) error {
 	normalizeRuntimeObservationHash(obs)
+	latest, latestErr := s.observations.GetLatest(ctx, obs.ServiceID, obs.EnvironmentID)
+	if latestErr != nil {
+		return fmt.Errorf("getting latest runtime observation: %w", latestErr)
+	}
 	if err := s.observations.Create(ctx, obs); err != nil {
 		return err
+	}
+	if observationIsOlder(obs, latest) {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventRuntimeObservation,
+			EntityID: obs.ID.String(),
+			Data:     obs,
+		})
+		return nil
 	}
 
 	// Update environment service state with new observation.
@@ -1518,6 +1565,8 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 			state.DriftStatus = domain.DriftStatusDrifted
 		} else if observationHealthOK(obs.HealthStatus) {
 			state.DriftStatus = domain.DriftStatusInSync
+		} else if obs.HealthStatus == domain.HealthStatusStarting {
+			state.DriftStatus = domain.DriftStatusDeploying
 		} else {
 			state.DriftStatus = domain.DriftStatusDrifted
 		}
@@ -1530,8 +1579,10 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 			)
 			// Don't fail the observation; mark drift as unknown and continue.
 			state.DriftStatus = domain.DriftStatusUnknown
-		} else if desired != nil && desired.ImageDigest == obs.ObservedImageDigest {
+		} else if desired != nil && desired.ImageDigest == obs.ObservedImageDigest && observationHealthOK(obs.HealthStatus) {
 			state.DriftStatus = domain.DriftStatusInSync
+		} else if desired != nil && desired.ImageDigest == obs.ObservedImageDigest && obs.HealthStatus == domain.HealthStatusStarting {
+			state.DriftStatus = domain.DriftStatusDeploying
 		} else {
 			state.DriftStatus = domain.DriftStatusDrifted
 		}
@@ -1607,7 +1658,20 @@ func observedStateHash(obs *domain.RuntimeObservation) string {
 }
 
 func observationHealthOK(health domain.HealthStatus) bool {
-	return health == domain.HealthStatusHealthy || health == domain.HealthStatusStarting
+	return health == domain.HealthStatusHealthy
+}
+
+func observationIsOlder(incoming, current *domain.RuntimeObservation) bool {
+	if incoming == nil || current == nil {
+		return false
+	}
+	if incoming.ObservedAt.Before(current.ObservedAt) {
+		return true
+	}
+	if incoming.ObservedAt.After(current.ObservedAt) {
+		return false
+	}
+	return incoming.ID.String() <= current.ID.String()
 }
 
 // --- State queries ---

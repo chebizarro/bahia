@@ -164,10 +164,16 @@
   let deployManagedConfigPreview = $state(null);
   let deployDesiredStatePreview = $state(null);
   let deployCurrentDesiredState = $state(null);
+  let deployRoutePreview = $state(null);
+  let deployRouteApprovalRequired = $state(false);
   let deployForm = $state({
     environment_id: '',
     deployment_unit_id: '',
-    artifact_id: ''
+    artifact_id: '',
+    public_route_enabled: false,
+    hostname: '',
+    upstream_port: 8080,
+    route_health_path: '/healthz'
   });
 
   // Rollback modal state
@@ -527,13 +533,30 @@
     deployManagedConfigPreview = null;
     deployDesiredStatePreview = null;
     deployCurrentDesiredState = null;
+    deployRoutePreview = null;
+    deployRouteApprovalRequired = false;
+  }
+
+  function deploymentPublicRoute() {
+    if (!deployForm.public_route_enabled) return null;
+    const hostname = String(deployForm.hostname || '').trim().toLowerCase().replace(/\.$/, '');
+    const upstreamPort = Number(deployForm.upstream_port);
+    const healthPath = String(deployForm.route_health_path || '').trim();
+    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(hostname) || !hostname.includes('.')) throw new Error('Enter a fully qualified public hostname without a scheme or path');
+    if (!Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535) throw new Error('Route target port must be between 1 and 65535');
+    if (!healthPath.startsWith('/') || /[?#\s]/.test(healthPath)) throw new Error('Route health path must be an absolute path without query, fragment, or whitespace');
+    return { hostname, upstream_scheme: 'http', upstream_port: upstreamPort, health_path: healthPath, tls: 'managed' };
   }
 
   function openDeployModal() {
     deployForm = {
       environment_id: '',
       deployment_unit_id: '',
-      artifact_id: ''
+      artifact_id: '',
+      public_route_enabled: false,
+      hostname: '',
+      upstream_port: 8080,
+      route_health_path: '/healthz'
     };
     deployStep = 1;
     deployRuntimeForm = createManagedRuntimeForm(service);
@@ -560,17 +583,21 @@
 
     try {
       const managedRuntimeConfig = buildManagedRuntimeConfig(deployRuntimeForm);
+      const publicRoute = deploymentPublicRoute();
       const preview = await previewServiceDeployment({
         service_id: serviceId,
         environment_id: environmentId,
         ...(deploymentUnitId ? { deployment_unit_id: deploymentUnitId } : {}),
         artifact_id: artifactId,
-        managed_runtime_config: managedRuntimeConfig
+        managed_runtime_config: managedRuntimeConfig,
+        ...(publicRoute ? { public_route: publicRoute } : {})
       });
       if (deployPolicyPreviewRequestToken === requestToken) {
         deployManagedConfigPreview = managedRuntimeConfig;
         deployDesiredStatePreview = preview?.desired_state || null;
         deployCurrentDesiredState = preview?.current_desired_state || null;
+        deployRoutePreview = preview?.route_preview || null;
+        deployRouteApprovalRequired = Boolean(preview?.route_approval_required);
         deployPolicyPreview = preview?.policy || null;
       }
     } catch (err) {
@@ -611,7 +638,15 @@
       if (!deployForm.artifact_id) return void (deployError = 'Select a registered immutable artifact');
       if (deployTargetError) return void (deployError = deployTargetError);
     }
-    if (deployStep >= 2) {
+    if (deployStep === 2) {
+      try {
+        deploymentPublicRoute();
+      } catch (err) {
+        deployError = err.message;
+        return;
+      }
+    }
+    if (deployStep >= 3) {
       try {
         buildManagedRuntimeConfig(deployRuntimeForm);
       } catch (err) {
@@ -619,14 +654,14 @@
         return;
       }
     }
-    if (deployStep === 4) {
+    if (deployStep === 5) {
       await loadDeploymentPolicyPreview(deployForm.environment_id, deployForm.artifact_id, deployForm.deployment_unit_id);
       if (deployPolicyPreviewError || !deployDesiredStatePreview) {
         deployError = deployPolicyPreviewError || 'Desired-state preview did not return a canonical state';
         return;
       }
     }
-    deployStep = Math.min(5, deployStep + 1);
+    deployStep = Math.min(6, deployStep + 1);
   }
 
   function previousDeployStep() {
@@ -670,7 +705,8 @@
         deployForm.environment_id,
         deployForm.artifact_id,
         deployForm.deployment_unit_id,
-        desiredHash
+        desiredHash,
+        deploymentPublicRoute()
       );
       deployOpen = false;
       goto('/deployments');
@@ -984,10 +1020,15 @@
   });
 
   $effect(() => {
-    if (!deployOpen || deployStep === 5) return;
+    if (!deployOpen || deployStep === 6) return;
     deployForm.environment_id;
     deployForm.artifact_id;
     deployForm.deployment_unit_id;
+    deployForm.public_route_enabled;
+    deployForm.hostname;
+    deployForm.upstream_port;
+    deployForm.route_health_path;
+    JSON.stringify(deployRuntimeForm);
     untrack(() => resetDeployPreview());
   });
 
@@ -1280,7 +1321,7 @@
     </p>
 
     <ol class="wizard-steps" aria-label="Deployment wizard progress">
-      {#each ['Target', 'Service', 'Configuration', 'Reliability', 'Review & sign'] as label, index}
+      {#each ['Target', 'Public route', 'Service', 'Configuration', 'Reliability', 'Review & sign'] as label, index}
         <li class:active={deployStep === index + 1} class:complete={deployStep > index + 1}>{index + 1}. {label}</li>
       {/each}
     </ol>
@@ -1406,6 +1447,30 @@
     {/if}
 
     {#if deployStep === 2}
+      <div class="wizard-panel managed-route-panel">
+        <Checkbox id="deploy-public-route" bind:checked={deployForm.public_route_enabled} label="Expose with Bahia-managed HTTPS" disabled={deploying} />
+        <p class="field-hint">Bahia will plan and sign the Cloudflare remote-tunnel ingress, proxied DNS record, and managed edge TLS. No connector or nginx files are edited.</p>
+        {#if deployForm.public_route_enabled}
+          <div class="runtime-grid">
+            <div class="form-field">
+              <label for="deploy-hostname">Public hostname *</label>
+              <Input id="deploy-hostname" bind:value={deployForm.hostname} placeholder="arcana.sharegap.net" required disabled={deploying} />
+            </div>
+            <div class="form-field">
+              <label for="deploy-route-port">Container target port *</label>
+              <Input id="deploy-route-port" type="number" bind:value={deployForm.upstream_port} min="1" max="65535" required disabled={deploying} />
+            </div>
+            <div class="form-field">
+              <label for="deploy-route-health">HTTPS health path *</label>
+              <Input id="deploy-route-health" bind:value={deployForm.route_health_path} placeholder="/healthz" required disabled={deploying} />
+            </div>
+            <div class="resolved-target"><strong>TLS:</strong><span>managed at edge · upstream HTTP only</span></div>
+          </div>
+        {:else}
+          <p class="preview-muted">This deployment remains private; no DNS, tunnel, proxy, or TLS state will change.</p>
+        {/if}
+      </div>
+    {:else if deployStep === 3}
       <div class="wizard-panel">
         <div class="form-field">
           <label for="deploy-service-name">Compose service name *</label>
@@ -1421,7 +1486,7 @@
           <Textarea id="deploy-command" bind:value={deployRuntimeForm.command} rows={4} placeholder="one argument per line; blank uses the image command" disabled={deploying} />
         </div>
       </div>
-    {:else if deployStep === 3}
+    {:else if deployStep === 4}
       <div class="wizard-panel">
         <div class="form-field">
           <label for="deploy-environment-values">Non-secret environment values</label>
@@ -1452,7 +1517,7 @@
           <span class="field-hint">The signed payload contains IDs and environment variable names only, never secret values.</span>
         </div>
       </div>
-    {:else if deployStep === 4}
+    {:else if deployStep === 5}
       <div class="wizard-panel">
         <Checkbox id="deploy-health-enabled" bind:checked={deployRuntimeForm.health_enabled} label="Enable HTTP healthcheck" disabled={deploying} />
         {#if deployRuntimeForm.health_enabled}
@@ -1480,7 +1545,7 @@
           <div class="form-field"><label for="deploy-memory">Memory limit (MiB)</label><Input id="deploy-memory" type="number" bind:value={deployRuntimeForm.memory_mib} min="1" placeholder="256" disabled={deploying} /></div>
         </div>
       </div>
-    {:else if deployStep === 5}
+    {:else if deployStep === 6}
       <section class="desired-state-review">
         <div class="preview-card-header">
           <h3 class="subsection-title">Exact signed desired state</h3>
@@ -1500,6 +1565,28 @@
             <p class="preview-muted">No change from the currently persisted desired state.</p>
           {/if}
         </details>
+        {#if deployRoutePreview}
+          <section class="route-plan-review">
+            <div class="preview-card-header">
+              <h3 class="subsection-title">Managed public route</h3>
+              <span class="status-pill success">HTTPS</span>
+            </div>
+            <dl>
+              <div><dt>Hostname</dt><dd><code>{deployRoutePreview.hostname}</code></dd></div>
+              <div><dt>Zone</dt><dd>{deployRoutePreview.zone}</dd></div>
+              <div><dt>DNS</dt><dd>{deployRoutePreview.dns?.type} {deployRoutePreview.dns?.name} → {deployRoutePreview.dns?.value} · TTL {deployRoutePreview.dns?.ttl} · proxied</dd></div>
+              <div><dt>Tunnel</dt><dd><code>{deployRoutePreview.tunnel?.tunnel_ref}</code> · {deployRoutePreview.tunnel?.origin_url}</dd></div>
+              <div><dt>Proxy</dt><dd>{deployRoutePreview.proxy?.host_match} → {deployRoutePreview.proxy?.upstream_scheme}://{deployRoutePreview.proxy?.upstream_host}:{deployRoutePreview.proxy?.upstream_port}{deployRoutePreview.proxy?.health_path}</dd></div>
+              <div><dt>TLS</dt><dd>{deployRoutePreview.tls?.mode} by {deployRoutePreview.tls?.provider}</dd></div>
+              <div><dt>Provider config</dt><dd><code>{deployRoutePreview.provider_config_hash}</code></dd></div>
+            </dl>
+            {#if deployRouteApprovalRequired}<p class="preview-warning">This protected zone requires deployment approval before application or edge mutation.</p>{/if}
+            <h4>Apply order</h4>
+            <ol>{#each deployRoutePreview.operations || [] as operation}<li>{operation.resource}: {operation.summary}</li>{/each}</ol>
+            <h4>Failure compensation</h4>
+            <ol>{#each deployRoutePreview.rollback || [] as operation}<li>{operation.resource}: {operation.summary}</li>{/each}</ol>
+          </section>
+        {/if}
         <details>
           <summary>Exact canonical non-secret JSON</summary>
           <pre>{JSON.stringify(deployDesiredStatePreview, null, 2)}</pre>
@@ -1632,7 +1719,7 @@
       {#if deployStep > 1}
         <LoadingButton type="button" variant="secondary" onclick={previousDeployStep} disabled={deploying || deployPolicyPreviewLoading}>Back</LoadingButton>
       {/if}
-      {#if deployStep < 5}
+      {#if deployStep < 6}
         <LoadingButton type="button" variant="primary" onclick={nextDeployStep} loading={deployPolicyPreviewLoading} disabled={deploying}>Continue</LoadingButton>
       {:else}
         <LoadingButton type="submit" variant="primary" loading={deploying} disabled={deployCreateDisabled}>Sign & submit idempotently</LoadingButton>

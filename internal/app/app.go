@@ -20,6 +20,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
@@ -33,6 +34,7 @@ import (
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
+	routingAdapter "github.com/openagentsinc/bahia/internal/adapters/routing"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	sbomAdapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
@@ -333,6 +335,15 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("secrets encryption enabled")
 	}
 
+	var publicRoutePlanner *service.PublicRoutePlanner
+	if cfg.EdgeRouting.Enabled {
+		publicRoutePlanner, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, secretRepo, secretEncryptor)
+		if err != nil {
+			return nil, fmt.Errorf("configuring edge routing: %w", err)
+		}
+		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef))
+	}
+
 	// Adopted workload orchestration and direct runtime lifecycle services.
 	// Privileged routes are opt-in; keep services nil unless their route family is enabled.
 	var adoptionSvc *service.AdoptionService
@@ -365,10 +376,14 @@ func New(cfg *config.Config) (*App, error) {
 	// Workflow coordinator. Deployment-unit routing is wired even when direct
 	// runtime actions are disabled so Compose-targeted intents fail closed
 	// instead of falling back to Loom's bare container deploy.
-	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger,
+	coordinatorOptions := []workflow.CoordinatorOption{
 		workflow.WithWorkerPolicy(workerPolicySvc),
 		workflow.WithDeploymentUnitRouting(deploymentUnitRepo, runtimeLifecycleSvc),
-	)
+	}
+	if publicRoutePlanner != nil {
+		coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
+	}
+	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger, coordinatorOptions...)
 	coord.SetupEventHandlers(publisher)
 	if dbAvailable && pool != nil {
 		if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
@@ -1234,6 +1249,7 @@ func New(cfg *config.Config) (*App, error) {
 			Registry:         registry,
 			RuntimeLifecycle: runtimeLifecycleSvc,
 			Policy:           policySvc,
+			PublicRoutes:     publicRoutePlanner,
 			Services:         serviceRepo,
 			RBAC:             tenantRBAC,
 			Logger:           logger,
@@ -2210,6 +2226,63 @@ func (a dnsRepositoryPersistenceAdapter) ListOverridesByZone(ctx context.Context
 		return nil, fmt.Errorf("DNS record override repository is not configured")
 	}
 	return a.overrides.ListByZone(ctx, zoneName)
+}
+
+func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, secretRepo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) (*service.PublicRoutePlanner, error) {
+	resolver := secretsAdapter.NewResolver(secretRepo, encryptor)
+	tokenPayload, err := resolver.ResolveSecret(ctx, cfg.APITokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Cloudflare API token reference: %w", err)
+	}
+	token := strings.TrimSpace(tokenPayload)
+	if strings.HasPrefix(token, "{") {
+		var credentials map[string]any
+		if err := json.Unmarshal([]byte(token), &credentials); err != nil {
+			return nil, fmt.Errorf("decode Cloudflare credential bundle")
+		}
+		for _, key := range []string{"api_token", "token", "APIToken"} {
+			if value, ok := credentials[key].(string); ok && strings.TrimSpace(value) != "" {
+				token = strings.TrimSpace(value)
+				break
+			}
+		}
+	}
+	if token == "" || strings.HasPrefix(token, "{") {
+		return nil, fmt.Errorf("Cloudflare credential secret does not contain an API token")
+	}
+	zoneIDs := make(map[string]string, len(cfg.Zones))
+	zones := make([]service.PublicRouteZone, 0, len(cfg.Zones))
+	for _, z := range cfg.Zones {
+		allowed := make([]uuid.UUID, 0, len(z.AllowedOrgIDs))
+		for _, raw := range z.AllowedOrgIDs {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return nil, fmt.Errorf("parse allowed organization ID: %w", err)
+			}
+			allowed = append(allowed, id)
+		}
+		zoneIDs[z.Name] = z.ZoneID
+		zones = append(zones, service.PublicRouteZone{Name: z.Name, BackendRef: cfg.BackendRef, AllowedOrgIDs: allowed, Protected: z.Protected, TTL: z.TTL})
+	}
+	origins := make([]service.PublicRouteOrigin, 0, len(cfg.Origins))
+	for _, o := range cfg.Origins {
+		id, err := uuid.Parse(o.DeploymentUnitID)
+		if err != nil {
+			return nil, err
+		}
+		origins = append(origins, service.PublicRouteOrigin{DeploymentUnitID: id, Host: o.Host, AllowedPorts: append([]int(nil), o.AllowedPorts...)})
+	}
+	backend, err := routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout}, nil)
+	if err != nil {
+		return nil, err
+	}
+	sanitized, _ := json.Marshal(struct {
+		Provider, APIBaseURL, AccountID, TunnelID, BackendRef string
+		Zones                                                 []config.EdgeRoutingZoneConfig
+		Origins                                               []config.EdgeRoutingOriginConfig
+	}{cfg.Provider, cfg.APIBaseURL, cfg.AccountID, cfg.TunnelID, cfg.BackendRef, cfg.Zones, cfg.Origins})
+	configHash := domain.PublicRouteProviderConfigHash(string(sanitized))
+	return service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{Provider: cfg.Provider, TunnelRef: cfg.TunnelID, DNSTarget: cfg.TunnelID + ".cfargotunnel.com", Zones: zones, Origins: origins, ConfigHash: configHash}, routingAdapter.StaticResolver{cfg.BackendRef: backend})
 }
 
 func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, error) {

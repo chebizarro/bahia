@@ -1,0 +1,12 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_06_ROUTING",
+  "tests": [
+    {"name":"Route contract, canonical validation, and signed hash","command":"go test ./internal/domain","criteria":["AC2","AC3"]},
+    {"name":"Route planner policy and target validation","command":"go test ./internal/service -run TestPublicRoutePlanner","criteria":["AC2","AC3"]},
+    {"name":"Cloudflare collision, ordering, and compensation","command":"go test ./internal/adapters/routing","criteria":["AC3","AC4","AC5","AC6"]},
+    {"name":"App-first workflow and application rollback","command":"go test ./internal/workflow -run TestExecuteDeployment_PublicRoute","criteria":["AC5","AC6"]},
+    {"name":"Signer-first route payload","command":"cd web && npm run test:unit -- --run tests/unit/public-controlplane.test.js","criteria":["AC1","AC2"]},
+    {"name":"Svelte static checks and production build","command":"cd web && npm run lint && npm run build","criteria":["AC1"]},
+    {"name":"Go production build","command":"go build ./...","criteria":["AC2","AC3","AC4","AC5","AC6"]}
+  ]
+}

@@ -63,7 +63,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 		}
 
 		got := spec.ComputeDesiredHash()
-		want := "sha256:b1624502760b159c0a3d7769ef24d71855b70f85c411991814539cb7c76326de"
+		want := "sha256:cb1c62116866e8f8fdf7e7c711edc81b7d528a2f658db195a493213b8a565b94"
 		if got != want {
 			t.Fatalf("golden desired hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -81,7 +81,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 		}
 
 		got := spec.ComputeDesiredHash()
-		want := "sha256:bb0216cdd0dac7dc198a515e41fc189da575dd44430a8c748a60e4a363355274"
+		want := "sha256:483bb27a20eec97b51a6c9018284ba79f5d08a6a3ea498093a2ef0da7486c6e7"
 		if got != want {
 			t.Fatalf("golden minimal desired hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -399,7 +399,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 
 		got := plan.ComputeRevisionHash()
 		// Lock the golden revision hash.
-		want := "sha256:35a78131d38fc31fc6bdb257ea31ce9c86431a9260417bbac2b370885db2fc2b"
+		want := "sha256:3c87a618088977b9821ddcdf18f305db13f162fc3a52acc63daa11ed9c58ab94"
 		if got != want {
 			t.Fatalf("golden environment revision hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -460,7 +460,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 		}
 
 		got := plan.ComputeRevisionHash()
-		want := "sha256:cbd0fccc7cdbd8e678df7d0e2fe298c54e3b0db5e8f15acf1e5f495262704614"
+		want := "sha256:e18ca48419c478b3d129d24ab9812fcb47566b68af62a1043c8f7e397676da4e"
 		if got != want {
 			t.Fatalf("golden single-service revision hash changed:\n  got:  %s\n  want: %s", got, want)
 		}

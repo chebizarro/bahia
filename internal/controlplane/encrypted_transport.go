@@ -51,6 +51,7 @@ const (
 	ContextVMMethodServiceCreate              = "service/create"
 	ContextVMMethodServiceDeploy              = "service/deploy"
 	ContextVMMethodServiceDeployPreview       = "service/deploy-preview"
+	ContextVMMethodServiceRollback            = "service/rollback"
 	ContextVMMethodPolicyCreate               = "policy/create"
 	ContextVMMethodPolicyUpdate               = "policy/update"
 	ContextVMMethodPolicyDelete               = "policy/delete"

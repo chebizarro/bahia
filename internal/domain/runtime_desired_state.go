@@ -14,7 +14,7 @@ import (
 
 // DesiredStateSchemaVersion is the current schema version for desired-state serialization.
 // Bump this when the canonical hash inputs change.
-const DesiredStateSchemaVersion = "3"
+const DesiredStateSchemaVersion = "4"
 
 // ---------------------------------------------------------------------------
 // Secret handling types
@@ -617,6 +617,9 @@ type DesiredServiceSpec struct {
 	RestartPolicy string   `json:"restart_policy,omitempty"`
 	PullPolicy    string   `json:"pull_policy,omitempty"`
 
+	// PublicRoute is the exact non-secret edge plan approved with this runtime state.
+	PublicRoute *DesiredPublicRoutePlan `json:"public_route,omitempty"`
+
 	// DesiredHash is the deterministic hash of the canonical service state.
 	// It is computed from the hash-relevant fields and used for drift detection.
 	DesiredHash string `json:"desired_hash"`
@@ -838,29 +841,30 @@ func NormalizeServiceKeyWithSuffix(name string, serviceID uuid.UUID) string {
 // (struct field order is stable in encoding/json). Volatile fields like
 // DesiredHash itself, extensions, and timestamps are excluded.
 type hashInput struct {
-	SchemaVersion     string                 `json:"schema_version"`
-	ServiceID         uuid.UUID              `json:"service_id"`
-	EnvironmentID     uuid.UUID              `json:"environment_id"`
-	DeploymentUnitID  *uuid.UUID             `json:"deployment_unit_id,omitempty"`
-	DeploymentUnitKey string                 `json:"deployment_unit_key"`
-	UnitRuntimeType   RuntimeType            `json:"unit_runtime_type,omitempty"`
-	ArtifactID        uuid.UUID              `json:"artifact_id"`
-	StableServiceKey  string                 `json:"stable_service_key"`
-	ImageRef          string                 `json:"image_ref"`
-	Command           []string               `json:"command"`
-	Entrypoint        []string               `json:"entrypoint"`
-	WorkDir           string                 `json:"work_dir"`
-	Env               map[string]string      `json:"env"`
-	SecretRefKeys     []string               `json:"secret_ref_keys"`
-	Ports             []string               `json:"ports"`
-	Volumes           []string               `json:"volumes"`
-	Labels            map[string]string      `json:"labels"`
-	ResourceLimits    *RuntimeResourceLimits `json:"resource_limits"`
-	Healthcheck       *HealthcheckConfig     `json:"healthcheck"`
-	DependsOn         []string               `json:"depends_on"`
-	NetworkMode       string                 `json:"network_mode"`
-	RestartPolicy     string                 `json:"restart_policy"`
-	PullPolicy        string                 `json:"pull_policy"`
+	SchemaVersion     string                  `json:"schema_version"`
+	ServiceID         uuid.UUID               `json:"service_id"`
+	EnvironmentID     uuid.UUID               `json:"environment_id"`
+	DeploymentUnitID  *uuid.UUID              `json:"deployment_unit_id,omitempty"`
+	DeploymentUnitKey string                  `json:"deployment_unit_key"`
+	UnitRuntimeType   RuntimeType             `json:"unit_runtime_type,omitempty"`
+	ArtifactID        uuid.UUID               `json:"artifact_id"`
+	StableServiceKey  string                  `json:"stable_service_key"`
+	ImageRef          string                  `json:"image_ref"`
+	Command           []string                `json:"command"`
+	Entrypoint        []string                `json:"entrypoint"`
+	WorkDir           string                  `json:"work_dir"`
+	Env               map[string]string       `json:"env"`
+	SecretRefKeys     []string                `json:"secret_ref_keys"`
+	Ports             []string                `json:"ports"`
+	Volumes           []string                `json:"volumes"`
+	Labels            map[string]string       `json:"labels"`
+	ResourceLimits    *RuntimeResourceLimits  `json:"resource_limits"`
+	Healthcheck       *HealthcheckConfig      `json:"healthcheck"`
+	DependsOn         []string                `json:"depends_on"`
+	NetworkMode       string                  `json:"network_mode"`
+	RestartPolicy     string                  `json:"restart_policy"`
+	PullPolicy        string                  `json:"pull_policy"`
+	PublicRoute       *DesiredPublicRoutePlan `json:"public_route,omitempty"`
 }
 
 // ComputeDesiredHash computes the deterministic hash of a DesiredServiceSpec.
@@ -933,6 +937,10 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 		NetworkMode:       s.NetworkMode,
 		RestartPolicy:     s.RestartPolicy,
 		PullPolicy:        s.PullPolicy,
+	}
+	// Route plans were introduced in schema v4. Preserve historical v3 hashes.
+	if s.SchemaVersion != "3" {
+		input.PublicRoute = s.PublicRoute
 	}
 
 	data, err := json.Marshal(input)

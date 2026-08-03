@@ -89,6 +89,35 @@ func (r *PgSecretRepository) GetCurrentVersion(ctx context.Context, secretID uui
 	return v, nil
 }
 
+// ListVersions returns every retained value for a secret so security-sensitive
+// consumers such as stored log redaction remain safe after secret rotation.
+func (r *PgSecretRepository) ListVersions(ctx context.Context, secretID uuid.UUID) ([]domain.SecretVersion, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, secret_id, version, encrypted_value, encryption_method, created_by, created_at
+		FROM secret_versions
+		WHERE secret_id = $1
+		ORDER BY version DESC
+	`, secretID)
+	if err != nil {
+		return nil, fmt.Errorf("listing secret versions: %w", err)
+	}
+	defer rows.Close()
+	versions := make([]domain.SecretVersion, 0)
+	for rows.Next() {
+		var version domain.SecretVersion
+		var method string
+		if err := rows.Scan(&version.ID, &version.SecretID, &version.Version, &version.EncryptedValue, &method, &version.CreatedBy, &version.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning secret version: %w", err)
+		}
+		version.EncryptionMethod = domain.EncryptionMethod(method)
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating secret versions: %w", err)
+	}
+	return versions, nil
+}
+
 func (r *PgSecretRepository) ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, service_id, environment_id, name, encrypted_value,
