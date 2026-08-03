@@ -53,6 +53,52 @@ func TestControlPlaneRelayURLsFallBackToBrowserPolicyWhenContextVMUnset(t *testi
 	}
 }
 
+func TestRelayPolicyHydrationRelayURLsIncludesEveryEligibleRelay(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.BackendURL = "ws://relay:3334"
+	cfg.Sidecar.PublicURL = "wss://sidecar.example/relay"
+	cfg.ContextVMRelays = []string{"wss://primary.example"}
+	cfg.BrowserRelays = []string{"wss://secondary.example"}
+	cfg.ServiceRelays = []string{"wss://service.example"}
+	cfg.Relays = []string{"wss://legacy.example"}
+	cfg.NIP34Relays = []string{"wss://nip34.example"}
+
+	got := relayPolicyHydrationRelayURLs(cfg)
+	want := []string{
+		"ws://relay:3334",
+		"wss://sidecar.example/relay",
+		"wss://primary.example",
+		"wss://secondary.example",
+		"wss://service.example",
+		"wss://legacy.example",
+		"wss://nip34.example",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("relayPolicyHydrationRelayURLs() = %v, want %v", got, want)
+	}
+}
+
+func TestRelayPolicyHydrationRelayURLsRetainsStoredPolicyRelaysAcrossUpgrade(t *testing.T) {
+	configured := []string{"wss://new-image-bootstrap.example"}
+	state := controlplane.RelayPolicyState{
+		Schema:          controlplane.RelaySettingsSchema,
+		BrowserRelays:   []string{"wss://stored-browser.example"},
+		ContextVMRelays: []string{"wss://stored-contextvm.example"},
+		ServiceRelays:   []string{"wss://stored-service.example"},
+	}
+	got := relayPolicyHydrationRelayURLsForState(configured, state)
+	want := []string{
+		"wss://new-image-bootstrap.example",
+		"wss://stored-contextvm.example",
+		"wss://stored-browser.example",
+		"wss://stored-service.example",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("relayPolicyHydrationRelayURLsForState() = %v, want %v", got, want)
+	}
+}
+
 func TestInteropRelayURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Relays = []string{"wss://upstream.example"}

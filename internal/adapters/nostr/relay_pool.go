@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -650,14 +651,16 @@ type RelayClosed struct {
 type MergedSubscription struct {
 	// Events receives events from all subscribed relays.
 	Events <-chan *nostr.Event
-	// EndOfStoredEvents is closed when all relays have sent EOSE.
+	// EndOfStoredEvents is closed when all relay subscriptions have sent EOSE.
 	EndOfStoredEvents <-chan struct{}
 	// RelayEOSE emits once for each relay subscription that sends EOSE.
 	RelayEOSE <-chan RelayEOSE
 	// Closed emits relay CLOSED reasons for each relay subscription that reports one.
 	Closed <-chan RelayClosed
 
-	closeFn func()
+	closeFn      func()
+	relayURLs    []string
+	eventSources *sync.Map
 }
 
 // Close cancels all relay subscriptions represented by the merged subscription.
@@ -666,6 +669,37 @@ func (m *MergedSubscription) Close() {
 		return
 	}
 	m.closeFn()
+}
+
+// RelayURLs returns the normalized relays that established subscriptions.
+// It excludes relays that were unavailable or could not authenticate.
+func (m *MergedSubscription) RelayURLs() []string {
+	if m == nil {
+		return nil
+	}
+	return append([]string(nil), m.relayURLs...)
+}
+
+// EventSource returns the relay that first delivered an event to this merged
+// subscription. It is provenance only; replaceable-event ordering never depends
+// on relay arrival order.
+func (m *MergedSubscription) EventSource(eventID string) string {
+	if m == nil || m.eventSources == nil || eventID == "" {
+		return ""
+	}
+	source, ok := m.eventSources.Load(eventID)
+	if !ok {
+		return ""
+	}
+	relayURL, _ := source.(string)
+	return relayURL
+}
+
+func (m *MergedSubscription) recordEventSource(eventID, relayURL string) {
+	if m == nil || m.eventSources == nil || eventID == "" {
+		return
+	}
+	m.eventSources.LoadOrStore(eventID, relayURL)
 }
 
 type relaySubscription struct {
@@ -784,12 +818,29 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 	eoseChan := make(chan struct{})
 	relayEOSE := make(chan RelayEOSE, len(subs))
 	closed := make(chan RelayClosed, len(subs))
+	subscription := &MergedSubscription{
+		Events:            merged,
+		EndOfStoredEvents: eoseChan,
+		RelayEOSE:         relayEOSE,
+		Closed:            closed,
+		eventSources:      &sync.Map{},
+	}
+	relayURLs := make(map[string]struct{}, len(subs))
+	for _, relaySub := range subs {
+		if relaySub.relayURL != "" {
+			relayURLs[relaySub.relayURL] = struct{}{}
+		}
+	}
+	for relayURL := range relayURLs {
+		subscription.relayURLs = append(subscription.relayURLs, relayURL)
+	}
+	sort.Strings(subscription.relayURLs)
 	if len(subs) == 0 {
 		close(merged)
 		close(eoseChan)
 		close(relayEOSE)
 		close(closed)
-		return &MergedSubscription{Events: merged, EndOfStoredEvents: eoseChan, RelayEOSE: relayEOSE, Closed: closed}
+		return subscription
 	}
 
 	var eventsWg sync.WaitGroup
@@ -874,6 +925,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 						return
 					}
 					event := ev
+					subscription.recordEventSource(event.ID.Hex(), rs.relayURL)
 					select {
 					case merged <- &event:
 					case <-ctx.Done():
@@ -891,7 +943,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 		close(closed)
 	}()
 
-	return &MergedSubscription{Events: merged, EndOfStoredEvents: eoseChan, RelayEOSE: relayEOSE, Closed: closed}
+	return subscription
 }
 
 func emitRelayClosed(ctx context.Context, closed chan<- RelayClosed, info RelayClosed) bool {

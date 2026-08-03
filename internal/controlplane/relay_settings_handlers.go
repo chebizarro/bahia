@@ -15,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -26,6 +27,8 @@ const (
 	RelaySettingsSchema = "bahia.relay-settings.v1"
 	RelaySettingsDomain = "relay-settings"
 	RelaySettingsDTag   = "relay-settings:operator"
+
+	defaultRelayPolicyProjectionFreshness = 5 * time.Minute
 )
 
 type RelayAdminCaller interface {
@@ -34,19 +37,30 @@ type RelayAdminCaller interface {
 }
 
 type RelaySettingsHandlerConfig struct {
-	Config      *config.Config
-	AdminClient RelayAdminCaller
-	Logger      *zap.Logger
+	Config          *config.Config
+	AdminClient     RelayAdminCaller
+	ProjectionStore repository.RelayPolicyProjectionRepository
+	ServicePubkey   string
+	Logger          *zap.Logger
+	Now             func() time.Time
+	FreshnessWindow time.Duration
 }
 
 type RelaySettingsHandlers struct {
-	cfg       *config.Config
-	admin     RelayAdminCaller
-	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
-	logger    *zap.Logger
+	cfg             *config.Config
+	admin           RelayAdminCaller
+	projectionStore repository.RelayPolicyProjectionRepository
+	servicePubkey   string
+	publisher       NostrEventPublisher
+	signer          canonicalnostr.Signer
+	logger          *zap.Logger
+	now             func() time.Time
+	freshnessWindow time.Duration
 }
 
+// RelayPolicyState is the canonical signed policy payload. It is not the
+// PostgreSQL projection metadata, relay discovery cache, or browser emergency
+// override.
 type RelayPolicyState struct {
 	Schema                     string                    `json:"schema"`
 	UpdatedAt                  string                    `json:"updated_at"`
@@ -58,6 +72,23 @@ type RelayPolicyState struct {
 	TrustedRelayMonitorPubkeys []string                  `json:"trusted_relay_monitor_pubkeys,omitempty"`
 	DMRelayLists               []RelayPolicyDMRelayList  `json:"dm_relay_lists,omitempty"`
 	RelayAdministration        RelayPolicyAdministration `json:"relay_administration"`
+}
+
+// RelayPolicyProjectionView describes the durable server projection and its
+// canonical-event provenance. Discovery cache and browser emergency-override
+// state are deliberately not folded into this view.
+type RelayPolicyProjectionView struct {
+	Availability    string `json:"availability"`
+	Source          string `json:"source"`
+	EventID         string `json:"event_id,omitempty"`
+	Author          string `json:"author,omitempty"`
+	EventCreatedAt  string `json:"event_created_at,omitempty"`
+	EventAcceptedAt string `json:"event_accepted_at,omitempty"`
+	Schema          string `json:"schema,omitempty"`
+	Hash            string `json:"hash,omitempty"`
+	SourceRelay     string `json:"source_relay,omitempty"`
+	LastSyncAt      string `json:"last_sync_at,omitempty"`
+	Freshness       string `json:"freshness"`
 }
 
 type RelayPolicyDMRelayList struct {
@@ -91,7 +122,23 @@ func NewRelaySettingsHandlers(cfg RelaySettingsHandlerConfig) *RelaySettingsHand
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &RelaySettingsHandlers{cfg: cfg.Config, admin: cfg.AdminClient, logger: logger.Named("relay-settings-contextvm")}
+	now := cfg.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	freshnessWindow := cfg.FreshnessWindow
+	if freshnessWindow <= 0 {
+		freshnessWindow = defaultRelayPolicyProjectionFreshness
+	}
+	return &RelaySettingsHandlers{
+		cfg:             cfg.Config,
+		admin:           cfg.AdminClient,
+		projectionStore: cfg.ProjectionStore,
+		servicePubkey:   strings.ToLower(strings.TrimSpace(cfg.ServicePubkey)),
+		logger:          logger.Named("relay-settings-contextvm"),
+		now:             now,
+		freshnessWindow: freshnessWindow,
+	}
 }
 
 func RegisterRelaySettingsContextVMHandlers(transport *EncryptedRequestTransport, cfg RelaySettingsHandlerConfig) {
@@ -113,11 +160,72 @@ func (h *RelaySettingsHandlers) Register(transport *EncryptedRequestTransport) {
 }
 
 func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequest) (any, error) {
-	state := h.currentState(req.Event.PubKey.Hex())
-	return map[string]any{"status": "ok", "state": state}, nil
+	_ = req
+	unavailable := RelayPolicyProjectionView{
+		Availability: "unavailable",
+		Source:       "postgres_projection",
+		Freshness:    "unavailable",
+	}
+	if h.projectionStore == nil || h.servicePubkey == "" {
+		return map[string]any{
+			"status":            "unavailable",
+			"state":             nil,
+			"canonical_policy":  nil,
+			"server_projection": unavailable,
+		}, nil
+	}
+	projection, err := h.projectionStore.Get(ctx, h.servicePubkey)
+	if err != nil {
+		return nil, fmt.Errorf("read durable relay policy projection: %w", err)
+	}
+	if projection == nil {
+		return map[string]any{
+			"status":            "unavailable",
+			"state":             nil,
+			"canonical_policy":  nil,
+			"server_projection": unavailable,
+		}, nil
+	}
+	state, err := relayPolicyStateFromProjection(projection, h.servicePubkey)
+	if err != nil {
+		return nil, fmt.Errorf("validate durable relay policy projection: %w", err)
+	}
+	view := h.projectionView(*projection)
+	return map[string]any{
+		"status":            "ok",
+		"state":             state,
+		"canonical_policy":  state,
+		"server_projection": view,
+	}, nil
+}
+
+func (h *RelaySettingsHandlers) projectionView(projection repository.RelayPolicyProjection) RelayPolicyProjectionView {
+	freshness := "stale"
+	if !projection.LastSyncAt.IsZero() {
+		age := h.now().UTC().Sub(projection.LastSyncAt.UTC())
+		if age <= h.freshnessWindow {
+			freshness = "fresh"
+		}
+	}
+	return RelayPolicyProjectionView{
+		Availability:    "available",
+		Source:          "postgres_projection",
+		EventID:         projection.EventID,
+		Author:          projection.AuthorPubkey,
+		EventCreatedAt:  projection.EventCreatedAt.UTC().Format(time.RFC3339),
+		EventAcceptedAt: projection.EventAcceptedAt.UTC().Format(time.RFC3339),
+		Schema:          projection.Schema,
+		Hash:            projection.PayloadHash,
+		SourceRelay:     safeRelayURL(projection.SourceRelay),
+		LastSyncAt:      projection.LastSyncAt.UTC().Format(time.RFC3339),
+		Freshness:       freshness,
+	}
 }
 
 func (h *RelaySettingsHandlers) ApplyPolicy(ctx context.Context, req ContextVMRequest) (any, error) {
+	if h.projectionStore == nil {
+		return nil, fmt.Errorf("durable relay policy projection is unavailable")
+	}
 	if h.cfg == nil {
 		return nil, fmt.Errorf("relay settings config is not available")
 	}

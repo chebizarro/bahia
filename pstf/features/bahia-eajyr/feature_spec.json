@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-eajyr",
+  "fleet_task": "fp-bahia-relay-policy-durability",
+  "title": "Make Bahia relay policy durable and upgrade-safe",
+  "scope": "Backend PostgreSQL projection, multi-relay hydration, signer-first ContextVM projection read model, and deterministic regression tests. UI and backup/upgrade workflows are excluded.",
+  "intended_behavior": [
+    "Only a fully validated trusted service-signed canonical relay policy can replace the PostgreSQL last-known-good projection.",
+    "All eligible configured relays participate in hydration; EOSE is tracked per relay and followed by a bounded drain.",
+    "Absence and transport or parsing failures retain the prior projection; empty policy requires an explicit signed event.",
+    "Signer-first ContextVM reads expose canonical policy separately from server projection provenance and freshness."
+  ],
+  "security": "No secret-bearing signer URLs, keys, relay credentials, or administrator credentials are emitted by this feature."
+}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-eajyr",
+  "criteria": [
+    {"id": "AC1", "statement": "A valid accepted policy survives backend restart/image replacement while its canonical relay is unavailable."},
+    {"id": "AC2", "statement": "A valid event available only from a secondary eligible relay, including delivery after EOSE inside the drain, is promoted deterministically."},
+    {"id": "AC3", "statement": "Zero-event EOSE, outage, AUTH failure, timeout, retrieval/promotion error, malformed payload, invalid signature, wrong author/schema/tags, older/equal losing event, and future timestamp never erase a valid head."},
+    {"id": "AC4", "statement": "An explicitly service-signed empty policy is valid; absence never synthesizes empty policy."},
+    {"id": "AC5", "statement": "The signer-first ContextVM get response exposes projection availability, event ID, author, hash, source relay, timestamps, last-sync, and freshness without a config-default or unsigned REST fallback."}
+  ]
+}

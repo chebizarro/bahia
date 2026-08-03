@@ -137,6 +137,9 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlanePool.Connect(ctx)
 	contextVMResponsePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	contextVMResponsePool.Connect(ctx)
+	relayPolicyHydrationRelays := relayPolicyHydrationRelayURLs(cfg.Nostr)
+	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	relayPolicyHydrationPool.Connect(ctx)
 
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
 	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
@@ -176,6 +179,7 @@ func New(cfg *config.Config) (*App, error) {
 	var orgRepo repository.OrganizationRepository
 	var orgMemberRepo repository.OrgMemberRepository
 	var orgInviteRepo repository.OrgInviteRepository
+	var relayPolicyProjectionRepo repository.RelayPolicyProjectionRepository
 
 	if dbAvailable {
 		serviceRepo = repository.NewPgServiceRepository(pool)
@@ -200,6 +204,9 @@ func New(cfg *config.Config) (*App, error) {
 		orgRepo = repository.NewPgOrganizationRepository(pool)
 		orgMemberRepo = repository.NewPgOrgMemberRepository(pool)
 		orgInviteRepo = repository.NewPgOrgInviteRepository(pool)
+		if pool != nil {
+			relayPolicyProjectionRepo = repository.NewPgRelayPolicyProjectionRepository(pool)
+		}
 	} else {
 		logger.Warn("database unavailable: tier2/tier3 repositories are nil, route gating will return 503 for those tiers")
 	}
@@ -1163,7 +1170,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
-	if len(controlPlaneRelays) > 0 && servicePubkey != "" {
+	if servicePubkey != "" && relayPolicyProjectionRepo != nil {
 		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
 			ControlPlanePool: controlPlanePool,
 			ResponsePool:     contextVMResponsePool,
@@ -1173,13 +1180,28 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:           logger,
 		})
 		relaySettingsHydrator := controlplane.NewRelaySettingsHydrator(controlplane.RelaySettingsHydratorConfig{
-			Pool:              controlPlanePool,
-			ServicePubkey:     servicePubkey,
-			Logger:            logger,
-			OnSnapshotApplied: relayTopologyCoordinator.ApplySnapshot,
+			Pool:            relayPolicyHydrationPool,
+			ServicePubkey:   servicePubkey,
+			ProjectionStore: relayPolicyProjectionRepo,
+			Logger:          logger,
+			OnSnapshotApplied: func(applyCtx context.Context, state controlplane.RelayPolicyState) error {
+				if err := relayTopologyCoordinator.ApplySnapshot(applyCtx, state); err != nil {
+					return err
+				}
+				relayPolicyHydrationPool.ReconfigureRelayURLs(
+					relayPolicyHydrationRelayURLsForState(relayPolicyHydrationRelays, state),
+				)
+				return nil
+			},
 		})
+		if err := relaySettingsHydrator.LoadProjection(ctx); err != nil {
+			return nil, fmt.Errorf("loading durable relay settings projection before control-plane activation: %w", err)
+		}
 		bgManager.RegisterWithOptions(relaySettingsHydrator, RunnerTier(Tier1))
-		logger.Info("relay settings canonical state hydrator registered", zap.Strings("relay_urls", controlPlaneRelays), zap.String("service_pubkey", servicePubkey))
+		logger.Info("durable relay settings projection hydrator registered",
+			zap.Int("eligible_relay_count", len(relayPolicyHydrationPool.URLs())),
+			zap.String("service_pubkey", servicePubkey),
+		)
 	}
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
@@ -1240,9 +1262,11 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
-			Config:      cfg,
-			AdminClient: relayAdminClient,
-			Logger:      logger,
+			Config:          cfg,
+			AdminClient:     relayAdminClient,
+			ProjectionStore: relayPolicyProjectionRepo,
+			ServicePubkey:   servicePubkey,
+			Logger:          logger,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
@@ -1413,7 +1437,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:          telemetryProvider,
 		Background:         bgManager,
 		toolCoordinator:    toolCoordinator,
-		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPool, fipsRelayPool},
+		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
 		ModePolicy:         policy,
 		Health:             healthProvider,
 		RelayFirstRegistry: relayFirstRegistry,
@@ -2382,6 +2406,41 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 		}
 	}
 	return cfg.ContextVMRelayPolicyRelays()
+}
+
+func relayPolicyHydrationRelayURLs(cfg config.NostrConfig) []string {
+	var relays []string
+	if cfg.Sidecar.Enabled {
+		relays = appendUniqueRelay(relays, cfg.Sidecar.BackendURL)
+		relays = appendUniqueRelay(relays, cfg.Sidecar.PublicURL)
+	}
+	for _, candidates := range [][]string{
+		cfg.ContextVMRelays,
+		cfg.BrowserRelays,
+		cfg.ServiceRelays,
+		cfg.Relays,
+		cfg.NIP34Relays,
+	} {
+		for _, relay := range candidates {
+			relays = appendUniqueRelay(relays, relay)
+		}
+	}
+	return relays
+}
+
+func relayPolicyHydrationRelayURLsForState(configured []string, state controlplane.RelayPolicyState) []string {
+	relays := append([]string(nil), configured...)
+	for _, candidates := range [][]string{
+		state.ContextVMRelays,
+		state.BrowserRelays,
+		state.ServiceRelays,
+		state.NIP34Relays,
+	} {
+		for _, relay := range candidates {
+			relays = appendUniqueRelay(relays, relay)
+		}
+	}
+	return relays
 }
 
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {

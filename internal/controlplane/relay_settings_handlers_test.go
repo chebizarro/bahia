@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
@@ -32,7 +33,7 @@ func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}
-	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{}, Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
@@ -102,7 +103,7 @@ func TestRelaySettingsApplyDoesNotMutateRuntimeConfig(t *testing.T) {
 		BrowserRelays:   []string{"wss://initial-browser.example"},
 		ContextVMRelays: []string{"wss://initial-contextvm.example"},
 	}}
-	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, Logger: zap.NewNop()})
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, ProjectionStore: &memoryRelayPolicyProjectionStore{}, Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
 	params := RelayPolicyState{
@@ -132,6 +133,17 @@ func TestRelaySettingsApplyDoesNotMutateRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestRelaySettingsApplyRequiresDurableProjectionStore(t *testing.T) {
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
+	_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)},
+		RPC:   ContextVMJSONRPCRequest{Params: []byte(`{"browser_relays":["wss://browser.example"]}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "durable relay policy projection is unavailable") {
+		t.Fatalf("error = %v, want durable projection unavailable", err)
+	}
+}
+
 func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -148,7 +160,7 @@ func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			signer, _ := NewPrivateKeySigner(testServiceKey)
-			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, Logger: zap.NewNop()})
+			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{}, Logger: zap.NewNop()})
 			h.publisher = publisher
 			h.signer = signer
 			_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: []byte(tc.policy)}})
@@ -162,21 +174,64 @@ func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 	}
 }
 
-func TestRelaySettingsGetPolicyDoesNotPublishMutationState(t *testing.T) {
+func TestRelaySettingsGetPolicyReturnsUnavailableWithoutInferringConfigDefaults(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	signer, _ := NewPrivateKeySigner(testServiceKey)
-	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{Nostr: config.NostrConfig{BrowserRelays: []string{"wss://browser.example"}}}, Logger: zap.NewNop()})
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		Config: &config.Config{Nostr: config.NostrConfig{BrowserRelays: []string{"wss://config-default.example"}}},
+		Logger: zap.NewNop(),
+	})
 	h.publisher = publisher
 	h.signer = signer
 	result, err := h.GetPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}})
 	if err != nil {
 		t.Fatalf("GetPolicy error: %v", err)
 	}
-	if result == nil {
-		t.Fatalf("missing result")
+	response := result.(map[string]any)
+	if response["status"] != "unavailable" || response["state"] != nil || response["canonical_policy"] != nil {
+		t.Fatalf("absence collapsed into policy state: %#v", response)
+	}
+	view := response["server_projection"].(RelayPolicyProjectionView)
+	if view.Availability != "unavailable" || view.Freshness != "unavailable" {
+		t.Fatalf("unexpected unavailable projection: %#v", view)
 	}
 	if len(publisher.events) != 0 {
 		t.Fatalf("read-only get published events: %d", len(publisher.events))
+	}
+}
+
+func TestRelaySettingsGetPolicyReturnsDurableProjectionProvenance(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	now := time.Unix(2_000, 0).UTC()
+	state := RelayPolicyState{Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://durable.example"}}
+	store := &memoryRelayPolicyProjectionStore{projection: testProjection(t, servicePubkey, "event-head", time.Unix(1_900, 0), state)}
+	store.projection.LastSyncAt = now.Add(-time.Minute)
+	store.projection.SourceRelay = "wss://secondary.example/path?ignored=value"
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		ProjectionStore: store,
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+		Now:             func() time.Time { return now },
+	})
+
+	result, err := h.GetPolicy(context.Background(), ContextVMRequest{})
+	if err != nil {
+		t.Fatalf("GetPolicy error: %v", err)
+	}
+	response := result.(map[string]any)
+	if response["status"] != "ok" {
+		t.Fatalf("status = %#v", response["status"])
+	}
+	policy := response["canonical_policy"].(*RelayPolicyState)
+	if strings.Join(policy.BrowserRelays, ",") != "wss://durable.example" {
+		t.Fatalf("unexpected canonical policy: %#v", policy)
+	}
+	view := response["server_projection"].(RelayPolicyProjectionView)
+	if view.Availability != "available" || view.Freshness != "fresh" || view.Hash == "" || view.EventID != strings.Repeat("a", 64) {
+		t.Fatalf("unexpected projection provenance: %#v", view)
+	}
+	if view.SourceRelay != "wss://secondary.example/path" {
+		t.Fatalf("source relay was not sanitized: %q", view.SourceRelay)
 	}
 }
 

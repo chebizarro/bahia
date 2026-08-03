@@ -268,6 +268,27 @@ func TestRelayPoolSubscribeRejectsMultiFilterSilentDrop(t *testing.T) {
 	require.Contains(t, err.Error(), "requires exactly one filter")
 }
 
+func TestMergedSubscriptionTracksRelaySourceAndEligibleRelays(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	primary := newTestSubscription()
+	secondary := newTestSubscription()
+	merged := mergeRelaySubscriptions(ctx, []relaySubscription{
+		{relayURL: "wss://primary.example", sub: primary},
+		{relayURL: "wss://secondary.example", sub: secondary},
+	}, 4)
+
+	event := gonostr.Event{ID: gonostr.ID{31: 0x42}}
+	secondary.Events <- event
+	got := <-merged.Events
+	require.Equal(t, event.ID, got.ID)
+	require.Equal(t, "wss://secondary.example", merged.EventSource(event.ID.Hex()))
+	require.Equal(t, []string{"wss://primary.example", "wss://secondary.example"}, merged.RelayURLs())
+
+	close(primary.Events)
+	close(secondary.Events)
+}
+
 func TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter(t *testing.T) {
 	const relayURL = "wss://relay.example"
 	pool := newRelayPoolWithManagedRelays(relayURL)
