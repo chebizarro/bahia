@@ -81,6 +81,7 @@ const (
 	ContextVMMethodLoomCancel                 = "loom/cancel"
 	ContextVMLoomSchema                       = "cascadia.loom.v1"
 	ContextVMMethodApprovalApprove            = "approval/approve"
+	ContextVMMethodApprovalReject             = "approval/reject"
 	ContextVMMethodToolsCall                  = "tools/call"
 
 	encryptedRequestReplayLookback = 2 * time.Minute
@@ -533,9 +534,13 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request"))
 		return
 	}
-	progressToken := cascontextvm.ProgressToken(rpc.Params)
+	progressToken, err := contextVMIdempotencyKey(rpc.Params)
+	if err != nil {
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, err.Error()))
+		return
+	}
 	if progressToken != "" {
-		if cached, ok := t.cachedContextVMResponse(innerPubkey, progressToken); ok {
+		if cached, ok := t.cachedContextVMResponse(innerPubkey, rpc.Method, progressToken); ok {
 			cached.ID = cascontextvm.NewResponse(rpc.ID, nil).ID
 			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached)
 			return
@@ -545,7 +550,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	if handler == nil {
 		t.logger.Warn("ContextVM method not found", zap.String("event_id", innerID), zap.String("method", rpc.Method))
 		response := cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.MethodNotFoundCode, "method not found")
-		t.cacheContextVMResponse(innerPubkey, progressToken, response)
+		t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 		return
 	}
@@ -561,7 +566,7 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		}
 		response.Error = &JSONRPCError{Code: code, Message: err.Error()}
 	}
-	t.cacheContextVMResponse(innerPubkey, progressToken, response)
+	t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 }
 
@@ -683,23 +688,52 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, o
 	return wrapped, nil
 }
 
-func (t *EncryptedRequestTransport) cachedContextVMResponse(pubkey, progressToken string) (ContextVMJSONRPCResponse, bool) {
+func contextVMIdempotencyKey(params json.RawMessage) (string, error) {
+	progressToken := strings.TrimSpace(cascontextvm.ProgressToken(params))
+	if len(params) == 0 || string(params) == "null" {
+		return progressToken, nil
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(params, &envelope); err != nil {
+		return "", fmt.Errorf("invalid request params")
+	}
+	var compatibilityKey string
+	if raw, ok := envelope["idempotency_key"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &compatibilityKey); err != nil {
+			return "", fmt.Errorf("idempotency_key must be a string")
+		}
+		compatibilityKey = strings.TrimSpace(compatibilityKey)
+	}
+	if progressToken != "" && compatibilityKey != "" && progressToken != compatibilityKey {
+		return "", fmt.Errorf("_meta.progressToken and idempotency_key must match")
+	}
+	if progressToken != "" {
+		return progressToken, nil
+	}
+	return compatibilityKey, nil
+}
+
+func contextVMCacheKey(pubkey, method, progressToken string) string {
+	return strings.Join([]string{pubkey, method, progressToken}, "\x00")
+}
+
+func (t *EncryptedRequestTransport) cachedContextVMResponse(pubkey, method, progressToken string) (ContextVMJSONRPCResponse, bool) {
 	if progressToken == "" {
 		return ContextVMJSONRPCResponse{}, false
 	}
 	t.contextVMMu.Lock()
 	defer t.contextVMMu.Unlock()
-	response, ok := t.contextVMDedup.get(pubkey + ":" + progressToken)
+	response, ok := t.contextVMDedup.get(contextVMCacheKey(pubkey, method, progressToken))
 	return response, ok
 }
 
-func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, progressToken string, response ContextVMJSONRPCResponse) {
+func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, method, progressToken string, response ContextVMJSONRPCResponse) {
 	if progressToken == "" {
 		return
 	}
 	t.contextVMMu.Lock()
 	defer t.contextVMMu.Unlock()
-	t.contextVMDedup.put(pubkey+":"+progressToken, response)
+	t.contextVMDedup.put(contextVMCacheKey(pubkey, method, progressToken), response)
 }
 
 func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) bool {

@@ -179,6 +179,25 @@ func (r *fakeEncryptedRegistryMutations) CreateService(_ context.Context, svc *d
 	r.createdServices = append(r.createdServices, &copy)
 	return nil
 }
+func (r *fakeEncryptedRegistryMutations) UpdateService(_ context.Context, svc *domain.Service) error {
+	for index, existing := range r.createdServices {
+		if existing.ID == svc.ID {
+			copy := *svc
+			r.createdServices[index] = &copy
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+func (r *fakeEncryptedRegistryMutations) DeleteService(_ context.Context, id uuid.UUID, _ bool) error {
+	for index, existing := range r.createdServices {
+		if existing.ID == id {
+			r.createdServices = append(r.createdServices[:index], r.createdServices[index+1:]...)
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
 func (r *fakeEncryptedRegistryMutations) CreateEnvironment(_ context.Context, env *domain.Environment) error {
 	copy := *env
 	if r.environments == nil {
@@ -245,6 +264,21 @@ func encryptedAuthDeps(t *testing.T, serviceID, orgID uuid.UUID, role domain.Rol
 	members := &fakeEncryptedMemberRepo{members: map[string]*domain.OrgMember{}}
 	_ = members.Add(context.Background(), &domain.OrgMember{OrgID: orgID, Pubkey: requesterPubkey, Role: role})
 	return services, auth.NewRBAC(members)
+}
+
+func encryptedAdminRBAC(t *testing.T, orgID uuid.UUID) *auth.RBAC {
+	t.Helper()
+	_, rbac := encryptedAuthDeps(t, uuid.New(), orgID, domain.RoleAdmin)
+	return rbac
+}
+
+func encryptedRequesterEvent(t *testing.T) *nostr.Event {
+	t.Helper()
+	secret, err := nostr.SecretKeyFromHex(testRequesterKey)
+	if err != nil {
+		t.Fatalf("parse requester key: %v", err)
+	}
+	return &nostr.Event{PubKey: secret.Public()}
 }
 
 type fakeEncryptedRunRepo struct {
@@ -379,19 +413,20 @@ func TestEncryptedRouteHandlers_ContextVMAliasPreservesCanonicalOperation(t *tes
 }
 
 func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryService(t *testing.T) {
+	orgID := uuid.New()
 	registry := &fakeEncryptedRegistryMutations{}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceCreate, map[string]any{
-		"name": "payments-api", "artifact_repo": "registry.example/payments", "repo_url": "https://git.example/payments", "runtime_type": "compose",
+		"org_id": orgID.String(), "name": "payments-api", "artifact_repo": "registry.example/payments", "repository": map[string]any{"source": "github", "clone_url": "https://git.example/payments"}, "default_branch": "release", "runtime_type": "compose",
 	}))
 
 	if len(registry.createdServices) != 1 {
 		t.Fatalf("created services = %d, want 1", len(registry.createdServices))
 	}
 	created := registry.createdServices[0]
-	if created.Name != "payments-api" || created.ArtifactRepo != "registry.example/payments" || created.RuntimeType != domain.RuntimeTypeCompose || created.DefaultBranch != "main" {
+	if created.OrgID != orgID || created.Name != "payments-api" || created.ArtifactRepo != "registry.example/payments" || created.RuntimeType != domain.RuntimeTypeCompose || created.RepoURL != "https://git.example/payments" || created.DefaultBranch != "release" {
 		t.Fatalf("unexpected created service: %#v", created)
 	}
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
@@ -400,13 +435,63 @@ func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryServi
 	}
 }
 
+func TestEncryptedRouteHandlers_UpdateAndDeleteServiceContextVMMethodsMutateRegistry(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	serviceRecord := &domain.Service{
+		ID:            serviceID,
+		OrgID:         orgID,
+		Name:          "payments-api",
+		RepoURL:       "https://github.com/example/payments",
+		Repository:    &domain.RepositoryRef{Source: "github", CloneURL: "https://github.com/example/payments"},
+		ArtifactRepo:  "ghcr.io/example/payments",
+		DefaultBranch: "main",
+		RuntimeType:   domain.RuntimeTypeDocker,
+	}
+	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: serviceRecord}}
+	registry := &fakeEncryptedRegistryMutations{createdServices: []*domain.Service{serviceRecord}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Registry: registry,
+		Services: services,
+		RBAC:     encryptedAdminRBAC(t, orgID),
+		Logger:   zap.NewNop(),
+	})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceUpdate, map[string]any{
+		"id": serviceID.String(), "name": "payments-web", "repo_url": "https://github.com/example/payments-web", "runtime_type": "compose",
+	}))
+	if len(registry.createdServices) != 1 || registry.createdServices[0].Name != "payments-web" || registry.createdServices[0].RuntimeType != domain.RuntimeTypeCompose {
+		t.Fatalf("unexpected updated services: %#v", registry.createdServices)
+	}
+	if registry.createdServices[0].RepoURL != "https://github.com/example/payments-web" || registry.createdServices[0].Repository.CloneURL != "https://github.com/example/payments-web" {
+		t.Fatalf("repo_url update was not synchronized: %#v", registry.createdServices[0])
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["service_id"] != serviceID.String() || payload["status"] != "updated" {
+		t.Fatalf("unexpected update response: %#v", payload)
+	}
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceDelete, map[string]any{
+		"id": serviceID.String(), "force": true,
+	}))
+	if len(registry.createdServices) != 0 {
+		t.Fatalf("service was not deleted: %#v", registry.createdServices)
+	}
+	payload = routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["service_id"] != serviceID.String() || payload["status"] != "deleted" {
+		t.Fatalf("unexpected delete response: %#v", payload)
+	}
+}
+
 func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodCreatesRegistryEnvironment(t *testing.T) {
+	orgID := uuid.New()
 	registry := &fakeEncryptedRegistryMutations{}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentCreate, map[string]any{
-		"name": "staging", "loom_worker_selector": map[string]any{"region": "us-east"}, "runtime_config": map[string]any{"type": "compose"}, "deploy_strategy": "blue_green", "protected": true,
+		"org_id": orgID.String(), "name": "staging", "loom_worker_selector": map[string]any{"region": "us-east"}, "runtime_config": map[string]any{"type": "compose"}, "deploy_strategy": "blue_green", "protected": true,
 	}))
 
 	if len(registry.environments) != 1 {
@@ -538,10 +623,11 @@ func TestEncryptedRouteHandlers_CreateEnvironmentRejectsDeploymentUnitSchemaViol
 
 func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSelector(t *testing.T) {
 	envID := uuid.New()
+	orgID := uuid.New()
 	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
-		envID: {ID: envID, Name: "prod", DeployStrategy: domain.DeployStrategyReplace, Protected: true},
+		envID: {ID: envID, OrgID: orgID, Name: "prod", DeployStrategy: domain.DeployStrategyReplace, Protected: true},
 	}}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentUpdate, map[string]any{
@@ -563,11 +649,12 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodAcceptsStringSel
 
 func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodPersistsExplicitUnits(t *testing.T) {
 	envID := uuid.New()
+	orgID := uuid.New()
 	revision := time.Now().UTC()
 	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
-		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"type": "docker"}, DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: revision},
+		envID: {ID: envID, OrgID: orgID, Name: "prod", RuntimeConfig: map[string]any{"type": "docker"}, DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: revision},
 	}}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentUpdate, map[string]any{
@@ -603,13 +690,15 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentContextVMMethodPersistsExplicit
 
 func TestEncryptedRouteHandlers_UpdateEnvironmentRequiresRevisionForCompleteUnitSet(t *testing.T) {
 	envID := uuid.New()
+	orgID := uuid.New()
 	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
-		envID: {ID: envID, Name: "prod", DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: time.Now().UTC()},
+		envID: {ID: envID, OrgID: orgID, Name: "prod", DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: time.Now().UTC()},
 	}}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
 
 	_, err := h.UpdateEnvironment(context.Background(), ContextVMRequest{
-		RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"id":"` + envID.String() + `","deployment_units":[]}`)},
+		Event: encryptedRequesterEvent(t),
+		RPC:   ContextVMJSONRPCRequest{Params: json.RawMessage(`{"id":"` + envID.String() + `","deployment_units":[]}`)},
 	})
 	if err == nil || !strings.Contains(err.Error(), "expected_updated_at is required") {
 		t.Fatalf("error = %v, want required revision precondition", err)
@@ -618,10 +707,11 @@ func TestEncryptedRouteHandlers_UpdateEnvironmentRequiresRevisionForCompleteUnit
 
 func TestEncryptedRouteHandlers_DeleteEnvironmentContextVMMethodDeletesRegistryEnvironment(t *testing.T) {
 	envID := uuid.New()
+	orgID := uuid.New()
 	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
-		envID: {ID: envID, Name: "staging"},
+		envID: {ID: envID, OrgID: orgID, Name: "staging"},
 	}}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodEnvironmentDelete, map[string]any{

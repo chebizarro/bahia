@@ -200,8 +200,12 @@ func (r *RelayFirstRegistry) DeleteEnvironment(ctx context.Context, id uuid.UUID
 func (r *RelayFirstRegistry) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {
 	content := map[string]any{"deleted": deleted, "id": svc.ID.String()}
 	if !deleted {
+		content["org_id"] = svc.OrgID.String()
 		content["name"] = svc.Name
 		content["repo_url"] = svc.RepoURL
+		if svc.Repository != nil {
+			content["repository"] = svc.Repository
+		}
 		content["artifact_repo"] = svc.ArtifactRepo
 		content["default_branch"] = svc.DefaultBranch
 		content["runtime_type"] = string(svc.RuntimeType)

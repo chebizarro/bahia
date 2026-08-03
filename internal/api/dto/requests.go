@@ -29,6 +29,7 @@ type DeploymentUnitRequest struct {
 
 // CreateServiceRequest represents a request to register a new service.
 type CreateServiceRequest struct {
+	OrgID          uuid.UUID             `json:"org_id"`
 	Name           string                `json:"name"`
 	RepoURL        string                `json:"repo_url,omitempty"`
 	Repository     *RepositoryRefRequest `json:"repository,omitempty"`
@@ -40,12 +41,21 @@ type CreateServiceRequest struct {
 
 // UpdateServiceRequest represents a request to update a service.
 type UpdateServiceRequest struct {
-	Name          *string               `json:"name,omitempty"`
-	RepoURL       *string               `json:"repo_url,omitempty"`
-	Repository    *RepositoryRefRequest `json:"repository,omitempty"`
-	ArtifactRepo  *string               `json:"artifact_repo,omitempty"`
-	DefaultBranch *string               `json:"default_branch,omitempty"`
-	RuntimeType   *string               `json:"runtime_type,omitempty"`
+	ID             uuid.UUID             `json:"id"`
+	Name           *string               `json:"name,omitempty"`
+	RepoURL        *string               `json:"repo_url,omitempty"`
+	Repository     *RepositoryRefRequest `json:"repository,omitempty"`
+	ArtifactRepo   *string               `json:"artifact_repo,omitempty"`
+	DefaultBranch  *string               `json:"default_branch,omitempty"`
+	RuntimeType    *string               `json:"runtime_type,omitempty"`
+	IdempotencyKey string                `json:"idempotency_key,omitempty"`
+}
+
+// DeleteServiceRequest deletes a service through the signer-first control plane.
+type DeleteServiceRequest struct {
+	ID             uuid.UUID `json:"id"`
+	Force          bool      `json:"force,omitempty"`
+	IdempotencyKey string    `json:"idempotency_key,omitempty"`
 }
 
 // RepositoryRefRequest is the request payload for structured repository metadata.
@@ -122,6 +132,24 @@ type RegisterArtifactRequest struct {
 	SignatureRef      string         `json:"signature_ref,omitempty"`
 	ScanStatus        string         `json:"scan_status,omitempty"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
+// ServiceDeployRequest is the signer-first request to create and, when
+// policy permits, execute a deployment intent. RequestedBy is intentionally
+// absent: handlers derive it from the verified request event.
+type ServiceDeployRequest struct {
+	ServiceID        uuid.UUID  `json:"service_id"`
+	EnvironmentID    uuid.UUID  `json:"environment_id"`
+	DeploymentUnitID *uuid.UUID `json:"deployment_unit_id,omitempty"`
+	ArtifactID       uuid.UUID  `json:"artifact_id"`
+	IdempotencyKey   string     `json:"idempotency_key,omitempty"`
+}
+
+// DeploymentDecisionRequest approves or rejects a pending deployment intent.
+type DeploymentDecisionRequest struct {
+	IntentID       uuid.UUID `json:"intent_id"`
+	Decision       string    `json:"decision"`
+	IdempotencyKey string    `json:"idempotency_key,omitempty"`
 }
 
 // CreateDeploymentIntentRequest represents a request to create a deployment intent.

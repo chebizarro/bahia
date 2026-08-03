@@ -63,6 +63,9 @@ func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequ
 	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid loom submit params: %w", err)
 	}
+	if err := validateLoomSubmitPayload(payload); err != nil {
+		return nil, err
+	}
 	job := loomadapter.JobRequest{
 		ID:                   strings.TrimSpace(payload.ID),
 		Type:                 strings.TrimSpace(payload.Type),
@@ -74,7 +77,6 @@ func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequ
 		Cmd:                  strings.TrimSpace(payload.Cmd),
 		Args:                 append([]string(nil), payload.Args...),
 		Env:                  payload.Env,
-		Secrets:              payload.Secrets,
 		Params:               payload.Params,
 		PaymentToken:         strings.TrimSpace(payload.PaymentToken),
 		RequiredSoftware:     append([]string(nil), payload.RequiredSoftware...),
@@ -96,6 +98,34 @@ func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequ
 		"job_event_id": jobID,
 		"state_d_tag":  "loom-job:" + jobID,
 	}, nil
+}
+
+func validateLoomSubmitPayload(payload loomSubmitContextVMPayload) error {
+	if len(payload.Secrets) > 0 || strings.TrimSpace(payload.PaymentToken) != "" {
+		return fmt.Errorf("plaintext Loom secrets are forbidden; secret references are not yet supported")
+	}
+	if loomPayloadContainsBunkerURL(payload) {
+		return fmt.Errorf("secret-bearing bunker URLs are forbidden in Loom events and command arguments")
+	}
+	return nil
+}
+
+func loomPayloadContainsBunkerURL(payload loomSubmitContextVMPayload) bool {
+	values := []string{payload.Cmd}
+	values = append(values, payload.Args...)
+	for _, value := range payload.Env {
+		values = append(values, value)
+	}
+	for _, value := range payload.Params {
+		values = append(values, value)
+	}
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if strings.Contains(normalized, "bunker://") || strings.Contains(normalized, "nostrconnect://") {
+			return true
+		}
+	}
+	return false
 }
 
 func (h loomContextVMHandlers) cancel(ctx context.Context, request ContextVMRequest) (any, error) {

@@ -869,6 +869,48 @@ func TestContextVMTransport_RejectsInvalidRandomKeyWrapper(t *testing.T) {
 	}
 }
 
+func TestContextVMIdempotencyKeySupportsCompatibilityAlias(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  string
+		want    string
+		wantErr bool
+	}{
+		{name: "progress token", params: `{"_meta":{"progressToken":"deploy-1"}}`, want: "deploy-1"},
+		{name: "compatibility alias", params: `{"idempotency_key":"deploy-1"}`, want: "deploy-1"},
+		{name: "matching values", params: `{"idempotency_key":"deploy-1","_meta":{"progressToken":"deploy-1"}}`, want: "deploy-1"},
+		{name: "mismatch", params: `{"idempotency_key":"deploy-2","_meta":{"progressToken":"deploy-1"}}`, wantErr: true},
+		{name: "non-string alias", params: `{"idempotency_key":42}`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := contextVMIdempotencyKey(json.RawMessage(test.params))
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("expected idempotency validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("contextVMIdempotencyKey: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("key = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestContextVMCacheKeyScopesBySignerAndMethod(t *testing.T) {
+	base := contextVMCacheKey("requester-a", "service/deploy", "deploy-1")
+	if base == contextVMCacheKey("requester-b", "service/deploy", "deploy-1") {
+		t.Fatal("cache key must be signer scoped")
+	}
+	if base == contextVMCacheKey("requester-a", "service/delete", "deploy-1") {
+		t.Fatal("cache key must be method scoped")
+	}
+}
+
 func TestContextVMDedupCache_BoundsEntries(t *testing.T) {
 	cache := newContextVMDedupCache(3)
 

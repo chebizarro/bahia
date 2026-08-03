@@ -383,10 +383,11 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 	if artifactID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is required")}
 	}
+	// Attribution is signer-first: the server derives requested_by from the
+	// verified ContextVM event pubkey. Keep the parameter for API compatibility,
+	// but never serialize caller-provided attribution.
+	_ = requestedBy
 	payload := map[string]any{"service_id": serviceID, "environment_id": envID, "artifact_id": artifactID}
-	if requestedBy = strings.TrimSpace(requestedBy); requestedBy != "" {
-		payload["requested_by"] = requestedBy
-	}
 	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeploy, Tags: nostr.Tags{{"service", serviceID}, {"environment", envID}, {"artifact", artifactID}}, Payload: payload}, onStatus)
 	if err != nil {
 		return nil, err

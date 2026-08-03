@@ -34,6 +34,8 @@ const (
 
 	EncryptedOperationDeploymentRunLogsGet = "deployments.run_logs.get"
 	ContextVMMethodDeploymentRunLogsGet    = "deployments/run-logs-get"
+	ContextVMMethodServiceUpdate           = "service/update"
+	ContextVMMethodServiceDelete           = "service/delete"
 	ContextVMMethodEnvironmentCreate       = "environment/create"
 	ContextVMMethodEnvironmentUpdate       = "environment/update"
 	ContextVMMethodEnvironmentDelete       = "environment/delete"
@@ -57,6 +59,8 @@ type SignatureVerifier interface {
 // semantics for service/environment writes.
 type RegistryMutationBackend interface {
 	CreateService(ctx context.Context, svc *domain.Service) error
+	UpdateService(ctx context.Context, svc *domain.Service) error
+	DeleteService(ctx context.Context, id uuid.UUID, force bool) error
 	CreateEnvironment(ctx context.Context, env *domain.Environment) error
 	CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
@@ -131,6 +135,8 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	h.registerRouteHandler(transport, EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs, ContextVMMethodDeploymentRunLogsGet)
 	h.registerRouteHandler(transport, EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, h.CreateService)
+	transport.RegisterContextVMHandler(ContextVMMethodServiceUpdate, h.UpdateService)
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDelete, h.DeleteService)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentCreate, h.CreateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
@@ -149,14 +155,6 @@ func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedReques
 	for _, alias := range contextVMAliases {
 		register(alias)
 	}
-}
-
-type encryptedServiceCreatePayload struct {
-	Name          string `json:"name"`
-	RepoURL       string `json:"repo_url,omitempty"`
-	ArtifactRepo  string `json:"artifact_repo"`
-	DefaultBranch string `json:"default_branch,omitempty"`
-	RuntimeType   string `json:"runtime_type,omitempty"`
 }
 
 type encryptedEnvironmentCreatePayload struct {
@@ -194,14 +192,18 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 	if h.registry == nil {
 		return nil, fmt.Errorf("service registry mutation handling is not configured")
 	}
-	var payload encryptedServiceCreatePayload
-	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+	var payload dto.CreateServiceRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, err
 	}
 	name := strings.TrimSpace(payload.Name)
 	artifactRepo := strings.TrimSpace(payload.ArtifactRepo)
 	if name == "" || artifactRepo == "" {
 		return nil, fmt.Errorf("name and artifact_repo are required")
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	if err := authorizer.authorizeOrg(ctx, request.Event, payload.OrgID, domain.PermWriteServices); err != nil {
+		return nil, err
 	}
 	runtimeType := domain.RuntimeTypeDocker
 	if strings.TrimSpace(payload.RuntimeType) != "" {
@@ -214,10 +216,17 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 	if defaultBranch == "" {
 		defaultBranch = "main"
 	}
+	repositoryRef := repositoryRefFromRequest(payload.Repository)
+	repoURL := strings.TrimSpace(payload.RepoURL)
+	if repositoryRef != nil && strings.TrimSpace(repositoryRef.CloneURL) != "" {
+		repoURL = strings.TrimSpace(repositoryRef.CloneURL)
+	}
 	svc := &domain.Service{
 		ID:            uuid.New(),
+		OrgID:         payload.OrgID,
 		Name:          name,
-		RepoURL:       strings.TrimSpace(payload.RepoURL),
+		RepoURL:       repoURL,
+		Repository:    repositoryRef,
 		ArtifactRepo:  artifactRepo,
 		DefaultBranch: defaultBranch,
 		RuntimeType:   runtimeType,
@@ -225,7 +234,108 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 	if err := h.registry.CreateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("failed to create service: %w", err)
 	}
-	return map[string]any{"status": "created", "service": svc, "service_id": svc.ID.String()}, nil
+	return map[string]any{"status": "created", "service": svc, "service_id": svc.ID.String(), "idempotency_key": effectiveIdempotencyKey(request, payload.IdempotencyKey)}, nil
+}
+
+func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("service registry mutation handling is not configured")
+	}
+	var payload dto.UpdateServiceRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	svc, err := authorizer.authorizeService(ctx, request.Event, payload.ID, domain.PermWriteServices)
+	if err != nil {
+		return nil, err
+	}
+	if payload.Name != nil {
+		name := strings.TrimSpace(*payload.Name)
+		if name == "" {
+			return nil, fmt.Errorf("name must not be empty")
+		}
+		svc.Name = name
+	}
+	if payload.RepoURL != nil {
+		svc.RepoURL = strings.TrimSpace(*payload.RepoURL)
+		if svc.Repository != nil {
+			svc.Repository.CloneURL = svc.RepoURL
+		}
+	}
+	if payload.Repository != nil {
+		svc.Repository = repositoryRefFromRequest(payload.Repository)
+		if svc.Repository != nil && strings.TrimSpace(svc.Repository.CloneURL) != "" {
+			svc.RepoURL = strings.TrimSpace(svc.Repository.CloneURL)
+		}
+	}
+	if payload.ArtifactRepo != nil {
+		artifactRepo := strings.TrimSpace(*payload.ArtifactRepo)
+		if artifactRepo == "" {
+			return nil, fmt.Errorf("artifact_repo must not be empty")
+		}
+		svc.ArtifactRepo = artifactRepo
+	}
+	if payload.DefaultBranch != nil {
+		branch := strings.TrimSpace(*payload.DefaultBranch)
+		if branch == "" {
+			return nil, fmt.Errorf("default_branch must not be empty")
+		}
+		svc.DefaultBranch = branch
+	}
+	if payload.RuntimeType != nil {
+		runtimeType := domain.RuntimeType(strings.TrimSpace(*payload.RuntimeType))
+		if err := domain.ValidateRuntimeType(runtimeType); err != nil {
+			return nil, fmt.Errorf("invalid runtime_type: %w", err)
+		}
+		svc.RuntimeType = runtimeType
+	}
+	if err := h.registry.UpdateService(ctx, svc); err != nil {
+		return nil, fmt.Errorf("failed to update service: %w", err)
+	}
+	return map[string]any{"status": "updated", "service": svc, "service_id": svc.ID.String(), "idempotency_key": effectiveIdempotencyKey(request, payload.IdempotencyKey)}, nil
+}
+
+func (h *EncryptedRouteHandlers) DeleteService(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("service registry mutation handling is not configured")
+	}
+	var payload dto.DeleteServiceRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ID, domain.PermWriteServices); err != nil {
+		return nil, err
+	}
+	if err := h.registry.DeleteService(ctx, payload.ID, payload.Force); err != nil {
+		return nil, fmt.Errorf("failed to delete service: %w", err)
+	}
+	return map[string]any{"status": "deleted", "service_id": payload.ID.String(), "idempotency_key": effectiveIdempotencyKey(request, payload.IdempotencyKey)}, nil
+}
+
+func repositoryRefFromRequest(request *dto.RepositoryRefRequest) *domain.RepositoryRef {
+	if request == nil {
+		return nil
+	}
+	ref := &domain.RepositoryRef{
+		Source:         strings.TrimSpace(request.Source),
+		RepoCoordinate: strings.TrimSpace(request.RepoCoordinate),
+		CloneURL:       strings.TrimSpace(request.CloneURL),
+		WebURL:         strings.TrimSpace(request.WebURL),
+		RelayURLs:      append([]string(nil), request.RelayURLs...),
+	}
+	if request.CI != nil {
+		ref.CI = &domain.ServiceCIConfig{Provider: strings.TrimSpace(request.CI.Provider), WorkflowPath: strings.TrimSpace(request.CI.WorkflowPath)}
+	}
+	return ref
+}
+
+func effectiveIdempotencyKey(request ContextVMRequest, compatibilityKey string) string {
+	if token := strings.TrimSpace(request.ProgressToken); token != "" {
+		return token
+	}
+	return strings.TrimSpace(compatibilityKey)
 }
 
 func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -239,6 +349,9 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 	name := strings.TrimSpace(payload.Name)
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
+	}
+	if payload.OrgID == uuid.Nil {
+		return nil, fmt.Errorf("org_id is required")
 	}
 	deployStrategy := domain.DeployStrategyReplace
 	if strings.TrimSpace(payload.DeployStrategy) != "" {
@@ -372,11 +485,15 @@ func (h *EncryptedRouteHandlers) DeleteEnvironment(ctx context.Context, request 
 		return nil, fmt.Errorf("environment registry mutation handling is not configured")
 	}
 	var payload encryptedEnvironmentDeletePayload
-	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, err
 	}
 	id, err := parseEncryptedUUID(payload.ID, "environment ID")
 	if err != nil {
+		return nil, err
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	if _, err := authorizer.authorizeEnvironment(ctx, request.Event, id, domain.PermWriteEnvironments); err != nil {
 		return nil, err
 	}
 	if err := h.registry.DeleteEnvironment(ctx, id, payload.Force); err != nil {
@@ -498,7 +615,7 @@ func deploymentUnitsFromRequests(env *domain.Environment, requests []dto.Deploym
 
 func (h *EncryptedRouteHandlers) authorizeEnvironmentOrg(ctx context.Context, request ContextVMRequest, orgID uuid.UUID) error {
 	if orgID == uuid.Nil {
-		return nil
+		return fmt.Errorf("environment organization is required")
 	}
 	if h.rbac == nil {
 		return fmt.Errorf("environment RBAC is not configured")

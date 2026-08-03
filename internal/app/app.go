@@ -1156,12 +1156,13 @@ func New(cfg *config.Config) (*App, error) {
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
+		tenantRBAC := auth.NewRBAC(orgMemberRepo)
 		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
 			Payments:              paymentSvc,
 			Orgs:                  orgRepo,
 			Members:               orgMemberRepo,
 			Invites:               orgInviteRepo,
-			RBAC:                  auth.NewRBAC(orgMemberRepo),
+			RBAC:                  tenantRBAC,
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(encryptedRequestTransport)
@@ -1180,7 +1181,7 @@ func New(cfg *config.Config) (*App, error) {
 			Services:     serviceRepo,
 			Intents:      intentRepo,
 			Registry:     registryMutations,
-			RBAC:         auth.NewRBAC(orgMemberRepo),
+			RBAC:         tenantRBAC,
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
 		controlplane.NewOperatorContextVMHandlers(controlplane.OperatorContextVMHandlersConfig{
@@ -1207,6 +1208,8 @@ func New(cfg *config.Config) (*App, error) {
 			Registry:         registry,
 			RuntimeLifecycle: runtimeLifecycleSvc,
 			Policy:           policySvc,
+			Services:         serviceRepo,
+			RBAC:             tenantRBAC,
 			Logger:           logger,
 		})
 		if sbomOrchestrator != nil {
