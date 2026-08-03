@@ -338,6 +338,9 @@ func (r *RelayFirstRegistry) UpdateBuildStatus(ctx context.Context, id uuid.UUID
 func (r *RelayFirstRegistry) RegisterArtifact(ctx context.Context, a *domain.Artifact) error {
 	return r.delegate.RegisterArtifact(ctx, a)
 }
+func (r *RelayFirstRegistry) RegisterVerifiedArtifact(ctx context.Context, a *domain.Artifact, proof ArtifactVerificationProof) error {
+	return r.delegate.RegisterVerifiedArtifact(ctx, a, proof)
+}
 func (r *RelayFirstRegistry) GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error) {
 	return r.delegate.GetArtifact(ctx, id)
 }

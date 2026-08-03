@@ -4,38 +4,56 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	registryadapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
-const ciSystemHiveCI = "hive-ci"
+var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
-// Bridge orchestrates Hive-CI result -> Bahia build registration for CI-5/CI-6.
+type artifactRegistry interface {
+	RegisterBuild(context.Context, *domain.Build) error
+	UpdateBuildStatus(context.Context, uuid.UUID, domain.BuildStatus) error
+	RegisterVerifiedArtifact(context.Context, *domain.Artifact, service.ArtifactVerificationProof) error
+}
+
+// Bridge orchestrates trusted Hive-CI result -> Bahia build/artifact
+// registration. Automatic processing and the signer-first build-result action
+// share this implementation, so retries cannot create parallel artifacts.
 type Bridge struct {
 	hiveRepo          repository.HiveCIRepository
+	serviceRepo       repository.ServiceRepository
 	buildRepo         repository.BuildRepository
 	artifactRepo      repository.ArtifactRepository
 	intentRepo        repository.DeploymentIntentRepository
 	envRepo           repository.EnvironmentRepository
 	ociRegistry       repository.OCIRegistryRepository
 	registryInspector registryadapter.ImageInspector
+	registry          artifactRegistry
 	logger            *zap.Logger
 	trustedCI         map[string]struct{}
+	autoRegister      bool
 }
 
 func NewBridge(
 	hiveRepo repository.HiveCIRepository,
+	serviceRepo repository.ServiceRepository,
 	buildRepo repository.BuildRepository,
 	artifactRepo repository.ArtifactRepository,
 	intentRepo repository.DeploymentIntentRepository,
 	envRepo repository.EnvironmentRepository,
 	ociRegistry repository.OCIRegistryRepository,
 	registryInspector registryadapter.ImageInspector,
+	registry artifactRegistry,
 	trustedCIPubkeys []string,
+	autoRegister bool,
 	logger *zap.Logger,
 ) *Bridge {
 	trusted := make(map[string]struct{}, len(trustedCIPubkeys))
@@ -49,190 +67,299 @@ func NewBridge(
 		logger = zap.NewNop()
 	}
 	return &Bridge{
-		hiveRepo: hiveRepo, buildRepo: buildRepo, artifactRepo: artifactRepo,
-		intentRepo: intentRepo, envRepo: envRepo, ociRegistry: ociRegistry,
-		registryInspector: registryInspector,
-		logger:            logger.Named("pipeline-bridge"), trustedCI: trusted,
+		hiveRepo: hiveRepo, serviceRepo: serviceRepo, buildRepo: buildRepo,
+		artifactRepo: artifactRepo, intentRepo: intentRepo, envRepo: envRepo,
+		ociRegistry: ociRegistry, registryInspector: registryInspector,
+		registry: registry, logger: logger.Named("pipeline-bridge"),
+		trustedCI: trusted, autoRegister: autoRegister,
 	}
 }
 
-// ProcessResult maps a verified Hive-CI result into a Bahia build/artifact, idempotently.
+// ProcessResult consumes a newly persisted signed Hive-CI result.
 func (b *Bridge) ProcessResult(ctx context.Context, resultEventID string) error {
-	result, err := b.hiveRepo.GetResultByEventID(ctx, resultEventID)
+	_, err := b.processResult(ctx, resultEventID, nil, false)
+	return err
+}
+
+// RegisterBuildResult is the signer-first recovery/action path. The browser
+// supplies only the Bahia build ID; every artifact identifier comes from the
+// trusted persisted Hive-CI result and verified OCI manifest.
+func (b *Bridge) RegisterBuildResult(ctx context.Context, buildID uuid.UUID) (*domain.Artifact, error) {
+	if b == nil || b.buildRepo == nil || b.hiveRepo == nil {
+		return nil, fmt.Errorf("HiveCI build-result registration is not configured")
+	}
+	build, err := b.buildRepo.GetByID(ctx, buildID)
 	if err != nil {
-		return fmt.Errorf("load hiveci result: %w", err)
+		return nil, fmt.Errorf("load build: %w", err)
+	}
+	if build == nil {
+		return nil, fmt.Errorf("build %s not found", buildID)
+	}
+	result, err := b.hiveRepo.GetLatestResultByRunEventID(ctx, build.CIRunID)
+	if err != nil {
+		return nil, fmt.Errorf("load HiveCI result for build: %w", err)
 	}
 	if result == nil {
-		return nil
+		return nil, fmt.Errorf("build has no signed HiveCI result")
 	}
+	return b.processResult(ctx, result.ResultEventID, build, true)
+}
 
+func (b *Bridge) processResult(ctx context.Context, resultEventID string, expectedBuild *domain.Build, explicit bool) (*domain.Artifact, error) {
+	result, err := b.hiveRepo.GetResultByEventID(ctx, resultEventID)
+	if err != nil {
+		return nil, fmt.Errorf("load hiveci result: %w", err)
+	}
+	if result == nil {
+		return nil, fmt.Errorf("HiveCI result %s not found", resultEventID)
+	}
 	run, err := b.hiveRepo.GetRunByEventID(ctx, result.RunEventID)
 	if err != nil {
-		return fmt.Errorf("load hiveci run: %w", err)
+		return nil, fmt.Errorf("load hiveci run: %w", err)
 	}
 	if run == nil {
-		return nil
+		return nil, fmt.Errorf("HiveCI run %s not found", result.RunEventID)
 	}
-
 	policy, err := b.hiveRepo.GetPolicyByRepoAndWorkflow(ctx, run.RepoCoordinate, run.WorkflowPath)
 	if err != nil {
-		return fmt.Errorf("load pipeline policy: %w", err)
+		return nil, fmt.Errorf("load pipeline policy: %w", err)
 	}
 	if policy == nil {
-		b.logger.Info("no pipeline policy match; skipping",
+		if explicit {
+			return nil, fmt.Errorf("no enabled pipeline policy binds this build result to a Bahia service")
+		}
+		b.logger.Info("no enabled pipeline policy match; skipping",
 			zap.String("run_event_id", run.RunEventID),
 			zap.String("repo", run.RepoCoordinate),
 			zap.String("workflow", run.WorkflowPath),
 		)
-		return nil
+		return nil, nil
 	}
-
 	if _, ok := b.trustedCI[run.PublisherPubkey]; !ok {
 		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
-		b.logger.Warn("rejecting untrusted dispatcher",
-			zap.String("run_event_id", run.RunEventID),
-			zap.String("dispatcher_pubkey", run.PublisherPubkey),
-		)
-		return nil
+		return nil, fmt.Errorf("HiveCI run publisher is not trusted")
 	}
-
 	if run.PublisherPubkey != result.PublisherPubkey {
 		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
-		b.logger.Warn("rejecting publisher mismatch",
-			zap.String("run_event_id", run.RunEventID),
-			zap.String("expected_publisher", run.PublisherPubkey),
-			zap.String("actual_publisher", result.PublisherPubkey),
-		)
-		return nil
+		return nil, fmt.Errorf("HiveCI result publisher does not match the run publisher")
 	}
 
-	existingBuild, err := b.buildRepo.GetByCISystemRunID(ctx, ciSystemHiveCI, run.RunEventID)
-	if err != nil {
-		return fmt.Errorf("lookup existing build: %w", err)
+	build := expectedBuild
+	if build != nil {
+		if (build.CISystem != domain.CISystemHiveCI && build.CISystem != domain.CISystemHiveCILegacy) || build.CIRunID != run.RunEventID {
+			return nil, fmt.Errorf("build is not bound to the selected HiveCI run")
+		}
+		if build.ServiceID != policy.ServiceID {
+			return nil, fmt.Errorf("build service does not match the pipeline policy service")
+		}
+	} else {
+		build, err = b.buildRepo.GetByCISystemRunID(ctx, domain.CISystemHiveCI, run.RunEventID)
+		if err != nil {
+			return nil, fmt.Errorf("lookup existing build: %w", err)
+		}
+		if build == nil {
+			build, err = b.buildRepo.GetByCISystemRunID(ctx, domain.CISystemHiveCILegacy, run.RunEventID)
+			if err != nil {
+				return nil, fmt.Errorf("lookup legacy HiveCI build: %w", err)
+			}
+		}
 	}
-	if existingBuild == nil {
-		status := domain.BuildStatusFailed
-		if result.Status == "success" {
-			status = domain.BuildStatusSucceeded
-		}
-		build := &domain.Build{
-			ServiceID:     policy.ServiceID,
-			GitSHA:        run.CommitSHA,
-			GitRef:        run.Branch,
-			CISystem:      ciSystemHiveCI,
-			CIRunID:       run.RunEventID,
-			SourceEventID: run.RunEventID,
-			Status:        status,
-		}
-		if err := b.buildRepo.Create(ctx, build); err != nil {
-			return fmt.Errorf("create build: %w", err)
-		}
-		existingBuild = build
+	status := domain.BuildStatusFailed
+	if result.Status == "success" {
+		status = domain.BuildStatusSucceeded
 	}
-
+	if build == nil {
+		if b.registry == nil {
+			return nil, fmt.Errorf("canonical build registry is not configured")
+		}
+		build = &domain.Build{
+			ServiceID: policy.ServiceID, GitSHA: strings.ToLower(strings.TrimSpace(run.CommitSHA)),
+			GitRef: run.Branch, CISystem: domain.CISystemHiveCI, CIRunID: run.RunEventID,
+			SourceEventID: run.RunEventID, Status: status,
+			Metadata: resultEvidenceMetadata(run, result),
+		}
+		if err := b.registry.RegisterBuild(ctx, build); err != nil {
+			return nil, fmt.Errorf("create build: %w", err)
+		}
+	} else {
+		if build.GitSHA != "" && !strings.EqualFold(strings.TrimSpace(build.GitSHA), strings.TrimSpace(run.CommitSHA)) {
+			return nil, fmt.Errorf("build commit does not match the signed HiveCI run")
+		}
+		if build.Status != status {
+			if b.registry == nil {
+				return nil, fmt.Errorf("canonical build registry is not configured")
+			}
+			if err := b.registry.UpdateBuildStatus(ctx, build.ID, status); err != nil {
+				return nil, fmt.Errorf("update build status: %w", err)
+			}
+			build.Status = status
+		}
+	}
 	if result.Status != "success" {
 		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateProcessed); err != nil {
-			return fmt.Errorf("mark result processed: %w", err)
+			return nil, fmt.Errorf("mark result processed: %w", err)
 		}
-		return nil
+		if explicit {
+			return nil, fmt.Errorf("only a successful HiveCI build result can register an artifact")
+		}
+		return nil, nil
+	}
+	if !explicit && !b.autoRegister {
+		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
+			return nil, fmt.Errorf("mark result artifact pending: %w", err)
+		}
+		return nil, nil
 	}
 
 	imageRepo := strings.TrimSpace(result.ImageRepo)
 	imageTag := strings.TrimSpace(result.ImageTag)
-	imageDigest := strings.TrimSpace(result.ImageDigest)
-	if imageRepo == "" || imageTag == "" || imageDigest == "" {
-		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
-			return fmt.Errorf("mark result artifact pending: %w", err)
+	imageDigest := strings.ToLower(strings.TrimSpace(result.ImageDigest))
+	if imageRepo == "" || imageTag == "" || !immutableManifestDigest.MatchString(imageDigest) {
+		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
+		if explicit {
+			return nil, fmt.Errorf("successful build result must include repository, tag, and immutable sha256 manifest digest")
 		}
-		return nil
+		return nil, nil
 	}
-
-	if b.artifactRepo == nil || (b.ociRegistry == nil && b.registryInspector == nil) {
-		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
-			return fmt.Errorf("mark result artifact pending: %w", err)
-		}
-		return nil
+	if b.serviceRepo == nil || b.artifactRepo == nil || b.registry == nil {
+		return nil, fmt.Errorf("artifact registration dependencies are not configured")
 	}
-
-	manifest, err := b.resolveManifest(ctx, imageRepo, imageDigest)
+	svc, err := b.serviceRepo.GetByID(ctx, policy.ServiceID)
 	if err != nil {
-		return fmt.Errorf("lookup registry manifest: %w", err)
+		return nil, fmt.Errorf("load pipeline service: %w", err)
 	}
-	if manifest == nil {
-		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
-			return fmt.Errorf("mark result artifact pending: %w", err)
-		}
-		return nil
+	if svc == nil {
+		return nil, fmt.Errorf("pipeline service %s not found", policy.ServiceID)
+	}
+	if strings.TrimSpace(svc.ArtifactRepo) != imageRepo {
+		return nil, fmt.Errorf("build result repository does not match the service artifact repository")
 	}
 
-	artifact, err := b.artifactRepo.GetByImageRepoDigest(ctx, imageRepo, imageDigest)
+	verified, err := b.resolveManifest(ctx, imageRepo, imageTag, imageDigest)
 	if err != nil {
-		return fmt.Errorf("lookup artifact by image repo/digest: %w", err)
+		return nil, fmt.Errorf("verify OCI manifest: %w", err)
 	}
-	if artifact == nil {
-		size := manifest.SizeBytes
-		artifact = &domain.Artifact{
-			BuildID:           existingBuild.ID,
-			ServiceID:         policy.ServiceID,
-			ImageRepo:         imageRepo,
-			ImageTag:          imageTag,
-			ImageDigest:       imageDigest,
-			ManifestMediaType: manifest.MediaType,
-			SizeBytes:         &size,
-			ScanStatus:        domain.ScanStatusUnknown,
-			Metadata: map[string]any{
-				"source":                  "hive-ci",
-				"hive_ci_run_event_id":    run.RunEventID,
-				"hive_ci_result_event_id": result.ResultEventID,
-				"workflow_path":           run.WorkflowPath,
-			},
+	if verified == nil {
+		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending)
+		if explicit {
+			return nil, fmt.Errorf("immutable OCI manifest could not be verified")
 		}
-		if err := b.artifactRepo.Create(ctx, artifact); err != nil {
-			return fmt.Errorf("create artifact: %w", err)
-		}
+		return nil, nil
 	}
-
+	artifact := &domain.Artifact{
+		BuildID: build.ID, ServiceID: build.ServiceID, ImageRepo: imageRepo,
+		ImageTag: imageTag, ImageDigest: imageDigest, ScanStatus: domain.ScanStatusUnknown,
+		Metadata: map[string]any{
+			"source":                  "hiveci",
+			"repository_coordinate":   run.RepoCoordinate,
+			"hive_ci_run_event_id":    run.RunEventID,
+			"hive_ci_result_event_id": result.ResultEventID,
+			"workflow_path":           run.WorkflowPath,
+			"git_sha":                 run.CommitSHA,
+		},
+	}
+	proof := service.ArtifactVerificationProof{
+		Source: verified.source, ManifestDigest: verified.digest, TagResolvedDigest: verified.digest,
+		MediaType: verified.mediaType, SizeBytes: verified.size, ScanStatus: verified.scanStatus,
+		Signatures: verified.signatures, SBOMRef: verified.sbomRef,
+		ProvenanceRef: verified.provenanceRef, PolicyState: "matched", PolicyID: policy.ID,
+		CIPublisher: run.PublisherPubkey, ReferrerDiscoveryState: verified.referrerDiscoveryState,
+		VerifiedAt: time.Now().UTC(), Annotations: verified.annotations,
+	}
+	if err := b.registry.RegisterVerifiedArtifact(ctx, artifact, proof); err != nil {
+		return nil, fmt.Errorf("register verified artifact: %w", err)
+	}
 	if err := b.autoCreateStagingIntent(ctx, policy, run, result, artifact); err != nil {
-		return err
+		return nil, err
 	}
-
 	if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateProcessed); err != nil {
-		return fmt.Errorf("mark result processed: %w", err)
+		return nil, fmt.Errorf("mark result processed: %w", err)
 	}
-
-	return nil
+	return artifact, nil
 }
 
-func (b *Bridge) resolveManifest(ctx context.Context, imageRepo, imageDigest string) (*domain.OCIManifest, error) {
+type verifiedManifest struct {
+	source, digest, mediaType, scanStatus, sbomRef, provenanceRef, referrerDiscoveryState string
+	size                                                                                  int64
+	signatures                                                                            []string
+	annotations                                                                           map[string]string
+}
+
+func (b *Bridge) resolveManifest(ctx context.Context, imageRepo, imageTag, imageDigest string) (*verifiedManifest, error) {
 	if b.ociRegistry != nil {
-		manifest, err := b.ociRegistry.GetManifest(ctx, imageRepo, imageDigest)
-		if err == nil && manifest != nil {
-			return manifest, nil
-		}
+		manifest, err := b.ociRegistry.GetManifest(ctx, imageRepo, imageTag)
 		if err != nil && b.registryInspector == nil {
 			return nil, err
+		}
+		if err == nil && manifest != nil {
+			digest := strings.ToLower(strings.TrimSpace(manifest.Digest))
+			if digest != imageDigest || !immutableManifestDigest.MatchString(digest) {
+				return nil, fmt.Errorf("embedded OCI manifest digest mismatch")
+			}
+			verified := &verifiedManifest{
+				source: "embedded_oci_layout", digest: digest, mediaType: manifest.MediaType,
+				size: manifest.SizeBytes, annotations: manifest.Annotations,
+			}
+			referrers, refErr := b.ociRegistry.ListReferrers(ctx, imageRepo, imageDigest, "")
+			if refErr != nil {
+				return nil, fmt.Errorf("list embedded OCI referrers: %w", refErr)
+			}
+			enrichEmbeddedReferrers(verified, referrers)
+			verified.referrerDiscoveryState = "complete"
+			return verified, nil
 		}
 	}
 	if b.registryInspector == nil {
 		return nil, nil
 	}
 	repoForInspector := stripRegistryHost(imageRepo)
-	inspection, err := b.registryInspector.InspectImage(ctx, repoForInspector, imageDigest)
+	inspection, err := b.registryInspector.InspectImage(ctx, repoForInspector, imageTag)
 	if err != nil {
 		return nil, err
 	}
 	if inspection == nil || !inspection.Exists {
 		return nil, nil
 	}
-	manifest := &domain.OCIManifest{
-		Digest:    inspection.Digest,
-		MediaType: inspection.MediaType,
-		SizeBytes: inspection.Size,
+	digest := strings.ToLower(strings.TrimSpace(inspection.Digest))
+	if digest != imageDigest || !immutableManifestDigest.MatchString(digest) {
+		return nil, fmt.Errorf("registry manifest digest mismatch")
 	}
-	if manifest.Digest == "" {
-		manifest.Digest = imageDigest
+	return &verifiedManifest{
+		source: "registry_manifest", digest: digest, mediaType: inspection.MediaType,
+		size: inspection.Size, scanStatus: inspection.ScanStatus,
+		signatures: append([]string(nil), inspection.Signatures...),
+		sbomRef:    inspection.SBOMRef, provenanceRef: inspection.ProvenanceRef,
+		referrerDiscoveryState: "best_effort", annotations: inspection.Annotations,
+	}, nil
+}
+
+func enrichEmbeddedReferrers(verified *verifiedManifest, refs []domain.OCIReferrerDescriptor) {
+	for _, ref := range refs {
+		kind := strings.ToLower(strings.TrimSpace(ref.ArtifactType))
+		switch {
+		case strings.Contains(kind, "signature") || strings.Contains(kind, "sigstore") || strings.Contains(kind, "cosign"):
+			verified.signatures = append(verified.signatures, ref.Digest)
+		case strings.Contains(kind, "sbom") || strings.Contains(kind, "spdx") || strings.Contains(kind, "cyclonedx"):
+			if verified.sbomRef == "" {
+				verified.sbomRef = ref.Digest
+			}
+		case strings.Contains(kind, "provenance") || strings.Contains(kind, "in-toto"):
+			if verified.provenanceRef == "" {
+				verified.provenanceRef = ref.Digest
+			}
+		}
 	}
-	return manifest, nil
+}
+
+func resultEvidenceMetadata(run *domain.HiveCIWorkflowRun, result *domain.HiveCIWorkflowResult) map[string]any {
+	return map[string]any{
+		"log_url":               result.LogURL,
+		"repository_coordinate": run.RepoCoordinate,
+		"evidence": map[string]any{
+			"run_event_id":    run.RunEventID,
+			"result_event_id": result.ResultEventID,
+		},
+	}
 }
 
 func stripRegistryHost(imageRepo string) string {
@@ -262,7 +389,6 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 	if !autoDeploy {
 		return nil
 	}
-
 	targetEnvName, _ := policy.Metadata["staging_environment"].(string)
 	var env *domain.Environment
 	var err error
@@ -280,7 +406,6 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 	if env == nil {
 		return nil
 	}
-
 	existing, err := b.intentRepo.GetByHiveResultEventID(ctx, result.ResultEventID)
 	if err != nil {
 		return fmt.Errorf("lookup existing deployment intent: %w", err)
@@ -288,25 +413,17 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 	if existing != nil {
 		return nil
 	}
-
 	approval := domain.ApprovalStatusNotRequired
 	status := domain.IntentStatusApproved
 	if env.Protected {
 		approval = domain.ApprovalStatusPending
 		status = domain.IntentStatusPending
 	}
-
 	intent := &domain.DeploymentIntent{
-		ServiceID:      policy.ServiceID,
-		EnvironmentID:  env.ID,
-		ArtifactID:     artifact.ID,
-		RequestedBy:    "hive-ci-bridge",
-		SourceKind:     domain.SourceKindEventTriggered,
-		ApprovalStatus: approval,
-		Status:         status,
-		Metadata: map[string]any{
-			"hive_ci_result_event_id": result.ResultEventID,
-		},
+		ServiceID: policy.ServiceID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		RequestedBy: "hive-ci-bridge", SourceKind: domain.SourceKindEventTriggered,
+		ApprovalStatus: approval, Status: status,
+		Metadata: map[string]any{"hive_ci_result_event_id": result.ResultEventID},
 	}
 	if err := b.intentRepo.Create(ctx, intent); err != nil {
 		return fmt.Errorf("create staging deployment intent: %w", err)

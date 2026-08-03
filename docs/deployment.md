@@ -426,8 +426,11 @@ hiveci:
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
   
-  # Auto-create builds from CI results
+  # Verify successful CI results and register one immutable artifact
   auto_register_builds: true
+
+  # Advanced signed manual artifact registration (disabled by default)
+  allow_manual_artifact_registration: false
   
   # Auto-deploy to staging environment
   auto_deploy_staging_environment: edge-01-staging

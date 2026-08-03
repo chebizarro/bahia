@@ -1,0 +1,21 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_04_ARTIFACT_FLOW",
+  "beads": ["bahia-90uu5"],
+  "title": "Automated immutable artifact registration, verification, and selection",
+  "intended_behavior": [
+    "A trusted successful HiveCI result resolves its repository and tag to an immutable OCI manifest digest.",
+    "The result is bound to the original service, build, repository, tag, manifest digest, and signed CI provenance.",
+    "Automatic and build-result action paths create one deduplicated canonical artifact without copied identifiers.",
+    "Mutable-only, mismatched, and unverifiable references are refused.",
+    "The UI exposes the manifest digest plus verification, signature, SBOM, scan, policy, and CI provenance.",
+    "Advanced signed manual registration is available only when explicitly enabled by policy."
+  ],
+  "scope": [
+    "internal/pipeline/bridge.go",
+    "internal/service/registry.go",
+    "internal/controlplane/encrypted_build_handlers.go",
+    "internal/repository/pg_hiveci.go",
+    "web/src/routes/builds/+page.svelte",
+    "web/src/lib/stores/arcana-build.js"
+  ]
+}

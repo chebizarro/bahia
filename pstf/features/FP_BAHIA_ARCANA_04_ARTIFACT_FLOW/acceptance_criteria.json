@@ -1,0 +1,10 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_04_ARTIFACT_FLOW",
+  "criteria": [
+    {"id":"AC1","statement":"A successful trusted build result becomes exactly one canonical artifact without copying repository, tag, digest, or CI identifiers into the browser action.","verification":["internal/pipeline/bridge_test.go","internal/controlplane/encrypted_build_handlers_test.go"]},
+    {"id":"AC2","statement":"The registrar binds service, build, service artifact repository, tag, and full sha256 manifest digest and verifies the tag resolves to that digest.","verification":["internal/pipeline/bridge.go","internal/service/registry.go","internal/pipeline/bridge_test.go"]},
+    {"id":"AC3","statement":"Mutable-only, tag/digest-mismatched, repository-mismatched, or unverifiable references produce no artifact.","verification":["internal/pipeline/bridge_test.go","internal/service/registry_test.go"]},
+    {"id":"AC4","statement":"Manifest verification provenance and available signature, SBOM, scan, policy, and CI evidence are persisted and visible on the Builds page.","verification":["internal/service/registry.go","web/src/routes/builds/+page.svelte","web/tests/unit/arcana-build.test.js"]},
+    {"id":"AC5","statement":"Advanced manual artifact registration is disabled by default and is still subject to registry verification and canonical deduplication when enabled.","verification":["internal/config/config.go","internal/service/registry_test.go","docs/user-guide/features/artifacts.md"]}
+  ]
+}

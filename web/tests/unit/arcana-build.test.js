@@ -4,6 +4,7 @@ import {
   ARCANA_PUBLIC_BUILD_ARGS,
   arcanaBuildPayload,
   artifactCandidateForBuild,
+  artifactVerificationState,
   buildEvidence,
   publicArcanaBuildArgs
 } from '$lib/stores/arcana-build.js';
@@ -46,11 +47,51 @@ describe('Arcana build contract', () => {
     const build = { id: 'build-1', status: 'succeeded' };
     const digest = `sha256:${'a'.repeat(64)}`;
     expect(artifactCandidateForBuild(build, [{
-      id: 'artifact-1', build_id: 'build-1', image_repo: 'registry.example/arcana', image_digest: digest
+      id: 'artifact-1', build_id: 'build-1', image_repo: 'registry.example/arcana', image_digest: digest,
+      metadata: { verification: { state: 'verified', manifest_digest: digest, tag_resolved_digest: digest } }
     }])?.immutable_ref).toBe(`registry.example/arcana@${digest}`);
+    expect(artifactCandidateForBuild(build, [{
+      id: 'artifact-unverified', build_id: 'build-1', image_repo: 'registry.example/arcana', image_digest: digest
+    }])).toBeNull();
     expect(artifactCandidateForBuild(build, [{
       id: 'artifact-2', build_id: 'build-1', image_repo: 'registry.example/arcana', image_digest: 'latest'
     }])).toBeNull();
+  });
+
+  it('surfaces immutable verification and supply-chain provenance', () => {
+    const digest = `sha256:${'b'.repeat(64)}`;
+    expect(artifactVerificationState({
+      image_digest: digest,
+      scan_status: 'clean',
+      metadata: {
+        verification: {
+          source: 'embedded_oci_layout', state: 'verified', manifest_digest: digest,
+          tag_resolved_digest: digest, verified_at: '2026-08-02T12:00:00Z'
+        },
+        policy: { state: 'matched', policy_id: 'policy-1', ci_publisher: 'trusted-pub' },
+        supply_chain: {
+          signature_state: 'present',
+          signature_refs: ['sha256:signature'],
+          sbom_state: 'present',
+          sbom_ref: 'sha256:sbom',
+          provenance_ref: 'sha256:provenance',
+          policy_state: 'matched',
+          referrer_discovery_state: 'complete'
+        }
+      }
+    })).toMatchObject({
+      manifest_digest: digest,
+      source: 'embedded_oci_layout',
+      state: 'verified',
+      signature_state: 'present',
+      sbom_state: 'present',
+      policy_state: 'matched',
+      policy_id: 'policy-1',
+      ci_publisher: 'trusted-pub',
+      referrer_discovery_state: 'complete',
+      tag_resolved_digest: digest,
+      scan_status: 'clean'
+    });
   });
 
   it('normalizes projected logs and signed evidence', () => {

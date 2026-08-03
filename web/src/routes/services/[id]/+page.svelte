@@ -29,8 +29,7 @@
     deleteService,
     evaluatePolicy,
     createDeploymentIntent,
-    rollbackDeployment,
-    registerArtifact
+    rollbackDeployment
   } from '$lib/stores/public-controlplane.svelte.js';
   import {
     DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS,
@@ -198,17 +197,6 @@
   let secretDeleting = $state(false);
   let secretDeleteError = $state(null);
   let secretToDelete = $state(null);
-
-  // Artifact registration modal state
-  let artifactRegisterOpen = $state(false);
-  let artifactRegistering = $state(false);
-  let artifactRegisterError = $state(null);
-  let artifactForm = $state({
-    name: '',
-    version: '',
-    digest: '',
-    metadata: ''
-  });
 
   const runtimeOptions = [
     { value: 'docker', label: 'Docker' },
@@ -840,80 +828,6 @@
     }
   }
 
-  function openArtifactRegisterModal() {
-    artifactForm = {
-      name: '',
-      version: '',
-      digest: '',
-      metadata: ''
-    };
-    artifactRegisterError = null;
-    artifactRegisterOpen = true;
-  }
-
-  function closeArtifactRegisterModal() {
-    artifactRegisterOpen = false;
-    artifactRegisterError = null;
-  }
-
-  async function handleArtifactRegister() {
-    // Validate required fields
-    if (!artifactForm.name.trim()) {
-      artifactRegisterError = 'Artifact name is required';
-      return;
-    }
-    if (!artifactForm.version.trim()) {
-      artifactRegisterError = 'Version is required';
-      return;
-    }
-    if (!artifactForm.digest.trim()) {
-      artifactRegisterError = 'Digest is required';
-      return;
-    }
-
-    // Validate metadata JSON if provided
-    let metadata = null;
-    if (artifactForm.metadata.trim()) {
-      try {
-        metadata = JSON.parse(artifactForm.metadata);
-      } catch (err) {
-        artifactRegisterError = 'Metadata must be valid JSON';
-        return;
-      }
-    }
-
-    artifactRegistering = true;
-    artifactRegisterError = null;
-
-    try {
-      const buildId = metadata?.build_id || builds[0]?.id;
-      if (!buildId) {
-        artifactRegisterError = 'Build ID is required to register an artifact on the public relay. Include metadata.build_id or wait for a build projection.';
-        return;
-      }
-      await registerArtifact({
-        service_id: serviceId,
-        build_id: buildId,
-        image_repo: service?.artifact_repo || artifactForm.name.trim(),
-        image_tag: artifactForm.version.trim(),
-        image_digest: artifactForm.digest.trim(),
-        metadata: {
-          ...(metadata || {}),
-          name: artifactForm.name.trim(),
-          version: artifactForm.version.trim(),
-          build_id: buildId
-        }
-      });
-
-      // Close modal and reload artifacts
-      closeArtifactRegisterModal();
-      await reloadArtifacts();
-    } catch (err) {
-      artifactRegisterError = err.message || 'Failed to register artifact';
-    } finally {
-      artifactRegistering = false;
-    }
-  }
   // Watch for edit form repository selection changes
   $effect(() => {
     if (editOpen && editForm.repositorySelection) {
@@ -1053,9 +967,7 @@
     <section>
       <div class="section-header">
         <h2 class="section-title"><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Artifacts ({artifacts.length})</span></h2>
-        <LoadingButton variant="primary" onclick={openArtifactRegisterModal}>
-          Register Artifact
-        </LoadingButton>
+        <a class="button-link" href="/builds">Register from verified build</a>
       </div>
       {#if artifacts.length > 0}
         <div class="artifacts-table">
@@ -1086,9 +998,7 @@
         <div class="empty-state">
           <ArtifactIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
           <p class="empty">No artifacts registered</p>
-          <LoadingButton variant="primary" onclick={openArtifactRegisterModal}>
-            Register Your First Artifact
-          </LoadingButton>
+          <a class="button-link" href="/builds">Register from verified build</a>
         </div>
       {/if}
     </section>
@@ -1763,81 +1673,6 @@
   </div>
 </ConfirmDialog>
 
-<!-- Artifact Registration Modal -->
-<Modal bind:open={artifactRegisterOpen} title="Register Artifact" titleIcon={ArtifactIcon} onClose={closeArtifactRegisterModal}>
-  <form onsubmit={(event) => { event.preventDefault(); handleArtifactRegister(); }} class="artifact-form">
-    <div class="form-field">
-      <label for="artifact-name">Name *</label>
-      <Input
-        id="artifact-name"
-        bind:value={artifactForm.name}
-        placeholder="my-service"
-        required
-        disabled={artifactRegistering}
-      />
-      <span class="field-hint">The artifact name (e.g., service name or image name)</span>
-    </div>
-
-    <div class="form-field">
-      <label for="artifact-version">Version *</label>
-      <Input
-        id="artifact-version"
-        bind:value={artifactForm.version}
-        placeholder="1.0.0"
-        required
-        disabled={artifactRegistering}
-      />
-      <span class="field-hint">Semantic version or tag</span>
-    </div>
-
-    <div class="form-field">
-      <label for="artifact-digest">Digest *</label>
-      <Input
-        id="artifact-digest"
-        bind:value={artifactForm.digest}
-        placeholder="sha256:abcdef123456..."
-        required
-        disabled={artifactRegistering}
-      />
-      <span class="field-hint">Content-addressable digest (e.g., SHA256 hash)</span>
-    </div>
-
-    <div class="form-field">
-      <label for="artifact-metadata">Metadata (JSON)</label>
-      <Textarea
-        id="artifact-metadata"
-        bind:value={artifactForm.metadata}
-        placeholder={'{"build_id": "123", "commit": "abc123"}'}
-        rows={6}
-        disabled={artifactRegistering}
-      />
-      <span class="field-hint">Optional JSON metadata about the artifact</span>
-    </div>
-
-    {#if artifactRegisterError}
-      <p class="error">{artifactRegisterError}</p>
-    {/if}
-
-    <div class="form-actions">
-      <LoadingButton
-        type="button"
-        variant="secondary"
-        onclick={closeArtifactRegisterModal}
-        disabled={artifactRegistering}
-      >
-        Cancel
-      </LoadingButton>
-      <LoadingButton
-        type="submit"
-        variant="primary"
-        loading={artifactRegistering}
-      >
-        Register Artifact
-      </LoadingButton>
-    </div>
-  </form>
-</Modal>
-
 <style>
   .page { max-width: 1000px; }
   .back {
@@ -1953,6 +1788,17 @@
   }
   .section-header h2 {
     margin-bottom: 0;
+  }
+  .button-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.625rem 0.875rem;
+    border-radius: 6px;
+    background: var(--primary);
+    color: white;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
   }
 
   .secrets-table {

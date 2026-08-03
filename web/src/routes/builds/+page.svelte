@@ -18,14 +18,18 @@
     ARCANA_REPOSITORY_URL,
     arcanaBuildPayload,
     artifactCandidateForBuild,
+    artifactVerificationState,
     buildEvidence,
     isArcanaService,
+    registerBuildResult,
     requestArcanaBuild
   } from '$lib/stores/arcana-build.js';
 
   let initialized = false;
   let loaded = $state(false);
   let submitting = $state(false);
+  let registeringBuildId = $state('');
+  let registrationMessage = $state({});
   let selectedServiceId = $state('');
   let credentialRef = $state('');
   let gitRef = $state('main');
@@ -112,6 +116,25 @@
 
   function buildArtifact(build) {
     return artifactCandidateForBuild(build, Array.from(artifacts));
+  }
+
+  async function registerArtifactForBuild(build) {
+    registeringBuildId = build.id;
+    registrationMessage = { ...registrationMessage, [build.id]: '' };
+    try {
+      await registerBuildResult(build.id);
+      registrationMessage = {
+        ...registrationMessage,
+        [build.id]: 'Verified artifact registration accepted. The signed artifact projection will make it deployment-selectable.'
+      };
+    } catch (cause) {
+      registrationMessage = {
+        ...registrationMessage,
+        [build.id]: cause?.message || 'Verified artifact registration failed'
+      };
+    } finally {
+      registeringBuildId = '';
+    }
   }
 </script>
 
@@ -216,6 +239,7 @@
         {#each visibleBuilds as build (build.id)}
           {@const evidence = buildEvidence(build)}
           {@const artifact = buildArtifact(build)}
+          {@const verification = artifact ? artifactVerificationState(artifact) : null}
           <article class="build">
             <div class="build-head">
               <div>
@@ -243,11 +267,37 @@
             </div>
             {#if artifact}
               <div class="candidate">
-                <strong>Immutable OCI artifact candidate</strong>
+                <strong>Registered immutable OCI artifact</strong>
                 <code>{artifact.immutable_ref}</code>
+                <dl class="provenance">
+                  <div><dt>Manifest digest</dt><dd><code>{verification.manifest_digest}</code></dd></div>
+                  <div><dt>Verified by</dt><dd>{verification.source || '—'} · {verification.state}</dd></div>
+                  <div><dt>Verified at</dt><dd>{formatTime(verification.verified_at)}</dd></div>
+                  <div><dt>Signature</dt><dd>{verification.signature_state} · refs {verification.signature_refs.length}</dd></div>
+                  <div><dt>SBOM</dt><dd>{verification.sbom_state}</dd></div>
+                  <div><dt>Referrers</dt><dd>{verification.referrer_discovery_state}</dd></div>
+                  <div><dt>Policy</dt><dd title={verification.policy_id}>{verification.policy_state}</dd></div>
+                  <div><dt>CI publisher</dt><dd title={verification.ci_publisher}><code>{short(verification.ci_publisher)}</code></dd></div>
+                  <div><dt>Scan</dt><dd>{verification.scan_status}</dd></div>
+                </dl>
+                {#if verification.provenance_ref}
+                  <small title={verification.provenance_ref}>Provenance {short(verification.provenance_ref, 24)}</small>
+                {/if}
               </div>
             {:else if build.status === 'succeeded'}
-              <p class="warning">Succeeded build has no verified sha256 artifact projection yet.</p>
+              <div class="registration">
+                <p class="warning">No verified immutable artifact projection exists for this successful build.</p>
+                <button
+                  type="button"
+                  disabled={registeringBuildId === build.id}
+                  onclick={() => registerArtifactForBuild(build)}
+                >
+                  {registeringBuildId === build.id ? 'Verifying manifest…' : 'Register verified build artifact'}
+                </button>
+                {#if registrationMessage[build.id]}
+                  <p class="registration-message" role="status">{registrationMessage[build.id]}</p>
+                {/if}
+              </div>
             {/if}
           </article>
         {/each}
@@ -289,7 +339,12 @@
   dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
   .failure { padding: .6rem; border-radius: 5px; }
   .evidence { display: flex; flex-wrap: wrap; gap: .75rem; color: var(--text-muted); font-size: .8rem; }
-  .candidate { display: grid; gap: .35rem; margin-top: .8rem; padding: .7rem; border: 1px solid #059669; border-radius: 6px; color: #6ee7b7; overflow-wrap: anywhere; }
+  .candidate { display: grid; gap: .5rem; margin-top: .8rem; padding: .7rem; border: 1px solid #059669; border-radius: 6px; color: #6ee7b7; overflow-wrap: anywhere; }
+  .provenance { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: .25rem 0 0; }
+  .provenance dd { color: var(--text); }
+  .registration { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-top: .8rem; }
+  .registration .warning, .registration-message { margin: 0; }
+  .registration-message { color: var(--text-muted); font-size: .85rem; flex-basis: 100%; }
   .warning, .empty { color: var(--text-muted); }
   @media (max-width: 800px) {
     header, .section-heading { flex-direction: column; }

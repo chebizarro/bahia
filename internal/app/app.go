@@ -260,7 +260,9 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Registry service.
-	registryOptions := []service.RegistryOption{}
+	registryOptions := []service.RegistryOption{
+		service.WithManualArtifactRegistration(cfg.HiveCI.AllowManualArtifactRegistration),
+	}
 	if dbAvailable && pool != nil {
 		registryOptions = append(registryOptions, service.WithRegistryTxExecutor(repository.NewPgTxExecutor(pool)))
 	}
@@ -778,9 +780,22 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Hive-CI wiring.
+	var buildResultRegistrar controlplane.BuildResultArtifactRegistrar
 	if cfg.HiveCI.Enabled {
 		hiveRepo := repository.NewPgHiveCIRepository(pool)
-		bridge := pipeline.NewBridge(hiveRepo, buildRepo, artifactRepo, intentRepo, envRepo, ociRepo, pipelineRegistryInspector, cfg.HiveCI.TrustedCIPubkeys, logger)
+		bridge := pipeline.NewBridge(
+			hiveRepo, serviceRepo, buildRepo, artifactRepo, intentRepo, envRepo,
+			ociRepo, pipelineRegistryInspector, registry,
+			cfg.HiveCI.TrustedCIPubkeys, cfg.HiveCI.AutoRegisterBuilds, logger,
+		)
+		if relayFirstRegistry != nil {
+			bridge = pipeline.NewBridge(
+				hiveRepo, serviceRepo, buildRepo, artifactRepo, intentRepo, envRepo,
+				ociRepo, pipelineRegistryInspector, relayFirstRegistry,
+				cfg.HiveCI.TrustedCIPubkeys, cfg.HiveCI.AutoRegisterBuilds, logger,
+			)
+		}
+		buildResultRegistrar = bridge
 		// Wrap bridge.ProcessResult to match the ResultConsumer signature (no error return).
 		onResult := func(ctx context.Context, resultEventID string) {
 			if err := bridge.ProcessResult(ctx, resultEventID); err != nil {
@@ -1188,10 +1203,12 @@ func New(cfg *config.Config) (*App, error) {
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
 		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
-			Registry: registry,
-			Services: serviceRepo,
-			Secrets:  secretRepo,
-			RBAC:     tenantRBAC,
+			Registry:          registry,
+			Builds:            buildRepo,
+			ArtifactRegistrar: buildResultRegistrar,
+			Services:          serviceRepo,
+			Secrets:           secretRepo,
+			RBAC:              tenantRBAC,
 		}).Register(encryptedRequestTransport)
 		controlplane.NewOperatorContextVMHandlers(controlplane.OperatorContextVMHandlersConfig{
 			Adoption:                       adoptionSvc,

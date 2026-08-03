@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -40,18 +41,19 @@ func (n *NoopImageVerifier) VerifyImage(_ context.Context, _, _ string) (*ImageV
 
 // RegistryService orchestrates the core deployment registry operations.
 type RegistryService struct {
-	services     repository.ServiceRepository
-	environments repository.EnvironmentRepository
-	builds       repository.BuildRepository
-	artifacts    repository.ArtifactRepository
-	intents      repository.DeploymentIntentRepository
-	runs         repository.DeploymentRunRepository
-	observations repository.RuntimeObservationRepository
-	state        repository.EnvironmentServiceStateRepository
-	txExecutor   repository.TxExecutor
-	verifier     ImageVerifier
-	publisher    events.Publisher
-	logger       *zap.Logger
+	services                        repository.ServiceRepository
+	environments                    repository.EnvironmentRepository
+	builds                          repository.BuildRepository
+	artifacts                       repository.ArtifactRepository
+	intents                         repository.DeploymentIntentRepository
+	runs                            repository.DeploymentRunRepository
+	observations                    repository.RuntimeObservationRepository
+	state                           repository.EnvironmentServiceStateRepository
+	txExecutor                      repository.TxExecutor
+	verifier                        ImageVerifier
+	allowManualArtifactRegistration bool
+	publisher                       events.Publisher
+	logger                          *zap.Logger
 }
 
 // RegistryOption configures optional registry capabilities.
@@ -64,8 +66,17 @@ func WithRegistryTxExecutor(executor repository.TxExecutor) RegistryOption {
 	}
 }
 
+// WithManualArtifactRegistration controls the advanced operator-supplied
+// artifact path. Production defaults should pass false; verified build-result
+// registration uses RegisterVerifiedArtifact and is unaffected.
+func WithManualArtifactRegistration(allowed bool) RegistryOption {
+	return func(s *RegistryService) {
+		s.allowManualArtifactRegistration = allowed
+	}
+}
+
 // NewRegistryService creates a new RegistryService.
-// The verifier parameter is optional: pass nil to skip image verification (equivalent to NoopImageVerifier).
+// The verifier parameter is optional, but advanced manual registration rejects NoopImageVerifier because it cannot prove a manifest digest.
 func NewRegistryService(
 	services repository.ServiceRepository,
 	environments repository.EnvironmentRepository,
@@ -84,17 +95,18 @@ func NewRegistryService(
 		verifier = &NoopImageVerifier{}
 	}
 	registry := &RegistryService{
-		services:     services,
-		environments: environments,
-		builds:       builds,
-		artifacts:    artifacts,
-		intents:      intents,
-		runs:         runs,
-		observations: observations,
-		state:        state,
-		verifier:     verifier,
-		publisher:    publisher,
-		logger:       logger,
+		services:                        services,
+		environments:                    environments,
+		builds:                          builds,
+		artifacts:                       artifacts,
+		intents:                         intents,
+		runs:                            runs,
+		observations:                    observations,
+		state:                           state,
+		verifier:                        verifier,
+		allowManualArtifactRegistration: false,
+		publisher:                       publisher,
+		logger:                          logger,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -667,56 +679,256 @@ func (s *RegistryService) UpdateBuildStatus(ctx context.Context, id uuid.UUID, s
 
 // --- Artifact operations ---
 
+var immutableArtifactDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// ArtifactVerificationProof is produced only after a build-result registrar has
+// resolved the immutable manifest from Bahia's embedded OCI layout or a
+// configured external registry.
+type ArtifactVerificationProof struct {
+	Source                 string
+	ManifestDigest         string
+	TagResolvedDigest      string
+	MediaType              string
+	SizeBytes              int64
+	ScanStatus             string
+	Signatures             []string
+	SBOMRef                string
+	ProvenanceRef          string
+	PolicyState            string
+	PolicyID               uuid.UUID
+	CIPublisher            string
+	ReferrerDiscoveryState string
+	VerifiedAt             time.Time
+	Annotations            map[string]string
+}
+
+// RegisterArtifact is the advanced manual path. It is disabled by production
+// policy unless explicitly enabled and always requires a registry to return the
+// same immutable manifest digest supplied by the operator.
 func (s *RegistryService) RegisterArtifact(ctx context.Context, a *domain.Artifact) error {
-	if a.ScanStatus == "" {
-		a.ScanStatus = domain.ScanStatusUnknown
+	if !s.allowManualArtifactRegistration {
+		return fmt.Errorf("manual artifact registration is disabled by policy")
+	}
+	if err := s.validateArtifactBinding(ctx, a); err != nil {
+		return err
 	}
 
-	// Verify the image exists in the container registry before accepting it.
-	// The reference is the digest if available, otherwise the tag.
-	reference := a.ImageDigest
-	if reference == "" {
-		reference = a.ImageTag
-	}
-	verification, err := s.verifier.VerifyImage(ctx, a.ImageRepo, reference)
+	verification, err := s.verifier.VerifyImage(ctx, a.ImageRepo, a.ImageTag)
 	if err != nil {
 		s.logger.Error("image verification failed",
 			zap.String("image_repo", a.ImageRepo),
-			zap.String("reference", reference),
+			zap.String("reference", a.ImageTag),
 			zap.Error(err),
 		)
-		return fmt.Errorf("verifying image in registry: %w", err)
+		return fmt.Errorf("verifying image immutable manifest in registry: %w", err)
 	}
-	if !verification.Exists {
-		return fmt.Errorf("image %s:%s not found in container registry", a.ImageRepo, reference)
+	if verification == nil || !verification.Exists {
+		return fmt.Errorf("immutable image %s@%s not found in container registry", a.ImageRepo, a.ImageDigest)
 	}
-
-	// If the registry returned a digest and the artifact has one, cross-check them.
-	if verification.Digest != "" && a.ImageDigest != "" && verification.Digest != a.ImageDigest {
-		return fmt.Errorf("digest mismatch: artifact claims %s but registry reports %s", a.ImageDigest, verification.Digest)
+	verifiedDigest := strings.ToLower(strings.TrimSpace(verification.Digest))
+	if !immutableArtifactDigest.MatchString(verifiedDigest) {
+		return fmt.Errorf("registry did not return a verifiable sha256 manifest digest")
 	}
-
-	// If the registry provided scan status and the artifact doesn't have one, adopt it.
+	if verifiedDigest != a.ImageDigest {
+		return fmt.Errorf("digest mismatch: artifact claims %s but registry reports %s", a.ImageDigest, verifiedDigest)
+	}
 	if verification.ScanStatus != "" && a.ScanStatus == domain.ScanStatusUnknown {
-		if scanStatus := domain.ScanStatus(verification.ScanStatus); scanStatus != "" {
-			a.ScanStatus = scanStatus
-		}
+		a.ScanStatus = domain.ScanStatus(verification.ScanStatus)
 	}
+	if a.Metadata == nil {
+		a.Metadata = map[string]any{}
+	}
+	for _, reserved := range []string{"verification", "supply_chain", "policy", "evidence", "oci_annotations"} {
+		delete(a.Metadata, reserved)
+	}
+	a.Metadata["registration_mode"] = "advanced_manual"
+	a.Metadata["verification"] = map[string]any{
+		"source": "registry_manifest", "manifest_digest": verifiedDigest, "tag_resolved_digest": verifiedDigest,
+		"tag": a.ImageTag, "state": "verified", "verified_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	return s.persistArtifact(ctx, a)
+}
 
-	if err := s.artifacts.Create(ctx, a); err != nil {
+// RegisterVerifiedArtifact persists a build result only when the caller
+// supplies a proof produced by an immutable manifest lookup.
+func (s *RegistryService) RegisterVerifiedArtifact(ctx context.Context, a *domain.Artifact, proof ArtifactVerificationProof) error {
+	if err := s.validateArtifactBinding(ctx, a); err != nil {
 		return err
 	}
-	s.publisher.Publish(ctx, events.Event{
-		Type:     events.EventArtifactRegistered,
-		EntityID: a.ID.String(),
-		Data:     a,
-	})
+	source := strings.TrimSpace(proof.Source)
+	if source != "embedded_oci_layout" && source != "registry_manifest" {
+		return fmt.Errorf("artifact verification source must be embedded_oci_layout or registry_manifest")
+	}
+	proofDigest := strings.ToLower(strings.TrimSpace(proof.ManifestDigest))
+	tagResolvedDigest := strings.ToLower(strings.TrimSpace(proof.TagResolvedDigest))
+	if !immutableArtifactDigest.MatchString(proofDigest) || proofDigest != a.ImageDigest || tagResolvedDigest != proofDigest {
+		return fmt.Errorf("verified tag-resolved manifest digest does not match artifact digest")
+	}
+	if !supportedOCIManifestMediaType(proof.MediaType) {
+		return fmt.Errorf("unsupported OCI manifest media type %q", proof.MediaType)
+	}
+	a.ManifestMediaType = strings.TrimSpace(proof.MediaType)
+	if proof.SizeBytes > 0 {
+		size := proof.SizeBytes
+		a.SizeBytes = &size
+	}
+	if proof.ScanStatus != "" {
+		a.ScanStatus = domain.ScanStatus(proof.ScanStatus)
+	}
+	if a.ScanStatus == "" {
+		a.ScanStatus = domain.ScanStatusUnknown
+	}
+	if len(proof.Signatures) > 0 {
+		a.SignatureRef = proof.Signatures[0]
+	}
+	if a.Metadata == nil {
+		a.Metadata = map[string]any{}
+	}
+	a.Metadata["registration_mode"] = "verified_build_result"
+	verifiedAt := proof.VerifiedAt.UTC()
+	if proof.VerifiedAt.IsZero() {
+		verifiedAt = time.Now().UTC()
+	}
+	a.Metadata["verification"] = map[string]any{
+		"source": source, "state": "verified", "manifest_digest": proofDigest,
+		"tag": a.ImageTag, "tag_resolved_digest": tagResolvedDigest,
+		"media_type": a.ManifestMediaType, "verified_at": verifiedAt.Format(time.RFC3339Nano),
+	}
+	a.Metadata["policy"] = map[string]any{
+		"state": strings.TrimSpace(proof.PolicyState), "policy_id": proof.PolicyID.String(),
+		"ci_publisher": strings.TrimSpace(proof.CIPublisher),
+	}
+	a.Metadata["supply_chain"] = map[string]any{
+		"signature_state":          supplyChainState(len(proof.Signatures) > 0),
+		"signature_refs":           append([]string(nil), proof.Signatures...),
+		"sbom_state":               supplyChainState(strings.TrimSpace(proof.SBOMRef) != ""),
+		"sbom_ref":                 strings.TrimSpace(proof.SBOMRef),
+		"provenance_ref":           strings.TrimSpace(proof.ProvenanceRef),
+		"policy_state":             strings.TrimSpace(proof.PolicyState),
+		"referrer_discovery_state": strings.TrimSpace(proof.ReferrerDiscoveryState),
+	}
+	if len(proof.Annotations) > 0 {
+		a.Metadata["oci_annotations"] = proof.Annotations
+	}
+	return s.persistArtifact(ctx, a)
+}
+
+func (s *RegistryService) validateArtifactBinding(ctx context.Context, a *domain.Artifact) error {
+	if a == nil {
+		return fmt.Errorf("artifact is required")
+	}
+	a.ImageRepo = strings.TrimSpace(a.ImageRepo)
+	a.ImageTag = strings.TrimSpace(a.ImageTag)
+	a.ImageDigest = strings.ToLower(strings.TrimSpace(a.ImageDigest))
+	if a.BuildID == uuid.Nil || a.ServiceID == uuid.Nil {
+		return fmt.Errorf("build_id and service_id are required")
+	}
+	if a.ImageRepo == "" || a.ImageTag == "" {
+		return fmt.Errorf("image repository and build-produced tag are required")
+	}
+	if !immutableArtifactDigest.MatchString(a.ImageDigest) {
+		return fmt.Errorf("image_digest must be an immutable sha256 manifest digest")
+	}
+	build, err := s.builds.GetByID(ctx, a.BuildID)
+	if err != nil {
+		return fmt.Errorf("loading artifact build: %w", err)
+	}
+	if build == nil {
+		return fmt.Errorf("artifact build %s not found", a.BuildID)
+	}
+	if build.ServiceID != a.ServiceID {
+		return fmt.Errorf("artifact service does not match build service")
+	}
+	if build.Status != domain.BuildStatusSucceeded {
+		return fmt.Errorf("artifacts may only be registered for successful builds")
+	}
+	svc, err := s.services.GetByID(ctx, a.ServiceID)
+	if err != nil {
+		return fmt.Errorf("loading artifact service: %w", err)
+	}
+	if svc == nil {
+		return fmt.Errorf("artifact service %s not found", a.ServiceID)
+	}
+	if strings.TrimSpace(svc.ArtifactRepo) != a.ImageRepo {
+		return fmt.Errorf("image repository must match the service artifact repository")
+	}
+	if a.ScanStatus == "" {
+		a.ScanStatus = domain.ScanStatusUnknown
+	}
+	return nil
+}
+
+func (s *RegistryService) persistArtifact(ctx context.Context, a *domain.Artifact) error {
+	existing, err := s.artifacts.GetByImageRepoDigest(ctx, a.ImageRepo, a.ImageDigest)
+	if err != nil {
+		return fmt.Errorf("checking artifact identity: %w", err)
+	}
+	if existing != nil {
+		if err := validateExistingArtifactBinding(existing, a); err != nil {
+			return err
+		}
+		*a = *existing
+		s.publishArtifactRegistered(ctx, a)
+		return nil
+	}
+	if err := s.artifacts.Create(ctx, a); err != nil {
+		// The database has a unique (image_repo, image_digest) constraint. A
+		// concurrent result delivery may win between lookup and insert; reload
+		// that row and converge only when every immutable binding agrees.
+		concurrent, lookupErr := s.artifacts.GetByImageRepoDigest(ctx, a.ImageRepo, a.ImageDigest)
+		if lookupErr == nil && concurrent != nil {
+			if bindingErr := validateExistingArtifactBinding(concurrent, a); bindingErr != nil {
+				return bindingErr
+			}
+			*a = *concurrent
+			s.publishArtifactRegistered(ctx, a)
+			return nil
+		}
+		return err
+	}
+	s.publishArtifactRegistered(ctx, a)
 	s.logger.Info("artifact registered",
 		zap.String("artifact_id", a.ID.String()),
-		zap.String("image", a.ImageRepo+":"+a.ImageTag),
+		zap.String("image", a.ImageRepo+"@"+a.ImageDigest),
 		zap.String("digest", a.ImageDigest),
 	)
 	return nil
+}
+
+func validateExistingArtifactBinding(existing, requested *domain.Artifact) error {
+	if existing.BuildID != requested.BuildID || existing.ServiceID != requested.ServiceID ||
+		existing.ImageRepo != requested.ImageRepo || existing.ImageTag != requested.ImageTag ||
+		existing.ImageDigest != requested.ImageDigest {
+		return fmt.Errorf("immutable artifact is already registered with different build, service, repository, tag, or digest bindings")
+	}
+	return nil
+}
+
+func (s *RegistryService) publishArtifactRegistered(ctx context.Context, artifact *domain.Artifact) {
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventArtifactRegistered,
+		EntityID: artifact.ID.String(),
+		Data:     artifact,
+	})
+}
+
+func supportedOCIManifestMediaType(mediaType string) bool {
+	switch strings.TrimSpace(strings.Split(mediaType, ";")[0]) {
+	case "application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json":
+		return true
+	default:
+		return false
+	}
+}
+
+func supplyChainState(present bool) string {
+	if present {
+		return "present"
+	}
+	return "missing"
 }
 
 func (s *RegistryService) GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error) {

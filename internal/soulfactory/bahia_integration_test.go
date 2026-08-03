@@ -43,6 +43,14 @@ type sfMockStateRepo struct {
 	states map[string]*domain.EnvironmentServiceState
 }
 
+type sfRuntimeArtifactVerifier struct{}
+
+func (sfRuntimeArtifactVerifier) VerifyImage(context.Context, string, string) (*service.ImageVerification, error) {
+	return &service.ImageVerification{
+		Exists: true, Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, nil
+}
+
 func newSoulFactoryRegistryHarness() (*service.RegistryService, *sfMockBuildRepo, *sfMockArtifactRepo, *sfMockIntentRepo, *sfMockObservationRepo, *sfMockStateRepo) {
 	services := &sfMockServiceRepo{services: map[uuid.UUID]*domain.Service{}}
 	envs := &sfMockEnvRepo{envs: map[uuid.UUID]*domain.Environment{}}
@@ -52,7 +60,11 @@ func newSoulFactoryRegistryHarness() (*service.RegistryService, *sfMockBuildRepo
 	runs := &sfMockRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
 	observations := &sfMockObservationRepo{observations: map[string][]domain.RuntimeObservation{}}
 	states := &sfMockStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
-	registry := service.NewRegistryService(services, envs, builds, artifacts, intents, runs, observations, states, &service.NoopImageVerifier{}, &events.NoopPublisher{}, zap.NewNop())
+	registry := service.NewRegistryService(
+		services, envs, builds, artifacts, intents, runs, observations, states,
+		sfRuntimeArtifactVerifier{}, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithManualArtifactRegistration(true),
+	)
 	return registry, builds, artifacts, intents, observations, states
 }
 
@@ -120,7 +132,7 @@ func TestBahiaIntegrationCreatesInitialDeploymentFromRuntimeArtifactMetadata(t *
 		t.Fatalf("artifact count = %d, want 1", len(artifacts.artifacts))
 	}
 	for _, artifact := range artifacts.artifacts {
-		if artifact.ImageRepo != "registry.example/openclaw/scout" || artifact.ImageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		if artifact.ImageRepo != "agents/scout" || artifact.ImageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 			t.Fatalf("artifact = %+v, want runtime repo+digest", artifact)
 		}
 	}
@@ -266,7 +278,7 @@ func runtimeArtifactResult() *RuntimeControlResultEnvelope {
 		Status:         "success",
 		Result: map[string]interface{}{
 			"artifact": map[string]interface{}{
-				"image_repo":          "registry.example/openclaw/scout",
+				"image_repo":          "agents/scout",
 				"image_tag":           "runtime-build-7",
 				"image_digest":        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"manifest_media_type": "application/vnd.oci.image.manifest.v1+json",

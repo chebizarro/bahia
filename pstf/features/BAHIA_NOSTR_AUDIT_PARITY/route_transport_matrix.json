@@ -90,9 +90,9 @@
       "id": "artifacts-registry-read-model",
       "surface": "`/artifacts/**` registry artifacts and Nostr signature verification",
       "transport_class": "nostr_native",
-      "route_files": ["web/src/routes/artifacts/+page.svelte", "web/src/routes/artifacts/[id]/+page.svelte"],
-      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/artifact-signatures.svelte.js"],
-      "evidence": ["Artifact registry data is loaded from Nostr-backed stores.", "Artifact signature verification uses encrypted Nostr verification UI/store paths."],
+        "route_files": ["web/src/routes/artifacts/+page.svelte", "web/src/routes/artifacts/[id]/+page.svelte", "web/src/routes/builds/+page.svelte"],
+        "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/artifact-signatures.svelte.js", "web/src/lib/stores/arcana-build.js"],
+      "evidence": ["Artifact registry data is loaded from Nostr-backed stores.", "Artifact signature verification uses encrypted Nostr verification UI/store paths and does not restore direct REST mutation.", "The Builds page uses signed ContextVM build/result commands and canonical build/artifact projections."],
       "rest_import_policy": "mixed_file_allowed_only_for_http_native_artifact_surfaces",
       "pstf_status": "current_audit_evidence"
     },

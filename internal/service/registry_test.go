@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -556,7 +558,8 @@ func newTestRegistry() (*RegistryService, *mockServiceRepo, *mockEnvRepo, *mockB
 	registry := NewRegistryService(
 		svcRepo, envRepo, buildRepo, artRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
-		nil, publisher, logger,
+		echoDigestVerifier{}, publisher, logger,
+		WithManualArtifactRegistration(true),
 	)
 
 	return registry, svcRepo, envRepo, buildRepo, artRepo, intentRepo, runRepo
@@ -579,9 +582,19 @@ func seedServiceAndEnv(t *testing.T, registry *RegistryService) (*domain.Service
 	return svc, env
 }
 
+type echoDigestVerifier struct{}
+
+func (echoDigestVerifier) VerifyImage(_ context.Context, _ string, reference string) (*ImageVerification, error) {
+	return &ImageVerification{Exists: true, Digest: reference}, nil
+}
+
 func seedArtifact(t *testing.T, registry *RegistryService, svc *domain.Service, digest string) *domain.Artifact {
 	t.Helper()
 	ctx := context.Background()
+	if !immutableArtifactDigest.MatchString(digest) {
+		sum := sha256.Sum256([]byte(digest))
+		digest = fmt.Sprintf("sha256:%x", sum)
+	}
 
 	build := &domain.Build{
 		ServiceID: svc.ID,
@@ -589,6 +602,7 @@ func seedArtifact(t *testing.T, registry *RegistryService, svc *domain.Service, 
 		GitRef:    "refs/heads/main",
 		CISystem:  "hive-ci",
 		CIRunID:   uuid.New().String(),
+		Status:    domain.BuildStatusSucceeded,
 	}
 	if err := registry.RegisterBuild(ctx, build); err != nil {
 		t.Fatalf("failed to register build: %v", err)
@@ -601,8 +615,15 @@ func seedArtifact(t *testing.T, registry *RegistryService, svc *domain.Service, 
 		ImageTag:    "v1",
 		ImageDigest: digest,
 	}
-	if err := registry.RegisterArtifact(ctx, artifact); err != nil {
-		t.Fatalf("failed to register artifact: %v", err)
+	proof := ArtifactVerificationProof{
+		Source:            "embedded_oci_layout",
+		ManifestDigest:    digest,
+		TagResolvedDigest: digest,
+		MediaType:         "application/vnd.oci.image.manifest.v1+json",
+		PolicyState:       "test",
+	}
+	if err := registry.RegisterVerifiedArtifact(ctx, artifact, proof); err != nil {
+		t.Fatalf("failed to register verified artifact: %v", err)
 	}
 
 	return artifact
@@ -1440,7 +1461,7 @@ func TestRecordObservation_NonDesiredStateArtifactDigestPathStillWorks(t *testin
 	obs := &domain.RuntimeObservation{
 		ServiceID:           svc.ID,
 		EnvironmentID:       env.ID,
-		ObservedImageDigest: "sha256:artifact",
+		ObservedImageDigest: artifact.ImageDigest,
 		HealthStatus:        domain.HealthStatusStopped,
 		Source:              "docker",
 		ObservedAt:          time.Now().UTC(),
@@ -1547,35 +1568,41 @@ func TestCompleteDeploymentRun_FailedRun_PropagatesIntentUpdateError(t *testing.
 
 // mockVerifier is a configurable ImageVerifier for testing.
 type mockVerifier struct {
-	result *ImageVerification
-	err    error
+	result    *ImageVerification
+	err       error
+	reference string
 }
 
-func (m *mockVerifier) VerifyImage(_ context.Context, _, _ string) (*ImageVerification, error) {
+func (m *mockVerifier) VerifyImage(_ context.Context, _ string, reference string) (*ImageVerification, error) {
+	m.reference = reference
 	return m.result, m.err
 }
 
 func TestRegisterArtifact_VerificationPasses(t *testing.T) {
 	registry, _, _, _, _, _, _ := newTestRegistry()
+	registry.verifier = &mockVerifier{result: &ImageVerification{
+		Exists: true, Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
 	ctx := context.Background()
 
 	svc, _ := seedServiceAndEnv(t, registry)
 	build := &domain.Build{
 		ServiceID: svc.ID, GitSHA: "abc123", GitRef: "main", CISystem: "ci", CIRunID: "1",
+		Status: domain.BuildStatusSucceeded,
 	}
 	if err := registry.RegisterBuild(ctx, build); err != nil {
 		t.Fatal(err)
 	}
 
-	// Default registry uses NoopImageVerifier, so this should succeed.
+	// The test registry uses an explicit digest-returning verifier.
 	art := &domain.Artifact{
 		BuildID: build.ID, ServiceID: svc.ID,
-		ImageRepo: "project/image", ImageTag: "v1",
+		ImageRepo: svc.ArtifactRepo, ImageTag: "v1",
 		ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 	err := registry.RegisterArtifact(ctx, art)
 	if err != nil {
-		t.Fatalf("expected success with noop verifier, got: %v", err)
+		t.Fatalf("expected success with digest verifier, got: %v", err)
 	}
 }
 
@@ -1597,13 +1624,14 @@ func TestRegisterArtifact_VerificationRejectsNonExistent(t *testing.T) {
 		svcRepo, envRepo, buildRepo, artRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
 		verifier, &events.NoopPublisher{}, zap.NewNop(),
+		WithManualArtifactRegistration(true),
 	)
 
 	ctx := context.Background()
 	svc := &domain.Service{Name: "test-svc", ArtifactRepo: "project/image"}
 	_ = registry.CreateService(ctx, svc)
 
-	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1"}
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1", Status: domain.BuildStatusSucceeded}
 	_ = registry.RegisterBuild(ctx, build)
 
 	art := &domain.Artifact{
@@ -1641,13 +1669,14 @@ func TestRegisterArtifact_VerificationDigestMismatch(t *testing.T) {
 		svcRepo, envRepo, buildRepo, artRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
 		verifier, &events.NoopPublisher{}, zap.NewNop(),
+		WithManualArtifactRegistration(true),
 	)
 
 	ctx := context.Background()
 	svc := &domain.Service{Name: "test-svc", ArtifactRepo: "project/image"}
 	_ = registry.CreateService(ctx, svc)
 
-	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1"}
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1", Status: domain.BuildStatusSucceeded}
 	_ = registry.RegisterBuild(ctx, build)
 
 	art := &domain.Artifact{
@@ -1682,13 +1711,14 @@ func TestRegisterArtifact_VerificationError(t *testing.T) {
 		svcRepo, envRepo, buildRepo, artRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
 		verifier, &events.NoopPublisher{}, zap.NewNop(),
+		WithManualArtifactRegistration(true),
 	)
 
 	ctx := context.Background()
 	svc := &domain.Service{Name: "test-svc", ArtifactRepo: "project/image"}
 	_ = registry.CreateService(ctx, svc)
 
-	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1"}
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1", Status: domain.BuildStatusSucceeded}
 	_ = registry.RegisterBuild(ctx, build)
 
 	art := &domain.Artifact{
@@ -1700,7 +1730,7 @@ func TestRegisterArtifact_VerificationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when verifier fails")
 	}
-	if !containsSubstring(err.Error(), "verifying image in registry") {
+	if !containsSubstring(err.Error(), "verifying image") {
 		t.Errorf("expected 'verifying image' error, got: %v", err)
 	}
 }
@@ -1727,13 +1757,14 @@ func TestRegisterArtifact_VerificationAdoptsScanStatus(t *testing.T) {
 		svcRepo, envRepo, buildRepo, artRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
 		verifier, &events.NoopPublisher{}, zap.NewNop(),
+		WithManualArtifactRegistration(true),
 	)
 
 	ctx := context.Background()
 	svc := &domain.Service{Name: "test-svc", ArtifactRepo: "project/image"}
 	_ = registry.CreateService(ctx, svc)
 
-	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1"}
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "1", Status: domain.BuildStatusSucceeded}
 	_ = registry.RegisterBuild(ctx, build)
 
 	art := &domain.Artifact{
@@ -1750,15 +1781,36 @@ func TestRegisterArtifact_VerificationAdoptsScanStatus(t *testing.T) {
 	if art.ScanStatus != domain.ScanStatusClean {
 		t.Errorf("expected scan status to be adopted from verifier as 'clean', got '%s'", art.ScanStatus)
 	}
+	if verifier.reference != art.ImageTag {
+		t.Fatalf("manual verification reference = %q, want tag %q", verifier.reference, art.ImageTag)
+	}
 }
 
-func TestNoopImageVerifier(t *testing.T) {
+func TestRegisterArtifactRefusesManualPathWhenPolicyDisabled(t *testing.T) {
+	registry, _, _, _, _, _, _ := newTestRegistry()
+	registry.allowManualArtifactRegistration = false
+	ctx := context.Background()
+	svc, _ := seedServiceAndEnv(t, registry)
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "ci", CIRunID: "manual-disabled"}
+	if err := registry.RegisterBuild(ctx, build); err != nil {
+		t.Fatal(err)
+	}
+	artifact := &domain.Artifact{
+		BuildID: build.ID, ServiceID: svc.ID, ImageRepo: svc.ArtifactRepo, ImageTag: "v1",
+		ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	if err := registry.RegisterArtifact(ctx, artifact); err == nil || !strings.Contains(err.Error(), "disabled by policy") {
+		t.Fatalf("manual registration policy error = %v", err)
+	}
+}
+
+func TestNoopImageVerifierDoesNotClaimDigestVerification(t *testing.T) {
 	v := &NoopImageVerifier{}
-	result, err := v.VerifyImage(context.Background(), "any/repo", "any-ref")
+	result, err := v.VerifyImage(context.Background(), "any/repo", "sha256:"+strings.Repeat("a", 64))
 	if err != nil {
 		t.Fatalf("noop verifier should not error: %v", err)
 	}
-	if !result.Exists {
-		t.Error("noop verifier should always report image exists")
+	if result.Digest != "" {
+		t.Fatalf("noop verifier must not claim a verified digest: %#v", result)
 	}
 }

@@ -241,6 +241,14 @@ type Environment struct {
 	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
+const (
+	// CISystemHiveCI is the canonical identifier for signed HiveCI runs.
+	CISystemHiveCI = "hive-ci"
+	// CISystemHiveCILegacy is accepted only when correlating rows written by the
+	// early Arcana browser build flow.
+	CISystemHiveCILegacy = "hiveci"
+)
+
 // Build represents a CI build execution.
 type Build struct {
 	ID            uuid.UUID      `json:"id"`

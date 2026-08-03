@@ -445,6 +445,7 @@ type HiveCIRepository interface {
 	UpsertWorkflowResult(ctx context.Context, result domain.HiveCIWorkflowResult) error
 	GetRunByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowRun, error)
 	GetResultByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowResult, error)
+	GetLatestResultByRunEventID(ctx context.Context, runEventID string) (*domain.HiveCIWorkflowResult, error)
 	ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error)
 	ListOrphanedResultsByRun(ctx context.Context, runEventID string) ([]domain.HiveCIWorkflowResult, error)
 	UpdateResultState(ctx context.Context, eventID string, newState domain.HiveCIProcessingState) error

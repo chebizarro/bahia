@@ -661,8 +661,12 @@ func seedTestArtifact(t *testing.T, registry *service.RegistryService, serviceID
 		ImageDigest: digest,
 		ScanStatus:  domain.ScanStatusClean,
 	}
-	if err := registry.RegisterArtifact(context.Background(), artifact); err != nil {
-		t.Fatalf("seed artifact: %v", err)
+	proof := service.ArtifactVerificationProof{
+		Source: "embedded_oci_layout", ManifestDigest: digest, TagResolvedDigest: digest,
+		MediaType: "application/vnd.oci.image.manifest.v1+json", PolicyState: "test",
+	}
+	if err := registry.RegisterVerifiedArtifact(context.Background(), artifact, proof); err != nil {
+		t.Fatalf("seed verified artifact: %v", err)
 	}
 	return artifact.ID.String()
 }

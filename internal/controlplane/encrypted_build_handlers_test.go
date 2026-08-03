@@ -143,7 +143,7 @@ func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing
 	if err != nil {
 		t.Fatalf("RequestBuild() error = %v", err)
 	}
-	if registry.build == nil || registry.build.Status != domain.BuildStatusQueued {
+	if registry.build == nil || registry.build.Status != domain.BuildStatusQueued || registry.build.CISystem != domain.CISystemHiveCI {
 		t.Fatalf("registered build = %#v", registry.build)
 	}
 	if starter.request.CredentialRef != payload.RepositoryCredentialRef {
@@ -157,6 +157,73 @@ func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing
 		strings.Contains(strings.ToLower(string(encoded)), "credential") ||
 		strings.Contains(strings.ToLower(string(encoded)), "token") {
 		t.Fatalf("public build metadata leaked credential material: %s", encoded)
+	}
+}
+
+type buildResultTestLoader struct{ build *domain.Build }
+
+func (f buildResultTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
+	return f.build, nil
+}
+
+type buildResultTestRegistrar struct {
+	artifact *domain.Artifact
+	buildID  uuid.UUID
+}
+
+func (f *buildResultTestRegistrar) RegisterBuildResult(_ context.Context, buildID uuid.UUID) (*domain.Artifact, error) {
+	f.buildID = buildID
+	return f.artifact, nil
+}
+
+func TestRegisterBuildResultUsesOnlyAuthorizedSuccessfulBuildID(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	buildID := uuid.New()
+	artifactID := uuid.New()
+	build := &domain.Build{ID: buildID, ServiceID: serviceID, Status: domain.BuildStatusSucceeded}
+	registrar := &buildResultTestRegistrar{artifact: &domain.Artifact{
+		ID: artifactID, BuildID: buildID, ServiceID: serviceID,
+		ImageRepo: "registry.example/arcana", ImageTag: "main",
+		ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Metadata:    map[string]any{"verification": map[string]any{"source": "registry_manifest"}},
+	}}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Builds: buildResultTestLoader{build: build}, ArtifactRegistrar: registrar,
+		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: orgID}},
+		RBAC:     auth.NewRBAC(buildTestMembers{}),
+	})
+	params, err := json.Marshal(map[string]any{"build_id": buildID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := handler.RegisterBuildResult(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: params},
+	})
+	if err != nil {
+		t.Fatalf("RegisterBuildResult() error = %v", err)
+	}
+	response := result.(map[string]any)
+	if registrar.buildID != buildID || response["artifact_id"] != artifactID || response["manifest_digest"] != registrar.artifact.ImageDigest {
+		t.Fatalf("unexpected verified artifact response: %#v", response)
+	}
+}
+
+func TestRegisterBuildResultRejectsNonSuccessfulBuild(t *testing.T) {
+	serviceID := uuid.New()
+	buildID := uuid.New()
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Builds:            buildResultTestLoader{build: &domain.Build{ID: buildID, ServiceID: serviceID, Status: domain.BuildStatusRunning}},
+		ArtifactRegistrar: &buildResultTestRegistrar{},
+		Services:          buildTestServices{service: &domain.Service{ID: serviceID, OrgID: uuid.New()}},
+		RBAC:              auth.NewRBAC(buildTestMembers{}),
+	})
+	params, _ := json.Marshal(map[string]any{"build_id": buildID})
+	_, err := handler.RegisterBuildResult(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: params},
+	})
+	if err == nil || !strings.Contains(err.Error(), "successful") {
+		t.Fatalf("non-successful build error = %v", err)
 	}
 }
 

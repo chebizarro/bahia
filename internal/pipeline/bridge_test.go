@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	registryadapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 )
 
 type mockHiveRepo struct {
@@ -36,6 +37,15 @@ func (m *mockHiveRepo) GetRunByEventID(_ context.Context, eventID string) (*doma
 }
 func (m *mockHiveRepo) GetResultByEventID(_ context.Context, eventID string) (*domain.HiveCIWorkflowResult, error) {
 	return m.results[eventID], nil
+}
+func (m *mockHiveRepo) GetLatestResultByRunEventID(_ context.Context, runEventID string) (*domain.HiveCIWorkflowResult, error) {
+	var latest *domain.HiveCIWorkflowResult
+	for _, result := range m.results {
+		if result.RunEventID == runEventID && (latest == nil || result.EventCreatedAt.After(latest.EventCreatedAt)) {
+			latest = result
+		}
+	}
+	return latest, nil
 }
 func (m *mockHiveRepo) ListPendingResults(_ context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
@@ -84,21 +94,59 @@ func (m *mockBuildRepo) Create(_ context.Context, b *domain.Build) error {
 	m.byRun[b.CIRunID] = &cp
 	return nil
 }
-func (m *mockBuildRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Build, error) {
+func (m *mockBuildRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Build, error) {
+	for _, build := range m.byRun {
+		if build.ID == id {
+			return build, nil
+		}
+	}
 	return nil, nil
 }
 func (m *mockBuildRepo) GetByCISystemRunID(_ context.Context, ciSystem, ciRunID string) (*domain.Build, error) {
-	if ciSystem != ciSystemHiveCI {
+	if ciSystem != domain.CISystemHiveCI && ciSystem != domain.CISystemHiveCILegacy {
 		return nil, nil
 	}
-	return m.byRun[ciRunID], nil
+	build := m.byRun[ciRunID]
+	if build == nil || build.CISystem != ciSystem {
+		return nil, nil
+	}
+	return build, nil
 }
 func (m *mockBuildRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ int) ([]domain.Build, error) {
 	return nil, nil
 }
-func (m *mockBuildRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ domain.BuildStatus) error {
+func (m *mockBuildRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domain.BuildStatus) error {
+	for _, build := range m.byRun {
+		if build.ID == id {
+			build.Status = status
+		}
+	}
 	return nil
 }
+
+type mockServiceRepo struct {
+	service *domain.Service
+}
+
+func (m *mockServiceRepo) Create(_ context.Context, svc *domain.Service) error {
+	m.service = svc
+	return nil
+}
+func (m *mockServiceRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Service, error) {
+	if m.service != nil && m.service.ID == id {
+		return m.service, nil
+	}
+	return nil, nil
+}
+func (m *mockServiceRepo) GetByName(context.Context, string) (*domain.Service, error) {
+	return nil, nil
+}
+func (m *mockServiceRepo) List(context.Context) ([]domain.Service, error) { return nil, nil }
+func (m *mockServiceRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.Service, error) {
+	return nil, nil
+}
+func (m *mockServiceRepo) Update(context.Context, *domain.Service) error { return nil }
+func (m *mockServiceRepo) Delete(context.Context, uuid.UUID) error       { return nil }
 
 type mockArtifactRepo struct {
 	byDigest map[string]*domain.Artifact
@@ -201,7 +249,7 @@ func seedRunResult(h *mockHiveRepo, status, runPublisher, resultPublisher string
 		PublisherPubkey: resultPublisher,
 		ImageRepo:       "ghcr.io/acme/api",
 		ImageTag:        "main",
-		ImageDigest:     "sha256:abc",
+		ImageDigest:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 }
 
@@ -287,8 +335,45 @@ func (m *mockRegistryInspector) GetReferrers(_ context.Context, _, _ string) ([]
 	return nil, nil
 }
 
+type mockCanonicalRegistry struct {
+	builds    *mockBuildRepo
+	artifacts *mockArtifactRepo
+	lastProof service.ArtifactVerificationProof
+}
+
+func (m *mockCanonicalRegistry) RegisterBuild(ctx context.Context, build *domain.Build) error {
+	return m.builds.Create(ctx, build)
+}
+func (m *mockCanonicalRegistry) UpdateBuildStatus(ctx context.Context, id uuid.UUID, status domain.BuildStatus) error {
+	return m.builds.UpdateStatus(ctx, id, status)
+}
+func (m *mockCanonicalRegistry) RegisterVerifiedArtifact(ctx context.Context, artifact *domain.Artifact, proof service.ArtifactVerificationProof) error {
+	m.lastProof = proof
+	if existing := m.artifacts.byDigest[artifactKey(artifact.ImageRepo, artifact.ImageDigest)]; existing != nil {
+		if existing.BuildID != artifact.BuildID || existing.ServiceID != artifact.ServiceID || existing.ImageTag != artifact.ImageTag {
+			return context.Canceled
+		}
+		*artifact = *existing
+		return nil
+	}
+	artifact.ManifestMediaType = proof.MediaType
+	artifact.Metadata["verification"] = map[string]any{"source": proof.Source, "manifest_digest": proof.ManifestDigest, "state": "verified"}
+	artifact.Metadata["supply_chain"] = map[string]any{"policy_state": proof.PolicyState}
+	return m.artifacts.Create(ctx, artifact)
+}
+
 func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i *mockIntentRepo, e *mockEnvRepo, o *mockOCIRepo) *Bridge {
-	return NewBridge(h, b, a, i, e, o, nil, []string{"trusted-pub"}, nil)
+	serviceID := uuid.Nil
+	imageRepo := ""
+	if h.policy != nil {
+		serviceID = h.policy.ServiceID
+	}
+	if result := h.results["res-1"]; result != nil {
+		imageRepo = result.ImageRepo
+	}
+	services := &mockServiceRepo{service: &domain.Service{ID: serviceID, ArtifactRepo: imageRepo}}
+	registry := &mockCanonicalRegistry{builds: b, artifacts: a}
+	return NewBridge(h, services, b, a, i, e, o, nil, registry, []string{"trusted-pub"}, true, nil)
 }
 
 func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {
@@ -298,8 +383,8 @@ func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
 	o := newMockOCIRepo()
-	o.manifests[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.OCIManifest{
-		Digest:    "sha256:abc",
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MediaType: "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes: 123,
 	}
@@ -344,16 +429,18 @@ func TestBridge_SuccessWithHarborInspectorFallbackCreatesArtifact(t *testing.T) 
 	a := newMockArtifactRepo()
 	h.results["res-1"].ImageRepo = "harbor.sharegap.net/cascadia/ddgs"
 	h.results["res-1"].ImageTag = "pilot-v1"
-	h.results["res-1"].ImageDigest = "sha256:def"
+	h.results["res-1"].ImageDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	inspector := &mockRegistryInspector{inspections: map[string]*registryadapter.ImageInspection{
-		artifactKey("cascadia/ddgs", "sha256:def"): {
+		artifactKey("cascadia/ddgs", "pilot-v1"): {
 			Exists:    true,
-			Digest:    "sha256:def",
+			Digest:    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 			MediaType: "application/vnd.docker.distribution.manifest.v2+json",
 			Size:      456,
 		},
 	}}
-	bridge := NewBridge(h, b, a, newMockIntentRepo(), newMockEnvRepo(), nil, inspector, []string{"trusted-pub"}, nil)
+	services := &mockServiceRepo{service: &domain.Service{ID: h.policy.ServiceID, ArtifactRepo: h.results["res-1"].ImageRepo}}
+	registry := &mockCanonicalRegistry{builds: b, artifacts: a}
+	bridge := NewBridge(h, services, b, a, newMockIntentRepo(), newMockEnvRepo(), nil, inspector, registry, []string{"trusted-pub"}, true, nil)
 
 	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
 		t.Fatalf("ProcessResult error: %v", err)
@@ -363,6 +450,9 @@ func TestBridge_SuccessWithHarborInspectorFallbackCreatesArtifact(t *testing.T) 
 	}
 	if h.updated["res-1"] != domain.HiveCIProcessingStateProcessed {
 		t.Fatalf("expected result state processed, got %q", h.updated["res-1"])
+	}
+	if registry.lastProof.ManifestDigest != h.results["res-1"].ImageDigest || registry.lastProof.Source != "registry_manifest" {
+		t.Fatalf("expected registry manifest provenance, got %+v", registry.lastProof)
 	}
 }
 
@@ -391,11 +481,20 @@ func TestBridge_DuplicateArtifactReused(t *testing.T) {
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
 	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
 	b := newMockBuildRepo()
+	build := &domain.Build{
+		ID: uuid.New(), ServiceID: h.policy.ServiceID, GitSHA: "abc123",
+		CISystem: domain.CISystemHiveCI, CIRunID: "run-1", Status: domain.BuildStatusSucceeded,
+	}
+	b.byRun["run-1"] = build
 	a := newMockArtifactRepo()
-	a.byDigest[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.Artifact{ID: uuid.New(), ImageRepo: "ghcr.io/acme/api", ImageDigest: "sha256:abc"}
+	a.byDigest[artifactKey("ghcr.io/acme/api", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")] = &domain.Artifact{
+		ID: uuid.New(), BuildID: build.ID, ServiceID: build.ServiceID,
+		ImageRepo: "ghcr.io/acme/api", ImageTag: "main",
+		ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
 	o := newMockOCIRepo()
-	o.manifests[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.OCIManifest{
-		Digest:    "sha256:abc",
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MediaType: "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes: 123,
 	}
@@ -427,8 +526,8 @@ func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
 	o := newMockOCIRepo()
-	o.manifests[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.OCIManifest{
-		Digest:    "sha256:abc",
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MediaType: "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes: 123,
 	}
@@ -473,8 +572,8 @@ func TestBridge_ProtectedEnvCreatesPendingIntent(t *testing.T) {
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
 	o := newMockOCIRepo()
-	o.manifests[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.OCIManifest{
-		Digest:    "sha256:abc",
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MediaType: "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes: 123,
 	}
@@ -510,8 +609,8 @@ func TestBridge_DuplicateIntentReused(t *testing.T) {
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
 	o := newMockOCIRepo()
-	o.manifests[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.OCIManifest{
-		Digest:    "sha256:abc",
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MediaType: "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes: 123,
 	}
@@ -529,6 +628,107 @@ func TestBridge_DuplicateIntentReused(t *testing.T) {
 	}
 }
 
+func TestBridge_CorrelatesLegacyBrowserBuildWithoutDuplication(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	b := newMockBuildRepo()
+	legacy := &domain.Build{
+		ID: uuid.New(), ServiceID: h.policy.ServiceID, GitSHA: "abc123",
+		CISystem: domain.CISystemHiveCILegacy, CIRunID: "run-1", Status: domain.BuildStatusQueued,
+	}
+	b.byRun[legacy.CIRunID] = legacy
+	a := newMockArtifactRepo()
+	o := newMockOCIRepo()
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest: h.results["res-1"].ImageDigest, MediaType: "application/vnd.oci.image.manifest.v1+json",
+	}
+	bridge := newBridgeForTest(h, b, a, newMockIntentRepo(), newMockEnvRepo(), o)
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+		t.Fatalf("ProcessResult legacy correlation: %v", err)
+	}
+	if len(b.byRun) != 1 || b.byRun["run-1"].ID != legacy.ID || b.byRun["run-1"].Status != domain.BuildStatusSucceeded {
+		t.Fatalf("legacy browser build did not converge: %#v", b.byRun)
+	}
+}
+
+func TestBridge_RegisterBuildResultDeduplicatesVerifiedArtifact(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	b := newMockBuildRepo()
+	build := &domain.Build{
+		ID: uuid.New(), ServiceID: h.policy.ServiceID, GitSHA: "abc123",
+		CISystem: domain.CISystemHiveCI, CIRunID: "run-1", Status: domain.BuildStatusSucceeded,
+	}
+	b.byRun[build.CIRunID] = build
+	a := newMockArtifactRepo()
+	o := newMockOCIRepo()
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest: h.results["res-1"].ImageDigest, MediaType: "application/vnd.oci.image.manifest.v1+json",
+	}
+	bridge := newBridgeForTest(h, b, a, newMockIntentRepo(), newMockEnvRepo(), o)
+
+	first, err := bridge.RegisterBuildResult(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("RegisterBuildResult first call: %v", err)
+	}
+	second, err := bridge.RegisterBuildResult(context.Background(), build.ID)
+	if err != nil {
+		t.Fatalf("RegisterBuildResult duplicate call: %v", err)
+	}
+	if a.created != 1 {
+		t.Fatalf("expected one deduplicated artifact, got %d", a.created)
+	}
+	if first == nil || second == nil || first.ID != second.ID {
+		t.Fatalf("expected duplicate action to return the same artifact")
+	}
+}
+
+func TestBridge_RejectsMutableOnlyBuildResult(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.results["res-1"].ImageDigest = "latest"
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	b := newMockBuildRepo()
+	build := &domain.Build{
+		ID: uuid.New(), ServiceID: h.policy.ServiceID, GitSHA: "abc123",
+		CISystem: domain.CISystemHiveCI, CIRunID: "run-1", Status: domain.BuildStatusSucceeded,
+	}
+	b.byRun[build.CIRunID] = build
+	a := newMockArtifactRepo()
+	bridge := newBridgeForTest(h, b, a, newMockIntentRepo(), newMockEnvRepo(), newMockOCIRepo())
+
+	if _, err := bridge.RegisterBuildResult(context.Background(), build.ID); err == nil {
+		t.Fatal("expected mutable-only build result to be refused")
+	}
+	if a.created != 0 || h.updated["res-1"] != domain.HiveCIProcessingStateRejected {
+		t.Fatalf("mutable-only result created artifact or was not rejected")
+	}
+}
+
+func TestBridge_RejectsTagDigestMismatch(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	b := newMockBuildRepo()
+	a := newMockArtifactRepo()
+	o := newMockOCIRepo()
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		MediaType: "application/vnd.oci.image.manifest.v1+json",
+	}
+	bridge := newBridgeForTest(h, b, a, newMockIntentRepo(), newMockEnvRepo(), o)
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err == nil {
+		t.Fatal("expected tag-to-manifest digest mismatch to be refused")
+	}
+	if a.created != 0 {
+		t.Fatalf("expected no artifact for mismatched tag/digest, got %d", a.created)
+	}
+}
+
 func TestBridge_NoAutoDeployPolicySkipped(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
@@ -540,8 +740,8 @@ func TestBridge_NoAutoDeployPolicySkipped(t *testing.T) {
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
 	o := newMockOCIRepo()
-	o.manifests[artifactKey("ghcr.io/acme/api", "sha256:abc")] = &domain.OCIManifest{
-		Digest:    "sha256:abc",
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MediaType: "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes: 123,
 	}

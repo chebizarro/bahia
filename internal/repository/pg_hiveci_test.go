@@ -37,6 +37,39 @@ func TestPgHiveCIRepository_LookupRepositoryCIEmptyInput(t *testing.T) {
 	}
 }
 
+func TestPgHiveCIRepository_GetLatestResultByRunEventID(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new mock pool: %v", err)
+	}
+	defer mock.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	columns := []string{
+		"result_event_id", "run_event_id", "status", "exit_code", "duration_seconds", "log_url",
+		"error", "image_repo", "image_tag", "image_digest", "publisher_pubkey", "processing_state",
+		"processing_error", "retry_count", "last_retry_at", "event_created_at", "created_at", "updated_at",
+	}
+	mock.ExpectQuery("WHERE run_event_id = \\$1").WithArgs("run-1").WillReturnRows(
+		pgxmock.NewRows(columns).AddRow(
+			"result-2", "run-1", "success", 0, 42, "https://logs.example/2", "",
+			"ghcr.io/acme/api", "main", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"trusted-pub", "processed", "", 0, nil, now, now, now,
+		),
+	)
+	repo := &PgHiveCIRepository{pool: mock}
+	result, err := repo.GetLatestResultByRunEventID(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetLatestResultByRunEventID: %v", err)
+	}
+	if result == nil || result.ResultEventID != "result-2" || result.ImageTag != "main" {
+		t.Fatalf("unexpected latest result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestPgHiveCIRepository_LookupRepositoryCIDedupesAndAssembles(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

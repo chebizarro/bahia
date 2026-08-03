@@ -206,6 +206,41 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 	return &result, nil
 }
 
+func (r *PgHiveCIRepository) GetLatestResultByRunEventID(ctx context.Context, runEventID string) (*domain.HiveCIWorkflowResult, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,
+		error, image_repo, image_tag, image_digest, publisher_pubkey, processing_state, processing_error,
+		retry_count, last_retry_at, event_created_at, created_at, updated_at
+		FROM hiveci_workflow_results
+		WHERE run_event_id = $1
+		ORDER BY event_created_at DESC, result_event_id DESC
+		LIMIT 1
+	`, runEventID)
+
+	var result domain.HiveCIWorkflowResult
+	var state string
+	var errText, imageRepo, imageTag, imageDigest, processingError sql.NullString
+	if err := row.Scan(
+		&result.ResultEventID, &result.RunEventID, &result.Status, &result.ExitCode,
+		&result.DurationSeconds, &result.LogURL, &errText, &imageRepo, &imageTag,
+		&imageDigest, &result.PublisherPubkey, &state, &processingError,
+		&result.RetryCount, &result.LastRetryAt, &result.EventCreatedAt,
+		&result.CreatedAt, &result.UpdatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting latest hiveci result by run: %w", err)
+	}
+	result.Error = nullStringValue(errText)
+	result.ImageRepo = nullStringValue(imageRepo)
+	result.ImageTag = nullStringValue(imageTag)
+	result.ImageDigest = nullStringValue(imageDigest)
+	result.ProcessingState = domain.HiveCIProcessingState(state)
+	result.ProcessingError = nullStringValue(processingError)
+	return &result, nil
+}
+
 func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,

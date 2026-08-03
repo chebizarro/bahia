@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	ContextVMMethodBuildRequest = "build/request"
+	ContextVMMethodBuildRequest                = "build/request"
+	ContextVMMethodArtifactRegisterBuildResult = "artifact/register-build-result"
 
 	ArcanaRepositoryCoordinate = "chebizarro/living-library-forge"
 	ArcanaRepositoryURL        = "https://github.com/chebizarro/living-library-forge"
@@ -84,6 +85,14 @@ type BuildRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
 }
 
+type BuildResultLoader interface {
+	GetByID(context.Context, uuid.UUID) (*domain.Build, error)
+}
+
+type BuildResultArtifactRegistrar interface {
+	RegisterBuildResult(context.Context, uuid.UUID) (*domain.Artifact, error)
+}
+
 // BuildCredentialReferenceLoader intentionally exposes lookup only. Build
 // initiation cannot list, reveal, update, or delete protected credentials.
 type BuildCredentialReferenceLoader interface {
@@ -91,24 +100,29 @@ type BuildCredentialReferenceLoader interface {
 }
 
 type EncryptedBuildHandlersConfig struct {
-	Starter  HiveCIBuildStarter
-	Registry BuildRegistry
-	Services encryptedServiceLoader
-	Secrets  BuildCredentialReferenceLoader
-	RBAC     *auth.RBAC
+	Starter           HiveCIBuildStarter
+	Registry          BuildRegistry
+	Builds            BuildResultLoader
+	ArtifactRegistrar BuildResultArtifactRegistrar
+	Services          encryptedServiceLoader
+	Secrets           BuildCredentialReferenceLoader
+	RBAC              *auth.RBAC
 }
 
 type EncryptedBuildHandlers struct {
-	starter  HiveCIBuildStarter
-	registry BuildRegistry
-	services encryptedServiceLoader
-	secrets  BuildCredentialReferenceLoader
-	rbac     *auth.RBAC
+	starter           HiveCIBuildStarter
+	registry          BuildRegistry
+	builds            BuildResultLoader
+	artifactRegistrar BuildResultArtifactRegistrar
+	services          encryptedServiceLoader
+	secrets           BuildCredentialReferenceLoader
+	rbac              *auth.RBAC
 }
 
 func NewEncryptedBuildHandlers(cfg EncryptedBuildHandlersConfig) *EncryptedBuildHandlers {
 	return &EncryptedBuildHandlers{
-		starter: cfg.Starter, registry: cfg.Registry, services: cfg.Services,
+		starter: cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
+		artifactRegistrar: cfg.ArtifactRegistrar, services: cfg.Services,
 		secrets: cfg.Secrets, rbac: cfg.RBAC,
 	}
 }
@@ -118,6 +132,7 @@ func (h *EncryptedBuildHandlers) Register(transport *EncryptedRequestTransport) 
 		return
 	}
 	transport.RegisterContextVMHandler(ContextVMMethodBuildRequest, h.RequestBuild)
+	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegisterBuildResult, h.RegisterBuildResult)
 }
 
 func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -185,7 +200,7 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	build := &domain.Build{
 		ID: buildID, ServiceID: payload.ServiceID,
 		GitSHA: strings.ToLower(strings.TrimSpace(result.GitSHA)), GitRef: resolvedRef,
-		CISystem: "hiveci", CIRunID: strings.TrimSpace(result.CIRunID),
+		CISystem: domain.CISystemHiveCI, CIRunID: strings.TrimSpace(result.CIRunID),
 		Status: domain.BuildStatusQueued, SourceEventID: sourceEventID,
 		Metadata: map[string]any{
 			"repository_coordinate": ArcanaRepositoryCoordinate,
@@ -200,6 +215,55 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	return map[string]any{
 		"build_id": build.ID, "status": build.Status, "git_sha": build.GitSHA,
 		"git_ref": build.GitRef, "ci_system": build.CISystem, "ci_run_id": build.CIRunID,
+	}, nil
+}
+
+func (h *EncryptedBuildHandlers) RegisterBuildResult(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload struct {
+		BuildID uuid.UUID `json:"build_id"`
+	}
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("decode artifact/register-build-result params: %w", err)
+	}
+	if payload.BuildID == uuid.Nil {
+		return nil, fmt.Errorf("build_id is required")
+	}
+	if h == nil || h.builds == nil || h.artifactRegistrar == nil || h.services == nil {
+		return nil, fmt.Errorf("build-result artifact registration is not configured")
+	}
+	build, err := h.builds.GetByID(ctx, payload.BuildID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch build: %w", err)
+	}
+	if build == nil {
+		return nil, fmt.Errorf("build %s not found", payload.BuildID)
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
+	if _, err := authorizer.authorizeService(ctx, request.Event, build.ServiceID, domain.PermWriteServices); err != nil {
+		return nil, err
+	}
+	if build.Status != domain.BuildStatusSucceeded {
+		return nil, fmt.Errorf("only a successful build result can register an artifact")
+	}
+	artifact, err := h.artifactRegistrar.RegisterBuildResult(ctx, build.ID)
+	if err != nil {
+		return nil, err
+	}
+	if artifact == nil {
+		return nil, fmt.Errorf("build result did not produce a verified artifact")
+	}
+	return map[string]any{
+		"artifact_id":         artifact.ID,
+		"build_id":            artifact.BuildID,
+		"service_id":          artifact.ServiceID,
+		"image_repo":          artifact.ImageRepo,
+		"image_tag":           artifact.ImageTag,
+		"manifest_digest":     artifact.ImageDigest,
+		"manifest_media_type": artifact.ManifestMediaType,
+		"scan_status":         artifact.ScanStatus,
+		"signature_ref":       artifact.SignatureRef,
+		"sbom_url":            artifact.SBOMURL,
+		"metadata":            artifact.Metadata,
 	}, nil
 }
 

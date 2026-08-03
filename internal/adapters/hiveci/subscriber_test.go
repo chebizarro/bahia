@@ -103,6 +103,15 @@ func (r *testHiveRepo) GetResultByEventID(_ context.Context, eventID string) (*d
 	}
 	return &result, nil
 }
+func (r *testHiveRepo) GetLatestResultByRunEventID(_ context.Context, runEventID string) (*domain.HiveCIWorkflowResult, error) {
+	for _, result := range r.results {
+		if result.RunEventID == runEventID {
+			copy := result
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
 func (r *testHiveRepo) ListPendingResults(_ context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }

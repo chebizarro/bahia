@@ -1,0 +1,12 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_04_ARTIFACT_FLOW",
+  "tests": [
+    {"name":"Immutable build-result bridge and deduplication","command":"go test ./internal/pipeline","criteria":["AC1","AC2","AC3","AC4"]},
+    {"name":"Canonical registrar and manual policy","command":"go test ./internal/service","criteria":["AC2","AC3","AC4","AC5"]},
+    {"name":"Signed build-result action","command":"go test ./internal/controlplane","criteria":["AC1","AC3"]},
+    {"name":"HiveCI persistence and application wiring","command":"go test ./internal/repository ./internal/app ./internal/adapters/hiveci","criteria":["AC1","AC2"]},
+    {"name":"Arcana artifact provenance UI","command":"cd web && npm run test:unit -- --run tests/unit/arcana-build.test.js","criteria":["AC1","AC4"]},
+    {"name":"Svelte static checks","command":"cd web && npm run lint","criteria":["AC4"]},
+    {"name":"Production builds","command":"go build ./... && cd web && npm run build","criteria":["AC1","AC4"]}
+  ]
+}

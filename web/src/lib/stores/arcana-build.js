@@ -69,13 +69,53 @@ export function requestArcanaBuild(payload) {
   });
 }
 
+export function registerBuildResult(buildId) {
+  const id = String(buildId || '').trim();
+  if (!id) throw new Error('Build ID is required');
+  return publishCommand({
+    operation: 'artifact/register-build-result',
+    tags: [['build', id]],
+    content: {
+      build_id: id,
+      _meta: { progressToken: globalThis.crypto?.randomUUID?.() || `artifact-build-${Date.now()}` }
+    }
+  });
+}
+
 export function artifactCandidateForBuild(build, artifacts = []) {
   if (!build?.id || build.status !== 'succeeded') return null;
   const artifact = artifacts.find((candidate) => candidate.build_id === build.id);
   const digest = String(artifact?.image_digest || '').trim();
   const imageRepo = String(artifact?.image_repo || '').trim();
   if (!artifact || !imageRepo || !immutableDigest.test(digest)) return null;
+  const verification = artifactVerificationState(artifact);
+  if (verification.state !== 'verified' || verification.manifest_digest !== digest || verification.tag_resolved_digest !== digest) return null;
   return { ...artifact, immutable_ref: `${imageRepo}@${digest}` };
+}
+
+export function artifactVerificationState(artifact) {
+  const metadata = artifact?.metadata && typeof artifact.metadata === 'object' ? artifact.metadata : {};
+  const verification = metadata.verification && typeof metadata.verification === 'object' ? metadata.verification : {};
+  const supplyChain = metadata.supply_chain && typeof metadata.supply_chain === 'object' ? metadata.supply_chain : {};
+  const policy = metadata.policy && typeof metadata.policy === 'object' ? metadata.policy : {};
+  return {
+    manifest_digest: String(verification.manifest_digest || artifact?.image_digest || '').trim(),
+    source: String(verification.source || '').trim(),
+    state: String(verification.state || 'unverified').trim(),
+    media_type: String(verification.media_type || artifact?.manifest_media_type || '').trim(),
+    verified_at: String(verification.verified_at || '').trim(),
+    tag_resolved_digest: String(verification.tag_resolved_digest || '').trim(),
+    signature_state: String(supplyChain.signature_state || (artifact?.signature_ref ? 'present' : 'missing')).trim(),
+    signature_refs: Array.isArray(supplyChain.signature_refs) ? supplyChain.signature_refs : [],
+    sbom_state: String(supplyChain.sbom_state || (artifact?.sbom_url ? 'present' : 'missing')).trim(),
+    sbom_ref: String(supplyChain.sbom_ref || artifact?.sbom_url || '').trim(),
+    provenance_ref: String(supplyChain.provenance_ref || '').trim(),
+    policy_state: String(policy.state || supplyChain.policy_state || 'unknown').trim(),
+    policy_id: String(policy.policy_id || '').trim(),
+    ci_publisher: String(policy.ci_publisher || '').trim(),
+    referrer_discovery_state: String(supplyChain.referrer_discovery_state || 'not_reported').trim(),
+    scan_status: String(artifact?.scan_status || 'unknown').trim()
+  };
 }
 
 export function buildEvidence(build) {

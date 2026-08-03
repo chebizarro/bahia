@@ -677,13 +677,14 @@ type HiveCIPolicyConfig struct {
 
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
-	Enabled                      bool                 `koanf:"enabled"`
-	TrustedCIPubkeys             []string             `koanf:"trusted_ci_pubkeys"`
-	AutoRegisterBuilds           bool                 `koanf:"auto_register_builds"`
-	AutoDeployStagingEnvironment string               `koanf:"auto_deploy_staging_environment"`
-	RetryInterval                time.Duration        `koanf:"retry_interval"`
-	MaxRetries                   int                  `koanf:"max_retries"`
-	Policies                     []HiveCIPolicyConfig `koanf:"policies" yaml:"policies"`
+	Enabled                         bool                 `koanf:"enabled"`
+	TrustedCIPubkeys                []string             `koanf:"trusted_ci_pubkeys"`
+	AutoRegisterBuilds              bool                 `koanf:"auto_register_builds"`
+	AllowManualArtifactRegistration bool                 `koanf:"allow_manual_artifact_registration"`
+	AutoDeployStagingEnvironment    string               `koanf:"auto_deploy_staging_environment"`
+	RetryInterval                   time.Duration        `koanf:"retry_interval"`
+	MaxRetries                      int                  `koanf:"max_retries"`
+	Policies                        []HiveCIPolicyConfig `koanf:"policies" yaml:"policies"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -901,10 +902,11 @@ func Defaults() *Config {
 			ServiceAccounts:         []OCIServiceAccountConfig{},
 		},
 		HiveCI: HiveCIConfig{
-			Enabled:            false,
-			AutoRegisterBuilds: true,
-			RetryInterval:      30 * time.Second,
-			MaxRetries:         10,
+			Enabled:                         false,
+			AutoRegisterBuilds:              true,
+			AllowManualArtifactRegistration: false,
+			RetryInterval:                   30 * time.Second,
+			MaxRetries:                      10,
 		},
 		Cashu: CashuConfig{
 			Enabled: false,

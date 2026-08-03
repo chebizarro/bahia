@@ -23,56 +23,26 @@ Artifacts represent:
 
 ## Registering Artifacts
 
-Artifact registration is signer-first. The legacy `POST /api/v1/artifacts` REST mutation has been removed; CI systems should publish a signed Nostr `ArtifactRegister` event or use the Hive-CI bridge.
+### From a build (recommended)
 
-### From CI (Recommended)
+A successful trusted HiveCI result is the normal registration source. Bahia binds the signed result to its service and original build, verifies that the service repository and result tag resolve to the claimed immutable manifest digest, and creates one canonical artifact projection. Operators do not copy names, versions, digests, or CI identifiers.
 
-Use the Hive-CI bridge or publish the event directly from CI with your configured Nostr signer:
+Automatic registration is enabled by default:
 
-```json
-{
-  "kind": 5985,
-  "content": {
-    "service_id": "svc-123",
-    "build_id": "build-456",
-    "image_repo": "registry.example.com/my-api",
-    "image_tag": "v2.0.0",
-    "image_digest": "sha256:abc123...",
-    "metadata": {
-      "git_commit": "abc123",
-      "build_timestamp": "2026-06-01T12:00:00Z"
-    }
-  },
-  "tags": [
-    ["service", "svc-123"],
-    ["build", "build-456"],
-    ["digest", "sha256:abc123..."]
-  ]
-}
+```yaml
+hiveci:
+  enabled: true
+  auto_register_builds: true
+  allow_manual_artifact_registration: false
 ```
 
-### CLI and MCP
+The **Builds** page also provides an idempotent **Register verified build artifact** recovery action for a successful result. The signed ContextVM request contains only `build_id`; repository, tag, digest, CI provenance, signatures, SBOM reference, scan state, and policy state come from verified server-side evidence.
 
-Artifact registration mutations are signer-first. MCP `bahia_register_artifact` publishes a signed kind `5985` ArtifactRegister event and returns the request event id, pubkey, kind, and accepted relay count. Legacy direct REST/registry registration is not a production mutation path.
+### Advanced manual registration
 
-### Nostr (Signer-First)
+The legacy `POST /api/v1/artifacts` mutation has been removed. Signed kind `5985`/`bahia_register_artifact` registration is an advanced recovery path and is rejected unless `hiveci.allow_manual_artifact_registration: true` is explicitly configured.
 
-Publish a `5985` ArtifactRegister event:
-
-```json
-{
-  "kind": 5985,
-  "content": {
-    "service_id": "svc-123",
-    "image": "registry.example.com/my-api:v2.0.0",
-    "digest": "sha256:abc123..."
-  },
-  "tags": [
-    ["service", "svc-123"],
-    ["digest", "sha256:abc123..."]
-  ]
-}
-```
+Even when enabled, the server requires an existing service/build binding, the service's exact artifact repository, a non-empty tag, and a full `sha256:` manifest digest. It resolves the tag in the configured registry and refuses missing, mutable-only, unverifiable, or tag/digest-mismatched references. Manual registration cannot bypass canonical deduplication or verification.
 
 ## Viewing Artifacts
 

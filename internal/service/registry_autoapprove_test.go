@@ -30,7 +30,7 @@ func TestCreateDeploymentIntent_AutoApprovedPublishesApprovedEvent(t *testing.T)
 	registry := NewRegistryService(
 		svcRepo, envRepo, buildRepo, artRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
-		nil, publisher, zap.NewNop(),
+		echoDigestVerifier{}, publisher, zap.NewNop(),
 	)
 
 	svc, env := seedServiceAndEnv(t, registry)
