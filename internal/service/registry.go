@@ -1072,6 +1072,14 @@ func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, 
 	return s.intents.ListByServiceEnv(ctx, serviceID, envID, limit, offset)
 }
 
+type deploymentIntentDecisionTransitioner interface {
+	TransitionDecision(context.Context, uuid.UUID, domain.ApprovalStatus, domain.DeploymentIntentStatus) (bool, error)
+}
+
+type approvedDeploymentIntentWithoutRunLister interface {
+	ListApprovedWithoutRuns(context.Context) ([]domain.DeploymentIntent, error)
+}
+
 func (s *RegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.UUID) error {
 	di, err := s.intents.GetByID(ctx, id)
 	if err != nil {
@@ -1091,10 +1099,7 @@ func (s *RegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.U
 			id, di.Status, domain.IntentStatusPending)
 	}
 
-	if err := s.intents.UpdateApproval(ctx, id, domain.ApprovalStatusApproved); err != nil {
-		return err
-	}
-	if err := s.intents.UpdateStatus(ctx, id, domain.IntentStatusApproved); err != nil {
+	if err := s.transitionDeploymentIntentDecision(ctx, id, domain.ApprovalStatusApproved, domain.IntentStatusApproved); err != nil {
 		return err
 	}
 
@@ -1125,10 +1130,7 @@ func (s *RegistryService) RejectDeploymentIntent(ctx context.Context, id uuid.UU
 			id, di.Status, domain.IntentStatusPending)
 	}
 
-	if err := s.intents.UpdateApproval(ctx, id, domain.ApprovalStatusRejected); err != nil {
-		return err
-	}
-	if err := s.intents.UpdateStatus(ctx, id, domain.IntentStatusRejected); err != nil {
+	if err := s.transitionDeploymentIntentDecision(ctx, id, domain.ApprovalStatusRejected, domain.IntentStatusRejected); err != nil {
 		return err
 	}
 	if err := s.repairStateAfterRejectedIntent(ctx, di); err != nil {
@@ -1140,6 +1142,28 @@ func (s *RegistryService) RejectDeploymentIntent(ctx context.Context, id uuid.UU
 		Data:     events.ResourceData{ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(), ArtifactID: di.ArtifactID.String(), IntentID: id.String()},
 	})
 	return nil
+}
+
+func (s *RegistryService) transitionDeploymentIntentDecision(
+	ctx context.Context,
+	id uuid.UUID,
+	approval domain.ApprovalStatus,
+	status domain.DeploymentIntentStatus,
+) error {
+	if transitioner, ok := s.intents.(deploymentIntentDecisionTransitioner); ok {
+		changed, err := transitioner.TransitionDecision(ctx, id, approval, status)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return fmt.Errorf("deployment intent %s decision changed concurrently: %w", id, repository.ErrConflict)
+		}
+		return nil
+	}
+	if err := s.intents.UpdateApproval(ctx, id, approval); err != nil {
+		return err
+	}
+	return s.intents.UpdateStatus(ctx, id, status)
 }
 
 func (s *RegistryService) repairStateAfterRejectedIntent(ctx context.Context, rejected *domain.DeploymentIntent) error {
@@ -1277,6 +1301,19 @@ func (s *RegistryService) UpdateDeploymentRunApplyMetadata(ctx context.Context, 
 		Data:     events.ResourceData{IntentID: run.DeploymentIntentID.String(), RunID: id.String()},
 	})
 	return nil
+}
+
+// ListApprovedDeploymentIntentsWithoutRuns returns durable approved intents
+// whose execution did not create a run before process interruption.
+func (s *RegistryService) ListApprovedDeploymentIntentsWithoutRuns(ctx context.Context) ([]domain.DeploymentIntent, error) {
+	if s.intents == nil {
+		return nil, nil
+	}
+	lister, ok := s.intents.(approvedDeploymentIntentWithoutRunLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListApprovedWithoutRuns(ctx)
 }
 
 // ListNonTerminalDeploymentRuns returns persisted queued/running runs when the
@@ -1517,6 +1554,10 @@ func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UU
 
 // --- Runtime Observation ---
 
+type orderedObservationStateUpserter interface {
+	UpsertObservation(context.Context, *domain.EnvironmentServiceState) (bool, error)
+}
+
 func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.RuntimeObservation) error {
 	normalizeRuntimeObservationHash(obs)
 	latest, latestErr := s.observations.GetLatest(ctx, obs.ServiceID, obs.EnvironmentID)
@@ -1590,7 +1631,13 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 
 	now := time.Now().UTC()
 	state.LastReconciledAt = &now
-	if err := s.state.Upsert(ctx, state); err != nil {
+	advanced := true
+	if ordered, ok := s.state.(orderedObservationStateUpserter); ok {
+		advanced, err = ordered.UpsertObservation(ctx, state)
+	} else {
+		err = s.state.Upsert(ctx, state)
+	}
+	if err != nil {
 		return err
 	}
 	s.publisher.Publish(ctx, events.Event{
@@ -1598,6 +1645,9 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 		EntityID: obs.ID.String(),
 		Data:     obs,
 	})
+	if !advanced {
+		return nil
+	}
 	s.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
 		EntityID: obs.ServiceID.String() + ":" + obs.EnvironmentID.String(),

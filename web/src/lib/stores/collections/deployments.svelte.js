@@ -4,6 +4,8 @@ import {
   getDTag,
   getTagValue,
   isReplaceableTombstone,
+  projectionVersion,
+  compareProjectionVersions,
   replaceArray,
   sortByNameOrId,
   sortByNewestField
@@ -29,6 +31,9 @@ const artifactMap = new Map();
 const buildMap = new Map();
 const deploymentIntentMap = new Map();
 const deploymentRunMap = new Map();
+const stateWatermarks = new Map();
+const deploymentIntentWatermarks = new Map();
+const deploymentRunWatermarks = new Map();
 const policyMap = new Map();
 const packageRepositoryMap = new Map();
 const packageArtifactMap = new Map();
@@ -38,6 +43,7 @@ export function resetDeployments() {
   [stateMap, llmRouteMap, llmRouteStateMap, artifactMap, buildMap, deploymentIntentMap,
     deploymentRunMap, policyMap, packageRepositoryMap, packageArtifactMap, packagePromotionMap]
     .forEach((map) => map.clear());
+  [stateWatermarks, deploymentIntentWatermarks, deploymentRunWatermarks].forEach((map) => map.clear());
   [states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns,
     policies, packageRepositories, packageArtifacts, packagePromotions]
     .forEach((array) => { array.length = 0; });
@@ -57,17 +63,22 @@ export function refreshDeployments() {
   replaceArray(packagePromotions, Array.from(packagePromotionMap.values()).sort(sortByNewestField(['promoted_at', 'published_at', 'created_at'])));
 }
 
-function applyScopedState(event, targetMap, replaceableEvents, scopeTags) {
-  const { accepted, key } = upsertReplaceableEvent(replaceableEvents, event);
-  if (!accepted) return false;
-
+function applyScopedState(event, targetMap, replaceableEvents, scopeTags, watermarks = null) {
   const content = contentWithEventMeta(event);
   const dTag = getDTag(event);
   const values = Object.fromEntries(scopeTags.map(([field, tag]) => [field, content[field] || getTagValue(event, tag)]));
   const composed = Object.values(values).every(Boolean) ? Object.values(values).join(':') : '';
-  const id = content.id || dTag || composed || key;
+  // Logical scope wins over relay d-tags so legacy and corrected coordinates
+  // deterministically converge on one row after reconnect.
+  const id = composed || content.id || dTag;
   if (!id) return false;
 
+  const incomingVersion = projectionVersion(content, event);
+  if (watermarks && compareProjectionVersions(incomingVersion, watermarks.get(id)) <= 0) return false;
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted && !watermarks) return false;
+
+  if (watermarks) watermarks.set(id, incomingVersion);
   if (isReplaceableTombstone(event)) {
     targetMap.delete(id);
   } else {
@@ -93,13 +104,13 @@ function applyLLMRouteEvent(event, replaceableEvents) {
 }
 
 export const deploymentApplicators = {
-  serviceState: (event, replaceableEvents) => applyScopedState(event, stateMap, replaceableEvents, [['service_id', 'service'], ['environment_id', 'environment']]),
+  serviceState: (event, replaceableEvents) => applyScopedState(event, stateMap, replaceableEvents, [['service_id', 'service'], ['environment_id', 'environment']], stateWatermarks),
   llmRoute: applyLLMRouteEvent,
   llmRouteState: (event, replaceableEvents) => applyScopedState(event, llmRouteStateMap, replaceableEvents, [['route_id', 'route'], ['environment_id', 'environment']]),
   artifact: (event, replaceableEvents) => applyProjectedEntity(event, artifactMap, replaceableEvents, ['id', 'artifact_id']),
   build: (event, replaceableEvents) => applyProjectedEntity(event, buildMap, replaceableEvents, ['id', 'build_id']),
-  intent: (event, replaceableEvents) => applyProjectedEntity(event, deploymentIntentMap, replaceableEvents, ['id', 'intent_id']),
-  run: (event, replaceableEvents) => applyProjectedEntity(event, deploymentRunMap, replaceableEvents, ['id', 'run_id']),
+  intent: (event, replaceableEvents) => applyProjectedEntity(event, deploymentIntentMap, replaceableEvents, ['id', 'intent_id'], deploymentIntentWatermarks),
+  run: (event, replaceableEvents) => applyProjectedEntity(event, deploymentRunMap, replaceableEvents, ['id', 'run_id'], deploymentRunWatermarks),
   policy: (event, replaceableEvents) => applyProjectedEntity(event, policyMap, replaceableEvents, ['id', 'policy_id']),
   packageRepository: (event, replaceableEvents) => applyProjectedEntity(event, packageRepositoryMap, replaceableEvents, ['id', 'repository_id']),
   packageArtifact: (event, replaceableEvents) => applyProjectedEntity(event, packageArtifactMap, replaceableEvents, ['id', 'artifact_id']),

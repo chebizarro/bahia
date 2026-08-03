@@ -132,7 +132,7 @@ Omitting `--units-file` leaves the unit set unchanged on update. Supplying a fil
 bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
 
 # Submit signer-first rollback intent
-bahia deployments rollback --service svc-123 --environment env-456
+bahia deployments rollback --service svc-123 --environment env-456 --deployment-unit unit-789 --target-artifact artifact-prev --supersedes-intent intent-current
 ```
 
 ### State

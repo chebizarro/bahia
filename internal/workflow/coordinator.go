@@ -131,7 +131,19 @@ func (c *Coordinator) RecoverNonTerminalRuns(ctx context.Context) error {
 			recovered++
 		}
 	}
-	c.logger.Info("deployment run recovery initialized", zap.Int("recovered_runs", recovered))
+
+	approvedWithoutRuns, err := c.registry.ListApprovedDeploymentIntentsWithoutRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("listing approved deployment intents without runs: %w", err)
+	}
+	for i := range approvedWithoutRuns {
+		c.startExecution(approvedWithoutRuns[i].ID)
+		recovered++
+	}
+	c.logger.Info("deployment run recovery initialized",
+		zap.Int("recovered_runs", recovered),
+		zap.Int("approved_without_runs", len(approvedWithoutRuns)),
+	)
 	return nil
 }
 

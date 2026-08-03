@@ -282,6 +282,17 @@ type EnvironmentCommandResult struct {
 	Message         string                  `json:"message,omitempty"`
 }
 
+// RollbackDeploymentNostrRequest is the explicit signer-first rollback target.
+// Requester attribution is derived from the signed event, never caller payload.
+type RollbackDeploymentNostrRequest struct {
+	ServiceID          string `json:"service_id"`
+	EnvironmentID      string `json:"environment_id"`
+	DeploymentUnitID   string `json:"deployment_unit_id,omitempty"`
+	TargetArtifactID   string `json:"target_artifact_id"`
+	SupersedesIntentID string `json:"supersedes_intent_id"`
+	IdempotencyKey     string `json:"idempotency_key,omitempty"`
+}
+
 // DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
 type DeploymentCommandResult struct {
 	Status        string `json:"status,omitempty"`
@@ -412,20 +423,28 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 }
 
 // RollbackDeploymentNostr publishes a signer-first service/rollback intent and awaits the correlated ContextVM acknowledgment.
-func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context, serviceID, envID, requestedBy string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
-	serviceID = strings.TrimSpace(serviceID)
-	envID = strings.TrimSpace(envID)
-	if serviceID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate rollback request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
+func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context, req RollbackDeploymentNostrRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
+	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
+	req.TargetArtifactID = strings.TrimSpace(req.TargetArtifactID)
+	req.SupersedesIntentID = strings.TrimSpace(req.SupersedesIntentID)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	for field, value := range map[string]string{
+		"service_id":           req.ServiceID,
+		"environment_id":       req.EnvironmentID,
+		"target_artifact_id":   req.TargetArtifactID,
+		"supersedes_intent_id": req.SupersedesIntentID,
+	} {
+		if value == "" {
+			return nil, &ControlPlaneRequestError{Phase: "validate rollback request", RequestAccepted: false, Cause: fmt.Errorf("%s is required", field)}
+		}
 	}
-	if envID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate rollback request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
+	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.TargetArtifactID}, {"supersedes", req.SupersedesIntentID}}
+	if req.DeploymentUnitID != "" {
+		tags = append(tags, nostr.Tag{"deployment-unit", req.DeploymentUnitID})
 	}
-	payload := map[string]any{"service_id": serviceID, "environment_id": envID}
-	if requestedBy = strings.TrimSpace(requestedBy); requestedBy != "" {
-		payload["requested_by"] = requestedBy
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{Method: "service/rollback", Tags: nostr.Tags{{"service", serviceID}, {"environment", envID}}, Payload: payload}, onStatus)
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: "service/rollback", Tags: tags, Payload: req}, onStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -437,10 +456,13 @@ func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context
 		result.Status = "submitted"
 	}
 	if result.ServiceID == "" {
-		result.ServiceID = serviceID
+		result.ServiceID = req.ServiceID
 	}
 	if result.EnvironmentID == "" {
-		result.EnvironmentID = envID
+		result.EnvironmentID = req.EnvironmentID
+	}
+	if result.ArtifactID == "" {
+		result.ArtifactID = req.TargetArtifactID
 	}
 	return &result, nil
 }

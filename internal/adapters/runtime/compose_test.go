@@ -158,7 +158,7 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 	dockerBin := writeFakeNamedBinary(t, "docker", `#!/bin/sh
 case "$*" in
 	"container inspect running-id")
-	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2"}}]'
+	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}]'
 	;;
 	"image inspect sha256:runningimage")
 	printf '%s' '[{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}]'
@@ -183,6 +183,9 @@ esac
 	if obs.ObservedImageRepo != "registry.example/app" || obs.ObservedImageDigest != "sha256:runningdigest" {
 		t.Fatalf("digest-aware observe mismatch: repo=%q digest=%q", obs.ObservedImageRepo, obs.ObservedImageDigest)
 	}
+	if obs.NormalizedHash != "sha256:reviewed" {
+		t.Fatalf("NormalizedHash = %q, want applied desired hash", obs.NormalizedHash)
+	}
 }
 
 func TestComposeRuntimeObservePrefersConfiguredRepoDigestWhenImageIDHasMultipleRepos(t *testing.T) {
@@ -192,7 +195,7 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 	dockerBin := writeFakeNamedBinary(t, "docker", `#!/bin/sh
 case "$*" in
 	"container inspect running-id")
-	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2"}}]'
+	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}]'
 	;;
 	"image inspect sha256:runningimage")
 	printf '%s' '[{"Id":"sha256:runningimage","RepoDigests":["registry.example/old-app@sha256:oldrunningdigest","registry.example/app@sha256:runningdigest"]}]'

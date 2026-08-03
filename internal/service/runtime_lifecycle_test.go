@@ -514,6 +514,7 @@ type desiredStateLifecycleMockRuntime struct {
 	applied          bool
 	observeStatuses  []domain.HealthStatus
 	observeCalls     int
+	observedHash     string
 }
 
 func (m *desiredStateLifecycleMockRuntime) Type() domain.RuntimeType {
@@ -559,6 +560,10 @@ func (m *desiredStateLifecycleMockRuntime) Observe(_ context.Context, serviceID,
 		health = m.observeStatuses[index]
 	}
 	m.observeCalls++
+	normalizedHash := m.observedHash
+	if normalizedHash == "" {
+		normalizedHash = m.lastDesiredHash
+	}
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
@@ -567,7 +572,7 @@ func (m *desiredStateLifecycleMockRuntime) Observe(_ context.Context, serviceID,
 		ObservedContainerID: serviceName + "-container",
 		HealthStatus:        health,
 		Source:              "desired-state-mock",
-		NormalizedHash:      m.lastDesiredHash,
+		NormalizedHash:      normalizedHash,
 		ObservedAt:          time.Now().UTC(),
 	}, nil
 }
@@ -578,7 +583,7 @@ func TestObserveDeploymentHealthConvergesFromStartingToHealthy(t *testing.T) {
 		domain.HealthStatusHealthy,
 	}}
 	lifecycle := &RuntimeLifecycleService{healthTimeout: 50 * time.Millisecond, healthInterval: time.Millisecond}
-	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true)
+	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true, "")
 	if err != nil {
 		t.Fatalf("observeDeploymentHealth: %v", err)
 	}
@@ -587,10 +592,26 @@ func TestObserveDeploymentHealthConvergesFromStartingToHealthy(t *testing.T) {
 	}
 }
 
+func TestObserveDeploymentHealthRejectsHealthyDesiredStateMismatch(t *testing.T) {
+	rt := &desiredStateLifecycleMockRuntime{
+		observeStatuses: []domain.HealthStatus{domain.HealthStatusHealthy},
+		observedHash:    "sha256:stale",
+	}
+	lifecycle := &RuntimeLifecycleService{healthTimeout: 4 * time.Millisecond, healthInterval: time.Millisecond}
+	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true, "sha256:reviewed")
+	if obs == nil || obs.HealthStatus != domain.HealthStatusHealthy {
+		t.Fatalf("expected latest healthy mismatched observation, got %#v", obs)
+	}
+	var healthErr *DeploymentHealthError
+	if !errors.As(err, &healthErr) || healthErr.Code != "desired_state_mismatch" {
+		t.Fatalf("expected safe desired_state_mismatch, got %v", err)
+	}
+}
+
 func TestObserveDeploymentHealthTimeoutReturnsSafeFailureAndLatestObservation(t *testing.T) {
 	rt := &desiredStateLifecycleMockRuntime{observeStatuses: []domain.HealthStatus{domain.HealthStatusUnhealthy}}
 	lifecycle := &RuntimeLifecycleService{healthTimeout: 4 * time.Millisecond, healthInterval: time.Millisecond}
-	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true)
+	obs, err := lifecycle.observeDeploymentHealth(context.Background(), rt, uuid.New(), uuid.New(), "arcana", true, "")
 	if obs == nil || obs.HealthStatus != domain.HealthStatusUnhealthy {
 		t.Fatalf("timeout did not preserve latest observation: %#v", obs)
 	}

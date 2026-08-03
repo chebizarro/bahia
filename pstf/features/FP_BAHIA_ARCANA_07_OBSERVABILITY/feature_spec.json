@@ -1,0 +1,14 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_07_OBSERVABILITY",
+  "beads": ["bahia-yjxxd"],
+  "external_ledger_item": "fp-bahia-arcana-07-observability",
+  "title": "Deployment approval, progress, health, drift, logs, history, and rollback UX",
+  "intended_behavior": [
+    "One linkable deployment view follows the signed intent through policy, approval, execution phases, redacted logs, runtime health, drift, and completion.",
+    "The workflow coordinator is the sole execution owner; rejection never creates a run or mutates runtime state.",
+    "Compose deployment success requires a healthy observation and preserves healthy in_sync state across completion and restart recovery.",
+    "Failed health convergence exposes a safe reason and one-click rollback to an explicit prior artifact through a fresh policy-checked intent.",
+    "Relay delay, reconnect, corrected coordinates, and duplicate projections converge deterministically."
+  ],
+  "scope": ["internal/workflow/coordinator.go", "internal/service/runtime_lifecycle.go", "internal/service/registry.go", "internal/controlplane/encrypted_service_handlers.go", "internal/controlplane/encrypted_route_handlers.go", "internal/adapters/nostr/projector.go", "web/src/routes/deployments", "web/src/lib/stores/collections/deployments.svelte.js"]
+}

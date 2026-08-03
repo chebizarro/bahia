@@ -113,8 +113,9 @@ func (m *stubArtifactRepo) GetByImageRepoDigest(_ context.Context, _, _ string) 
 }
 
 type stubIntentRepo struct {
-	mu      sync.Mutex
-	intents map[uuid.UUID]*domain.DeploymentIntent
+	mu                  sync.Mutex
+	intents             map[uuid.UUID]*domain.DeploymentIntent
+	approvedWithoutRuns []domain.DeploymentIntent
 }
 
 func newStubIntentRepo() *stubIntentRepo {
@@ -184,6 +185,11 @@ func (m *stubIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, des
 func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, _ string) (*domain.DeploymentIntent, error) {
 	return nil, nil
 }
+func (m *stubIntentRepo) ListApprovedWithoutRuns(_ context.Context) ([]domain.DeploymentIntent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]domain.DeploymentIntent(nil), m.approvedWithoutRuns...), nil
+}
 
 type stubRunRepo struct {
 	mu   sync.Mutex
@@ -208,8 +214,16 @@ func (m *stubRunRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Deployme
 	defer m.mu.Unlock()
 	return m.runs[id], nil
 }
-func (m *stubRunRepo) ListByIntent(_ context.Context, _ uuid.UUID) ([]domain.DeploymentRun, error) {
-	return nil, nil
+func (m *stubRunRepo) ListByIntent(_ context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var runs []domain.DeploymentRun
+	for _, run := range m.runs {
+		if run.DeploymentIntentID == intentID {
+			runs = append(runs, *run)
+		}
+	}
+	return runs, nil
 }
 func (m *stubRunRepo) ListNonTerminal(_ context.Context) ([]domain.DeploymentRun, error) {
 	m.mu.Lock()
@@ -462,6 +476,10 @@ func (r *renderingComposeRuntime) ApplyDesiredState(ctx context.Context, req run
 }
 
 func (r *renderingComposeRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	desiredHash := ""
+	if r.applyRequest.TargetService != nil {
+		desiredHash = r.applyRequest.TargetService.DesiredHash
+	}
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
@@ -469,6 +487,7 @@ func (r *renderingComposeRuntime) Observe(_ context.Context, serviceID, envID uu
 		ObservedContainerID: serviceName + "-container",
 		HealthStatus:        domain.HealthStatusHealthy,
 		Source:              "max-compose-fixture",
+		NormalizedHash:      desiredHash,
 		ObservedAt:          time.Now().UTC(),
 	}, nil
 }
@@ -906,6 +925,52 @@ func TestRecoverNonTerminalRuns_ResumesDirectRuntimeAndPersistsPhases(t *testing
 	}
 	if phases := metadataPhases(updated.ApplyMetadata["phases"]); len(phases) < 2 {
 		t.Fatalf("recovered run phases were not persisted: %#v", updated.ApplyMetadata)
+	}
+}
+
+func TestRecoverNonTerminalRuns_StartsApprovedIntentWithoutRun(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "arcana",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "arcana-local", ComposeDir: "/srv/arcana",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		DesiredHash: "sha256:reviewed",
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusApproved, Status: domain.IntentStatusApproved,
+		DesiredState: desired, DesiredHash: desired.DesiredHash,
+	}
+	if err := intentRepo.Create(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.approvedWithoutRuns = []domain.DeploymentIntent{*intent}
+
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, lifecycle))
+	if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+		t.Fatalf("RecoverNonTerminalRuns: %v", err)
+	}
+	coord.wg.Wait()
+	if lifecycle.calls != 1 {
+		t.Fatalf("approved intent recovery runtime calls = %d, want 1", lifecycle.calls)
+	}
+	runs, err := registry.ListDeploymentRuns(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Status != domain.RunStatusSucceeded {
+		t.Fatalf("approved intent recovery runs = %#v", runs)
 	}
 }
 

@@ -36,10 +36,23 @@ export function contentWithEventMeta(event) {
   };
 }
 
-export function applyProjectedEntity(event, targetMap, replaceableEvents, idKeys = ['id']) {
-  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
-  if (!accepted) return false;
+export function projectionVersion(content, event) {
+  const updatedAt = Date.parse(content?.updated_at || content?.observed_at || content?.created_at || '');
+  return {
+    domainTime: Number.isFinite(updatedAt) ? updatedAt : 0,
+    relayTime: Number(event?.created_at || 0),
+    eventId: String(event?.id || '')
+  };
+}
 
+export function compareProjectionVersions(left, right) {
+  if (!right) return 1;
+  if (left.domainTime !== right.domainTime) return left.domainTime > right.domainTime ? 1 : -1;
+  if (left.relayTime !== right.relayTime) return left.relayTime > right.relayTime ? 1 : -1;
+  return left.eventId === right.eventId ? 0 : (left.eventId > right.eventId ? 1 : -1);
+}
+
+export function applyProjectedEntity(event, targetMap, replaceableEvents, idKeys = ['id'], watermarks = null) {
   const content = contentWithEventMeta(event);
   let id = getDTag(event);
   for (const key of idKeys) {
@@ -50,6 +63,16 @@ export function applyProjectedEntity(event, targetMap, replaceableEvents, idKeys
   }
   if (!id) return false;
 
+  const incomingVersion = projectionVersion(content, event);
+  if (watermarks && compareProjectionVersions(incomingVersion, watermarks.get(id)) <= 0) {
+    return false;
+  }
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  // A corrected logical coordinate can coexist with a legacy d-tag. Domain
+  // updated_at is authoritative across those replaceable coordinates.
+  if (!accepted && !watermarks) return false;
+
+  if (watermarks) watermarks.set(id, incomingVersion);
   if (isReplaceableTombstone(event) || content.deleted === true) {
     targetMap.delete(id);
   } else {

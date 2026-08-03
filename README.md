@@ -165,7 +165,7 @@ bahia environments list
 bahia state list
 bahia state drifted
 bahia deployments deploy --service <id> --environment <id> --artifact <id>
-bahia deployments rollback --service <id> --environment <id>
+bahia deployments rollback --service <id> --environment <id> --deployment-unit <unit-id> --target-artifact <previous-artifact-id> --supersedes-intent <current-intent-id>
 ```
 
 Some operator flows are signer-first and relay-driven. See:

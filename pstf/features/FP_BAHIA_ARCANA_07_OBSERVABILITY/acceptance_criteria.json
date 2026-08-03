@@ -1,0 +1,12 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_07_OBSERVABILITY",
+  "criteria": [
+    {"id":"AC1","statement":"Approved Arcana Compose deployment executes once, reports persisted phases, waits for healthy, and finishes healthy and in_sync.","verification":["internal/workflow/coordinator_test.go","internal/service/runtime_lifecycle_test.go","internal/service/registry_test.go"]},
+    {"id":"AC2","statement":"Rejected deployment creates no execution and makes no runtime change; approval re-evaluates current policy.","verification":["internal/controlplane/encrypted_service_handlers.go","internal/workflow/coordinator.go"]},
+    {"id":"AC3","statement":"One linkable UI shows unit/endpoint, desired hash, artifact digest, policy, phases, logs, health, drift, safe failure, observation, and completion.","verification":["web/src/routes/deployments/[id]/+page.svelte","web/src/routes/deployments/runs/[id]/+page.svelte"]},
+    {"id":"AC4","statement":"Healthcheck timeout offers rollback to an explicit previous artifact through a fresh policy-checked intent that respects protected approval.","verification":["internal/controlplane/encrypted_service_handlers.go","web/src/lib/stores/public-controlplane.svelte.js","web/src/routes/deployments/[id]/+page.svelte"]},
+    {"id":"AC5","statement":"Restart/reconcile and delayed or duplicate observations preserve the newest healthy in_sync state.","verification":["internal/workflow/coordinator_test.go","internal/service/registry_test.go","web/tests/unit/deployment-observability.test.js"]},
+    {"id":"AC6","statement":"Stored stdout and stderr redact every retained version of each referenced secret before stream selection or tailing.","verification":["internal/controlplane/encrypted_route_handlers.go","internal/repository/pg_secret.go","internal/controlplane/encrypted_route_handlers_test.go"]},
+    {"id":"AC7","statement":"Deployment history and each run/log view have stable navigable URLs and rollback target links.","verification":["web/src/routes/deployments/+page.svelte","web/src/routes/deployments/[id]/+page.svelte","web/src/routes/deployments/runs/[id]/+page.svelte"]}
+  ]
+}

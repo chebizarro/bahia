@@ -68,6 +68,62 @@ func (r *PgEnvironmentServiceStateRepository) Upsert(ctx context.Context, state 
 	return nil
 }
 
+// UpsertObservation advances current runtime state only when the incoming
+// observation wins the durable (observed_at, id) ordering. This prevents
+// concurrent relay/reconcile writers from regressing the current projection.
+func (r *PgEnvironmentServiceStateRepository) UpsertObservation(ctx context.Context, state *domain.EnvironmentServiceState) (bool, error) {
+	if state == nil || state.CurrentObservationID == nil {
+		return false, fmt.Errorf("observation state requires current_observation_id")
+	}
+	state.UpdatedAt = time.Now().UTC()
+	desiredRuntimeStateJSON, err := marshalJSON(state.DesiredRuntimeState, "desired runtime state")
+	if err != nil {
+		return false, err
+	}
+	failureMetadataJSON, err := marshalJSON(state.ReconcileFailureMetadata, "reconcile failure metadata")
+	if err != nil {
+		return false, err
+	}
+	cmd, err := r.pool.Exec(ctx, `
+		INSERT INTO environment_service_state (`+stateColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (service_id, environment_id) DO UPDATE SET
+			deployment_unit_id = EXCLUDED.deployment_unit_id,
+			desired_artifact_id = EXCLUDED.desired_artifact_id,
+			desired_intent_id = EXCLUDED.desired_intent_id,
+			last_successful_run_id = EXCLUDED.last_successful_run_id,
+			current_observation_id = EXCLUDED.current_observation_id,
+			drift_status = EXCLUDED.drift_status,
+			desired_runtime_state = EXCLUDED.desired_runtime_state,
+			desired_hash = EXCLUDED.desired_hash,
+			reconcile_failure_metadata = EXCLUDED.reconcile_failure_metadata,
+			reconcile_backoff_until = EXCLUDED.reconcile_backoff_until,
+			reconcile_consecutive_failures = EXCLUDED.reconcile_consecutive_failures,
+			last_reconciled_at = EXCLUDED.last_reconciled_at,
+			updated_at = EXCLUDED.updated_at
+		WHERE environment_service_state.current_observation_id IS NULL
+		OR EXISTS (
+				SELECT 1
+				FROM runtime_observations incoming
+				LEFT JOIN runtime_observations current
+				ON current.id = environment_service_state.current_observation_id
+				WHERE incoming.id = EXCLUDED.current_observation_id
+				AND (
+					current.id IS NULL
+					OR incoming.observed_at > current.observed_at
+					OR (incoming.observed_at = current.observed_at AND incoming.id > current.id)
+				)
+		)
+	`, state.ServiceID, state.EnvironmentID, state.DeploymentUnitID, state.DesiredArtifactID, state.DesiredIntentID,
+		state.LastSuccessfulRunID, state.CurrentObservationID, state.DriftStatus,
+		desiredRuntimeStateJSON, state.DesiredHash, failureMetadataJSON, state.ReconcileBackoffUntil,
+		state.ReconcileConsecutiveFailures, state.LastReconciledAt, state.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("upserting ordered environment observation state: %w", err)
+	}
+	return cmd.RowsAffected() == 1, nil
+}
+
 func (r *PgEnvironmentServiceStateRepository) scanState(row pgx.Row) (*domain.EnvironmentServiceState, error) {
 	s := &domain.EnvironmentServiceState{}
 	var desiredRuntimeStateJSON []byte

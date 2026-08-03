@@ -135,16 +135,16 @@ Require relay `OK` with `accepted=true`. Treat the ContextVM response as receipt
 
 ### Web UI
 
-The **Deployments** page shows:
-- **Pending**: Awaiting approval
-- **Running**: Currently executing
-- **Completed**: Successfully finished
-- **Failed**: Encountered errors
+The **Deployments** page is linkable at `/deployments/<intent-id>`. One aggregate follows the signed request without leaving the deployment UI and shows:
 
-Click a deployment to see:
-- Intent details
-- Run progress and logs
-- Final status
+- policy decision and approval/rejection status;
+- explicit deployment-unit key and safe endpoint alias;
+- immutable artifact digest and reviewed desired-state hash;
+- persisted execution phases and links to each run's redacted stdout/stderr;
+- safe failure code/message, runtime health, observed digest/hash, drift, reconciliation time, and completion; and
+- the explicit previous healthy artifact used by rollback.
+
+Relay updates may arrive late or repeat after reconnect. The dashboard merges intent, run, and service/environment projections by logical identity and domain `updated_at`, with relay timestamp and event ID as deterministic tie-breakers. Corrected service-state coordinates include both service and environment, and logical tombstone watermarks prevent stale replay from resurrecting deleted state.
 
 ### CLI
 
@@ -190,7 +190,7 @@ Publish a ContextVM approval request:
 ```json
 {
   "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"approve-intent-123\",\"method\":\"approval/approve\",\"params\":{\"intent_id\":\"intent-123\",\"approved\":true,\"_meta\":{\"progressToken\":\"approve-intent-123\"}}}",
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"approve-intent-123\",\"method\":\"approval/approve\",\"params\":{\"intent_id\":\"intent-123\",\"decision\":\"approve\",\"_meta\":{\"progressToken\":\"approve-intent-123\"}}}",
   "tags": [
     ["p", "<bahia-service-pubkey>"],
     ["method", "approval/approve"],
@@ -205,9 +205,9 @@ Roll back to a previous artifact:
 
 ### Web UI
 
-1. Go to service detail
-2. Find the deployment to roll back to
-3. Click **Rollback to this version**
+1. Open the failed deployment's linkable detail page.
+2. Review the displayed prior deployed artifact and immutable digest.
+3. Click **Rollback**. Bahia creates a fresh desired-state intent for that explicit artifact, evaluates current policy, and requests approval again when the environment is protected.
 
 ### Nostr
 
@@ -216,29 +216,24 @@ Rollback is signer-first. The legacy `POST /api/v1/rollback` REST mutation has b
 ```json
 {
   "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"rollback-svc-123-env-456\",\"method\":\"service/rollback\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"_meta\":{\"progressToken\":\"rollback-svc-123-env-456\"}}}",
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"rollback-svc-123-env-456\",\"method\":\"service/rollback\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"deployment_unit_id\":\"unit-max\",\"target_artifact_id\":\"art-previous\",\"supersedes_intent_id\":\"intent-failed\",\"_meta\":{\"progressToken\":\"rollback-svc-123-env-456\"}}}",
   "tags": [
     ["p", "<bahia-service-pubkey>"],
     ["method", "service/rollback"],
     ["service", "svc-123"],
-    ["environment", "env-456"]
+    ["environment", "env-456"],
+    ["unit", "unit-max"],
+    ["artifact", "art-previous"],
+    ["intent", "intent-failed"]
   ]
 }
 ```
 
-This creates a new intent to deploy the previously successful artifact.
+The target must be an explicit, previously successful artifact for the same service, environment, and deployment unit. This creates a new canonical desired-state intent; it never reuses the legacy force-approved rollback path.
 
-### MCP Tool
+### MCP
 
-```json
-{
-  "tool": "bahia_rollback",
-  "arguments": {
-    "service_id": "svc-123",
-    "environment_id": "env-456"
-  }
-}
-```
+Use the same signer-first `service/rollback` ContextVM payload with an explicit target. Do not use registry helpers that infer history or force approval.
 
 ## Rollout safety and verified rollback
 
@@ -267,9 +262,9 @@ Deployment runs capture logs:
 
 ### Web UI
 
-1. Go to the deployment run
-2. Click **Logs** tab
-3. View stdout/stderr
+1. Open a deployment and select **View phases & logs** for a run.
+2. Select stdout or stderr after the run reaches a terminal state.
+3. Bahia decrypts all retained versions of the desired state's referenced secrets and redacts them from both complete streams before applying tail limits or stream selection. If redaction dependencies or retained versions are unavailable, log retrieval fails closed.
 
 ### CLI
 

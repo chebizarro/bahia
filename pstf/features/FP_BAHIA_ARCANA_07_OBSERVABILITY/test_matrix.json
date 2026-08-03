@@ -1,0 +1,12 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_07_OBSERVABILITY",
+  "tests": [
+    {"name":"Registry observation and completion convergence","command":"go test ./internal/service","criteria":["AC1","AC5"]},
+    {"name":"Coordinator execution and restart recovery","command":"go test ./internal/workflow","criteria":["AC1","AC2","AC5"]},
+    {"name":"Signed approval, rollback, and redacted logs","command":"go test ./internal/controlplane ./internal/repository","criteria":["AC2","AC4","AC6"]},
+    {"name":"Safe Nostr deployment projections","command":"go test ./internal/adapters/nostr","criteria":["AC3","AC5"]},
+    {"name":"Relay duplicate/reconnect browser convergence","command":"cd web && npm run test:unit -- tests/unit/deployment-observability.test.js","criteria":["AC3","AC5"]},
+    {"name":"Dashboard checks and production build","command":"cd web && npm run lint && npm run build","criteria":["AC3","AC4","AC7"]},
+    {"name":"Go production build","command":"go build ./...","criteria":["AC1","AC2","AC4","AC6"]}
+  ]
+}

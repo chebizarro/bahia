@@ -15,7 +15,7 @@
     WarningIcon
   } from '$lib/icons/domain-icons.js';
   import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts } from '$lib/stores';
-  import { createDeploymentIntent, rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
+  import { rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
   import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
   function escapeAttr(value) {
@@ -270,15 +270,28 @@
     rollbackError = null;
 
     try {
+      let targetArtifactId = rollbackArtifactId;
       if (rollbackTargetMode === 'previous') {
-        await rollbackDeployment(rollbackIntent.service_id, rollbackIntent.environment_id);
-      } else {
-        await createDeploymentIntent(
-          rollbackIntent.service_id,
-          rollbackIntent.environment_id,
-          rollbackArtifactId
+        const previous = deploymentIntents.find((candidate) =>
+          candidate.id !== rollbackIntent.id &&
+          candidate.service_id === rollbackIntent.service_id &&
+          candidate.environment_id === rollbackIntent.environment_id &&
+          (candidate.deployment_unit_id || '') === (rollbackIntent.deployment_unit_id || '') &&
+          candidate.artifact_id !== rollbackIntent.artifact_id &&
+          String(candidate.status || candidate.deployment_status || '').toLowerCase() === 'deployed'
         );
+        targetArtifactId = previous?.artifact_id || '';
       }
+      if (!targetArtifactId) {
+        throw new Error('No previous healthy artifact exists for this deployment unit.');
+      }
+      await rollbackDeployment({
+        service_id: rollbackIntent.service_id,
+        environment_id: rollbackIntent.environment_id,
+        ...(rollbackIntent.deployment_unit_id ? { deployment_unit_id: rollbackIntent.deployment_unit_id } : {}),
+        target_artifact_id: targetArtifactId,
+        supersedes_intent_id: rollbackIntent.id
+      });
       rollbackOpen = false;
     } catch (err) {
       rollbackError = err.message || 'Failed to create rollback intent';

@@ -1049,19 +1049,13 @@ func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent
 			continue
 		}
 		seen[ref.SecretID] = struct{}{}
-		versions := make([]domain.SecretVersion, 0, 1)
-		if history, ok := h.secrets.(secretVersionHistoryLister); ok {
-			listed, err := history.ListVersions(ctx, ref.SecretID)
-			if err != nil {
-				return fmt.Errorf("load referenced secret history")
-			}
-			versions = append(versions, listed...)
-		} else {
-			version, err := h.secrets.GetCurrentVersion(ctx, ref.SecretID)
-			if err != nil || version == nil {
-				return fmt.Errorf("load referenced secret version")
-			}
-			versions = append(versions, *version)
+		history, ok := h.secrets.(secretVersionHistoryLister)
+		if !ok {
+			return fmt.Errorf("referenced secret version history is unavailable")
+		}
+		versions, err := history.ListVersions(ctx, ref.SecretID)
+		if err != nil {
+			return fmt.Errorf("load referenced secret history")
 		}
 		if len(versions) == 0 {
 			return fmt.Errorf("referenced secret has no retained versions")

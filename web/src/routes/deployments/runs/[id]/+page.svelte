@@ -22,7 +22,8 @@
   let lastRunRequestId = null;
 
   let isCompleted = $derived(Boolean(run && ['succeeded', 'failed', 'cancelled', 'timeout'].includes(String(run.status || '').toLowerCase())));
-  let progressPercent = $derived(calculateProgress(run?.status));
+  let phases = $derived(Array.isArray(run?.phases) ? run.phases : []);
+  let progressPercent = $derived(calculateProgress(run));
   let durationLabel = $derived(formatDuration(run));
 
   $effect(() => {
@@ -100,7 +101,12 @@
     }
   }
 
-  function calculateProgress(status) {
+  function calculateProgress(runValue) {
+    const status = runValue?.status;
+    if (Array.isArray(runValue?.phases) && runValue.phases.length > 0 && !['succeeded', 'failed', 'cancelled', 'timeout'].includes(String(status || '').toLowerCase())) {
+      const expected = Math.max(Number(runValue.phase_sequence || 0), runValue.phases.length, 1);
+      return Math.min(95, Math.max(10, Math.round((runValue.phases.length / (expected + 1)) * 100)));
+    }
     switch (String(status || '').toLowerCase()) {
       case 'queued':
         return 5;
@@ -159,7 +165,7 @@
   {:else if run}
     <div class="header">
       <div>
-        <a href="/deployments" class="back-link">← Back to Deployments</a>
+        <a href={run.deployment_intent_id ? `/deployments/${run.deployment_intent_id}` : '/deployments'} class="back-link">← Deployment aggregate</a>
         <h1>Deployment Run</h1>
         <p class="run-id"><code>{run.id}</code></p>
       </div>
@@ -199,10 +205,33 @@
       <h2>Run Details</h2>
       <div class="details-grid">
         <div class="detail-item"><span class="detail-label">Intent ID</span><span class="detail-value"><code>{run.deployment_intent_id || '-'}</code></span></div>
+        <div class="detail-item"><span class="detail-label">Deployment Unit</span><span class="detail-value"><code>{run.deployment_unit_key || run.deployment_unit_id || 'default'}</code></span></div>
+        <div class="detail-item"><span class="detail-label">Endpoint</span><span class="detail-value"><code>{run.endpoint_ref || 'local runtime'}</code></span></div>
+        <div class="detail-item"><span class="detail-label">Desired-state Hash</span><span class="detail-value"><code>{run.desired_hash || '-'}</code></span></div>
+        <div class="detail-item"><span class="detail-label">Health</span><span class="detail-value">{run.health_status || 'not observed'}</span></div>
         <div class="detail-item"><span class="detail-label">Worker Pubkey</span><span class="detail-value">{run.worker_pubkey || '-'}</span></div>
         <div class="detail-item"><span class="detail-label">Started At</span><span class="detail-value">{formatDate(run.started_at)}</span></div>
         <div class="detail-item"><span class="detail-label">Finished At</span><span class="detail-value">{formatDate(run.finished_at)}</span></div>
       </div>
+    </Card>
+
+    <Card>
+      <h2>Execution Phases</h2>
+      {#if phases.length}
+        <ol class="timeline">
+          {#each phases as phase, index}
+            <li class:failed={String(phase.status || '').toLowerCase() === 'failed'} class:active={String(phase.status || '').toLowerCase() === 'running'}>
+              <span>{index + 1}</span>
+              <div><strong>{phase.step || 'phase'}</strong><small>{phase.status || 'pending'} · {formatDate(phase.started_at)}</small></div>
+            </li>
+          {/each}
+        </ol>
+      {:else}
+        <p class="transport-note">Phase events have not been projected for this run yet.</p>
+      {/if}
+      {#if run.failure}
+        <p class="failure"><strong>{run.failure.code || 'deployment_failed'}:</strong> {run.failure.message || 'Bahia could not complete this deployment.'}</p>
+      {/if}
     </Card>
 
     <Card>
@@ -250,6 +279,14 @@
   .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
   .detail-item { display: flex; flex-direction: column; gap: 0.25rem; }
   .transport-note { margin: 0 0 1rem; color: var(--text-muted); font-size: 0.875rem; }
+  .timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: .5rem; }
+  .timeline li { display: flex; align-items: center; gap: .75rem; border: 1px solid var(--border-color); border-radius: 7px; padding: .65rem; }
+  .timeline li > span { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 999px; background: var(--surface-secondary); font-weight: 700; }
+  .timeline li div { display: flex; flex-direction: column; }
+  .timeline small { color: var(--text-muted); }
+  .timeline li.active { border-color: var(--primary); }
+  .timeline li.failed { border-color: var(--error); }
+  .failure { color: var(--error); padding: .75rem; border: 1px solid var(--error); border-radius: 7px; }
   .tabs { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
   .tab { background: transparent; border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 6px; padding: 0.4rem 0.7rem; cursor: pointer; }
   .tab.active { color: var(--text-primary); border-color: var(--primary); }

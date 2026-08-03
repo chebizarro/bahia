@@ -22,7 +22,7 @@ type cliOperatorClient interface {
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	CreateDeploymentIntentNostr(context.Context, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
-	RollbackDeploymentNostr(context.Context, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
+	RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	StopServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	ScanAdoptionNostr(context.Context, client.AdoptionScanRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionPreview, error)
@@ -109,13 +109,13 @@ func runDeploymentIntentNostr(cmd *cobra.Command, serviceID, envID, artifactID, 
 	return op.CreateDeploymentIntentNostr(cmd.Context(), serviceID, envID, artifactID, requestedBy, operatorStatusCallback(cmd, "deploy"))
 }
 
-func runRollbackIntentNostr(cmd *cobra.Command, serviceID, envID, requestedBy string) (*client.DeploymentCommandResult, error) {
+func runRollbackIntentNostr(cmd *cobra.Command, req client.RollbackDeploymentNostrRequest) (*client.DeploymentCommandResult, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
 		return nil, err
 	}
 	defer op.Close()
-	return op.RollbackDeploymentNostr(cmd.Context(), serviceID, envID, requestedBy, operatorStatusCallback(cmd, "rollback"))
+	return op.RollbackDeploymentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "rollback"))
 }
 
 func runRuntimeActionNostrFirst(cmd *cobra.Command, action, serviceID, envID string, artifactID *string, fallback func(context.Context) (*client.RuntimeActionResult, error)) (*client.RuntimeActionResult, error) {

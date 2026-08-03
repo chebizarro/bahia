@@ -559,8 +559,8 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	// Step: observing — observe the runtime state after deploy.
 	notify(DeployStepObserving, "Observing runtime state after deploy")
 
-	waitForHealthy := unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose && targetSpec.Healthcheck != nil
-	obs, observeErr := s.observeDeploymentHealth(ctx, rt, serviceID, envID, targetName, waitForHealthy)
+	waitForHealthy := unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose
+	obs, observeErr := s.observeDeploymentHealth(ctx, rt, serviceID, envID, targetName, waitForHealthy, targetSpec.DesiredHash)
 	if obs == nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
 		return nil, observeErr
@@ -614,13 +614,14 @@ func (s *RuntimeLifecycleService) observeDeploymentHealth(
 	serviceID, envID uuid.UUID,
 	targetName string,
 	waitForHealthy bool,
+	desiredHash string,
 ) (*domain.RuntimeObservation, error) {
 	var latest *domain.RuntimeObservation
 	for {
 		obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 		if err == nil && obs != nil {
 			latest = obs
-			if !waitForHealthy || obs.HealthStatus == domain.HealthStatusHealthy {
+			if !waitForHealthy || deploymentObservationConverged(obs, desiredHash) {
 				return obs, nil
 			}
 		} else if !waitForHealthy {
@@ -649,6 +650,12 @@ func (s *RuntimeLifecycleService) observeDeploymentHealth(
 			case <-deadline.C:
 				retry.Stop()
 				if latest != nil {
+					if latest.HealthStatus == domain.HealthStatusHealthy && strings.TrimSpace(desiredHash) != "" && observedStateHash(latest) != desiredHash {
+						return latest, &DeploymentHealthError{
+							Code:    "desired_state_mismatch",
+							Message: "The healthy runtime did not converge to the reviewed desired state.",
+						}
+					}
 					return latest, &DeploymentHealthError{
 						Code:    "health_check_timeout",
 						Message: "The deployed service did not become healthy before the health deadline.",
@@ -662,13 +669,21 @@ func (s *RuntimeLifecycleService) observeDeploymentHealth(
 				obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 				if err == nil && obs != nil {
 					latest = obs
-					if obs.HealthStatus == domain.HealthStatusHealthy {
+					if deploymentObservationConverged(obs, desiredHash) {
 						return obs, nil
 					}
 				}
 			}
 		}
 	}
+}
+
+func deploymentObservationConverged(obs *domain.RuntimeObservation, desiredHash string) bool {
+	if obs == nil || obs.HealthStatus != domain.HealthStatusHealthy {
+		return false
+	}
+	desiredHash = strings.TrimSpace(desiredHash)
+	return desiredHash == "" || observedStateHash(obs) == desiredHash
 }
 
 // Restart restarts a service directly through the resolved runtime and records a fresh observation.

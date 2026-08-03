@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -155,6 +156,58 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 	return intents, rows.Err()
 }
 
+// ListApprovedWithoutRuns returns approved intents whose execution never acquired
+// a durable run, covering the crash window between approval publication and run creation.
+func (r *PgDeploymentIntentRepository) ListApprovedWithoutRuns(ctx context.Context) ([]domain.DeploymentIntent, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+intentColumns+` FROM deployment_intents di
+		WHERE di.approval_status = 'approved'
+		  AND di.status = 'approved'
+		  AND NOT EXISTS (
+			SELECT 1 FROM deployment_runs dr WHERE dr.deployment_intent_id = di.id
+		  )
+		ORDER BY di.approved_at ASC NULLS LAST, di.created_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("listing approved deployment intents without runs: %w", err)
+	}
+	defer rows.Close()
+
+	var intents []domain.DeploymentIntent
+	for rows.Next() {
+		di, scanErr := r.scanIntent(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scanning approved deployment intent without run: %w", scanErr)
+		}
+		intents = append(intents, *di)
+	}
+	return intents, rows.Err()
+}
+
+// TransitionDecision atomically moves a still-pending intent to one terminal
+// approval decision so concurrent approve/reject requests cannot both win.
+func (r *PgDeploymentIntentRepository) TransitionDecision(
+	ctx context.Context,
+	id uuid.UUID,
+	approval domain.ApprovalStatus,
+	status domain.DeploymentIntentStatus,
+) (bool, error) {
+	now := time.Now().UTC()
+	var approvedAt *time.Time
+	if approval == domain.ApprovalStatusApproved {
+		approvedAt = &now
+	}
+	cmd, err := r.pool.Exec(ctx, `
+		UPDATE deployment_intents
+		SET approval_status = $2, status = $3, approved_at = $4, updated_at = $5
+		WHERE id = $1 AND approval_status = 'pending' AND status = 'pending'
+	`, id, approval, status, approvedAt, now)
+	if err != nil {
+		return false, fmt.Errorf("transitioning deployment intent decision: %w", err)
+	}
+	return cmd.RowsAffected() == 1, nil
+}
+
 func (r *PgDeploymentIntentRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error {
 	cmd, err := r.pool.Exec(ctx, `UPDATE deployment_intents SET status = $2, updated_at = $3 WHERE id = $1`, id, status, time.Now().UTC())
 	if err != nil {
@@ -231,6 +284,10 @@ func (r *PgDeploymentRunRepository) Create(ctx context.Context, dr *domain.Deplo
 	`, dr.ID, dr.DeploymentIntentID, dr.DeploymentUnitID, dr.LoomJobID, dr.WorkerPubkey, dr.WorkerName, dr.Status,
 		dr.ExitCode, dr.StdoutRef, dr.StderrRef, dr.StartedAt, dr.FinishedAt, metaJSON, applyMetaJSON, dr.CreatedAt, dr.UpdatedAt)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("deployment intent already has an active run: %w", ErrConflict)
+		}
 		return fmt.Errorf("inserting deployment run: %w", err)
 	}
 	return nil

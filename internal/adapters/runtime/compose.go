@@ -28,7 +28,7 @@ type ComposeRuntime struct {
 	dockerTLSEnv    []string
 	endpoint        config.RuntimeEndpointConfig // server-managed endpoint (TLS material for the SDK path)
 	ownershipConfig ComposeOwnershipConfig
-	binary          string // "docker-compose" or "docker compose"
+	binary          string               // "docker-compose" or "docker compose"
 	executionMode   RuntimeExecutionMode // cli (default) or sdk
 	logger          *zap.Logger
 }
@@ -151,6 +151,7 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	containerID := ""
 	image := ""
 	imageDigest := ""
+	normalizedHash := ""
 	if len(entries) > 0 {
 		representative := entries[0]
 		for _, entry := range entries {
@@ -165,12 +166,12 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		}
 		containerID = representative.ID
 		image = representative.Image
-		if repo, digest := r.resolveObservedComposeImage(ctx, containerID, image); repo != "" || digest != "" {
-			if repo != "" {
-				image = repo
-			}
-			imageDigest = digest
+		observedRepo, observedDigest, desiredHash := r.resolveObservedComposeImage(ctx, containerID, image)
+		if observedRepo != "" {
+			image = observedRepo
 		}
+		imageDigest = observedDigest
+		normalizedHash = desiredHash
 	}
 
 	return &domain.RuntimeObservation{
@@ -181,6 +182,7 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		ObservedContainerID: containerID,
 		HealthStatus:        health,
 		Source:              "compose",
+		NormalizedHash:      normalizedHash,
 		ObservedAt:          time.Now().UTC(),
 	}, nil
 }
@@ -350,44 +352,44 @@ func (r *ComposeRuntime) runCommandStdout(ctx context.Context, extraEnv []string
 	return stdout.String(), stderr.String(), err
 }
 
-func (r *ComposeRuntime) resolveObservedComposeImage(ctx context.Context, containerID, image string) (string, string) {
+func (r *ComposeRuntime) resolveObservedComposeImage(ctx context.Context, containerID, image string) (string, string, string) {
 	image = strings.TrimSpace(image)
-	if image == "" {
-		return "", ""
-	}
-	if repo, digest := splitRepoDigest(image); digest != "" {
-		return repo, digest
-	}
 	logger := r.logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if strings.TrimSpace(containerID) != "" {
-		if imageID, configuredImage, ok := r.inspectComposeContainerImage(ctx, logger, containerID); ok {
-			if repo, digest := r.inspectDockerImage(ctx, logger, imageID, firstNonEmptyString(configuredImage, image)); repo != "" || digest != "" {
-				return repo, digest
-			}
+		if imageID, configuredImage, desiredHash, ok := r.inspectComposeContainerImage(ctx, logger, containerID); ok {
+			repo, digest := r.inspectDockerImage(ctx, logger, imageID, firstNonEmptyString(configuredImage, image))
+			return repo, digest, desiredHash
 		}
 	}
-	return r.inspectDockerImage(ctx, logger, image, image)
+	if image == "" {
+		return "", "", ""
+	}
+	if repo, digest := splitRepoDigest(image); digest != "" {
+		return repo, digest, ""
+	}
+	repo, digest := r.inspectDockerImage(ctx, logger, image, image)
+	return repo, digest, ""
 }
 
-func (r *ComposeRuntime) inspectComposeContainerImage(ctx context.Context, logger *zap.Logger, containerID string) (string, string, bool) {
+func (r *ComposeRuntime) inspectComposeContainerImage(ctx context.Context, logger *zap.Logger, containerID string) (string, string, string, bool) {
 	stdout, stderr, err := r.runDockerStdout(ctx, "container", "inspect", containerID)
 	if err != nil {
 		logger.Debug("failed to inspect compose container for image digest", zap.String("container_id", containerID), zap.String("stderr", strings.TrimSpace(stderr)), zap.Error(err))
-		return "", "", false
+		return "", "", "", false
 	}
 	var inspected []composeContainerInspect
 	if err := json.Unmarshal([]byte(stdout), &inspected); err != nil || len(inspected) == 0 {
 		var single composeContainerInspect
 		if singleErr := json.Unmarshal([]byte(stdout), &single); singleErr != nil {
 			logger.Debug("failed to parse compose container inspect output", zap.String("container_id", containerID), zap.Error(err))
-			return "", "", false
+			return "", "", "", false
 		}
 		inspected = []composeContainerInspect{single}
 	}
-	return strings.TrimSpace(inspected[0].Image), strings.TrimSpace(inspected[0].Config.Image), strings.TrimSpace(inspected[0].Image) != ""
+	return strings.TrimSpace(inspected[0].Image), strings.TrimSpace(inspected[0].Config.Image), strings.TrimSpace(inspected[0].Config.Labels["bahia.desired_hash"]), strings.TrimSpace(inspected[0].Image) != ""
 }
 
 func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Logger, inspectRef, fallbackRepo string) (string, string) {
@@ -439,7 +441,8 @@ func (r *ComposeRuntime) runDockerStdout(ctx context.Context, args ...string) (s
 type composeContainerInspect struct {
 	Image  string `json:"Image"`
 	Config struct {
-		Image string `json:"Image"`
+		Image  string            `json:"Image"`
+		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 }
 

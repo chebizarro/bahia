@@ -465,7 +465,7 @@ func (f fakeCLIOperatorClient) DeployServiceRuntimeNostr(context.Context, string
 func (f fakeCLIOperatorClient) CreateDeploymentIntentNostr(context.Context, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (f fakeCLIOperatorClient) RollbackDeploymentNostr(context.Context, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
+func (f fakeCLIOperatorClient) RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {

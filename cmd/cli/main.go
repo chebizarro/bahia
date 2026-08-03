@@ -342,9 +342,19 @@ func deployCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			requestedBy, _ := cmd.Flags().GetString("requested-by")
+			unitID, _ := cmd.Flags().GetString("deployment-unit")
+			targetArtifactID, _ := cmd.Flags().GetString("target-artifact")
+			supersedesIntentID, _ := cmd.Flags().GetString("supersedes-intent")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runRollbackIntentNostr(cmd, serviceID, envID, requestedBy)
+			result, err := runRollbackIntentNostr(cmd, client.RollbackDeploymentNostrRequest{
+				ServiceID:          serviceID,
+				EnvironmentID:      envID,
+				DeploymentUnitID:   unitID,
+				TargetArtifactID:   targetArtifactID,
+				SupersedesIntentID: supersedesIntentID,
+				IdempotencyKey:     idempotencyKey,
+			})
 			if err != nil {
 				return err
 			}
@@ -361,9 +371,14 @@ func deployCommands() *cobra.Command {
 	}
 	rollbackCmd.Flags().String("service", "", "Service ID")
 	rollbackCmd.Flags().String("environment", "", "Environment ID")
-	rollbackCmd.Flags().String("requested-by", "", "Who requested the rollback")
+	rollbackCmd.Flags().String("deployment-unit", "", "Deployment unit ID (required for explicit-unit intents)")
+	rollbackCmd.Flags().String("target-artifact", "", "Previously healthy artifact ID to restore")
+	rollbackCmd.Flags().String("supersedes-intent", "", "Current deployed intent ID being superseded")
+	rollbackCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
 	_ = rollbackCmd.MarkFlagRequired("service")
 	_ = rollbackCmd.MarkFlagRequired("environment")
+	_ = rollbackCmd.MarkFlagRequired("target-artifact")
+	_ = rollbackCmd.MarkFlagRequired("supersedes-intent")
 
 	deploymentsCmd := &cobra.Command{
 		Use:   "deployments",
