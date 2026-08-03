@@ -1,0 +1,7 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_03_BUILD_UI",
+  "beads": ["bahia-ja073", "bahia-1tgwr"],
+  "title": "Private GitHub repository build initiation and status UI",
+  "intended_behavior": ["Signed browser request uses an opaque credential reference and approved public Vite settings.","Queued state is persisted only after fleet Gitea/HiveCI initiator acceptance.","UI renders projected statuses, evidence, and digest-pinned OCI candidates.","Missing mirror initiation fails closed without a direct GitHub runner."],
+  "scope": ["internal/controlplane/encrypted_build_handlers.go","internal/app/app.go","web/src/routes/builds/+page.svelte","web/src/lib/stores/arcana-build.js"]
+}

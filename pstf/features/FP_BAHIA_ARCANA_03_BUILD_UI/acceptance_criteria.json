@@ -1,0 +1,10 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_03_BUILD_UI",
+  "criteria": [
+    {"id":"AC1","statement":"Only an opaque credential reference and the exact nine approved public Arcana VITE_* arguments cross the signed request.","verification":["internal/controlplane/encrypted_build_handlers_test.go","web/tests/unit/arcana-build.test.js"]},
+    {"id":"AC2","statement":"Bahia validates service and credential ownership and registers queued state only after initiator acceptance.","verification":["internal/controlplane/encrypted_build_handlers.go"]},
+    {"id":"AC3","statement":"The browser displays canonical statuses, logs, and signed evidence without polling.","verification":["web/src/routes/builds/+page.svelte"]},
+    {"id":"AC4","statement":"Only successful artifacts with valid sha256 digests become repository@digest candidates.","verification":["web/tests/unit/arcana-build.test.js"]},
+    {"id":"AC5","statement":"Absent mirror plumbing fails closed; no direct private GitHub fetcher is implemented.","verification":["internal/controlplane/encrypted_build_handlers_test.go","bahia-1tgwr"]}
+  ]
+}

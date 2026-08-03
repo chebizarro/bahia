@@ -1,0 +1,9 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_03_BUILD_UI",
+  "tests": [
+    {"name":"ContextVM build contract and security","command":"go test ./internal/controlplane/...","criteria":["AC1","AC2","AC5"]},
+    {"name":"Arcana browser contract","command":"cd web && npm test -- --run tests/unit/arcana-build.test.js tests/unit/nav.test.js","criteria":["AC1","AC3","AC4"]},
+    {"name":"Svelte static checks","command":"cd web && npm run lint","criteria":["AC3"]},
+    {"name":"Production web build","command":"cd web && npm run build","criteria":["AC3"]}
+  ]
+}

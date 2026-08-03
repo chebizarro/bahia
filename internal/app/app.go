@@ -1184,6 +1184,15 @@ func New(cfg *config.Config) (*App, error) {
 			RBAC:         tenantRBAC,
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
+		// The build request contract is registered even while the fleet Gitea
+		// mirror initiator is unavailable, so browsers receive a signed,
+		// fail-closed error instead of falling back to credential-bearing flows.
+		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
+			Registry: registry,
+			Services: serviceRepo,
+			Secrets:  secretRepo,
+			RBAC:     tenantRBAC,
+		}).Register(encryptedRequestTransport)
 		controlplane.NewOperatorContextVMHandlers(controlplane.OperatorContextVMHandlersConfig{
 			Adoption:                       adoptionSvc,
 			RuntimeLifecycle:               runtimeLifecycleSvc,
