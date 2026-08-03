@@ -3,7 +3,17 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { RelayIcon } from '$lib/icons/domain-icons.js';
   import { nostr, saveRelayConfig, getDefaultRelays, getConfiguredRelays, hasSavedRelayConfig } from '$lib/nostr/client.js';
-  import { applyRelayPolicy, buildRelayPolicyPayload, callRelayAdmin, subscribeRelayPolicyReadModel } from '$lib/nostr/relay-settings-controlplane.js';
+  import {
+    RELAY_POLICY_TRUTH_STATES,
+    applyRelayPolicy,
+    buildRelayPolicyPayload,
+    callRelayAdmin,
+    compareRelayPolicyTruthCandidates,
+    getRelayPolicy,
+    liveRelayPolicyTruth,
+    normalizeRelayPolicyProjectionResponse,
+    subscribeRelayPolicyReadModel
+  } from '$lib/nostr/relay-settings-controlplane.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
   import { toast } from '$lib/components/toast.js';
 
@@ -31,13 +41,35 @@
   let relayAdminTargetRef = $state('');
   let relayAdminMethod = $state('supportedmethods');
   let relayAdminParamsInput = $state('[]');
-  let operatorPolicyHydrationStatus = $state('waiting for discovery');
+  let operatorPolicyHydrationStatus = $state('Waiting for trusted service discovery');
   let operatorPolicyHydrationError = $state('');
   let operatorPolicyHydratedAt = $state('');
+  let operatorPolicyTruthState = $state(RELAY_POLICY_TRUTH_STATES.LOADING);
+  let operatorPolicyObservedLive = $state(false);
+  let operatorPolicyProvenance = $state(emptyRelayPolicyProvenance());
+  let operatorPolicyCandidate = $state(null);
+  let operatorPolicyProjectionKey = $state('');
+  let operatorPolicyProjectionRequestInFlight = $state('');
   let operatorPolicyDirty = $state(false);
   let pendingCanonicalRelayPolicyState = $state(null);
   let pendingCanonicalRelayPolicyReceivedAt = $state('');
   let pendingPublishedRelayPolicyPayload = $state(null);
+  let replacementConfirmed = $state(false);
+  let replacementChangeReference = $state('');
+
+  let operatorPolicyHydrationSucceeded = $derived([
+    RELAY_POLICY_TRUTH_STATES.LOADED_LIVE,
+    RELAY_POLICY_TRUTH_STATES.LOADED_CACHED,
+    RELAY_POLICY_TRUTH_STATES.LOADED_STALE,
+    RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED,
+    RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY
+  ].includes(operatorPolicyTruthState));
+  let auditedReplacementReady = $derived(
+    operatorPolicyTruthState === RELAY_POLICY_TRUTH_STATES.UNAVAILABLE
+      && replacementConfirmed
+      && /^[A-Za-z0-9._:/#-]{1,128}$/.test(replacementChangeReference.trim())
+  );
+  let operatorPolicyApplyBlocked = $derived(!operatorPolicyHydrationSucceeded && !auditedReplacementReady);
 
   $effect(() => {
     const unsubscribe = nostr.connectionStatus.subscribe(status => {
@@ -64,8 +96,27 @@
     const nostrConfig = systemInfo?.nostr;
     if (!nostrConfig || operatorPolicyInitialized) return;
     applyOperatorRelayPolicyState(nostrConfig, { markClean: true });
-    operatorPolicyHydrationStatus = 'bootstrap defaults loaded';
+    operatorPolicyHydrationStatus = 'Discovery values loaded as a noncanonical draft; checking signed truth';
     operatorPolicyInitialized = true;
+  });
+
+  $effect(() => {
+    const nostrConfig = systemInfo?.nostr;
+    if (!nostrConfig) return;
+    const servicePubkey = String(nostrConfig.service_pubkey || '').trim();
+    const requestRelays = nostrConfig.contextvm_relays || [];
+    const serviceRelays = nostrConfig.service_relays || [];
+    const key = [servicePubkey, ...requestRelays, ...serviceRelays].join('|');
+    if (!servicePubkey || requestRelays.length + serviceRelays.length === 0) {
+      setRelayPolicyUnavailable('Trusted service pubkey or signer-first request relays are not available from discovery.');
+      return;
+    }
+    if (operatorPolicyProjectionKey === key) return;
+    if (operatorPolicyProjectionKey) {
+      resetRelayPolicyTruthForIdentityChange();
+    }
+    operatorPolicyProjectionKey = key;
+    void hydrateProjectedRelayPolicy({ requestKey: key });
   });
 
   $effect(() => {
@@ -83,9 +134,31 @@
     const unsubscribe = subscribeRelayPolicyReadModel({
       relays: policyRelays,
       servicePubkey,
-      onState: (state) => {
+      onState: (state, metadata = {}) => {
         const receivedAt = new Date().toISOString();
+        const liveTruth = liveRelayPolicyTruth(state, {
+          event: metadata.event,
+          relay: metadata.relay,
+          receivedAt
+        });
+        const liveCandidate = { ...liveTruth, service_key: operatorPolicyProjectionKey };
+        const candidateOrder = compareRelayPolicyTruthCandidates(liveCandidate, operatorPolicyCandidate);
+        if (candidateOrder < 0) return;
+        if (candidateOrder === 0 && operatorPolicyCandidate?.provenance?.hash) {
+          liveCandidate.provenance = {
+            ...liveCandidate.provenance,
+            hash: operatorPolicyCandidate.provenance.hash
+          };
+        }
+        operatorPolicyCandidate = liveCandidate;
         operatorPolicyInitialized = true;
+        operatorPolicyTruthState = liveCandidate.truthState;
+        operatorPolicyObservedLive = true;
+        operatorPolicyProvenance = liveCandidate.provenance;
+        operatorPolicyHydratedAt = receivedAt;
+        replacementConfirmed = false;
+        replacementChangeReference = '';
+        void hydrateProjectedRelayPolicy({ requestKey: operatorPolicyProjectionKey });
         if (operatorPolicyDirty) {
           pendingCanonicalRelayPolicyState = state;
           pendingCanonicalRelayPolicyReceivedAt = receivedAt;
@@ -100,17 +173,18 @@
           operatorPolicyHydrationError = '';
           return;
         }
-        applyOperatorRelayPolicyState(state, { markClean: true });
+        applyOperatorRelayPolicyState(liveCandidate.policy, { markClean: true });
         pendingCanonicalRelayPolicyState = null;
         pendingCanonicalRelayPolicyReceivedAt = '';
         pendingPublishedRelayPolicyPayload = null;
-        operatorPolicyHydrationStatus = 'loaded from service relay policy';
+        operatorPolicyHydrationStatus = liveCandidate.truthState === RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY
+          ? 'Verified a live, explicitly service-signed empty policy'
+          : 'Loaded directly from a live service-signed relay event';
         operatorPolicyHydrationError = '';
-        operatorPolicyHydratedAt = receivedAt;
       },
       onEose: () => {
-        if (operatorPolicyHydrationStatus === 'loading service relay policy') {
-          operatorPolicyHydrationStatus = operatorPolicyInitialized ? 'service relay policy sync complete' : 'no service relay policy found during initial sync';
+        if (!operatorPolicyObservedLive && !operatorPolicyHydrationSucceeded) {
+          operatorPolicyHydrationStatus = 'Live relay catch-up complete; durable projection remains authoritative';
         }
       },
       onClosed: (reason, relay, metadata = {}) => {
@@ -127,6 +201,153 @@
       unsubscribe?.();
     };
   });
+
+  function emptyRelayPolicyProvenance() {
+    return {
+      event_id: '',
+      event_created_at: '',
+      hash: '',
+      source_relay: '',
+      last_sync_at: '',
+      freshness: '',
+      source: ''
+    };
+  }
+
+  function setRelayPolicyUnavailable(message) {
+    if (operatorPolicyObservedLive || operatorPolicyHydrationSucceeded) return;
+    operatorPolicyTruthState = RELAY_POLICY_TRUTH_STATES.UNAVAILABLE;
+    operatorPolicyHydrationStatus = 'Canonical relay policy could not be loaded';
+    operatorPolicyHydrationError = message;
+    operatorPolicyProvenance = emptyRelayPolicyProvenance();
+  }
+
+  function resetRelayPolicyTruthForIdentityChange() {
+    operatorPolicyInitialized = false;
+    operatorPolicyTruthState = RELAY_POLICY_TRUTH_STATES.LOADING;
+    operatorPolicyObservedLive = false;
+    operatorPolicyCandidate = null;
+    operatorPolicyProvenance = emptyRelayPolicyProvenance();
+    operatorPolicyProjectionRequestInFlight = '';
+    operatorPolicyHydrationStatus = 'Trusted service identity changed; reloading signed truth';
+    operatorPolicyHydrationError = '';
+    operatorPolicyHydratedAt = '';
+    operatorPolicyDirty = false;
+    pendingCanonicalRelayPolicyState = null;
+    pendingCanonicalRelayPolicyReceivedAt = '';
+    pendingPublishedRelayPolicyPayload = null;
+    replacementConfirmed = false;
+    replacementChangeReference = '';
+  }
+
+  async function hydrateProjectedRelayPolicy({ requestKey = operatorPolicyProjectionKey } = {}) {
+    if (!requestKey || operatorPolicyProjectionRequestInFlight === requestKey) return;
+    operatorPolicyProjectionRequestInFlight = requestKey;
+    try {
+      const response = await getRelayPolicy();
+      if (requestKey !== operatorPolicyProjectionKey) return;
+      const projected = normalizeRelayPolicyProjectionResponse(response);
+      const projectedCandidate = { ...projected, service_key: requestKey };
+      const candidateOrder = compareRelayPolicyTruthCandidates(projectedCandidate, operatorPolicyCandidate);
+
+      if (candidateOrder < 0) return;
+      if (candidateOrder === 0 && operatorPolicyObservedLive && projected.provenance.event_id) {
+        operatorPolicyProvenance = {
+          ...operatorPolicyProvenance,
+          ...projected.provenance,
+          freshness: 'live'
+        };
+        operatorPolicyCandidate = {
+          ...operatorPolicyCandidate,
+          provenance: operatorPolicyProvenance
+        };
+        return;
+      }
+
+      if (projected.truthState === RELAY_POLICY_TRUTH_STATES.UNAVAILABLE) {
+        setRelayPolicyUnavailable('The signer-first projection API reported canonical relay policy unavailable.');
+        return;
+      }
+
+      operatorPolicyCandidate = projectedCandidate;
+      operatorPolicyTruthState = projected.truthState;
+      operatorPolicyObservedLive = false;
+      operatorPolicyProvenance = projected.provenance;
+      operatorPolicyHydrationError = '';
+      operatorPolicyHydratedAt = projected.provenance.last_sync_at || '';
+      replacementConfirmed = false;
+      replacementChangeReference = '';
+
+      if (projected.policy) {
+        if (operatorPolicyDirty) {
+          pendingCanonicalRelayPolicyState = projected.policy;
+          pendingCanonicalRelayPolicyReceivedAt = projected.provenance.last_sync_at || new Date().toISOString();
+          operatorPolicyHydrationStatus = 'Durable service relay policy pending; local edits preserved';
+          return;
+        }
+        applyOperatorRelayPolicyState(projected.policy, { markClean: true });
+        operatorPolicyInitialized = true;
+        if (projected.truthState === RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY) {
+          operatorPolicyHydrationStatus = 'Loaded an explicitly service-signed empty policy from the durable projection'
+            + (projected.provenance.freshness === 'stale' ? ' (stale)' : '');
+        } else if (projected.truthState === RELAY_POLICY_TRUTH_STATES.LOADED_STALE) {
+          operatorPolicyHydrationStatus = 'Loaded last-known-good durable projection; relay sync is stale';
+        } else {
+          operatorPolicyHydrationStatus = 'Loaded last-known-good durable projection';
+        }
+      } else if (projected.truthState === RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED) {
+        if (!operatorPolicyDirty) {
+          applyOperatorRelayPolicyState({}, { markClean: true });
+        }
+        operatorPolicyInitialized = true;
+        operatorPolicyHydrationStatus = operatorPolicyDirty
+          ? 'Never-configured truth loaded; local draft preserved'
+          : 'Durable projection confirms no relay policy has ever been configured';
+        operatorPolicyHydratedAt = '';
+      }
+    } catch (error) {
+      if (requestKey === operatorPolicyProjectionKey) {
+        setRelayPolicyUnavailable(error?.message || 'Signer-first projection hydration failed.');
+      }
+    } finally {
+      if (operatorPolicyProjectionRequestInFlight === requestKey) {
+        operatorPolicyProjectionRequestInFlight = '';
+      }
+    }
+  }
+
+  function relayPolicyTruthLabel() {
+    switch (operatorPolicyTruthState) {
+      case RELAY_POLICY_TRUTH_STATES.LOADED_LIVE: return 'Loaded — live';
+      case RELAY_POLICY_TRUTH_STATES.LOADED_CACHED: return 'Loaded — cached';
+      case RELAY_POLICY_TRUTH_STATES.LOADED_STALE: return 'Loaded — cached/stale';
+      case RELAY_POLICY_TRUTH_STATES.UNAVAILABLE: return 'Unavailable';
+      case RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED: return 'Never configured';
+      case RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY: return 'Intentionally empty — explicitly signed';
+      default: return 'Loading signed truth';
+    }
+  }
+
+  function relayPolicyTruthDescription() {
+    switch (operatorPolicyTruthState) {
+      case RELAY_POLICY_TRUTH_STATES.UNAVAILABLE:
+        return 'No canonical policy is being shown. Form values are only a noncanonical draft until hydration succeeds or an audited replacement is confirmed.';
+      case RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED:
+        return 'The signer-first durable projection confirms that no canonical relay policy has ever been accepted.';
+      case RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY:
+        return operatorPolicyObservedLive
+          ? 'A live service-signed canonical event explicitly defines an empty policy.'
+          : 'The durable projection contains an explicit service-signed empty policy; this is not missing data.';
+      case RELAY_POLICY_TRUTH_STATES.LOADED_STALE:
+        return 'Showing the last-known-good service-signed projection. Relay synchronization is stale; absence was not treated as empty.';
+      case RELAY_POLICY_TRUTH_STATES.LOADED_CACHED:
+        return 'Showing the durable last-known-good service-signed projection while the live subscription continues.';
+      case RELAY_POLICY_TRUTH_STATES.LOADED_LIVE:
+        return 'Showing the newest validated service-signed event received from the live relay subscription.';
+      default:
+        return 'Waiting for signer-first projection hydration or a validated live relay event.';
+    }
+  }
 
   function listToTextarea(values = []) {
     return Array.isArray(values) ? values.join('\n') : '';
@@ -210,16 +431,39 @@
   }
 
   async function saveOperatorRelayPolicy() {
+    if (operatorPolicyApplyBlocked) {
+      toast.error('Load canonical relay policy or confirm an audited replacement before applying changes');
+      return;
+    }
     operatorPolicySaving = true;
     try {
       const policy = buildRelayPolicyPayload(buildOperatorRelayPolicy());
-      const response = await applyRelayPolicy({ policy });
+      const expectedProjection = operatorPolicyTruthState === RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED
+        ? { availability: 'never-configured' }
+        : operatorPolicyHydrationSucceeded && operatorPolicyProvenance.event_id
+          ? {
+              availability: 'available',
+              event_id: operatorPolicyProvenance.event_id,
+              hash: operatorPolicyProvenance.hash
+            }
+          : null;
+      const replacementConfirmation = operatorPolicyHydrationSucceeded ? null : {
+        confirmed: true,
+        previous_truth_state: RELAY_POLICY_TRUTH_STATES.UNAVAILABLE,
+        reason_code: 'relay_hydration_unavailable',
+        change_reference: replacementChangeReference
+      };
+      const response = await applyRelayPolicy({ policy, expectedProjection, replacementConfirmation });
       const accepted = response?.acceptedRelays?.length || response?.ok?.length || 0;
       operatorPolicyDirty = false;
       pendingPublishedRelayPolicyPayload = policy;
       pendingCanonicalRelayPolicyState = null;
       pendingCanonicalRelayPolicyReceivedAt = '';
-      operatorPolicyHydrationStatus = 'relay policy update accepted; awaiting service confirmation';
+      operatorPolicyHydrationStatus = replacementConfirmation
+        ? 'Audited replacement accepted; awaiting service-signed canonical confirmation'
+        : 'Relay policy update accepted; awaiting service-signed canonical confirmation';
+      replacementConfirmed = false;
+      replacementChangeReference = '';
       toast.success(`Relay policy update accepted${accepted ? ` by ${accepted} relay${accepted === 1 ? '' : 's'}` : ''}`);
     } catch (err) {
       toast.error(err?.message || 'Failed to publish relay policy update');
@@ -251,6 +495,9 @@
     try {
       const parsed = new URL(url);
       if (!parsed.hostname) return { ok: false, message: 'Relay URL must include a hostname.' };
+      if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+        return { ok: false, message: 'Local relay overrides must not contain credentials, query parameters, or fragments.' };
+      }
     } catch {
       return { ok: false, message: 'Relay URL must be a valid ws:// or wss:// URL.' };
     }
@@ -357,9 +604,24 @@
   <p class="section-description">
     Add or remove persistent Bahia relay policy. Durable truth is the service-signed relay settings state; this is not local browser storage.
   </p>
-  <p class="section-description relay-policy-hydration-status">
-    Canonical state: {operatorPolicyHydrationStatus}{operatorPolicyHydratedAt ? ` at ${operatorPolicyHydratedAt}` : ''}{operatorPolicyHydrationError ? ` — ${operatorPolicyHydrationError}` : ''}
-  </p>
+  <div
+    class="relay-policy-truth"
+    class:truth-unavailable={operatorPolicyTruthState === RELAY_POLICY_TRUTH_STATES.UNAVAILABLE}
+    class:truth-stale={operatorPolicyTruthState === RELAY_POLICY_TRUTH_STATES.LOADED_STALE}
+    aria-live="polite"
+  >
+    <strong>{relayPolicyTruthLabel()}</strong>
+    <p>{relayPolicyTruthDescription()}</p>
+    <p class="relay-policy-hydration-status">
+      {operatorPolicyHydrationStatus}{operatorPolicyHydratedAt ? ` at ${operatorPolicyHydratedAt}` : ''}{operatorPolicyHydrationError ? ` — ${operatorPolicyHydrationError}` : ''}
+    </p>
+    <dl class="relay-policy-provenance">
+      <div><dt>Event ID</dt><dd class="monospace">{operatorPolicyProvenance.event_id || 'Not available'}</dd></div>
+      <div><dt>Policy hash</dt><dd class="monospace">{operatorPolicyProvenance.hash || 'Not available'}</dd></div>
+      <div><dt>Source relay</dt><dd class="monospace">{operatorPolicyProvenance.source_relay || 'Not available'}</dd></div>
+      <div><dt>Last sync</dt><dd>{operatorPolicyProvenance.last_sync_at || 'Not available'}</dd></div>
+    </dl>
+  </div>
   {#if pendingCanonicalRelayPolicyState}
     <div class="pending-canonical-policy">
       <p class="section-description">
@@ -408,8 +670,40 @@
     <textarea class="relay-textarea monospace" rows="6" bind:value={relayAdminTargetsInput} oninput={markOperatorRelayPolicyDirty} placeholder="JSON array of managed relay target objects"></textarea>
   </label>
 
+  {#if !operatorPolicyHydrationSucceeded}
+    <div class="replacement-confirmation">
+      {#if operatorPolicyTruthState === RELAY_POLICY_TRUTH_STATES.UNAVAILABLE}
+        <strong>Audited replacement required</strong>
+        <p>Applying this draft may replace canonical truth that could not be hydrated. The signed request and service-authored audit fact will record reason code <code>relay_hydration_unavailable</code> plus the non-secret change reference.</p>
+        <label class="replacement-check">
+          <input type="checkbox" bind:checked={replacementConfirmed} />
+          I explicitly confirm replacement while canonical relay policy is unavailable.
+        </label>
+        <label class="relay-field">
+          <span>Change/incident reference</span>
+          <input
+            class="relay-textarea audit-reference"
+            maxlength="128"
+            pattern="[A-Za-z0-9._:/#-]+"
+            bind:value={replacementChangeReference}
+            placeholder="INC-42 or CHG-2026-08-03"
+          />
+          <span class="field-hint">Use only letters, numbers, dot, underscore, colon, slash, hash, or dash. Do not include credentials, signer URLs, keys, or other secrets.</span>
+        </label>
+      {:else}
+        <strong>Apply disabled while signed truth is loading</strong>
+        <p>Wait for signer-first projection hydration or a validated live event. Audited replacement is available only after the state is definitively unavailable.</p>
+      {/if}
+    </div>
+  {/if}
+
   <div class="relay-actions">
-    <LoadingButton variant="primary" loading={operatorPolicySaving} onclick={saveOperatorRelayPolicy}>Publish Relay Policy Update</LoadingButton>
+    <LoadingButton
+      variant="primary"
+      loading={operatorPolicySaving}
+      disabled={operatorPolicyApplyBlocked}
+      onclick={saveOperatorRelayPolicy}
+    >Publish Relay Policy Update</LoadingButton>
   </div>
 
   <div class="relay-admin-call">
@@ -425,7 +719,7 @@
 <section id="relays" class="settings-section">
   <h2><RelayIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Browser Session Relays</h2>
   <p class="section-description">
-    Local emergency override for this browser session only. Use Operator Relay Policy above for persistent Bahia relay settings.
+    <strong>LOCAL / NONCANONICAL emergency override.</strong> It persists only in this browser profile and never changes service-signed Bahia relay policy. Use Operator Relay Policy above for canonical settings.
   </p>
 
   <div class="relay-list">
@@ -494,6 +788,73 @@
     color: var(--text-muted);
     font-size: 0.875rem;
     margin: 0 0 1rem 0;
+  }
+
+  .relay-policy-truth,
+  .replacement-confirmation {
+    margin-bottom: 1rem;
+    padding: 0.875rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg);
+  }
+
+  .relay-policy-truth.truth-unavailable {
+    border-color: var(--error);
+  }
+
+  .relay-policy-truth.truth-stale {
+    border-color: var(--warning);
+  }
+
+  .relay-policy-truth > p,
+  .replacement-confirmation > p {
+    margin: 0.375rem 0 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+  }
+
+  .relay-policy-hydration-status {
+    margin-bottom: 0.75rem !important;
+  }
+
+  .relay-policy-provenance {
+    display: grid;
+    gap: 0.375rem;
+    margin: 0;
+  }
+
+  .relay-policy-provenance > div {
+    display: grid;
+    grid-template-columns: minmax(6rem, 8rem) minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .relay-policy-provenance dt {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  .relay-policy-provenance dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.75rem;
+  }
+
+  .monospace {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  }
+
+  .replacement-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+    font-size: 0.8125rem;
+  }
+
+  .replacement-confirmation .relay-field {
+    margin-bottom: 0;
   }
 
   .relay-list {
@@ -582,6 +943,11 @@
     color: var(--text-primary);
     resize: vertical;
     font: inherit;
+  }
+
+  .relay-textarea.audit-reference {
+    min-height: 2.5rem;
+    resize: none;
   }
 
   .relay-textarea.monospace {

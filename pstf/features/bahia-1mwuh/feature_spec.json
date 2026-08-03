@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-1mwuh",
+  "fleet_task": "fp-bahia-relay-policy-durability",
+  "fleet_item": "2 of 4",
+  "title": "Expose relay-policy truth states and safe Apply behavior",
+  "scope": "Settings relay-policy UI, signer-first ContextVM truth-state API response, audited unavailable-state replacement evidence, versioned browser-local override migration, docs, and deterministic regressions. Deploy, health, projection backup/export/restore, and upgrade digest pinning are excluded.",
+  "intended_behavior": [
+    "The Settings UI distinguishes validated live truth, cached or stale durable truth, unavailable truth, confirmed never-configured truth, and an explicitly service-signed empty policy.",
+    "Unavailable canonical truth is never rendered as blank or inferred from discovery defaults; safe event ID, policy hash, source relay, and last-sync provenance remain explicit.",
+    "Apply is disabled until canonical hydration succeeds, except after a definitive unavailable result when an operator checks an explicit replacement confirmation and supplies a non-secret change/incident reference.",
+    "Expected projection heads and unavailable-state replacement confirmation remain separate from canonical policy; stale or false claims are rejected, and confirmation is recorded in a correlated service-authored audit event before mutation.",
+    "The browser emergency override is visibly local and noncanonical, migrates compatible legacy storage shapes, and excludes credential-bearing URLs."
+  ],
+  "security": "Mutations remain encrypted signer-first ContextVM. No signer URLs, credentials, keys, query tokens, or secret-bearing parse details are persisted or logged by the touched browser paths."
+}

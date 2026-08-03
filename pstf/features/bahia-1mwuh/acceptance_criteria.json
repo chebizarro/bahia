@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-1mwuh",
+  "criteria": [
+    {"id": "AC1", "statement": "A reload or new browser document renders a signer-first cached/stale PostgreSQL projection with event ID, hash, sanitized source relay, and last-sync instead of blank canonical truth."},
+    {"id": "AC2", "statement": "Loaded-live, loaded-cached/stale, unavailable, never-configured, and explicitly signed empty policy are visually and semantically distinct."},
+    {"id": "AC3", "statement": "Apply is disabled while canonical truth is loading or unavailable; definitive unavailable truth can unlock it only with an explicit checked confirmation and a valid non-secret change/incident reference."},
+    {"id": "AC4", "statement": "The signed Apply request carries an expected projection head or replacement confirmation separately from canonical policy; the service rejects stale heads and false unavailable claims, and publishes correlated service-authored confirmation evidence before canonical mutation."},
+    {"id": "AC5", "statement": "Compatible legacy browser relay override values migrate to a versioned local/noncanonical envelope and credential/query/fragment-bearing values never enter browser storage or logs."}
+  ]
+}

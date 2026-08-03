@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
+
+type failingRelayPolicyPublisher struct{}
+
+func (f *failingRelayPolicyPublisher) Publish(context.Context, nostr.Event) (int, error) {
+	return 0, errors.New("relay publish failed")
+}
 
 type fakeRelayAdminClient struct {
 	calls []relayAdminCallPayload
@@ -33,7 +40,7 @@ func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}
-	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{}, Logger: zap.NewNop()})
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{}, ServicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey), Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
@@ -103,7 +110,7 @@ func TestRelaySettingsApplyDoesNotMutateRuntimeConfig(t *testing.T) {
 		BrowserRelays:   []string{"wss://initial-browser.example"},
 		ContextVMRelays: []string{"wss://initial-contextvm.example"},
 	}}
-	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, ProjectionStore: &memoryRelayPolicyProjectionStore{}, Logger: zap.NewNop()})
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, ProjectionStore: &memoryRelayPolicyProjectionStore{}, ServicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey), Logger: zap.NewNop()})
 	h.publisher = publisher
 	h.signer = signer
 	params := RelayPolicyState{
@@ -160,7 +167,7 @@ func TestRelaySettingsRejectsInvalidPolicyAndDoesNotPublish(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			signer, _ := NewPrivateKeySigner(testServiceKey)
-			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{}, Logger: zap.NewNop()})
+			h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{}, ServicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey), Logger: zap.NewNop()})
 			h.publisher = publisher
 			h.signer = signer
 			_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: []byte(tc.policy)}})
@@ -188,7 +195,7 @@ func TestRelaySettingsGetPolicyReturnsUnavailableWithoutInferringConfigDefaults(
 		t.Fatalf("GetPolicy error: %v", err)
 	}
 	response := result.(map[string]any)
-	if response["status"] != "unavailable" || response["state"] != nil || response["canonical_policy"] != nil {
+	if response["status"] != "unavailable" || response["truth_state"] != "unavailable" || response["state"] != nil || response["canonical_policy"] != nil {
 		t.Fatalf("absence collapsed into policy state: %#v", response)
 	}
 	view := response["server_projection"].(RelayPolicyProjectionView)
@@ -197,6 +204,31 @@ func TestRelaySettingsGetPolicyReturnsUnavailableWithoutInferringConfigDefaults(
 	}
 	if len(publisher.events) != 0 {
 		t.Fatalf("read-only get published events: %d", len(publisher.events))
+	}
+}
+
+func TestRelaySettingsGetPolicyDistinguishesNeverConfigured(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		ProjectionStore: &memoryRelayPolicyProjectionStore{},
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+	})
+
+	result, err := h.GetPolicy(context.Background(), ContextVMRequest{})
+	if err != nil {
+		t.Fatalf("GetPolicy error: %v", err)
+	}
+	response := result.(map[string]any)
+	if response["status"] != "unavailable" || response["truth_state"] != "never-configured" {
+		t.Fatalf("response = %#v, want additive never-configured truth", response)
+	}
+	if response["state"] != nil || response["canonical_policy"] != nil {
+		t.Fatalf("never-configured response synthesized state: %#v", response)
+	}
+	view := response["server_projection"].(RelayPolicyProjectionView)
+	if view.Availability != "never-configured" || view.Freshness != "not-applicable" {
+		t.Fatalf("projection view = %#v", view)
 	}
 }
 
@@ -219,8 +251,8 @@ func TestRelaySettingsGetPolicyReturnsDurableProjectionProvenance(t *testing.T) 
 		t.Fatalf("GetPolicy error: %v", err)
 	}
 	response := result.(map[string]any)
-	if response["status"] != "ok" {
-		t.Fatalf("status = %#v", response["status"])
+	if response["status"] != "ok" || response["truth_state"] != "loaded-cached" {
+		t.Fatalf("response status/truth_state = %#v/%#v", response["status"], response["truth_state"])
 	}
 	policy := response["canonical_policy"].(*RelayPolicyState)
 	if strings.Join(policy.BrowserRelays, ",") != "wss://durable.example" {
@@ -232,6 +264,226 @@ func TestRelaySettingsGetPolicyReturnsDurableProjectionProvenance(t *testing.T) 
 	}
 	if view.SourceRelay != "wss://secondary.example/path" {
 		t.Fatalf("source relay was not sanitized: %q", view.SourceRelay)
+	}
+}
+
+func TestRelaySettingsGetPolicyDistinguishesStaleAndSignedEmpty(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	now := time.Unix(4_000, 0).UTC()
+	store := &memoryRelayPolicyProjectionStore{projection: testProjection(t, servicePubkey, "empty-head", time.Unix(3_000, 0), RelayPolicyState{Schema: RelaySettingsSchema})}
+	store.projection.LastSyncAt = now.Add(-time.Hour)
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		ProjectionStore: store,
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+		Now:             func() time.Time { return now },
+		FreshnessWindow: 5 * time.Minute,
+	})
+
+	result, err := h.GetPolicy(context.Background(), ContextVMRequest{})
+	if err != nil {
+		t.Fatalf("GetPolicy error: %v", err)
+	}
+	response := result.(map[string]any)
+	if response["truth_state"] != "intentionally-empty" {
+		t.Fatalf("truth_state = %#v, want intentionally-empty", response["truth_state"])
+	}
+	view := response["server_projection"].(RelayPolicyProjectionView)
+	if view.Freshness != "stale" {
+		t.Fatalf("freshness = %q, want stale", view.Freshness)
+	}
+
+	store.projection = testProjection(t, servicePubkey, "stale-head", time.Unix(3_100, 0), RelayPolicyState{
+		Schema:        RelaySettingsSchema,
+		BrowserRelays: []string{"wss://stale.example"},
+	})
+	store.projection.LastSyncAt = now.Add(-time.Hour)
+	result, err = h.GetPolicy(context.Background(), ContextVMRequest{})
+	if err != nil {
+		t.Fatalf("GetPolicy stale error: %v", err)
+	}
+	if got := result.(map[string]any)["truth_state"]; got != "loaded-stale" {
+		t.Fatalf("truth_state = %#v, want loaded-stale", got)
+	}
+}
+
+func TestRelaySettingsApplyRequiresExpectedProjectionHead(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	projection := testProjection(t, servicePubkey, "existing-head", time.Unix(3_000, 0), RelayPolicyState{
+		Schema:        RelaySettingsSchema,
+		BrowserRelays: []string{"wss://existing.example"},
+	})
+	store := &memoryRelayPolicyProjectionStore{projection: projection}
+	publisher := &mockEncryptedPublisher{}
+	signer, _ := NewPrivateKeySigner(testServiceKey)
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		Config:          &config.Config{},
+		ProjectionStore: store,
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+	})
+	h.publisher = publisher
+	h.signer = signer
+	request := ContextVMRequest{
+		Event: &nostr.Event{ID: testNostrID("expected-head-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)},
+		RPC:   ContextVMJSONRPCRequest{Params: []byte(`{"browser_relays":["wss://replacement.example"]}`)},
+	}
+
+	if _, err := h.ApplyPolicy(context.Background(), request); err == nil || !strings.Contains(err.Error(), "expected_projection.event_id is required") {
+		t.Fatalf("missing expected head error = %v", err)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("published events before expected-head validation: %d", len(publisher.events))
+	}
+
+	request.RPC.Params = []byte(`{
+		"browser_relays":["wss://replacement.example"],
+		"expected_projection":{"event_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	}`)
+	if _, err := h.ApplyPolicy(context.Background(), request); err == nil || !strings.Contains(err.Error(), "relay policy projection changed") {
+		t.Fatalf("mismatched expected head error = %v", err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"browser_relays": []string{"wss://replacement.example"},
+		"expected_projection": map[string]any{
+			"event_id": projection.EventID,
+			"hash":     projection.PayloadHash,
+		},
+	})
+	request.RPC.Params = raw
+	if _, err := h.ApplyPolicy(context.Background(), request); err != nil {
+		t.Fatalf("matching expected head ApplyPolicy error: %v", err)
+	}
+	if len(publisher.events) == 0 || publisher.events[0].Kind != kinds.CASControlState || !hasTag(publisher.events[0].Tags, "e", request.Event.ID.Hex()) {
+		t.Fatalf("canonical state did not correlate expected-head request: %#v", publisher.events)
+	}
+}
+
+func TestRelaySettingsApplyRecordsAuditedReplacementBeforeCanonicalMutation(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	publisher := &mockEncryptedPublisher{}
+	signer, _ := NewPrivateKeySigner(testServiceKey)
+	confirmedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		Config:          &config.Config{},
+		ProjectionStore: &memoryRelayPolicyProjectionStore{getErr: errors.New("database unavailable")},
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+		Now:             func() time.Time { return confirmedAt },
+	})
+	h.publisher = publisher
+	h.signer = signer
+	requestEvent := &nostr.Event{ID: testNostrID("relay-policy-replacement-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}
+	raw := []byte(`{
+		"browser_relays":["wss://replacement.example"],
+		"replacement_confirmation":{
+			"confirmed":true,
+			"previous_truth_state":"unavailable",
+			"reason_code":"relay_hydration_unavailable",
+			"change_reference":"INC-42"
+		}
+	}`)
+	result, err := h.ApplyPolicy(context.Background(), ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Params: raw},
+	})
+	if err != nil {
+		t.Fatalf("ApplyPolicy error: %v", err)
+	}
+	if result.(map[string]any)["replacement_confirmation_recorded"] != true {
+		t.Fatalf("result = %#v, want recorded confirmation", result)
+	}
+	if len(publisher.events) < 2 || publisher.events[0].Kind != kinds.CASAudit || publisher.events[1].Kind != kinds.CASControlState {
+		t.Fatalf("publication order = %#v, want replacement audit before canonical state", publisher.events)
+	}
+	preAudit := publisher.events[0]
+	if !hasTag(preAudit.Tags, "type", "relay-settings.replacement-confirmed") ||
+		!hasTag(preAudit.Tags, "replacement-confirmed", "true") ||
+		!hasTag(preAudit.Tags, "e", requestEvent.ID.Hex()) {
+		t.Fatalf("pre-mutation audit tags = %#v", preAudit.Tags)
+	}
+	var content struct {
+		ReplacementConfirmation RelayPolicyReplacementConfirmation `json:"replacement_confirmation"`
+	}
+	if err := json.Unmarshal([]byte(preAudit.Content), &content); err != nil {
+		t.Fatalf("decode audit: %v", err)
+	}
+	if content.ReplacementConfirmation.ReasonCode != "relay_hydration_unavailable" ||
+		content.ReplacementConfirmation.ChangeReference != "INC-42" ||
+		content.ReplacementConfirmation.ConfirmedAt != confirmedAt.Format(time.RFC3339) {
+		t.Fatalf("audit confirmation = %#v", content.ReplacementConfirmation)
+	}
+}
+
+func TestRelaySettingsApplyRejectsMissingOrFalseUnavailableConfirmation(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	publisher := &mockEncryptedPublisher{}
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		Config:          &config.Config{},
+		ProjectionStore: &memoryRelayPolicyProjectionStore{getErr: errors.New("database unavailable")},
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+	})
+	h.publisher = publisher
+	_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{ID: testNostrID("missing-confirmation"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)},
+		RPC:   ContextVMJSONRPCRequest{Params: []byte(`{"browser_relays":["wss://replacement.example"]}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "audited replacement confirmation is required") {
+		t.Fatalf("error = %v, want audited replacement requirement", err)
+	}
+
+	readable := testProjection(t, servicePubkey, "readable-head", time.Unix(3_000, 0), RelayPolicyState{
+		Schema:        RelaySettingsSchema,
+		BrowserRelays: []string{"wss://existing.example"},
+	})
+	h.projectionStore = &memoryRelayPolicyProjectionStore{projection: readable}
+	_, err = h.ApplyPolicy(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{ID: testNostrID("false-unavailable"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)},
+		RPC: ContextVMJSONRPCRequest{Params: []byte(`{
+			"browser_relays":["wss://replacement.example"],
+			"replacement_confirmation":{
+				"confirmed":true,
+				"previous_truth_state":"unavailable",
+				"reason_code":"relay_hydration_unavailable",
+				"change_reference":"INC-42"
+			}
+		}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "canonical relay policy is readable") {
+		t.Fatalf("error = %v, want false unavailable claim rejection", err)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("published events for rejected unavailable claims: %d", len(publisher.events))
+	}
+}
+
+func TestRelaySettingsApplyPublishesNoCanonicalStateWhenReplacementAuditFails(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	signer, _ := NewPrivateKeySigner(testServiceKey)
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{
+		Config:          &config.Config{},
+		ProjectionStore: &memoryRelayPolicyProjectionStore{getErr: errors.New("database unavailable")},
+		ServicePubkey:   servicePubkey,
+		Logger:          zap.NewNop(),
+	})
+	h.publisher = &failingRelayPolicyPublisher{}
+	h.signer = signer
+	_, err := h.ApplyPolicy(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{ID: testNostrID("audit-failure"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)},
+		RPC: ContextVMJSONRPCRequest{Params: []byte(`{
+			"browser_relays":["wss://replacement.example"],
+			"replacement_confirmation":{
+				"confirmed":true,
+				"previous_truth_state":"unavailable",
+				"reason_code":"relay_hydration_unavailable",
+				"change_reference":"INC-42"
+			}
+		}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "before relay policy mutation") {
+		t.Fatalf("error = %v, want pre-mutation audit failure", err)
 	}
 }
 

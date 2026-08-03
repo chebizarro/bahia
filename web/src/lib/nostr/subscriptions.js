@@ -8,29 +8,89 @@ const DEFAULT_RELAYS = [
   'wss://relay.sharegap.net'
 ];
 
-// Storage key for user-configured relays
+// Storage key for the explicitly local, noncanonical emergency override.
 const RELAY_CONFIG_KEY = 'bahia_nostr_relays';
+export const RELAY_OVERRIDE_STORAGE_SCHEMA = 'bahia.browser-relay-override.v2';
 
+function normalizeLocalRelayOverride(values) {
+  if (!Array.isArray(values)) return [];
+  const normalized = [];
+  const seen = new Set();
+  for (const raw of values) {
+    try {
+      const url = new URL(String(raw || '').trim());
+      if (!['ws:', 'wss:'].includes(url.protocol)) continue;
+      // Browser storage must never retain credential-bearing relay URLs.
+      if (url.username || url.password || url.search || url.hash) continue;
+      const value = url.toString();
+      if (!seen.has(value)) {
+        seen.add(value);
+        normalized.push(value);
+      }
+    } catch {
+      // Invalid legacy entries are incompatible and intentionally not migrated.
+    }
+  }
+  return normalized;
+}
+
+function relayOverrideEnvelope(relays) {
+  return {
+    schema: RELAY_OVERRIDE_STORAGE_SCHEMA,
+    scope: 'browser-local-noncanonical',
+    relays: normalizeLocalRelayOverride(relays)
+  };
+}
+
+function parseRelayOverride(raw) {
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) {
+    return { relays: normalizeLocalRelayOverride(parsed), migrationRequired: true };
+  }
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.relays)) {
+    const relays = normalizeLocalRelayOverride(parsed.relays);
+    return {
+      relays,
+      migrationRequired: parsed.schema !== RELAY_OVERRIDE_STORAGE_SCHEMA
+        || parsed.scope !== 'browser-local-noncanonical'
+        || JSON.stringify(parsed.relays) !== JSON.stringify(relays)
+    };
+  }
+  return null;
+}
 
 /**
- * Get configured relays from localStorage or return defaults
+ * Get the local, noncanonical emergency override or return defaults. Legacy
+ * arrays and compatible object envelopes are migrated in place without
+ * changing their safe relay values.
  */
 export function getConfiguredRelays() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return DEFAULT_RELAYS;
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return [...DEFAULT_RELAYS];
 
   try {
     const stored = localStorage.getItem(RELAY_CONFIG_KEY);
     if (stored !== null) {
-      const relays = JSON.parse(stored);
-      if (Array.isArray(relays)) {
-        return relays;
+      const decoded = parseRelayOverride(stored);
+      if (decoded) {
+        if (decoded.migrationRequired) {
+          localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relayOverrideEnvelope(decoded.relays)));
+        }
+        return decoded.relays;
       }
+      localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relayOverrideEnvelope([])));
+      return [];
     }
-  } catch (e) {
-    console.error('[nostr] Failed to load relay config:', e);
+  } catch {
+    // Do not log parse details: a malformed legacy value could contain secrets.
+    try {
+      localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relayOverrideEnvelope([])));
+      return [];
+    } catch {
+      console.error('[nostr] Failed to scrub local emergency relay override');
+    }
   }
 
-  return DEFAULT_RELAYS;
+  return [...DEFAULT_RELAYS];
 }
 
 export function hasSavedRelayConfig() {
@@ -41,19 +101,20 @@ export function hasSavedRelayConfig() {
 }
 
 /**
- * Save relay configuration to localStorage
+ * Save the explicitly local, noncanonical emergency override. Credential,
+ * query, and fragment-bearing URLs are excluded from browser persistence.
  */
 export function saveRelayConfig(relays) {
   if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.setItem !== 'function') return;
 
   try {
     if (Array.isArray(relays)) {
-      localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relays));
+      localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relayOverrideEnvelope(relays)));
     } else {
       localStorage.removeItem(RELAY_CONFIG_KEY);
     }
-  } catch (e) {
-    console.error('[nostr] Failed to save relay config:', e);
+  } catch {
+    console.error('[nostr] Failed to save local emergency relay override');
   }
 }
 

@@ -27,7 +27,8 @@ export async function installE2EMocks(
     sseEvents = [],
     nostrEvents = [],
     systemInfo = null,
-    routeRoleRequirements = null
+    routeRoleRequirements = null,
+    contextVMOperations = []
   } = {}
 ) {
   const effectiveSystemInfo = systemInfo || {
@@ -39,7 +40,7 @@ export async function installE2EMocks(
       legacy_sse: !(Array.isArray(nostrEvents) && nostrEvents.length > 0)
     }
   };
-  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements }) => {
+  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
@@ -94,6 +95,8 @@ export async function installE2EMocks(
       delete window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS;
     }
     sessionStorage.removeItem('bahia_dashboard_pending_deployments');
+    window.__BAHIA_E2E_CONTEXTVM_OPERATIONS = (contextVMOperations || []).map((entry) => ({ ...entry }));
+    window.__BAHIA_E2E_CONTEXTVM_REQUESTS = [];
 
     if (authenticated) {
       localStorage.removeItem('bahia_token');
@@ -243,6 +246,23 @@ export async function installE2EMocks(
         method: entry.operation || entry.method,
         params: entry.payload || entry.params || {}
       };
+    }
+
+    function handleQueuedContextVMRequest(event) {
+      let envelope = decodeEncryptedContextVMEnvelope(event);
+      let entry = null;
+      if (envelope) {
+        const operation = String(envelope.method || envelope.operation || '');
+        entry = takeQueuedContextVMOperation((candidate) => String(candidate?.operation || candidate?.method || '') === operation);
+      } else if (event?.kind === 1059) {
+        entry = takeQueuedContextVMOperation();
+        envelope = queuedEnvelopeFromOperation(event, entry);
+      }
+      if (!entry || !envelope) return null;
+      const operation = String(envelope.method || envelope.operation || '');
+      const params = { ...(envelope.params || envelope.payload || {}) };
+      window.__BAHIA_E2E_CONTEXTVM_REQUESTS.push({ operation, params });
+      return encryptedContextVMResponse(event, envelope, entry.response ?? entry.result ?? {});
     }
 
     function encryptedContextVMResponse(event, envelope, payload, tags = []) {
@@ -502,7 +522,9 @@ export async function installE2EMocks(
         } else if (Array.isArray(message) && message[0] === 'EVENT') {
           const event = message[1];
           persistMockNostrEvent(event);
-          const encryptedResult = handleEncryptedServiceSecretRequest(event) || handleEncryptedSBOMRequest(event);
+          const encryptedResult = handleEncryptedServiceSecretRequest(event)
+            || handleEncryptedSBOMRequest(event)
+            || handleQueuedContextVMRequest(event);
           if (encryptedResult) {
             persistMockNostrEvent(encryptedResult);
             setTimeout(() => this.emitEvent(encryptedResult), 0);
@@ -598,7 +620,16 @@ export async function installE2EMocks(
     }
 
     window.EventSource = MockEventSource;
-  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents, systemInfo: effectiveSystemInfo, routeRoleRequirements });
+  }, {
+    authenticated,
+    extension,
+    pubkey: TEST_PUBKEY,
+    sseEvents,
+    nostrEvents,
+    systemInfo: effectiveSystemInfo,
+    routeRoleRequirements,
+    contextVMOperations
+  });
 }
 
 export async function seedSseEvents(page, events) {

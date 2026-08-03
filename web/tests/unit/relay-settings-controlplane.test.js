@@ -47,6 +47,52 @@ describe('relay settings control-plane helpers', () => {
     });
   });
 
+  it('includes explicit unavailable-state replacement confirmation in the encrypted request', async () => {
+    await relaySettings.applyRelayPolicy({
+      policy: { browser_relays: ['wss://replacement.example'] },
+      replacementConfirmation: {
+        confirmed: true,
+        previous_truth_state: 'unavailable',
+        reason_code: 'relay_hydration_unavailable',
+        change_reference: 'INC-42'
+      }
+    });
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'settings/relay-policy.apply',
+      payload: expect.objectContaining({
+        browser_relays: ['wss://replacement.example'],
+        replacement_confirmation: {
+          confirmed: true,
+          previous_truth_state: 'unavailable',
+          reason_code: 'relay_hydration_unavailable',
+          change_reference: 'INC-42'
+        }
+      }),
+      tags: [['domain', 'relay-settings'], ['action', 'relay_policy_apply']],
+      signal: undefined
+    });
+  });
+
+  it('includes the expected durable head in ordinary policy updates', async () => {
+    await relaySettings.applyRelayPolicy({
+      policy: { browser_relays: ['wss://replacement.example'] },
+      expectedProjection: {
+        availability: 'available',
+        event_id: 'a'.repeat(64),
+        hash: 'b'.repeat(64)
+      }
+    });
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        expected_projection: {
+          availability: 'available',
+          event_id: 'a'.repeat(64),
+          hash: 'b'.repeat(64)
+        }
+      })
+    }));
+  });
+
   it('sends NIP-86 admin calls through the relay-admin ContextVM method', async () => {
     await relaySettings.callRelayAdmin({ targetRef: 'sidecar', method: 'supportedmethods' });
     expect(requestEncryptedResultMock).toHaveBeenCalledWith({
@@ -55,6 +101,90 @@ describe('relay settings control-plane helpers', () => {
       tags: [['domain', 'relay-settings'], ['action', 'relay_admin_call'], ['target', 'sidecar']],
       signal: undefined
     });
+  });
+
+  it('normalizes projection truth states without collapsing absence into empty policy', () => {
+    expect(relaySettings.normalizeRelayPolicyProjectionResponse({
+      result: {
+        status: 'unavailable',
+        truth_state: 'unavailable',
+        canonical_policy: null,
+        server_projection: { availability: 'unavailable', freshness: 'unavailable' }
+      }
+    })).toMatchObject({ truthState: 'unavailable', policy: null });
+
+    expect(relaySettings.normalizeRelayPolicyProjectionResponse({
+      result: {
+        request_event_id: 'request-1',
+        status: 'success',
+        payload: {
+          status: 'never-configured',
+          truth_state: 'never-configured',
+          canonical_policy: null,
+          server_projection: { availability: 'never-configured', freshness: 'not-applicable' }
+        }
+      }
+    })).toMatchObject({ truthState: 'never-configured', policy: null });
+
+    expect(relaySettings.normalizeRelayPolicyProjectionResponse({
+      status: 'ok',
+      truth_state: 'loaded-stale',
+      canonical_policy: { browser_relays: ['wss://cached.example'] },
+      server_projection: {
+        event_id: 'a'.repeat(64),
+        event_created_at: '2026-08-03T00:00:00Z',
+        hash: 'b'.repeat(64),
+        source_relay: 'wss://relay.example/path?credential=redacted',
+        last_sync_at: '2026-08-03T01:02:03Z',
+        freshness: 'stale'
+      }
+    })).toEqual({
+      truthState: 'loaded-stale',
+      policy: expect.objectContaining({ browser_relays: ['wss://cached.example'] }),
+      provenance: {
+        event_id: 'a'.repeat(64),
+        event_created_at: '2026-08-03T00:00:00Z',
+        hash: 'b'.repeat(64),
+        source_relay: 'wss://relay.example/path',
+        last_sync_at: '2026-08-03T01:02:03Z',
+        freshness: 'stale',
+        source: ''
+      }
+    });
+
+    expect(relaySettings.normalizeRelayPolicyProjectionResponse({
+      status: 'ok',
+      truth_state: 'intentionally-empty',
+      canonical_policy: {},
+      server_projection: { freshness: 'fresh' }
+    })).toMatchObject({ truthState: 'intentionally-empty', policy: expect.any(Object) });
+  });
+
+  it('classifies validated live signed-empty separately from unavailable', () => {
+    const live = relaySettings.liveRelayPolicyTruth({}, {
+      event: { id: 'c'.repeat(64) },
+      relay: 'wss://live.example/path?ignored=value',
+      receivedAt: '2026-08-03T02:03:04Z'
+    });
+    expect(live).toMatchObject({
+      truthState: 'intentionally-empty',
+      provenance: {
+        event_id: 'c'.repeat(64),
+        source_relay: 'wss://live.example/path',
+        last_sync_at: '2026-08-03T02:03:04Z',
+        freshness: 'live'
+      }
+    });
+  });
+
+  it('orders cached and live candidates by replaceable-event semantics', () => {
+    const newer = { provenance: { event_created_at: '2026-08-03T00:00:02Z', event_id: 'b'.repeat(64) } };
+    const older = { provenance: { event_created_at: '2026-08-03T00:00:01Z', event_id: 'a'.repeat(64) } };
+    const equalTimeLowerID = { provenance: { event_created_at: '2026-08-03T00:00:02Z', event_id: 'a'.repeat(64) } };
+
+    expect(relaySettings.compareRelayPolicyTruthCandidates(newer, older)).toBe(1);
+    expect(relaySettings.compareRelayPolicyTruthCandidates(older, newer)).toBe(-1);
+    expect(relaySettings.compareRelayPolicyTruthCandidates(equalTimeLowerID, newer)).toBe(1);
   });
 
   it('builds a scoped canonical relay-settings read-model filter', () => {

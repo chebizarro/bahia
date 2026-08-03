@@ -91,6 +91,29 @@ type RelayPolicyProjectionView struct {
 	Freshness       string `json:"freshness"`
 }
 
+type relayPolicyApplyPayload struct {
+	RelayPolicyState
+	ExpectedProjection      *RelayPolicyExpectedProjection      `json:"expected_projection,omitempty"`
+	ReplacementConfirmation *RelayPolicyReplacementConfirmation `json:"replacement_confirmation,omitempty"`
+}
+
+type RelayPolicyExpectedProjection struct {
+	Availability string `json:"availability,omitempty"`
+	EventID      string `json:"event_id,omitempty"`
+	Hash         string `json:"hash,omitempty"`
+}
+
+// RelayPolicyReplacementConfirmation is operator-signed evidence that an Apply
+// performed without readable canonical truth was deliberate. It is emitted in
+// the service-authored audit fact and is never folded into canonical policy.
+type RelayPolicyReplacementConfirmation struct {
+	Confirmed          bool   `json:"confirmed"`
+	PreviousTruthState string `json:"previous_truth_state"`
+	ReasonCode         string `json:"reason_code"`
+	ChangeReference    string `json:"change_reference"`
+	ConfirmedAt        string `json:"confirmed_at"`
+}
+
 type RelayPolicyDMRelayList struct {
 	Enabled  bool     `json:"enabled"`
 	Feature  string   `json:"feature"`
@@ -169,6 +192,7 @@ func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequ
 	if h.projectionStore == nil || h.servicePubkey == "" {
 		return map[string]any{
 			"status":            "unavailable",
+			"truth_state":       "unavailable",
 			"state":             nil,
 			"canonical_policy":  nil,
 			"server_projection": unavailable,
@@ -176,14 +200,25 @@ func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequ
 	}
 	projection, err := h.projectionStore.Get(ctx, h.servicePubkey)
 	if err != nil {
-		return nil, fmt.Errorf("read durable relay policy projection: %w", err)
-	}
-	if projection == nil {
+		h.logger.Warn("durable relay policy projection read unavailable", zap.Error(err))
 		return map[string]any{
 			"status":            "unavailable",
+			"truth_state":       "unavailable",
 			"state":             nil,
 			"canonical_policy":  nil,
 			"server_projection": unavailable,
+		}, nil
+	}
+	if projection == nil {
+		neverConfigured := unavailable
+		neverConfigured.Availability = "never-configured"
+		neverConfigured.Freshness = "not-applicable"
+		return map[string]any{
+			"status":            "unavailable",
+			"truth_state":       "never-configured",
+			"state":             nil,
+			"canonical_policy":  nil,
+			"server_projection": neverConfigured,
 		}, nil
 	}
 	state, err := relayPolicyStateFromProjection(projection, h.servicePubkey)
@@ -191,8 +226,16 @@ func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequ
 		return nil, fmt.Errorf("validate durable relay policy projection: %w", err)
 	}
 	view := h.projectionView(*projection)
+	truthState := "loaded-cached"
+	if view.Freshness == "stale" {
+		truthState = "loaded-stale"
+	}
+	if relayPolicyIsIntentionallyEmpty(*state) {
+		truthState = "intentionally-empty"
+	}
 	return map[string]any{
 		"status":            "ok",
+		"truth_state":       truthState,
 		"state":             state,
 		"canonical_policy":  state,
 		"server_projection": view,
@@ -229,9 +272,17 @@ func (h *RelaySettingsHandlers) ApplyPolicy(ctx context.Context, req ContextVMRe
 	if h.cfg == nil {
 		return nil, fmt.Errorf("relay settings config is not available")
 	}
-	var state RelayPolicyState
-	if err := json.Unmarshal(req.RPC.Params, &state); err != nil {
+	var payload relayPolicyApplyPayload
+	if err := json.Unmarshal(req.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("decode relay policy settings: %w", err)
+	}
+	state := payload.RelayPolicyState
+	confirmation, err := h.normalizeReplacementConfirmation(payload.ReplacementConfirmation)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.authorizePolicyReplacement(ctx, payload.ExpectedProjection, confirmation); err != nil {
+		return nil, err
 	}
 	state.Schema = RelaySettingsSchema
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -239,16 +290,25 @@ func (h *RelaySettingsHandlers) ApplyPolicy(ctx context.Context, req ContextVMRe
 	if err := normalizeAndValidateRelayPolicy(&state); err != nil {
 		return nil, err
 	}
+	if confirmation != nil {
+		if err := h.publishAudit(ctx, req, state, "relay-settings.replacement-confirmed", confirmation); err != nil {
+			return nil, fmt.Errorf("publish replacement confirmation before relay policy mutation: %w", err)
+		}
+	}
 	if err := h.publishState(ctx, req, state, "updated"); err != nil {
 		return nil, err
 	}
 	if err := h.publishRelayTopology(ctx, req, state); err != nil {
 		return nil, err
 	}
-	if err := h.publishAudit(ctx, req, state, "relay-settings.updated"); err != nil {
+	if err := h.publishAudit(ctx, req, state, "relay-settings.updated", confirmation); err != nil {
 		return nil, err
 	}
-	return map[string]any{"status": "accepted", "state": state}, nil
+	return map[string]any{
+		"status":                            "accepted",
+		"state":                             state,
+		"replacement_confirmation_recorded": confirmation != nil,
+	}, nil
 }
 
 func (h *RelaySettingsHandlers) CallRelayAdmin(ctx context.Context, req ContextVMRequest) (any, error) {
@@ -321,7 +381,11 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 	if err != nil {
 		return err
 	}
-	ev := &nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", RelaySettingsDTag}, {"domain", RelaySettingsDomain}, {"entity", "relay-policy"}, {"schema", RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey.Hex()}}, Content: string(content)}
+	tags := nostr.Tags{{"d", RelaySettingsDTag}, {"domain", RelaySettingsDomain}, {"entity", "relay-policy"}, {"schema", RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey.Hex()}}
+	if req.Event.ID != (nostr.ID{}) {
+		tags = append(tags, nostr.Tag{"e", req.Event.ID.Hex(), "", "request"})
+	}
+	ev := &nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign relay settings state: %w", err)
 	}
@@ -401,16 +465,28 @@ func (h *RelaySettingsHandlers) publishDMRelayList(ctx context.Context, req Cont
 	return nil
 }
 
-func (h *RelaySettingsHandlers) publishAudit(ctx context.Context, req ContextVMRequest, state RelayPolicyState, eventType string) error {
+func (h *RelaySettingsHandlers) publishAudit(ctx context.Context, req ContextVMRequest, state RelayPolicyState, eventType string, confirmations ...*RelayPolicyReplacementConfirmation) error {
 	publisher, signer, err := h.publisherForRequest(req)
 	if err != nil {
 		return err
 	}
-	content, err := json.Marshal(map[string]any{"schema": RelaySettingsSchema, "type": eventType, "state": state})
+	auditContent := map[string]any{"schema": RelaySettingsSchema, "type": eventType, "state": state}
+	tags := nostr.Tags{{"domain", RelaySettingsDomain}, {"type", eventType}, {"schema", "bahia.audit.v1"}, {"p", req.Event.PubKey.Hex()}}
+	if req.Event.ID != (nostr.ID{}) {
+		tags = append(tags, nostr.Tag{"e", req.Event.ID.Hex(), "", "request"})
+	}
+	if len(confirmations) > 0 && confirmations[0] != nil {
+		auditContent["replacement_confirmation"] = confirmations[0]
+		tags = append(tags,
+			nostr.Tag{"replacement-confirmed", "true"},
+			nostr.Tag{"previous-truth-state", confirmations[0].PreviousTruthState},
+		)
+	}
+	content, err := json.Marshal(auditContent)
 	if err != nil {
 		return err
 	}
-	ev := &nostr.Event{Kind: kinds.CASAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"domain", RelaySettingsDomain}, {"type", eventType}, {"schema", "bahia.audit.v1"}, {"p", req.Event.PubKey.Hex()}}, Content: string(content)}
+	ev := &nostr.Event{Kind: kinds.CASAudit, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign relay settings audit: %w", err)
 	}
@@ -431,6 +507,92 @@ func (h *RelaySettingsHandlers) publisherForRequest(req ContextVMRequest) (Nostr
 		return nil, nil, fmt.Errorf("relay settings signer is not configured")
 	}
 	return h.publisher, h.signer, nil
+}
+
+func (h *RelaySettingsHandlers) normalizeReplacementConfirmation(confirmation *RelayPolicyReplacementConfirmation) (*RelayPolicyReplacementConfirmation, error) {
+	if confirmation == nil {
+		return nil, nil
+	}
+	confirmation.PreviousTruthState = strings.TrimSpace(confirmation.PreviousTruthState)
+	confirmation.ReasonCode = strings.TrimSpace(confirmation.ReasonCode)
+	confirmation.ChangeReference = strings.TrimSpace(confirmation.ChangeReference)
+	if !confirmation.Confirmed {
+		return nil, fmt.Errorf("replacement_confirmation.confirmed must be true")
+	}
+	if confirmation.PreviousTruthState != "unavailable" {
+		return nil, fmt.Errorf("replacement_confirmation.previous_truth_state must be unavailable")
+	}
+	if confirmation.ReasonCode != "relay_hydration_unavailable" {
+		return nil, fmt.Errorf("replacement_confirmation.reason_code must be relay_hydration_unavailable")
+	}
+	if !validRelayPolicyChangeReference(confirmation.ChangeReference) {
+		return nil, fmt.Errorf("replacement_confirmation.change_reference must be 1-128 non-secret reference characters")
+	}
+	confirmation.ConfirmedAt = h.now().UTC().Format(time.RFC3339)
+	return confirmation, nil
+}
+
+func validRelayPolicyChangeReference(reference string) bool {
+	if len(reference) == 0 || len(reference) > 128 {
+		return false
+	}
+	for _, r := range reference {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case strings.ContainsRune("._:/#-", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (h *RelaySettingsHandlers) authorizePolicyReplacement(ctx context.Context, expected *RelayPolicyExpectedProjection, confirmation *RelayPolicyReplacementConfirmation) error {
+	if h.servicePubkey == "" {
+		return fmt.Errorf("durable relay policy projection author is unavailable")
+	}
+	projection, err := h.projectionStore.Get(ctx, h.servicePubkey)
+	if err != nil {
+		if confirmation == nil {
+			return fmt.Errorf("canonical relay policy is unavailable; audited replacement confirmation is required: %w", err)
+		}
+		return nil
+	}
+	if projection == nil {
+		if confirmation != nil {
+			return fmt.Errorf("replacement confirmation claimed unavailable truth, but relay policy is confirmed never-configured")
+		}
+		if expected != nil && expected.Availability != "" && expected.Availability != "never-configured" {
+			return fmt.Errorf("relay policy projection changed: expected %s, found never-configured", expected.Availability)
+		}
+		return nil
+	}
+	if confirmation != nil {
+		return fmt.Errorf("replacement confirmation claimed unavailable truth, but canonical relay policy is readable")
+	}
+	if expected == nil || strings.TrimSpace(expected.EventID) == "" {
+		return fmt.Errorf("expected_projection.event_id is required when canonical relay policy exists")
+	}
+	if !strings.EqualFold(strings.TrimSpace(expected.EventID), projection.EventID) {
+		return fmt.Errorf("relay policy projection changed: expected event %s", strings.TrimSpace(expected.EventID))
+	}
+	if hash := strings.TrimSpace(expected.Hash); hash != "" && !strings.EqualFold(hash, projection.PayloadHash) {
+		return fmt.Errorf("relay policy projection changed: expected hash %s", hash)
+	}
+	return nil
+}
+
+func relayPolicyIsIntentionallyEmpty(state RelayPolicyState) bool {
+	return len(state.BrowserRelays) == 0 &&
+		len(state.ContextVMRelays) == 0 &&
+		len(state.ServiceRelays) == 0 &&
+		len(state.NIP34Relays) == 0 &&
+		len(state.TrustedRelayMonitorPubkeys) == 0 &&
+		len(state.DMRelayLists) == 0 &&
+		!state.RelayAdministration.Enabled &&
+		len(state.RelayAdministration.Targets) == 0
 }
 
 func normalizeAndValidateRelayPolicy(state *RelayPolicyState) error {

@@ -14,6 +14,16 @@ export const RELAY_SETTINGS_OPERATIONS = {
   ADMIN_CALL: 'settings/relay-admin.call'
 };
 
+export const RELAY_POLICY_TRUTH_STATES = Object.freeze({
+  LOADING: 'loading',
+  LOADED_LIVE: 'loaded-live',
+  LOADED_CACHED: 'loaded-cached',
+  LOADED_STALE: 'loaded-stale',
+  UNAVAILABLE: 'unavailable',
+  NEVER_CONFIGURED: 'never-configured',
+  INTENTIONALLY_EMPTY: 'intentionally-empty'
+});
+
 function normalizeRelayArray(values = []) {
   if (!Array.isArray(values)) return [];
   const seen = new Set();
@@ -67,6 +77,109 @@ export function buildRelayPolicyPayload(policy = {}) {
       }))
     }
   };
+}
+
+export function isRelayPolicyIntentionallyEmpty(policy = {}) {
+  const normalized = buildRelayPolicyPayload(policy);
+  return normalized.browser_relays.length === 0
+    && normalized.contextvm_relays.length === 0
+    && normalized.service_relays.length === 0
+    && normalized.nip34_relays.length === 0
+    && normalized.trusted_relay_monitor_pubkeys.length === 0
+    && normalized.dm_relay_lists.length === 0
+    && !normalized.relay_administration.enabled
+    && normalized.relay_administration.targets.length === 0;
+}
+
+function safeProvenanceToken(value) {
+  const token = String(value || '').trim();
+  return /^[a-zA-Z0-9:_-]{1,256}$/.test(token) ? token : '';
+}
+
+function safeProvenanceRelay(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password) return '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+export function normalizeRelayPolicyProjectionResponse(response = {}) {
+  let payload = response?.result && typeof response.result === 'object' ? response.result : response;
+  // Accept both JSON-RPC v2 results and the correlated legacy ContextVM
+  // response envelope used during wire-version migration.
+  if (payload?.payload && typeof payload.payload === 'object') {
+    payload = payload.payload;
+  }
+  const projection = payload?.server_projection && typeof payload.server_projection === 'object'
+    ? payload.server_projection
+    : {};
+  const policy = payload?.canonical_policy || payload?.state || null;
+  const status = String(payload?.status || '').trim();
+  const advertisedTruth = String(payload?.truth_state || '').trim();
+
+  let truthState = RELAY_POLICY_TRUTH_STATES.UNAVAILABLE;
+  if (advertisedTruth === RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED || status === 'never-configured') {
+    truthState = RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED;
+  } else if (policy) {
+    if (isRelayPolicyIntentionallyEmpty(policy)) {
+      truthState = RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY;
+    } else if (projection.freshness === 'stale' || advertisedTruth === RELAY_POLICY_TRUTH_STATES.LOADED_STALE) {
+      truthState = RELAY_POLICY_TRUTH_STATES.LOADED_STALE;
+    } else {
+      truthState = RELAY_POLICY_TRUTH_STATES.LOADED_CACHED;
+    }
+  }
+
+  return {
+    truthState,
+    policy: policy ? buildRelayPolicyPayload(policy) : null,
+    provenance: {
+      event_id: safeProvenanceToken(projection.event_id),
+      event_created_at: String(projection.event_created_at || '').trim(),
+      hash: safeProvenanceToken(projection.hash),
+      source_relay: safeProvenanceRelay(projection.source_relay),
+      last_sync_at: String(projection.last_sync_at || '').trim(),
+      freshness: String(projection.freshness || '').trim(),
+      source: String(projection.source || '').trim()
+    }
+  };
+}
+
+export function liveRelayPolicyTruth(state, { event, relay, receivedAt = new Date().toISOString() } = {}) {
+  return {
+    truthState: isRelayPolicyIntentionallyEmpty(state)
+      ? RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY
+      : RELAY_POLICY_TRUTH_STATES.LOADED_LIVE,
+    policy: buildRelayPolicyPayload(state),
+    provenance: {
+      event_id: safeProvenanceToken(event?.id),
+      event_created_at: Number.isFinite(Number(event?.created_at))
+        ? new Date(Number(event.created_at) * 1000).toISOString()
+        : '',
+      hash: '',
+      source_relay: safeProvenanceRelay(relay),
+      last_sync_at: receivedAt,
+      freshness: 'live',
+      source: 'canonical_relay_event'
+    }
+  };
+}
+
+export function compareRelayPolicyTruthCandidates(candidate, current) {
+  if (!current) return 1;
+  if (!candidate) return -1;
+  const candidateCreated = Date.parse(candidate.provenance?.event_created_at || '') || 0;
+  const currentCreated = Date.parse(current.provenance?.event_created_at || '') || 0;
+  if (candidateCreated !== currentCreated) return candidateCreated > currentCreated ? 1 : -1;
+  const candidateID = String(candidate.provenance?.event_id || '');
+  const currentID = String(current.provenance?.event_id || '');
+  if (!candidateID || !currentID || candidateID === currentID) return 0;
+  return candidateID < currentID ? 1 : -1;
 }
 
 export function relayPolicyReadModelFilter({ servicePubkey, since, limit = 10 } = {}) {
@@ -162,10 +275,26 @@ export async function getRelayPolicy({ signal } = {}) {
   });
 }
 
-export async function applyRelayPolicy({ policy, signal } = {}) {
+export async function applyRelayPolicy({ policy, expectedProjection = null, replacementConfirmation = null, signal } = {}) {
+  const payload = buildRelayPolicyPayload(policy);
+  if (expectedProjection) {
+    payload.expected_projection = {
+      availability: String(expectedProjection.availability || '').trim(),
+      event_id: String(expectedProjection.event_id || '').trim(),
+      hash: String(expectedProjection.hash || '').trim()
+    };
+  }
+  if (replacementConfirmation) {
+    payload.replacement_confirmation = {
+      confirmed: replacementConfirmation.confirmed === true,
+      previous_truth_state: String(replacementConfirmation.previous_truth_state || '').trim(),
+      reason_code: String(replacementConfirmation.reason_code || '').trim(),
+      change_reference: String(replacementConfirmation.change_reference || '').trim()
+    };
+  }
   return requestEncryptedResult({
     operation: RELAY_SETTINGS_OPERATIONS.APPLY,
-    payload: buildRelayPolicyPayload(policy),
+    payload,
     tags: [['domain', 'relay-settings'], ['action', 'relay_policy_apply']],
     signal
   });
