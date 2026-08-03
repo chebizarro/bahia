@@ -300,19 +300,22 @@ describe('Nostr system discovery store', () => {
     expect(poolClientHarness.instance).toBeNull();
   });
 
-  it('fails closed when EOSE completes without a trusted system discovery event', async () => {
+  it('treats EOSE without discovery as a normal empty metadata state', async () => {
     poolClientHarness.events = [
       systemDiscovery({ pubkey: otherPubkey }),
       relaySet('bahia-browser-v1', ['wss://relay.example'])
     ];
 
-    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('No trusted Bahia system discovery event received before EOSE');
+    await expect(store.discoverSystemInfo({ force: true })).resolves.toBeNull();
+    expect(store.discoveryState.error).toBeNull();
   });
 
-  it('fails closed when EOSE completes without a browser relay set', async () => {
+  it('accepts discovery metadata without a browser relay set', async () => {
     poolClientHarness.events = [systemDiscovery()];
 
-    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('No trusted Bahia browser relay set received before EOSE');
+    await expect(store.discoverSystemInfo({ force: true })).resolves.toMatchObject({
+      nostr: { browser_relays: [], contextvm_relays: [] }
+    });
   });
 
   it('applies latest-wins replaceable semantics for discovery and relay sets', () => {

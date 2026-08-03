@@ -15,6 +15,7 @@ const DISCOVERY_DEADLINE_MS = 10_000;
 
 export const discoveryState = $state({
   seed: null,
+  info: null,
   events: [],
   relaySets: {},
   loading: false,
@@ -25,6 +26,24 @@ export const discoveryState = $state({
 let discoveryPromise = null;
 let bootstrapClient = null;
 let discoveryUnsubscribe = null;
+const discoverySubscribers = new Set();
+
+export function subscribeDiscoveryInfo(fn) {
+  discoverySubscribers.add(fn);
+  fn(discoveryState.info);
+  return () => discoverySubscribers.delete(fn);
+}
+
+function publishDiscoveryInfo(seed, normalized, events) {
+  if (!normalized) return;
+  discoveryState.info = normalized;
+  discoveryState.events = [...events];
+  discoveryState.relaySets = normalized._discovery?.relay_sets || {};
+  discoveryState.loadedAt = new Date().toISOString();
+  discoveryState.error = null;
+  persistDiscoveryCache(seed, normalized, events);
+  for (const subscriber of discoverySubscribers) subscriber(normalized);
+}
 
 function splitList(value) {
   if (!value || typeof value !== 'string') return [];
@@ -88,7 +107,7 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
     .filter((event) => event.kind === KINDS.BAHIA_SYSTEM_DISCOVERY)
     .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
 
-  if (!discoveryEvent) throw new Error('No trusted Bahia system discovery event received before EOSE');
+  if (!discoveryEvent) return null;
 
   const payload = parseJsonContent(discoveryEvent, null);
   if (!payload || payload.schema !== DISCOVERY_SCHEMA) {
@@ -105,9 +124,6 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
   const nip34Relays = Array.isArray(payload.nostr?.nip34_relays)
     ? Array.from(new Set(payload.nostr.nip34_relays.map(normalizeRelayUrl).filter(Boolean)))
     : [];
-  if (browserRelays.length === 0) {
-    throw new Error('No trusted Bahia browser relay set received before EOSE');
-  }
 
   const advertisedContextVMRelays = relaySets[CONTEXTVM_RELAY_SET_DTAG] || [];
   const contextVMFallback = advertisedContextVMRelays.length === 0;
@@ -159,6 +175,7 @@ export function resetDiscoveryStore() {
   bootstrapClient = null;
   discoveryPromise = null;
   discoveryState.seed = null;
+  discoveryState.info = null;
   discoveryState.events = [];
   discoveryState.relaySets = {};
   discoveryState.loading = false;
@@ -211,7 +228,7 @@ function persistDiscoveryCache(seed, normalized, events) {
 
 export async function discoverSystemInfo({ force = false } = {}) {
   if (!browser) return null;
-  if (discoveryState.events.length > 0 && !force) return normalizeDiscoveryEvents(discoveryState.events, discoveryState.seed?.service_pubkeys || []);
+  if (discoveryState.info && !force) return discoveryState.info;
   if (discoveryPromise && !force) return discoveryPromise;
 
   discoveryState.loading = true;
@@ -226,6 +243,7 @@ export async function discoverSystemInfo({ force = false } = {}) {
       discoveryState.seed = seed;
       const cached = !force ? loadCachedDiscovery(seed) : null;
       if (cached?.normalized) {
+        discoveryState.info = cached.normalized;
         discoveryState.events = Array.isArray(cached.events) ? cached.events : [];
         discoveryState.relaySets = cached.normalized?._discovery?.relay_sets || {};
         discoveryState.loadedAt = new Date(cached.cachedAt).toISOString();
@@ -290,9 +308,15 @@ export async function discoverSystemInfo({ force = false } = {}) {
           }
         ], {
           onEvent: (event, relay) => {
-            if (settled) return;
             tracker.markEvent(event, normalizeRelayUrl(relay));
             collectedEvents.push(event);
+            if (settled) {
+              try {
+                publishDiscoveryInfo(seed, normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys), collectedEvents);
+              } catch (error) {
+                discoveryState.error = error?.message || String(error);
+              }
+            }
           },
           onEose: (relay) => {
             const normalizedRelay = normalizeRelayUrl(relay);
@@ -308,10 +332,8 @@ export async function discoverSystemInfo({ force = false } = {}) {
         });
       });
 
-      discoveryState.events = collectedEvents;
-      discoveryState.relaySets = normalized._discovery.relay_sets;
-      discoveryState.loadedAt = new Date().toISOString();
-      persistDiscoveryCache(seed, normalized, collectedEvents);
+      publishDiscoveryInfo(seed, normalized, collectedEvents);
+      if (!normalized) discoveryState.loadedAt = new Date().toISOString();
       return normalized;
     } catch (error) {
       discoveryState.error = error?.message || String(error);

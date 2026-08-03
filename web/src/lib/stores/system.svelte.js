@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { discoverSystemInfo } from './discovery.svelte.js';
+import { discoverSystemInfo, discoveryState, subscribeDiscoveryInfo } from './discovery.svelte.js';
 
 export const systemInfo = $state({
   data: null,
@@ -11,8 +11,15 @@ export const systemInfo = $state({
 let loadPromise = null;
 let eagerConnectPromise = null;
 
+subscribeDiscoveryInfo((info) => {
+  if (!info) return;
+  systemInfo.data = info;
+  systemInfo.error = null;
+  systemInfo.loadedAt = new Date().toISOString();
+});
+
 export function currentSystemInfo() {
-  return systemInfo.data;
+  return systemInfo.data || discoveryState.info;
 }
 
 export function resetSystemInfoStore() {
@@ -47,7 +54,7 @@ export async function loadSystemInfo({ force = false } = {}) {
   loadPromise = (async () => {
     try {
       const info = await discoverSystemInfo({ force });
-      systemInfo.data = info;
+      if (info) systemInfo.data = info;
       systemInfo.loadedAt = new Date().toISOString();
       systemInfo.error = null;
       return info;

@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/stores/system.svelte.js', () => ({
-  currentSystemInfo: vi.fn(),
-  loadSystemInfo: vi.fn()
+vi.mock('$lib/stores/discovery.svelte.js', () => ({
+  getBootstrapSeed: vi.fn()
 }));
 
 vi.mock('$lib/nostr/client.js', () => ({
@@ -20,15 +19,11 @@ describe('ensureRelayConnection', () => {
     global.document = global.document || {};
   });
 
-  it('loads system info and connects the shared nostr client to browser relays', async () => {
-    const systemModule = await import('$lib/stores/system.svelte.js');
+  it('connects directly to deployment-configured browser relays', async () => {
+    const discoveryModule = await import('$lib/stores/discovery.svelte.js');
     const nostrModule = await import('$lib/nostr/client.js');
-    systemModule.currentSystemInfo.mockReturnValue(null);
-    systemModule.loadSystemInfo.mockResolvedValue({
-      nostr: {
-        browser_relays: ['wss://relay-1.example', 'https://relay-2.example/relay'],
-        sidecar_url: 'wss://relay-1.example'
-      }
+    discoveryModule.getBootstrapSeed.mockReturnValue({
+      relay_urls: ['wss://relay-1.example', 'https://relay-2.example/relay']
     });
     nostrModule.nostr.connect.mockResolvedValue({
       connected: 2,
@@ -41,7 +36,6 @@ describe('ensureRelayConnection', () => {
     const { ensureRelayConnection } = await import('$lib/nostr/connection-guard.js');
     await ensureRelayConnection();
 
-    expect(systemModule.loadSystemInfo).toHaveBeenCalledTimes(1);
     expect(nostrModule.nostr.setRelays).toHaveBeenCalledWith([
       'wss://relay-1.example',
       'wss://relay-2.example/relay'

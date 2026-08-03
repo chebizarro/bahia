@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../../src/lib/stores/discovery.svelte.js', () => ({
-  discoverSystemInfo: vi.fn()
+  discoverSystemInfo: vi.fn(),
+  discoveryState: { info: null },
+  subscribeDiscoveryInfo: vi.fn((listener) => {
+    listener(null);
+    return vi.fn();
+  })
 }));
 
 describe('Nostr discovery store', () => {

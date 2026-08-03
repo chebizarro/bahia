@@ -1,9 +1,10 @@
 import { browser } from '$app/environment';
 import { nostr } from '../../nostr/client.js';
+import { getBootstrapSeed } from '../discovery.svelte.js';
 import { loadSystemInfo } from '../system.svelte.js';
 import { hydrateCachedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
 import { applyControlplaneEvent, readModelFilters, resetEventRouting } from './events.svelte.js';
-import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, normalizeRelayUrl, registerBootstrapControlplaneForRetry, resetConnectionState, resolveBrowserRelays, setBootstrapError } from './connection.svelte.js';
+import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, normalizeRelayUrl, registerBootstrapControlplaneForRetry, resetConnectionState, setBootstrapError } from './connection.svelte.js';
 
 let bootstrapPromise = null;
 let liveUnsubscribe = null;
@@ -131,13 +132,13 @@ export async function bootstrapControlplane({ force = false } = {}) {
     }
 
     try {
-      const systemInfo = await loadSystemInfo({ force });
-      const relays = resolveBrowserRelays(systemInfo);
+      const seed = getBootstrapSeed();
+      const relays = Array.from(new Set((seed?.relay_urls || []).map(normalizeRelayUrl).filter(Boolean)));
       controlplaneConnection.relays = relays;
-      controlplaneConnection.servicePubkey = systemInfo?.nostr?.service_pubkey || '';
+      controlplaneConnection.servicePubkey = seed?.service_pubkeys?.[0] || '';
 
-      if (!systemInfo?.features?.relay_read_models) throw new Error('Relay read models are not advertised by Nostr system discovery');
-      if (relays.length === 0) throw new Error('No browser Nostr relays advertised by Nostr system discovery');
+      if (relays.length === 0) throw new Error('No browser Nostr relays configured by deployment bootstrap');
+      if (!controlplaneConnection.servicePubkey) throw new Error('No trusted Bahia service pubkey configured by deployment bootstrap');
 
       controlplaneConnection.status = 'connecting';
       subscribeToConnectionState();
@@ -154,6 +155,11 @@ export async function bootstrapControlplane({ force = false } = {}) {
       await startStreamingSubscription(connectedRelays, { waitForEose: true });
       refreshCollections();
       schedulePersistCachedCollections();
+      // Optional discovery metadata may arrive now or later. It must never
+      // gate socket connection or relay-backed read models.
+      void loadSystemInfo({ force }).catch((error) => {
+        console.warn('Optional Bahia discovery metadata unavailable:', error?.message || error);
+      });
       return { ok: true };
     } catch (err) {
       markBootstrapFailedAt();

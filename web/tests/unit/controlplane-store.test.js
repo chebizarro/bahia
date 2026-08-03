@@ -10,6 +10,10 @@ const systemInfoMock = vi.hoisted(() => ({
   loadSystemInfo: vi.fn()
 }));
 
+const discoveryMock = vi.hoisted(() => ({
+  getBootstrapSeed: vi.fn()
+}));
+
 const nostrMock = vi.hoisted(() => {
   function store(initial) {
     let value = initial;
@@ -38,6 +42,10 @@ const nostrMock = vi.hoisted(() => {
 
 vi.mock('../../src/lib/stores/system.svelte.js', () => ({
   loadSystemInfo: systemInfoMock.loadSystemInfo
+}));
+
+vi.mock('../../src/lib/stores/discovery.svelte.js', () => ({
+  getBootstrapSeed: discoveryMock.getBootstrapSeed
 }));
 
 vi.mock('../../src/lib/nostr/client.js', async () => {
@@ -108,6 +116,10 @@ describe('controlplane store', () => {
         legacy_sse: false
       }
     });
+    discoveryMock.getBootstrapSeed.mockReturnValue({
+      relay_urls: ['http://localhost:10547/relay'],
+      service_pubkeys: ['b'.repeat(64)]
+    });
 
     const nostrClient = await import('../../src/lib/nostr/client.js');
     KINDS = nostrClient.KINDS;
@@ -147,8 +159,12 @@ describe('controlplane store', () => {
     expect(store.resolveBrowserRelays({ nostr: { relays: ['wss://backend.example'] } })).toEqual([]);
   });
 
-  it('bootstraps from the canonical Nostr discovery fixture used by other consumers', async () => {
+  it('bootstraps from deployment configuration without waiting for discovery', async () => {
     systemInfoMock.loadSystemInfo.mockResolvedValueOnce(structuredClone(canonicalDiscoveryFixture));
+    discoveryMock.getBootstrapSeed.mockReturnValueOnce({
+      relay_urls: ['wss://public.example', 'http://localhost:3000/relay'],
+      service_pubkeys: ['b'.repeat(64)]
+    });
 
     const result = await bootstrapWithEose(undefined, ['wss://public.example', 'ws://localhost:3000/relay']);
 
@@ -210,7 +226,7 @@ describe('controlplane store', () => {
     expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
     expect(store.controlplaneConnection.status).toBe('syncing');
     expect(store.services).toHaveLength(0);
-    expect(systemInfoMock.loadSystemInfo).toHaveBeenCalledTimes(1);
+    expect(systemInfoMock.loadSystemInfo).not.toHaveBeenCalled();
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
@@ -250,9 +266,9 @@ describe('controlplane store', () => {
   });
 
   it('requires EOSE from every connected bootstrap relay before marking live', async () => {
-    systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
-      nostr: { browser_relays: ['wss://relay-one.example', 'wss://relay-two.example'], service_pubkey: 'b'.repeat(64) },
-      features: { relay_read_models: true, legacy_sse: false }
+    discoveryMock.getBootstrapSeed.mockReturnValueOnce({
+      relay_urls: ['wss://relay-one.example', 'wss://relay-two.example'],
+      service_pubkeys: ['b'.repeat(64)]
     });
 
     const { bootstrap: resultPromise } = await startBootstrapAndWaitForSubscription();
@@ -360,33 +376,45 @@ describe('controlplane store', () => {
     expect(store.services).toEqual([]);
   });
 
-  it('fails closed when relay read models are not advertised', async () => {
+  it('does not gate configured relay read models on optional discovery metadata', async () => {
     systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
       nostr: { browser_relays: ['http://localhost:10547/relay'], service_pubkey: 'b'.repeat(64) },
       features: { relay_read_models: false, legacy_sse: false }
     });
 
-    const result = await store.bootstrapControlplane();
+    const resultPromise = bootstrapWithEose();
+    const result = await resultPromise;
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('Relay read models are not advertised by Nostr system discovery');
-    expect(store.controlplaneConnection.status).toBe('error');
-    expect(nostrMock.setRelays).not.toHaveBeenCalled();
-    expect(nostrMock.connect).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(store.controlplaneConnection.status).toBe('live');
+    expect(nostrMock.connect).toHaveBeenCalled();
   });
 
-  it('fails closed when no browser bootstrap relays are advertised', async () => {
-    systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
-      nostr: { service_pubkey: 'b'.repeat(64) },
-      features: { relay_read_models: true, legacy_sse: false }
+  it('fails clearly when deployment config has no browser bootstrap relays', async () => {
+    discoveryMock.getBootstrapSeed.mockReturnValueOnce({
+      relay_urls: [],
+      service_pubkeys: ['b'.repeat(64)]
     });
 
     const result = await store.bootstrapControlplane();
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toBe('No browser Nostr relays advertised by Nostr system discovery');
+    expect(result.reason).toBe('No browser Nostr relays configured by deployment bootstrap');
     expect(store.controlplaneConnection.status).toBe('error');
     expect(nostrMock.setRelays).not.toHaveBeenCalled();
+    expect(nostrMock.connect).not.toHaveBeenCalled();
+  });
+
+  it('fails clearly when deployment config has no trusted service pubkey', async () => {
+    discoveryMock.getBootstrapSeed.mockReturnValueOnce({
+      relay_urls: ['wss://relay.example'],
+      service_pubkeys: []
+    });
+
+    const result = await store.bootstrapControlplane();
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('No trusted Bahia service pubkey configured by deployment bootstrap');
     expect(nostrMock.connect).not.toHaveBeenCalled();
   });
 });
