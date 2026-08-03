@@ -1208,9 +1208,10 @@ func New(cfg *config.Config) (*App, error) {
 			_, hydrated := relaySettingsHydrator.Snapshot()
 			check := HealthCheck{
 				Name:    "relay_policy_projection",
-				Status:  HealthStatusFail,
-				Message: "validated relay policy is unavailable to API hydration",
+				Status:  HealthStatusPass,
+				Message: "no validated relay policy has been observed; Nostr convergence remains asynchronous",
 				Tier:    int(Tier1),
+				Details: map[string]string{"availability": "unavailable"},
 			}
 			if !projected || !hydrated {
 				return check
@@ -1219,7 +1220,6 @@ func New(cfg *config.Config) (*App, error) {
 			if projection.RelayConfirmedAt != nil {
 				confirmation = "relay_confirmed"
 			}
-			check.Status = HealthStatusPass
 			check.Message = "validated relay policy projection is hydrated"
 			check.Details = map[string]string{
 				"availability":     "available",

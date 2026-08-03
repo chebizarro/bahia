@@ -42,9 +42,40 @@ class RelayPolicyRolloutGateTests(unittest.TestCase):
                 policy(created="2026-08-03T06:00:00Z"),
             )
 
-    def test_empty_by_absence_is_rejected(self):
-        with self.assertRaisesRegex(gate.RolloutGateError, "did not pass"):
-            gate.projection_from_readiness({"checks": []})
+    def test_absent_projection_is_not_a_readiness_failure(self):
+        self.assertIsNone(gate.projection_from_readiness({"checks": []}))
+
+    def test_capture_records_absent_baseline(self):
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as directory, patch.object(gate, "fetch_readiness", return_value={"checks": []}):
+            output = Path(directory) / "baseline.json"
+            gate.capture("http://ready", output)
+            self.assertEqual(output.read_text(encoding="utf-8"), '{"present": false}\n')
+
+    def test_verify_skips_policy_comparison_when_no_pre_rollout_head_existed(self):
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as directory, patch.object(gate, "fetch_readiness") as fetch:
+            baseline = Path(directory) / "baseline.json"
+            baseline.write_text('{"present": false}\n', encoding="utf-8")
+            gate.verify("http://ready", baseline)
+            fetch.assert_not_called()
+
+    def test_verify_requires_post_rollout_head_when_baseline_was_present(self):
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as directory, patch.object(gate, "fetch_readiness", return_value={"checks": []}):
+            baseline = Path(directory) / "baseline.json"
+            baseline.write_text(
+                __import__("json").dumps({"present": True, "projection": policy()}) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(gate.RolloutGateError, "present before rollout"):
+                gate.verify("http://ready", baseline)
 
 
 if __name__ == "__main__":

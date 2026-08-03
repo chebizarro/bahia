@@ -122,7 +122,8 @@ jobs:
           baseline="$CONTROLPLANE_ROOT/backups/relay-policy-${tag}-${timestamp}.json"
           ready_url="http://${EDGE_HEALTH_HOST}:8080/ready"
 
-          # Capture only public signed provenance; never policy payloads or credentials.
+          # Capture only public signed provenance when a policy head exists.
+          # A fresh Nostr installation with no matching event remains deployable.
           python3 scripts/relay_policy_rollout_gate.py capture --url "$ready_url" --baseline "$baseline"
           cp "$COMPOSE_FILE" "$backup"
 
@@ -161,8 +162,8 @@ jobs:
           docker compose -f "$COMPOSE_FILE" config --quiet
           docker compose -f "$COMPOSE_FILE" up -d bahia relay web
 
-          # Tier-0 migration/bootstrap may take several minutes. The projection
-          # gate additionally rejects absence, regression, and same-time hash changes.
+          # Tier-0 migration/bootstrap may take several minutes. If a relay-policy
+          # head existed before rollout, reject its loss, regression, or hash change.
           curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null
           python3 scripts/relay_policy_rollout_gate.py verify --url "$ready_url" --baseline "$baseline"
           curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
