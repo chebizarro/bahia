@@ -27,6 +27,11 @@ operations and are not implied by these source fixtures.
 | `BahiaAudit4903Anomaly` | A rejected or contradictory kind-4903 event increments the anomaly counter | Security/operator pair | Tier 3 | Preserve the event chain and pause correlated mutations pending signature/correlation review |
 | `BahiaAuthorizationRejectionSpike` | More than ten bounded authorization rejections occur within five minutes | Security operator | Tier 2 | Inspect identity, policy, replay, and signature reason counts; do not loosen policy |
 | `BahiaTierRejectionSpike` | More than five insufficient-tier rejections occur within five minutes | Bahia operator | Tier 1 | Compare requested and active tier and restore the failed dependency instead of bypassing the gate |
+| `NodeExporterDown` | An expected-up node scrape fails for five minutes | Host owner | Tier 1 | Check the exporter service and monitoring-interface route; do not infer host failure from exporter failure alone |
+| `HostMemoryPressure` | Available host memory remains below 10% for ten minutes | Host owner | Tier 1 | Inspect workload pressure and preserve continuity capacity before evicting work |
+| `HostFilesystemPressure` | A writable filesystem remains below 10% free for ten minutes | Host owner | Tier 1 | Identify reclaimable data and use approved cleanup policy; do not delete manually |
+| `LemmyGPUExporterDown` | Lemmy's GPU scrape fails for five minutes | Lemmy operator | Tier 1 | Check the exporter and `nvidia-smi`; keep exporter failure distinct from GPU failure |
+| `LemmyGPUMemoryPressure` | A Lemmy GPU remains above 90% allocated VRAM for ten minutes | Lemmy operator | Tier 1 | Stop new GPU placement and inspect the owning inference workload |
 
 ## Non-mutating detection simulations
 
@@ -97,3 +102,23 @@ authorization boundary merely to clear the alert.
 
 Inspect dependency health and Bahia's requested versus active tier. Restore the
 dependency instead of bypassing tier gates.
+
+## NodeExporterDown
+
+Verify `prometheus-node-exporter` is active and listening only on the inventory address. Test the route from the Prometheus host. The alert describes observer failure and does not itself prove that the host is down.
+
+## HostMemoryPressure
+
+Inspect the host's workload and swap activity. Preserve fleet continuity reserve and cordon new placement before terminating workloads.
+
+## HostFilesystemPressure
+
+Identify the pressured mount and use Bahia's approved cleanup/quarantine workflow. Do not bypass signed maintenance approvals for destructive cleanup.
+
+## LemmyGPUExporterDown
+
+Verify `nvidia_gpu_exporter`, its bound listener, and `nvidia-smi`. Compare with Nostr presence before deciding whether Lemmy or merely the exporter is unavailable.
+
+## LemmyGPUMemoryPressure
+
+Inspect the GPU UUID and owning inference process. Stop new GPU placement and use the model lifecycle controls rather than killing arbitrary processes.

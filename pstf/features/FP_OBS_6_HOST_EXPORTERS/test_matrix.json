@@ -1,0 +1,9 @@
+{
+  "tests": [
+    {"criterion": "AC1", "test": "remote systemd state plus node_memory_MemAvailable_bytes and node_filesystem_files_free probes"},
+    {"criterion": "AC2", "test": "Lemmy nvidia-smi inventory plus nvidia_smi_* metrics probe"},
+    {"criterion": "AC3", "test": "remote ss listener-address inspection"},
+    {"criterion": "AC4", "test": "inventory expected-state comparison against SSH reachability"},
+    {"criterion": "AC5", "test": "Prometheus targets API after fp-obs.1 deployment"}
+  ]
+}

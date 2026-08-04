@@ -1,0 +1,7 @@
+{
+  "id": "fp-obs.6",
+  "title": "MVP host pressure and Lemmy GPU exporters",
+  "objective": "Expose machine-level pressure and GPU facts on explicitly bound monitoring interfaces without duplicating Nostr semantic fleet state.",
+  "sources": ["prometheus-node-exporter", "utkuozdemir/nvidia_gpu_exporter"],
+  "semantic_boundary": "Fleet presence, status, capacity decisions, and recommendations remain signed Nostr observables projected by Bahia."
+}

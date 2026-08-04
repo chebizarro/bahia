@@ -22,6 +22,26 @@ tests:
         values: '0 0 0 0 0 12 12 12 12 12'
       - series: 'bahia_tier_rejections_total{tier="3"}'
         values: '0 0 0 0 0 6 6 6 6 6'
+      - series: 'up{job="node",expected_state="up",host="ai-02",instance="192.168.30.100:9100"}'
+        values: '0x15'
+      - series: 'up{job="node",expected_state="down",host="roost",instance="192.168.20.100:9100"}'
+        values: '0x15'
+      - series: 'node_memory_MemAvailable_bytes{job="node",host="max",instance="192.168.40.15:9100"}'
+        values: '8x15'
+      - series: 'node_memory_MemTotal_bytes{job="node",host="max",instance="192.168.40.15:9100"}'
+        values: '100x15'
+      - series: 'node_filesystem_avail_bytes{job="node",host="storage-01",instance="192.168.40.107:9100",device="/dev/sda1",mountpoint="/srv",fstype="ext4"}'
+        values: '5x15'
+      - series: 'node_filesystem_size_bytes{job="node",host="storage-01",instance="192.168.40.107:9100",device="/dev/sda1",mountpoint="/srv",fstype="ext4"}'
+        values: '100x15'
+      - series: 'node_filesystem_readonly{job="node",host="storage-01",instance="192.168.40.107:9100",device="/dev/sda1",mountpoint="/srv",fstype="ext4"}'
+        values: '0x15'
+      - series: 'up{job="nvidia_gpu",expected_state="up",host="lemmy",instance="192.168.40.110:9835"}'
+        values: '0x15'
+      - series: 'nvidia_smi_memory_used_bytes{job="nvidia_gpu",host="lemmy",instance="192.168.40.110:9835",uuid="gpu-a"}'
+        values: '95x15'
+      - series: 'nvidia_smi_memory_total_bytes{job="nvidia_gpu",host="lemmy",instance="192.168.40.110:9835",uuid="gpu-a"}'
+        values: '100x15'
     alert_rule_test:
       - eval_time: 6m
         alertname: BahiaWorkerHeartbeatStale
@@ -79,3 +99,38 @@ tests:
             exp_annotations:
               summary: "Bahia dependency-tier rejection rate has spiked"
               runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
+      - eval_time: 6m
+        alertname: NodeExporterDown
+        exp_alerts:
+          - exp_labels: {expected_state: up, host: ai-02, instance: "192.168.30.100:9100", job: node, severity: critical}
+            exp_annotations:
+              summary: "Node exporter is unavailable on ai-02"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#nodeexporterdown"
+      - eval_time: 11m
+        alertname: HostMemoryPressure
+        exp_alerts:
+          - exp_labels: {host: max, instance: "192.168.40.15:9100", job: node, severity: warning}
+            exp_annotations:
+              summary: "Host max has less than 10% available memory"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#hostmemorypressure"
+      - eval_time: 11m
+        alertname: HostFilesystemPressure
+        exp_alerts:
+          - exp_labels: {device: /dev/sda1, fstype: ext4, host: storage-01, instance: "192.168.40.107:9100", job: node, mountpoint: /srv, severity: warning}
+            exp_annotations:
+              summary: "Host storage-01 filesystem /srv has less than 10% free space"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#hostfilesystempressure"
+      - eval_time: 6m
+        alertname: LemmyGPUExporterDown
+        exp_alerts:
+          - exp_labels: {expected_state: up, host: lemmy, instance: "192.168.40.110:9835", job: nvidia_gpu, severity: critical}
+            exp_annotations:
+              summary: "Lemmy GPU exporter is unavailable"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#lemmygpuexporterdown"
+      - eval_time: 11m
+        alertname: LemmyGPUMemoryPressure
+        exp_alerts:
+          - exp_labels: {host: lemmy, instance: "192.168.40.110:9835", job: nvidia_gpu, severity: warning, uuid: gpu-a}
+            exp_annotations:
+              summary: "Lemmy GPU gpu-a has more than 90% VRAM allocated"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#lemmygpumemorypressure"
