@@ -72,6 +72,18 @@ Fleet telemetry exports these operator-facing gauges:
 - `bahia_fleet_health_drift_stuck`
 - `bahia_fleet_health_services{health="..."}`
 - `bahia_fleet_health_entities`
+- `bahia_fleet_health_nostr_entities{domain="...",status="healthy|degraded|unhealthy|unknown"}`
+- `bahia_fleet_health_nostr_heartbeat_lag_seconds{entity="..."}`
+- `bahia_fleet_health_projector_subscription_active`
+- `bahia_fleet_health_projector_caught_up`
+- `bahia_fleet_health_projector_last_event_timestamp_seconds`
+- `bahia_fleet_health_projector_last_ingested_timestamp_seconds`
+- `bahia_fleet_health_projector_relay_closed_total`
+- `bahia_fleet_health_projector_errors_total`
+
+The `nostr` gauges are projected directly from validated, persisted relay events of kinds `30315`, `30316`, `30317`, `30900`, and `4903`. Relay subscription and catch-up gauges deliberately remain separate from subject-health gauges: losing the relay says the observer is impaired, not that every observed agent or service failed. Labels are fixed domains and normalized health states; heartbeat entities use fixed-width signer pubkeys, and event content and coordinates are never exported as labels.
+
+Only node, process, and GPU exporters are scraped directly. Semantic fleet state must arrive through signed Nostr observables rather than polling Bahia's database read models.
 
 Use the shipped WS6 alert rules and Grafana dashboards to interpret these metrics together; a single pressure gauge is a scheduling signal, not proof of host failure.
 

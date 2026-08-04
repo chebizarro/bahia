@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "AC1", "text": "Validated, persisted 30315, 30316, 30317, 30900, and 4903 events update the fleet health projector."},
+    {"id": "AC2", "text": "Latest replaceable state wins and stale replay cannot regress a subject."},
+    {"id": "AC3", "text": "Subscription, EOSE, CLOSED, and projection error signals are observable separately from subject state."},
+    {"id": "AC4", "text": "Metric labels use bounded domains and statuses and never contain raw content."},
+    {"id": "AC5", "text": "Semantic fleet metrics are relay-event-derived; direct scrape remains limited to node/process/GPU exporters."}
+  ]
+}

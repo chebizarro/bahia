@@ -1,0 +1,11 @@
+{
+  "id": "fp-obs-1",
+  "title": "Nostr-native fleet health observability",
+  "objective": "Project bounded fleet health metrics from validated canonical relay events while exposing relay/projector health separately from subject health.",
+  "event_kinds": [30315, 30316, 30317, 30900, 4903],
+  "constraints": [
+    "No semantic database polling",
+    "No raw event content in metric labels",
+    "Only node, process, and GPU exporters are direct-scrape sources"
+  ]
+}
