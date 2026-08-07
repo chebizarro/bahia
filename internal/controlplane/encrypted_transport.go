@@ -557,7 +557,12 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		return
 	}
 	t.logger.Info("dispatching ContextVM request", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey", innerPubkey))
-	t.publishContextVMProgressAck(ctx, outer, inner, encrypted)
+	// A progress notification is best-effort protocol sugar. Bound it so relay
+	// or signer backpressure cannot indefinitely prevent the requested
+	// control-plane mutation from reaching its handler.
+	ackCtx, cancelAck := context.WithTimeout(ctx, 5*time.Second)
+	t.publishContextVMProgressAck(ackCtx, outer, inner, encrypted)
+	cancelAck()
 	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
 	response := cascontextvm.NewResponse(rpc.ID, result)
 	if err != nil {
