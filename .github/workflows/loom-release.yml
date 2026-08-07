@@ -1,0 +1,43 @@
+name: Loom NIP-34 Release Canary
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate signed release checkout
+        id: release
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          tag=$(git describe --tags --exact-match)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$tag" == v* ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build immutable Bahia web image
+        id: image
+        run: |
+          set -euo pipefail
+          sha='${{ steps.release.outputs.sha }}'
+          tag='${{ steps.release.outputs.tag }}'
+          image="local/bahia-controlplane-web:${tag}"
+          docker build \
+            -f web/Dockerfile \
+            --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS=wss://bahia.sharegap.net/relay \
+            --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS=37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc \
+            --build-arg PUBLIC_BAHIA_GIT_COMMIT="$sha" \
+            --build-arg PUBLIC_BAHIA_WEB_VERSION="$tag" \
+            -t "$image" web
+          digest=$(docker image inspect --format '{{.Id}}' "$image")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'BAHIA_ARTIFACT={"image_repo":"%s","image_tag":"%s","image_digest":"%s"}\n' \
+            "local/bahia-controlplane-web" "$tag" "$digest"
