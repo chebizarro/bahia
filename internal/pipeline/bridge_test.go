@@ -401,6 +401,28 @@ func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {
 	}
 }
 
+func TestBridge_TrustsDistinctRunAndResultPublishers(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-trigger", "trusted-worker")
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	b := newMockBuildRepo()
+	a := newMockArtifactRepo()
+	o := newMockOCIRepo()
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	services := &mockServiceRepo{service: &domain.Service{ID: h.policy.ServiceID, ArtifactRepo: "ghcr.io/acme/api"}}
+	registry := &mockCanonicalRegistry{builds: b, artifacts: a}
+	bridge := NewBridge(h, services, b, a, newMockIntentRepo(), newMockEnvRepo(), o, nil, registry, []string{"trusted-trigger", "trusted-worker"}, true, nil)
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+		t.Fatalf("ProcessResult error: %v", err)
+	}
+	if a.created != 1 {
+		t.Fatalf("expected one artifact created, got %d", a.created)
+	}
+}
+
 func TestBridge_SuccessWithImageMissingMarksArtifactPending(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")

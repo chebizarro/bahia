@@ -139,9 +139,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
 		return nil, fmt.Errorf("HiveCI run publisher is not trusted")
 	}
-	if run.PublisherPubkey != result.PublisherPubkey {
+	if _, ok := b.trustedCI[result.PublisherPubkey]; !ok {
 		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
-		return nil, fmt.Errorf("HiveCI result publisher does not match the run publisher")
+		return nil, fmt.Errorf("HiveCI result publisher is not trusted")
 	}
 
 	build := expectedBuild

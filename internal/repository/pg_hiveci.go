@@ -846,11 +846,12 @@ func isValidHiveCIResultTransition(ctx context.Context, pool hiveCIDB, eventID s
 func scanHiveCIPipelinePolicy(row interface{ Scan(...any) error }) (domain.HiveCIPipelinePolicy, error) {
 	var p domain.HiveCIPipelinePolicy
 	var metadata []byte
+	var branchPattern *string
 	if err := row.Scan(
 		&p.ID,
 		&p.RepoCoordinate,
 		&p.WorkflowPath,
-		&p.BranchPattern,
+		&branchPattern,
 		&p.ServiceID,
 		&p.EnvironmentID,
 		&p.Enabled,
@@ -862,6 +863,9 @@ func scanHiveCIPipelinePolicy(row interface{ Scan(...any) error }) (domain.HiveC
 			return p, ErrNotFound
 		}
 		return p, fmt.Errorf("scanning hiveci policy: %w", err)
+	}
+	if branchPattern != nil {
+		p.BranchPattern = *branchPattern
 	}
 	if err := unmarshalJSON(metadata, &p.Metadata, "metadata"); err != nil {
 		return p, err
