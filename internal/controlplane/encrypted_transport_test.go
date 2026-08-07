@@ -30,6 +30,25 @@ func (m *mockEncryptedPublisher) Publish(_ context.Context, ev nostr.Event) (int
 	return 1, nil
 }
 
+type blockingEncryptedPublisher struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingEncryptedPublisher) Publish(ctx context.Context, _ nostr.Event) (int, error) {
+	select {
+	case <-p.started:
+	default:
+		close(p.started)
+	}
+	select {
+	case <-p.release:
+		return 1, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
 func newResponder(t *testing.T, publisher *mockEncryptedPublisher) *EncryptedResponder {
 	t.Helper()
 	signer, err := NewPrivateKeySigner(testServiceKey)
@@ -493,17 +512,13 @@ func TestContextVMTransport_RejectsUnauthorizedRequester(t *testing.T) {
 	}
 }
 
-func TestContextVMTransport_PublishesProgressAckBeforeHandlerForAuthorizedRoutedRequest(t *testing.T) {
+func TestContextVMTransport_PublishesProgressAckBeforeResponseForAuthorizedRoutedRequest(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-1","method":"service/deploy","params":{"service_id":"svc-1"}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
-		if len(publisher.events) != 1 {
-			t.Fatalf("progress ack must publish before handler runs, got %d events", len(publisher.events))
-		}
-		assertContextVMProgressAck(t, publisher.events[0], event)
 		return map[string]any{"accepted": true}, nil
 	})
 
@@ -516,6 +531,46 @@ func TestContextVMTransport_PublishesProgressAckBeforeHandlerForAuthorizedRouted
 	terminal := contextVMResponse(t, publisher.events[1])
 	if terminal.Error != nil || string(terminal.ID) != `"ack-1"` {
 		t.Fatalf("unexpected terminal response after progress ack: %+v", terminal)
+	}
+}
+
+func TestContextVMTransport_ProgressAckBackpressureDoesNotGateHandler(t *testing.T) {
+	publisher := &blockingEncryptedPublisher{started: make(chan struct{}), release: make(chan struct{})}
+	signer, err := NewPrivateKeySigner(testServiceKey)
+	if err != nil {
+		t.Fatalf("NewPrivateKeySigner: %v", err)
+	}
+	responder := NewEncryptedResponder(publisher, signer, testServiceKey, zap.NewNop())
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-blocked","method":"service/deploy","params":{"service_id":"svc-1"}}`)
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	handled := make(chan struct{})
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+		close(handled)
+		return map[string]any{"accepted": true}, nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		transport.HandleEvent(context.Background(), event)
+		close(done)
+	}()
+
+	select {
+	case <-publisher.started:
+	case <-time.After(time.Second):
+		t.Fatal("progress acknowledgement publication did not start")
+	}
+	select {
+	case <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("handler remained gated behind progress acknowledgement publication")
+	}
+	close(publisher.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("transport did not finish after publisher was released")
 	}
 }
 
