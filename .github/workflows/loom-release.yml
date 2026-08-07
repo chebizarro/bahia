@@ -17,8 +17,11 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git rev-parse HEAD)
-          tag=$(git describe --tags --exact-match)
+          [[ "${LOOM_CI_REF:-}" == refs/tags/v* ]]
+          tag=${LOOM_CI_REF#refs/tags/}
+          requested_sha=$(git rev-parse "${LOOM_CI_REF}^{commit}")
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$requested_sha" == "$sha" ]]
           [[ "$tag" == v* ]]
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
