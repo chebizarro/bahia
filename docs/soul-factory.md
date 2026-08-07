@@ -98,6 +98,24 @@ soul_factory:
 
 During the Signet stage, SoulFactory authenticates to each group relay with NIP-42 and publishes controller-signed kind-`9000` put-user events with `h=<group-id>` and `p=<agent-pubkey>`. Every configured group must accept the write; assignment fails closed otherwise. The relay adapter waits briefly for a late challenge, and group assignment retries a write once if it races the AUTH acknowledgement.
 
+## Communikeys community write access
+
+Configure `soul_factory.communikeys_communities` with the controller-owned community pubkey and the names of existing kind-`30000` section profile lists:
+
+```yaml
+soul_factory:
+  communikeys_communities:
+    - pubkey: <64-char-controller-community-pubkey>
+      sections:
+        - General
+        - Apps
+        - Chat
+```
+
+The community pubkey must be controlled by the configured Signet signer, and each section list must already be available through `soul_factory.relays` or `additional_relays`. After Signet provisions an agent identity, SoulFactory queries the exact admin-authored `(kind=30000, pubkey, d=section)` coordinate through EOSE, adds the agent `p` tag without dropping existing tags or content, signs the replacement with the controller, and requires a relay `OK`. Existing membership is idempotent. Missing or invalid admin lists, signer ownership mismatches, AUTH failures, and rejected writes fail provisioning closed. The assigned `30000:<community-pubkey>:<section>` coordinates are recorded in the Signet step as `communikeys_communities`.
+
+Kind-`30000` `p` tags are the write ACL. Communikeys badges are engagement metadata only and are never used to grant publishing permission.
+
 ## Signet transport and secret handling
 
 The controller identity is obtained from the configured Signet bunker and authorizes management requests.
@@ -138,6 +156,7 @@ soul_factory:
   nip05_relays:
     - wss://relay.example.com
   nip29_groups: []
+  communikeys_communities: []
   authorized_pubkeys:
     - <64-char-operator-pubkey>
   soul_factory_pubkey: <64-char-controller-pubkey>

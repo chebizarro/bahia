@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-38qqz",
+  "mappings": [
+    {
+      "acceptance_criteria": ["AC2", "AC3", "AC4", "AC5"],
+      "test": "internal/soulfactory/communikeys_membership_test.go and communikeys_provisioner_test.go",
+      "command": "go test ./internal/soulfactory -run 'TestCommunikeys|TestFullProvisioner.*Communikeys'",
+      "result": "passed"
+    },
+    {
+      "acceptance_criteria": ["AC1"],
+      "test": "internal/config/config_test.go",
+      "command": "go test ./internal/config -run 'TestLoadSoulFactoryConfigFromYAMLAndEnv|TestLoadRejectsInvalidSoulFactoryConfig'",
+      "result": "passed"
+    },
+    {
+      "acceptance_criteria": ["AC1", "AC5"],
+      "test": "internal/app package compile and tests",
+      "command": "go test ./internal/app",
+      "result": "passed"
+    },
+    {
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6"],
+      "test": "repository quality gates",
+      "command": "go build ./... && go test ./...",
+      "result": "go build ./... passed; go test ./... failed only the known unrelated stale expectation tracked by bahia-rp4l7"
+    }
+  ]
+}

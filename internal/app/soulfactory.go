@@ -132,9 +132,10 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			AuthHeaderName:            cfg.Qdrant.AuthHeaderName,
 			AllowUnauthenticatedLocal: cfg.Qdrant.AllowUnauthenticatedLocal,
 		},
-		AgentMemory: agentmemory.Config{},
-		NIP05Relays: cfg.SoulFactory.NIP05Relays,
-		NIP29Groups: soulFactoryNIP29Groups(cfg.SoulFactory.NIP29Groups),
+		AgentMemory:            agentmemory.Config{},
+		NIP05Relays:            cfg.SoulFactory.NIP05Relays,
+		NIP29Groups:            soulFactoryNIP29Groups(cfg.SoulFactory.NIP29Groups),
+		CommunikeysCommunities: soulFactoryCommunikeysCommunities(cfg.SoulFactory.CommunikeysCommunities),
 		Workspace: soulfactory.WorkspaceConfig{
 			GiteaURL:              sf.WorkspaceGiteaURL,
 			TemplateDir:           sf.WorkspaceTemplateDir,
@@ -167,6 +168,14 @@ func soulFactoryNIP29Groups(groups []config.NIP29Group) []soulfactory.NIP29Group
 	out := make([]soulfactory.NIP29Group, 0, len(groups))
 	for _, group := range groups {
 		out = append(out, soulfactory.NIP29Group{Relay: group.Relay, ID: group.ID})
+	}
+	return out
+}
+
+func soulFactoryCommunikeysCommunities(communities []config.CommunikeysCommunity) []soulfactory.CommunikeysCommunity {
+	out := make([]soulfactory.CommunikeysCommunity, 0, len(communities))
+	for _, community := range communities {
+		out = append(out, soulfactory.CommunikeysCommunity{Pubkey: community.Pubkey, Sections: append([]string(nil), community.Sections...)})
 	}
 	return out
 }

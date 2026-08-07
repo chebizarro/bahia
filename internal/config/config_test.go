@@ -774,6 +774,11 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
       id: " fleet-dev "
     - relay: "wss://groups.example"
       id: "fleet-dev"
+  communikeys_communities:
+    - pubkey: " ` + controller + ` "
+      sections: [" Apps ", "Apps", "Chat"]
+    - pubkey: "` + controller + `"
+      sections: ["Chat", "Threads"]
   authorized_pubkeys:
     - "` + authorized + `"
   soul_factory_pubkey: "` + controller + `"
@@ -811,6 +816,9 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	}
 	if got := cfg.SoulFactory.NIP29Groups; len(got) != 1 || got[0].Relay != "wss://groups.example" || got[0].ID != "fleet-dev" {
 		t.Fatalf("SoulFactory NIP-29 groups = %#v", got)
+	}
+	if got := cfg.SoulFactory.CommunikeysCommunities; len(got) != 1 || got[0].Pubkey != controller || strings.Join(got[0].Sections, ",") != "Apps,Chat,Threads" {
+		t.Fatalf("SoulFactory Communikeys communities = %#v", got)
 	}
 	if cfg.SoulFactory.SoulFactoryPubkey != controller {
 		t.Fatalf("SoulFactory pubkey = %q", cfg.SoulFactory.SoulFactoryPubkey)
@@ -910,6 +918,24 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   llm_api_key: "secret"
 `,
 			want: "soul_factory.llm_base_url must be an API origin without a path",
+		},
+		{
+			name: "invalid Communikeys community pubkey",
+			yaml: `soul_factory:
+  communikeys_communities:
+    - pubkey: "not-hex"
+      sections: ["Apps"]
+`,
+			want: "soul_factory.communikeys_communities[0].pubkey",
+		},
+		{
+			name: "Communikeys community without sections",
+			yaml: `soul_factory:
+  communikeys_communities:
+    - pubkey: "` + validPubkey + `"
+      sections: []
+`,
+			want: "soul_factory.communikeys_communities[0].sections requires at least one section",
 		},
 		{
 			name: "workspace missing private key ref",

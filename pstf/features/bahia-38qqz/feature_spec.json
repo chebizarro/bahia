@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-38qqz",
+  "title": "Soul Factory Communikeys community membership provisioning",
+  "source_specification": "cascadia-nips/nips/NIP-CAS-0007.md",
+  "observed_behavior_before": [
+    "SoulFactory could assign newly provisioned identities to configured NIP-29 groups.",
+    "SoulFactory did not update Communikeys kind-30000 section profile lists.",
+    "SoulFactory configuration and Signet-step output had no Communikeys community assignment surface."
+  ],
+  "intended_behavior": [
+    "Configuration identifies controller-owned Communikeys communities by community pubkey and section names.",
+    "After Signet identity provisioning, SoulFactory reads the latest valid admin-authored kind-30000 list for each exact section coordinate through EOSE.",
+    "SoulFactory preserves the list, appends the agent p tag when missing, republishes a controller-signed replacement, and requires relay OK.",
+    "Missing lists, invalid controller ownership, relay AUTH failures, and relay rejection fail provisioning closed.",
+    "Assigned kind-30000 coordinates are recorded in the Signet provisioning step; badges never grant write permission."
+  ],
+  "files_touched": [
+    "internal/soulfactory/communikeys_membership.go",
+    "internal/soulfactory/provisioner_full.go",
+    "internal/config/config.go",
+    "internal/app/soulfactory.go",
+    "docs/soul-factory.md",
+    "docs/user-guide/features/souls.md"
+  ]
+}

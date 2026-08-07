@@ -196,31 +196,38 @@ type DNSProjectionConfig struct {
 
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
-	Enabled                       bool          `koanf:"enabled" yaml:"enabled"`
-	Relays                        []string      `koanf:"relays" yaml:"relays"`
-	AdditionalRelays              []string      `koanf:"additional_relays" yaml:"additional_relays"`
-	NIP05Relays                   []string      `koanf:"nip05_relays" yaml:"nip05_relays"`
-	NIP29Groups                   []NIP29Group  `koanf:"nip29_groups" yaml:"nip29_groups"`
-	AuthorizedPubkeys             []string      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
-	SoulFactoryPubkey             string        `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
-	SignetBunkerURI               string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetClientSecretKey         string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
-	StartupTimeout                time.Duration `koanf:"startup_timeout" yaml:"startup_timeout"`
-	LLMBaseURL                    string        `koanf:"llm_base_url" yaml:"llm_base_url"`
-	LLMModel                      string        `koanf:"llm_model" yaml:"llm_model"`
-	LLMAPIKey                     string        `koanf:"llm_api_key" yaml:"llm_api_key"`
-	LLMTimeout                    time.Duration `koanf:"llm_timeout" yaml:"llm_timeout"`
-	WorkspaceGiteaURL             string        `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
-	WorkspaceTemplateDir          string        `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
-	WorkspacePrivateKeyRef        string        `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
-	WorkspaceAgentMemoryMCPURLRef string        `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
-	WorkspaceGatewayPort          int           `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
+	Enabled                       bool                   `koanf:"enabled" yaml:"enabled"`
+	Relays                        []string               `koanf:"relays" yaml:"relays"`
+	AdditionalRelays              []string               `koanf:"additional_relays" yaml:"additional_relays"`
+	NIP05Relays                   []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
+	NIP29Groups                   []NIP29Group           `koanf:"nip29_groups" yaml:"nip29_groups"`
+	CommunikeysCommunities        []CommunikeysCommunity `koanf:"communikeys_communities" yaml:"communikeys_communities"`
+	AuthorizedPubkeys             []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
+	SoulFactoryPubkey             string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
+	SignetBunkerURI               string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetClientSecretKey         string                 `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	StartupTimeout                time.Duration          `koanf:"startup_timeout" yaml:"startup_timeout"`
+	LLMBaseURL                    string                 `koanf:"llm_base_url" yaml:"llm_base_url"`
+	LLMModel                      string                 `koanf:"llm_model" yaml:"llm_model"`
+	LLMAPIKey                     string                 `koanf:"llm_api_key" yaml:"llm_api_key"`
+	LLMTimeout                    time.Duration          `koanf:"llm_timeout" yaml:"llm_timeout"`
+	WorkspaceGiteaURL             string                 `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
+	WorkspaceTemplateDir          string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
+	WorkspacePrivateKeyRef        string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
+	WorkspaceAgentMemoryMCPURLRef string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
+	WorkspaceGatewayPort          int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
 }
 
 // NIP29Group identifies a fleet group that newly provisioned souls join.
 type NIP29Group struct {
 	Relay string `koanf:"relay" yaml:"relay"`
 	ID    string `koanf:"id" yaml:"id"`
+}
+
+// CommunikeysCommunity identifies controller-owned section ACLs assigned to newly provisioned souls.
+type CommunikeysCommunity struct {
+	Pubkey   string   `koanf:"pubkey" yaml:"pubkey"`
+	Sections []string `koanf:"sections" yaml:"sections"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -2172,6 +2179,39 @@ func (c *Config) validateSoulFactory() error {
 		normalizedGroups = append(normalizedGroups, group)
 	}
 	sf.NIP29Groups = normalizedGroups
+
+	communityIndexes := make(map[string]int, len(sf.CommunikeysCommunities))
+	communitySections := make(map[string]map[string]struct{}, len(sf.CommunikeysCommunities))
+	normalizedCommunities := make([]CommunikeysCommunity, 0, len(sf.CommunikeysCommunities))
+	for i, community := range sf.CommunikeysCommunities {
+		pubkeys, err := normalizePubkeyList([]string{community.Pubkey})
+		if err != nil || len(pubkeys) != 1 {
+			if err == nil {
+				err = fmt.Errorf("pubkey is required")
+			}
+			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].pubkey: %w", i, err)
+		}
+		sections := normalizeStringList(community.Sections)
+		if len(sections) == 0 {
+			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].sections requires at least one section", i)
+		}
+		pubkey := pubkeys[0]
+		index, exists := communityIndexes[pubkey]
+		if !exists {
+			index = len(normalizedCommunities)
+			communityIndexes[pubkey] = index
+			communitySections[pubkey] = make(map[string]struct{}, len(sections))
+			normalizedCommunities = append(normalizedCommunities, CommunikeysCommunity{Pubkey: pubkey})
+		}
+		for _, section := range sections {
+			if _, duplicate := communitySections[pubkey][section]; duplicate {
+				continue
+			}
+			communitySections[pubkey][section] = struct{}{}
+			normalizedCommunities[index].Sections = append(normalizedCommunities[index].Sections, section)
+		}
+	}
+	sf.CommunikeysCommunities = normalizedCommunities
 	sf.SoulFactoryPubkey = strings.ToLower(strings.TrimSpace(sf.SoulFactoryPubkey))
 	sf.SignetBunkerURI = strings.TrimSpace(sf.SignetBunkerURI)
 	sf.SignetClientSecretKey = strings.TrimSpace(sf.SignetClientSecretKey)

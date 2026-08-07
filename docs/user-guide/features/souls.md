@@ -264,6 +264,9 @@ soul_factory:
       id: fleet-ops
     - relay: wss://groups.example.com
       id: fleet-dev
+  communikeys_communities: # optional; controller-owned kind-30000 section ACLs
+    - pubkey: "<64-char Signet/controller community pubkey>"
+      sections: [General, Apps, Chat]
   authorized_pubkeys:
     - "<64-char requester pubkey>"
   soul_factory_pubkey: "<64-char Signet/controller pubkey>"
@@ -282,6 +285,8 @@ soul_factory:
 When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runtime adapter. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory.
 
 When `nip29_groups` is configured, provisioning uses the Signet-custodied Soul Factory controller to authenticate with each group relay and publish a NIP-29 `put-user` event after the new identity is minted. Every relay must acknowledge the assignment or provisioning fails closed. The new soul never receives or handles raw signing-key material.
+
+When `communikeys_communities` is configured, the Signet/controller key must own the named community pubkey and its existing kind-`30000` section profile lists must be reachable through the SoulFactory relays. During Signet provisioning, Bahia reads each exact admin-authored list through EOSE, preserves its tags and content, adds the new soul's `p` tag, republishes the replacement with the controller, and requires relay `OK`. Provisioning fails closed on missing lists, invalid ownership, AUTH failure, or rejection. Badges remain engagement-only and never grant Communikeys write access.
 
 For OpenClaw command-driver deployments, the packaged local wrapper currently supports `soulfactory.provision`, `soulfactory.update`, `soulfactory.persona.update`, and `soulfactory.revoke`. Full updates require optimistic spec-hash checks and accept either a canonical replacement spec or a merge patch over the persisted prior resolved spec. The sidecar advertises that conservative method set by default; operators can override it with `-methods` or `OPENCLAW_SOULFACTORY_METHODS` only when the configured command really implements additional runtime-control methods. The wrapper supports dry-run verification and non-dry-run targeting of an existing containerized OpenClaw runtime through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` plus `OPENCLAW_SOULFACTORY_CONTAINER`; it does not expose REST lifecycle control or launch persistent bare-metal OpenClaw runtimes.
 

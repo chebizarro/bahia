@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-38qqz",
+  "criteria": [
+    {"id": "AC1", "statement": "SoulFactory loads, validates, normalizes, and deduplicates Communikeys community pubkeys and non-empty section names."},
+    {"id": "AC2", "statement": "Assignment queries the exact admin-authored kind-30000 coordinate, accepts only a valid signed list with exactly one matching d tag, and resolves latest-wins deterministically."},
+    {"id": "AC3", "statement": "A missing agent p tag is appended without dropping existing tags or content, and the replacement is signed by the configured community owner."},
+    {"id": "AC4", "statement": "Relay authentication and OK outcomes are verified; missing lists, ownership mismatch, and rejected publication fail provisioning closed."},
+    {"id": "AC5", "statement": "Communikeys assignment runs after Signet identity provisioning, is idempotent for existing members, and records assigned kind-30000 coordinates in the Signet step."},
+    {"id": "AC6", "statement": "Documentation states that profile-list p tags grant write access and badges are engagement-only."}
+  ]
+}
