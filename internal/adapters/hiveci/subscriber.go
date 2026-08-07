@@ -221,6 +221,11 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 		s.logger.Debug("ignoring untrusted hiveci workflow run", zap.String("event_id", eventID), zap.String("pubkey", pubkey))
 		return
 	}
+	existing, err := s.repo.GetRunByEventID(ctx, eventID)
+	if err != nil {
+		s.logger.Warn("failed to load existing hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
+		return
+	}
 
 	repoCoordinate, err := requiredTag(ev, "a")
 	if err != nil {
@@ -269,7 +274,11 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 		s.logger.Warn("failed to persist hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
-	if s.onRun != nil {
+	// A merged relay subscription can deliver the same signed event once per
+	// relay. Persisting is idempotent, and dispatch must be as well: otherwise
+	// one workflow event can fan out into multiple Loom jobs and competing 5402
+	// results for the same run.
+	if existing == nil && s.onRun != nil {
 		s.onRun(ctx, WorkflowRunDispatch{
 			RunEventID: eventID,
 			Repository: optionalTag(ev, "repo"),

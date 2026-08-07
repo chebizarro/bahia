@@ -225,6 +225,28 @@ func TestReleaseWorkflowRunDispatchPreservesRepositoryAndRef(t *testing.T) {
 	require.True(t, dispatched.Release)
 }
 
+func TestReleaseWorkflowRunReplayDispatchesOnlyOnce(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), nil)
+	s.now = func() time.Time { return now }
+	dispatches := 0
+	s.SetRunConsumer(func(context.Context, WorkflowRunDispatch) { dispatches++ })
+
+	run := signedHiveCIEvent(t, kindWorkflowRun, now, nostr.Tags{
+		{"a", "30617:pk:bahia"}, {"commit", "abc"}, {"branch", "v0.2.0-rc.1"},
+		{"ref", "refs/tags/v0.2.0-rc.1"}, {"repo", "https://git.example/bahia.git"},
+		{"workflow", ".github/workflows/release.yml"}, {"triggered-by", "nip34-tag"},
+		{"publisher", publisher}, {"release", "true"},
+	})
+
+	s.handleEvent(context.Background(), run)
+	s.handleEvent(context.Background(), run)
+
+	require.Equal(t, 1, dispatches)
+}
+
 func TestSubscribeAuthRequiredClosedAuthenticatesAndRetriesImmediately(t *testing.T) {
 	repo := newTestHiveRepo()
 	now := time.Unix(1_700_000_000, 0).UTC()
