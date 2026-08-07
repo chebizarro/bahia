@@ -84,6 +84,24 @@
       "name": "Sidecar reports idempotency persistence failure as failed result",
       "command": "go test ./internal/soulfactory -run TestOpenClawSidecarReportsIdempotencyPersistenceFailure -count=1",
       "criteria": ["OCSCW-AC-009"]
+    },
+    {
+      "id": "OCSCW-T-015",
+      "name": "Missing runtime plugin installs before agent mutation and requires restart",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestProvisionRequiresLoadedRuntimePluginBeforeAgentMutation",
+      "criteria": ["OCSCW-AC-010"]
+    },
+    {
+      "id": "OCSCW-T-016",
+      "name": "Loaded runtime plugin permits containerized provision sequence",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestProvisionContinuesWhenRequiredRuntimePluginIsLoaded",
+      "criteria": ["OCSCW-AC-010"]
+    },
+    {
+      "id": "OCSCW-T-017",
+      "name": "Required plugin configuration uses explicit id and install source",
+      "command": "go test ./internal/soulfactory/openclawcontrol -run TestRequiredPluginConfigRejectsAmbiguousInstallSource",
+      "criteria": ["OCSCW-AC-010"]
     }
   ],
   "not_covered_here": []

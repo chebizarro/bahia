@@ -46,6 +46,7 @@ type Config struct {
 	Container       string
 	DefaultModel    string
 	DefaultBindings []string
+	RequiredPlugins []string
 	DryRun          bool
 	Now             func() time.Time
 	Runner          CommandRunner
@@ -140,6 +141,7 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		Container:       strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_CONTAINER")),
 		DefaultModel:    strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_DEFAULT_MODEL")),
 		DefaultBindings: splitCSV(getenv("OPENCLAW_SOULFACTORY_DEFAULT_BINDINGS")),
+		RequiredPlugins: splitCSV(getenv("OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS")),
 		DryRun:          truthy(getenv("OPENCLAW_SOULFACTORY_DRY_RUN")),
 	}, nil
 }
@@ -347,6 +349,12 @@ func resolveConfig(config Config) (Config, error) {
 		return config, fmt.Errorf("OPENCLAW_SOULFACTORY_RUNTIME_MODE must be existing-container or per-agent-compose")
 	}
 	config.DefaultBindings = uniqueStrings(config.DefaultBindings)
+	config.RequiredPlugins = uniqueStrings(config.RequiredPlugins)
+	for _, requirement := range config.RequiredPlugins {
+		if _, _, err := parsePluginRequirement(requirement); err != nil {
+			return config, err
+		}
+	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
@@ -381,6 +389,11 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 	}
 	if e.config.RuntimeMode == RuntimeModeExistingContainer && !e.config.DryRun && strings.TrimSpace(e.config.Container) == "" {
 		return rejected(ErrorMissingRequired, "OPENCLAW_SOULFACTORY_CONTAINER is required for existing-container non-dry-run provisioning", false, nil)
+	}
+	if !e.config.DryRun {
+		if outcome := e.ensureRuntimePlugins(ctx); outcome != nil {
+			return outcome
+		}
 	}
 
 	paths := e.paths(invocation.AgentID)
@@ -431,6 +444,70 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 		return failed(ErrorExecutionFailed, err.Error(), true, nil)
 	}
 	return outcome
+}
+
+// ensureRuntimePlugins treats plugins as shared runtime prerequisites, not
+// per-agent state. A newly installed plugin requires one gateway restart, so
+// provisioning stops before creating agent state and succeeds on retry after
+// the runtime has restarted and reports the plugin as loaded.
+func (e *Executor) ensureRuntimePlugins(ctx context.Context) *soulfactory.OpenClawControlOutcome {
+	if len(e.config.RequiredPlugins) == 0 {
+		return nil
+	}
+	out, outcome := e.runOpenClawOutput(ctx, e.containerArgs("plugins", "list", "--json")...)
+	if outcome != nil {
+		return outcome
+	}
+	var inventory interface{}
+	if err := json.Unmarshal(out, &inventory); err != nil {
+		return failed(ErrorExecutionFailed, "parse OpenClaw plugin inventory: "+err.Error(), true, nil)
+	}
+	for _, requirement := range e.config.RequiredPlugins {
+		id, source, _ := parsePluginRequirement(requirement)
+		if pluginLoaded(inventory, id) {
+			continue
+		}
+		if _, installOutcome := e.runOpenClawOutput(ctx, e.containerArgs("plugins", "install", source)...); installOutcome != nil {
+			return installOutcome
+		}
+		return failed(ErrorRuntimeUnavailable, fmt.Sprintf("installed required OpenClaw plugin %q from %q; restart the shared gateway, then retry provisioning", id, source), true, map[string]interface{}{
+			"plugin_id":        id,
+			"restart_required": true,
+		})
+	}
+	return nil
+}
+
+func parsePluginRequirement(requirement string) (string, string, error) {
+	parts := strings.SplitN(strings.TrimSpace(requirement), "=", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS entries must use plugin-id=install-source")
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+}
+
+func pluginLoaded(value interface{}, id string) bool {
+	switch typed := value.(type) {
+	case []interface{}:
+		for _, item := range typed {
+			if pluginLoaded(item, id) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		pluginID, _ := typed["id"].(string)
+		status, _ := typed["status"].(string)
+		enabled, hasEnabled := typed["enabled"].(bool)
+		if pluginID == id && status == "loaded" && (!hasEnabled || enabled) {
+			return true
+		}
+		for _, item := range typed {
+			if pluginLoaded(item, id) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (e *Executor) existingProvisionOutcome(invocation soulfactory.OpenClawControlInvocation, paths localPaths, state State) *soulfactory.OpenClawControlOutcome {
@@ -639,15 +716,20 @@ func (e *Executor) revoke(ctx context.Context, invocation soulfactory.OpenClawCo
 }
 
 func (e *Executor) runOpenClaw(ctx context.Context, args ...string) *soulfactory.OpenClawControlOutcome {
-	_, err := e.config.Runner.Run(ctx, e.config.OpenClawBin, args...)
+	_, outcome := e.runOpenClawOutput(ctx, args...)
+	return outcome
+}
+
+func (e *Executor) runOpenClawOutput(ctx context.Context, args ...string) ([]byte, *soulfactory.OpenClawControlOutcome) {
+	out, err := e.config.Runner.Run(ctx, e.config.OpenClawBin, args...)
 	if err == nil {
-		return nil
+		return out, nil
 	}
 	var unavailable RuntimeUnavailableError
 	if errors.As(err, &unavailable) {
-		return failed(ErrorRuntimeUnavailable, unavailable.Error(), true, nil)
+		return out, failed(ErrorRuntimeUnavailable, unavailable.Error(), true, nil)
 	}
-	return failed(ErrorExecutionFailed, err.Error(), true, nil)
+	return out, failed(ErrorExecutionFailed, err.Error(), true, nil)
 }
 
 func (e *Executor) containerArgs(args ...string) []string {

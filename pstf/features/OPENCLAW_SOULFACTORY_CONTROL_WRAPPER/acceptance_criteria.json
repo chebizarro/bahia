@@ -46,6 +46,11 @@
       "id": "OCSCW-AC-009",
       "statement": "The OpenClaw sidecar invokes the real openclaw-soulfactory-control wrapper through OpenClawCommandDriver in dry-run from a signed kind 38384 runtime-control request, publishes a signed correlated kind 38386 result, replays the cached result without invoking wrapper side effects again, rejects conflicting idempotency-key reuse before wrapper execution including params-only conflicts, and reports idempotency persistence failures as failed 38386 results.",
       "tests": ["OCSCW-T-012", "OCSCW-T-013", "OCSCW-T-014"]
+    },
+    {
+      "id": "OCSCW-AC-010",
+      "statement": "Non-dry-run provision verifies configured shared-runtime plugins before creating agent state; a missing plugin is installed from its explicit source and returns a retryable restart-required outcome, while a loaded enabled plugin permits normal containerized agent mutation.",
+      "tests": ["OCSCW-T-015", "OCSCW-T-016", "OCSCW-T-017"]
     }
   ]
 }

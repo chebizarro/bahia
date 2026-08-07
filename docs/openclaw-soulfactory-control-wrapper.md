@@ -59,6 +59,22 @@ openclaw --container <container> agents unbind ...
 openclaw --container <container> agents delete ...
 ```
 
+Plugins are shared gateway prerequisites. They are not installed once per
+agent. When `OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS` is configured, provision
+first runs `plugins list --json`. A missing plugin is installed into the
+target container, but agent state is not created: the wrapper returns a
+retryable `runtime_unavailable` result with `restart_required=true`. After the
+gateway is restarted, replaying the provision request proceeds only when the
+plugin reports `status=loaded`. This prevents a half-provisioned agent from
+being advertised before its channel implementation is active.
+
+The current `openclaw-nostr` configuration resolver exposes one top-level
+Nostr identity per gateway. A shared gateway can therefore route that identity
+to one soul, but must not be used to present multiple independent Signet
+identities. Fleet onboarding that requires one Nostr identity per soul must
+use a gateway/container per soul until the plugin supports multiple configured
+accounts end to end.
+
 ## Packaging path
 
 `openclaw-soulfactory-control` is built and packaged with the sidecar:
@@ -124,7 +140,21 @@ The wrapper reads configuration from environment variables:
 - `OPENCLAW_SOULFACTORY_CONTAINER`: container name used when `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container`; required for non-dry-run provision and required for non-dry-run revoke unless persisted state already contains a container.
 - `OPENCLAW_SOULFACTORY_DEFAULT_MODEL`: fallback model for `openclaw agents add --model`.
 - `OPENCLAW_SOULFACTORY_DEFAULT_BINDINGS`: comma-separated channel bindings to add on non-dry-run provision.
+- `OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS`: comma-separated `plugin-id=install-source` requirements. For the Nostr runtime use `nostr=npm:openclaw-nostr`. Missing plugins are installed before agent mutation and require a shared-gateway restart plus provision retry.
 - `OPENCLAW_SOULFACTORY_DRY_RUN`: when truthy (`1`, `true`, `yes`, `y`, or `on`), validate and render state but skip OpenClaw CLI mutations.
+
+For the Lemmy-hosted Gemma 4 deployment, set:
+
+```text
+OPENCLAW_SOULFACTORY_DEFAULT_MODEL=lemmy-local/google_gemma-4-26B-A4B-it-Q4_K_M.gguf
+OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS=nostr=npm:openclaw-nostr
+```
+
+Plugin installation does not provision a Nostr identity. The container must
+also receive a file-backed Signet NIP-46 client key and one-time pairing secret,
+apply a deny-by-default Signet policy, bind `nostr:<account-id>` to the agent,
+restart once to adopt the binding, remove the consumed pairing secret, and
+prove a second restart resumes from the durable client key.
 
 The sidecar injects these variables when it invokes the command:
 
