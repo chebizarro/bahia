@@ -568,6 +568,11 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		t.publishContextVMProgressAck(ackCtx, outer, inner, encrypted)
 	}()
 	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
+	if err != nil {
+		t.logger.Warn("ContextVM handler failed", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.Error(err))
+	} else {
+		t.logger.Info("ContextVM handler completed", zap.String("event_id", innerID), zap.String("method", rpc.Method))
+	}
 	select {
 	case <-ackDone:
 	case <-ackCtx.Done():
