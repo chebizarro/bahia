@@ -296,7 +296,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	// routing, payment, or secret tags through the generic Params map.
 	allowedParams := map[string]struct{}{
 		"actor": {}, "event": {}, "input": {}, "job": {}, "method": {},
-		"ref": {}, "repo": {}, "workflow": {},
+		"ref": {}, "repo": {}, "run": {}, "workflow": {},
 	}
 	paramKeys := make([]string, 0, len(job.Params))
 	for key := range job.Params {

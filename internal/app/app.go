@@ -831,6 +831,37 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		}
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
+		hiveSub.SetRunConsumer(func(ctx context.Context, run hiveciAdapter.WorkflowRunDispatch) {
+			if !run.Release {
+				return
+			}
+			if strings.TrimSpace(run.Repository) == "" || strings.TrimSpace(run.Ref) == "" {
+				logger.Warn("release workflow run is missing repository/ref; refusing Loom dispatch",
+					zap.String("run_event_id", run.RunEventID))
+				return
+			}
+			jobID, err := loomClient.SubmitJob(ctx, loom.JobRequest{
+				ID:               run.RunEventID,
+				Type:             "build",
+				RequiredSoftware: []string{"git", "act", "docker"},
+				Params: map[string]string{
+					"method":   "ci/workflow-run",
+					"run":      run.RunEventID,
+					"repo":     run.Repository,
+					"ref":      run.Ref,
+					"workflow": run.Workflow,
+					"event":    "push",
+				},
+			})
+			if err != nil {
+				logger.Error("failed to dispatch release workflow to Loom",
+					zap.String("run_event_id", run.RunEventID), zap.Error(err))
+				return
+			}
+			logger.Info("release workflow dispatched to Loom",
+				zap.String("run_event_id", run.RunEventID), zap.String("loom_job_id", jobID),
+				zap.String("ref", run.Ref), zap.String("commit", run.CommitSHA))
+		})
 		bgManager.RegisterWithOptions(hiveSub, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger), RunnerTier(Tier3))
 
