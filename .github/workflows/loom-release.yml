@@ -32,7 +32,8 @@ jobs:
           set -euo pipefail
           sha='${{ steps.release.outputs.sha }}'
           tag='${{ steps.release.outputs.tag }}'
-          image="local/bahia-controlplane-web:${tag}"
+          image_repo="harbor.sharegap.net/cascadia/bahia-controlplane-web"
+          image="${image_repo}:${tag}"
           docker build \
             -f web/Dockerfile \
             --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS=wss://bahia.sharegap.net/relay \
@@ -40,7 +41,9 @@ jobs:
             --build-arg PUBLIC_BAHIA_GIT_COMMIT="$sha" \
             --build-arg PUBLIC_BAHIA_WEB_VERSION="$tag" \
             -t "$image" web
-          digest=$(docker image inspect --format '{{.Id}}' "$image")
+          docker push "$image"
+          repo_digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")
+          digest=${repo_digest##*@}
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'BAHIA_ARTIFACT={"image_repo":"%s","image_tag":"%s","image_digest":"%s"}\n' \
-            "local/bahia-controlplane-web" "$tag" "$digest"
+            "$image_repo" "$tag" "$digest"
