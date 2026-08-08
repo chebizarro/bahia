@@ -177,8 +177,19 @@ func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID,
 
 type fakeEncryptedRegistryMutations struct {
 	createdServices []*domain.Service
+	artifacts       []*domain.Artifact
 	environments    map[uuid.UUID]*domain.Environment
 	deploymentUnits map[uuid.UUID][]*domain.DeploymentUnit
+}
+
+func (r *fakeEncryptedRegistryMutations) RegisterArtifact(_ context.Context, artifact *domain.Artifact) error {
+	copy := *artifact
+	if copy.ID == uuid.Nil {
+		copy.ID = uuid.New()
+		artifact.ID = copy.ID
+	}
+	r.artifacts = append(r.artifacts, &copy)
+	return nil
 }
 
 func (r *fakeEncryptedRegistryMutations) CreateService(_ context.Context, svc *domain.Service) error {
@@ -439,6 +450,32 @@ func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryServi
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["service_id"] == "" || payload["status"] != "created" {
 		t.Fatalf("unexpected create response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_RegisterArtifactContextVMMethodMutatesRegistry(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	buildID := uuid.New()
+	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, OrgID: orgID, Name: "web"}}}
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Services: services, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodArtifactRegister, map[string]any{
+		"build_id": buildID.String(), "service_id": serviceID.String(), "image_repo": "local/web", "image_tag": "baseline", "image_digest": "sha256:abc",
+	}))
+
+	if len(registry.artifacts) != 1 {
+		t.Fatalf("registered artifacts = %d, want 1", len(registry.artifacts))
+	}
+	artifact := registry.artifacts[0]
+	if artifact.BuildID != buildID || artifact.ServiceID != serviceID || artifact.ImageRepo != "local/web" || artifact.ImageTag != "baseline" || artifact.ImageDigest != "sha256:abc" || artifact.ScanStatus != domain.ScanStatusUnknown {
+		t.Fatalf("unexpected artifact: %#v", artifact)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["status"] != "registered" || payload["artifact_id"] == "" {
+		t.Fatalf("unexpected register response: %#v", payload)
 	}
 }
 
