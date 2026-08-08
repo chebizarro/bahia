@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
+	vmfirecracker "github.com/openagentsinc/bahia/internal/adapters/runtime/vm/firecracker"
 	vmlibvirt "github.com/openagentsinc/bahia/internal/adapters/runtime/vm/libvirt"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -33,6 +35,32 @@ func newVMQEMURuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 	}, driver, logger)
 	if err != nil {
 		return nil, err
+	}
+	return &vmRuntimeAdapter{core: core}, nil
+}
+
+// newVMFirecrackerRuntime wires the shared VM runtime core to the
+// Firecracker hypervisor driver, then reconciles the on-disk instance
+// registry: VMMs still running from a previous bahia process are adopted,
+// dead ones are reaped so their instances read as cleanly stopped.
+func newVMFirecrackerRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
+	driver := vmfirecracker.New(vmfirecracker.Config{
+		InstancesDir: vm.InstancesDir(strings.TrimSpace(cfg.VM.StateDir)),
+	}, logger)
+	core, err := vm.NewRuntime(vm.Config{
+		RuntimeType:    domain.RuntimeTypeVMFirecracker,
+		StateDir:       strings.TrimSpace(cfg.VM.StateDir),
+		ImageRoot:      strings.TrimSpace(cfg.VM.ImageRoot),
+		VsockGuestPort: cfg.VM.VsockGuestPort,
+		VCPUs:          cfg.VM.VCPUs,
+		MemoryMB:       cfg.VM.MemoryMB,
+		NetworkProfile: strings.TrimSpace(cfg.VM.NetworkProfile),
+	}, driver, logger)
+	if err != nil {
+		return nil, err
+	}
+	if err := driver.AdoptOrphans(context.Background()); err != nil {
+		return nil, fmt.Errorf("adopting existing firecracker instances: %w", err)
 	}
 	return &vmRuntimeAdapter{core: core}, nil
 }

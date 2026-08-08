@@ -2,7 +2,7 @@
 // and vm-qemu runtime types. The core owns instance naming, per-instance
 // state directories, artifact (image release) resolution, and lifecycle
 // orchestration, delegating hypervisor mechanics to a small Hypervisor
-// driver interface (libvirt/QEMU today, Firecracker as a follow-up).
+// driver interface (libvirt/QEMU and Firecracker).
 package vm
 
 import (
@@ -44,6 +44,12 @@ type ImageSpec struct {
 	// UEFIVarsPath is the verified UEFI NVRAM vars template, when the
 	// release ships one (Windows-capable qcow2 images). Empty otherwise.
 	UEFIVarsPath string
+	// KernelPath is the verified guest kernel image (firecracker-rootfs
+	// format only).
+	KernelPath string
+	// RootFSPath is the verified base root filesystem image, cloned per
+	// instance by the driver (firecracker-rootfs format only).
+	RootFSPath string
 	// ImageID is the release identifier from the manifest.
 	ImageID string
 	// ManifestDigest is "sha256:<hex>" over the canonical manifest.json

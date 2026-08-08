@@ -26,6 +26,8 @@ const (
 	currentLinkName  = "current"
 	diskFileName     = "disk.qcow2"
 	uefiVarsFileName = "uefi-vars.fd"
+	kernelFileName   = "kernel"
+	rootfsFileName   = "rootfs.ext4"
 )
 
 // Manifest is the VM image release manifest (cascadia-go packaging format).
@@ -53,6 +55,12 @@ type Release struct {
 	// UEFIVarsPath is the verified UEFI vars template (optional, qcow2
 	// releases only).
 	UEFIVarsPath string
+	// KernelPath is the verified guest kernel image (firecracker-rootfs
+	// releases only).
+	KernelPath string
+	// RootFSPath is the verified base root filesystem image
+	// (firecracker-rootfs releases only).
+	RootFSPath string
 }
 
 // ImageSpec converts the release into the driver-facing image description.
@@ -63,6 +71,8 @@ func (r *Release) ImageSpec() ImageSpec {
 		ReleaseDir:     r.Dir,
 		DiskPath:       r.DiskPath,
 		UEFIVarsPath:   r.UEFIVarsPath,
+		KernelPath:     r.KernelPath,
+		RootFSPath:     r.RootFSPath,
 		ImageID:        r.Manifest.ImageID,
 		ManifestDigest: r.ManifestDigest,
 	}
@@ -183,9 +193,22 @@ func ResolveRelease(imageRoot, repo, digest, wantFormat string) (*Release, error
 			}
 		}
 	case FormatFirecrackerRootFS:
-		// Firecracker file resolution (kernel + rootfs entries) lands with
-		// the Firecracker driver; the manifest digest and format are
-		// verified above, which is all the shared core needs.
+		kernelDigest := strings.TrimSpace(manifest.SHA256["kernel"])
+		if kernelDigest == "" {
+			return nil, fmt.Errorf("firecracker-rootfs release manifest for repo %q is missing sha256.kernel", repo)
+		}
+		rootfsDigest := strings.TrimSpace(manifest.SHA256["rootfs"])
+		if rootfsDigest == "" {
+			return nil, fmt.Errorf("firecracker-rootfs release manifest for repo %q is missing sha256.rootfs", repo)
+		}
+		release.KernelPath = filepath.Join(releaseDir, kernelFileName)
+		if err := verifyFileSHA256(release.KernelPath, kernelDigest); err != nil {
+			return nil, fmt.Errorf("verifying kernel image for repo %q: %w", repo, err)
+		}
+		release.RootFSPath = filepath.Join(releaseDir, rootfsFileName)
+		if err := verifyFileSHA256(release.RootFSPath, rootfsDigest); err != nil {
+			return nil, fmt.Errorf("verifying base rootfs for repo %q: %w", repo, err)
+		}
 	}
 	return release, nil
 }

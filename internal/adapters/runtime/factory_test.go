@@ -177,16 +177,33 @@ func TestNewRuntime_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestNewRuntime_VMFirecrackerNotYetWired(t *testing.T) {
-	_, err := NewRuntime(RuntimeConfig{
+func TestNewRuntime_VMFirecrackerConstructsRuntime(t *testing.T) {
+	rt, err := NewRuntime(RuntimeConfig{
 		Type: "vm-firecracker",
-		VM:   config.RuntimeVMConfig{StateDir: "/var/lib/bahia/vm", ImageRoot: "/var/lib/bahia/images"},
+		VM:   config.RuntimeVMConfig{StateDir: t.TempDir(), ImageRoot: t.TempDir()},
 	}, zap.NewNop())
-	if err == nil {
-		t.Fatal("expected not-yet-wired error for vm-firecracker")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !contains(err.Error(), "not yet wired") {
-		t.Errorf("unexpected error message: %v", err)
+	if rt.Type() != domain.RuntimeTypeVMFirecracker {
+		t.Errorf("expected vm-firecracker, got %s", rt.Type())
+	}
+	if _, ok := rt.(LifecycleRuntime); !ok {
+		t.Error("vm-firecracker runtime should implement LifecycleRuntime")
+	}
+}
+
+func TestNewRuntime_VMFirecrackerRequiresStateDirAndImageRoot(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{Type: "vm-firecracker"}, zap.NewNop())
+	if err == nil || !contains(err.Error(), "state_dir") {
+		t.Fatalf("expected state_dir error, got %v", err)
+	}
+	_, err = NewRuntime(RuntimeConfig{
+		Type: "vm-firecracker",
+		VM:   config.RuntimeVMConfig{StateDir: t.TempDir()},
+	}, zap.NewNop())
+	if err == nil || !contains(err.Error(), "image_root") {
+		t.Fatalf("expected image_root error, got %v", err)
 	}
 }
 
@@ -483,8 +500,8 @@ func TestComposeRuntime_ComposeArgsV1(t *testing.T) {
 }
 
 // TestRuntimeInterfaceCompileTime verifies all runtime types satisfy the interface.
-// NOTE: vm-firecracker shares vmRuntimeAdapter with vm-qemu; it stays behind a
-// not-yet-wired factory error until the Firecracker hypervisor driver lands.
+// NOTE: vm-firecracker and vm-qemu share vmRuntimeAdapter over their
+// respective hypervisor drivers.
 func TestRuntimeInterfaceCompileTime(t *testing.T) {
 	// These are compile-time checks; if they compile, they pass.
 	var _ Runtime = (*DockerObserver)(nil)

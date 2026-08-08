@@ -111,9 +111,7 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		if err := validateVMRuntimeConfig(rt, cfg); err != nil {
 			return nil, err
 		}
-		// The shared VM core is in place; fail explicitly until the
-		// Firecracker hypervisor driver lands (plan work item 6).
-		return nil, fmt.Errorf("runtime type %q is not yet wired: the Firecracker hypervisor driver has not landed yet", rt)
+		return newVMFirecrackerRuntime(cfg, logger)
 
 	default:
 		return nil, fmt.Errorf("unsupported runtime type: %q", cfg.Type)

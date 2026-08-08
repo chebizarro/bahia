@@ -219,6 +219,27 @@ func TestDeployHappyPath(t *testing.T) {
 	}
 }
 
+func TestDeployFirecrackerCarriesKernelAndRootFS(t *testing.T) {
+	fx := newCoreFixture(t, domain.RuntimeTypeVMFirecracker)
+	if err := fx.rt.Deploy(context.Background(), "api", "vm/base@"+fx.digest, DeployOptions{}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(fx.hv.specs) != 1 {
+		t.Fatalf("expected one instance spec, got %v", fx.hv.specs)
+	}
+	for _, spec := range fx.hv.specs {
+		if spec.Image.Format != FormatFirecrackerRootFS {
+			t.Errorf("unexpected format %q", spec.Image.Format)
+		}
+		if spec.Image.KernelPath == "" || spec.Image.RootFSPath == "" {
+			t.Errorf("expected verified kernel/rootfs paths, got %+v", spec.Image)
+		}
+		if spec.Image.DiskPath != "" {
+			t.Errorf("qcow2 disk path should be empty for firecracker, got %q", spec.Image.DiskPath)
+		}
+	}
+}
+
 func TestDeployWithoutEnvLabelUsesHashFallback(t *testing.T) {
 	fx := newCoreFixture(t, domain.RuntimeTypeVMQEMU)
 	if err := fx.rt.Deploy(context.Background(), "api", "vm/base@"+fx.digest, DeployOptions{}); err != nil {

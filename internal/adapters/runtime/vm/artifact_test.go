@@ -65,17 +65,34 @@ func writeRelease(t *testing.T, root, repo, releaseID, format string, uefi bool)
 	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	disk := []byte("fake-qcow2-disk-content-" + releaseID)
-	if err := os.WriteFile(filepath.Join(releaseDir, "disk.qcow2"), disk, 0o644); err != nil {
-		t.Fatal(err)
+	hashes := map[string]string{}
+	if format == FormatFirecrackerRootFS {
+		kernel := []byte("fake-kernel-" + releaseID)
+		if err := os.WriteFile(filepath.Join(releaseDir, "kernel"), kernel, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		kernelSum := sha256.Sum256(kernel)
+		hashes["kernel"] = hex.EncodeToString(kernelSum[:])
+		rootfs := []byte("fake-rootfs-ext4-" + releaseID)
+		if err := os.WriteFile(filepath.Join(releaseDir, "rootfs.ext4"), rootfs, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rootfsSum := sha256.Sum256(rootfs)
+		hashes["rootfs"] = hex.EncodeToString(rootfsSum[:])
+	} else {
+		disk := []byte("fake-qcow2-disk-content-" + releaseID)
+		if err := os.WriteFile(filepath.Join(releaseDir, "disk.qcow2"), disk, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		diskSum := sha256.Sum256(disk)
+		hashes["disk"] = hex.EncodeToString(diskSum[:])
 	}
-	diskSum := sha256.Sum256(disk)
 	manifest := map[string]any{
 		"image_id":               releaseID,
 		"arch":                   "x86_64",
 		"format":                 format,
 		"agent_protocol_version": 1,
-		"sha256":                 map[string]string{"disk": hex.EncodeToString(diskSum[:])},
+		"sha256":                 hashes,
 	}
 	if uefi {
 		vars := []byte("fake-uefi-vars-" + releaseID)
@@ -136,6 +153,67 @@ func TestResolveReleaseUEFI(t *testing.T) {
 	}
 	if release.UEFIVarsPath != filepath.Join(release.Dir, "uefi-vars.fd") {
 		t.Errorf("unexpected uefi vars path: %s", release.UEFIVarsPath)
+	}
+}
+
+func TestResolveReleaseFirecracker(t *testing.T) {
+	root := t.TempDir()
+	digest := writeRelease(t, root, "vm/micro", "rel-fc", FormatFirecrackerRootFS, false)
+
+	release, err := ResolveRelease(root, "vm/micro", digest, FormatFirecrackerRootFS)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if release.KernelPath != filepath.Join(release.Dir, "kernel") {
+		t.Errorf("unexpected kernel path: %s", release.KernelPath)
+	}
+	if release.RootFSPath != filepath.Join(release.Dir, "rootfs.ext4") {
+		t.Errorf("unexpected rootfs path: %s", release.RootFSPath)
+	}
+	if release.DiskPath != "" || release.UEFIVarsPath != "" {
+		t.Errorf("qcow2 fields should be empty for firecracker releases: %+v", release)
+	}
+	spec := release.ImageSpec()
+	if spec.KernelPath != release.KernelPath || spec.RootFSPath != release.RootFSPath {
+		t.Errorf("ImageSpec did not carry firecracker paths: %+v", spec)
+	}
+}
+
+func TestResolveReleaseFirecrackerMissingHashes(t *testing.T) {
+	root := t.TempDir()
+	releaseDir := filepath.Join(root, "vm", "micro", "rel-fc")
+	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{
+		"image_id": "rel-fc",
+		"format":   FormatFirecrackerRootFS,
+		"sha256":   map[string]string{},
+	})
+	if err := os.WriteFile(filepath.Join(releaseDir, "manifest.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("rel-fc", filepath.Join(root, "vm", "micro", "current")); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	_, err := ResolveRelease(root, "vm/micro", digest, FormatFirecrackerRootFS)
+	if err == nil || !strings.Contains(err.Error(), "sha256.kernel") {
+		t.Fatalf("expected missing kernel hash error, got %v", err)
+	}
+}
+
+func TestResolveReleaseFirecrackerCorruptRootfs(t *testing.T) {
+	root := t.TempDir()
+	digest := writeRelease(t, root, "vm/micro", "rel-fc", FormatFirecrackerRootFS, false)
+	rootfsPath := filepath.Join(root, "vm", "micro", "rel-fc", "rootfs.ext4")
+	if err := os.WriteFile(rootfsPath, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveRelease(root, "vm/micro", digest, FormatFirecrackerRootFS)
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected rootfs hash mismatch, got %v", err)
 	}
 }
 
