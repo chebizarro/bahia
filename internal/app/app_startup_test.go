@@ -95,6 +95,7 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 
 	cfg := startupTestConfig(ModeFull)
 	configureValidSoulFactory(t, cfg, signer.pubkey)
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example", "wss://relay.example"}
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer app.Logger.Sync()
@@ -107,7 +108,7 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	require.NoError(t, signer.connectCtx.Err(), "SoulFactory signer connection must outlive startup")
 	require.Equal(t, domain.RuntimeTargetOpenClaw, adapterConfig.Target)
 	require.Equal(t, signer.pubkey, adapterConfig.ControllerPubkey)
-	require.Equal(t, []string{"wss://relay.example", "wss://private.example"}, adapterConfig.Relays)
+	require.Equal(t, []string{"wss://relay.example", "wss://private.example", "wss://browser.example"}, adapterConfig.Relays)
 	require.Same(t, signer, adapterConfig.Signer)
 }
 
