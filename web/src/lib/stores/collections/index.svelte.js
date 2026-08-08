@@ -31,7 +31,8 @@ import {
   backupVerifications,
   backupRestores,
   backupRetentionRuns,
-  backupRuntimeObservations
+  backupRuntimeObservations,
+  backupAttestations
 } from './backup.svelte.js';
 import { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
 import { events } from './activity.svelte.js';
@@ -69,6 +70,7 @@ export {
   operationsForDomain,
   operationsForEntity,
   isTerminalOperationStatus,
+  OPERATION_REQUEST_KINDS,
   OPERATION_STATUS_KINDS,
   OPERATION_RESULT_KINDS,
   HIVE_CI_OPERATION_KINDS
@@ -82,7 +84,8 @@ export {
   backupVerifications,
   backupRestores,
   backupRetentionRuns,
-  backupRuntimeObservations
+  backupRuntimeObservations,
+  backupAttestations
 } from './backup.svelte.js';
 export { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
 export { events } from './activity.svelte.js';
@@ -153,6 +156,7 @@ export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
   'backupRestores',
   'backupRetentionRuns',
   'backupRuntimeObservations',
+  'backupAttestations',
   'mlEndpointStates'
 ]);
 
@@ -257,6 +261,7 @@ const COLLECTION_TARGETS = Object.freeze({
   backupRestores,
   backupRetentionRuns,
   backupRuntimeObservations,
+  backupAttestations,
   mlModels,
   mlModelVersions,
   mlEndpoints,

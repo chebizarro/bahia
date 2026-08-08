@@ -114,7 +114,8 @@ describe('DNS command store APIs', () => {
 
   it('builds narrow DNS read-model relay filters scoped to the Bahia service pubkey', () => {
     expect(store.dnsReadModelFilters('b'.repeat(64))).toEqual([
-      { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] }
+      { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] },
+      { kinds: [6941, 7941, 7942, 7943, 7944, 7945], since: expect.any(Number), limit: 1000, authors: ['b'.repeat(64)] }
     ]);
   });
 

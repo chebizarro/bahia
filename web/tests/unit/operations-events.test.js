@@ -13,6 +13,7 @@ import {
   refreshOperations,
   resetOperations
 } from '../../src/lib/stores/collections/operations.svelte.js';
+import { backupAttestations, resetBackup } from '../../src/lib/stores/collections/backup.svelte.js';
 import {
   DEPLOYMENT_RESULT,
   DEPLOYMENT_STATUS,
@@ -45,6 +46,10 @@ const STATUS_KINDS = [
   6991,
   6997
 ];
+
+const ML_OPERATION_KINDS = Array.from({ length: 10 }, (_, index) => 38390 + index);
+const BACKUP_RESULT_KINDS = Array.from({ length: 10 }, (_, index) => 38410 + index);
+const BACKUP_ATTESTATION_KINDS = [31310, 31311];
 
 const RESULT_KINDS = [
   7941,
@@ -133,6 +138,7 @@ const deploymentResult = relayEvent({
 beforeEach(() => {
   resetEventRouting();
   resetOperations();
+  resetBackup();
   controlplaneConnection.servicePubkey = SERVICE_PUBKEY;
 });
 
@@ -145,7 +151,7 @@ describe('operational event subscriptions', () => {
     const filters = readModelFilters();
     const subscribedKinds = new Set(filters.flatMap((filter) => filter.kinds || []));
 
-    for (const kind of [...STATUS_KINDS, ...RESULT_KINDS, HIVE_CI_WORKFLOW_RUN, HIVE_CI_WORKFLOW_RESULT]) {
+    for (const kind of [...STATUS_KINDS, ...RESULT_KINDS, ...ML_OPERATION_KINDS, ...BACKUP_RESULT_KINDS, ...BACKUP_ATTESTATION_KINDS, HIVE_CI_WORKFLOW_RUN, HIVE_CI_WORKFLOW_RESULT]) {
       expect(subscribedKinds.has(kind), `missing subscription kind ${kind}`).toBe(true);
     }
   });
@@ -164,6 +170,63 @@ describe('operational event subscriptions', () => {
       pubkey: OTHER_PUBKEY
     }))).toBe(false);
     expect(operations).toHaveLength(0);
+  });
+});
+
+describe('ML and backup live operations', () => {
+  it('merges ML request/result events by the result e-tag', () => {
+    const request = relayEvent({
+      id: 'a'.repeat(64),
+      kind: 38391,
+      created_at: 1770000100,
+      tags: [['d', 'deploy:model-1'], ['endpoint', 'endpoint-1'], ['model', 'model-1']],
+      content: { operation: 'inference_deploy', endpoint_id: 'endpoint-1', model_id: 'model-1' }
+    });
+    const result = relayEvent({
+      id: 'b'.repeat(64),
+      kind: 38396,
+      created_at: 1770000110,
+      tags: [['d', `result:${request.id}`], ['e', request.id, '', 'reply'], ['endpoint', 'endpoint-1'], ['status', 'succeeded']],
+      content: { status: 'succeeded', message: 'endpoint deployed' }
+    });
+
+    expect(applyControlplaneEvent(request)).toBe(true);
+    expect(applyControlplaneEvent(result)).toBe(true);
+    expect(operationsForDomain(operations, 'ml')).toEqual([
+      expect.objectContaining({ request_event_id: request.id, result_event_id: result.id, endpoint_id: 'endpoint-1', status: 'succeeded', terminal: true })
+    ]);
+  });
+
+  it('streams backup statuses, terminal results, and attestations', () => {
+    const requestId = 'c'.repeat(64);
+    expect(applyControlplaneEvent(relayEvent({
+      id: 'd'.repeat(64),
+      kind: 6981,
+      created_at: 1770000200,
+      tags: [['e', requestId, '', 'reply'], ['run', 'backup-run-1'], ['status', 'running']],
+      content: { message: 'snapshotting' }
+    }))).toBe(true);
+    expect(applyControlplaneEvent(relayEvent({
+      id: 'e'.repeat(64),
+      kind: 38410,
+      created_at: 1770000210,
+      tags: [['e', requestId, '', 'reply'], ['run', 'backup-run-1'], ['status', 'succeeded']],
+      content: { status: 'succeeded', message: 'backup complete' }
+    }))).toBe(true);
+    expect(applyControlplaneEvent(relayEvent({
+      id: 'f'.repeat(64),
+      kind: 31310,
+      created_at: 1770000220,
+      tags: [['run', 'backup-run-1'], ['status', 'verified']],
+      content: { artifact_id: 'artifact-1' }
+    }))).toBe(true);
+
+    expect(operationsForDomain(operations, 'backup')).toEqual([
+      expect.objectContaining({ request_event_id: requestId, run_id: 'backup-run-1', status: 'succeeded', result_event_kind: 38410 })
+    ]);
+    expect(backupAttestations).toEqual([
+      expect.objectContaining({ kind: 31310, backup_run_id: 'backup-run-1', status: 'verified', artifact_id: 'artifact-1' })
+    ]);
   });
 });
 

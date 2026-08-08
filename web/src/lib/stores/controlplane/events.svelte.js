@@ -23,17 +23,23 @@ import {
   applyLoomJobResultEvent,
   workerApplicators
 } from '../collections/workers.svelte.js';
-import { backupApplicators } from '../collections/backup.svelte.js';
+import {
+  BACKUP_ATTESTATION_KINDS,
+  applyBackupAttestationEvent,
+  backupApplicators
+} from '../collections/backup.svelte.js';
 import { mlApplicators } from '../collections/ml.svelte.js';
 import { applyActivityEvent } from '../collections/activity.svelte.js';
 import {
   CANONICAL_OPERATION_KINDS,
   EXTERNAL_OPERATION_KINDS,
   HIVE_CI_OPERATION_KINDS,
+  OPERATION_REQUEST_KINDS,
   OPERATION_RESULT_KINDS,
   OPERATION_STATUS_KINDS,
   applyHiveCIWorkflowResultEvent,
   applyHiveCIWorkflowRunEvent,
+  applyOperationRequestEvent,
   applyOperationResultEvent,
   applyOperationStatusEvent
 } from '../collections/operations.svelte.js';
@@ -77,6 +83,12 @@ export function readModelFilters() {
       ...authorFilter
     },
     {
+      kinds: BACKUP_ATTESTATION_KINDS,
+      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
+      limit: OPERATION_LIMIT,
+      ...authorFilter
+    },
+    {
       kinds: EXTERNAL_OPERATION_KINDS,
       since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
       limit: OPERATION_LIMIT
@@ -93,7 +105,8 @@ export function readModelFilters() {
 function isCanonicalBahiaKind(kind) {
   return CANONICAL_READ_MODEL_KINDS.includes(kind)
     || ACTIVITY_KINDS.includes(kind)
-    || CANONICAL_OPERATION_KINDS.includes(kind);
+    || CANONICAL_OPERATION_KINDS.includes(kind)
+    || BACKUP_ATTESTATION_KINDS.includes(kind);
 }
 
 function shouldAcceptControlplaneEvent(event) {
@@ -197,6 +210,7 @@ const handlers = new Map([
   [LOOM_JOB_REQUEST, applyLoomJobRequestEvent],
   [LOOM_JOB_STATUS_UPDATE, applyLoomJobStatusEvent],
   [LOOM_JOB_RESULT, applyLoomJobResultEvent],
+  ...OPERATION_REQUEST_KINDS.map((kind) => [kind, applyOperationRequestEvent]),
   ...OPERATION_STATUS_KINDS.map((kind) => [kind, applyOperationStatusEvent]),
   ...OPERATION_RESULT_KINDS.map((kind) => [kind, applyOperationResultEvent]),
   [HIVE_CI_OPERATION_KINDS[0], applyHiveCIWorkflowRunEvent],
@@ -215,6 +229,7 @@ const handlers = new Map([
   [BAHIA_STATE_SCHEMAS.BACKUP_VERIFICATION_STATE, backupApplicators.verification],
   [BAHIA_STATE_SCHEMAS.BACKUP_RESTORE_STATE, backupApplicators.restore],
   [BAHIA_STATE_SCHEMAS.BACKUP_RUNTIME_OBSERVATION_STATE, backupApplicators.runtimeObservation],
+  ...BACKUP_ATTESTATION_KINDS.map((kind) => [kind, applyBackupAttestationEvent]),
   [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, mlApplicators.model],
   [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, mlApplicators.modelVersion],
   [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, mlApplicators.endpoint],

@@ -106,7 +106,8 @@ describe('DNS dashboard Nostr subscription store', () => {
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledTimes(1);
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith([
-      { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] }
+      { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] },
+      { kinds: [6941, 7941, 7942, 7943, 7944, 7945], since: expect.any(Number), limit: 1000, authors: ['b'.repeat(64)] }
     ], expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onHealth: expect.any(Function), onClosed: expect.any(Function), onAuth: expect.any(Function) }));
   });
 
@@ -260,6 +261,38 @@ describe('DNS dashboard Nostr subscription store', () => {
       resubscribeAttempts: 2,
       lastClosedReason: 'rate-limited'
     });
+  });
+
+  it('projects retained DNS status and result EVENTs into command runs', async () => {
+    await store.connect('ws://localhost:10547/relay', 'b'.repeat(64));
+    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
+    const requestId = 'r'.repeat(64);
+
+    callbacks.onEvent(event({
+      id: 'dns-status-live',
+      kind: 6941,
+      tags: [['e', requestId, '', 'reply'], ['status', 'processing'], ['step', 'apply']],
+      content: { command: 'zone_create', message: 'applying zone' }
+    }), 'relay-a');
+    callbacks.onEvent(event({
+      id: 'dns-result-live',
+      kind: 7941,
+      created_at: 110,
+      tags: [['e', requestId, '', 'reply'], ['status', 'success']],
+      content: { zone: 'prod.example', message: 'zone created' }
+    }), 'relay-a');
+
+    expect(store.dnsState.commandRuns).toEqual([
+      expect.objectContaining({
+        id: requestId,
+        requestEventId: requestId,
+        command: 'zone_create',
+        phase: 'completed',
+        relayFed: true,
+        statusEvents: [expect.objectContaining({ id: 'dns-status-live', status: 'processing', step: 'apply' })],
+        result: expect.objectContaining({ id: 'dns-result-live', kind: 7941, status: 'success', zone: 'prod.example' })
+      })
+    ]);
   });
 
   it('dedupes parameterized replaceable DNS events and applies tombstones', () => {

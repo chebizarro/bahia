@@ -1,5 +1,5 @@
 <script>
-  import { bootstrapControlplane, controlplaneConnection, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, environments, workers } from '$lib/stores';
+  import { bootstrapControlplane, controlplaneConnection, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, environments, workers, operations } from '$lib/stores';
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
@@ -133,6 +133,7 @@
     }
   });
   let existingEndpointForDeploy = $derived(resolveEndpointForInput(mlEndpoints, deployForm.endpoint));
+  let mlOperations = $derived(operations.filter((operation) => operation.domain === 'ml').slice(0, 20));
 
   async function handleImport(event) {
     event.preventDefault();
@@ -403,6 +404,33 @@
                   <td>{endpointTaskLabel(endpoint)}</td>
                   <td>{endpoint.protocol || '-'}</td>
                   <td><span class="status-badge status-{endpointStatusBadge(state)}">{endpointStatusBadge(state)}</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </section>
+
+    <section class="panel" data-testid="ml-operation-results">
+      <div class="section-header">
+        <h2><ProgressIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Live ML Operations</h2>
+        <span>{mlOperations.length}</span>
+      </div>
+      {#if mlOperations.length === 0}
+        <p class="empty">No ML request or result events received yet.</p>
+      {:else}
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Updated</th><th>Operation</th><th>Status</th><th>Model / endpoint</th><th>Message</th></tr></thead>
+            <tbody>
+              {#each mlOperations as operation}
+                <tr>
+                  <td>{operation.updated_at ? new Date(operation.updated_at).toLocaleString() : '-'}</td>
+                  <td>{operation.operation || operation.result_event_kind || operation.request_event?.kind || '-'}</td>
+                  <td><span class="status-badge status-{operation.status || 'pending'}">{operation.status || 'pending'}</span></td>
+                  <td>{operation.model_id || operation.model_version_id || operation.endpoint_id || '-'}</td>
+                  <td>{operation.message || operation.error || '-'}</td>
                 </tr>
               {/each}
             </tbody>

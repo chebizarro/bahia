@@ -20,7 +20,13 @@ import {
 
 import {
   CASCADIA_CONTROLPLANE_STATE,
-  DNS_STATE_SCHEMAS
+  DNS_BACKEND_REGISTER_RESULT,
+  DNS_DRIFT_REMEDIATE_RESULT,
+  DNS_OPERATION_STATUS,
+  DNS_POLICY_APPLY_RESULT,
+  DNS_RECORD_OVERRIDE_RESULT,
+  DNS_STATE_SCHEMAS,
+  DNS_ZONE_CREATE_RESULT
 } from '$lib/nostr/kinds.gen.js';
 
 export const DNS_READ_MODEL_SCHEMAS = DNS_STATE_SCHEMAS;
@@ -30,6 +36,16 @@ export const DNS_READ_MODEL_KINDS = Object.freeze({
 
 const DNS_SCHEMA_LIST = Object.values(DNS_READ_MODEL_SCHEMAS);
 const DNS_READ_MODEL_LIMIT = 5000;
+const DNS_OPERATION_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
+const DNS_OPERATION_LIMIT = 1000;
+export const DNS_OPERATION_KINDS = Object.freeze([
+  DNS_OPERATION_STATUS,
+  DNS_ZONE_CREATE_RESULT,
+  DNS_POLICY_APPLY_RESULT,
+  DNS_RECORD_OVERRIDE_RESULT,
+  DNS_DRIFT_REMEDIATE_RESULT,
+  DNS_BACKEND_REGISTER_RESULT
+]);
 const NIP66_RELAY_MONITOR_ANNOUNCEMENT = 10166;
 const NIP66_RELAY_DISCOVERY = 30166;
 
@@ -300,7 +316,15 @@ export function dnsReadModelFilters(pubkey = dnsState.connection.servicePubkey, 
   const servicePubkey = String(pubkey || '').trim();
   const authorFilter = servicePubkey ? { authors: [servicePubkey] } : {};
   const temporal = since ? { since } : { limit: DNS_READ_MODEL_LIMIT };
-  return [{ kinds: [CASCADIA_CONTROLPLANE_STATE], '#domain': ['dns'], '#schema': DNS_SCHEMA_LIST, ...temporal, ...authorFilter }];
+  return [
+    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#domain': ['dns'], '#schema': DNS_SCHEMA_LIST, ...temporal, ...authorFilter },
+    {
+      kinds: DNS_OPERATION_KINDS,
+      since: since || Math.floor(Date.now() / 1000) - DNS_OPERATION_BACKFILL_SECONDS,
+      limit: DNS_OPERATION_LIMIT,
+      ...authorFilter
+    }
+  ];
 }
 
 function parseEventContent(event) {
@@ -477,6 +501,88 @@ export function applyDNSReadModelEvent(event) {
   return changed;
 }
 
+function dnsOperationCommand(kind, content) {
+  const byKind = {
+    [DNS_ZONE_CREATE_RESULT]: DNS_COMMANDS.ZONE_CREATE,
+    [DNS_POLICY_APPLY_RESULT]: DNS_COMMANDS.POLICY_APPLY,
+    [DNS_RECORD_OVERRIDE_RESULT]: DNS_COMMANDS.RECORD_OVERRIDE,
+    [DNS_DRIFT_REMEDIATE_RESULT]: DNS_COMMANDS.DRIFT_REMEDIATE,
+    [DNS_BACKEND_REGISTER_RESULT]: 'backend_register'
+  };
+  return content.command || content.operation || byKind[kind] || 'dns_operation';
+}
+
+function dnsOperationStatus(event, content) {
+  return String(getTagValue(event, 'status') || content.status || (event.kind === DNS_OPERATION_STATUS ? 'processing' : 'completed')).toLowerCase();
+}
+
+function dnsOperationSnapshot(event, content, status) {
+  return {
+    ...content,
+    id: event.id,
+    kind: event.kind,
+    pubkey: event.pubkey,
+    created_at: event.created_at,
+    status,
+    step: getTagValue(event, 'step') || content.step,
+    message: content.message
+  };
+}
+
+export function applyDNSOperationEvent(event) {
+  if (!event?.id || !DNS_OPERATION_KINDS.includes(event.kind) || seenEventIds.has(event.id)) return false;
+  if (dnsState.connection.servicePubkey && event.pubkey !== dnsState.connection.servicePubkey) return false;
+  const requestEventId = getTagValue(event, 'e');
+  if (!requestEventId) return false;
+
+  let content;
+  try {
+    content = parseEventContent(event);
+  } catch (error) {
+    dnsState.error.subscription = error?.message || String(error);
+    return false;
+  }
+
+  const status = dnsOperationStatus(event, content);
+  const snapshot = dnsOperationSnapshot(event, content, status);
+  let run = dnsState.commandRuns.find((candidate) => candidate.requestEventId === requestEventId);
+  if (!run) {
+    run = {
+      id: requestEventId,
+      command: dnsOperationCommand(event.kind, content),
+      phase: 'published',
+      requestEventId,
+      publishOk: [],
+      acceptedRelays: [],
+      rejectedRelays: [],
+      statusEvents: [],
+      result: null,
+      error: null,
+      payload: {},
+      startedAt: (event.created_at || 0) * 1000,
+      completedAt: null,
+      relayFed: true
+    };
+  }
+
+  if (event.kind === DNS_OPERATION_STATUS) {
+    if (!run.statusEvents.some((statusEvent) => statusEvent.id === event.id)) {
+      run.statusEvents = [...run.statusEvents, snapshot];
+    }
+    if (!run.result) run.phase = status;
+  } else {
+    run.result = snapshot;
+    run.phase = dnsResultIsFailure(snapshot) ? 'failed' : 'completed';
+    run.error = dnsResultIsFailure(snapshot) ? snapshot.error || snapshot.message || 'DNS command failed' : null;
+    run.completedAt = (event.created_at || 0) * 1000;
+  }
+
+  seenEventIds.add(event.id);
+  dnsState.commandRuns = [run, ...dnsState.commandRuns.filter((candidate) => candidate !== run)].slice(0, 50);
+  dnsState.connection.lastEventAt = new Date().toISOString();
+  return true;
+}
+
 export function relayMonitorFilters(relays = dnsState.connection.relays, trustedRelayMonitors = dnsState.connection.trustedRelayMonitors) {
   const relayList = normalizeRelayList(relays);
   const monitors = normalizePubkeyList(trustedRelayMonitors);
@@ -636,7 +742,11 @@ function startDNSReadModelSubscription(since = null) {
 
   unsubscribeDNSReadModels = nostr.subscribeWithRecovery(dnsReadModelFilters(dnsState.connection.servicePubkey, { since }), {
     onEvent: (event) => {
-      applyDNSReadModelEvent(event);
+      if (DNS_OPERATION_KINDS.includes(event?.kind)) {
+        applyDNSOperationEvent(event);
+      } else {
+        applyDNSReadModelEvent(event);
+      }
     },
     onEose: (relay) => {
       if (relay) eoseRelays.add(relay);

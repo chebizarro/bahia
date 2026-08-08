@@ -1,5 +1,5 @@
 <script>
-  import { bootstrapControlplane, controlplaneConnection, environments, events, llmRouteStates, llmRoutes } from '$lib/stores';
+  import { bootstrapControlplane, controlplaneConnection, environments, events, llmRouteStates, llmRoutes, operations } from '$lib/stores';
   import {
     approveLLMDeploymentIntent,
     createLLMRoute,
@@ -118,6 +118,7 @@
   let llmEventHistory = $derived.by(() => buildLLMEventHistory(events, LLM_ACTIVITY_KINDS, getTagValue));
 
   let llmActivity = $derived.by(() => llmEventHistory.slice(0, 20));
+  let llmOperations = $derived(operations.filter((operation) => operation.domain === 'llm').slice(0, 20));
 
   let recentReleases = $derived.by(() => buildRecentReleases(llmEventHistory, getTagValue));
 
@@ -482,6 +483,31 @@
                       -
                     {/if}
                   </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </section>
+
+      <section class="panel" data-testid="llm-operation-table">
+        <div class="section-header">
+          <h2><ProgressIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Live Deployments</h2>
+          <span>{llmOperations.length}</span>
+        </div>
+        {#if llmOperations.length === 0}
+          <p class="empty">No live LLM deployment status received yet.</p>
+        {:else}
+          <table>
+            <thead><tr><th>Updated</th><th>Operation</th><th>Status</th><th>Route</th><th>Message</th></tr></thead>
+            <tbody>
+              {#each llmOperations as operation}
+                <tr>
+                  <td>{operation.updated_at ? new Date(operation.updated_at).toLocaleString() : '-'}</td>
+                  <td>{operation.operation || operation.result_event_kind || operation.status_event_kind || '-'}</td>
+                  <td>{operation.status || '-'}</td>
+                  <td>{routeName(llmRoutes, operation.route_id)}</td>
+                  <td>{operation.message || operation.error || '-'}</td>
                 </tr>
               {/each}
             </tbody>

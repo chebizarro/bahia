@@ -51,6 +51,7 @@ export {
   backupRestores,
   backupRetentionRuns,
   backupRuntimeObservations,
+  backupAttestations,
   mlModels,
   mlModelVersions,
   mlEndpoints,
