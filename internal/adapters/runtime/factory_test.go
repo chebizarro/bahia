@@ -177,6 +177,46 @@ func TestNewRuntime_UnsupportedType(t *testing.T) {
 	}
 }
 
+func TestNewRuntime_VMTypesNotYetWired(t *testing.T) {
+	for _, typ := range []string{"vm-firecracker", "vm-qemu"} {
+		_, err := NewRuntime(RuntimeConfig{Type: typ}, zap.NewNop())
+		if err == nil {
+			t.Fatalf("expected not-yet-wired error for %s", typ)
+		}
+		if !contains(err.Error(), "not yet wired") {
+			t.Errorf("unexpected error message for %s: %v", typ, err)
+		}
+	}
+}
+
+func TestNewRuntime_VMConfigRejectedForNonVMTypes(t *testing.T) {
+	for _, typ := range []string{"docker", "compose", "kubernetes", "podman"} {
+		_, err := NewRuntime(RuntimeConfig{
+			Type: typ,
+			VM:   config.RuntimeVMConfig{StateDir: "/var/lib/bahia/vm"},
+		}, zap.NewNop())
+		if err == nil {
+			t.Fatalf("expected vm.* rejection error for %s", typ)
+		}
+		if !contains(err.Error(), "vm.* runtime settings are not valid") {
+			t.Errorf("unexpected error message for %s: %v", typ, err)
+		}
+	}
+}
+
+func TestNewRuntime_VMFirecrackerRejectsLibvirtURI(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{
+		Type: "vm-firecracker",
+		VM:   config.RuntimeVMConfig{LibvirtURI: "qemu:///system"},
+	}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected libvirt_uri rejection for vm-firecracker")
+	}
+	if !contains(err.Error(), "libvirt_uri") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 func TestNewRuntime_ComposeRequiresComposeDir(t *testing.T) {
 	_, err := NewRuntime(RuntimeConfig{Type: "compose", ExecutionMode: "cli"}, zap.NewNop())
 	if err == nil {
@@ -408,6 +448,9 @@ func TestComposeRuntime_ComposeArgsV1(t *testing.T) {
 }
 
 // TestRuntimeInterfaceCompileTime verifies all runtime types satisfy the interface.
+// NOTE: vm-firecracker and vm-qemu are in the domain closed set but have no
+// adapter yet (NewRuntime returns an explicit not-yet-wired error); add their
+// implementations here when internal/adapters/runtime/vm lands.
 func TestRuntimeInterfaceCompileTime(t *testing.T) {
 	// These are compile-time checks; if they compile, they pass.
 	var _ Runtime = (*DockerObserver)(nil)

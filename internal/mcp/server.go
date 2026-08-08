@@ -288,7 +288,7 @@ func (s *Server) GetTools() []Tool {
 					"runtime_type": map[string]interface{}{
 						"type":        "string",
 						"description": "Target runtime type",
-						"enum":        []string{"docker", "compose", "kubernetes", "podman"},
+						"enum":        []string{"docker", "compose", "kubernetes", "podman", "vm-firecracker", "vm-qemu"},
 						"default":     "docker",
 					},
 				},
@@ -324,7 +324,7 @@ func (s *Server) GetTools() []Tool {
 					"runtime_type": map[string]interface{}{
 						"type":        "string",
 						"description": "New runtime type (optional)",
-						"enum":        []string{"docker", "compose", "kubernetes", "podman"},
+						"enum":        []string{"docker", "compose", "kubernetes", "podman", "vm-firecracker", "vm-qemu"},
 					},
 				},
 				"required": []string{"service_id"},

@@ -12,7 +12,7 @@ import (
 
 // RuntimeConfig holds the configuration needed to create a Runtime.
 type RuntimeConfig struct {
-	Type          string // "docker", "compose", "kubernetes", "podman"
+	Type          string // "docker", "compose", "kubernetes", "podman", "vm-firecracker", "vm-qemu"
 	DockerHost    string // Docker socket or TCP address
 	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
@@ -20,9 +20,10 @@ type RuntimeConfig struct {
 	ExecutionMode string // "engine_api", "cli", or "sdk"; compose requires explicit "cli" or "sdk"
 	Endpoint      config.RuntimeEndpointConfig
 	RegistryAuth  *RegistryAuthConfig
-	KubeContext   string // Kubernetes context name
-	KubeNamespace string // Kubernetes namespace
-	KubeConfig    string // Path to kubeconfig file
+	KubeContext   string                 // Kubernetes context name
+	KubeNamespace string                 // Kubernetes namespace
+	KubeConfig    string                 // Path to kubeconfig file
+	VM            config.RuntimeVMConfig // VM runtime settings (vm-firecracker, vm-qemu only)
 }
 
 // NewRuntime creates a Runtime implementation based on the config type.
@@ -30,6 +31,12 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 	rt := domain.RuntimeType(cfg.Type)
 	if rt == "" {
 		rt = domain.RuntimeTypeDocker
+	}
+
+	// VM settings on a non-VM runtime type are an explicit configuration
+	// error rather than silently ignored fields.
+	if rt != domain.RuntimeTypeVMFirecracker && rt != domain.RuntimeTypeVMQEMU && !cfg.VM.Empty() {
+		return nil, fmt.Errorf("vm.* runtime settings are not valid for runtime type %q (allowed only for vm-firecracker and vm-qemu)", rt)
 	}
 
 	switch rt {
@@ -94,6 +101,14 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		}
 		return NewPodmanObserver(host, logger), nil
 
+	case domain.RuntimeTypeVMFirecracker, domain.RuntimeTypeVMQEMU:
+		if err := validateVMRuntimeConfig(rt, cfg); err != nil {
+			return nil, err
+		}
+		// Domain plumbing (types, config, validation) landed ahead of the VM
+		// adapter package; fail explicitly until the drivers are wired in.
+		return nil, fmt.Errorf("runtime type %q is not yet wired: the VM adapter package (internal/adapters/runtime/vm) has not landed yet", rt)
+
 	default:
 		return nil, fmt.Errorf("unsupported runtime type: %q", cfg.Type)
 	}
@@ -132,8 +147,13 @@ func RuntimeConfigFromWorkerTarget(target *domain.WorkerRuntimeTarget, cfg confi
 		KubeNamespace: strings.TrimSpace(target.KubeNamespace),
 	}
 
+	// Kubernetes targets resolve through kubeconfig contexts and VM targets
+	// are host-local, so neither requires a Docker endpoint reference.
+	endpointOptional := rt == domain.RuntimeTypeK8s ||
+		rt == domain.RuntimeTypeVMFirecracker ||
+		rt == domain.RuntimeTypeVMQEMU
 	ref := strings.TrimSpace(target.EndpointRef)
-	if ref == "" && rt != domain.RuntimeTypeK8s {
+	if ref == "" && !endpointOptional {
 		return RuntimeConfig{}, fmt.Errorf("worker runtime target endpoint_ref is required for %s runtime", rt)
 	}
 	if ref != "" {
@@ -163,6 +183,8 @@ func RuntimeConfigFromWorkerTarget(target *domain.WorkerRuntimeTarget, cfg confi
 		}
 		runtimeCfg.KubeContext = strings.TrimSpace(cfg.KubeContext)
 		runtimeCfg.KubeConfig = strings.TrimSpace(cfg.KubeConfig)
+	case domain.RuntimeTypeVMFirecracker, domain.RuntimeTypeVMQEMU:
+		runtimeCfg.VM = cfg.VM
 	}
 
 	if runtimeCfg.DockerHost == "" {
@@ -172,6 +194,18 @@ func RuntimeConfigFromWorkerTarget(target *domain.WorkerRuntimeTarget, cfg confi
 		runtimeCfg.ExecutionMode = strings.TrimSpace(cfg.ExecutionMode)
 	}
 	return runtimeCfg, nil
+}
+
+// validateVMRuntimeConfig rejects VM runtime settings that are unknown for
+// the concrete VM runtime type (explicit-failure convention). Non-VM fields
+// such as compose_dir or kube_* are not rejected here because the resolver
+// overlays them from global defaults in mixed-runtime configurations; only
+// fields that must have been set explicitly for a VM target are checked.
+func validateVMRuntimeConfig(rt domain.RuntimeType, cfg RuntimeConfig) error {
+	if rt == domain.RuntimeTypeVMFirecracker && strings.TrimSpace(cfg.VM.LibvirtURI) != "" {
+		return fmt.Errorf("vm.libvirt_uri is not valid for runtime type %q (libvirt applies only to vm-qemu)", rt)
+	}
+	return nil
 }
 
 func normalizeRuntimeExecutionMode(mode string) RuntimeExecutionMode {

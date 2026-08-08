@@ -71,7 +71,7 @@ export class BahiaAPIDriver {
     name: string;
     artifact_repo: string;
     repo_url?: string;
-    runtime_type?: 'docker' | 'compose' | 'kubernetes' | 'podman';
+    runtime_type?: 'docker' | 'compose' | 'kubernetes' | 'podman' | 'vm-firecracker' | 'vm-qemu';
   }): Promise<APIResponse<Service>> {
     return this.request<Service>('/api/v1/services', {
       method: 'POST',

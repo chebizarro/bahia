@@ -30,7 +30,8 @@ Let bahia deploy and monitor long-lived VM instances — Firecracker microVMs an
 2. **Both engines** ship behind one shared VM-runtime abstraction: libvirt/QEMU (Linux + Windows/UEFI) and Firecracker (Linux microVMs).
 3. **Guest-level metrics are in scope** via cascadia-guest-agent (protocol extension in cascadia-go).
 4. Artifact model: recommendation below (Approach §3).
-5. **V1 VM adapters use the legacy `Runtime.Deploy` path and do NOT implement `DesiredStateApplier`** (`internal/adapters/runtime/desired_state_capability.go:23`). Legacy drift compares desired artifact digest vs observed digest + health (`internal/service/registry.go:1555-1659`), which works unchanged with manifest-hash digests. Desired-state/`NormalizedObservation` support (container-shaped today, `runtime_desired_state.go:983-1008`) is an explicit follow-up.
+5. **VMs run on the host where bahia executes** — local `virsh`/local `state_dir`. Remote VM hosts would reshape config/resolver and the Observe transport; explicitly out of scope for v1.
+6. **V1 VM adapters use the legacy `Runtime.Deploy` path and do NOT implement `DesiredStateApplier`** (`internal/adapters/runtime/desired_state_capability.go:23`). Legacy drift compares desired artifact digest vs observed digest + health (`internal/service/registry.go:1555-1659`), which works unchanged with manifest-hash digests. Desired-state/`NormalizedObservation` support (container-shaped today, `runtime_desired_state.go:983-1008`) is an explicit follow-up.
 
 ## Approach
 
@@ -55,7 +56,7 @@ New package `internal/adapters/runtime/vm`:
 Keep bahia's artifact identity untouched (UUID → `ImageRepo`/`ImageDigest`), and make the digest point at a **VM image release manifest** rather than an OCI image:
 
 - Extend cascadia-go's packaging manifest with a `format` field (`firecracker-rootfs` | `qcow2`) and qcow2/UEFI fields for QEMU/Windows; keep sha256 pinning + atomic `current` symlink semantics.
-- `ImageRepo` = release channel path under the host's `image_root` (or fetchable URL later); `ImageDigest` = `sha256:<hex>` of the canonical `manifest.json` bytes. Deploy receives `repo@sha256:...` (built at `runtime_lifecycle.go:1261-1269`), splits on `@`, resolves `<image_root>/<repo>/current` (following the symlink once), recomputes the manifest hash, and fails explicitly on mismatch — mirroring cascadia-go's runtime verification (`platform_linux.go:452-522`). Tag-only artifacts (no digest) are rejected for VM runtimes.
+- `ImageRepo` = release channel path under the host's `image_root` (or fetchable URL later); `ImageDigest` = `sha256:<hex>` of the canonical `manifest.json` bytes. Deploy receives `repo@sha256:...` (built at `runtime_lifecycle.go:1261-1269`), splits on `@`, resolves `<image_root>/<repo>/current` (following the symlink once), recomputes the manifest hash, and fails explicitly on mismatch — mirroring cascadia-go's runtime verification (`platform_linux.go:452-522`). Tag-only artifacts (no digest) and malformed refs are rejected inside the vm core with explicit errors before any hypervisor call; registry-auth handling is bypassed for `vm-*` runtime types (filesystem repo paths never hit the OCI client).
 - This keeps intent/state/drift machinery unchanged: observed "image digest" is the manifest hash of the running instance's release.
 
 ### 4. Observe + guest metrics
@@ -64,6 +65,8 @@ Keep bahia's artifact identity untouched (UUID → `ImageRepo`/`ImageDigest`), a
 1. Hypervisor state (`virsh domstate` / VMM process liveness) → running/stopped.
 2. Guest-agent **ping** over vsock → healthy vs degraded.
 3. Guest-agent **metrics** (CPU %, mem used/total, disk used/total, uptime) → `RuntimeObservation.Metadata`.
+
+Agent expectation is declared per image: manifests carry `agent_protocol_version`; a manifest declaring `agent: none` (or a pre-v2 version) makes hypervisor-running sufficient for `healthy` — so Windows guests are not permanently degraded before fp-1mn lands. Images that declare a v2 agent require a successful ping for `healthy`.
 
 Requires a cascadia-go protocol v2 (backward-compatible additions): `ping`/`pong` and `metrics_request`/`metrics_report` frames, multi-connection acceptance in the guest agent (today it accepts exactly one connection, `cmd/cascadia-guest-agent/agent.go:25-26`), and a `--service-mode` flag so the agent keeps serving after boot instead of exiting after one exec. Bahia imports `git.sharegap.net/cascadia/cascadia-go/worker/vmexec/protocol` (exported, non-internal). Windows guests need the agent cross-compiled (existing bead fp-1mn).
 
@@ -87,13 +90,12 @@ Ordered; repo in brackets. Beads: bahia items under `bahia-`, cascadia-go items 
 10. **[release]** cascadia-go release: tag protocol-v2/packaging changes, bump bahia `go.mod` (currently pinned `v1.0.1`, `go.mod:8`) and the literal pin in `.gitea/workflows/deploy-edge.yml:65`.
 11. **[docs]** Operator docs: configuring a `vm-qemu` environment (incl. Windows image prep) and a `vm-firecracker` environment; artifact publishing flow.
 
-Dependencies: 3 → 4 → 5 → 7 → 8; 6 (firecracker) follows 5 (libvirt proves the `Hypervisor` interface first); 1+10 gate 7; 2 gates 4's artifact resolution for qcow2. Items 1–2 land in cascadia-go first (independent of bahia items 3–4).
+Dependencies: 3 → 4 → 5 → 7 → 8; 6 (firecracker) follows 5 — libvirt proves the `Hypervisor` interface first and gets persistence free from `virsh define`, while the firecracker supervised-VMM path is the riskier build. 1+10 gate 7; **item 2 is the first cross-repo blocker** (it gates item 4's qcow2 artifact resolution), with item 1 needed only by item 7. Code for 1–2 lands in cascadia-go first, but bahia consumes it only after the item-10 tag/pin bump — the release step is on the critical path, not an afterthought.
 
 ## Open Questions
 
 - Does deploy-time image *distribution* (pulling a release dir onto the target host) belong in v1, or are image releases pre-provisioned on hosts out-of-band (as fp-tpt assumes)? Plan assumes pre-provisioned; distribution becomes a follow-up.
 - Should `DeployOptions.Ports`/networking map to anything for VMs in v1 (tap devices / port forwards), or is networking deferred per the isolation plan's "no implicit networking" stance? Plan assumes deferred — VM services are vsock+console only in v1.
-- Windows guest metrics need a Windows build of the guest agent (fp-1mn) — acceptable for Windows health to be hypervisor-state-only until that lands? (Plan assumes yes.)
 - When VM adapters later adopt `DesiredStateApplier`, `NormalizedObservation` needs VM-shaped fields — out of scope here, flagged for the follow-up plan.
 
 ## References

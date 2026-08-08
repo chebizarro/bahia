@@ -115,6 +115,12 @@ const (
 	RuntimeTypeCompose RuntimeType = "compose"
 	RuntimeTypeK8s     RuntimeType = "kubernetes"
 	RuntimeTypePodman  RuntimeType = "podman"
+	// RuntimeTypeVMFirecracker targets long-lived Firecracker microVMs
+	// (loom canonical mechanism name: vm/firecracker).
+	RuntimeTypeVMFirecracker RuntimeType = "vm-firecracker"
+	// RuntimeTypeVMQEMU targets persistent QEMU/KVM domains via libvirt
+	// (loom canonical mechanism name: vm/qemu-kvm).
+	RuntimeTypeVMQEMU RuntimeType = "vm-qemu"
 )
 
 // Service represents a deployable application component.

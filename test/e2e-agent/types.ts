@@ -70,7 +70,7 @@ export interface Service {
   name: string;
   artifact_repo: string;
   repo_url?: string;
-  runtime_type: 'docker' | 'compose' | 'kubernetes' | 'podman';
+  runtime_type: 'docker' | 'compose' | 'kubernetes' | 'podman' | 'vm-firecracker' | 'vm-qemu';
   created_at: string;
   updated_at: string;
 }

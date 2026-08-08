@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -88,6 +89,7 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 		KubeContext:   target.KubeContext,
 		KubeNamespace: target.KubeNamespace,
 		KubeConfig:    target.KubeConfig,
+		VM:            target.VM,
 	}, r.logger)
 	if err != nil {
 		return nil, err
@@ -107,6 +109,7 @@ func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.R
 		KubeContext:   r.cfg.KubeContext,
 		KubeNamespace: r.cfg.KubeNamespace,
 		KubeConfig:    r.cfg.KubeConfig,
+		VM:            r.cfg.VM,
 	}
 
 	target = overlayTarget(target, r.cfg.Default)
@@ -161,6 +164,27 @@ func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTarg
 	if override.KubeConfig != "" {
 		base.KubeConfig = override.KubeConfig
 	}
+	if override.VM.StateDir != "" {
+		base.VM.StateDir = override.VM.StateDir
+	}
+	if override.VM.ImageRoot != "" {
+		base.VM.ImageRoot = override.VM.ImageRoot
+	}
+	if override.VM.LibvirtURI != "" {
+		base.VM.LibvirtURI = override.VM.LibvirtURI
+	}
+	if override.VM.VsockGuestPort != 0 {
+		base.VM.VsockGuestPort = override.VM.VsockGuestPort
+	}
+	if override.VM.VCPUs != 0 {
+		base.VM.VCPUs = override.VM.VCPUs
+	}
+	if override.VM.MemoryMB != 0 {
+		base.VM.MemoryMB = override.VM.MemoryMB
+	}
+	if override.VM.NetworkProfile != "" {
+		base.VM.NetworkProfile = override.VM.NetworkProfile
+	}
 	return base
 }
 
@@ -170,6 +194,20 @@ func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any
 		if key == "bahia_owned" {
 			if boolValue, ok := boolValue(values[key]); ok {
 				base.BahiaOwned = &boolValue
+			}
+			continue
+		}
+		switch key {
+		case "vm_vsock_guest_port", "vm_vcpus", "vm_memory_mb":
+			if n, ok := intValue(values[key]); ok && n > 0 {
+				switch key {
+				case "vm_vsock_guest_port":
+					base.VM.VsockGuestPort = n
+				case "vm_vcpus":
+					base.VM.VCPUs = n
+				case "vm_memory_mb":
+					base.VM.MemoryMB = n
+				}
 			}
 			continue
 		}
@@ -195,6 +233,14 @@ func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any
 			base.KubeNamespace = value
 		case "kube_config":
 			base.KubeConfig = value
+		case "vm_state_dir":
+			base.VM.StateDir = value
+		case "vm_image_root":
+			base.VM.ImageRoot = value
+		case "vm_libvirt_uri":
+			base.VM.LibvirtURI = value
+		case "vm_network_profile":
+			base.VM.NetworkProfile = value
 		}
 	}
 	return base, typeExplicit
@@ -236,6 +282,26 @@ func stringValue(v any) (string, bool) {
 	return strings.TrimSpace(s), true
 }
 
+func intValue(v any) (int, bool) {
+	switch typed := v.(type) {
+	case int:
+		return typed, true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case float64:
+		if typed == float64(int(typed)) {
+			return int(typed), true
+		}
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
 func boolValue(v any) (bool, bool) {
 	switch typed := v.(type) {
 	case bool:
@@ -273,6 +339,13 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 		target.KubeContext,
 		target.KubeNamespace,
 		target.KubeConfig,
+		target.VM.StateDir,
+		target.VM.ImageRoot,
+		target.VM.LibvirtURI,
+		fmt.Sprintf("%d", target.VM.VsockGuestPort),
+		fmt.Sprintf("%d", target.VM.VCPUs),
+		fmt.Sprintf("%d", target.VM.MemoryMB),
+		target.VM.NetworkProfile,
 	}, "\x00")
 }
 

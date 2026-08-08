@@ -572,7 +572,45 @@ type RuntimeTargetConfig struct {
 	KubeNamespace string `koanf:"kube_namespace"`
 	KubeConfig    string `koanf:"kube_config"`
 
+	// VM holds settings for the vm-firecracker and vm-qemu runtime types.
+	VM RuntimeVMConfig `koanf:"vm"`
+
 	ResolvedEndpoint RuntimeEndpointConfig `koanf:"-"`
+}
+
+// RuntimeVMConfig holds host-local VM runtime settings for the
+// vm-firecracker and vm-qemu runtime types. Setting any of these fields for a
+// non-VM runtime type is a configuration error (explicit-failure convention).
+type RuntimeVMConfig struct {
+	// StateDir is the host directory holding per-instance VM state
+	// (pidfiles, API sockets, metadata.json, overlays).
+	StateDir string `koanf:"state_dir"`
+	// ImageRoot is the host directory containing VM image release channels
+	// (each channel a hash-pinned release dir with manifest.json and an
+	// atomic "current" symlink).
+	ImageRoot string `koanf:"image_root"`
+	// LibvirtURI is the libvirt connection URI (vm-qemu only).
+	LibvirtURI string `koanf:"libvirt_uri"`
+	// VsockGuestPort is the guest agent vsock port used for ping/metrics.
+	VsockGuestPort int `koanf:"vsock_guest_port"`
+	// VCPUs is the default vCPU count for instances without an explicit spec.
+	VCPUs int `koanf:"vcpus"`
+	// MemoryMB is the default memory size (MiB) for instances without an
+	// explicit spec.
+	MemoryMB int `koanf:"memory_mb"`
+	// NetworkProfile names the host network profile applied to instances.
+	NetworkProfile string `koanf:"network_profile"`
+}
+
+// Empty reports whether no VM runtime settings are configured.
+func (c RuntimeVMConfig) Empty() bool {
+	return strings.TrimSpace(c.StateDir) == "" &&
+		strings.TrimSpace(c.ImageRoot) == "" &&
+		strings.TrimSpace(c.LibvirtURI) == "" &&
+		c.VsockGuestPort == 0 &&
+		c.VCPUs == 0 &&
+		c.MemoryMB == 0 &&
+		strings.TrimSpace(c.NetworkProfile) == ""
 }
 
 // RuntimeEndpointConfig holds server-managed Docker endpoint transport settings.
@@ -605,14 +643,15 @@ func (c RuntimeEndpointConfig) Empty() bool {
 // BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/prod.
 type RuntimeConfig struct {
 	// Legacy flat fields.
-	Type          string `koanf:"type"`
-	DockerHost    string `koanf:"docker_host"`
-	ComposeDir    string `koanf:"compose_dir"`
-	BahiaOwned    *bool  `koanf:"bahia_owned"`
-	ExecutionMode string `koanf:"execution_mode"`
-	KubeContext   string `koanf:"kube_context"`
-	KubeNamespace string `koanf:"kube_namespace"`
-	KubeConfig    string `koanf:"kube_config"`
+	Type          string          `koanf:"type"`
+	DockerHost    string          `koanf:"docker_host"`
+	ComposeDir    string          `koanf:"compose_dir"`
+	BahiaOwned    *bool           `koanf:"bahia_owned"`
+	ExecutionMode string          `koanf:"execution_mode"`
+	KubeContext   string          `koanf:"kube_context"`
+	KubeNamespace string          `koanf:"kube_namespace"`
+	KubeConfig    string          `koanf:"kube_config"`
+	VM            RuntimeVMConfig `koanf:"vm"`
 
 	// Environment-targeted fields.
 	Default      RuntimeTargetConfig              `koanf:"default"`

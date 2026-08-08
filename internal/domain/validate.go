@@ -87,12 +87,12 @@ func ValidateHealthStatus(s HealthStatus) error {
 // ValidateRuntimeType checks that a RuntimeType is a known value.
 func ValidateRuntimeType(s RuntimeType) error {
 	switch s {
-	case RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman:
+	case RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman, RuntimeTypeVMFirecracker, RuntimeTypeVMQEMU:
 		return nil
 	case "":
 		return nil // defaults to "docker"
 	default:
-		return fmt.Errorf("%w: runtime type %q is not valid (allowed: docker, compose, kubernetes, podman)", ErrInvalidValue, s)
+		return fmt.Errorf("%w: runtime type %q is not valid (allowed: docker, compose, kubernetes, podman, vm-firecracker, vm-qemu)", ErrInvalidValue, s)
 	}
 }
 

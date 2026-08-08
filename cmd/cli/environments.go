@@ -491,7 +491,7 @@ func (f *deploymentUnitFlags) bind(cmd *cobra.Command) {
 	name := func(value string) string { return f.prefix + value }
 	cmd.Flags().StringVar(&f.key, name("key"), "", "Deployment-unit key")
 	cmd.Flags().StringVar(&f.displayName, name("display-name"), "", "Deployment-unit display name")
-	cmd.Flags().StringVar(&f.runtimeType, name("runtime-type"), "", "Runtime type: docker, compose, kubernetes, podman")
+	cmd.Flags().StringVar(&f.runtimeType, name("runtime-type"), "", "Runtime type: docker, compose, kubernetes, podman, vm-firecracker, vm-qemu")
 	cmd.Flags().StringVar(&f.endpointRef, name("endpoint-ref"), "", "Managed runtime endpoint reference")
 	cmd.Flags().StringVar(&f.composeDir, name("compose-dir"), "", "Compose project directory on the managed endpoint")
 	cmd.Flags().StringVar(&f.namespace, name("namespace"), "", "Runtime namespace")

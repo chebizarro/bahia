@@ -73,7 +73,7 @@ func TestValidateHealthStatus(t *testing.T) {
 }
 
 func TestValidateRuntimeType(t *testing.T) {
-	valid := []RuntimeType{RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman, ""}
+	valid := []RuntimeType{RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman, RuntimeTypeVMFirecracker, RuntimeTypeVMQEMU, ""}
 	for _, s := range valid {
 		if err := ValidateRuntimeType(s); err != nil {
 			t.Errorf("ValidateRuntimeType(%q) unexpected error: %v", s, err)
@@ -107,9 +107,9 @@ func TestValidateImageDigest(t *testing.T) {
 		}
 	}
 	invalid := []string{
-		"",                 // empty
-		"sha256:short",     // too short
-		"sha512:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", // wrong algo
+		"",             // empty
+		"sha256:short", // too short
+		"sha512:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4",  // wrong algo
 		"a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4",         // no prefix
 		"sha256:AAAA95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4",  // uppercase
 		"sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4a", // too long (65 chars)
@@ -123,14 +123,14 @@ func TestValidateImageDigest(t *testing.T) {
 
 func TestValidateGitSHA(t *testing.T) {
 	valid := []string{
-		"abc1234",                                  // short SHA
+		"abc1234", // short SHA
 		"abc1234567890abcdef1234567890abcdef12345678", // 42 chars... wait, let me use correct ones
 	}
 	// Actually let me be precise
 	valid = []string{
-		"abc1234",                                     // 7 chars (short SHA)
-		"a3ed95caeb02ffe68cdd9fd84406680ae93d633c",    // 40 chars (full SHA)
-		"abcdef1",                                     // 7 chars
+		"abc1234", // 7 chars (short SHA)
+		"a3ed95caeb02ffe68cdd9fd84406680ae93d633c", // 40 chars (full SHA)
+		"abcdef1", // 7 chars
 	}
 	for _, s := range valid {
 		if err := ValidateGitSHA(s); err != nil {
