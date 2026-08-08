@@ -1,10 +1,16 @@
 <script>
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
-  import { listNotificationChannels, listNotificationLogs } from '$lib/stores/notifications.svelte.js';
+  import {
+    listNotificationChannels,
+    listNotificationLogs,
+    notificationState,
+    subscribeToNotificationUpdates
+  } from '$lib/stores/notifications.svelte.js';
   import { NotificationIcon } from '$lib/icons/domain-icons.js';
   import {
     channelLabel,
@@ -17,10 +23,10 @@
     truncateMiddle
   } from '../list-utils.js';
 
-  let logs = $state([]);
-  let channels = $state([]);
-  let loading = $state(true);
-  let error = $state(null);
+  let logs = $derived(normalizeNotificationLogs(notificationState.logs));
+  let channels = $derived(normalizeChannels(notificationState.channels));
+  let loading = $derived(notificationState.logsLoading || notificationState.channelsLoading);
+  let error = $derived(notificationState.logsError);
   let channelFilter = $state('all');
   let eventTypeFilter = $state('all');
 
@@ -39,28 +45,28 @@
     eventType: eventTypeFilter
   }));
 
-  $effect(() => {
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
     void loadLogs();
+    void subscribeToNotificationUpdates({ logParams: { limit: 50 } }).then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      notificationState.logsError = caught?.message || 'Failed to subscribe to notification updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
   });
 
   async function loadLogs() {
-    loading = true;
-    error = null;
-
     try {
-      logs = normalizeNotificationLogs(await listNotificationLogs({ limit: 50 }));
-
-      try {
-        channels = normalizeChannels(await listNotificationChannels());
-      } catch {
-        channels = [];
-      }
-    } catch (err) {
-      error = err?.message || 'Failed to load notification log';
-      logs = [];
-      channels = [];
-    } finally {
-      loading = false;
+      await listNotificationLogs({ limit: 50 });
+      await listNotificationChannels().catch(() => []);
+    } catch {
+      // The shared store retains the failure for the route-level ErrorState.
     }
   }
 

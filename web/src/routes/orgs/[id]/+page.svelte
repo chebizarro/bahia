@@ -1,13 +1,16 @@
 <script>
   import { page } from '$app/state';
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { authState } from '$lib/stores/auth.js';
   import {
     createOrgInvite,
     deleteOrg as deletePrivateOrg,
     loadOrgDetail,
+    orgDetailState,
     removeOrgMember,
     revokeOrgInvite,
+    subscribeToOrgsUpdates,
     updateOrgMemberRole
   } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
@@ -21,12 +24,12 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { OrganizationIcon, PendingIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
-  let org = $state(null);
-  let members = $state([]);
-  let invites = $state([]);
-  let loading = $state(true);
-  let error = $state(null);
-  let myRole = $state(null);
+  let org = $derived(orgDetailState.org);
+  let members = $derived(orgDetailState.members);
+  let invites = $derived(orgDetailState.invites);
+  let loading = $derived(orgDetailState.loading);
+  let error = $derived(orgDetailState.error);
+  let myRole = $derived(orgDetailState.myRole);
 
   // Invite modal state
   let showInviteModal = $state(false);
@@ -54,20 +57,26 @@
     void loadData(id);
   });
 
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
+    void subscribeToOrgsUpdates({ detailId: orgId }).then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      orgDetailState.error = caught?.message || 'Failed to subscribe to organization updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
+
   async function loadData(id = orgId) {
-    loading = true;
-    error = null;
     try {
-      const detail = await loadOrgDetail(id);
-      org = detail?.org ?? null;
-      members = Array.isArray(detail?.members) ? detail.members : [];
-      invites = Array.isArray(detail?.invites) ? detail.invites : [];
-      myRole = detail?.my_role || null;
+      await loadOrgDetail(id);
     } catch (e) {
-      error = e.message;
       toast.error(`Failed to load organization: ${e.message}`);
-    } finally {
-      loading = false;
     }
   }
 

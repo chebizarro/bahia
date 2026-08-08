@@ -1,6 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
@@ -11,10 +11,26 @@
     securityState,
     listSecurityFindings,
     listSecuritySchedules,
-    computeSeverityCounts
+    computeSeverityCounts,
+    subscribeToSecurityUpdates
   } from '$lib/stores/security.svelte.js';
 
   let loadStarted = false;
+
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
+    void subscribeToSecurityUpdates().then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      securityState.schedulesError = caught?.message || 'Failed to subscribe to security updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
 
   $effect(() => {
     if (loadStarted) return;
@@ -104,6 +120,9 @@
     const scope = selectedFindingScope;
     if (!scope || selectedFindingScopeKey === loadedFindingScopeKey) return;
     loadedFindingScopeKey = selectedFindingScopeKey;
+    void untrack(() => subscribeToSecurityUpdates({ findingsScope: scope.params }).catch((err) => {
+      securityState.findingsError = err?.message || 'Failed to subscribe to scoped security findings';
+    }));
     void untrack(() => loadFindingsForScope(scope).catch((err) => console.error('Failed to load scoped security findings:', err)));
   });
 

@@ -1,8 +1,15 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
-  import { getNotificationChannel, listNotificationChannels, updateNotificationChannel } from '$lib/stores/notifications.svelte.js';
+  import {
+    getNotificationChannel,
+    listNotificationChannels,
+    notificationState,
+    subscribeToNotificationUpdates,
+    updateNotificationChannel
+  } from '$lib/stores/notifications.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import NotificationChannelForm from '../../NotificationChannelForm.svelte';
 
@@ -11,13 +18,43 @@
   let loadError = $state('');
   let saving = $state(false);
   let saveError = $state('');
+  let requestedChannelId = '';
 
   const channelId = $derived(page.params.id);
 
   $effect(() => {
     const id = channelId;
     if (!id) return;
-    void loadChannel(id);
+    const liveChannel = notificationState.channels.find((candidate) => candidate.id === id);
+    if (liveChannel) {
+      channel = liveChannel;
+      loadError = '';
+      return;
+    }
+    if (!loading && !notificationState.channelsLoading && !loadError) {
+      channel = null;
+      loadError = 'Notification channel not found';
+      return;
+    }
+    if (!channel && requestedChannelId !== id) {
+      requestedChannelId = id;
+      void loadChannel(id);
+    }
+  });
+
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
+    void subscribeToNotificationUpdates().then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      loadError = caught?.message || 'Failed to subscribe to notification updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
   });
 
   async function loadChannel(id) {

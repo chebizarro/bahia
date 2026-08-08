@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
@@ -11,6 +12,8 @@
   import {
     deleteNotificationChannel,
     listNotificationChannels,
+    notificationState,
+    subscribeToNotificationUpdates,
     testNotificationChannel,
     updateNotificationChannel
   } from '$lib/stores/notifications.svelte.js';
@@ -27,9 +30,9 @@
     truncateMiddle
   } from './list-utils.js';
 
-  let channels = $state([]);
-  let loading = $state(true);
-  let error = $state(null);
+  let channels = $derived(normalizeChannels(notificationState.channels));
+  let loading = $derived(notificationState.channelsLoading);
+  let error = $derived(notificationState.channelsError);
   let statusFilter = $state('all');
   let typeFilter = $state('all');
   let searchQuery = $state('');
@@ -56,21 +59,27 @@
 
   const enabledCount = $derived(channels.filter((channel) => channel.enabled).length);
 
-  $effect(() => {
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
     void loadChannels();
+    void subscribeToNotificationUpdates().then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      notificationState.channelsError = caught?.message || 'Failed to subscribe to notification updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
   });
 
   async function loadChannels() {
-    loading = true;
-    error = null;
-
     try {
-      channels = normalizeChannels(await listNotificationChannels());
-    } catch (err) {
-      error = err.message || 'Failed to load notification channels';
-      channels = [];
-    } finally {
-      loading = false;
+      await listNotificationChannels();
+    } catch {
+      // The shared store retains the failure for the route-level ErrorState.
     }
   }
 
@@ -79,8 +88,7 @@
     actionKey = `toggle:${channel.id}`;
 
     try {
-      const updated = await updateNotificationChannel(channel.id, { enabled: nextEnabled });
-      upsertChannel(updated || { ...channel, enabled: nextEnabled });
+      await updateNotificationChannel(channel.id, { enabled: nextEnabled });
       toast.success(`${channel.name} ${nextEnabled ? 'enabled' : 'disabled'}`);
     } catch (err) {
       toast.error(`Failed to update channel: ${err.message}`);
@@ -115,7 +123,6 @@
 
     try {
       await deleteNotificationChannel(target.id);
-      channels = channels.filter((channel) => channel.id !== target.id);
       toast.success(`${target.name} deleted`);
       deleteDialogOpen = false;
       deleteTarget = null;
@@ -124,16 +131,6 @@
     } finally {
       actionKey = '';
     }
-  }
-
-  function upsertChannel(updated) {
-    const index = channels.findIndex((channel) => channel.id === updated.id);
-    if (index === -1) {
-      channels = [updated, ...channels];
-      return;
-    }
-
-    channels = channels.map((channel, i) => i === index ? { ...channel, ...updated } : channel);
   }
 
   function resetFilters() {

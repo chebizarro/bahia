@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   continuityNostrFilters,
+  continuityRequestsFromEvents,
   continuityStatusesFromEvents,
   deriveContinuityAssessments,
   parseContinuityStatusEvent,
-  simulateWorkerFailureFromEvents
+  simulateWorkerFailureFromEvents,
+  subscribeToContinuityDashboard
 } from '../../src/lib/nostr/continuity';
 
 const SERVICE = 'svc-api';
@@ -28,11 +30,69 @@ describe('continuity Nostr read models', () => {
       expect.objectContaining({ kinds: [30351], '#t': ['continuity', 'continuity-status'] }),
       expect.objectContaining({ kinds: [30353], '#t': ['continuity', 'recovery-progress'] }),
       expect.objectContaining({ kinds: [31400, 31401, 31402, 31403, 31404] }),
+      expect.objectContaining({ kinds: [38430, 38431] }),
       expect.objectContaining({ kinds: [30315], '#domain': ['continuity'] }),
       expect.objectContaining({ kinds: [30900], '#domain': ['worker'], '#schema': ['bahia.state.worker.v1'] })
     ]));
     expect(continuityNostrFilters()).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ kinds: [30350] })
+    ]));
+  });
+
+  it('keeps the subscription open after EOSE and applies later live events', async () => {
+    let handlers: any;
+    const stop = vi.fn();
+    const client = {
+      getConnectedRelays: () => ['wss://continuity.example'],
+      subscribeWithRecovery: vi.fn((_filters, nextHandlers) => {
+        handlers = nextHandlers;
+        return stop;
+      })
+    };
+    const updates: any[] = [];
+
+    const unsubscribe = await subscribeToContinuityDashboard({
+      client,
+      connect: vi.fn(async () => undefined),
+      onUpdate: (snapshot) => updates.push(snapshot)
+    });
+
+    handlers.onEose('wss://continuity.example');
+    expect(stop).not.toHaveBeenCalled();
+    expect(updates.at(-1).ready).toBe(true);
+
+    handlers.onEvent(event({
+      id: 'live-status',
+      kind: 30351,
+      created_at: 300,
+      tags: [['d', `continuity-status:${SERVICE}`], ['service', SERVICE], ['t', 'continuity'], ['t', 'continuity-status']],
+      content: {
+        service_key: SERVICE,
+        active_profile: 'degraded',
+        operation_state: 'failover_in_progress',
+        primary_worker_pubkey: 'primary-a',
+        active_worker_pubkey: 'standby-a'
+      }
+    }), 'wss://continuity.example');
+
+    expect(updates.at(-1).statuses).toEqual([
+      expect.objectContaining({ service_key: SERVICE, operation_state: 'failover_in_progress' })
+    ]);
+    expect(stop).not.toHaveBeenCalled();
+
+    unsubscribe();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('represents failover and recovery request events', () => {
+    const requests = continuityRequestsFromEvents([
+      event({ id: 'failover-request', kind: 38430, tags: [['service', SERVICE], ['worker', 'standby-a']], content: { reason: 'primary unavailable' } }),
+      event({ id: 'recovery-request', kind: 38431, tags: [['service', SERVICE]], content: { worker_pubkey: 'primary-a' } })
+    ]);
+
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'failover-request', request_type: 'failover', service_key: SERVICE, worker_pubkey: 'standby-a' }),
+      expect.objectContaining({ id: 'recovery-request', request_type: 'recovery', service_key: SERVICE, worker_pubkey: 'primary-a' })
     ]));
   });
 

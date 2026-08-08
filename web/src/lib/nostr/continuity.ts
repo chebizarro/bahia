@@ -4,19 +4,20 @@ import {
   CONTINUITY_PROFILE,
   CONTINUITY_STATUS,
   FAILOVER_POLICY,
+  FAILOVER_REQUEST,
   HEARTBEAT_OBSERVATION,
   RECOVERY_PROGRESS,
+  RECOVERY_REQUEST,
   RECOVERY_WORKFLOW,
   REPLICATION_POLICY,
   STANDBY_NODE_DEFINITION,
   dedupeReplaceableEvents,
-  ensureRelayConnection,
   getDTag,
   getTagValue,
   getTagValues,
-  nostr,
   parseJsonContent
 } from '$lib/nostr/client.js';
+import { subscribeToRetainedEvents } from '$lib/nostr/retained-domain-subscription.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
 const CONTINUITY_EVENT_LIMIT = 1000;
@@ -32,8 +33,10 @@ export const CONTINUITY_DEFINITION_KINDS = [
   REPLICATION_POLICY,
   RECOVERY_WORKFLOW
 ];
+export const CONTINUITY_COMMAND_KINDS = [FAILOVER_REQUEST, RECOVERY_REQUEST];
 export const CONTINUITY_TOPOLOGY_SOURCE_KINDS = [
   ...CONTINUITY_DEFINITION_KINDS,
+  ...CONTINUITY_COMMAND_KINDS,
   HEARTBEAT_OBSERVATION,
   CASCADIA_CONTROLPLANE_STATE
 ];
@@ -45,6 +48,16 @@ export interface ContinuityNostrEvent {
   created_at?: number;
   tags?: string[][];
   content?: string;
+}
+
+export interface ContinuityRequestDTO {
+  id: string;
+  request_type: 'failover' | 'recovery';
+  service_key: string;
+  worker_pubkey: string;
+  reason: string;
+  created_at: string;
+  pubkey: string;
 }
 
 interface ContinuityProfileDefinition {
@@ -107,6 +120,7 @@ export function continuityNostrFilters() {
     { kinds: [CONTINUITY_STATUS], '#t': [CONTINUITY_STATUS_TAG, CONTINUITY_STATUS_READ_MODEL_TAG], limit: CONTINUITY_EVENT_LIMIT },
     { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_STATUS_TAG, 'recovery-progress'], limit: CONTINUITY_EVENT_LIMIT },
     { kinds: CONTINUITY_DEFINITION_KINDS, limit: CONTINUITY_EVENT_LIMIT },
+    { kinds: CONTINUITY_COMMAND_KINDS, limit: CONTINUITY_EVENT_LIMIT },
     { kinds: [HEARTBEAT_OBSERVATION], '#domain': ['continuity'], limit: CONTINUITY_EVENT_LIMIT },
     {
       kinds: [CASCADIA_CONTROLPLANE_STATE],
@@ -117,41 +131,93 @@ export function continuityNostrFilters() {
   ];
 }
 
-export async function fetchContinuityEvents(): Promise<ContinuityNostrEvent[]> {
-  await ensureRelayConnection();
-
-  return new Promise((resolve, reject) => {
-    const events: ContinuityNostrEvent[] = [];
-
-    nostr.subscribe(continuityNostrFilters(), {
-      onEvent: (event: ContinuityNostrEvent) => {
-        events.push(event);
-      },
-      onEose: () => {
-        resolve(events);
-      },
-      onClosed: (reason: string) => {
-        // Resolve with whatever we have if subscription closes
-        if (events.length > 0) {
-          resolve(events);
-        } else {
-          reject(new Error(`Continuity subscription closed: ${reason}`));
-        }
-      }
-    });
-  });
+export function continuityRequestsFromEvents(events: ContinuityNostrEvent[] = []): ContinuityRequestDTO[] {
+  const seen = new Set<string>();
+  return events
+    .filter((event) => CONTINUITY_COMMAND_KINDS.includes(Number(event?.kind)))
+    .filter((event) => {
+      const id = text(event.id);
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .map((event): ContinuityRequestDTO => {
+      const content = contentObject(event);
+      const requestType = event.kind === FAILOVER_REQUEST ? 'failover' : 'recovery';
+      return {
+        id: text(event.id),
+        request_type: requestType,
+        service_key: continuityEventServiceKey(event, content),
+        worker_pubkey: text(content.worker_pubkey) || eventTagValue(event, 'worker') || eventTagValue(event, 'p'),
+        reason: text(content.reason) || eventTagValue(event, 'reason'),
+        created_at: eventCreatedAtISO(event),
+        pubkey: text(event.pubkey)
+      };
+    })
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id));
 }
 
-export async function loadContinuityDashboardFromNostr(): Promise<{
-  statuses: ContinuityServiceStatusDTO[];
-  assessments: ContinuityAssessmentDTO[];
-  events: ContinuityNostrEvent[];
-}> {
-  const events = await fetchContinuityEvents();
+function continuityDashboardSnapshot(events: ContinuityNostrEvent[], ready: boolean, error: string | null = null) {
   const statuses = continuityStatusesFromEvents(events);
-  const assessments = deriveContinuityAssessments(events, statuses);
-  return { statuses, assessments, events };
+  return {
+    statuses,
+    assessments: deriveContinuityAssessments(events, statuses),
+    requests: continuityRequestsFromEvents(events),
+    events,
+    ready,
+    error
+  };
 }
+
+export async function subscribeToContinuityDashboard({
+  initialEvents = [],
+  onUpdate,
+  onError,
+  client,
+  connect
+}: {
+  initialEvents?: ContinuityNostrEvent[];
+  onUpdate?: (snapshot: ReturnType<typeof continuityDashboardSnapshot>) => void;
+  onError?: (error: Error) => void;
+  client?: any;
+  connect?: (options?: { silent?: boolean }) => Promise<void>;
+} = {}): Promise<() => void> {
+  const eventsById = new Map<string, ContinuityNostrEvent>();
+  for (const event of initialEvents) {
+    if (event?.id) eventsById.set(event.id, event);
+  }
+  let ready = false;
+
+  const publish = (error: string | null = null) => {
+    const events = Array.from(eventsById.values()).sort(newestFirst);
+    onUpdate?.(continuityDashboardSnapshot(events, ready, error));
+  };
+
+  publish();
+  const subscriptionOptions: any = {
+    filters: continuityNostrFilters(),
+    client,
+    connect,
+    onEvent: (event: ContinuityNostrEvent) => {
+      if (!event?.id || eventsById.has(event.id)) return;
+      eventsById.set(event.id, event);
+      publish();
+    },
+    onReady: () => {
+      ready = true;
+      publish();
+    },
+    onClosed: (reason: string, relay: string, metadata: any, meta: any) => {
+      if (metadata?.complete || !meta?.terminal) return;
+      const error = new Error(`Continuity subscription closed before EOSE at ${relay}: ${reason}`);
+      onError?.(error);
+      publish(error.message);
+    }
+  };
+  return subscribeToRetainedEvents(subscriptionOptions);
+}
+
+export const loadContinuityDashboardFromNostr = subscribeToContinuityDashboard;
 
 export function continuityStatusesFromEvents(events: ContinuityNostrEvent[] = []): ContinuityServiceStatusDTO[] {
   const statusEvents = dedupeReplaceableEvents(

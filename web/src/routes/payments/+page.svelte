@@ -1,6 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
@@ -8,7 +9,12 @@
   import Input from '$lib/components/Input.svelte';
   import Select from '$lib/components/Select.svelte';
   import { workers, loading, loadWorkers } from '$lib/stores';
-  import { loadPaymentHistory as loadPrivatePaymentHistory } from '$lib/stores/payments.svelte.js';
+  import {
+    loadPaymentHistory as loadPrivatePaymentHistory,
+    paymentHistoryState,
+    resetPaymentHistory,
+    subscribeToPaymentHistoryUpdates
+  } from '$lib/stores/payments.svelte.js';
   import { PaymentIcon } from '$lib/icons/domain-icons.js';
   import {
     buildPaymentsCsvFilename,
@@ -27,11 +33,10 @@
   let statusFilter = $state('all');
   let directionFilter = $state('all');
   let searchQuery = $state('');
-  let payments = $state([]);
-  let paymentsLoading = $state(false);
-  let error = $state(null);
-  let loadedWorker = $state('');
-  let loadSequence = 0;
+  let payments = $derived(normalizePayments(paymentHistoryState.records));
+  let paymentsLoading = $derived(paymentHistoryState.loading);
+  let error = $derived(paymentHistoryState.error);
+  let loadedWorker = $derived(paymentHistoryState.loadedWorker);
   let lastQueryKey = '';
 
   const limitOptions = [
@@ -50,6 +55,21 @@
     void loadWorkers();
   });
 
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
+    void subscribeToPaymentHistoryUpdates({ worker: workerFilter, limit: Number(limit) }).then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      paymentHistoryState.error = caught?.message || 'Failed to subscribe to payment updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
+
   $effect(() => {
     const params = page.url.searchParams;
     const nextWorker = params.get('worker') || '';
@@ -64,9 +84,7 @@
     if (nextWorker) {
       void loadPaymentHistory(nextWorker, nextLimit);
     } else {
-      payments = [];
-      loadedWorker = '';
-      error = null;
+      resetPaymentHistory();
     }
   });
 
@@ -125,29 +143,11 @@
   ]);
 
   async function loadPaymentHistory(worker, requestedLimit) {
-    const sequence = ++loadSequence;
-    paymentsLoading = true;
-    error = null;
-    payments = [];
-
     try {
-      const records = await loadPrivatePaymentHistory({ worker, limit: Number(requestedLimit) });
-      if (!isCurrentLoad(sequence)) return;
-      payments = normalizePayments(records);
-      loadedWorker = worker;
-    } catch (err) {
-      if (!isCurrentLoad(sequence)) return;
-      error = err.message || 'Failed to load payment history';
-      loadedWorker = '';
-    } finally {
-      if (isCurrentLoad(sequence)) {
-        paymentsLoading = false;
-      }
+      await loadPrivatePaymentHistory({ worker, limit: Number(requestedLimit) });
+    } catch {
+      // The shared store retains the failure for the route-level ErrorState.
     }
-  }
-
-  function isCurrentLoad(sequence) {
-    return sequence === loadSequence;
   }
 
   function applyRemoteFilters() {

@@ -2,7 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const encryptedRequestsMock = vi.hoisted(() => ({
   requestEncryptedResult: vi.fn(),
-  encryptedRequestsAvailable: vi.fn(() => true)
+  encryptedRequestsAvailable: vi.fn(() => true),
+  servicePubkeyFromSystemInfo: vi.fn(() => 'b'.repeat(64))
+}));
+
+const liveSubscriptionMock = vi.hoisted(() => ({
+  subscribeToRetainedEvents: vi.fn(),
+  createCoalescedRefresh: vi.fn((refresh, onError) => {
+    const run = async () => {
+      try { await refresh(); } catch (error) { onError?.(error); }
+    };
+    run.stop = vi.fn();
+    return run;
+  })
 }));
 
 const systemMock = vi.hoisted(() => ({
@@ -17,6 +29,7 @@ const systemMock = vi.hoisted(() => ({
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
 vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
 vi.mock('$lib/stores/system.svelte.js', () => systemMock);
+vi.mock('$lib/nostr/retained-domain-subscription.js', () => liveSubscriptionMock);
 vi.mock('../../src/lib/stores/system.svelte.js', () => systemMock);
 
 describe('security encrypted store', () => {
@@ -26,6 +39,7 @@ describe('security encrypted store', () => {
     vi.resetModules();
     vi.clearAllMocks();
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
+    liveSubscriptionMock.subscribeToRetainedEvents.mockResolvedValue(vi.fn());
     systemMock.currentSystemInfo.mockReturnValue({
       nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
     });
@@ -54,6 +68,44 @@ describe('security encrypted store', () => {
     expect(store.securityState.findings).toHaveLength(2);
     expect(store.securityState.findingsError).toBeNull();
     expect(store.securityState.findingsLoading).toBe(false);
+  });
+
+  it('applies a security finding event received after EOSE without reloading', async () => {
+    let handlers;
+    liveSubscriptionMock.subscribeToRetainedEvents.mockImplementationOnce(async (options) => {
+      handlers = options;
+      return vi.fn();
+    });
+
+    await store.subscribeToSecurityUpdates({ findingsScope: { run_id: 'run-live' } });
+    handlers.onReady();
+
+    handlers.onEvent({
+      id: 'finding-event-live',
+      kind: 30078,
+      pubkey: 'b'.repeat(64),
+      created_at: 100,
+      tags: [
+        ['d', 'security:findings:run-live:chunk-1'],
+        ['domain', 'security'],
+        ['schema', 'bahia.security.findings.v1'],
+        ['run', 'run-live'],
+        ['target_key_hash', 'target-live']
+      ],
+      content: JSON.stringify({
+        findings: [{ id: 'finding-live', osv_id: 'GHSA-LIVE', severity: 'high' }]
+      })
+    }, { live: true, relay: 'wss://requests.example' });
+
+    expect(store.securityState.findings).toEqual([
+      expect.objectContaining({
+        id: 'finding-live',
+        osv_id: 'GHSA-LIVE',
+        run_id: 'run-live',
+        target_key_hash: 'target-live'
+      })
+    ]);
+    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
   });
 
   // T-2: listSecuritySchedules calls ContextVM and populates state

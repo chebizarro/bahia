@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const encryptedRequestsMock = vi.hoisted(() => ({
   requestEncryptedResult: vi.fn(),
-  encryptedRequestsAvailable: vi.fn(() => true)
+  encryptedRequestsAvailable: vi.fn(() => true),
+  servicePubkeyFromSystemInfo: vi.fn(() => 'b'.repeat(64))
 }));
 
 const systemMock = vi.hoisted(() => ({
@@ -17,6 +18,9 @@ const systemMock = vi.hoisted(() => ({
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
 vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
 vi.mock('$lib/stores/system.svelte.js', () => systemMock);
+vi.mock('$lib/nostr/retained-domain-subscription.js', () => ({
+  subscribeToDomainRefresh: vi.fn(async () => vi.fn())
+}));
 vi.mock('../../src/lib/stores/system.svelte.js', () => systemMock);
 
 describe('notifications encrypted store', () => {

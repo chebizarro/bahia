@@ -1,4 +1,5 @@
-import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
+import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
+import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const notificationState = $state({
@@ -9,6 +10,10 @@ export const notificationState = $state({
   logsLoading: false,
   logsError: null
 });
+
+let notificationSubscription = null;
+let notificationSubscriptionGeneration = 0;
+let subscribedLogParams = null;
 
 export const NOTIFICATION_ENCRYPTED_OPERATIONS = {
   listChannels: 'notifications.channels.list',
@@ -136,7 +141,54 @@ export async function listNotificationLogs(params = {}) {
   }
 }
 
+export function unsubscribeFromNotificationUpdates() {
+  notificationSubscriptionGeneration += 1;
+  notificationSubscription?.();
+  notificationSubscription = null;
+  subscribedLogParams = null;
+}
+
+export async function refreshNotificationStore({ logParams = subscribedLogParams } = {}) {
+  const requests = [listNotificationChannels()];
+  if (logParams) requests.push(listNotificationLogs(logParams));
+  await Promise.all(requests);
+  return notificationState;
+}
+
+export async function subscribeToNotificationUpdates({ logParams = null } = {}) {
+  subscribedLogParams = logParams ? { ...logParams } : null;
+  if (notificationSubscription) {
+    const ownedSubscription = notificationSubscription;
+    return () => {
+      if (notificationSubscription === ownedSubscription) unsubscribeFromNotificationUpdates();
+    };
+  }
+
+  const generation = ++notificationSubscriptionGeneration;
+  const info = await ensureEncryptedNotifications();
+  const unsubscribe = await subscribeToDomainRefresh({
+    domain: 'notifications',
+    servicePubkey: servicePubkeyFromSystemInfo(info),
+    refresh: () => refreshNotificationStore(),
+    onError: (error) => {
+      const message = error?.message || 'Notification live updates failed';
+      notificationState.channelsError = message;
+      if (subscribedLogParams) notificationState.logsError = message;
+    }
+  });
+
+  if (generation !== notificationSubscriptionGeneration) {
+    unsubscribe();
+    return () => {};
+  }
+  notificationSubscription = unsubscribe;
+  return () => {
+    if (notificationSubscription === unsubscribe) unsubscribeFromNotificationUpdates();
+  };
+}
+
 export function resetNotificationStore() {
+  unsubscribeFromNotificationUpdates();
   notificationState.channels = [];
   notificationState.channelsLoading = false;
   notificationState.channelsError = null;

@@ -1,4 +1,5 @@
-import { encryptedRequestsAvailable, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { encryptedRequestsAvailable, requestEncryptedResult, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
+import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
 import { authState, initializeAuth } from '$lib/stores/auth.js';
 import { currentSystemInfo, loadSystemInfo } from '$lib/stores/system.svelte.js';
 
@@ -8,6 +9,10 @@ export const paymentHistoryState = $state({
   error: null,
   loadedWorker: ''
 });
+
+let paymentSubscription = null;
+let paymentSubscriptionGeneration = 0;
+let subscribedPaymentQuery = { worker: '', limit: 50 };
 
 function unwrapEncryptedResult(response) {
   const envelope = response?.result;
@@ -55,8 +60,60 @@ export async function requestPaymentHistoryRecords({ worker, limit = 50 } = {}) 
   return Array.isArray(records) ? records : [];
 }
 
+export function unsubscribeFromPaymentHistoryUpdates() {
+  paymentSubscriptionGeneration += 1;
+  paymentSubscription?.();
+  paymentSubscription = null;
+}
+
+export async function refreshPaymentHistory(query = subscribedPaymentQuery) {
+  const worker = String(query?.worker || '').trim();
+  const limit = Number(query?.limit) || 50;
+  subscribedPaymentQuery = { worker, limit };
+  return loadPaymentHistory(subscribedPaymentQuery);
+}
+
+export async function subscribeToPaymentHistoryUpdates(query = {}) {
+  subscribedPaymentQuery = {
+    worker: String(query.worker || subscribedPaymentQuery.worker || '').trim(),
+    limit: Number(query.limit || subscribedPaymentQuery.limit) || 50
+  };
+  if (paymentSubscription) {
+    const ownedSubscription = paymentSubscription;
+    return () => {
+      if (paymentSubscription === ownedSubscription) unsubscribeFromPaymentHistoryUpdates();
+    };
+  }
+
+  const generation = ++paymentSubscriptionGeneration;
+  const info = await ensureEncryptedPaymentHistoryRequests();
+  const unsubscribe = await subscribeToDomainRefresh({
+    domain: 'payments',
+    servicePubkey: servicePubkeyFromSystemInfo(info),
+    refresh: () => refreshPaymentHistory(),
+    onError: (error) => {
+      paymentHistoryState.error = error?.message || 'Payment history live updates failed';
+    }
+  });
+
+  if (generation !== paymentSubscriptionGeneration) {
+    unsubscribe();
+    return () => {};
+  }
+  paymentSubscription = unsubscribe;
+  return () => {
+    if (paymentSubscription === unsubscribe) unsubscribeFromPaymentHistoryUpdates();
+  };
+}
+
+export function resetPaymentHistoryStore() {
+  unsubscribeFromPaymentHistoryUpdates();
+  resetPaymentHistory();
+}
+
 export async function loadPaymentHistory({ worker, limit = 50 } = {}) {
   const workerPubkey = String(worker || '').trim();
+  subscribedPaymentQuery = { worker: workerPubkey, limit: Number(limit) || 50 };
   if (!workerPubkey) {
     resetPaymentHistory();
     return [];

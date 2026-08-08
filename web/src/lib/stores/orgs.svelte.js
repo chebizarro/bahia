@@ -1,5 +1,6 @@
 import { authState, initializeAuth } from '$lib/stores/auth.js';
-import { encryptedRequestsAvailable, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { encryptedRequestsAvailable, requestEncryptedResult, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
+import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const orgsState = $state({
@@ -19,6 +20,9 @@ export const orgDetailState = $state({
 });
 
 const ORG_ENCRYPTED_DOMAIN_TAG = ['domain', 'orgs'];
+let orgsSubscription = null;
+let orgsSubscriptionGeneration = 0;
+let subscribedDetailId = '';
 
 function unwrapEncryptedResult(response, fallback = null) {
   const envelope = response?.result ?? response;
@@ -69,6 +73,19 @@ export function resetOrgDetailState() {
   orgDetailState.error = null;
 }
 
+export function unsubscribeFromOrgsUpdates() {
+  orgsSubscriptionGeneration += 1;
+  orgsSubscription?.();
+  orgsSubscription = null;
+  subscribedDetailId = '';
+}
+
+export function resetOrgsStore() {
+  unsubscribeFromOrgsUpdates();
+  resetOrgsState();
+  resetOrgDetailState();
+}
+
 export async function loadOrgsOverview() {
   orgsState.loading = true;
   orgsState.error = null;
@@ -84,6 +101,46 @@ export async function loadOrgsOverview() {
   } finally {
     orgsState.loading = false;
   }
+}
+
+export async function refreshOrgsState({ detailId = subscribedDetailId } = {}) {
+  const normalizedDetailId = String(detailId || '').trim();
+  const requests = [loadOrgsOverview()];
+  if (normalizedDetailId) requests.push(loadOrgDetail(normalizedDetailId));
+  await Promise.all(requests);
+  return { overview: orgsState, detail: orgDetailState };
+}
+
+export async function subscribeToOrgsUpdates({ detailId = '' } = {}) {
+  const normalizedDetailId = String(detailId || '').trim();
+  subscribedDetailId = normalizedDetailId;
+  if (orgsSubscription) {
+    const ownedSubscription = orgsSubscription;
+    return () => {
+      if (orgsSubscription === ownedSubscription) unsubscribeFromOrgsUpdates();
+    };
+  }
+
+  const generation = ++orgsSubscriptionGeneration;
+  const info = await ensureEncryptedOrgs();
+  const unsubscribe = await subscribeToDomainRefresh({
+    domain: 'orgs',
+    servicePubkey: servicePubkeyFromSystemInfo(info),
+    refresh: () => refreshOrgsState(),
+    onError: (error) => {
+      orgsState.error = error?.message || 'Organization live updates failed';
+      if (subscribedDetailId) orgDetailState.error = orgsState.error;
+    }
+  });
+
+  if (generation !== orgsSubscriptionGeneration) {
+    unsubscribe();
+    return () => {};
+  }
+  orgsSubscription = unsubscribe;
+  return () => {
+    if (orgsSubscription === unsubscribe) unsubscribeFromOrgsUpdates();
+  };
 }
 
 export async function loadOrgDetail(id) {

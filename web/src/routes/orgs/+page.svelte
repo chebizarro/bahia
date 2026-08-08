@@ -1,19 +1,35 @@
 <script>
   import { onMount } from 'svelte';
-  import { acceptInvite as acceptPrivateInvite, loadOrgsOverview } from '$lib/stores/orgs.svelte.js';
+  import {
+    acceptInvite as acceptPrivateInvite,
+    loadOrgsOverview,
+    orgsState,
+    subscribeToOrgsUpdates
+  } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
 
-  let orgs = $state([]);
-  let myInvites = $state([]);
-  let loading = $state(true);
-  let error = $state(null);
-  let loadGeneration = 0;
+  let orgs = $derived(orgsState.orgs);
+  let myInvites = $derived(orgsState.myInvites);
+  let loading = $derived(orgsState.loading);
+  let error = $derived(orgsState.error ? describeLoadError(orgsState.error) : null);
 
   onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
     void loadData();
+    void subscribeToOrgsUpdates().then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      orgsState.error = caught?.message || 'Failed to subscribe to organization updates';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
   });
 
   function describeLoadError(message) {
@@ -25,23 +41,10 @@
   }
 
   async function loadData() {
-    const generation = ++loadGeneration;
-    loading = true;
-    error = null;
     try {
-      const data = await loadOrgsOverview();
-      if (generation !== loadGeneration) return;
-      orgs = data.orgs;
-      myInvites = data.myInvites;
-    } catch (e) {
-      if (generation !== loadGeneration) return;
-      // Surface a single, inline error with a Retry affordance instead of an
-      // additional transient toast so recovery is obvious once the backend lands.
-      error = describeLoadError(e?.message);
-    } finally {
-      if (generation === loadGeneration) {
-        loading = false;
-      }
+      await loadOrgsOverview();
+    } catch {
+      // The reactive store exposes the inline error and Retry affordance.
     }
   }
 

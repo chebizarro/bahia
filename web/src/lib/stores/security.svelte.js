@@ -1,4 +1,15 @@
-import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
+import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
+import {
+  CASCADIA_AUDIT,
+  CASCADIA_CONTROLPLANE_STATE,
+  NIP38_STATUS,
+  NIP78_APP_DATA,
+  getTagValue,
+  isReplaceableTombstone,
+  parseJsonContent,
+  upsertReplaceableEvent
+} from '$lib/nostr/client.js';
+import { createCoalescedRefresh, subscribeToRetainedEvents } from '$lib/nostr/retained-domain-subscription.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const securityState = $state({
@@ -11,6 +22,15 @@ export const securityState = $state({
   scanSubmitting: false,
   scanError: null
 });
+
+const SECURITY_FINDINGS_SCHEMA = 'bahia.security.findings.v1';
+const SECURITY_EVENT_LIMIT = 500;
+const securityFindingEvents = new Map();
+let securitySnapshotFindings = [];
+let securitySubscription = null;
+let securitySubscriptionGeneration = 0;
+let subscribedFindingsScope = null;
+let subscribedScheduleParams = {};
 
 export const SECURITY_ENCRYPTED_OPERATIONS = {
   scan: 'security/scan',
@@ -92,9 +112,12 @@ export async function listSecurityFindings(params = {}) {
       payload: scopedParams
     });
     const findings = normalizeFindingsPayload(extractEncryptedPayload(response));
+    securitySnapshotFindings = findings;
     securityState.findings = findings;
+    if (securityFindingEvents.size > 0) refreshFindingsFromEvents(scopedParams);
     return findings;
   } catch (error) {
+    securitySnapshotFindings = [];
     securityState.findings = [];
     securityState.findingsError = error?.message || 'Failed to load security findings';
     throw error;
@@ -175,7 +198,185 @@ export async function rescanSecurityTarget(targetKeyHash) {
   }
 }
 
+function normalizeFindingEvent(event) {
+  const content = parseJsonContent(event, {});
+  const inherited = {
+    run_id: content.run_id || getTagValue(event, 'run'),
+    target_key_hash: content.target_key_hash || getTagValue(event, 'target_key_hash')
+  };
+  const findings = normalizeFindingsPayload(content.finding ?? content);
+  const rows = findings.length > 0
+    ? findings
+    : (content.osv_id || content.id ? [content] : []);
+  return rows.map((finding) => ({
+    ...inherited,
+    ...finding,
+    run_id: finding.run_id || inherited.run_id,
+    target_key_hash: finding.target_key_hash || inherited.target_key_hash
+  }));
+}
+
+function findingIdentity(finding) {
+  if (finding.id) return `id:${finding.id}`;
+  const pkg = finding.package || {};
+  return [
+    finding.run_id,
+    finding.target_key_hash,
+    finding.osv_id,
+    finding.cve,
+    pkg.ecosystem || finding.ecosystem,
+    pkg.name || finding.package_name,
+    pkg.version || finding.package_version
+  ].map((value) => String(value || '')).join(':');
+}
+
+function findingMatchesScope(finding, scope) {
+  if (!scope) return true;
+  if (scope.run_id && String(finding.run_id || '') !== String(scope.run_id)) return false;
+  if (scope.target_key_hash && String(finding.target_key_hash || '') !== String(scope.target_key_hash)) return false;
+  if (scope.severity && String(finding.severity || '').toLowerCase() !== String(scope.severity).toLowerCase()) return false;
+  if (scope.osv_id && String(finding.osv_id || '') !== String(scope.osv_id)) return false;
+  return true;
+}
+
+function refreshFindingsFromEvents(scope = subscribedFindingsScope) {
+  const deduped = new Map();
+  for (const finding of securitySnapshotFindings) {
+    if (findingMatchesScope(finding, scope)) deduped.set(findingIdentity(finding), finding);
+  }
+  for (const event of securityFindingEvents.values()) {
+    if (isReplaceableTombstone(event)) continue;
+    for (const finding of normalizeFindingEvent(event)) {
+      if (findingMatchesScope(finding, scope)) deduped.set(findingIdentity(finding), finding);
+    }
+  }
+  securityState.findings = Array.from(deduped.values());
+  securityState.findingsError = null;
+  return securityState.findings;
+}
+
+export function applySecurityFindingEvent(event, scope = subscribedFindingsScope) {
+  if (event?.kind !== NIP78_APP_DATA) return false;
+  if (getTagValue(event, 'domain') !== 'security') return false;
+  if (getTagValue(event, 'schema') !== SECURITY_FINDINGS_SCHEMA) return false;
+  const result = upsertReplaceableEvent(securityFindingEvents, event);
+  if (!result.accepted) return false;
+  refreshFindingsFromEvents(scope);
+  return true;
+}
+
+function securityFilters(servicePubkey, scope = null) {
+  const findingFilter = {
+    kinds: [NIP78_APP_DATA],
+    authors: [servicePubkey],
+    '#domain': ['security'],
+    '#schema': [SECURITY_FINDINGS_SCHEMA],
+    limit: SECURITY_EVENT_LIMIT
+  };
+  if (scope?.run_id) findingFilter['#run'] = [String(scope.run_id)];
+  if (scope?.target_key_hash) findingFilter['#target_key_hash'] = [String(scope.target_key_hash)];
+
+  return [
+    findingFilter,
+    {
+      kinds: [CASCADIA_CONTROLPLANE_STATE, NIP38_STATUS, CASCADIA_AUDIT],
+      authors: [servicePubkey],
+      '#domain': ['security'],
+      limit: SECURITY_EVENT_LIMIT
+    }
+  ];
+}
+
+function securityScopeKey(scope, scheduleParams) {
+  return JSON.stringify({ findings: scope || null, schedules: scheduleParams || {} });
+}
+
+export function unsubscribeFromSecurityUpdates() {
+  securitySubscriptionGeneration += 1;
+  securitySubscription?.();
+  securitySubscription = null;
+}
+
+export async function refreshSecurityStore({
+  findingsScope = subscribedFindingsScope,
+  scheduleParams = subscribedScheduleParams
+} = {}) {
+  const requests = [listSecuritySchedules(scheduleParams || {})];
+  if (findingsScope) requests.push(listSecurityFindings(findingsScope));
+  await Promise.all(requests);
+  return securityState;
+}
+
+export async function subscribeToSecurityUpdates({
+  findingsScope = null,
+  scheduleParams = {}
+} = {}) {
+  const normalizedScope = findingsScope ? { ...findingsScope } : null;
+  const normalizedScheduleParams = { ...(scheduleParams || {}) };
+  const nextKey = securityScopeKey(normalizedScope, normalizedScheduleParams);
+  const currentKey = securityScopeKey(subscribedFindingsScope, subscribedScheduleParams);
+  subscribedFindingsScope = normalizedScope;
+  subscribedScheduleParams = normalizedScheduleParams;
+
+  if (securitySubscription && nextKey === currentKey) {
+    const ownedSubscription = securitySubscription;
+    return () => {
+      if (securitySubscription === ownedSubscription) unsubscribeFromSecurityUpdates();
+    };
+  }
+  unsubscribeFromSecurityUpdates();
+  securityFindingEvents.clear();
+  securitySnapshotFindings = [];
+
+  const generation = ++securitySubscriptionGeneration;
+  const info = await ensureEncryptedSecurity();
+  const refresh = createCoalescedRefresh(
+    () => refreshSecurityStore(),
+    (error) => {
+      securityState.schedulesError = error?.message || 'Security live refresh failed';
+    }
+  );
+  const unsubscribe = await subscribeToRetainedEvents({
+    filters: securityFilters(servicePubkeyFromSystemInfo(info), normalizedScope),
+    onEvent: (event, context) => {
+      if (event.kind === NIP78_APP_DATA) {
+        const result = upsertReplaceableEvent(securityFindingEvents, event);
+        if (result.accepted && context.live) refreshFindingsFromEvents();
+        return;
+      }
+      if (context.live) void refresh();
+    },
+    onReady: () => {
+      if (securityFindingEvents.size > 0) refreshFindingsFromEvents();
+    },
+    onClosed: (reason, relay, _metadata, meta) => {
+      if (meta?.authRequired) {
+        securityState.schedulesError = `Security live subscription requires relay AUTH at ${relay}: ${reason}`;
+      }
+    }
+  });
+
+  if (generation !== securitySubscriptionGeneration) {
+    refresh.stop();
+    unsubscribe();
+    return () => {};
+  }
+  const ownedSubscription = () => {
+    refresh.stop();
+    unsubscribe();
+  };
+  securitySubscription = ownedSubscription;
+  return () => {
+    if (securitySubscription === ownedSubscription) unsubscribeFromSecurityUpdates();
+  };
+}
+
 export function resetSecurityStore() {
+  unsubscribeFromSecurityUpdates();
+  securityFindingEvents.clear();
+  securitySnapshotFindings = [];
+  subscribedFindingsScope = null;
+  subscribedScheduleParams = {};
   securityState.findings = [];
   securityState.findingsLoading = false;
   securityState.findingsError = null;

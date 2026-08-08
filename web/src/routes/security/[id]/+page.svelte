@@ -1,6 +1,6 @@
 <script>
   import { page } from '$app/stores';
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -10,11 +10,27 @@
   import {
     securityState,
     listSecurityFindings,
-    computeSeverityCounts
+    computeSeverityCounts,
+    subscribeToSecurityUpdates
   } from '$lib/stores/security.svelte.js';
 
   let loadStarted = false;
   let runId = $derived($page.params.id);
+
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
+    void subscribeToSecurityUpdates({ findingsScope: { run_id: runId } }).then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      securityState.findingsError = caught?.message || 'Failed to subscribe to security findings';
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
 
   $effect(() => {
     const id = runId;

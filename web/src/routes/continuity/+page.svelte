@@ -1,12 +1,46 @@
 <script>
+  import { onMount } from 'svelte';
+  import { subscribeToContinuityDashboard } from '$lib/nostr/continuity';
   import SimulationPanel from './SimulationPanel.svelte';
   import TopologyView from './TopologyView.svelte';
 
-  let { data } = $props();
   let activeTab = $state('status');
+  let statuses = $state([]);
+  let assessments = $state([]);
+  let requests = $state([]);
+  let continuityEvents = $state([]);
+  let ready = $state(false);
+  let error = $state(null);
 
-  const statuses = $derived(data?.statuses || []);
-  const assessments = $derived(data?.assessments || []);
+  onMount(() => {
+    let disposed = false;
+    let unsubscribe = null;
+
+    void subscribeToContinuityDashboard({
+      onUpdate: (snapshot) => {
+        if (disposed) return;
+        statuses = snapshot.statuses;
+        assessments = snapshot.assessments;
+        requests = snapshot.requests;
+        continuityEvents = snapshot.events;
+        ready = snapshot.ready;
+        error = snapshot.error;
+      },
+      onError: (caught) => {
+        if (!disposed) error = caught?.message || 'Continuity live subscription failed';
+      }
+    }).then((stop) => {
+      if (disposed) stop();
+      else unsubscribe = stop;
+    }).catch((caught) => {
+      if (!disposed) error = caught?.message || 'Failed to subscribe to continuity events';
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
   const sortedStatuses = $derived([...statuses].sort((left, right) =>
     String(left.service_key || '').localeCompare(String(right.service_key || ''))
   ));
@@ -73,21 +107,27 @@
     </div>
   </div>
 
-  {#if data?.error}
+  {#if error}
     <div class="alert" role="status">
       <strong>Continuity status unavailable.</strong>
-      <span>{data.error}</span>
+      <span>{error}</span>
     </div>
   {/if}
 
   <nav class="tabs" aria-label="Continuity views">
     <button type="button" class:active={activeTab === 'status'} onclick={() => (activeTab = 'status')}>Status</button>
     <button type="button" class:active={activeTab === 'topology'} onclick={() => (activeTab = 'topology')}>Topology</button>
+    <button type="button" class:active={activeTab === 'requests'} onclick={() => (activeTab = 'requests')}>Requests ({requests.length})</button>
     <button type="button" class:active={activeTab === 'simulation'} onclick={() => (activeTab = 'simulation')}>Simulation</button>
   </nav>
 
   {#if activeTab === 'status'}
-    {#if sortedStatuses.length === 0 && !data?.error}
+    {#if !ready && sortedStatuses.length === 0 && !error}
+      <section class="empty-card">
+        <h2>Loading continuity history</h2>
+        <p>The retained relay subscription is processing stored events and will remain open after EOSE.</p>
+      </section>
+    {:else if sortedStatuses.length === 0 && !error}
       <section class="empty-card">
         <h2>No continuity status projected yet</h2>
         <p>Services will appear here after the continuity status projector records kind 30351/30353 read-model state.</p>
@@ -160,8 +200,34 @@
     {/if}
   {:else if activeTab === 'topology'}
     <TopologyView {assessments} {statuses} />
+  {:else if activeTab === 'requests'}
+    {#if requests.length === 0}
+      <section class="empty-card">
+        <h2>No continuity requests observed</h2>
+        <p>Failover and recovery requests (kinds 38430 and 38431) will appear here as relay events arrive.</p>
+      </section>
+    {:else}
+      <section class="status-grid" aria-label="Continuity requests">
+        {#each requests as request (request.id)}
+          <article class="service-card">
+            <div class="card-topline">
+              <div>
+                <h2>{request.service_key || 'Unscoped service'}</h2>
+                <p>{request.request_type} request</p>
+              </div>
+              <span class="status-badge recovering">{request.request_type.toUpperCase()}</span>
+            </div>
+            {#if request.worker_pubkey}
+              <div class="profile-row"><span>Worker</span><code>{shortKey(request.worker_pubkey)}</code></div>
+            {/if}
+            {#if request.reason}<div class="reason"><span>Reason</span><p>{request.reason}</p></div>{/if}
+            <footer><span>Requested {changedAtLabel(request.created_at)}</span></footer>
+          </article>
+        {/each}
+      </section>
+    {/if}
   {:else}
-    <SimulationPanel baseline={assessments} {statuses} continuityEvents={data?.continuityEvents || []} />
+    <SimulationPanel baseline={assessments} {statuses} {continuityEvents} />
   {/if}
 </div>
 
