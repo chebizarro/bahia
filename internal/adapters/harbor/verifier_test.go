@@ -13,6 +13,8 @@ func TestParseImageRepo_Valid(t *testing.T) {
 		{"myproject/myimage", "myproject", "myimage"},
 		{"library/nginx", "library", "nginx"},
 		{"project/sub/repo", "project", "sub/repo"},
+		{"harbor.sharegap.net/cascadia/bahia-controlplane-web", "cascadia", "bahia-controlplane-web"},
+		{"localhost:5000/project/sub/repo", "project", "sub/repo"},
 	}
 
 	for _, tt := range tests {
