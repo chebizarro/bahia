@@ -26,6 +26,17 @@ import {
 import { backupApplicators } from '../collections/backup.svelte.js';
 import { mlApplicators } from '../collections/ml.svelte.js';
 import { applyActivityEvent } from '../collections/activity.svelte.js';
+import {
+  CANONICAL_OPERATION_KINDS,
+  EXTERNAL_OPERATION_KINDS,
+  HIVE_CI_OPERATION_KINDS,
+  OPERATION_RESULT_KINDS,
+  OPERATION_STATUS_KINDS,
+  applyHiveCIWorkflowResultEvent,
+  applyHiveCIWorkflowRunEvent,
+  applyOperationResultEvent,
+  applyOperationStatusEvent
+} from '../collections/operations.svelte.js';
 import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
 import { refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
 
@@ -34,6 +45,8 @@ const READ_MODEL_LIMIT = 1000;
 const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const LOOM_JOB_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const LOOM_JOB_LIMIT = 500;
+const OPERATION_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
+const OPERATION_LIMIT = 1000;
 const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
@@ -58,6 +71,17 @@ export function readModelFilters() {
       limit: LOOM_JOB_LIMIT
     },
     {
+      kinds: CANONICAL_OPERATION_KINDS,
+      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
+      limit: OPERATION_LIMIT,
+      ...authorFilter
+    },
+    {
+      kinds: EXTERNAL_OPERATION_KINDS,
+      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
+      limit: OPERATION_LIMIT
+    },
+    {
       kinds: ACTIVITY_KINDS,
       since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
       limit: ACTIVITY_BACKFILL_LIMIT,
@@ -67,7 +91,9 @@ export function readModelFilters() {
 }
 
 function isCanonicalBahiaKind(kind) {
-  return CANONICAL_READ_MODEL_KINDS.includes(kind) || ACTIVITY_KINDS.includes(kind);
+  return CANONICAL_READ_MODEL_KINDS.includes(kind)
+    || ACTIVITY_KINDS.includes(kind)
+    || CANONICAL_OPERATION_KINDS.includes(kind);
 }
 
 function shouldAcceptControlplaneEvent(event) {
@@ -171,6 +197,10 @@ const handlers = new Map([
   [LOOM_JOB_REQUEST, applyLoomJobRequestEvent],
   [LOOM_JOB_STATUS_UPDATE, applyLoomJobStatusEvent],
   [LOOM_JOB_RESULT, applyLoomJobResultEvent],
+  ...OPERATION_STATUS_KINDS.map((kind) => [kind, applyOperationStatusEvent]),
+  ...OPERATION_RESULT_KINDS.map((kind) => [kind, applyOperationResultEvent]),
+  [HIVE_CI_OPERATION_KINDS[0], applyHiveCIWorkflowRunEvent],
+  [HIVE_CI_OPERATION_KINDS[1], applyHiveCIWorkflowResultEvent],
   [BAHIA_STATE_SCHEMAS.WORKER_STATE, applyWorkerStateEvent],
   [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, workerApplicators.assignment],
   [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, workerApplicators.drainStatus],

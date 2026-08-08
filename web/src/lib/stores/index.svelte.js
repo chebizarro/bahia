@@ -22,6 +22,7 @@ import {
   workerEligibilityPreviews,
   workerCleanupExecutions,
   workerJobs,
+  operations,
   events,
   backupRepositories,
   backupPolicies,
@@ -54,7 +55,7 @@ export { isAuthenticated, currentUser };
 export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs, events, backupRepositories, backupPolicies, backupRecipes, backupDefinitions, backupRuns, backupVerifications, backupRestores, backupRetentionRuns, backupRuntimeObservations, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, manualRetry, upsertServiceProjection };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs, operations, events, backupRepositories, backupPolicies, backupRecipes, backupDefinitions, backupRuns, backupVerifications, backupRestores, backupRetentionRuns, backupRuntimeObservations, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, manualRetry, upsertServiceProjection };
 
 // Derived state helpers
 export function driftedStates() {

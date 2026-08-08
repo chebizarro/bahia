@@ -33,6 +33,8 @@ export {
   workerDrainStatuses,
   workerEligibilityPreviews,
   workerCleanupExecutions,
+  workerJobs,
+  operations,
   events,
   sbomRefs,
   sbomAvailability,

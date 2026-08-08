@@ -21,6 +21,7 @@ import {
   workerCleanupExecutions,
   workerJobs
 } from './workers.svelte.js';
+import { operations } from './operations.svelte.js';
 import {
   backupRepositories,
   backupPolicies,
@@ -64,6 +65,15 @@ export {
   isTerminalLoomJobStatus
 } from './workers.svelte.js';
 export {
+  operations,
+  operationsForDomain,
+  operationsForEntity,
+  isTerminalOperationStatus,
+  OPERATION_STATUS_KINDS,
+  OPERATION_RESULT_KINDS,
+  HIVE_CI_OPERATION_KINDS
+} from './operations.svelte.js';
+export {
   backupRepositories,
   backupPolicies,
   backupRecipes,
@@ -82,6 +92,7 @@ import { resetServices, refreshServices } from './services.svelte.js';
 import { resetEnvironments, refreshEnvironments } from './environments.svelte.js';
 import { resetDeployments, refreshDeployments } from './deployments.svelte.js';
 import { resetWorkers, refreshWorkers } from './workers.svelte.js';
+import { resetOperations, refreshOperations } from './operations.svelte.js';
 import { resetBackup, refreshBackup } from './backup.svelte.js';
 import { resetML, refreshML } from './ml.svelte.js';
 import { resetActivity, refreshActivity } from './activity.svelte.js';
@@ -136,6 +147,7 @@ export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
   'workerEligibilityPreviews',
   'workerCleanupExecutions',
   'workerJobs',
+  'operations',
   'backupRuns',
   'backupVerifications',
   'backupRestores',
@@ -171,6 +183,7 @@ export function resetCollections() {
   resetEnvironments();
   resetDeployments();
   resetWorkers();
+  resetOperations();
   resetBackup();
   resetML();
   resetActivity();
@@ -183,6 +196,7 @@ export function refreshCollections() {
   refreshEnvironments();
   refreshDeployments();
   refreshWorkers();
+  refreshOperations();
   refreshBackup();
   refreshML();
   refreshActivity();
@@ -230,6 +244,7 @@ const COLLECTION_TARGETS = Object.freeze({
   workerEligibilityPreviews,
   workerCleanupExecutions,
   workerJobs,
+  operations,
   events,
   sbomRefs,
   sbomAvailability,
