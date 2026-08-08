@@ -358,6 +358,21 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 		}
 		svc.RuntimeConfig.Managed = managed
 	}
+	if payload.AdoptedPublicEnvironment != nil {
+		if svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+			return nil, fmt.Errorf("adopted_public_environment requires an already-adopted service")
+		}
+		if svc.RuntimeConfig.Adopted.Environment == nil {
+			svc.RuntimeConfig.Adopted.Environment = map[string]string{}
+		}
+		for key, value := range payload.AdoptedPublicEnvironment {
+			key = strings.TrimSpace(key)
+			if !strings.HasPrefix(key, "PUBLIC_") {
+				return nil, fmt.Errorf("adopted public environment key %q must use the PUBLIC_ prefix", key)
+			}
+			svc.RuntimeConfig.Adopted.Environment[key] = value
+		}
+	}
 	if err := h.registry.UpdateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("failed to update service: %w", err)
 	}

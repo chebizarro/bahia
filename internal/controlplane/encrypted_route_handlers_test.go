@@ -479,6 +479,37 @@ func TestEncryptedRouteHandlers_RegisterArtifactContextVMMethodMutatesRegistry(t
 	}
 }
 
+func TestEncryptedRouteHandlers_UpdateServiceRefreshesOnlyAdoptedPublicEnvironment(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	serviceRecord := &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "web", RuntimeType: domain.RuntimeTypeDocker,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
+			TargetName: "bahia-web", HostAlias: "local", EndpointRef: "edge-01-docker",
+			Environment: map[string]string{"PATH": "/usr/bin"},
+		}},
+	}
+	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: serviceRecord}}
+	registry := &fakeEncryptedRegistryMutations{createdServices: []*domain.Service{serviceRecord}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Services: services, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
+	transport, _ := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceUpdate, map[string]any{
+		"id": serviceID.String(), "adopted_public_environment": map[string]string{
+			"PUBLIC_BAHIA_BOOTSTRAP_RELAYS": "wss://bahia.example/relay",
+			"PUBLIC_BAHIA_SERVICE_PUBKEYS":  "abc123",
+		},
+	}))
+
+	updated := registry.createdServices[0].RuntimeConfig.Adopted
+	if updated.TargetName != "bahia-web" || updated.HostAlias != "local" || updated.EndpointRef != "edge-01-docker" {
+		t.Fatalf("adopted identity changed: %#v", updated)
+	}
+	if updated.Environment["PATH"] != "/usr/bin" || updated.Environment["PUBLIC_BAHIA_BOOTSTRAP_RELAYS"] != "wss://bahia.example/relay" || updated.Environment["PUBLIC_BAHIA_SERVICE_PUBKEYS"] != "abc123" {
+		t.Fatalf("unexpected adopted environment: %#v", updated.Environment)
+	}
+}
+
 func TestEncryptedRouteHandlers_UpdateAndDeleteServiceContextVMMethodsMutateRegistry(t *testing.T) {
 	orgID := uuid.New()
 	serviceID := uuid.New()
