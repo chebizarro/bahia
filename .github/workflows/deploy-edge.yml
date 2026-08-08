@@ -62,7 +62,7 @@ jobs:
           docker version >/dev/null
           docker compose version >/dev/null
           curl -fsS \
-            "$ATHENS_PROXY/git.sharegap.net/cascadia/cascadia-go/@v/v1.0.1.info" \
+            "$ATHENS_PROXY/git.sharegap.net/cascadia/cascadia-go/@v/v1.2.0.info" \
             >/dev/null
 
           test -f Dockerfile
