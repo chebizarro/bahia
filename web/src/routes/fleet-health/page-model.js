@@ -6,7 +6,8 @@ import {
   workerPressureLevel,
   workerRecommendedAction,
   workerTelemetryIndicators,
-  hasWorkerTelemetry
+  hasWorkerTelemetry,
+  workerActivitySummary
 } from '../workers/list-utils.js';
 
 export const FLEET_CAPACITY_LANES = Object.freeze([
@@ -175,7 +176,7 @@ export function activeCleanupByWorker(executions = []) {
   return map;
 }
 
-export function buildFleetWeatherNodes(workers = [], cleanupExecutions = [], assignments = []) {
+export function buildFleetWeatherNodes(workers = [], cleanupExecutions = [], assignments = [], workerJobs = [], operations = []) {
   const activeCleanup = activeCleanupByWorker(cleanupExecutions);
   const assignmentCounts = countAssignments(assignments);
   return [...workers]
@@ -183,6 +184,7 @@ export function buildFleetWeatherNodes(workers = [], cleanupExecutions = [], ass
     .map((worker) => {
       const pubkey = worker?.pubkey || '';
       const signal = dominantPressureSignal(worker);
+      const liveActivity = workerActivitySummary(workerJobs, operations, pubkey);
       return {
         id: pubkey,
         worker,
@@ -197,12 +199,13 @@ export function buildFleetWeatherNodes(workers = [], cleanupExecutions = [], ass
         telemetryIndicators: workerTelemetryIndicators(worker),
         dominantSignal: signal,
         cleanup: activeCleanup.get(pubkey) || null,
-        assignmentCount: assignmentCounts.get(pubkey) || 0
+        assignmentCount: assignmentCounts.get(pubkey) || 0,
+        liveActivity
       };
     });
 }
 
-export function buildFleetHealthSummary(workers = [], cleanupExecutions = [], assignments = []) {
+export function buildFleetHealthSummary(workers = [], cleanupExecutions = [], assignments = [], workerJobs = [], operations = []) {
   const summary = {
     total: workers.length,
     activity: summarizeWorkerActivity(workers),
@@ -211,7 +214,9 @@ export function buildFleetHealthSummary(workers = [], cleanupExecutions = [], as
     recommended: { none: 0, cleanup_recommended: 0, operator_intervention: 0 },
     telemetry: { present: 0, missing: 0 },
     cleanup: { active: 0, completed: 0, failed: 0, total: cleanupExecutions.length },
-    assignments: { total: assignments.length }
+    assignments: { total: assignments.length },
+    jobs: { active: 0, total: workerJobs.length },
+    workerOperations: operations.filter((operation) => operation?.domain === 'worker').length
   };
 
   for (const worker of workers) {
@@ -220,6 +225,7 @@ export function buildFleetHealthSummary(workers = [], cleanupExecutions = [], as
     increment(summary.recommended, workerRecommendedAction(worker));
     if (hasWorkerTelemetry(worker)) summary.telemetry.present += 1;
     else summary.telemetry.missing += 1;
+    summary.jobs.active += workerActivitySummary(workerJobs, operations, worker?.pubkey).activeJobCount;
   }
 
   for (const execution of cleanupExecutions) {

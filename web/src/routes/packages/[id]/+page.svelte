@@ -12,11 +12,13 @@
     packageRepositories,
     packageArtifacts,
     packagePromotions,
+    operations,
     loadPackageRepositories,
     loadPackageArtifacts,
     loadPackagePromotions
   } from '$lib/stores';
   import { promotePackage, yankPackage } from '$lib/stores/public-controlplane.svelte.js';
+  import { packageDriftOutcome, packageOperationLabel, packageOperationsForRepository } from '../page-model.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -32,6 +34,8 @@
   let repository = $derived(packageRepositories.find((candidate) => candidate.id === repositoryId) || null);
   let artifacts = $derived(packageArtifacts.filter((artifact) => artifact.repository_id === repositoryId && !artifact.deleted));
   let promotions = $derived(packagePromotions.filter((promotion) => promotion.repository_id === repositoryId || artifacts.some((artifact) => artifact.id === promotion.artifact_id)));
+  let liveOperations = $derived(packageOperationsForRepository(operations, repositoryId));
+  let liveDrift = $derived(packageDriftOutcome(operations, repositoryId));
   let targetRepositoryOptions = $derived(packageRepositories
     .filter((candidate) => candidate.id !== repositoryId && !candidate.deleted)
     .map((candidate) => ({ value: candidate.id, label: candidate.name || candidate.id })));
@@ -213,7 +217,7 @@
   {:else if repository}
     <div class="header">
       <h1><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> {repository.name}</h1>
-      <span class="drift {driftStatus(repository)}">Drift: {driftStatus(repository)}</span>
+      <span class="drift {liveDrift?.status || driftStatus(repository)}">Drift: {liveDrift?.status || driftStatus(repository)}</span>
     </div>
 
     <div class="info-grid">
@@ -243,6 +247,23 @@
         <EmptyState iconComponent={ArtifactIcon} title="No package artifacts" message="Artifacts will appear after packages are published." />
       {:else}
         <Table columns={artifactColumns} data={artifacts} onRowClick={handleArtifactClick} rowClickable={false} />
+      {/if}
+    </section>
+
+    <section>
+      <h2>Live package activity</h2>
+      {#if liveOperations.length === 0}
+        <p class="muted">No promotion, yank, or drift outcomes have been published yet.</p>
+      {:else}
+        <div class="operation-list">
+          {#each liveOperations as operation}
+            <article class="operation-row">
+              <div><strong>{packageOperationLabel(operation)}</strong><span>{operation.status || 'processing'}</span></div>
+              <p>{operation.message || operation.error || 'Awaiting the next operational event.'}</p>
+              <time>{formatDate(operation.completed_at || operation.status_at || operation.updated_at)}</time>
+            </article>
+          {/each}
+        </div>
       {/if}
     </section>
 
@@ -341,7 +362,11 @@
   .drift { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.35rem 0.75rem; color: var(--text-muted); font-size: 0.875rem; }
   .drift.ok, .drift.clean, .drift.none { color: #10b981; border-color: #10b981; }
   .drift.drifted, .drift.error { color: #ef4444; border-color: #ef4444; }
-  .promotion-list, .promotion-group { display: grid; gap: 0.75rem; }
+  .promotion-list, .promotion-group, .operation-list { display: grid; gap: 0.75rem; }
+  .operation-row { display: grid; grid-template-columns: minmax(180px, 0.7fr) minmax(240px, 1.5fr) 220px; gap: 1rem; align-items: center; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; }
+  .operation-row div { display: grid; gap: 0.2rem; }
+  .operation-row span, .operation-row time { color: var(--text-muted); font-size: 0.875rem; }
+  .operation-row p { margin: 0; }
   .promotion-row { display: grid; grid-template-columns: 1fr 120px 220px; gap: 1rem; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; }
   .action-form, .form-field { display: flex; flex-direction: column; gap: 0.75rem; }
   .action-form { gap: 1rem; }

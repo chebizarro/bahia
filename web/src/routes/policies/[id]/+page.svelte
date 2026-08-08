@@ -12,11 +12,13 @@
   import {
     policies as policyStore,
     environments as environmentStore,
+    operations,
     loadPolicies,
     loadEnvironments
   } from '$lib/stores';
   import { updatePolicy, deletePolicy, evaluatePolicy } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
+  import { policyEvaluationHistory, policyEvaluationLabel } from '../page-model.js';
   import { CheckIcon, CloseIcon, EnvironmentIcon, InfoIcon, PolicyIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let policy = $state(null);
@@ -244,6 +246,7 @@
   let currentPolicyEvaluation = $derived(
     evaluation?.results?.find((r) => r.policy_id === policy?.id) || null
   );
+  let evaluationHistory = $derived(policyEvaluationHistory(operations, policyId));
 
   async function togglePolicyEnabled() {
     if (!policy) return;
@@ -369,6 +372,27 @@
         </div>
       {:else if evaluation}
         <p class="help-text">This policy did not apply to the selected environment.</p>
+      {/if}
+    </section>
+
+    <section>
+      <h2><CheckIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Evaluation outcome history</h2>
+      <p class="help-text">Durable policy outcomes projected from live Nostr result events.</p>
+      {#if evaluationHistory.length === 0}
+        <p class="help-text">No evaluation outcomes have been published for this policy yet.</p>
+      {:else}
+        <div class="evaluation-history">
+          {#each evaluationHistory as entry}
+            <article>
+              <div>
+                <strong>{policyEvaluationLabel(entry)}</strong>
+                <span>{entry.policy_result?.enforcement || entry.status || 'processing'}</span>
+              </div>
+              <p>{entry.policy_result?.violations?.map((violation) => violation.message || violation.rule).join('; ') || entry.message || entry.error || 'No violations reported.'}</p>
+              <time>{new Date(entry.completed_at || entry.status_at || entry.updated_at).toLocaleString()}</time>
+            </article>
+          {/each}
+        </div>
       {/if}
     </section>
   {/if}
@@ -674,6 +698,11 @@
     margin: 0;
     padding-left: 1.25rem;
   }
+  .evaluation-history { display: grid; gap: 0.75rem; margin-top: 1rem; }
+  .evaluation-history article { display: grid; grid-template-columns: minmax(120px, 0.5fr) minmax(220px, 1.5fr) 200px; gap: 1rem; align-items: center; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; }
+  .evaluation-history article div { display: grid; gap: 0.2rem; }
+  .evaluation-history article span, .evaluation-history time { color: var(--text-muted); font-size: 0.8rem; }
+  .evaluation-history article p { margin: 0; }
 
   .visual-rule-row {
     display: grid;

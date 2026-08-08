@@ -6,9 +6,11 @@
   import {
     packageRepositories,
     packageArtifacts,
+    operations,
     loadPackageRepositories,
     loadPackageArtifacts
   } from '$lib/stores';
+  import { latestPackageOperation, packageOperationLabel } from './page-model.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -37,7 +39,8 @@
     .filter((repository) => !repository.deleted)
     .map((repository) => ({
       ...repository,
-      artifact_count: artifactCount(repository)
+      artifact_count: artifactCount(repository),
+      live_operation: latestPackageOperation(operations, repository.id)
     })));
 
   let columns = $derived([
@@ -45,6 +48,7 @@
     { key: 'backend_type', label: 'Backend Type', text: (row) => row.backend_type || '-' },
     { key: 'format', label: 'Format', text: (row) => row.format || '-' },
     { key: 'status', label: 'Status', text: (row) => row.status || '-' },
+    { key: 'live_operation', label: 'Live outcome', text: (row) => row.live_operation ? `${packageOperationLabel(row.live_operation)} · ${row.live_operation.status || 'processing'}` : '-' },
     { key: 'artifact_count', label: 'Artifacts' }
   ]);
 </script>

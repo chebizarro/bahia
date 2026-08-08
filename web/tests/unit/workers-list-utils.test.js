@@ -5,6 +5,8 @@ import {
   getCapabilityOptions,
   filterWorkers,
   summarizeWorkerActivity,
+  workerActivityLabel,
+  workerActivitySummary,
   workerPriceLabel,
   workerLastAdvertisementLabel
 } from '../../src/routes/workers/list-utils.js';
@@ -61,6 +63,30 @@ describe('workers list utils', () => {
     expect(filterWorkers(workers, 'docker', '')).toHaveLength(2);
     expect(filterWorkers(workers, '', 'kube').map((w) => w.pubkey)).toEqual(['b']);
     expect(filterWorkers(workers, 'docker', 'gpu').map((w) => w.pubkey)).toEqual(['a']);
+  });
+
+  it('summarizes active Loom jobs and live worker outcomes by pubkey', () => {
+    const summary = workerActivitySummary([
+      { job_id: 'job-1', worker_pubkey: 'worker-a', status: 'running', cmd: 'build' },
+      { job_id: 'job-2', worker_pubkey: 'worker-a', status: 'completed', cmd: 'test' },
+      { job_id: 'job-3', worker_pubkey: 'worker-b', status: 'queued', cmd: 'deploy' }
+    ], [
+      { id: 'op-1', domain: 'worker', worker_pubkey: 'worker-a', status: 'completed', operation: 'worker/cordon' },
+      { id: 'op-2', domain: 'worker', worker_pubkey: 'worker-b', status: 'failed' }
+    ], 'worker-a');
+
+    expect(summary.jobs).toHaveLength(2);
+    expect(summary.activeJobCount).toBe(1);
+    expect(summary.latestOperation?.id).toBe('op-1');
+    expect(workerActivityLabel(summary)).toBe('1 active · build');
+  });
+
+  it('falls back to worker 6997/7997 activity when no job is active', () => {
+    const summary = workerActivitySummary([], [
+      { domain: 'worker', entity_refs: { worker_pubkey: 'worker-a' }, status: 'failed', operation: 'worker/drain' }
+    ], 'worker-a');
+
+    expect(workerActivityLabel(summary)).toBe('failed · worker/drain');
   });
 
   it('formats pricing and advertisement fields from the worker domain model', () => {

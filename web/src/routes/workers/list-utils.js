@@ -272,3 +272,33 @@ export function workerTelemetryIndicators(worker) {
 export function hasWorkerTelemetry(worker) {
   return Boolean(worker?.telemetry && typeof worker.telemetry === 'object');
 }
+
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'complete', 'succeeded', 'success', 'failed', 'error', 'cancelled', 'canceled', 'timed_out', 'timeout']);
+
+export function workerActivitySummary(workerJobs = [], operations = [], workerPubkey = '') {
+  const jobs = (workerJobs || []).filter((job) => job?.worker_pubkey === workerPubkey);
+  const activeJobs = jobs.filter((job) => !TERMINAL_JOB_STATUSES.has(String(job?.status || '').toLowerCase()));
+  const workerOperations = (operations || []).filter((operation) => (
+    operation?.domain === 'worker'
+    && (operation?.worker_pubkey === workerPubkey || operation?.entity_refs?.worker_pubkey === workerPubkey)
+  ));
+  return {
+    jobs,
+    activeJobs,
+    activeJobCount: activeJobs.length,
+    latestJob: jobs[0] || null,
+    latestOperation: workerOperations[0] || null
+  };
+}
+
+export function workerActivityLabel(summary) {
+  const active = summary?.activeJobCount || 0;
+  if (active > 0) {
+    const job = summary?.activeJobs?.[0];
+    const command = job?.cmd || job?.operation || job?.job_id || 'job';
+    return `${active} active · ${command}`;
+  }
+  const operation = summary?.latestOperation;
+  if (operation) return `${operation.status || 'processing'} · ${operation.operation || 'worker operation'}`;
+  return 'idle';
+}

@@ -1,6 +1,6 @@
 <script>
   import { untrack } from 'svelte';
-  import { workers, workerCleanupExecutions, loading, loadWorkers } from '$lib/stores';
+  import { workers, workerCleanupExecutions, workerJobs, operations, loading, loadWorkers } from '$lib/stores';
   import { goto } from '$app/navigation';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
@@ -25,7 +25,9 @@
     workerCapacityClass,
     workerRecommendedAction,
     workerTelemetryIndicators,
-    hasWorkerTelemetry
+    hasWorkerTelemetry,
+    workerActivitySummary,
+    workerActivityLabel
   } from './list-utils.js';
 
 
@@ -704,6 +706,7 @@
             <th>Capacity</th>
             <th>Telemetry</th>
             <th>Recommended Action</th>
+            <th>Live activity</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -714,6 +717,7 @@
             {@const pressure = workerPressureLevel(worker)}
             {@const capacity = workerCapacityClass(worker)}
             {@const recommendedAction = workerRecommendedAction(worker)}
+            {@const liveActivity = workerActivitySummary(workerJobs, operations, worker.pubkey)}
             <tr>
               <td><a class="worker-link" href={`/workers/${encodeURIComponent(worker.pubkey)}`}>{worker.name || '-'}</a></td>
               <td><code>{worker.pubkey?.slice(0, 12)}...</code></td>
@@ -759,6 +763,12 @@
               </td>
               <td><span class="recommended-action">{recommendedAction}</span></td>
               <td>
+                <div class="worker-activity">
+                  <strong>{liveActivity.activeJobCount}</strong>
+                  <span>{workerActivityLabel(liveActivity)}</span>
+                </div>
+              </td>
+              <td>
                 <details class="action-menu">
                   <summary>Actions</summary>
                   <div class="action-menu-panel">
@@ -781,7 +791,7 @@
             </tr>
           {/each}
           {#if filteredWorkers.length === 0}
-            <tr><td colspan="17" class="empty">No workers match the selected filters</td></tr>
+            <tr><td colspan="18" class="empty">No workers match the selected filters</td></tr>
           {/if}
         </tbody>
       </table>
@@ -1053,6 +1063,9 @@
 
   .telemetry-chip strong { color: var(--text-color, #fff); }
   .recommended-action { white-space: nowrap; }
+  .worker-activity { display: grid; gap: 0.2rem; min-width: 10rem; }
+  .worker-activity strong { font-size: 1.1rem; }
+  .worker-activity span { color: var(--text-muted); font-size: 0.78rem; }
 
   .action-menu { position: relative; min-width: 8rem; }
   .action-menu summary { cursor: pointer; color: var(--primary, #8b5cf6); }

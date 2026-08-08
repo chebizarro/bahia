@@ -1,7 +1,7 @@
 <script>
   import { untrack } from 'svelte';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
-  import { workers, workerAssignments, workerCleanupExecutions, loading, loadWorkers } from '$lib/stores';
+  import { workers, workerAssignments, workerCleanupExecutions, workerJobs, operations, loading, loadWorkers } from '$lib/stores';
   import CleanupRequestDialog from '../workers/CleanupRequestDialog.svelte';
   import FleetWeatherMap from './FleetWeatherMap.svelte';
   import {
@@ -24,8 +24,9 @@
     void untrack(() => loadWorkers());
   });
 
-  let summary = $derived(buildFleetHealthSummary(workers, workerCleanupExecutions, workerAssignments));
-  let weatherNodes = $derived(buildFleetWeatherNodes(workers, workerCleanupExecutions, workerAssignments));
+  let summary = $derived(buildFleetHealthSummary(workers, workerCleanupExecutions, workerAssignments, workerJobs, operations));
+  let weatherNodes = $derived(buildFleetWeatherNodes(workers, workerCleanupExecutions, workerAssignments, workerJobs, operations));
+  let activityNodes = $derived(weatherNodes.filter((node) => node.liveActivity.activeJobCount > 0 || node.liveActivity.latestOperation));
   let activeCleanupMap = $derived(activeCleanupByWorker(workerCleanupExecutions));
   let cleanupHistory = $derived(sortCleanupExecutions(workerCleanupExecutions).filter((execution) => !statusFilter || execution.status === statusFilter));
   let actionItems = $derived(weatherNodes.filter((node) => node.capacity === 'blocked' || node.capacity === 'cleanup_only' || node.recommendedAction === 'cleanup_recommended' || !node.telemetryPresent));
@@ -68,6 +69,7 @@
     <article class="cleanup"><span>Cleanup only</span><strong>{summary.capacity.cleanup_only}</strong><em>{summary.recommended.cleanup_recommended} cleanup recommendations</em></article>
     <article class="watch"><span>Pressure watch</span><strong>{summary.pressure.warning + summary.pressure.critical}</strong><em>{summary.telemetry.missing} missing telemetry</em></article>
     <article><span>Cleanup active</span><strong>{summary.cleanup.active}</strong><em>{summary.cleanup.completed} completed · {summary.cleanup.failed} failed</em></article>
+    <article><span>Active jobs</span><strong>{summary.jobs.active}</strong><em>{summary.jobs.total} observed · {summary.workerOperations} worker outcomes</em></article>
   </section>
 
   <section class="panel">
@@ -81,6 +83,28 @@
       <p class="muted">Loading fleet read models from Nostr…</p>
     {:else}
       <FleetWeatherMap nodes={weatherNodes} onCleanup={openCleanup} />
+    {/if}
+  </section>
+
+  <section class="panel">
+    <div class="section-heading">
+      <div>
+        <h2>Worker job and operation activity</h2>
+        <p>Active Loom jobs and live worker 6997/7997 outcomes across the fleet.</p>
+      </div>
+    </div>
+    {#if activityNodes.length === 0}
+      <p class="muted">No active jobs or worker operations have been published yet.</p>
+    {:else}
+      <div class="activity-list">
+        {#each activityNodes as node}
+          <article>
+            <a href={`/workers/${encodeURIComponent(node.id)}`}>{node.name}</a>
+            <strong>{node.liveActivity.activeJobCount} active</strong>
+            <span>{node.liveActivity.activeJobs[0]?.cmd || node.liveActivity.latestOperation?.operation || node.liveActivity.latestOperation?.status || 'worker activity'}</span>
+          </article>
+        {/each}
+      </div>
     {/if}
   </section>
 
@@ -301,18 +325,24 @@
   }
 
   .cleanup-list,
-  .action-list {
+  .action-list,
+  .activity-list {
     display: grid;
     gap: 0.75rem;
   }
 
   .cleanup-row,
-  .action-list article {
+  .action-list article,
+  .activity-list article {
     border: 1px solid var(--border-color);
     border-radius: 14px;
     padding: 0.9rem;
     background: rgba(2, 6, 23, 0.25);
   }
+
+  .activity-list article { display: grid; grid-template-columns: minmax(180px, 1fr) 100px minmax(200px, 1fr); gap: 1rem; align-items: center; }
+  .activity-list a { color: var(--primary, #818cf8); font-weight: 800; text-decoration: none; }
+  .activity-list span { color: var(--text-muted); }
 
   .cleanup-row header span,
   .action-list header span {
