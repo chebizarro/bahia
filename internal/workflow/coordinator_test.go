@@ -1403,6 +1403,53 @@ func TestExecuteDeployment_ComposeUnitLifecycleFailureMarksRunFailedWithoutLoomF
 	}
 }
 
+func TestExecuteDeployment_DockerUnitUsesManagedEndpointWithoutLoom(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "edge-docker",
+		RuntimeType: domain.RuntimeTypeDocker, EndpointRef: "edge-01-docker",
+		ReconcileMode: domain.ReconcileModeObserveOnly, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+	)
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(ctx, di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	if stubLoom.submitCalls != 0 {
+		t.Fatalf("Docker deployment unit must not dispatch to a compute worker, got %d Loom submissions", stubLoom.submitCalls)
+	}
+	if lifecycle.unit == nil || lifecycle.unit.ID != unit.ID {
+		t.Fatalf("Docker deployment unit was not applied through its managed endpoint: %#v", lifecycle.unit)
+	}
+	for _, run := range runRepo.runs {
+		if run.LoomJobID != "runtime:direct" || run.Status != domain.RunStatusSucceeded {
+			t.Fatalf("unexpected direct Docker run: %#v", run)
+		}
+	}
+}
+
 func TestExecuteDeployment_PublicRouteFailureRestoresPreviousApplication(t *testing.T) {
 	ctx := context.Background()
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()

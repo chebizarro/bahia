@@ -213,7 +213,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	if err != nil {
 		return fmt.Errorf("resolving deployment unit: %w", err)
 	}
-	if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose {
+	if unit != nil {
 		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
 	}
 	if intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
@@ -411,20 +411,17 @@ func (c *Coordinator) executeDirectRuntimeDeployment(
 	if unit == nil {
 		return fmt.Errorf("deployment unit is required for direct runtime deployment")
 	}
-	if unit.RuntimeType != domain.RuntimeTypeCompose {
-		return fmt.Errorf("deployment unit %q runtime type %q is not compose", unit.Key, unit.RuntimeType)
-	}
 	if unit.OwnershipMode != domain.OwnershipModeBahiaManaged {
-		return fmt.Errorf("compose deployment unit %q is not Bahia-managed", unit.Key)
+		return fmt.Errorf("deployment unit %q is not Bahia-managed", unit.Key)
 	}
 	if strings.TrimSpace(unit.EndpointRef) == "" {
-		return fmt.Errorf("compose deployment unit %q requires a managed endpoint_ref", unit.Key)
+		return fmt.Errorf("deployment unit %q requires a managed endpoint_ref", unit.Key)
 	}
-	if strings.TrimSpace(unit.ComposeDir) == "" {
+	if unit.RuntimeType == domain.RuntimeTypeCompose && strings.TrimSpace(unit.ComposeDir) == "" {
 		return fmt.Errorf("compose deployment unit %q requires compose_dir", unit.Key)
 	}
 	if c.runtimeLifecycle == nil {
-		return fmt.Errorf("runtime lifecycle is required for compose deployment unit %q", unit.Key)
+		return fmt.Errorf("runtime lifecycle is required for deployment unit %q", unit.Key)
 	}
 
 	now := time.Now().UTC()
