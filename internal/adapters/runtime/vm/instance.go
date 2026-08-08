@@ -47,6 +47,11 @@ type InstanceMetadata struct {
 	ImageID       string            `json:"image_id"`
 	ReleaseDir    string            `json:"release_dir"`
 	SpecHash      string            `json:"spec_hash"`
+	// AgentProtocolVersion is the guest-agent protocol version declared by
+	// the release manifest at deploy time. Zero or 1 means the image ships
+	// no service-mode agent: hypervisor-running is sufficient for healthy.
+	// 2+ means Observe requires a successful guest-agent ping for healthy.
+	AgentProtocolVersion int `json:"agent_protocol_version,omitempty"`
 	VsockCID      uint32            `json:"vsock_cid,omitempty"`
 	Labels        map[string]string `json:"labels,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`

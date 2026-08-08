@@ -7,6 +7,7 @@ package libvirt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,13 +35,18 @@ const (
 	nvramFileName      = "nvram.fd"
 	domainXMLFileName  = "domain.xml"
 	consoleLogFileName = "console.log"
+	vsockFileName      = "vsock.json"
 
 	statePollInterval = 250 * time.Millisecond
 )
 
 // CommandRunner executes a host command and returns its combined output.
-// It is the driver's only side-effect boundary; tests substitute a fake.
+// It is the driver's primary side-effect boundary; tests substitute a fake.
 type CommandRunner func(ctx context.Context, binary string, args ...string) ([]byte, error)
+
+// VsockDialer opens a host-side AF_VSOCK connection to (cid, port). It is
+// the driver's guest-agent transport boundary; tests substitute a fake.
+type VsockDialer func(ctx context.Context, cid, port uint32) (net.Conn, error)
 
 // Config configures the libvirt driver.
 type Config struct {
@@ -59,6 +65,9 @@ type Config struct {
 	FirmwareCodePath string
 	// Runner overrides command execution (tests). Defaults to exec.
 	Runner CommandRunner
+	// Dialer overrides vsock dialing (tests). Defaults to the host
+	// AF_VSOCK dialer (Linux only).
+	Dialer VsockDialer
 }
 
 // Driver implements vm.Hypervisor over a virsh exec boundary with
@@ -88,6 +97,9 @@ func New(cfg Config, logger *zap.Logger) *Driver {
 	}
 	if cfg.Runner == nil {
 		cfg.Runner = execRunner
+	}
+	if cfg.Dialer == nil {
+		cfg.Dialer = dialVsock
 	}
 	return &Driver{cfg: cfg, logger: logger}
 }
@@ -165,6 +177,14 @@ func (d *Driver) Create(ctx context.Context, spec vm.InstanceSpec) error {
 	xmlPath := filepath.Join(spec.InstanceDir, domainXMLFileName)
 	if err := os.WriteFile(xmlPath, xmlData, 0o600); err != nil {
 		return fmt.Errorf("writing domain XML: %w", err)
+	}
+
+	// Record the guest CID so VsockDial can reach the guest agent without
+	// re-parsing the domain definition.
+	if spec.VsockCID != 0 {
+		if err := writeVsockRecord(spec.InstanceDir, spec.VsockCID); err != nil {
+			return fmt.Errorf("recording vsock CID: %w", err)
+		}
 	}
 
 	if _, err := d.virsh(ctx, "define", xmlPath); err != nil {
@@ -296,13 +316,45 @@ func (d *Driver) ConsoleLogPath(name string) (string, error) {
 	return filepath.Join(d.instanceDir(name), consoleLogFileName), nil
 }
 
-// VsockDial is the guest-agent transport seam.
-//
-// TODO(bahia vm observe): implement AF_VSOCK dialing (host CID 2 ->
-// instance CID from metadata) for the protocol-v2 guest health/metrics
-// client. Until then Observe runs on hypervisor state alone.
+// VsockDial opens a host-side AF_VSOCK connection to the guest agent,
+// using the guest CID recorded when the instance was created.
 func (d *Driver) VsockDial(ctx context.Context, name string, port uint32) (net.Conn, error) {
-	return nil, fmt.Errorf("vsock guest-agent transport is not implemented yet for the libvirt driver (instance %q, port %d)", name, port)
+	cid, err := d.readVsockRecord(name)
+	if err != nil {
+		return nil, err
+	}
+	return d.cfg.Dialer(ctx, cid, port)
+}
+
+// vsockRecord is the per-instance vsock.json payload.
+type vsockRecord struct {
+	CID uint32 `json:"cid"`
+}
+
+func writeVsockRecord(instanceDir string, cid uint32) error {
+	data, err := json.Marshal(vsockRecord{CID: cid})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(instanceDir, vsockFileName), append(data, '\n'), 0o600)
+}
+
+func (d *Driver) readVsockRecord(name string) (uint32, error) {
+	data, err := os.ReadFile(filepath.Join(d.instanceDir(name), vsockFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, fmt.Errorf("libvirt domain %q has no vsock device configured", name)
+		}
+		return 0, fmt.Errorf("reading vsock record for %q: %w", name, err)
+	}
+	var record vsockRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return 0, fmt.Errorf("decoding vsock record for %q: %w", name, err)
+	}
+	if record.CID < 3 {
+		return 0, fmt.Errorf("vsock record for %q has invalid guest CID %d", name, record.CID)
+	}
+	return record.CID, nil
 }
 
 // isAbsentOutput reports whether a virsh error indicates the domain does

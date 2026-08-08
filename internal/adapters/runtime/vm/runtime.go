@@ -200,17 +200,18 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 	specHash := ComputeSpecHash(string(r.cfg.RuntimeType), release.ManifestDigest, spec.VCPUs, spec.MemoryMB, spec.NetworkProfile)
 
 	md := &InstanceMetadata{
-		Name:        name,
-		ServiceName: serviceName,
-		RuntimeType: string(r.cfg.RuntimeType),
-		ImageRepo:   repo,
-		ImageDigest: release.ManifestDigest,
-		ImageID:     release.Manifest.ImageID,
-		ReleaseDir:  release.Dir,
-		SpecHash:    specHash,
-		VsockCID:    spec.VsockCID,
-		Labels:      copyLabels(opts.Labels),
-		CreatedAt:   time.Now().UTC(),
+		Name:                 name,
+		ServiceName:          serviceName,
+		RuntimeType:          string(r.cfg.RuntimeType),
+		ImageRepo:            repo,
+		ImageDigest:          release.ManifestDigest,
+		ImageID:              release.Manifest.ImageID,
+		ReleaseDir:           release.Dir,
+		SpecHash:             specHash,
+		VsockCID:             spec.VsockCID,
+		AgentProtocolVersion: release.Manifest.AgentProtocolVersion,
+		Labels:               copyLabels(opts.Labels),
+		CreatedAt:            time.Now().UTC(),
 	}
 	if envID != uuid.Nil {
 		md.EnvironmentID = envID.String()
@@ -317,11 +318,14 @@ func (r *Runtime) removeInstance(ctx context.Context, md *InstanceMetadata) erro
 
 // Observe reports the runtime state of the target's instance.
 //
-// V1 observes hypervisor state only: running maps to healthy. The guest
-// agent vsock ping/metrics client (protocol v2) will refine this — a
-// running-but-unresponsive guest should degrade to unhealthy, and guest
-// metrics should populate observation metadata. TODO(bahia vm observe):
-// wire the vsock health/metrics client through Hypervisor.VsockDial.
+// Observation composes two sources: hypervisor state decides
+// running/stopped, and — when the image declares a service-mode guest
+// agent (protocol v2) and a vsock transport is configured — a guest-agent
+// ping refines health: a running instance whose agent answers is healthy
+// and contributes guest metrics to observation metadata; a running
+// instance whose agent is unreachable degrades to unhealthy. Images
+// without a v2 agent (or runtimes without vsock configured) are observed
+// on hypervisor state alone. Guest probe failures never fail Observe.
 func (r *Runtime) Observe(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
 	observedAt := time.Now().UTC()
 	matches, err := FindInstancesByService(r.instancesDir(), serviceName)
@@ -342,6 +346,33 @@ func (r *Runtime) Observe(ctx context.Context, serviceID, envID uuid.UUID, servi
 	if err != nil {
 		return nil, fmt.Errorf("querying hypervisor state for %q: %w", md.Name, err)
 	}
+	health := mapInstanceState(state)
+	metadata := map[string]any{
+		"instance_name":    md.Name,
+		"hypervisor_state": string(state),
+		"image_id":         md.ImageID,
+		"release_dir":      md.ReleaseDir,
+		"spec_hash":        md.SpecHash,
+	}
+	if state == StateRunning && r.agentExpected(md) {
+		probe, probeErr := probeGuestAgent(ctx, r.hv, md.Name, md.ImageID, uint32(r.cfg.VsockGuestPort))
+		if probeErr != nil {
+			health = domain.HealthStatusUnhealthy
+			metadata["guest_agent"] = "unreachable"
+			metadata["guest_agent_error"] = probeErr.Error()
+			r.logger.Debug("vm guest agent probe failed",
+				zap.String("instance", md.Name), zap.Error(probeErr))
+		} else {
+			metadata["guest_agent"] = "ok"
+			if probe.Metrics != nil {
+				metadata["guest_metrics"] = metricsMetadata(probe.Metrics)
+			} else if probe.MetricsErr != nil {
+				metadata["guest_metrics_error"] = probe.MetricsErr.Error()
+				r.logger.Debug("vm guest metrics collection failed",
+					zap.String("instance", md.Name), zap.Error(probe.MetricsErr))
+			}
+		}
+	}
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
@@ -349,17 +380,19 @@ func (r *Runtime) Observe(ctx context.Context, serviceID, envID uuid.UUID, servi
 		ObservedImageRepo:   md.ImageRepo,
 		ObservedContainerID: md.Name,
 		ObservedHost:        "local",
-		HealthStatus:        mapInstanceState(state),
+		HealthStatus:        health,
 		Source:              string(r.cfg.RuntimeType),
-		Metadata: map[string]any{
-			"instance_name":    md.Name,
-			"hypervisor_state": string(state),
-			"image_id":         md.ImageID,
-			"release_dir":      md.ReleaseDir,
-			"spec_hash":        md.SpecHash,
-		},
-		ObservedAt: observedAt,
+		Metadata:            metadata,
+		ObservedAt:          observedAt,
 	}, nil
+}
+
+// agentExpected reports whether the instance's image declares a
+// service-mode (protocol v2+) guest agent and this runtime has a vsock
+// transport configured to reach it. Pre-v2 images and vsock-less
+// configurations observe on hypervisor state alone.
+func (r *Runtime) agentExpected(md *InstanceMetadata) bool {
+	return md.AgentProtocolVersion >= 2 && r.cfg.VsockGuestPort > 0 && md.VsockCID != 0
 }
 
 func mapInstanceState(state InstanceState) domain.HealthStatus {
@@ -413,12 +446,18 @@ func (r *Runtime) requireInstance(serviceName string) (*InstanceMetadata, error)
 	return matches[0], nil
 }
 
-// StreamLogs tails the instance's serial console log.
-//
-// This is a minimal console tail: lines are stamped at read time and
-// follow mode polls for appended data. TODO(bahia vm logs): the full
-// StreamLogs collector (timestamp parsing, rotation handling, SSE parity
-// with the Docker collector) is a follow-up work item.
+// DefaultLogTail is the number of historical console lines emitted when
+// no tail is requested, matching the Docker collector's default.
+const DefaultLogTail = 100
+
+// StreamLogs tails the instance's serial console log with the Docker
+// collector's semantics: Tail bounds the historical lines (default
+// DefaultLogTail), Follow keeps polling for appended data until the
+// context ends, and line timestamps are parsed from the log content where
+// present (RFC3339 prefix), falling back to the read time. Follow mode
+// survives log rotation/truncation: a shrunken or temporarily missing
+// console file restarts the tail from the top instead of ending the
+// stream.
 func (r *Runtime) StreamLogs(ctx context.Context, serviceName string, opts LogOptions) (<-chan LogEntry, error) {
 	md, err := r.requireInstance(serviceName)
 	if err != nil {
@@ -432,9 +471,13 @@ func (r *Runtime) StreamLogs(ctx context.Context, serviceName string, opts LogOp
 	if err != nil {
 		return nil, fmt.Errorf("console log not available for vm instance %q: %w", md.Name, err)
 	}
+	tail := opts.Tail
+	if tail <= 0 {
+		tail = DefaultLogTail
+	}
 	lines := splitConsoleLines(string(data))
-	if opts.Tail > 0 && len(lines) > opts.Tail {
-		lines = lines[len(lines)-opts.Tail:]
+	if len(lines) > tail {
+		lines = lines[len(lines)-tail:]
 	}
 
 	ch := make(chan LogEntry, 64)
@@ -443,7 +486,7 @@ func (r *Runtime) StreamLogs(ctx context.Context, serviceName string, opts LogOp
 		defer close(ch)
 		for _, line := range lines {
 			select {
-			case ch <- LogEntry{Timestamp: time.Now().UTC(), Stream: "stdout", Message: line}:
+			case ch <- consoleLogEntry(line, time.Now().UTC()):
 			case <-ctx.Done():
 				return
 			}
@@ -462,8 +505,16 @@ func (r *Runtime) StreamLogs(ctx context.Context, serviceName string, opts LogOp
 			}
 			chunk, newOffset, err := readConsoleFrom(path, offset)
 			if err != nil {
+				// Transient failures (e.g. the file vanishing mid-rotation)
+				// must not end a followed stream; keep polling until the
+				// context does.
 				r.logger.Debug("vm console follow read failed", zap.String("instance", md.Name), zap.Error(err))
-				return
+				continue
+			}
+			if newOffset < offset {
+				// Truncated/rotated: the read restarted from the top, so any
+				// partial line from the old file is stale.
+				partial = ""
 			}
 			offset = newOffset
 			if chunk == "" {
@@ -474,7 +525,7 @@ func (r *Runtime) StreamLogs(ctx context.Context, serviceName string, opts LogOp
 			emit, partial = splitCompleteLines(partial)
 			for _, line := range emit {
 				select {
-				case ch <- LogEntry{Timestamp: time.Now().UTC(), Stream: "stdout", Message: line}:
+				case ch <- consoleLogEntry(line, time.Now().UTC()):
 				case <-ctx.Done():
 					return
 				}
@@ -482,6 +533,19 @@ func (r *Runtime) StreamLogs(ctx context.Context, serviceName string, opts LogOp
 		}
 	}()
 	return ch, nil
+}
+
+// consoleLogEntry builds a LogEntry for one console line, parsing a
+// leading RFC3339 timestamp when the guest emits one and falling back to
+// the provided read time otherwise. Console output is a single serial
+// stream, so entries are always stdout.
+func consoleLogEntry(line string, fallback time.Time) LogEntry {
+	if space := strings.IndexByte(line, ' '); space > 0 {
+		if ts, err := time.Parse(time.RFC3339Nano, line[:space]); err == nil {
+			return LogEntry{Timestamp: ts.UTC(), Stream: "stdout", Message: strings.TrimLeft(line[space+1:], " ")}
+		}
+	}
+	return LogEntry{Timestamp: fallback, Stream: "stdout", Message: line}
 }
 
 func splitConsoleLines(data string) []string {
@@ -516,7 +580,11 @@ func readConsoleFrom(path string, offset int64) (string, int64, error) {
 		return "", offset, err
 	}
 	size := info.Size()
-	if size <= offset {
+	if size < offset {
+		// The file shrank (rotation/truncation): restart from the top.
+		offset = 0
+	}
+	if size == offset {
 		return "", offset, nil
 	}
 	if _, err := file.Seek(offset, 0); err != nil {

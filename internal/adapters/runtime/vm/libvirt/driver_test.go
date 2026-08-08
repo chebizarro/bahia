@@ -3,6 +3,7 @@ package libvirt
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -391,12 +392,75 @@ func TestConsoleLogPath(t *testing.T) {
 	}
 }
 
-func TestVsockDialNotImplemented(t *testing.T) {
+func TestCreateRecordsVsockCID(t *testing.T) {
+	runner := &fakeRunner{responses: []fakeResponse{absentResponse("bahia-x-api")}}
+	driver, instancesDir := newTestDriver(t, runner)
+	spec := qcow2Spec(t, instancesDir, "bahia-x-api", false, 42)
+	if err := driver.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cid, err := driver.readVsockRecord("bahia-x-api")
+	if err != nil {
+		t.Fatalf("readVsockRecord: %v", err)
+	}
+	if cid != 42 {
+		t.Errorf("expected recorded CID 42, got %d", cid)
+	}
+}
+
+func TestCreateWithoutVsockWritesNoRecord(t *testing.T) {
+	runner := &fakeRunner{responses: []fakeResponse{absentResponse("bahia-x-api")}}
+	driver, instancesDir := newTestDriver(t, runner)
+	spec := qcow2Spec(t, instancesDir, "bahia-x-api", false, 0)
+	if err := driver.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(instancesDir, "bahia-x-api", "vsock.json")); !os.IsNotExist(err) {
+		t.Errorf("expected no vsock.json, stat err: %v", err)
+	}
+	if _, err := driver.VsockDial(context.Background(), "bahia-x-api", 1024); err == nil || !strings.Contains(err.Error(), "no vsock device") {
+		t.Errorf("expected no-vsock-device error, got %v", err)
+	}
+}
+
+func TestVsockDialUsesRecordedCID(t *testing.T) {
+	runner := &fakeRunner{responses: []fakeResponse{absentResponse("bahia-x-api")}}
+	instancesDir := t.TempDir()
+	var gotCID, gotPort uint32
+	host, guest := net.Pipe()
+	defer host.Close()
+	defer guest.Close()
+	driver := New(Config{
+		URI:          "qemu:///session",
+		InstancesDir: instancesDir,
+		Runner:       runner.run,
+		Dialer: func(_ context.Context, cid, port uint32) (net.Conn, error) {
+			gotCID, gotPort = cid, port
+			return host, nil
+		},
+	}, zap.NewNop())
+	spec := qcow2Spec(t, instancesDir, "bahia-x-api", false, 77)
+	if err := driver.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	conn, err := driver.VsockDial(context.Background(), "bahia-x-api", 5000)
+	if err != nil {
+		t.Fatalf("VsockDial: %v", err)
+	}
+	if conn != host {
+		t.Error("expected the dialer's connection to be returned")
+	}
+	if gotCID != 77 || gotPort != 5000 {
+		t.Errorf("expected dial(77, 5000), got dial(%d, %d)", gotCID, gotPort)
+	}
+}
+
+func TestVsockDialUnknownInstanceErrors(t *testing.T) {
 	runner := &fakeRunner{}
 	driver, _ := newTestDriver(t, runner)
-	_, err := driver.VsockDial(context.Background(), "bahia-x-api", 1024)
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("expected not-implemented error, got %v", err)
+	_, err := driver.VsockDial(context.Background(), "ghost", 1024)
+	if err == nil || !strings.Contains(err.Error(), "no vsock device") {
+		t.Fatalf("expected no-vsock-device error, got %v", err)
 	}
 }
 

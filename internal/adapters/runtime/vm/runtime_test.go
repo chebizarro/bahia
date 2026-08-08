@@ -29,6 +29,10 @@ type fakeHypervisor struct {
 	destroyErr error
 	stateErr   error
 
+	// vsockDial overrides the guest-agent transport; nil means no vsock.
+	vsockDial  func(ctx context.Context, name string, port uint32) (net.Conn, error)
+	vsockCalls int
+
 	consoleDir string
 }
 
@@ -128,7 +132,14 @@ func (f *fakeHypervisor) ConsoleLogPath(name string) (string, error) {
 	return filepath.Join(f.consoleDir, name+".log"), nil
 }
 
-func (f *fakeHypervisor) VsockDial(context.Context, string, uint32) (net.Conn, error) {
+func (f *fakeHypervisor) VsockDial(ctx context.Context, name string, port uint32) (net.Conn, error) {
+	f.mu.Lock()
+	f.vsockCalls++
+	dial := f.vsockDial
+	f.mu.Unlock()
+	if dial != nil {
+		return dial(ctx, name, port)
+	}
 	return nil, fmt.Errorf("not implemented in fake")
 }
 
@@ -549,6 +560,127 @@ func TestStreamLogsFollow(t *testing.T) {
 		t.Fatal("timed out waiting for followed line")
 	}
 	cancel()
+}
+
+func TestStreamLogsParsesTimestampPrefix(t *testing.T) {
+	fx := newCoreFixture(t, domain.RuntimeTypeVMQEMU)
+	ctx := context.Background()
+	if err := fx.rt.Deploy(ctx, "api", "vm/base@"+fx.digest, DeployOptions{}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	var name string
+	for n := range fx.hv.instances {
+		name = n
+	}
+	logPath, _ := fx.hv.ConsoleLogPath(name)
+	content := "2026-08-08T10:30:00.5Z guest says hello\n[    0.000000] kernel line\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := fx.rt.StreamLogs(ctx, "api", LogOptions{})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	var entries []LogEntry
+	for entry := range ch {
+		entries = append(entries, entry)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %v", entries)
+	}
+	wantTS := time.Date(2026, 8, 8, 10, 30, 0, 500_000_000, time.UTC)
+	if !entries[0].Timestamp.Equal(wantTS) {
+		t.Errorf("expected parsed timestamp %v, got %v", wantTS, entries[0].Timestamp)
+	}
+	if entries[0].Message != "guest says hello" {
+		t.Errorf("expected timestamp stripped from message, got %q", entries[0].Message)
+	}
+	if entries[1].Message != "[    0.000000] kernel line" {
+		t.Errorf("unparseable-timestamp line must pass through, got %q", entries[1].Message)
+	}
+	if entries[1].Timestamp.IsZero() {
+		t.Error("expected read-time fallback timestamp")
+	}
+	if entries[0].Stream != "stdout" || entries[1].Stream != "stdout" {
+		t.Errorf("console entries must be stdout, got %q/%q", entries[0].Stream, entries[1].Stream)
+	}
+}
+
+func TestStreamLogsDefaultTail(t *testing.T) {
+	fx := newCoreFixture(t, domain.RuntimeTypeVMQEMU)
+	ctx := context.Background()
+	if err := fx.rt.Deploy(ctx, "api", "vm/base@"+fx.digest, DeployOptions{}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	var name string
+	for n := range fx.hv.instances {
+		name = n
+	}
+	logPath, _ := fx.hv.ConsoleLogPath(name)
+	var content strings.Builder
+	for i := 0; i < DefaultLogTail+50; i++ {
+		fmt.Fprintf(&content, "line %d\n", i)
+	}
+	if err := os.WriteFile(logPath, []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := fx.rt.StreamLogs(ctx, "api", LogOptions{})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	var lines []string
+	for entry := range ch {
+		lines = append(lines, entry.Message)
+	}
+	if len(lines) != DefaultLogTail {
+		t.Fatalf("expected default tail of %d lines, got %d", DefaultLogTail, len(lines))
+	}
+	if lines[0] != "line 50" {
+		t.Errorf("expected tail to start at line 50, got %q", lines[0])
+	}
+}
+
+func TestStreamLogsFollowSurvivesTruncation(t *testing.T) {
+	fx := newCoreFixture(t, domain.RuntimeTypeVMQEMU)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := fx.rt.Deploy(ctx, "api", "vm/base@"+fx.digest, DeployOptions{}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	var name string
+	for n := range fx.hv.instances {
+		name = n
+	}
+	logPath, _ := fx.hv.ConsoleLogPath(name)
+	if err := os.WriteFile(logPath, []byte("old line one\nold line two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := fx.rt.StreamLogs(ctx, "api", LogOptions{Follow: true})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	if entry := <-ch; entry.Message != "old line one" {
+		t.Fatalf("expected first historical line, got %q", entry.Message)
+	}
+	if entry := <-ch; entry.Message != "old line two" {
+		t.Fatalf("expected second historical line, got %q", entry.Message)
+	}
+
+	// Rotate: truncate and write fresh content shorter than the old file.
+	if err := os.WriteFile(logPath, []byte("fresh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case entry := <-ch:
+		if entry.Message != "fresh" {
+			t.Errorf("expected post-truncation line, got %q", entry.Message)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for post-truncation line")
+	}
 }
 
 func TestStreamLogsMissingConsole(t *testing.T) {

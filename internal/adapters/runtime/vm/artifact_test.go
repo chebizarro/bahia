@@ -57,9 +57,15 @@ func TestParseImageRefRejectsTraversalRepo(t *testing.T) {
 }
 
 // writeRelease builds <root>/<repo>/<releaseID>/ with a disk, optional UEFI
-// vars, and a manifest, plus a "current" symlink, returning the manifest
-// digest.
+// vars, and a manifest (declaring a pre-service-mode v1 agent), plus a
+// "current" symlink, returning the manifest digest.
 func writeRelease(t *testing.T, root, repo, releaseID, format string, uefi bool) string {
+	t.Helper()
+	return writeReleaseAgent(t, root, repo, releaseID, format, uefi, 1)
+}
+
+// writeReleaseAgent is writeRelease with an explicit agent_protocol_version.
+func writeReleaseAgent(t *testing.T, root, repo, releaseID, format string, uefi bool, agentVersion int) string {
 	t.Helper()
 	releaseDir := filepath.Join(root, filepath.FromSlash(repo), releaseID)
 	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
@@ -91,7 +97,7 @@ func writeRelease(t *testing.T, root, repo, releaseID, format string, uefi bool)
 		"image_id":               releaseID,
 		"arch":                   "x86_64",
 		"format":                 format,
-		"agent_protocol_version": 1,
+		"agent_protocol_version": agentVersion,
 		"sha256":                 hashes,
 	}
 	if uefi {
