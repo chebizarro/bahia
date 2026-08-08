@@ -16,17 +16,19 @@ export const workerAssignments = $state([]);
 export const workerDrainStatuses = $state([]);
 export const workerEligibilityPreviews = $state([]);
 export const workerCleanupExecutions = $state([]);
+export const workerJobs = $state([]);
 
 const workerMap = new Map();
 const workerAssignmentMap = new Map();
 const workerDrainStatusMap = new Map();
 const workerEligibilityPreviewMap = new Map();
 const workerCleanupExecutionMap = new Map();
+const workerJobMap = new Map();
 
 export function resetWorkers() {
-  [workerMap, workerAssignmentMap, workerDrainStatusMap, workerEligibilityPreviewMap, workerCleanupExecutionMap]
+  [workerMap, workerAssignmentMap, workerDrainStatusMap, workerEligibilityPreviewMap, workerCleanupExecutionMap, workerJobMap]
     .forEach((map) => map.clear());
-  [workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions]
+  [workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs]
     .forEach((array) => { array.length = 0; });
 }
 
@@ -36,6 +38,7 @@ export function refreshWorkers() {
   replaceArray(workerDrainStatuses, Array.from(workerDrainStatusMap.values()).sort(sortByNameOrId));
   replaceArray(workerEligibilityPreviews, Array.from(workerEligibilityPreviewMap.values()).sort(sortByNewestField(['updated_at', 'nostr_created_at'])));
   replaceArray(workerCleanupExecutions, Array.from(workerCleanupExecutionMap.values()).sort(sortByNewestField(['updated_at', 'completed_at', 'started_at', 'nostr_created_at'])));
+  replaceArray(workerJobs, Array.from(workerJobMap.values()).sort(sortByNewestField(['updated_at', 'requested_at'])));
 }
 
 export function hasWorkerReadModelTag(event) {
@@ -124,6 +127,99 @@ export function applyWorkerStateEvent(event, replaceableEvents) {
     });
   }
   return true;
+}
+
+// =============================================================================
+// Loom job projection (kinds 5100 job request, 30100 status, 5101 result)
+// =============================================================================
+
+export const LOOM_JOB_TERMINAL_STATUSES = Object.freeze(['completed', 'failed', 'cancelled', 'timeout']);
+
+export function isTerminalLoomJobStatus(status) {
+  return LOOM_JOB_TERMINAL_STATUSES.includes(String(status || '').toLowerCase());
+}
+
+function eventIso(event) {
+  return new Date((event?.created_at || 0) * 1000).toISOString();
+}
+
+function mergeWorkerJob(jobId, patch, eventCreatedAt) {
+  const existing = workerJobMap.get(jobId) || { job_id: jobId };
+  // Never let a late-arriving status regress a terminal result.
+  if (existing.terminal && !patch.terminal) {
+    const allowed = { ...patch };
+    delete allowed.status;
+    delete allowed.message;
+    workerJobMap.set(jobId, { ...existing, ...pruneUndefined(allowed) });
+    return true;
+  }
+  const merged = { ...existing, ...pruneUndefined(patch) };
+  const updatedAt = eventIso({ created_at: eventCreatedAt });
+  if (!merged.updated_at || updatedAt > merged.updated_at || patch.terminal) merged.updated_at = updatedAt;
+  workerJobMap.set(jobId, merged);
+  return true;
+}
+
+function pruneUndefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== ''));
+}
+
+/** Kind 5100 Loom job request: keyed by the request event id. */
+export function applyLoomJobRequestEvent(event) {
+  const jobId = event?.id;
+  if (!jobId) return false;
+  return mergeWorkerJob(jobId, {
+    request_event_id: jobId,
+    worker_pubkey: getTagValue(event, 'p') || workerJobMap.get(jobId)?.worker_pubkey,
+    client_pubkey: event.pubkey,
+    cmd: getTagValue(event, 'cmd'),
+    status: workerJobMap.get(jobId)?.status || 'queued',
+    requested_at: eventIso(event)
+  }, event.created_at);
+}
+
+/** Kind 30100 Loom job status update: correlated by the `e` request id tag. */
+export function applyLoomJobStatusEvent(event) {
+  const jobId = getTagValue(event, 'e') || getDTag(event);
+  if (!jobId) return false;
+  const status = String(getTagValue(event, 'status') || '').toLowerCase();
+  if (!status) return false;
+  return mergeWorkerJob(jobId, {
+    request_event_id: jobId,
+    worker_pubkey: event.pubkey,
+    status,
+    message: event.content,
+    terminal: isTerminalLoomJobStatus(status) || undefined,
+    started_at: status === 'running' ? eventIso(event) : undefined
+  }, event.created_at);
+}
+
+/** Kind 5101 Loom job result: terminal, correlated by the `e` request id tag. */
+export function applyLoomJobResultEvent(event) {
+  const jobId = getTagValue(event, 'e');
+  if (!jobId) return false;
+  const success = getTagValue(event, 'success') === 'true';
+  const exitCode = Number.parseInt(getTagValue(event, 'exit_code'), 10);
+  const duration = Number.parseInt(getTagValue(event, 'duration'), 10);
+  return mergeWorkerJob(jobId, {
+    request_event_id: jobId,
+    result_event_id: event.id,
+    worker_pubkey: event.pubkey,
+    status: success ? 'completed' : 'failed',
+    success,
+    exit_code: Number.isFinite(exitCode) ? exitCode : undefined,
+    duration_seconds: Number.isFinite(duration) ? duration : undefined,
+    stdout_url: getTagValue(event, 'stdout'),
+    stderr_url: getTagValue(event, 'stderr'),
+    error: getTagValue(event, 'error'),
+    terminal: true,
+    completed_at: eventIso(event)
+  }, event.created_at);
+}
+
+export function workerJobsForPubkey(jobs, pubkey) {
+  if (!pubkey) return [];
+  return (jobs || []).filter((job) => job.worker_pubkey === pubkey);
 }
 
 export const workerApplicators = {

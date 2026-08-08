@@ -4,7 +4,8 @@
   import ErrorState from '$lib/components/ErrorState.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
-  import { workers, workerCleanupExecutions, loadWorkers } from '$lib/stores';
+  import { workers, workerCleanupExecutions, workerJobs, loadWorkers } from '$lib/stores';
+  import { workerJobsForPubkey, isTerminalLoomJobStatus } from '$lib/stores/collections/workers.svelte.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { SCHEDULING_STATES, WORKER_COMMANDS, workerOperation } from '../actions.js';
@@ -470,6 +471,28 @@
   let selectors = $derived(worker ? selectorRows(worker) : []);
   let acceptsWork = $derived(worker ? acceptingNewWork(worker) : false);
 
+  const RECENT_JOB_LIMIT = 20;
+
+  let jobs = $derived(worker ? workerJobsForPubkey(workerJobs, worker.pubkey) : []);
+  let activeJobs = $derived(jobs.filter((job) => !isTerminalLoomJobStatus(job.status)));
+  let recentJobs = $derived(jobs.filter((job) => isTerminalLoomJobStatus(job.status)).slice(0, RECENT_JOB_LIMIT));
+
+  function shortEventId(id) {
+    return id ? `${String(id).slice(0, 12)}…` : '-';
+  }
+
+  function jobDurationDisplay(job) {
+    const seconds = Number(job?.duration_seconds);
+    if (!Number.isFinite(seconds)) return '-';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    return `${Math.round(seconds / 3600)}h`;
+  }
+
+  function jobExitCodeDisplay(job) {
+    return typeof job?.exit_code === 'number' && Number.isFinite(job.exit_code) ? String(job.exit_code) : '-';
+  }
+
   let activeCleanupMap = $derived(activeCleanupByWorker(workerCleanupExecutions));
   let selectedActiveCleanup = $derived(worker ? activeCleanupMap.get(worker.pubkey) || null : null);
 
@@ -486,7 +509,8 @@
     { label: 'Liveness', value: livenessStatus },
     { label: 'Scheduling', value: scheduling },
     { label: 'Accepting New Work', value: formatBool(acceptsWork) },
-    { label: 'Active Assignments', value: assignments.length }
+    { label: 'Active Assignments', value: assignments.length },
+    { label: 'Active Jobs', value: activeJobs.length }
   ] : []);
 
   let schedulingRows = $derived(worker ? [
@@ -752,6 +776,63 @@
           <p>Pinned or non-movable assignments must clear before the worker can finish draining.</p>
           <Table columns={assignmentColumns} data={drainBlockerData} />
         </div>
+      {/if}
+    </section>
+
+    <section data-testid="worker-jobs">
+      <h2>Loom Jobs</h2>
+      {#if jobs.length === 0}
+        <EmptyState message="No Loom job activity observed for this worker" />
+      {:else}
+        {#if activeJobs.length > 0}
+          <div class="subsection">
+            <h3>Active</h3>
+            <table class="jobs-table">
+              <thead>
+                <tr><th>Job</th><th>Status</th><th>Message</th><th>Requested</th><th>Updated</th></tr>
+              </thead>
+              <tbody>
+                {#each activeJobs as job (job.job_id)}
+                  <tr>
+                    <td><code title={job.job_id}>{shortEventId(job.job_id)}</code></td>
+                    <td><span class={`status-badge job-${job.status}`}>{job.status}</span></td>
+                    <td class="job-message">{job.message || '-'}</td>
+                    <td>{formatTimestamp(job.requested_at)}</td>
+                    <td>{formatTimestamp(job.updated_at)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+        {#if recentJobs.length > 0}
+          <div class="subsection">
+            <h3>Recent</h3>
+            <table class="jobs-table">
+              <thead>
+                <tr><th>Job</th><th>Status</th><th>Exit code</th><th>Duration</th><th>Completed</th><th>Message</th><th>Artifacts</th></tr>
+              </thead>
+              <tbody>
+                {#each recentJobs as job (job.job_id)}
+                  <tr>
+                    <td><code title={job.job_id}>{shortEventId(job.job_id)}</code></td>
+                    <td><span class={`status-badge job-${job.status}`}>{job.status}</span></td>
+                    <td>{jobExitCodeDisplay(job)}</td>
+                    <td>{jobDurationDisplay(job)}</td>
+                    <td>{formatTimestamp(job.completed_at || job.updated_at)}</td>
+                    <td class="job-message">{job.error || job.message || '-'}</td>
+                    <td>
+                      {#if job.stdout_url}<a href={job.stdout_url} target="_blank" rel="noopener noreferrer">stdout</a>{/if}
+                      {#if job.stderr_url}<a href={job.stderr_url} target="_blank" rel="noopener noreferrer">stderr</a>{/if}
+                      {#if job.result_event_id}<code title={job.result_event_id}>{shortEventId(job.result_event_id)}</code>{/if}
+                      {#if !job.stdout_url && !job.stderr_url && !job.result_event_id}-{/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
       {/if}
     </section>
 
@@ -1048,6 +1129,35 @@
 
   .positive { color: #86efac; }
   .negative { color: #fca5a5; }
+
+  .jobs-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .jobs-table th, .jobs-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .jobs-table th {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .job-message {
+    max-width: 28rem;
+    overflow-wrap: anywhere;
+    color: var(--text-muted);
+  }
+  .jobs-table a { color: var(--primary, #8b5cf6); margin-right: 0.5rem; }
+
+  .job-queued { border-color: rgba(148, 163, 184, 0.5); color: #cbd5e1; }
+  .job-running { border-color: rgba(59, 130, 246, 0.5); color: #93c5fd; }
+  .job-completed { border-color: rgba(34, 197, 94, 0.45); color: #86efac; }
+  .job-failed, .job-timeout { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+  .job-cancelled { border-color: rgba(245, 158, 11, 0.5); color: #fcd34d; }
 
   .warning-panel {
     border: 1px solid rgba(245, 158, 11, 0.45);

@@ -18,7 +18,8 @@ import {
   workerAssignments,
   workerDrainStatuses,
   workerEligibilityPreviews,
-  workerCleanupExecutions
+  workerCleanupExecutions,
+  workerJobs
 } from './workers.svelte.js';
 import {
   backupRepositories,
@@ -57,7 +58,10 @@ export {
   workerAssignments,
   workerDrainStatuses,
   workerEligibilityPreviews,
-  workerCleanupExecutions
+  workerCleanupExecutions,
+  workerJobs,
+  workerJobsForPubkey,
+  isTerminalLoomJobStatus
 } from './workers.svelte.js';
 export {
   backupRepositories,
@@ -131,6 +135,7 @@ export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
   'llmRouteStates',
   'workerEligibilityPreviews',
   'workerCleanupExecutions',
+  'workerJobs',
   'backupRuns',
   'backupVerifications',
   'backupRestores',
@@ -224,6 +229,7 @@ const COLLECTION_TARGETS = Object.freeze({
   workerDrainStatuses,
   workerEligibilityPreviews,
   workerCleanupExecutions,
+  workerJobs,
   events,
   sbomRefs,
   sbomAvailability,

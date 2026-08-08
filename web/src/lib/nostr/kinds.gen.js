@@ -98,6 +98,7 @@ export const NIP38_STATUS = 30315;
 export const ASSISTANT_TRANSCRIPT = 30316;
 export const CAS_CONTROL_STATE = 30900;
 export const LOOM_WORKER_ADVERTISEMENT = 10100;
+export const LOOM_JOB_REQUEST = 5100;
 export const LOOM_JOB_STATUS_UPDATE = 30100;
 export const LOOM_JOB_RESULT = 5101;
 export const LOOM_JOB_CANCELLATION = 5102;
@@ -392,6 +393,7 @@ export function isBahiaProjectionKind(kind) {
 export function isOpenInteropKind(kind) {
   switch (kind) {
     case LOOM_WORKER_ADVERTISEMENT:
+    case LOOM_JOB_REQUEST:
     case LOOM_JOB_STATUS_UPDATE:
     case LOOM_JOB_RESULT:
     case LOOM_JOB_CANCELLATION:

@@ -6,6 +6,9 @@ import {
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
   LOOM_WORKER_ADVERTISEMENT,
+  LOOM_JOB_REQUEST,
+  LOOM_JOB_STATUS_UPDATE,
+  LOOM_JOB_RESULT,
   parseJsonContent
 } from '../../nostr/client.js';
 import { controlplaneConnection } from './connection.svelte.js';
@@ -15,6 +18,9 @@ import { deploymentApplicators } from '../collections/deployments.svelte.js';
 import {
   applyWorkerEvent,
   applyWorkerStateEvent,
+  applyLoomJobRequestEvent,
+  applyLoomJobStatusEvent,
+  applyLoomJobResultEvent,
   workerApplicators
 } from '../collections/workers.svelte.js';
 import { backupApplicators } from '../collections/backup.svelte.js';
@@ -26,6 +32,9 @@ import { refreshCollections, schedulePersistCachedCollections } from '../collect
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
 const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
+const LOOM_JOB_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
+const LOOM_JOB_LIMIT = 500;
+const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
 const CP_STATE_SCHEMA = 'bahia.cp-state.v1';
@@ -43,6 +52,11 @@ export function readModelFilters() {
   return [
     { kinds: CANONICAL_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
     { kinds: [LOOM_WORKER_ADVERTISEMENT], limit: READ_MODEL_LIMIT },
+    {
+      kinds: LOOM_JOB_KINDS,
+      since: Math.floor(Date.now() / 1000) - LOOM_JOB_BACKFILL_SECONDS,
+      limit: LOOM_JOB_LIMIT
+    },
     {
       kinds: ACTIVITY_KINDS,
       since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
@@ -154,6 +168,9 @@ const handlers = new Map([
   [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, deploymentApplicators.packageArtifact],
   [BAHIA_STATE_SCHEMAS.PACKAGE_PROMOTION_REGISTRY, deploymentApplicators.packagePromotion],
   [LOOM_WORKER_ADVERTISEMENT, applyWorkerEvent],
+  [LOOM_JOB_REQUEST, applyLoomJobRequestEvent],
+  [LOOM_JOB_STATUS_UPDATE, applyLoomJobStatusEvent],
+  [LOOM_JOB_RESULT, applyLoomJobResultEvent],
   [BAHIA_STATE_SCHEMAS.WORKER_STATE, applyWorkerStateEvent],
   [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, workerApplicators.assignment],
   [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, workerApplicators.drainStatus],

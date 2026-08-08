@@ -166,6 +166,7 @@ const (
 
 const (
 	LoomWorkerAdvertisement = cascadia.CAS_WORKER_AD
+	LoomJobRequest          = 5100
 	LoomJobStatusUpdate     = 30100
 	LoomJobResult           = 5101
 	LoomJobCancellation     = 5102
