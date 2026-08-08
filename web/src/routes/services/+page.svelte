@@ -8,10 +8,12 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CreateServiceDialog from './CreateServiceDialog.svelte';
+  import OperationalActivity from '../OperationalActivity.svelte';
   import { ArtifactIcon, ServiceIcon, UnknownIcon } from '$lib/icons/domain-icons.js';
-  import { services, loading, loadServices } from '$lib/stores';
+  import { services, loading, loadServices, operations, operationsForDomain } from '$lib/stores';
 
   let servicesPageInitialized = $state(false);
+  let liveServiceOperations = $derived(operationsForDomain(operations, 'service'));
 
   // Create dialog state — the modal + form now live in the reusable
   // CreateServiceDialog component (shared with the dashboard).
@@ -105,6 +107,8 @@
       Create Service
     </LoadingButton>
   </div>
+
+  <OperationalActivity items={liveServiceOperations} title="Live service activity" />
 
   <div class="filters">
     <div class="filter-field">

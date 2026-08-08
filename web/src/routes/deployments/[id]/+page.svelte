@@ -2,6 +2,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import Card from '$lib/components/Card.svelte';
+  import OperationalActivity from '../../OperationalActivity.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -19,6 +20,7 @@
     loadServices,
     loadStates
   } from '$lib/stores';
+  import { operations } from '$lib/stores';
   import {
     approveDeploymentIntent,
     rejectDeploymentIntent,
@@ -50,6 +52,10 @@
   let rejectOpen = $state(false);
   let rollbackOpen = $state(false);
   let intentId = $derived(page.params.id);
+  let liveDeploymentOperations = $derived(operations.filter((operation) => {
+    const refs = operation.entity_refs || {};
+    return operation.operation_id === intentId || refs.intent_id === intentId || refs.deployment_id === intentId;
+  }));
 
   let intent = $derived(deploymentIntents.find((item) => item.id === intentId) || null);
   let runs = $derived(deploymentRuns.filter((run) => run.deployment_intent_id === intentId || run.intent_id === intentId));
@@ -197,6 +203,8 @@
 
     {#if actionNotice}<p class="notice">{actionNotice}</p>{/if}
     {#if actionError}<p class="error">{actionError}</p>{/if}
+
+    <OperationalActivity items={liveDeploymentOperations} title="Live deployment activity" />
 
     <section class="cards">
       <Card title="Approval" titleIcon={isPending ? PendingIcon : SuccessIcon} status={statusTone(intent.approval_status)} value={intent.approval_status || 'unknown'} />

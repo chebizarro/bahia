@@ -5,11 +5,14 @@
   import Card from '$lib/components/Card.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { deploymentRuns, loadDeploymentRuns } from '$lib/stores';
+  import OperationalActivity from '../../../OperationalActivity.svelte';
+  import { projectLiveDeploymentRun } from '../../../operational-activity.js';
+  import { deploymentRuns, loadDeploymentRuns, operations } from '$lib/stores';
   import { loadDeploymentRunLogs } from '$lib/stores/deployment-run-logs.svelte.js';
   import { DeploymentIcon, UnknownIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
-  let run = $state(null);
+  let storedRun = $state(null);
+  let run = $derived(projectLiveDeploymentRun(storedRun, operations));
   let stdoutLogs = $state('');
   let stderrLogs = $state('');
   let loading = $state(true);
@@ -30,7 +33,7 @@
     const id = runId;
     if (!id || id === lastRunRequestId) return;
     lastRunRequestId = id;
-    run = null;
+    storedRun = null;
     loading = true;
     logsLoading = true;
     error = null;
@@ -71,7 +74,7 @@
   }
 
   function applyLoadedRun(loadedRun) {
-    run = loadedRun;
+    storedRun = loadedRun;
     error = null;
     loading = false;
     void loadLogs(runId, loadedRun);
@@ -215,6 +218,13 @@
       </div>
     </Card>
 
+    <OperationalActivity
+      items={run.liveOperations}
+      title="Live deployment status"
+      emptyMessage="Waiting for live 6961 status or 7961 result events."
+      limit={20}
+    />
+
     <Card>
       <h2>Execution Phases</h2>
       {#if phases.length}
@@ -228,6 +238,9 @@
         </ol>
       {:else}
         <p class="transport-note">Phase events have not been projected for this run yet.</p>
+      {/if}
+      {#if run.current_step || run.status_message}
+        <p class="transport-note"><strong>{run.current_step || 'Update'}:</strong> {run.status_message || run.status}</p>
       {/if}
       {#if run.failure}
         <p class="failure"><strong>{run.failure.code || 'deployment_failed'}:</strong> {run.failure.message || 'Bahia could not complete this deployment.'}</p>

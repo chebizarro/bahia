@@ -1,12 +1,14 @@
 <script>
   import { untrack } from 'svelte';
+  import OperationalActivity from '../OperationalActivity.svelte';
   import {
     services,
     builds,
     artifacts,
     loadServices,
     loadBuilds,
-    loadArtifacts
+    loadArtifacts,
+    operations
   } from '$lib/stores';
   import {
     listServiceSecrets,
@@ -26,6 +28,9 @@
   } from '$lib/stores/arcana-build.js';
 
   let initialized = false;
+  let buildOperations = $derived(operations.filter((operation) =>
+    operation.domain === 'hive-ci' || (operation.domain === 'action' && (operation.entity_refs?.service_id || operation.entity_refs?.artifact_id))
+  ));
   let loaded = $state(false);
   let submitting = $state(false);
   let registeringBuildId = $state('');
@@ -150,6 +155,12 @@
     </div>
     <a class="repository" href={ARCANA_REPOSITORY_URL} target="_blank" rel="noreferrer">Arcana repository ↗</a>
   </header>
+
+  <OperationalActivity
+    items={buildOperations}
+    title="Live build activity"
+    emptyMessage="Waiting for Hive-CI run and result events."
+  />
 
   <section class="panel">
     <h2>Request an Arcana build</h2>

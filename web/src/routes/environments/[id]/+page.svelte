@@ -2,6 +2,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import Card from '$lib/components/Card.svelte';
+  import OperationalActivity from '../../OperationalActivity.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -12,6 +13,7 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import DeploymentUnitsSection from './DeploymentUnitsSection.svelte';
+  import { operations, operationsForEntity } from '$lib/stores';
   import {
     environments,
     states as allStates,
@@ -65,6 +67,7 @@
   ]);
 
   let environmentId = $derived(page.params.id);
+  let liveEnvironmentOperations = $derived(operationsForEntity(operations, 'environment', environmentId));
 
   // Edit modal state
   let editOpen = $state(false);
@@ -432,6 +435,8 @@
       </div>
     </div>
     
+    <OperationalActivity items={liveEnvironmentOperations} title="Live environment and reconciliation activity" />
+
     <div class="info-grid">
       <Card title="Deploy Strategy" titleIcon={DeploymentIcon} value={environment.deploy_strategy || 'replace'} />
       <Card title="Protected" titleIcon={ProtectedIcon} value={environment.protected ? 'Yes' : 'No'} />

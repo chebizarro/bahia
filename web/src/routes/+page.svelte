@@ -3,6 +3,7 @@
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import CreateServiceDialog from './services/CreateServiceDialog.svelte';
+  import OperationalActivity from './OperationalActivity.svelte';
   import {
     DeploymentIcon,
     EnvironmentIcon,
@@ -14,7 +15,7 @@
   } from '$lib/icons/domain-icons.js';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
   import { kindLabel } from '$lib/nostr/kind-labels.js';
-  import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection, discoveryState } from '$lib/stores';
+  import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection, discoveryState, operations } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
   import { summarizeWorkerActivity } from './workers/list-utils.js';
   import { summarizeDriftCause, shortHash } from './dashboard-drift-summary.js';
@@ -622,6 +623,9 @@
             ? `${costSummaryPartialFailures} ${pluralize(costSummaryPartialFailures, 'worker')} unavailable`
             : 'No recent spend');
   let costSummaryStatus = $derived(costSummaryError ? 'error' : costSummary.paymentCount > 0 ? 'warning' : 'success');
+  let dashboardOperations = $derived(operations.filter((operation) =>
+    ['deployment', 'service', 'environment', 'action', 'observation', 'remediation', 'hive-ci'].includes(operation.domain)
+  ));
 </script>
 
 <div class="dashboard" data-testid="dashboard-root">
@@ -689,6 +693,8 @@
       </Card>
     </a>
   </div>
+
+  <OperationalActivity items={dashboardOperations} title="Live operations" limit={10} />
 
   <div class="sections">
     <section id="environment-states">

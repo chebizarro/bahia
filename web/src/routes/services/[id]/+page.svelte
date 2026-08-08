@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
+  import OperationalActivity from '../../OperationalActivity.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -24,6 +25,7 @@
     loadEnvironments,
     loadWorkers
   } from '$lib/stores';
+  import { operations, operationsForEntity } from '$lib/stores';
   import {
     updateService,
     deleteService,
@@ -91,6 +93,7 @@
   let loading = $state(true);
   let error = $state(null);
   let serviceId = $derived(page.params.id);
+  let liveServiceOperations = $derived(operationsForEntity(operations, 'service', serviceId));
   let loadSequence = 0;
   let lastServiceRequestId = null;
   let hydratedRelatedForServiceId = null;
@@ -1071,6 +1074,8 @@
       </div>
     </div>
     
+    <OperationalActivity items={liveServiceOperations} title="Live service and action activity" />
+
     <div class="info-grid">
       <Card title="Repository" titleIcon={ArtifactIcon} value={service.artifact_repo || '-'} />
       <Card title="Runtime" titleIcon={ServiceIcon} value={service.runtime_type || 'docker'} />

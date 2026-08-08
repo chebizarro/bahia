@@ -8,8 +8,9 @@
   import Checkbox from '$lib/components/Checkbox.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import OperationalActivity from '../OperationalActivity.svelte';
   import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
-  import { environments, loading, loadEnvironments, workers, loadWorkers } from '$lib/stores';
+  import { environments, workers, loading, loadEnvironments, loadWorkers, operations, operationsForDomain } from '$lib/stores';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { orgsState } from '$lib/stores/orgs.svelte.js';
   import { parseKeyValueLines } from '../ml/page-model.js';
@@ -30,6 +31,7 @@
 
   // Create modal state
   let createOpen = $state(false);
+  let liveEnvironmentOperations = $derived(operationsForDomain(operations, 'environment'));
   let creating = $state(false);
   let createError = $state(null);
 
@@ -216,6 +218,8 @@
       Create Environment
     </LoadingButton>
   </div>
+
+  <OperationalActivity items={liveEnvironmentOperations} title="Live environment activity" />
 
   {#if loading.environments}
     <p class="loading">Loading...</p>

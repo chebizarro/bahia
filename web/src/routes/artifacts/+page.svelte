@@ -4,6 +4,7 @@
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import OperationalActivity from '../OperationalActivity.svelte';
   import {
     ArtifactIcon,
     BlossomIcon,
@@ -13,13 +14,16 @@
     WarningIcon,
     blossomContentTypeIcon
   } from '$lib/icons/domain-icons.js';
-  import { artifacts as registryArtifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { artifacts as registryArtifacts, services, loadArtifacts, loadServices, operations } from '$lib/stores';
   import { sbomArtifactIds } from '$lib/stores/controlplane/index.js';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
 
   // Tab state
   let activeTab = $state('registry');
+  let artifactOperations = $derived(operations.filter((operation) =>
+    operation.entity_refs?.artifact_id || ['action', 'hive-ci'].includes(operation.domain)
+  ));
 
   // Registry artifacts state
   let registryLoading = $state(true);
@@ -320,6 +324,8 @@
       </span>
     </div>
   </div>
+
+  <OperationalActivity items={artifactOperations} title="Live artifact and build activity" />
 
   <!-- Tabs -->
   <div class="tabs">

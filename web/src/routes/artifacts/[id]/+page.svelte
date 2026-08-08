@@ -3,12 +3,13 @@
   import { goto } from '$app/navigation';
   import { onDestroy, tick, untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
+  import OperationalActivity from '../../OperationalActivity.svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
-  import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { artifacts, services, loadArtifacts, loadServices, operations, operationsForEntity } from '$lib/stores';
   import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
@@ -63,6 +64,7 @@
   let verifyError = $state(null);
 
   let artifactId = $derived(page.params.id);
+  let liveArtifactOperations = $derived(operationsForEntity(operations, 'artifact', artifactId));
   let service = $derived(artifact?.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null);
   let displayName = $derived(artifact?.name || artifact?.image_repo || artifact?.image_tag || 'Artifact Details');
   let displayVersion = $derived(artifactVersionLabel(artifact));
@@ -614,6 +616,8 @@
         <p class="artifact-id"><code>{artifact.id}</code></p>
       </div>
     </div>
+
+    <OperationalActivity items={liveArtifactOperations} title="Live artifact activity" />
 
     <!-- Tabs -->
     <div class="tabs">

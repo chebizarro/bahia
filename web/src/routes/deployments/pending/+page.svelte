@@ -4,13 +4,16 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
+  import OperationalActivity from '../../OperationalActivity.svelte';
+  import { pendingDeploymentIntents } from '../../operational-activity.js';
   import {
     deploymentIntents,
     services,
     environments,
     loadDeploymentIntents,
     loadServices,
-    loadEnvironments
+    loadEnvironments,
+    operations
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
   import { DeploymentIcon, SuccessIcon, WarningIcon } from '$lib/icons/domain-icons.js';
@@ -30,8 +33,7 @@
     const serviceById = new Map(services.map((service) => [service.id, service]));
     const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
 
-    return deploymentIntents
-      .filter(intent => String(intent.approval_status || '').toLowerCase() === 'pending')
+    return pendingDeploymentIntents(deploymentIntents, operations)
       .map((intent) => ({
         ...intent,
         service_name: serviceById.get(intent.service_id)?.name || intent.service_id || 'Unknown service',
@@ -43,6 +45,11 @@
         return dateB - dateA;
       });
   });
+
+  let approvalOperations = $derived(operations.filter((operation) =>
+    ['action', 'deployment'].includes(operation.domain)
+    && (operation.operation?.includes('approv') || operation.operation?.includes('reject') || operation.entity_refs?.intent_id)
+  ));
 
   // Columns for the pending intents table
   let columns = $derived([
@@ -167,6 +174,12 @@
       <span class="count">{pendingIntents.length} pending</span>
     </div>
   </div>
+
+  <OperationalActivity
+    items={approvalOperations}
+    title="Live approval outcomes"
+    emptyMessage="Waiting for approval acknowledgements and results."
+  />
 
   {#if loading}
     <p class="loading">Loading pending approvals...</p>

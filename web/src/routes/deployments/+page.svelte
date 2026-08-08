@@ -5,6 +5,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Select from '$lib/components/Select.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import OperationalActivity from '../OperationalActivity.svelte';
   import {
     ArtifactIcon,
     DeploymentIcon,
@@ -14,7 +15,7 @@
     UnknownIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
-  import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts } from '$lib/stores';
+  import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts, operations, operationsForDomain } from '$lib/stores';
   import { rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
   import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
@@ -31,6 +32,7 @@
   let loading = $state(true);
   let error = $state(null);
   let deploymentHistoryInitialized = $state(false);
+  let liveDeploymentOperations = $derived(operationsForDomain(operations, 'deployment'));
 
   let statusFilter = $state('all');
   let serviceFilter = $state('all');
@@ -337,6 +339,8 @@
       <span class="count">{filteredIntents.length} of {intents.length} deployments</span>
     </div>
   </div>
+
+  <OperationalActivity items={liveDeploymentOperations} title="Live deployment activity" />
 
   <div class="filters">
     <div class="filter-field">

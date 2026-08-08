@@ -4,13 +4,15 @@
   import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import OperationalActivity from '../OperationalActivity.svelte';
   import {
     states,
     services,
     environments,
     loadStates,
     loadServices,
-    loadEnvironments
+    loadEnvironments,
+    operations
   } from '$lib/stores';
   import {
     ArtifactIcon,
@@ -25,6 +27,9 @@
   let driftFilter = $state('all');
   let selectedState = $state(null);
   let driftDialogOpen = $state(false);
+  let reconciliationOperations = $derived(operations.filter((operation) =>
+    ['environment', 'observation', 'remediation', 'deployment'].includes(operation.domain)
+  ));
 
   $effect(() => {
     if (initialized) return;
@@ -159,6 +164,8 @@
     Live reconciliation status for every service projected onto an environment. Click a row's
     <strong>Drift</strong> cell to inspect the full state payload.
   </p>
+
+  <OperationalActivity items={reconciliationOperations} title="Live reconciliation activity" />
 
   <div class="filters">
     <div class="filter-field">
