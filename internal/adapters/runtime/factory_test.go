@@ -177,15 +177,50 @@ func TestNewRuntime_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestNewRuntime_VMTypesNotYetWired(t *testing.T) {
-	for _, typ := range []string{"vm-firecracker", "vm-qemu"} {
-		_, err := NewRuntime(RuntimeConfig{Type: typ}, zap.NewNop())
-		if err == nil {
-			t.Fatalf("expected not-yet-wired error for %s", typ)
-		}
-		if !contains(err.Error(), "not yet wired") {
-			t.Errorf("unexpected error message for %s: %v", typ, err)
-		}
+func TestNewRuntime_VMFirecrackerNotYetWired(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{
+		Type: "vm-firecracker",
+		VM:   config.RuntimeVMConfig{StateDir: "/var/lib/bahia/vm", ImageRoot: "/var/lib/bahia/images"},
+	}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected not-yet-wired error for vm-firecracker")
+	}
+	if !contains(err.Error(), "not yet wired") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestNewRuntime_VMQEMUConstructsRuntime(t *testing.T) {
+	rt, err := NewRuntime(RuntimeConfig{
+		Type: "vm-qemu",
+		VM: config.RuntimeVMConfig{
+			StateDir:   t.TempDir(),
+			ImageRoot:  t.TempDir(),
+			LibvirtURI: "qemu:///session",
+		},
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.Type() != domain.RuntimeTypeVMQEMU {
+		t.Errorf("expected vm-qemu, got %s", rt.Type())
+	}
+	if _, ok := rt.(LifecycleRuntime); !ok {
+		t.Error("vm-qemu runtime should implement LifecycleRuntime")
+	}
+}
+
+func TestNewRuntime_VMQEMURequiresStateDirAndImageRoot(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{Type: "vm-qemu"}, zap.NewNop())
+	if err == nil || !contains(err.Error(), "state_dir") {
+		t.Fatalf("expected state_dir error, got %v", err)
+	}
+	_, err = NewRuntime(RuntimeConfig{
+		Type: "vm-qemu",
+		VM:   config.RuntimeVMConfig{StateDir: t.TempDir()},
+	}, zap.NewNop())
+	if err == nil || !contains(err.Error(), "image_root") {
+		t.Fatalf("expected image_root error, got %v", err)
 	}
 }
 
@@ -448,19 +483,21 @@ func TestComposeRuntime_ComposeArgsV1(t *testing.T) {
 }
 
 // TestRuntimeInterfaceCompileTime verifies all runtime types satisfy the interface.
-// NOTE: vm-firecracker and vm-qemu are in the domain closed set but have no
-// adapter yet (NewRuntime returns an explicit not-yet-wired error); add their
-// implementations here when internal/adapters/runtime/vm lands.
+// NOTE: vm-firecracker shares vmRuntimeAdapter with vm-qemu; it stays behind a
+// not-yet-wired factory error until the Firecracker hypervisor driver lands.
 func TestRuntimeInterfaceCompileTime(t *testing.T) {
 	// These are compile-time checks; if they compile, they pass.
 	var _ Runtime = (*DockerObserver)(nil)
 	var _ Runtime = (*ComposeRuntime)(nil)
 	var _ Runtime = (*KubernetesRuntime)(nil)
 	var _ Runtime = (*PodmanObserver)(nil)
+	var _ Runtime = (*vmRuntimeAdapter)(nil)
 	var _ Observer = (*DockerObserver)(nil)
 	var _ Observer = (*ComposeRuntime)(nil)
 	var _ Observer = (*KubernetesRuntime)(nil)
 	var _ Observer = (*PodmanObserver)(nil)
+	var _ Observer = (*vmRuntimeAdapter)(nil)
+	var _ LifecycleRuntime = (*vmRuntimeAdapter)(nil)
 }
 
 func TestDeployOptions(t *testing.T) {

@@ -101,13 +101,19 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		}
 		return NewPodmanObserver(host, logger), nil
 
-	case domain.RuntimeTypeVMFirecracker, domain.RuntimeTypeVMQEMU:
+	case domain.RuntimeTypeVMQEMU:
 		if err := validateVMRuntimeConfig(rt, cfg); err != nil {
 			return nil, err
 		}
-		// Domain plumbing (types, config, validation) landed ahead of the VM
-		// adapter package; fail explicitly until the drivers are wired in.
-		return nil, fmt.Errorf("runtime type %q is not yet wired: the VM adapter package (internal/adapters/runtime/vm) has not landed yet", rt)
+		return newVMQEMURuntime(cfg, logger)
+
+	case domain.RuntimeTypeVMFirecracker:
+		if err := validateVMRuntimeConfig(rt, cfg); err != nil {
+			return nil, err
+		}
+		// The shared VM core is in place; fail explicitly until the
+		// Firecracker hypervisor driver lands (plan work item 6).
+		return nil, fmt.Errorf("runtime type %q is not yet wired: the Firecracker hypervisor driver has not landed yet", rt)
 
 	default:
 		return nil, fmt.Errorf("unsupported runtime type: %q", cfg.Type)

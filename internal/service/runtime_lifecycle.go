@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -476,6 +477,12 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	}
 	opts.Labels["bahia.service"] = svc.Name
 	opts.Labels["bahia.managed"] = "true"
+	// VM runtimes only receive the runtime target name through Deploy, so
+	// thread environment identity via a label; it feeds the
+	// bahia-<envID-short>-<serviceName> instance naming scheme.
+	if rt.Type() == domain.RuntimeTypeVMFirecracker || rt.Type() == domain.RuntimeTypeVMQEMU {
+		opts.Labels[vm.LabelEnvironmentID] = envID.String()
+	}
 
 	// Compose ownership gate: if the resolved runtime is Compose, validate
 	// ownership BEFORE any locking, staging, file writes, validation, pull,
