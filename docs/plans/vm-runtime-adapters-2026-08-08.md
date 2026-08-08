@@ -1,6 +1,6 @@
 # VM Runtime Adapters: Deploy & Monitor VMs Through Bahia
 
-Status: draft plan
+Status: implemented (work items 1–11 done; item 9's KVM-host integration tests remain gated/deferred like fp-1jh)
 Date: 2026-08-08
 Related: `loom-worker/docs/plans/vm-job-isolation-2026-08-01.md`, `docs/plans/desired-state-runtime-architecture-2026-05-26.md`
 
@@ -78,17 +78,17 @@ Requires a cascadia-go protocol v2 (backward-compatible additions): `ping`/`pong
 
 Ordered; repo in brackets. Beads: bahia items under `bahia-`, cascadia-go items under `fp-`.
 
-1. **[cascadia-go]** Guest protocol v2: `ping`/`pong`, `metrics_request`/`metrics_report` frames; guest agent service mode (multi-connection loop, metrics collection from /proc; Windows counterpart stubbed behind build tag). Version-negotiated via existing `hello.ProtocolVersion`.
-2. **[cascadia-go]** Packaging: add `format` field + qcow2 flavor to the image manifest and install/verify scripts; document `vm/qemu-kvm` image layout (UEFI/NVRAM template).
-3. **[bahia]** Domain plumbing: `vm-firecracker`/`vm-qemu` runtime types, validator, config schema + resolver target fields, `RuntimeConfig` extension, factory cases (explicit failure if unconfigured). Includes ALL closed-set touchpoints: DB migration extending the `runtime_type` CHECK (`internal/db/migrations/000038_deployment_units.up.sql:18`), MCP enums (`internal/mcp/server.go:291,327`), and e2e TypeScript unions.
-4. **[bahia]** `internal/adapters/runtime/vm` core: `Hypervisor` interface, instance naming, state-dir/metadata layout, artifact→release-dir resolution + manifest verification, `Deploy`/`Undeploy`/`Restart`/`Stop` orchestration, spec-hash drift input.
-5. **[bahia]** libvirt driver: persistent domain XML templating (incl. UEFI/Windows), qcow2 overlay per instance, virsh boundary, domstate-based `State`, console log wiring.
-6. **[bahia]** firecracker driver: long-lived supervised VMM, pidfile/API-socket instance registry, boot + vsock handshake reuse, reap/adopt orphan instances on startup.
-7. **[bahia]** Observe + metrics: vsock ping/metrics client over protocol v2, RuntimeObservation mapping (health, digest = manifest hash, metadata metrics), wired into `RecordObservation` flow unchanged.
-8. **[bahia]** StreamLogs console tail collector + SSE verification.
-9. **[bahia]** Tests: fake `Hypervisor` unit tests for the core; per-driver fakes at the virsh/VMM process boundary (pattern from cascadia-go engines); factory/resolver/validation coverage; KVM-host integration tests gated like fp-1jh.
-10. **[release]** cascadia-go release: tag protocol-v2/packaging changes, bump bahia `go.mod` (currently pinned `v1.0.1`, `go.mod:8`) and the literal pin in `.gitea/workflows/deploy-edge.yml:65`.
-11. **[docs]** Operator docs: configuring a `vm-qemu` environment (incl. Windows image prep) and a `vm-firecracker` environment; artifact publishing flow.
+1. ✅ **[cascadia-go]** Guest protocol v2: `ping`/`pong`, `metrics_request`/`metrics_report` frames; guest agent service mode (multi-connection loop, metrics collection from /proc; Windows counterpart stubbed behind build tag). Version-negotiated via existing `hello.ProtocolVersion`.
+2. ✅ **[cascadia-go]** Packaging: add `format` field + qcow2 flavor to the image manifest and install/verify scripts; document `vm/qemu-kvm` image layout (UEFI/NVRAM template).
+3. ✅ **[bahia]** Domain plumbing: `vm-firecracker`/`vm-qemu` runtime types, validator, config schema + resolver target fields, `RuntimeConfig` extension, factory cases (explicit failure if unconfigured). Includes ALL closed-set touchpoints: DB migration extending the `runtime_type` CHECK (`internal/db/migrations/000038_deployment_units.up.sql:18`), MCP enums (`internal/mcp/server.go:291,327`), and e2e TypeScript unions.
+4. ✅ **[bahia]** `internal/adapters/runtime/vm` core: `Hypervisor` interface, instance naming, state-dir/metadata layout, artifact→release-dir resolution + manifest verification, `Deploy`/`Undeploy`/`Restart`/`Stop` orchestration, spec-hash drift input.
+5. ✅ **[bahia]** libvirt driver: persistent domain XML templating (incl. UEFI/Windows), qcow2 overlay per instance, virsh boundary, domstate-based `State`, console log wiring.
+6. ✅ **[bahia]** firecracker driver: long-lived supervised VMM, pidfile/API-socket instance registry, boot + vsock handshake reuse, reap/adopt orphan instances on startup.
+7. ✅ **[bahia]** Observe + metrics: vsock ping/metrics client over protocol v2, RuntimeObservation mapping (health, digest = manifest hash, metadata metrics), wired into `RecordObservation` flow unchanged.
+8. ✅ **[bahia]** StreamLogs console tail collector + SSE verification.
+9. ✅ **[bahia]** Tests (KVM-host integration tests deferred, gated like fp-1jh): fake `Hypervisor` unit tests for the core; per-driver fakes at the virsh/VMM process boundary (pattern from cascadia-go engines); factory/resolver/validation coverage; KVM-host integration tests gated like fp-1jh.
+10. ✅ **[release]** cascadia-go release: tagged as **v1.2.0** (v1.1.0 already existed — published 2026-07-20 for the nsec-free operator client — and v1.0.2 shipped in between); bahia `go.mod` bumped v1.0.1 → v1.2.0 and the literal pin in `.github/workflows/deploy-edge.yml:65` updated.
+11. ✅ **[docs]** Operator docs: `docs/vm-runtimes.md` — configuring `vm-qemu` (incl. Windows/UEFI image prep) and `vm-firecracker` environments; artifact publishing flow (manifest digest as artifact ImageDigest).
 
 Dependencies: 3 → 4 → 5 → 7 → 8; 6 (firecracker) follows 5 — libvirt proves the `Hypervisor` interface first and gets persistence free from `virsh define`, while the firecracker supervised-VMM path is the riskier build. 1+10 gate 7; **item 2 is the first cross-repo blocker** (it gates item 4's qcow2 artifact resolution), with item 1 needed only by item 7. Code for 1–2 lands in cascadia-go first, but bahia consumes it only after the item-10 tag/pin bump — the release step is on the critical path, not an afterthought.
 
