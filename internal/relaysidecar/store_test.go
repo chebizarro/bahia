@@ -23,10 +23,11 @@ func TestSweepRetentionDeletesExpiredEventsAndKeepsFreshEvents(t *testing.T) {
 
 	now := time.Unix(2_000_000, 0)
 	testCases := []struct {
-		content string
-		kind    int
-		age     time.Duration
-		keep    bool
+		content     string
+		kind        int
+		age         time.Duration
+		keep        bool
+		replaceable bool
 	}{
 		{content: "expired ContextVM message", kind: kinds.ContextVMMessage, age: 25 * time.Hour},
 		{content: "expired gift wrap", kind: kinds.ContextVMGiftWrap, age: 25 * time.Hour},
@@ -34,6 +35,7 @@ func TestSweepRetentionDeletesExpiredEventsAndKeepsFreshEvents(t *testing.T) {
 		{content: "fresh ContextVM message", kind: kinds.ContextVMMessage, age: 23 * time.Hour, keep: true},
 		{content: "expired durable event", kind: 30900, age: 8 * 24 * time.Hour},
 		{content: "fresh durable event", kind: 30900, age: 6 * 24 * time.Hour, keep: true},
+		{content: "old current Soul read model", kind: 31951, age: 30 * 24 * time.Hour, keep: true, replaceable: true},
 	}
 	sk := nostr.Generate()
 	for _, tc := range testCases {
@@ -42,10 +44,17 @@ func TestSweepRetentionDeletesExpiredEventsAndKeepsFreshEvents(t *testing.T) {
 			Kind:      nostr.Kind(tc.kind),
 			Content:   tc.content,
 		}
+		if tc.replaceable {
+			event.Tags = nostr.Tags{{"d", "marjam"}}
+		}
 		if err := event.Sign(sk); err != nil {
 			t.Fatalf("sign %q: %v", tc.content, err)
 		}
-		if err := store.Save(context.Background(), event); err != nil {
+		save := store.Save
+		if tc.replaceable {
+			save = store.Replace
+		}
+		if err := save(context.Background(), event); err != nil {
 			t.Fatalf("save %q: %v", tc.content, err)
 		}
 	}
