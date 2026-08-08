@@ -86,6 +86,9 @@ type ComposeDependency struct {
 // DockerExtension carries Docker Engine-specific configuration that is not
 // portable across runtimes.
 type DockerExtension struct {
+	// ContainerName preserves the exact runtime name for an adopted Docker
+	// workload. Empty uses Bahia's environment-scoped managed name.
+	ContainerName string `json:"container_name,omitempty"`
 	// HostConfig is raw Docker host-config fields (binds, resources, etc.).
 	HostConfig map[string]any `json:"host_config,omitempty"`
 	// NetworkingConfig is raw Docker networking config (endpoints, aliases).

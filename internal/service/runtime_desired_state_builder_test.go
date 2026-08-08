@@ -410,6 +410,29 @@ func TestDesiredStateBuilder_DockerRuntime(t *testing.T) {
 	}
 }
 
+func TestDesiredStateBuilder_DockerRuntimePreservesAdoptedTargetName(t *testing.T) {
+	builder := NewDesiredStateBuilder()
+	serviceID, envID, artifactID, buildID, _ := testIDs()
+	adopted := &domain.AdoptedRuntimeConfig{TargetName: "bahia-web"}
+	input := BuildInput{
+		Service: &domain.Service{
+			ID: serviceID, Name: "web", RuntimeType: domain.RuntimeTypeDocker,
+			RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: adopted},
+		},
+		Environment:   &domain.Environment{ID: envID, Name: "prod"},
+		Artifact:      &domain.Artifact{ID: artifactID, BuildID: buildID, ServiceID: serviceID, ImageRepo: "img", ImageTag: "v1"},
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: adopted},
+	}
+
+	spec, err := builder.Build(input)
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	if spec.DockerExtension == nil || spec.DockerExtension.ContainerName != "bahia-web" {
+		t.Fatalf("DockerExtension = %#v, want adopted container name", spec.DockerExtension)
+	}
+}
+
 func TestValidateSpec(t *testing.T) {
 	builder := NewDesiredStateBuilder()
 	input := makeTestInput()
