@@ -49,7 +49,7 @@ const (
 	// cascadia-go release still aliases CAS_INTENT to the obsolete kind 6950.
 	// Keep the wire boundary explicit until that dependency is corrected.
 	signetKindContextVM nostr.Kind = 25910
-	signetKindGiftWrap  = cascadia.NIP59_GIFT_WRAP
+	signetKindGiftWrap             = cascadia.NIP59_GIFT_WRAP
 )
 
 // Client communicates with Signet via NIP-46.
@@ -301,6 +301,44 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 	}
 
 	return nil
+}
+
+// NIP44Encrypt encrypts plaintext to a recipient using the Signet-held staff key.
+// In production the private key remains inside the NIP-46 bunker.
+func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plaintext string) (string, error) {
+	c.mu.Lock()
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
+	bunker := c.bunker
+	clientSecretKey := c.clientSecretKey
+	c.mu.Unlock()
+
+	if !connected {
+		return "", ErrNotConnected
+	}
+	if mockMode {
+		secret, err := nostr.SecretKeyFromHex(clientSecretKey)
+		if err != nil {
+			return "", fmt.Errorf("decode mock Signet key: %w", err)
+		}
+		conversationKey, err := nip44.GenerateConversationKey(recipient, secret)
+		if err != nil {
+			return "", fmt.Errorf("derive mock Signet NIP-44 conversation key: %w", err)
+		}
+		ciphertext, err := nip44.Encrypt(plaintext, conversationKey)
+		if err != nil {
+			return "", fmt.Errorf("mock Signet NIP-44 encrypt: %w", err)
+		}
+		return ciphertext, nil
+	}
+	if bunker == nil {
+		return "", ErrNotConnected
+	}
+	ciphertext, err := bunker.NIP44Encrypt(ctx, recipient, plaintext)
+	if err != nil {
+		return "", fmt.Errorf("bunker nip44_encrypt: %w", err)
+	}
+	return ciphertext, nil
 }
 
 // signMock signs with the explicit mock client's stable key for testing.

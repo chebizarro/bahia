@@ -267,6 +267,9 @@ soul_factory:
   communikeys_communities: # optional; controller-owned kind-30000 section ACLs
     - pubkey: "<64-char Signet/controller community pubkey>"
       sections: [General, Apps, Chat]
+  concord_communities: # optional; CORD-05 Direct Invites for encrypted backup communities
+    - community_id: "<64-char self-certifying Concord community id>"
+      invite_bundle_env: "FLEET_CONCORD_INVITE" # or invite_bundle_file: /run/secrets/concord.json
   authorized_pubkeys:
     - "<64-char requester pubkey>"
   soul_factory_pubkey: "<64-char Signet/controller pubkey>"
@@ -287,6 +290,8 @@ When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runt
 When `nip29_groups` is configured, provisioning uses the Signet-custodied Soul Factory controller to authenticate with each group relay and publish a NIP-29 `put-user` event after the new identity is minted. Every relay must acknowledge the assignment or provisioning fails closed. The new soul never receives or handles raw signing-key material.
 
 When `communikeys_communities` is configured, the Signet/controller key must own the named community pubkey and its existing kind-`30000` section profile lists must be reachable through the SoulFactory relays. During Signet provisioning, Bahia reads each exact admin-authored list through EOSE, preserves its tags and content, adds the new soul's `p` tag, republishes the replacement with the controller, and requires relay `OK`. Provisioning fails closed on missing lists, invalid ownership, AUTH failure, or rejection. Badges remain engagement-only and never grant Communikeys write access.
+
+When `concord_communities` is configured, each entry references CORD-05 CommunityInvite JSON through either an environment-variable name or an absolute mounted-secret file path; Bahia does not accept inline `community_root` or channel keys. Bahia verifies the bundle's self-certifying `community_id`, current control/channel material, size and relay bounds, then uses the Signet-held staff identity to NIP-44-encrypt a kind-`3313` rumor and sign its kind-`13` seal. A single-use key signs the outer kind-`1059` wrap with `p=<new soul>` and `k=3313`. Every bundle relay must also be configured as a SoulFactory relay; Bahia authenticates and publishes only to that declared set, and every relay must return an accepted `OK` or provisioning aborts. The agent's Concord client must watch at least one of those relays. A delivered Direct Invite cannot be revoked; removing accidental access requires CORD-06 key rotation/refounding.
 
 For OpenClaw command-driver deployments, the packaged local wrapper currently supports `soulfactory.provision`, `soulfactory.update`, `soulfactory.persona.update`, and `soulfactory.revoke`. Full updates require optimistic spec-hash checks and accept either a canonical replacement spec or a merge patch over the persisted prior resolved spec. The sidecar advertises that conservative method set by default; operators can override it with `-methods` or `OPENCLAW_SOULFACTORY_METHODS` only when the configured command really implements additional runtime-control methods. The wrapper supports dry-run verification and non-dry-run targeting of an existing containerized OpenClaw runtime through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` plus `OPENCLAW_SOULFACTORY_CONTAINER`; it does not expose REST lifecycle control or launch persistent bare-metal OpenClaw runtimes.
 

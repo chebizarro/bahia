@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/adapters/agentmemory"
@@ -107,6 +109,11 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		_ = closeSigner()
 		return nil, fmt.Errorf("creating SoulFactory generator: generator is not configured")
 	}
+	concordCommunities, err := loadSoulFactoryConcordCommunities(sf.ConcordCommunities)
+	if err != nil {
+		_ = closeSigner()
+		return nil, err
+	}
 
 	reactor := soulfactory.NewReactor(soulfactory.Config{
 		Relays:            sf.Relays,
@@ -136,6 +143,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		NIP05Relays:            cfg.SoulFactory.NIP05Relays,
 		NIP29Groups:            soulFactoryNIP29Groups(cfg.SoulFactory.NIP29Groups),
 		CommunikeysCommunities: soulFactoryCommunikeysCommunities(cfg.SoulFactory.CommunikeysCommunities),
+		ConcordCommunities:     concordCommunities,
 		Workspace: soulfactory.WorkspaceConfig{
 			GiteaURL:              sf.WorkspaceGiteaURL,
 			TemplateDir:           sf.WorkspaceTemplateDir,
@@ -178,6 +186,46 @@ func soulFactoryCommunikeysCommunities(communities []config.CommunikeysCommunity
 		out = append(out, soulfactory.CommunikeysCommunity{Pubkey: community.Pubkey, Sections: append([]string(nil), community.Sections...)})
 	}
 	return out
+}
+
+const concordInviteBundleReadLimit = 65536
+
+func loadSoulFactoryConcordCommunities(communities []config.ConcordCommunity) ([]soulfactory.ConcordCommunity, error) {
+	out := make([]soulfactory.ConcordCommunity, 0, len(communities))
+	for i, community := range communities {
+		var bundle []byte
+		switch {
+		case community.InviteBundleEnv != "":
+			value, ok := os.LookupEnv(community.InviteBundleEnv)
+			if !ok || strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("load soul_factory.concord_communities[%d]: environment variable %s is unset or empty", i, community.InviteBundleEnv)
+			}
+			bundle = []byte(value)
+		case community.InviteBundleFile != "":
+			file, err := os.Open(community.InviteBundleFile)
+			if err != nil {
+				return nil, fmt.Errorf("load soul_factory.concord_communities[%d] invite bundle file: %w", i, err)
+			}
+			bundle, err = io.ReadAll(io.LimitReader(file, concordInviteBundleReadLimit))
+			closeErr := file.Close()
+			if err != nil {
+				return nil, fmt.Errorf("read soul_factory.concord_communities[%d] invite bundle file: %w", i, err)
+			}
+			if closeErr != nil {
+				return nil, fmt.Errorf("close soul_factory.concord_communities[%d] invite bundle file: %w", i, closeErr)
+			}
+		default:
+			return nil, fmt.Errorf("load soul_factory.concord_communities[%d]: invite bundle secret source is missing", i)
+		}
+		if len(bundle) == 0 || len(bundle) >= concordInviteBundleReadLimit {
+			return nil, fmt.Errorf("load soul_factory.concord_communities[%d]: invite bundle must contain 1 to 65535 bytes", i)
+		}
+		out = append(out, soulfactory.ConcordCommunity{
+			CommunityID:  community.CommunityID,
+			InviteBundle: append([]byte(nil), bundle...),
+		})
+	}
+	return out, nil
 }
 
 func resolveSoulFactoryControllerPubkey(ctx context.Context, configured string, signer soulFactorySignerClient) (string, error) {

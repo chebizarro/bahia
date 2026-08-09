@@ -202,6 +202,7 @@ type SoulFactoryConfig struct {
 	NIP05Relays                   []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
 	NIP29Groups                   []NIP29Group           `koanf:"nip29_groups" yaml:"nip29_groups"`
 	CommunikeysCommunities        []CommunikeysCommunity `koanf:"communikeys_communities" yaml:"communikeys_communities"`
+	ConcordCommunities            []ConcordCommunity     `koanf:"concord_communities" yaml:"concord_communities"`
 	AuthorizedPubkeys             []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
 	SoulFactoryPubkey             string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
 	SignetBunkerURI               string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
@@ -228,6 +229,14 @@ type NIP29Group struct {
 type CommunikeysCommunity struct {
 	Pubkey   string   `koanf:"pubkey" yaml:"pubkey"`
 	Sections []string `koanf:"sections" yaml:"sections"`
+}
+
+// ConcordCommunity identifies CORD-05 invite material for a fleet community.
+// Exactly one secret source is required; raw membership keys are never accepted inline.
+type ConcordCommunity struct {
+	CommunityID      string `koanf:"community_id" yaml:"community_id"`
+	InviteBundleEnv  string `koanf:"invite_bundle_env" yaml:"invite_bundle_env"`
+	InviteBundleFile string `koanf:"invite_bundle_file" yaml:"invite_bundle_file"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -2251,6 +2260,37 @@ func (c *Config) validateSoulFactory() error {
 		}
 	}
 	sf.CommunikeysCommunities = normalizedCommunities
+
+	seenConcord := make(map[string]struct{}, len(sf.ConcordCommunities))
+	normalizedConcord := make([]ConcordCommunity, 0, len(sf.ConcordCommunities))
+	for i, community := range sf.ConcordCommunities {
+		community.CommunityID = strings.ToLower(strings.TrimSpace(community.CommunityID))
+		community.InviteBundleEnv = strings.TrimSpace(community.InviteBundleEnv)
+		community.InviteBundleFile = strings.TrimSpace(community.InviteBundleFile)
+		decoded, err := hex.DecodeString(community.CommunityID)
+		if err != nil || len(decoded) != 32 || len(community.CommunityID) != 64 {
+			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].community_id must be 64 lowercase hex characters", i)
+		}
+		sources := 0
+		if community.InviteBundleEnv != "" {
+			sources++
+		}
+		if community.InviteBundleFile != "" {
+			sources++
+			if !filepath.IsAbs(community.InviteBundleFile) {
+				return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].invite_bundle_file must be an absolute secret path", i)
+			}
+		}
+		if sources != 1 {
+			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d] requires exactly one of invite_bundle_env or invite_bundle_file", i)
+		}
+		if _, duplicate := seenConcord[community.CommunityID]; duplicate {
+			continue
+		}
+		seenConcord[community.CommunityID] = struct{}{}
+		normalizedConcord = append(normalizedConcord, community)
+	}
+	sf.ConcordCommunities = normalizedConcord
 	sf.SoulFactoryPubkey = strings.ToLower(strings.TrimSpace(sf.SoulFactoryPubkey))
 	sf.SignetBunkerURI = strings.TrimSpace(sf.SignetBunkerURI)
 	sf.SignetClientSecretKey = strings.TrimSpace(sf.SignetClientSecretKey)

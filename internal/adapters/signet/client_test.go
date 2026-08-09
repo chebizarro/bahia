@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -81,6 +82,9 @@ func TestClient_OperationsFailWhenNotConnected(t *testing.T) {
 	if err := client.Sign(ctx, event); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Sign() error = %v, want ErrNotConnected", err)
 	}
+	if _, err := client.NIP44Encrypt(ctx, nostr.Generate().Public(), "secret"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("NIP44Encrypt() error = %v, want ErrNotConnected", err)
+	}
 	if err := client.SignAs(ctx, "test-agent", event); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("SignAs() error = %v, want ErrNotConnected", err)
 	}
@@ -112,6 +116,34 @@ func TestClient_ExplicitMockMode(t *testing.T) {
 	}
 	if !client.IsConnected() {
 		t.Error("client should be connected after Connect()")
+	}
+}
+
+func TestClient_NIP44Encrypt_ExplicitMockMode(t *testing.T) {
+	client := newConnectedMockClient(t)
+	recipient := nostr.Generate()
+	ciphertext, err := client.NIP44Encrypt(t.Context(), recipient.Public(), "cord-05-bundle")
+	if err != nil {
+		t.Fatalf("NIP44Encrypt() error = %v", err)
+	}
+	staffHex, err := client.GetPublicKey(t.Context())
+	if err != nil {
+		t.Fatalf("GetPublicKey() error = %v", err)
+	}
+	staffPK, err := nostr.PubKeyFromHex(staffHex)
+	if err != nil {
+		t.Fatalf("staff pubkey: %v", err)
+	}
+	conversationKey, err := nip44.GenerateConversationKey(staffPK, recipient)
+	if err != nil {
+		t.Fatalf("recipient conversation key: %v", err)
+	}
+	plaintext, err := nip44.Decrypt(ciphertext, conversationKey)
+	if err != nil {
+		t.Fatalf("Decrypt() error = %v", err)
+	}
+	if plaintext != "cord-05-bundle" {
+		t.Fatalf("Decrypt() plaintext = %q", plaintext)
 	}
 }
 

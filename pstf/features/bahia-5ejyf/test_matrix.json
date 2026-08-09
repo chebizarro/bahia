@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-5ejyf",
+  "tests": [
+    {"acceptance_criteria": ["AC2", "AC3", "AC4", "AC5"], "test": "internal/soulfactory/concord_invite_test.go and internal/soulfactory/concord_provisioner_test.go", "command": "go test ./internal/soulfactory -run 'TestConcord|TestFullProvisioner.*Concord' -count=1", "result": "passed"},
+    {"acceptance_criteria": ["AC1"], "test": "internal/config/config_test.go", "command": "go test ./internal/config -run 'TestLoadSoulFactoryConfigFromYAMLAndEnv|TestLoadRejectsInvalidSoulFactoryConfig' -count=1", "result": "passed"},
+    {"acceptance_criteria": ["AC1", "AC5"], "test": "internal/app/soulfactory_concord_test.go", "command": "go test ./internal/app -run 'TestLoadSoulFactoryConcord' -count=1", "result": "passed"},
+    {"acceptance_criteria": ["AC4"], "test": "internal/adapters/signet/client_test.go", "command": "go test ./internal/adapters/signet -run 'TestClient_NIP44Encrypt' -count=1", "result": "passed"},
+    {"acceptance_criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"], "test": "affected Go packages", "command": "go vet ./internal/soulfactory ./internal/adapters/signet ./internal/config ./internal/app", "result": "passed"},
+    {"acceptance_criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"], "test": "affected package regressions", "command": "go test ./internal/soulfactory ./internal/adapters/signet ./internal/config ./internal/app -count=1", "result": "Concord tests and signet/config/app packages pass; soulfactory has the unrelated pre-existing failure tracked by bahia-9pzwv"},
+    {"acceptance_criteria": ["AC6"], "test": "operator and user documentation review", "command": "review docs/soul-factory.md and docs/user-guide/features/souls.md", "result": "passed"},
+    {"acceptance_criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6"], "test": "full Go repository suite", "command": "go test ./... -count=1", "result": "Concord tests pass; unrelated failures are tracked by bahia-9pzwv and bahia-eaxhv"}
+  ]
+}

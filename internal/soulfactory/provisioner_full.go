@@ -42,6 +42,8 @@ type FullProvisioner struct {
 	nip29MembershipErr       error
 	communikeysMembership    communikeysMembershipAssigner
 	communikeysMembershipErr error
+	concordMembership        concordMembershipAssigner
+	concordMembershipErr     error
 	runtimeAdapters          map[domain.RuntimeTarget]RuntimeAdapter
 	lookupSoul               func(context.Context, string) (*domain.AgentSoul, error)
 }
@@ -58,6 +60,7 @@ type FullProvisionerConfig struct {
 	NIP05Relays            []string
 	NIP29Groups            []NIP29Group
 	CommunikeysCommunities []CommunikeysCommunity
+	ConcordCommunities     []ConcordCommunity
 	Bahia                  BahiaIntegrationConfig
 	RuntimeAdapters        map[domain.RuntimeTarget]RuntimeAdapter
 }
@@ -74,6 +77,10 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	if communikeysErr != nil {
 		logger.Error("Communikeys membership configuration is invalid", "error", communikeysErr)
 	}
+	concordMembership, concordErr := newConcordMembership(config.ConcordCommunities, reactor.signer, reactor.relayBus)
+	if concordErr != nil {
+		logger.Error("Concord membership configuration is invalid", "error", concordErr)
+	}
 	p := &FullProvisioner{
 		reactor:                  reactor,
 		qdrantClient:             qdrant.NewClient(config.Qdrant, logger),
@@ -83,6 +90,8 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 		nip29MembershipErr:       nip29Err,
 		communikeysMembership:    communikeysMembership,
 		communikeysMembershipErr: communikeysErr,
+		concordMembership:        concordMembership,
+		concordMembershipErr:     concordErr,
 		nip05Relays:              append([]string(nil), config.NIP05Relays...),
 		runtimeAdapters:          cloneRuntimeAdapters(config.RuntimeAdapters),
 		lookupSoul:               reactor.GetSoul,
@@ -229,6 +238,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	var assignedGroups []string
 	var assignedCommunities []string
+	var assignedConcordCommunities []string
 	if p.nip29MembershipErr != nil {
 		p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, p.nip29MembershipErr, time.Since(stepStart))
 		return nil, fmt.Errorf("configure NIP-29 groups: %w", p.nip29MembershipErr)
@@ -251,10 +261,22 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 			return nil, fmt.Errorf("assign Communikeys communities: %w", err)
 		}
 	}
+	if p.concordMembershipErr != nil {
+		p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, p.concordMembershipErr, time.Since(stepStart))
+		return nil, fmt.Errorf("configure Concord communities: %w", p.concordMembershipErr)
+	}
+	if p.concordMembership != nil {
+		assignedConcordCommunities, err = p.concordMembership.Assign(ctx, soul.NostrPubkey)
+		if err != nil {
+			p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("assign Concord communities: %w", err)
+		}
+	}
 	p.recordStep(run, domain.StepSignet, domain.StepStatusComplete, map[string]interface{}{
 		"npub":                    npub,
 		"nip29_groups":            assignedGroups,
 		"communikeys_communities": assignedCommunities,
+		"concord_communities":     assignedConcordCommunities,
 	}, nil, time.Since(stepStart))
 
 	// Step 3: Generate and upload avatar

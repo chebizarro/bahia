@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-5ejyf",
+  "criteria": [
+    {"id": "AC1", "statement": "Soul Factory loads, validates, normalizes, and deduplicates optional concord_communities entries, each with exactly one non-inline invite bundle secret source."},
+    {"id": "AC2", "statement": "Invite bundles are size-bounded, structurally validated, self-certified by recomputing community_id from owner and owner_salt, and reject malformed, expired, over-broad, or mismatched material."},
+    {"id": "AC3", "statement": "Each assignment emits a CORD-05 kind-3313 rumor with empty tags inside a staff-signed kind-13 seal and ephemeral kind-1059 wrap carrying exact p recipient and k=3313 tags."},
+    {"id": "AC4", "statement": "Rumor encryption and seal signing use the Signet-held staff identity; the outer wrap uses a single-use ephemeral key and all published events are signature-valid."},
+    {"id": "AC5", "statement": "Concord onboarding runs after agent Signet provisioning, requires relay authentication and accepted OK, fails closed on any error, and records successful community identifiers without secret material."},
+    {"id": "AC6", "statement": "Soul Factory operator and user documentation describes optional Concord onboarding, secret references, relay delivery, failure semantics, and the CORD-06 rotation requirement after mistaken disclosure."}
+  ]
+}

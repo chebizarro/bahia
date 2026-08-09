@@ -116,6 +116,25 @@ The community pubkey must be controlled by the configured Signet signer, and eac
 
 Kind-`30000` `p` tags are the write ACL. Communikeys badges are engagement metadata only and are never used to grant publishing permission.
 
+## Concord encrypted community onboarding
+
+Concord is an optional encrypted backup plane. Configure one `soul_factory.concord_communities` entry per existing community, with its 64-character `community_id` and exactly one secret source for the CORD-05 `CommunityInvite` JSON:
+
+```yaml
+soul_factory:
+  concord_communities:
+    - community_id: <64-char-community-id>
+      invite_bundle_env: FLEET_CONCORD_INVITE
+    - community_id: <64-char-other-community-id>
+      invite_bundle_file: /run/secrets/concord-other.json
+```
+
+`invite_bundle_env` names an environment variable; `invite_bundle_file` must be an absolute path to a mounted secret. Raw `community_root` and channel keys are not accepted inline in Bahia configuration. The referenced JSON follows [CORD-05](https://github.com/concord-protocol/concord/blob/main/05.md) and contains `community_id`, `owner`, `owner_salt`, `community_root`, `root_epoch`, `control_pk`, up to 256 `channels` (`id`, `key`, `epoch`, `name`), one to five `relays`, `name`, and optional `expires_at`, `creator_npub`, and `label` fields. Bahia bounds the NIP-44 plaintext at 65,535 bytes, verifies the self-certifying community ID, validates key/channel/relay fields, and refuses expired bundles.
+
+After Signet mints the agent identity, Bahia builds a kind-`3313` rumor with empty tags and the bundle JSON as content, encrypts it to the new agent through the Signet-held staff key, signs the kind-`13` seal through Signet, and creates the kind-`1059` outer giftwrap with a single-use ephemeral key. The outer tags are exactly `p=<agent-pubkey>` and `k=3313`. Bahia requires every relay declared in the bundle to be present in `soul_factory.relays` or `additional_relays`, authenticates only that declared set, requires an accepted relay `OK` from every declared relay, fails the Signet provisioning step closed on any configuration, encryption, signing, AUTH, or publish error, and records successful community IDs as `concord_communities` without recording bundle contents.
+
+Configure every relay declared in each bundle in `soul_factory.relays` or `additional_relays`, and configure the newly provisioned agent's Concord client to watch at least one of them. Direct Invites cannot be revoked after delivery; accidental disclosure requires the CORD-06 rekey/refounding process before the old holder loses access.
+
 ## Signet transport and secret handling
 
 The controller identity is obtained from the configured Signet bunker and authorizes management requests.
@@ -157,6 +176,7 @@ soul_factory:
     - wss://relay.example.com
   nip29_groups: []
   communikeys_communities: []
+  concord_communities: []
   authorized_pubkeys:
     - <64-char-operator-pubkey>
   soul_factory_pubkey: <64-char-controller-pubkey>

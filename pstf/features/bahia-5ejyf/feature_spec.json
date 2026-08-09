@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-5ejyf",
+  "title": "Soul Factory Concord onboarding via CORD-05 Direct Invite",
+  "source_specification": "NIP-CAS-0008 and concord-protocol/concord CORD-05 §6",
+  "observed_behavior_before": [
+    "Soul Factory could assign newly provisioned identities to NIP-29 groups and Communikeys communities after Signet provisioning.",
+    "Bahia had no Concord configuration, CORD-05 invite builder, or Signet-backed NIP-44 encryption surface.",
+    "Provisioning runs did not record Concord community onboarding."
+  ],
+  "intended_behavior": [
+    "Configuration identifies optional Concord communities by self-certifying community_id and references invite bundle JSON through an environment variable or absolute secret file rather than inline key material.",
+    "After Signet provisions an agent identity, Soul Factory validates the CORD-05 CommunityInvite and sends a standard NIP-59 Direct Invite: kind-3313 rumor, staff-signed kind-13 seal, and ephemeral kind-1059 wrap tagged p=<recipient> and k=3313.",
+    "The Signet-held Soul Factory staff key performs recipient NIP-44 encryption and seal signing without exposing its private key to Bahia.",
+    "Relay authentication and publish acceptance are required; configuration, cryptography, or relay failures fail the Signet provisioning step closed.",
+    "Successful onboarding records only configured Concord community identifiers, never invite key material."
+  ]
+}
