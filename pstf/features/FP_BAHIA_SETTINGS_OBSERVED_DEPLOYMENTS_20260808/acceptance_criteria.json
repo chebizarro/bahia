@@ -1,0 +1,9 @@
+{
+  "feature_id": "FP_BAHIA_SETTINGS_OBSERVED_DEPLOYMENTS_20260808",
+  "criteria": [
+    {"id": "AC1", "statement": "System discovery publishes a deterministically ordered observed_deployments array containing only environment-service states whose current observation ID matches the authoritative latest runtime observation.", "tests": ["go test ./internal/adapters/nostr"]},
+    {"id": "AC2", "statement": "System discovery and relay policy events publish when browser relay policy is configured and nostr.sidecar.enabled is false.", "tests": ["go test ./internal/adapters/nostr"]},
+    {"id": "AC3", "statement": "Settings > Versions renders observed_deployments as runtime truth and never infers observed rows from versions.components.", "tests": ["npm run test:unit -- --run tests/unit/version.test.js"]},
+    {"id": "AC4", "statement": "Compile-time frontend and backend artifact metadata remains visible only under a Build information label that states it is not deployment evidence.", "tests": ["npm run lint", "npm run build"]}
+  ]
+}

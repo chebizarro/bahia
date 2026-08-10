@@ -1,0 +1,10 @@
+{
+  "feature_id": "FP_BAHIA_SETTINGS_OBSERVED_DEPLOYMENTS_20260808",
+  "tests": [
+    {"criterion": "AC1", "layer": "Go projector", "case": "current observations projected; desired-only state excluded; rows sorted by environment and service", "command": "go test ./internal/adapters/nostr"},
+    {"criterion": "AC2", "layer": "Go projector", "case": "external relay topology with sidecar disabled still publishes discovery and relay sets", "command": "go test ./internal/adapters/nostr"},
+    {"criterion": "AC3", "layer": "frontend unit", "case": "observed payload normalized and sorted; static components do not create observed rows", "command": "npm run test:unit -- --run tests/unit/version.test.js", "workdir": "web"},
+    {"criterion": "AC4", "layer": "frontend static analysis/build", "case": "Settings Svelte page compiles with distinct observed and build sections", "command": "npm run lint && npm run build", "workdir": "web"},
+    {"criterion": "AC1-AC4", "layer": "Go repository", "case": "all packages compile", "command": "go build ./..."}
+  ]
+}

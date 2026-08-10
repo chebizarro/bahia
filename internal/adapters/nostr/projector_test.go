@@ -534,6 +534,88 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	assertNoRelayPreferenceTag(t, nip65, "wss://service.example", "read")
 }
 
+func TestProjectorPublishesObservedDeploymentsWithoutEmbeddedSidecar(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)
+	backendID := uuid.New()
+	relayID := uuid.New()
+	unobservedID := uuid.New()
+	environmentID := uuid.New()
+	backendObservationID := uuid.New()
+	relayObservationID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[backendID] = domain.Service{ID: backendID, Name: "Bahia backend", RuntimeType: domain.RuntimeTypeDocker}
+	source.services[relayID] = domain.Service{ID: relayID, Name: "Bahia relay", RuntimeType: domain.RuntimeTypeCompose}
+	source.services[unobservedID] = domain.Service{ID: unobservedID, Name: "Desired only", RuntimeType: domain.RuntimeTypeDocker}
+	source.envs[environmentID] = domain.Environment{ID: environmentID, Name: "production"}
+	source.states[stateKeyForTest(backendID, environmentID)] = domain.EnvironmentServiceState{
+		ServiceID: backendID, EnvironmentID: environmentID, CurrentObservationID: &backendObservationID, DriftStatus: domain.DriftStatusInSync,
+	}
+	source.states[stateKeyForTest(relayID, environmentID)] = domain.EnvironmentServiceState{
+		ServiceID: relayID, EnvironmentID: environmentID, CurrentObservationID: &relayObservationID, DriftStatus: domain.DriftStatusDrifted,
+	}
+	source.states[stateKeyForTest(unobservedID, environmentID)] = domain.EnvironmentServiceState{
+		ServiceID: unobservedID, EnvironmentID: environmentID, DriftStatus: domain.DriftStatusUnknown,
+	}
+	source.observations[backendObservationID] = domain.RuntimeObservation{
+		ID: backendObservationID, ServiceID: backendID, EnvironmentID: environmentID,
+		ObservedVersion: "0.2.0-backend", ObservedImageRepo: "ghcr.io/openagentsinc/bahia",
+		ObservedImageDigest: "sha256:backend", ObservedHost: "backend-01", HealthStatus: domain.HealthStatusHealthy,
+		Source: "docker", ObservedAt: now,
+	}
+	source.observations[relayObservationID] = domain.RuntimeObservation{
+		ID: relayObservationID, ServiceID: relayID, EnvironmentID: environmentID,
+		ObservedVersion: "0.2.0-relay", ObservedImageRepo: "ghcr.io/openagentsinc/bahia-relay",
+		ObservedImageDigest: "sha256:relay", ObservedHost: "relay-01", HealthStatus: domain.HealthStatusHealthy,
+		Source: "compose", ObservedAt: now.Add(time.Minute),
+	}
+
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = false
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, source, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
+		t.Fatalf("unmarshal discovery content: %v", err)
+	}
+	deployments, ok := payload["observed_deployments"].([]any)
+	if !ok || len(deployments) != 2 {
+		t.Fatalf("observed deployments = %#v, want two current runtime observations", payload["observed_deployments"])
+	}
+	first, ok := deployments[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first observed deployment = %#v", deployments[0])
+	}
+	if first["service_name"] != "Bahia backend" || first["environment_name"] != "production" ||
+		first["observed_version"] != "0.2.0-backend" || first["observed_image_digest"] != "sha256:backend" ||
+		first["observed_host"] != "backend-01" || first["health_status"] != "healthy" || first["drift_status"] != "in_sync" {
+		t.Fatalf("first observed deployment = %#v", first)
+	}
+	second, ok := deployments[1].(map[string]any)
+	if !ok || second["service_name"] != "Bahia relay" {
+		t.Fatalf("second observed deployment = %#v, want deterministically sorted relay observation", deployments[1])
+	}
+	features, ok := payload["features"].(map[string]any)
+	if !ok || features["relay_sidecar"] != false || features["relay_read_models"] != true {
+		t.Fatalf("split-topology discovery features = %#v", payload["features"])
+	}
+	assertOneRelaySet(t, sink, BrowserRelaySetDTag)
+	assertOneRelaySet(t, sink, ContextVMRelaySetDTag)
+	assertOneRelaySet(t, sink, ServiceRelaySetDTag)
+}
+
 func TestProjectorSystemDiscoveryDoesNotInferDMRelayListFromPublicRelaySets(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Defaults()
@@ -1489,7 +1571,7 @@ func assertSystemDiscoveryEnvelopeForBrowser(t *testing.T, ev gonostr.Event) {
 	if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil {
 		t.Fatalf("unmarshal discovery content: %v", err)
 	}
-	wantTopLevel := []string{"blossom", "control_plane", "features", "nostr", "oci", "registries", "runtime", "schema", "versions"}
+	wantTopLevel := []string{"blossom", "control_plane", "features", "nostr", "observed_deployments", "oci", "registries", "runtime", "schema", "versions"}
 	if got := sortedDiscoveryPayloadKeys(payload); !reflect.DeepEqual(got, wantTopLevel) {
 		t.Fatalf("discovery top-level keys = %#v, want browser protocol envelope keys %#v", got, wantTopLevel)
 	}
