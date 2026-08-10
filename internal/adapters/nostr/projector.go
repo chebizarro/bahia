@@ -670,6 +670,11 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.publishBackupRetentionByID(ctx, firstString(stringifyMapValue(e.Data, "retention_run_id"), e.EntityID))
 		p.publishBackupRuntimeObservation(ctx)
 	}
+	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
+		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
+			p.logger.Warn("publish observed deployments discovery after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+		}
+	}
 	if shouldRefreshDNSProjection(e.Type) {
 		if _, _, err := p.publishDNSEndpointSnapshot(ctx); err != nil {
 			p.logger.Warn("publish DNS endpoint projection after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
@@ -2189,26 +2194,128 @@ func shouldRefreshDNSProjection(eventType events.EventType) bool {
 	}
 }
 
-func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
-	cfg := p.systemConfig
-	if cfg == nil {
-		return nil
+type observedDeploymentDiscovery struct {
+	ServiceID           string `json:"service_id"`
+	ServiceName         string `json:"service_name,omitempty"`
+	EnvironmentID       string `json:"environment_id"`
+	EnvironmentName     string `json:"environment_name,omitempty"`
+	DeploymentUnitID    string `json:"deployment_unit_id,omitempty"`
+	RuntimeType         string `json:"runtime_type,omitempty"`
+	RuntimeTarget       string `json:"runtime_target,omitempty"`
+	ObservationID       string `json:"observation_id"`
+	ObservedVersion     string `json:"observed_version,omitempty"`
+	ObservedImageRepo   string `json:"observed_image_repo,omitempty"`
+	ObservedImageDigest string `json:"observed_image_digest,omitempty"`
+	ObservedContainerID string `json:"observed_container_id,omitempty"`
+	ObservedHost        string `json:"observed_host,omitempty"`
+	ObservationSource   string `json:"observation_source,omitempty"`
+	HealthStatus        string `json:"health_status,omitempty"`
+	DriftStatus         string `json:"drift_status,omitempty"`
+	ObservedAt          string `json:"observed_at"`
+}
+
+func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool {
+	switch eventType {
+	case events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted,
+		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
+		events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
+		events.EventReconcileCompleted, events.EventAdoptionImported, events.EventRuntimeDeploy,
+		events.EventRuntimeRestart, events.EventRuntimeStop:
+		return true
+	default:
+		return false
 	}
-	if !cfg.Nostr.Sidecar.Enabled {
-		return nil
+}
+
+func (p *Projector) observedDeployments(ctx context.Context) ([]observedDeploymentDiscovery, error) {
+	source := p.snapshotSource()
+	services, err := source.ListServices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list services for observed deployments: %w", err)
+	}
+	environments, err := source.ListEnvironments(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list environments for observed deployments: %w", err)
+	}
+	states, err := source.ListStates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list states for observed deployments: %w", err)
+	}
+
+	servicesByID := make(map[uuid.UUID]domain.Service, len(services))
+	for _, service := range services {
+		servicesByID[service.ID] = service
+	}
+	environmentsByID := make(map[uuid.UUID]domain.Environment, len(environments))
+	for _, environment := range environments {
+		environmentsByID[environment.ID] = environment
+	}
+
+	deployments := make([]observedDeploymentDiscovery, 0, len(states))
+	for i := range states {
+		state := &states[i]
+		if state.CurrentObservationID == nil {
+			continue
+		}
+		observation, err := source.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
+		if err != nil {
+			return nil, fmt.Errorf("get latest observation for service %s in environment %s: %w", state.ServiceID, state.EnvironmentID, err)
+		}
+		if observation == nil || observation.ID != *state.CurrentObservationID {
+			continue
+		}
+
+		service := servicesByID[state.ServiceID]
+		environment := environmentsByID[state.EnvironmentID]
+		deployment := observedDeploymentDiscovery{
+			ServiceID:           state.ServiceID.String(),
+			ServiceName:         service.Name,
+			EnvironmentID:       state.EnvironmentID.String(),
+			EnvironmentName:     environment.Name,
+			RuntimeType:         string(service.RuntimeType),
+			RuntimeTarget:       service.RuntimeTargetName(),
+			ObservationID:       observation.ID.String(),
+			ObservedVersion:     observation.ObservedVersion,
+			ObservedImageRepo:   observation.ObservedImageRepo,
+			ObservedImageDigest: observation.ObservedImageDigest,
+			ObservedContainerID: observation.ObservedContainerID,
+			ObservedHost:        observation.ObservedHost,
+			ObservationSource:   observation.Source,
+			HealthStatus:        string(observation.HealthStatus),
+			DriftStatus:         string(state.DriftStatus),
+			ObservedAt:          formatTime(observation.ObservedAt),
+		}
+		if state.DeploymentUnitID != nil {
+			deployment.DeploymentUnitID = state.DeploymentUnitID.String()
+		}
+		deployments = append(deployments, deployment)
+	}
+
+	sort.Slice(deployments, func(i, j int) bool {
+		left := strings.ToLower(deployments[i].EnvironmentName) + "\x00" +
+			strings.ToLower(deployments[i].ServiceName) + "\x00" +
+			deployments[i].EnvironmentID + "\x00" + deployments[i].ServiceID + "\x00" + deployments[i].DeploymentUnitID
+		right := strings.ToLower(deployments[j].EnvironmentName) + "\x00" +
+			strings.ToLower(deployments[j].ServiceName) + "\x00" +
+			deployments[j].EnvironmentID + "\x00" + deployments[j].ServiceID + "\x00" + deployments[j].DeploymentUnitID
+		return left < right
+	})
+	return deployments, nil
+}
+
+func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg *config.Config) error {
+	observedDeployments, err := p.observedDeployments(ctx)
+	if err != nil {
+		return err
 	}
 	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
-	if len(browserRelays) == 0 {
-		return fmt.Errorf("system discovery requires nostr.browser_relays when relay sidecar is enabled")
-	}
-	contextVMRelays := cfg.Nostr.ContextVMRelayPolicyRelays()
-	serviceRelays := cfg.Nostr.ServiceRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && cfg.Nostr.PrivateKey != ""
 	payload := map[string]any{
-		"schema":        SystemDiscoverySchema,
-		"registries":    discoveryRegistries(cfg),
-		"versions":      discoveryVersions(),
-		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
+		"schema":               SystemDiscoverySchema,
+		"registries":           discoveryRegistries(cfg),
+		"versions":             discoveryVersions(),
+		"observed_deployments": observedDeployments,
+		"control_plane":        discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
 			"url":           cfg.Blossom.URL,
@@ -2236,7 +2343,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 			"notifications":            cfg.Notifications.Enabled,
 			"auth":                     cfg.Auth.Enabled,
 			"relay_sidecar":            cfg.Nostr.Sidecar.Enabled,
-			"relay_read_models":        cfg.Nostr.Sidecar.Enabled && cfg.Nostr.PublishEnabled,
+			"relay_read_models":        cfg.Nostr.PublishEnabled,
 			"encrypted_nostr_requests": encryptedRequestsEnabled,
 			"llm_control_plane":        cfg.LLM.Enabled,
 			"direct_nostr_http_auth":   cfg.Auth.Enabled,
@@ -2244,8 +2351,28 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 			"publish_enabled":          cfg.Nostr.PublishEnabled,
 		},
 	}
-	content, _ := json.Marshal(payload)
-	if err := p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, systemDiscoveryAnnouncementTags(), string(content), "system.discovery", nil); err != nil {
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal system discovery: %w", err)
+	}
+	return p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, systemDiscoveryAnnouncementTags(), string(content), "system.discovery", nil)
+}
+
+func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
+	cfg := p.systemConfig
+	if cfg == nil {
+		return nil
+	}
+	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
+	if len(browserRelays) == 0 {
+		if cfg.Nostr.Sidecar.Enabled {
+			return fmt.Errorf("system discovery requires nostr.browser_relays when relay sidecar is enabled")
+		}
+		return nil
+	}
+	contextVMRelays := cfg.Nostr.ContextVMRelayPolicyRelays()
+	serviceRelays := cfg.Nostr.ServiceRelayPolicyRelays()
+	if err := p.publishSystemDiscoveryAnnouncement(ctx, cfg); err != nil {
 		return err
 	}
 	if err := p.publishRelaySet(ctx, BrowserRelaySetDTag, browserRelays); err != nil {

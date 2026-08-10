@@ -62,7 +62,9 @@ The web app uses compile-time environment variables for Nostr bootstrap discover
 | `PUBLIC_BAHIA_GIT_COMMIT` | Commit hash stamped into the frontend version. |
 | `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |
 
-The Settings page shows the web app as a separately packaged frontend component and shows backend-side packaged components advertised by Bahia system discovery. Release builds should stamp versions as `0.1.0-<commit-hash>` unless release automation intentionally provides another SemVer-compatible value.
+The Settings **Versions** section treats the signed system-discovery `observed_deployments` projection as runtime truth. Each row is derived from the current environment-service state and its matching runtime observation, with service/environment names, runtime target, observed version or image digest, host, health, drift, and observation time. The backend publishes this discovery projection when browser relay policy is configured even when the relay runs as a separate container and `nostr.sidecar.enabled=false`.
+
+Compile-time metadata remains visible under **Build information**. It includes the web artifact stamped into the frontend and the backend-side packaged artifact catalog, but the UI explicitly does not present those entries as evidence that an artifact is deployed. Release builds should stamp build versions as `0.1.0-<commit-hash>` unless release automation intentionally provides another SemVer-compatible value.
 
 ### Relay subscriptions, health, and caches
 

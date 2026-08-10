@@ -5,7 +5,7 @@
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
-  import { componentVersionRows } from '$lib/version.js';
+  import { buildInformationRows, observedDeploymentRows } from '$lib/version.js';
   import * as QRCode from 'qrcode';
   import jsQR from 'jsqr';
   import {
@@ -26,7 +26,8 @@
   const serviceRelayList = $derived(systemInfo?.nostr?.service_relays || []);
   const featureEntries = $derived(Object.entries(systemInfo?.features || {}).sort(([a], [b]) => a.localeCompare(b)));
   const registryRows = $derived(systemInfo?.registries || []);
-  const versionRows = $derived(componentVersionRows(systemInfo));
+  const observedDeploymentVersionRows = $derived(observedDeploymentRows(systemInfo));
+  const buildInfoVersionRows = $derived(buildInformationRows(systemInfo));
   const settingsAreas = [
     {
       href: '/settings/profile',
@@ -438,31 +439,70 @@
     <section class="settings-section">
       <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Versions</h2>
       <p class="section-description">
-        Semantic versions for Bahia artifacts packaged and deployed independently. Versions use the <code>0.1.0-&lt;commit-hash&gt;</code> format unless release automation provides an explicit override.
+        Current deployment versions come from Bahia's authoritative runtime observations. Build metadata is shown separately and does not imply that an artifact is running.
       </p>
 
-      <div class="version-list">
-        {#each versionRows as component}
-          <div class="version-item">
-            <div class="version-info">
-              <span class="version-name">{component.name}</span>
-              <span class="version-kind">{component.kind}</span>
-            </div>
-            <div class="version-values">
-              <span class="config-value monospace">{component.version}</span>
-              {#if component.packaged_as}
-                <span class="version-package monospace">{component.packaged_as}</span>
-              {/if}
-            </div>
+      <div class="config-group">
+        <h3>Observed deployments</h3>
+        {#if observedDeploymentVersionRows.length > 0}
+          <div class="version-list">
+            {#each observedDeploymentVersionRows as deployment}
+              <div class="version-item">
+                <div class="version-info">
+                  <span class="version-name">{deployment.name}</span>
+                  <span class="version-kind">{deployment.environment} · {deployment.kind}</span>
+                  <span class="version-package">Health: {deployment.health} · Drift: {deployment.drift}</span>
+                </div>
+                <div class="version-values">
+                  <span class="config-value monospace">{deployment.version}</span>
+                  {#if deployment.image}
+                    <span class="version-package monospace">{deployment.image}</span>
+                  {/if}
+                  {#if deployment.host}
+                    <span class="version-package">Host: {deployment.host}</span>
+                  {/if}
+                  {#if deployment.observed_at}
+                    <span class="version-package">Observed: {deployment.observed_at}</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
           </div>
-        {/each}
+        {:else}
+          <div class="empty-config">
+            {#if systemLoading}
+              Loading observed deployments…
+            {:else if systemError}
+              Observed deployments unavailable: {systemError}
+            {:else}
+              No current runtime observations are advertised by discovery.
+            {/if}
+          </div>
+        {/if}
       </div>
 
-      {#if systemLoading}
-        <p class="section-description version-note">Loading backend component versions…</p>
-      {:else if systemError}
-        <p class="section-description version-note">Backend component versions unavailable: {systemError}</p>
-      {/if}
+      <div class="config-group">
+        <h3>Build information</h3>
+        <p class="section-description version-note">
+          Compile-time versions for packaged Bahia artifacts. These entries describe the build, not observed deployment state.
+        </p>
+        <div class="version-list">
+          {#each buildInfoVersionRows as component}
+            <div class="version-item">
+              <div class="version-info">
+                <span class="version-name">{component.name}</span>
+                <span class="version-kind">{component.kind}</span>
+              </div>
+              <div class="version-values">
+                <span class="config-value monospace">{component.version}</span>
+                {#if component.packaged_as}
+                  <span class="version-package monospace">{component.packaged_as}</span>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
     </section>
 
   </div>

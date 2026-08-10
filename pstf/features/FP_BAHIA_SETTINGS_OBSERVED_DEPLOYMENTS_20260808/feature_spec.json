@@ -1,0 +1,13 @@
+{
+  "feature_id": "FP_BAHIA_SETTINGS_OBSERVED_DEPLOYMENTS_20260808",
+  "title": "Observed deployments in Settings Versions",
+  "intent": "Present authoritative observed runtime deployment state in Settings > Versions across embedded and externally deployed relay topologies, while retaining compile-time artifact metadata only as clearly labeled build information.",
+  "authoritative_sources": ["service registry read model", "environment registry read model", "environment service state read model", "current runtime observation read model"],
+  "projection": {
+    "schema": "bahia.system-discovery.v1",
+    "field": "observed_deployments",
+    "publication": "signed parameterized-replaceable ContextVM server announcement",
+    "refresh_events": ["service and environment lifecycle", "runtime observation", "environment service state and drift", "reconcile and adoption", "runtime deploy, restart, and stop"]
+  },
+  "compatibility": "The existing versions object remains additive build metadata; observed_deployments is an additive field in the v1 discovery envelope."
+}

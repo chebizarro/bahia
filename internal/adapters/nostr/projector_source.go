@@ -16,6 +16,7 @@ type ProjectorSource interface {
 	ListServices(ctx context.Context) ([]ProjectorServiceSnapshot, error)
 	ListEnvironments(ctx context.Context) ([]ProjectorEnvironmentSnapshot, error)
 	ListStates(ctx context.Context) ([]ProjectorStateSnapshot, error)
+	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
 	ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]ProjectorBuildSnapshot, error)
 	ListArtifacts(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]ProjectorArtifactSnapshot, error)
 	ListDeploymentIntents(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]ProjectorDeploymentIntentSnapshot, error)
