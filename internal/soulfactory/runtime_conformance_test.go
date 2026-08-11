@@ -33,6 +33,9 @@ func conformanceCapability(t *testing.T, controller, runtime fakeSigner, target 
 	}, nostr.Tags{{tagParameterizedD, string(target) + "-main"}, {tagRuntime, string(target)}})
 }
 
+// newConformanceAdapter builds the generic adapter with the real clock so
+// signed capability fixtures stay inside both event-level validity and the
+// dispatch freshness window.
 func newConformanceAdapter(t *testing.T, controller fakeSigner, target domain.RuntimeTarget, transport *fakeRuntimeAdapterTransport) RuntimeAdapter {
 	t.Helper()
 	adapter, err := NewRuntimeAdapter(RuntimeAdapterConfig{
@@ -41,7 +44,25 @@ func newConformanceAdapter(t *testing.T, controller fakeSigner, target domain.Ru
 		Signer:           controller,
 		Relays:           []string{"wss://fallback.example"},
 		Transport:        transport,
-		Now:              func() time.Time { return time.Unix(1715700000, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeAdapter(%s) error = %v", target, err)
+	}
+	return adapter
+}
+
+// newFixedClockConformanceAdapter builds the generic adapter pinned to a fixed
+// clock for tests that construct RuntimeCapability values directly and never
+// round-trip through event-level validity checks.
+func newFixedClockConformanceAdapter(t *testing.T, controller fakeSigner, target domain.RuntimeTarget, transport *fakeRuntimeAdapterTransport, now time.Time) RuntimeAdapter {
+	t.Helper()
+	adapter, err := NewRuntimeAdapter(RuntimeAdapterConfig{
+		Target:           target,
+		ControllerPubkey: controller.pubkey,
+		Signer:           controller,
+		Relays:           []string{"wss://fallback.example"},
+		Transport:        transport,
+		Now:              func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("NewRuntimeAdapter(%s) error = %v", target, err)
@@ -216,8 +237,9 @@ func TestRuntimeAdapterRejectsUnavailableOrIncompatibleTargets(t *testing.T) {
 	}
 }
 
-// TestRuntimeAdapterRejectsStaleCapabilities proves stale 30317 announcements
-// never gate dispatch, whether discovered or supplied by the caller.
+// TestRuntimeAdapterRejectsStaleCapabilities proves 30317 announcements outside
+// the freshness window never gate dispatch, whether discovered or supplied by
+// the caller, in both the stale and future-skew directions.
 func TestRuntimeAdapterRejectsStaleCapabilities(t *testing.T) {
 	for _, tc := range runtimeConformanceCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,20 +247,73 @@ func TestRuntimeAdapterRejectsStaleCapabilities(t *testing.T) {
 			runtime := newFakeSigner(t)
 			runtimeAdapterTestRuntimeSecret = runtime.secret
 			runtimeAdapterTestRuntimePubkey = runtime.pubkey
-			now := time.Unix(1715700000, 0)
-			staleAt := now.Add(-DefaultMaxCapabilityAge - time.Minute)
-			staleCapability := signedRuntimeCapabilityEventAt(t, runtime, staleAt.Unix(), map[string]interface{}{
-				"schema":             domain.SoulFactoryRuntimeCapabilitySchema,
-				"runtime":            string(tc.target),
-				"methods":            []string{RuntimeMethodProvision},
-				"control_schema":     domain.SoulFactoryRuntimeControlSchema,
-				"controller_pubkeys": []string{controller.pubkey},
-			}, nostr.Tags{{tagParameterizedD, string(tc.target) + "-main"}, {tagRuntime, string(tc.target)}})
 
-			t.Run("stale discovery result is ineligible", func(t *testing.T) {
-				transport := &fakeRuntimeAdapterTransport{capabilities: []*nostr.Event{staleCapability}}
-				adapter := newConformanceAdapter(t, controller, tc.target, transport)
-				_, err := adapter.Execute(t.Context(), RuntimeAdapterRequest{
+			capabilityAt := func(createdAt int64) *nostr.Event {
+				return signedRuntimeCapabilityEventAt(t, runtime, createdAt, map[string]interface{}{
+					"schema":             domain.SoulFactoryRuntimeCapabilitySchema,
+					"runtime":            string(tc.target),
+					"methods":            []string{RuntimeMethodProvision},
+					"control_schema":     domain.SoulFactoryRuntimeControlSchema,
+					"controller_pubkeys": []string{controller.pubkey},
+				}, nostr.Tags{{tagParameterizedD, string(tc.target) + "-main"}, {tagRuntime, string(tc.target)}})
+			}
+
+			// Discovery-path cases use the adapter's real clock so events stay
+			// inside event-level validity and the TTL is what decides.
+			t.Run("discovery freshness window", func(t *testing.T) {
+				now := int64(nostr.Now())
+				for _, bc := range []struct {
+					name      string
+					createdAt int64
+					eligible  bool
+				}{
+					{"fresh", now, true},
+					{"just inside max age", now - int64(DefaultMaxCapabilityAge/time.Second) + 30, true},
+					{"just past max age", now - int64(DefaultMaxCapabilityAge/time.Second) - 60, false},
+					{"well past max age", now - int64(DefaultMaxCapabilityAge/time.Second) - 3600, false},
+					{"just inside future skew", now + int64(DefaultMaxCapabilityFutureSkew/time.Second) - 30, true},
+					{"beyond future skew", now + int64(DefaultMaxCapabilityFutureSkew/time.Second) + 60, false},
+				} {
+					t.Run(bc.name, func(t *testing.T) {
+						transport := &fakeRuntimeAdapterTransport{capabilities: []*nostr.Event{capabilityAt(bc.createdAt)}}
+						adapter, err := NewRuntimeAdapter(RuntimeAdapterConfig{
+							Target:           tc.target,
+							ControllerPubkey: controller.pubkey,
+							Signer:           controller,
+							Relays:           []string{"wss://fallback.example"},
+							Transport:        transport,
+						})
+						if err != nil {
+							t.Fatalf("NewRuntimeAdapter(%s) error = %v", tc.target, err)
+						}
+						capabilities, err := adapter.DiscoverCapabilities(t.Context(), domain.SoulRelayPolicySpec{})
+						if err != nil {
+							t.Fatalf("DiscoverCapabilities error = %v", err)
+						}
+						if bc.eligible && len(capabilities) != 1 {
+							t.Fatalf("capability at %s rejected, want eligible", bc.name)
+						}
+						if !bc.eligible && len(capabilities) != 0 {
+							t.Fatalf("capability at %s eligible, want rejected", bc.name)
+						}
+					})
+				}
+			})
+
+			t.Run("stale discovery result never dispatches", func(t *testing.T) {
+				staleAt := int64(nostr.Now()) - int64(DefaultMaxCapabilityAge/time.Second) - 60
+				transport := &fakeRuntimeAdapterTransport{capabilities: []*nostr.Event{capabilityAt(staleAt)}}
+				adapter, err := NewRuntimeAdapter(RuntimeAdapterConfig{
+					Target:           tc.target,
+					ControllerPubkey: controller.pubkey,
+					Signer:           controller,
+					Relays:           []string{"wss://fallback.example"},
+					Transport:        transport,
+				})
+				if err != nil {
+					t.Fatalf("NewRuntimeAdapter(%s) error = %v", tc.target, err)
+				}
+				_, err = adapter.Execute(t.Context(), RuntimeAdapterRequest{
 					Method:   RuntimeMethodProvision,
 					Operator: RuntimeOperatorRef{Pubkey: stringsRepeat("a", 64), RequestEvent: stringsRepeat("b", 64)},
 					Soul:     RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
@@ -252,32 +327,55 @@ func TestRuntimeAdapterRejectsStaleCapabilities(t *testing.T) {
 				}
 			})
 
-			t.Run("stale caller-supplied capability is rejected", func(t *testing.T) {
-				transport := &fakeRuntimeAdapterTransport{}
-				adapter := newConformanceAdapter(t, controller, tc.target, transport)
-				stale := RuntimeCapability{
-					ID:                staleCapability.ID.Hex(),
-					Pubkey:            runtime.pubkey,
-					Runtime:           tc.target,
-					Schema:            domain.SoulFactoryRuntimeCapabilitySchema,
-					ControlSchema:     domain.SoulFactoryRuntimeControlSchema,
-					Methods:           []string{RuntimeMethodProvision},
-					ControllerPubkeys: []string{controller.pubkey},
-					CreatedAt:         staleAt,
-					Compatible:        true,
-				}
-				_, err := adapter.Execute(t.Context(), RuntimeAdapterRequest{
-					Method:     RuntimeMethodProvision,
-					Operator:   RuntimeOperatorRef{Pubkey: stringsRepeat("a", 64), RequestEvent: stringsRepeat("b", 64)},
-					Soul:       RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
-					Target:     RuntimeTargetRef{Runtime: tc.target, AgentID: "scout", RuntimePubkey: runtime.pubkey},
-					Capability: &stale,
-				})
-				if err == nil || !strings.Contains(err.Error(), "stale") {
-					t.Fatalf("Execute error = %v, want stale capability rejection", err)
-				}
-				if len(transport.published) != 0 {
-					t.Fatalf("published %d requests against stale capability", len(transport.published))
+			// Caller-supplied capabilities bypass event-level validity checks,
+			// so both freshness directions must be enforced by the adapter.
+			t.Run("caller-supplied freshness window", func(t *testing.T) {
+				now := time.Unix(1715700000, 0)
+				for _, bc := range []struct {
+					name      string
+					createdAt time.Time
+					eligible  bool
+				}{
+					{"fresh", now, true},
+					{"at max age boundary", now.Add(-DefaultMaxCapabilityAge), true},
+					{"just past max age", now.Add(-DefaultMaxCapabilityAge - time.Second), false},
+					{"at future skew boundary", now.Add(DefaultMaxCapabilityFutureSkew), true},
+					{"beyond future skew", now.Add(DefaultMaxCapabilityFutureSkew + time.Second), false},
+					{"arbitrarily far future", now.Add(365 * 24 * time.Hour), false},
+				} {
+					t.Run(bc.name, func(t *testing.T) {
+						transport := &fakeRuntimeAdapterTransport{capabilities: []*nostr.Event{capabilityAt(int64(nostr.Now()))}}
+						adapter := newFixedClockConformanceAdapter(t, controller, tc.target, transport, now)
+						supplied := RuntimeCapability{
+							ID:                "caller-supplied",
+							Pubkey:            runtime.pubkey,
+							Runtime:           tc.target,
+							Schema:            domain.SoulFactoryRuntimeCapabilitySchema,
+							ControlSchema:     domain.SoulFactoryRuntimeControlSchema,
+							Methods:           []string{RuntimeMethodProvision},
+							ControllerPubkeys: []string{controller.pubkey},
+							CreatedAt:         bc.createdAt,
+							Compatible:        true,
+						}
+						_, err := adapter.Execute(t.Context(), RuntimeAdapterRequest{
+							Method:     RuntimeMethodProvision,
+							Operator:   RuntimeOperatorRef{Pubkey: stringsRepeat("a", 64), RequestEvent: stringsRepeat("b", 64)},
+							Soul:       RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
+							Target:     RuntimeTargetRef{Runtime: tc.target, AgentID: "scout", RuntimePubkey: runtime.pubkey},
+							Capability: &supplied,
+						})
+						if bc.eligible && err != nil {
+							t.Fatalf("Execute error = %v, want success for %s", err, bc.name)
+						}
+						if !bc.eligible {
+							if err == nil || !strings.Contains(err.Error(), "freshness window") {
+								t.Fatalf("Execute error = %v, want freshness rejection for %s", err, bc.name)
+							}
+							if len(transport.published) != 0 {
+								t.Fatalf("published %d requests against out-of-window capability", len(transport.published))
+							}
+						}
+					})
 				}
 			})
 		})
