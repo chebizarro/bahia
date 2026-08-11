@@ -1,5 +1,5 @@
 <script>
-  import { diffDraftContent, publishSoulAction, trackLifecycleRun } from '$lib/stores/souls.svelte.js';
+  import { diffDraftContent, publishSoulAction, trackLifecycleRun, supportedRuntimeMethods } from '$lib/stores/souls.svelte.js';
   import { KINDS, SOUL_LIFECYCLE_ACTIONS, SOUL_RUNTIME_METHODS } from '$lib/nostr/client.js';
 
   let {
@@ -31,6 +31,11 @@
 
   const current = $derived(normalizeContent(currentConfig || soul?.content || {}));
   const pending = $derived(normalizeContent(pendingConfig || draft?.content || {}));
+  const advertisedMethods = $derived(supportedRuntimeMethods({ runtime: soul?.runtime?.target || '', runtimePubkey: soul?.runtime?.runtime_pubkey || soul?.runtime?.runtimePubkey || '' }));
+  const methodAdvertised = $derived((method) => advertisedMethods !== null && advertisedMethods.includes(method));
+  const unavailableSections = $derived(sectionOptions.filter((section) => !methodAdvertised(section.method)));
+  const redeployAdvertised = $derived(methodAdvertised(SOUL_RUNTIME_METHODS.REDEPLOY));
+  const reloadAdvertised = $derived(methodAdvertised('soulfactory.config.reload'));
   const changes = $derived(diffDraftContent(current, pending).filter((change) => sectionFromPath(change.path)));
   const visibleChanges = $derived(changes.filter((change) => selectedSections.has(sectionFromPath(change.path))));
   const selectedList = $derived(sectionOptions.filter((section) => selectedSections.has(section.id)));
@@ -161,10 +166,18 @@
 
   function applySelectedUpdate() {
     if (updateMode === 'restart') {
+      if (!redeployAdvertised) {
+        errorMessage = `Full redeploy is not advertised by the live ${soul?.runtime?.target || 'runtime'} capability.`;
+        return;
+      }
       if (!confirm('Full redeploy may restart the running agent. Continue?')) return;
       return publishUpdate(SOUL_LIFECYCLE_ACTIONS.REDEPLOY, SOUL_RUNTIME_METHODS.REDEPLOY, { update_mode: 'redeploy' });
     }
 
+    if (!reloadAdvertised) {
+      errorMessage = `Hot-reload is not advertised by the live ${soul?.runtime?.target || 'runtime'} capability.`;
+      return;
+    }
     return publishUpdate('hot-reload', 'soulfactory.config.reload', { update_mode: 'hot-reload' });
   }
 
@@ -198,16 +211,21 @@
       <legend>Sections</legend>
       <div class="checkbox-row">
         {#each sectionOptions as section}
-          <label><input type="checkbox" checked={selectedSections.has(section.id)} onchange={() => toggleSection(section.id)} /> {section.label}</label>
+          <label class:muted={!methodAdvertised(section.method)} title={methodAdvertised(section.method) ? '' : `Not advertised by the live ${soul?.runtime?.target || 'runtime'} capability`}><input type="checkbox" checked={selectedSections.has(section.id)} disabled={!methodAdvertised(section.method)} onchange={() => toggleSection(section.id)} /> {section.label}</label>
         {/each}
       </div>
     </fieldset>
 
     <fieldset disabled={disabled || running}>
       <legend>Update mode</legend>
-      <label><input type="radio" name="update-mode" value="hot-reload" bind:group={updateMode} /> Hot-reload without restart</label>
-      <label><input type="radio" name="update-mode" value="restart" bind:group={updateMode} /> Full redeploy / restart</label>
+      <label title={reloadAdvertised ? '' : `Not advertised by the live ${soul?.runtime?.target || 'runtime'} capability`}><input type="radio" name="update-mode" value="hot-reload" disabled={!reloadAdvertised} bind:group={updateMode} /> Hot-reload without restart</label>
+      <label title={redeployAdvertised ? '' : `Not advertised by the live ${soul?.runtime?.target || 'runtime'} capability`}><input type="radio" name="update-mode" value="restart" disabled={!redeployAdvertised} bind:group={updateMode} /> Full redeploy / restart</label>
     </fieldset>
+    {#if advertisedMethods === null}
+      <p class="capability-note">No live compatible capability is observed for {soul?.runtime?.target || 'this runtime'} (or it is not enabled in server policy); runtime controls are disabled until a fresh capability is advertised.</p>
+    {:else if unavailableSections.length > 0 || !redeployAdvertised || !reloadAdvertised}
+      <p class="capability-note">Some controls are disabled because the live {soul?.runtime?.target || 'runtime'} capability does not advertise their methods{#if unavailableSections.length > 0}: {unavailableSections.map((section) => section.label).join(', ')}{/if}.</p>
+    {/if}
   </div>
 
   {#if validationError}
@@ -299,6 +317,7 @@
   button:disabled, select:disabled, fieldset:disabled { opacity: 0.55; cursor: not-allowed; }
   .spinner { width: 0.9rem; height: 0.9rem; border: 2px solid rgba(255,255,255,0.45); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .capability-note { grid-column: 1 / -1; color: var(--text-muted); font-size: 0.8rem; }
   .version-picker { display: inline-flex; gap: 0.5rem; align-items: center; margin-left: auto; }
   @media (max-width: 1024px) { .diff-row { grid-template-columns: 0.7fr 1fr 1fr; } }
   @media (max-width: 820px) { .status-grid, .controls, .diff-row { grid-template-columns: 1fr; } .panel-header, .action-row, .error-actions { flex-direction: column; align-items: stretch; } .version-picker { margin-left: 0; align-items: stretch; flex-direction: column; } }

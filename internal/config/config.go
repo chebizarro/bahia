@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -196,7 +197,11 @@ type DNSProjectionConfig struct {
 
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
-	Enabled                       bool                   `koanf:"enabled" yaml:"enabled"`
+	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	// AgentRuntimes is the validated list of administratively enabled
+	// SoulFactory agent runtime targets (for example openclaw, metiq).
+	// When unset it defaults to [openclaw] to preserve prior behavior.
+	AgentRuntimes                 []string               `koanf:"agent_runtimes" yaml:"agent_runtimes"`
 	Relays                        []string               `koanf:"relays" yaml:"relays"`
 	AdditionalRelays              []string               `koanf:"additional_relays" yaml:"additional_relays"`
 	NIP05Relays                   []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
@@ -233,10 +238,14 @@ type CommunikeysCommunity struct {
 
 // ConcordCommunity identifies CORD-05 invite material for a fleet community.
 // Exactly one secret source is required; raw membership keys are never accepted inline.
+// InviteBundleSealedFile is the Signet-backed custody form: the file holds only a
+// NIP-44 payload sealed to the staff key, and it is the only source CORD-06
+// rotation can write fresh material back to.
 type ConcordCommunity struct {
-	CommunityID      string `koanf:"community_id" yaml:"community_id"`
-	InviteBundleEnv  string `koanf:"invite_bundle_env" yaml:"invite_bundle_env"`
-	InviteBundleFile string `koanf:"invite_bundle_file" yaml:"invite_bundle_file"`
+	CommunityID            string `koanf:"community_id" yaml:"community_id"`
+	InviteBundleEnv        string `koanf:"invite_bundle_env" yaml:"invite_bundle_env"`
+	InviteBundleFile       string `koanf:"invite_bundle_file" yaml:"invite_bundle_file"`
+	InviteBundleSealedFile string `koanf:"invite_bundle_sealed_file" yaml:"invite_bundle_sealed_file"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -1482,6 +1491,43 @@ func normalizeStringList(values []string) []string {
 	return normalized
 }
 
+// agentRuntimeIDPattern constrains SoulFactory agent runtime target IDs to
+// stable lowercase protocol identifiers suitable for Nostr tag values.
+var agentRuntimeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// DefaultAgentRuntimes preserves the historical single-runtime behavior when
+// soul_factory.agent_runtimes is not configured.
+var DefaultAgentRuntimes = []string{"openclaw"}
+
+// normalizeAgentRuntimeList validates the administratively enabled SoulFactory
+// agent runtime list. An unset list defaults to DefaultAgentRuntimes; an
+// explicitly configured list rejects empty, malformed, and duplicate targets.
+func normalizeAgentRuntimeList(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return append([]string(nil), DefaultAgentRuntimes...), nil
+	}
+	if len(values) > 16 {
+		return nil, fmt.Errorf("at most 16 agent runtimes may be enabled, got %d", len(values))
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for i, raw := range values {
+		target := strings.ToLower(strings.TrimSpace(raw))
+		if target == "" {
+			return nil, fmt.Errorf("entry %d must not be empty", i)
+		}
+		if !agentRuntimeIDPattern.MatchString(target) {
+			return nil, fmt.Errorf("entry %d %q is not a valid runtime target id (expected %s)", i, raw, agentRuntimeIDPattern.String())
+		}
+		if _, ok := seen[target]; ok {
+			return nil, fmt.Errorf("entry %d duplicates runtime target %q", i, target)
+		}
+		seen[target] = struct{}{}
+		normalized = append(normalized, target)
+	}
+	return normalized, nil
+}
+
 func normalizePubkeyList(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -2267,6 +2313,7 @@ func (c *Config) validateSoulFactory() error {
 		community.CommunityID = strings.ToLower(strings.TrimSpace(community.CommunityID))
 		community.InviteBundleEnv = strings.TrimSpace(community.InviteBundleEnv)
 		community.InviteBundleFile = strings.TrimSpace(community.InviteBundleFile)
+		community.InviteBundleSealedFile = strings.TrimSpace(community.InviteBundleSealedFile)
 		decoded, err := hex.DecodeString(community.CommunityID)
 		if err != nil || len(decoded) != 32 || len(community.CommunityID) != 64 {
 			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].community_id must be 64 lowercase hex characters", i)
@@ -2281,8 +2328,14 @@ func (c *Config) validateSoulFactory() error {
 				return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].invite_bundle_file must be an absolute secret path", i)
 			}
 		}
+		if community.InviteBundleSealedFile != "" {
+			sources++
+			if !filepath.IsAbs(community.InviteBundleSealedFile) {
+				return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].invite_bundle_sealed_file must be an absolute secret path", i)
+			}
+		}
 		if sources != 1 {
-			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d] requires exactly one of invite_bundle_env or invite_bundle_file", i)
+			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d] requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file", i)
 		}
 		if _, duplicate := seenConcord[community.CommunityID]; duplicate {
 			continue
@@ -2310,6 +2363,11 @@ func (c *Config) validateSoulFactory() error {
 	if !sf.Enabled {
 		return nil
 	}
+	runtimes, err := normalizeAgentRuntimeList(sf.AgentRuntimes)
+	if err != nil {
+		return fmt.Errorf("config validation failed: soul_factory.agent_runtimes: %w", err)
+	}
+	sf.AgentRuntimes = runtimes
 	if len(sf.Relays) == 0 {
 		return fmt.Errorf("config validation failed: soul_factory.relays requires at least one relay when soul_factory.enabled=true")
 	}

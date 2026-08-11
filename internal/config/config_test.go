@@ -760,6 +760,7 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	controller := strings.Repeat("a", 64)
 	authorized := strings.Repeat("b", 64)
 	concordID := strings.Repeat("d", 64)
+	sealedConcordID := strings.Repeat("e", 64)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`soul_factory:
   enabled: true
@@ -785,6 +786,8 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
       invite_bundle_env: " FLEET_CONCORD_INVITE "
     - community_id: "` + concordID + `"
       invite_bundle_env: "FLEET_CONCORD_INVITE"
+    - community_id: "` + sealedConcordID + `"
+      invite_bundle_sealed_file: " /run/secrets/concord.sealed "
   authorized_pubkeys:
     - "` + authorized + `"
   soul_factory_pubkey: "` + controller + `"
@@ -826,7 +829,8 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	if got := cfg.SoulFactory.CommunikeysCommunities; len(got) != 1 || got[0].Pubkey != controller || strings.Join(got[0].Sections, ",") != "Apps,Chat,Threads" {
 		t.Fatalf("SoulFactory Communikeys communities = %#v", got)
 	}
-	if got := cfg.SoulFactory.ConcordCommunities; len(got) != 1 || got[0].CommunityID != concordID || got[0].InviteBundleEnv != "FLEET_CONCORD_INVITE" {
+	if got := cfg.SoulFactory.ConcordCommunities; len(got) != 2 || got[0].CommunityID != concordID || got[0].InviteBundleEnv != "FLEET_CONCORD_INVITE" ||
+		got[1].CommunityID != sealedConcordID || got[1].InviteBundleSealedFile != "/run/secrets/concord.sealed" {
 		t.Fatalf("SoulFactory Concord communities = %#v", got)
 	}
 	if cfg.SoulFactory.SoulFactoryPubkey != controller {
@@ -859,6 +863,53 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	if cfg.SoulFactory.WorkspaceGatewayPort != 18781 {
 		t.Fatalf("SoulFactory workspace_gateway_port = %d", cfg.SoulFactory.WorkspaceGatewayPort)
 	}
+}
+
+func TestLoadSoulFactoryAgentRuntimes(t *testing.T) {
+	validPubkey := strings.Repeat("c", 64)
+	base := `soul_factory:
+  enabled: true
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`
+	load := func(t *testing.T, yaml string) *Config {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		return cfg
+	}
+
+	t.Run("defaults to openclaw when unset", func(t *testing.T) {
+		cfg := load(t, base)
+		got := cfg.SoulFactory.AgentRuntimes
+		if len(got) != 1 || got[0] != "openclaw" {
+			t.Fatalf("AgentRuntimes = %v, want [openclaw]", got)
+		}
+	})
+
+	t.Run("normalizes and preserves multiple runtimes", func(t *testing.T) {
+		cfg := load(t, "soul_factory:\n  agent_runtimes: [\" OpenClaw \", \"metiq\", \"synthetic-3\"]\n"+strings.TrimPrefix(base, "soul_factory:\n"))
+		got := cfg.SoulFactory.AgentRuntimes
+		want := []string{"openclaw", "metiq", "synthetic-3"}
+		if len(got) != len(want) {
+			t.Fatalf("AgentRuntimes = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("AgentRuntimes = %v, want %v", got, want)
+			}
+		}
+	})
 }
 
 func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
@@ -961,7 +1012,7 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   concord_communities:
     - community_id: "` + validPubkey + `"
 `,
-			want: "requires exactly one of invite_bundle_env or invite_bundle_file",
+			want: "requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file",
 		},
 		{
 			name: "Concord community with two invite sources",
@@ -971,7 +1022,26 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
       invite_bundle_env: "FLEET_CONCORD_INVITE"
       invite_bundle_file: "/run/secrets/concord.json"
 `,
-			want: "requires exactly one of invite_bundle_env or invite_bundle_file",
+			want: "requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file",
+		},
+		{
+			name: "Concord community with sealed and plaintext invite sources",
+			yaml: `soul_factory:
+  concord_communities:
+    - community_id: "` + validPubkey + `"
+      invite_bundle_env: "FLEET_CONCORD_INVITE"
+      invite_bundle_sealed_file: "/run/secrets/concord.sealed"
+`,
+			want: "requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file",
+		},
+		{
+			name: "Concord community with relative sealed custody file",
+			yaml: `soul_factory:
+  concord_communities:
+    - community_id: "` + validPubkey + `"
+      invite_bundle_sealed_file: "secrets/concord.sealed"
+`,
+			want: "invite_bundle_sealed_file must be an absolute secret path",
 		},
 		{
 			name: "Concord community with relative invite file",
@@ -996,6 +1066,48 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory"
 `,
 			want: "soul_factory.workspace_private_key_ref is required",
+		},
+		{
+			name: "agent runtime with empty entry",
+			yaml: `soul_factory:
+  enabled: true
+  agent_runtimes: ["openclaw", " "]
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "soul_factory.agent_runtimes",
+		},
+		{
+			name: "agent runtime with malformed target",
+			yaml: `soul_factory:
+  enabled: true
+  agent_runtimes: ["Open Claw!"]
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "soul_factory.agent_runtimes",
+		},
+		{
+			name: "agent runtime with duplicate target",
+			yaml: `soul_factory:
+  enabled: true
+  agent_runtimes: ["openclaw", "metiq", "OPENCLAW"]
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "duplicates runtime target",
 		},
 	}
 

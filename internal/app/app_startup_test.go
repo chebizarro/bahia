@@ -87,9 +87,9 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	defer restoreDBHooks()
 
 	signer := newFakeSoulFactorySigner(t)
-	var adapterConfig soulfactory.RuntimeAdapterConfig
+	var adapterConfigs []soulfactory.RuntimeAdapterConfig
 	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, func(cfg soulfactory.RuntimeAdapterConfig) {
-		adapterConfig = cfg
+		adapterConfigs = append(adapterConfigs, cfg)
 	})
 	defer restoreSoulFactoryHooks()
 
@@ -105,10 +105,66 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	require.True(t, appHasRunner(app, "soulfactory"))
 	require.True(t, signer.connected)
 	require.NoError(t, signer.connectCtx.Err(), "SoulFactory signer connection must outlive startup")
+	require.Len(t, adapterConfigs, 1)
+	adapterConfig := adapterConfigs[0]
 	require.Equal(t, domain.RuntimeTargetOpenClaw, adapterConfig.Target)
 	require.Equal(t, signer.pubkey, adapterConfig.ControllerPubkey)
 	require.Equal(t, []string{"wss://relay.example", "wss://private.example"}, adapterConfig.Relays)
 	require.Same(t, signer, adapterConfig.Signer)
+}
+
+func TestNewRegistersMultipleSoulFactoryRuntimes(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	signer := newFakeSoulFactorySigner(t)
+	var adapterConfigs []soulfactory.RuntimeAdapterConfig
+	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, func(cfg soulfactory.RuntimeAdapterConfig) {
+		adapterConfigs = append(adapterConfigs, cfg)
+	})
+	defer restoreSoulFactoryHooks()
+
+	cfg := startupTestConfig(ModeFull)
+	configureValidSoulFactory(t, cfg, signer.pubkey)
+	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "metiq", "synthetic-3"}
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer app.Logger.Sync()
+	defer closeRelayPools(app.relayPools...)
+	defer app.soulFactoryCloser()
+
+	require.NotNil(t, app.SoulFactory)
+	require.Len(t, adapterConfigs, 3)
+	wantTargets := []domain.RuntimeTarget{
+		domain.RuntimeTargetOpenClaw,
+		domain.RuntimeTargetMetiq,
+		domain.RuntimeTarget("synthetic-3"),
+	}
+	for i, want := range wantTargets {
+		require.Equal(t, want, adapterConfigs[i].Target)
+		require.Equal(t, signer.pubkey, adapterConfigs[i].ControllerPubkey)
+		require.Same(t, signer, adapterConfigs[i].Signer)
+	}
+}
+
+func TestNewFailsStartupOnDuplicateAgentRuntime(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	signer := newFakeSoulFactorySigner(t)
+	factoryCalled := false
+	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, func(cfg soulfactory.RuntimeAdapterConfig) {
+		factoryCalled = true
+	})
+	defer restoreSoulFactoryHooks()
+
+	cfg := startupTestConfig(ModeFull)
+	configureValidSoulFactory(t, cfg, signer.pubkey)
+	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "openclaw"}
+	_, err := New(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "soul_factory.agent_runtimes")
+	require.False(t, factoryCalled, "invalid agent_runtimes must fail validation before adapter construction")
 }
 
 func TestNewRejectsInvalidSoulFactoryConfig(t *testing.T) {
@@ -281,7 +337,7 @@ func configureValidSoulFactory(t *testing.T, cfg *config.Config, controllerPubke
 func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAdapterConfig func(soulfactory.RuntimeAdapterConfig)) func() {
 	t.Helper()
 	previousSignetFactory := newSoulFactorySignetClient
-	previousAdapterFactory := newSoulFactoryOpenClawRuntimeAdapter
+	previousAdapterFactory := newSoulFactoryRuntimeAdapter
 	previousGeneratorFactory := newSoulFactorySoulGenerator
 	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
 		if cfg.AllowMock {
@@ -289,18 +345,18 @@ func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAd
 		}
 		return signer, nil
 	}
-	newSoulFactoryOpenClawRuntimeAdapter = func(cfg soulfactory.RuntimeAdapterConfig) (soulfactory.RuntimeAdapter, error) {
+	newSoulFactoryRuntimeAdapter = func(cfg soulfactory.RuntimeAdapterConfig) (soulfactory.RuntimeAdapter, error) {
 		if captureAdapterConfig != nil {
 			captureAdapterConfig(cfg)
 		}
-		return fakeSoulFactoryRuntimeAdapter{}, nil
+		return fakeSoulFactoryRuntimeAdapter{target: cfg.Target}, nil
 	}
 	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *slog.Logger) soulfactory.SoulGenerator {
 		return fakeSoulFactoryGenerator{}
 	}
 	return func() {
 		newSoulFactorySignetClient = previousSignetFactory
-		newSoulFactoryOpenClawRuntimeAdapter = previousAdapterFactory
+		newSoulFactoryRuntimeAdapter = previousAdapterFactory
 		newSoulFactorySoulGenerator = previousGeneratorFactory
 	}
 }
@@ -372,10 +428,15 @@ func (fakeSoulFactoryGenerator) Generate(context.Context, domain.SoulGeneratorIn
 	return &domain.SoulGeneratorOutput{SoulMD: "# Soul", IdentityMD: "# Identity", AllowedKinds: []int{0, 1}}, nil
 }
 
-type fakeSoulFactoryRuntimeAdapter struct{}
+type fakeSoulFactoryRuntimeAdapter struct {
+	target domain.RuntimeTarget
+}
 
-func (fakeSoulFactoryRuntimeAdapter) Runtime() domain.RuntimeTarget {
-	return domain.RuntimeTargetOpenClaw
+func (a fakeSoulFactoryRuntimeAdapter) Runtime() domain.RuntimeTarget {
+	if a.target == "" {
+		return domain.RuntimeTargetOpenClaw
+	}
+	return a.target
 }
 func (fakeSoulFactoryRuntimeAdapter) DiscoverCapabilities(context.Context, domain.SoulRelayPolicySpec) ([]soulfactory.RuntimeCapability, error) {
 	return nil, nil

@@ -16,6 +16,7 @@ import (
 type fakeConcordSigner struct {
 	fakeSigner
 	encryptErr error
+	decryptErr error
 }
 
 func (s fakeConcordSigner) GetPublicKey(context.Context) (string, error) {
@@ -37,6 +38,39 @@ func (s fakeConcordSigner) NIP44Encrypt(_ context.Context, recipient nostr.PubKe
 	return nip44.Encrypt(plaintext, conversationKey)
 }
 
+// NIP44EncryptBytes mirrors Signet's binary-safe encrypt path. A Go string is
+// a byte string, so the fake carries binary plaintext verbatim; it is the
+// NIP-46 JSON transport, not NIP-44, that cannot.
+func (s fakeConcordSigner) NIP44EncryptBytes(_ context.Context, recipient nostr.PubKey, plaintext []byte) (string, error) {
+	if s.encryptErr != nil {
+		return "", s.encryptErr
+	}
+	secret, err := nostr.SecretKeyFromHex(s.secret)
+	if err != nil {
+		return "", err
+	}
+	conversationKey, err := nip44.GenerateConversationKey(recipient, secret)
+	if err != nil {
+		return "", err
+	}
+	return nip44.Encrypt(string(plaintext), conversationKey)
+}
+
+func (s fakeConcordSigner) NIP44Decrypt(_ context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
+	if s.decryptErr != nil {
+		return "", s.decryptErr
+	}
+	secret, err := nostr.SecretKeyFromHex(s.secret)
+	if err != nil {
+		return "", err
+	}
+	conversationKey, err := nip44.GenerateConversationKey(counterparty, secret)
+	if err != nil {
+		return "", err
+	}
+	return nip44.Decrypt(ciphertext, conversationKey)
+}
+
 func TestConcordMembershipAssignPublishesCORD05DirectInvite(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
@@ -45,6 +79,8 @@ func TestConcordMembershipAssignPublishesCORD05DirectInvite(t *testing.T) {
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
 	unrelated := newFakeRelayEndpoint("wss://unrelated.example")
 	unrelated.publishResults = []RelayPublishResult{{Accepted: true}}
+	queueConcordInboxLookup(endpoint)
+	queueConcordInboxLookup(unrelated)
 
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{unrelated, endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
@@ -175,6 +211,7 @@ func TestConcordMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	community := concordTestCommunity(t, nil)
 	endpoint := newFakeRelayEndpoint("wss://community.example")
 	endpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "restricted"}}
+	queueConcordInboxLookup(endpoint)
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
 		t.Fatalf("new relay bus: %v", err)
@@ -190,10 +227,59 @@ func TestConcordMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	}
 }
 
+func TestConcordMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
+	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
+	community := concordTestCommunity(t, nil)
+	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint.publishResults = []RelayPublishResult{
+		{Accepted: false, Reason: "auth-required: challenge pending"},
+		{Accepted: true},
+	}
+	queueConcordInboxLookup(endpoint)
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	membership, err := newConcordMembership([]ConcordCommunity{community}, staff, bus)
+	if err != nil {
+		t.Fatalf("newConcordMembership() error = %v", err)
+	}
+
+	recipient := newFakeSigner(t)
+	assigned, err := membership.Assign(t.Context(), recipient.pubkey)
+	if err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	if len(assigned) != 1 || assigned[0] != community.CommunityID {
+		t.Fatalf("Assign() communities = %#v", assigned)
+	}
+	if endpoint.publishCalls != 2 {
+		t.Fatalf("publish calls = %d, want auth-race retry", endpoint.publishCalls)
+	}
+	if len(endpoint.published) == 0 || !validConcordGiftWrap(endpoint.published[len(endpoint.published)-1], recipient.pubkey) {
+		t.Fatal("auth-race retry did not republish a valid CORD-05 direct invite")
+	}
+}
+
+// queueConcordInboxLookup answers one inbox resolution on an endpoint. With no
+// events the recipient has published neither a kind-10050 nor a NIP-65 list,
+// which is the freshly provisioned agent case.
+func queueConcordInboxLookup(endpoint *fakeRelayEndpoint, events ...*nostr.Event) {
+	subscription := newFakeRelaySubscription()
+	for _, event := range events {
+		if event != nil {
+			subscription.events <- event
+		}
+	}
+	close(subscription.eose)
+	endpoint.subscribeQueue <- subscription
+}
+
 func newConcordTestBus(t *testing.T, signer relayAuthSigner) *SoulFactoryRelayBus {
 	t.Helper()
 	endpoint := newFakeRelayEndpoint("wss://community.example")
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
+	queueConcordInboxLookup(endpoint)
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(signer))
 	if err != nil {
 		t.Fatalf("new relay bus: %v", err)
@@ -203,12 +289,20 @@ func newConcordTestBus(t *testing.T, signer relayAuthSigner) *SoulFactoryRelayBu
 
 func concordTestCommunity(t *testing.T, expiresAt *int64) ConcordCommunity {
 	t.Helper()
-	owner := newFakeSigner(t)
+	return concordTestCommunityOwnedBy(t, newFakeSigner(t).pubkey, expiresAt)
+}
+
+// concordTestCommunityOwnedBy names the owner explicitly. A rotation resolves
+// its CORD-06 §3 authority against that npub — the owner cites no Grant, anyone
+// else must cite one from the folded Control Plane — so a rotating test hands in
+// its own staff key here rather than inheriting an unrelated owner.
+func concordTestCommunityOwnedBy(t *testing.T, ownerHex string, expiresAt *int64) ConcordCommunity {
+	t.Helper()
 	ownerSalt := strings.Repeat("1", 64)
-	communityID := computeConcordCommunityID(owner.pubkey, ownerSalt)
+	communityID := computeConcordCommunityID(ownerHex, ownerSalt)
 	bundle := concordInviteBundle{
 		CommunityID:   communityID,
-		Owner:         owner.pubkey,
+		Owner:         ownerHex,
 		OwnerSalt:     ownerSalt,
 		CommunityRoot: strings.Repeat("2", 64),
 		RootEpoch:     3,

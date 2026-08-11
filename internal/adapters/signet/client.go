@@ -50,6 +50,12 @@ const (
 	// Keep the wire boundary explicit until that dependency is corrected.
 	signetKindContextVM nostr.Kind = 25910
 	signetKindGiftWrap             = cascadia.NIP59_GIFT_WRAP
+
+	// signetMethodNIP44EncryptBinary is Signet's binary-safe NIP-44 encrypt:
+	// params are [recipient_pubkey_hex, base64(plaintext)] and the result is an
+	// ordinary NIP-44 v2 payload. It exists because NIP-46's JSON params cannot
+	// carry non-UTF-8 plaintext.
+	signetMethodNIP44EncryptBinary = "nip44_encrypt_b64"
 )
 
 // Client communicates with Signet via NIP-46.
@@ -339,6 +345,107 @@ func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plain
 		return "", fmt.Errorf("bunker nip44_encrypt: %w", err)
 	}
 	return ciphertext, nil
+}
+
+// NIP44EncryptBytes encrypts a raw binary plaintext to a recipient using the
+// Signet-held staff key.
+//
+// NIP-46 carries params as JSON strings, so plaintext that is not valid UTF-8
+// cannot travel over NIP44Encrypt: Go's encoder substitutes U+FFFD for every
+// invalid byte and the bunker would encrypt corrupted material without anyone
+// noticing. Concord CORD-06 rekey blobs are fixed-width binary whose width is
+// the format signal (72/104/136 bytes), so silent substitution is not a
+// recoverable error. This path base64-encodes the plaintext for the transport
+// only; the bunker decodes it and encrypts the exact bytes, returning an
+// ordinary NIP-44 v2 payload.
+//
+// A bunker without the method fails the call rather than returning a payload
+// over mangled bytes, so an out-of-date Signet degrades to a loud error.
+func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, plaintext []byte) (string, error) {
+	c.mu.Lock()
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
+	bunker := c.bunker
+	clientSecretKey := c.clientSecretKey
+	c.mu.Unlock()
+
+	if !connected {
+		return "", ErrNotConnected
+	}
+	if len(plaintext) == 0 {
+		return "", fmt.Errorf("Signet NIP-44 binary encrypt requires a non-empty plaintext")
+	}
+	if mockMode {
+		secret, err := nostr.SecretKeyFromHex(clientSecretKey)
+		if err != nil {
+			return "", fmt.Errorf("decode mock Signet key: %w", err)
+		}
+		conversationKey, err := nip44.GenerateConversationKey(recipient, secret)
+		if err != nil {
+			return "", fmt.Errorf("derive mock Signet NIP-44 conversation key: %w", err)
+		}
+		// A Go string is a byte string, so the local path carries binary
+		// plaintext verbatim; only the JSON transport needs the encoding.
+		ciphertext, err := nip44.Encrypt(string(plaintext), conversationKey)
+		if err != nil {
+			return "", fmt.Errorf("mock Signet NIP-44 encrypt: %w", err)
+		}
+		return ciphertext, nil
+	}
+	if bunker == nil {
+		return "", ErrNotConnected
+	}
+	ciphertext, err := bunker.RPC(ctx, signetMethodNIP44EncryptBinary, []string{
+		recipient.Hex(),
+		base64.StdEncoding.EncodeToString(plaintext),
+	})
+	if err != nil {
+		return "", fmt.Errorf("bunker %s: %w", signetMethodNIP44EncryptBinary, err)
+	}
+	if strings.TrimSpace(ciphertext) == "" {
+		return "", fmt.Errorf("bunker %s returned an empty payload", signetMethodNIP44EncryptBinary)
+	}
+	return ciphertext, nil
+}
+
+// NIP44Decrypt decrypts ciphertext from a counterparty using the Signet-held
+// staff key. Sealing custody to the staff pubkey and unsealing it here keeps
+// Concord invite material ciphertext at rest: the private key never leaves the
+// NIP-46 bunker in production.
+func (c *Client) NIP44Decrypt(ctx context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
+	c.mu.Lock()
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
+	bunker := c.bunker
+	clientSecretKey := c.clientSecretKey
+	c.mu.Unlock()
+
+	if !connected {
+		return "", ErrNotConnected
+	}
+	if mockMode {
+		secret, err := nostr.SecretKeyFromHex(clientSecretKey)
+		if err != nil {
+			return "", fmt.Errorf("decode mock Signet key: %w", err)
+		}
+		conversationKey, err := nip44.GenerateConversationKey(counterparty, secret)
+		if err != nil {
+			return "", fmt.Errorf("derive mock Signet NIP-44 conversation key: %w", err)
+		}
+		plaintext, err := nip44.Decrypt(ciphertext, conversationKey)
+		if err != nil {
+			return "", fmt.Errorf("mock Signet NIP-44 decrypt: %w", err)
+		}
+		return plaintext, nil
+	}
+	if bunker == nil {
+		return "", ErrNotConnected
+	}
+	plaintext, err := bunker.NIP44Decrypt(ctx, counterparty, ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("bunker nip44_decrypt: %w", err)
+	}
+	return plaintext, nil
 }
 
 // signMock signs with the explicit mock client's stable key for testing.

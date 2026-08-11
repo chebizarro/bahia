@@ -6,7 +6,6 @@ import (
 	"errors"
 	"reflect"
 	"testing"
-	"time"
 
 	"fiatjaf.com/nostr"
 
@@ -266,7 +265,6 @@ func TestRuntimeAdapterSignsRequestSelectsRelaysAndRequiresCorrelatedResult(t *t
 		Signer:           controller,
 		Relays:           []string{"wss://fallback.example"},
 		Transport:        transport,
-		Now:              func() time.Time { return time.Unix(1715700000, 0) },
 	})
 	if err != nil {
 		t.Fatalf("NewOpenClawRuntimeAdapter error = %v", err)

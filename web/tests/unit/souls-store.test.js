@@ -335,6 +335,10 @@ describe('Souls Store', () => {
       expect(soulsModule.drafts).toHaveLength(1);
       expect(soulsModule.drafts[0]).toMatchObject({ agentId: 'scout' });
       expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+      // Unknown server policy fails closed.
+      expect(soulsModule.supportedRuntimeTargets()).toEqual([]);
+      soulsModule.serverAgentRuntimes.push('openclaw');
+      soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeTargets()).toEqual(['openclaw']);
       expect(soulsModule.loading.souls).toBe(false);
     });
@@ -725,7 +729,81 @@ describe('Souls Store', () => {
       ]);
 
       expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+      soulsModule.serverAgentRuntimes.push('openclaw');
+      soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['openclaw']);
+    });
+
+    it('supportedRuntimeMethods gates controls by advertised methods per runtime', async () => {
+      const nostrModule = await import('$lib/nostr/client.js');
+      nostrModule.parseRuntimeCapabilityEvent.mockImplementation((event) => ({
+        id: event.id,
+        pubkey: event.pubkey,
+        createdAt: event.created_at,
+        runtime: event.tags.find((t) => t[0] === 'runtime')?.[1] || 'unknown',
+        methods: event.tags.filter((t) => t[0] === 'method').map((t) => t[1]),
+        compatible: true,
+        event
+      }));
+      const { handlers } = await startSoulFactorySubscription();
+
+      applyBackfill(handlers, [
+        {
+          id: 'cap-oc',
+          kind: 30317,
+          pubkey: 'runtime-oc',
+          created_at: 100,
+          tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision'], ['method', 'soulfactory.config.reload']],
+          content: '{}'
+        },
+        {
+          id: 'cap-mq',
+          kind: 30317,
+          pubkey: 'runtime-mq',
+          created_at: 100,
+          tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']],
+          content: '{}'
+        }
+      ]);
+
+      soulsModule.serverAgentRuntimes.push('openclaw', 'metiq');
+      soulsModule.serverPolicy.known = true;
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toEqual(
+        expect.arrayContaining(['soulfactory.provision', 'soulfactory.config.reload'])
+      );
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toEqual(['soulfactory.provision']);
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'unregistered-rt' })).toBeNull();
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw', runtimePubkey: 'runtime-oc' })).toContain('soulfactory.config.reload');
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw', runtimePubkey: 'other-pubkey' })).toBeNull();
+    });
+
+    it('intersects discovered targets with the server-enabled runtime policy', async () => {
+      const nostrModule = await import('$lib/nostr/client.js');
+      nostrModule.parseRuntimeCapabilityEvent.mockImplementation((event) => ({
+        id: event.id,
+        pubkey: event.pubkey,
+        createdAt: event.created_at,
+        runtime: event.tags.find((t) => t[0] === 'runtime')?.[1] || 'unknown',
+        methods: event.tags.filter((t) => t[0] === 'method').map((t) => t[1]),
+        compatible: true,
+        event
+      }));
+      const { handlers } = await startSoulFactorySubscription();
+
+      applyBackfill(handlers, [
+        { id: 'cap-oc', kind: 30317, pubkey: 'runtime-oc', created_at: 100, tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision']], content: '{}' },
+        { id: 'cap-mq', kind: 30317, pubkey: 'runtime-mq', created_at: 100, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
+      ]);
+
+      // Unknown policy fails closed even with live compatible capabilities.
+      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual([]);
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toBeNull();
+
+      soulsModule.serverAgentRuntimes.push('metiq');
+      soulsModule.serverPolicy.known = true;
+      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['metiq']);
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toBeNull();
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toEqual(['soulfactory.provision']);
     });
 
     it('publishSoulDraft signs, publishes, and stores a 31952 draft', async () => {

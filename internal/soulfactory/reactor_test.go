@@ -871,6 +871,77 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 	}
 }
 
+func TestProvisionWithUnregisteredRuntimeTargetFailsClosed(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(
+		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
+		&capturingGenerator{},
+		signer,
+		slog.Default(),
+	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	capture := attachPublishCapture(reactor)
+	draft := &domain.SoulDraft{
+		EventID:   "unregistered-target-draft",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Brief:    "Target is not administratively enabled",
+			SpecHash: "sha256:unregistered-target",
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTarget("synthetic-3"), RuntimePubkey: "runtime-pubkey"},
+		},
+	}
+	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
+	runtime := &trackingRuntimeAdapter{}
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	reactor.provisioner = full
+
+	request := buildProvisioningEvent(t, signer.pubkey, "unregistered-target", nostr.Tags{{"agent-id", "scout"}, {"draft-event", draft.EventID}, {"spec-hash", "sha256:unregistered-target"}}, `{}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if len(runtime.requests) != 0 {
+		t.Fatalf("runtime called for unregistered target: %+v", runtime.requests)
+	}
+	if len(capture.eventsByKind(domain.KindAgentSoul)) != 0 {
+		t.Fatalf("final soul published for unregistered target: %#v", capture.eventsByKind(domain.KindAgentSoul))
+	}
+	if len(capture.eventsByKind(domain.KindRuntimeControlRequest)) != 0 {
+		t.Fatalf("38384 published for unregistered target: %#v", capture.eventsByKind(domain.KindRuntimeControlRequest))
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 || !strings.Contains(results[0].Content, "no runtime adapter configured") {
+		t.Fatalf("unregistered target result = %#v, want one no-adapter error", results)
+	}
+}
+
+func TestFullProvisionerInstallsSameAdapterRegistryInLifecycleHandler(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(
+		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
+		&capturingGenerator{},
+		signer,
+		slog.Default(),
+	)
+	runtime := &trackingRuntimeAdapter{}
+	synthetic := &trackingRuntimeAdapter{}
+	adapters := map[domain.RuntimeTarget]RuntimeAdapter{
+		domain.RuntimeTargetOpenClaw:        runtime,
+		domain.RuntimeTarget("synthetic-3"): synthetic,
+	}
+	NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: adapters}, nil)
+	if reactor.lifecycleHandler == nil {
+		t.Fatal("lifecycle handler was not installed")
+	}
+	if len(reactor.lifecycleHandler.runtimeAdapters) != 2 {
+		t.Fatalf("lifecycle adapters = %#v, want both registered targets", reactor.lifecycleHandler.runtimeAdapters)
+	}
+	for target := range adapters {
+		if reactor.lifecycleHandler.runtimeAdapters[target] == nil {
+			t.Fatalf("lifecycle handler missing adapter for %s", target)
+		}
+	}
+}
+
 func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testing.T) {
 	signer := newFakeSigner(t)
 	reactor := NewReactor(

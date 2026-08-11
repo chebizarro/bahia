@@ -110,8 +110,12 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	}
 	// Lifecycle requests are orchestrated by lifecycle_handler.go, not the
 	// provisioning engine. Installing the handler here preserves the Bahia
-	// integration side effects previously wired through FullProvisioner.
+	// integration side effects previously wired through FullProvisioner. The
+	// lifecycle handler receives the same runtime adapter registry as the
+	// provisioner so dispatch never diverges between provisioning and
+	// lifecycle/customization paths.
 	reactor.lifecycleHandler = NewLifecycleHandler(reactor, bahiaIntegration, nil, logger)
+	reactor.lifecycleHandler.SetRuntimeAdapters(config.RuntimeAdapters)
 	return p
 }
 
@@ -778,6 +782,38 @@ func stringResult(result map[string]interface{}, key string) string {
 		return text
 	}
 	return fmt.Sprint(value)
+}
+
+// RotateConcordCommunity performs an explicit CORD-06 Rekey or Refounding for a
+// configured Concord community and redistributes the fresh material to the
+// surviving members. It fails closed when Concord onboarding is unconfigured or
+// misconfigured, and when the community's invite material is not held in
+// Signet-sealed custody (there would be nowhere durable to put the new keys).
+//
+// A partial redistribution returns both the receipt and the error: custody
+// already holds the rotated material, and re-running the rotation's delivery is
+// idempotent (CORD-06 §3).
+func (p *FullProvisioner) RotateConcordCommunity(ctx context.Context, rotation ConcordRotation) (*ConcordRotationReceipt, error) {
+	if p.concordMembershipErr != nil {
+		return nil, fmt.Errorf("configure Concord communities: %w", p.concordMembershipErr)
+	}
+	rotator, ok := p.concordMembership.(concordCommunityRotator)
+	if !ok || rotator == nil {
+		return nil, fmt.Errorf("Concord onboarding is not configured")
+	}
+	receipt, err := rotator.Rotate(ctx, rotation)
+	if receipt != nil {
+		p.reactor.logger.Info("rotated Concord community",
+			"community_id", receipt.CommunityID,
+			"refounded", receipt.Refounded,
+			"root_epoch", receipt.RootEpoch,
+			"rotated_channels", len(receipt.Channels),
+			"recipients", len(receipt.Recipients),
+			"direct_invites", len(receipt.DirectInvites),
+			"rekey_scopes", len(receipt.Rekeys),
+		)
+	}
+	return receipt, err
 }
 
 func (p *FullProvisioner) recordStep(run *domain.ProvisioningRun, step domain.ProvisioningStep, status domain.StepStatus, output map[string]interface{}, err error, duration time.Duration) {

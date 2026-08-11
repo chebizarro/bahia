@@ -33,6 +33,32 @@ func TestLoadSoulFactoryConcordCommunitiesFromSecretSources(t *testing.T) {
 	}
 }
 
+func TestLoadSoulFactoryConcordCommunitiesKeepsSealedCustodyOnDisk(t *testing.T) {
+	sealedPath := filepath.Join(t.TempDir(), "concord.sealed")
+	if err := os.WriteFile(sealedPath, []byte("AjA1Nzg5-not-real-ciphertext"), 0o600); err != nil {
+		t.Fatalf("write sealed custody: %v", err)
+	}
+
+	communities, err := loadSoulFactoryConcordCommunities([]config.ConcordCommunity{{
+		CommunityID:            strings.Repeat("c", 64),
+		InviteBundleSealedFile: sealedPath,
+	}})
+	if err != nil {
+		t.Fatalf("loadSoulFactoryConcordCommunities() error = %v", err)
+	}
+	if len(communities) != 1 {
+		t.Fatalf("communities = %d, want 1", len(communities))
+	}
+	if communities[0].SealedBundlePath != sealedPath {
+		t.Fatalf("sealed bundle path = %q", communities[0].SealedBundlePath)
+	}
+	// Sealed custody is opened through Signet at use time, never slurped into
+	// process configuration at boot.
+	if len(communities[0].InviteBundle) != 0 {
+		t.Fatalf("sealed custody was read into config: %s", communities[0].InviteBundle)
+	}
+}
+
 func TestLoadSoulFactoryConcordCommunitiesFailsForMissingSecret(t *testing.T) {
 	_, err := loadSoulFactoryConcordCommunities([]config.ConcordCommunity{{
 		CommunityID:     strings.Repeat("a", 64),
