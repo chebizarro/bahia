@@ -16,6 +16,7 @@ import (
 type fakeConcordSigner struct {
 	fakeSigner
 	encryptErr error
+	decryptErr error
 }
 
 func (s fakeConcordSigner) GetPublicKey(context.Context) (string, error) {
@@ -35,6 +36,21 @@ func (s fakeConcordSigner) NIP44Encrypt(_ context.Context, recipient nostr.PubKe
 		return "", err
 	}
 	return nip44.Encrypt(plaintext, conversationKey)
+}
+
+func (s fakeConcordSigner) NIP44Decrypt(_ context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
+	if s.decryptErr != nil {
+		return "", s.decryptErr
+	}
+	secret, err := nostr.SecretKeyFromHex(s.secret)
+	if err != nil {
+		return "", err
+	}
+	conversationKey, err := nip44.GenerateConversationKey(counterparty, secret)
+	if err != nil {
+		return "", err
+	}
+	return nip44.Decrypt(ciphertext, conversationKey)
 }
 
 func TestConcordMembershipAssignPublishesCORD05DirectInvite(t *testing.T) {

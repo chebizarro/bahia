@@ -85,6 +85,9 @@ func TestClient_OperationsFailWhenNotConnected(t *testing.T) {
 	if _, err := client.NIP44Encrypt(ctx, nostr.Generate().Public(), "secret"); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("NIP44Encrypt() error = %v, want ErrNotConnected", err)
 	}
+	if _, err := client.NIP44Decrypt(ctx, nostr.Generate().Public(), "secret"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("NIP44Decrypt() error = %v, want ErrNotConnected", err)
+	}
 	if err := client.SignAs(ctx, "test-agent", event); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("SignAs() error = %v, want ErrNotConnected", err)
 	}
@@ -144,6 +147,50 @@ func TestClient_NIP44Encrypt_ExplicitMockMode(t *testing.T) {
 	}
 	if plaintext != "cord-05-bundle" {
 		t.Fatalf("Decrypt() plaintext = %q", plaintext)
+	}
+}
+
+func TestClient_NIP44SelfSealRoundTrip_ExplicitMockMode(t *testing.T) {
+	client := newConnectedMockClient(t)
+	staffHex, err := client.GetPublicKey(t.Context())
+	if err != nil {
+		t.Fatalf("GetPublicKey() error = %v", err)
+	}
+	staffPK, err := nostr.PubKeyFromHex(staffHex)
+	if err != nil {
+		t.Fatalf("staff pubkey: %v", err)
+	}
+
+	const custody = `{"version":1,"invite_bundle":{"community_id":"cord"}}`
+	sealed, err := client.NIP44Encrypt(t.Context(), staffPK, custody)
+	if err != nil {
+		t.Fatalf("NIP44Encrypt() error = %v", err)
+	}
+	if strings.Contains(sealed, "invite_bundle") {
+		t.Fatal("sealed custody payload leaks plaintext")
+	}
+	plaintext, err := client.NIP44Decrypt(t.Context(), staffPK, sealed)
+	if err != nil {
+		t.Fatalf("NIP44Decrypt() error = %v", err)
+	}
+	if plaintext != custody {
+		t.Fatalf("NIP44Decrypt() plaintext = %q", plaintext)
+	}
+}
+
+func TestClient_NIP44Decrypt_RejectsForeignPayload(t *testing.T) {
+	client := newConnectedMockClient(t)
+	other := nostr.Generate()
+	conversationKey, err := nip44.GenerateConversationKey(other.Public(), other)
+	if err != nil {
+		t.Fatalf("conversation key: %v", err)
+	}
+	ciphertext, err := nip44.Encrypt("someone else's custody", conversationKey)
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+	if _, err := client.NIP44Decrypt(t.Context(), other.Public(), ciphertext); err == nil {
+		t.Fatal("NIP44Decrypt() accepted a payload sealed to another key")
 	}
 }
 

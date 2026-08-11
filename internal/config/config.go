@@ -238,10 +238,14 @@ type CommunikeysCommunity struct {
 
 // ConcordCommunity identifies CORD-05 invite material for a fleet community.
 // Exactly one secret source is required; raw membership keys are never accepted inline.
+// InviteBundleSealedFile is the Signet-backed custody form: the file holds only a
+// NIP-44 payload sealed to the staff key, and it is the only source CORD-06
+// rotation can write fresh material back to.
 type ConcordCommunity struct {
-	CommunityID      string `koanf:"community_id" yaml:"community_id"`
-	InviteBundleEnv  string `koanf:"invite_bundle_env" yaml:"invite_bundle_env"`
-	InviteBundleFile string `koanf:"invite_bundle_file" yaml:"invite_bundle_file"`
+	CommunityID            string `koanf:"community_id" yaml:"community_id"`
+	InviteBundleEnv        string `koanf:"invite_bundle_env" yaml:"invite_bundle_env"`
+	InviteBundleFile       string `koanf:"invite_bundle_file" yaml:"invite_bundle_file"`
+	InviteBundleSealedFile string `koanf:"invite_bundle_sealed_file" yaml:"invite_bundle_sealed_file"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -2309,6 +2313,7 @@ func (c *Config) validateSoulFactory() error {
 		community.CommunityID = strings.ToLower(strings.TrimSpace(community.CommunityID))
 		community.InviteBundleEnv = strings.TrimSpace(community.InviteBundleEnv)
 		community.InviteBundleFile = strings.TrimSpace(community.InviteBundleFile)
+		community.InviteBundleSealedFile = strings.TrimSpace(community.InviteBundleSealedFile)
 		decoded, err := hex.DecodeString(community.CommunityID)
 		if err != nil || len(decoded) != 32 || len(community.CommunityID) != 64 {
 			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].community_id must be 64 lowercase hex characters", i)
@@ -2323,8 +2328,14 @@ func (c *Config) validateSoulFactory() error {
 				return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].invite_bundle_file must be an absolute secret path", i)
 			}
 		}
+		if community.InviteBundleSealedFile != "" {
+			sources++
+			if !filepath.IsAbs(community.InviteBundleSealedFile) {
+				return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d].invite_bundle_sealed_file must be an absolute secret path", i)
+			}
+		}
 		if sources != 1 {
-			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d] requires exactly one of invite_bundle_env or invite_bundle_file", i)
+			return fmt.Errorf("config validation failed: soul_factory.concord_communities[%d] requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file", i)
 		}
 		if _, duplicate := seenConcord[community.CommunityID]; duplicate {
 			continue

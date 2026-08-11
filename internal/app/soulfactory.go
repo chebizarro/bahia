@@ -220,6 +220,14 @@ func loadSoulFactoryConcordCommunities(communities []config.ConcordCommunity) ([
 	for i, community := range communities {
 		var bundle []byte
 		switch {
+		case community.InviteBundleSealedFile != "":
+			// Signet-sealed custody stays on disk as ciphertext: it is opened
+			// lazily through the bunker, never read into process config.
+			out = append(out, soulfactory.ConcordCommunity{
+				CommunityID:      community.CommunityID,
+				SealedBundlePath: community.InviteBundleSealedFile,
+			})
+			continue
 		case community.InviteBundleEnv != "":
 			value, ok := os.LookupEnv(community.InviteBundleEnv)
 			if !ok || strings.TrimSpace(value) == "" {

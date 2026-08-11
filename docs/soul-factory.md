@@ -127,13 +127,38 @@ soul_factory:
       invite_bundle_env: FLEET_CONCORD_INVITE
     - community_id: <64-char-other-community-id>
       invite_bundle_file: /run/secrets/concord-other.json
+    - community_id: <64-char-third-community-id>
+      invite_bundle_sealed_file: /var/lib/bahia/concord-third.sealed
 ```
 
-`invite_bundle_env` names an environment variable; `invite_bundle_file` must be an absolute path to a mounted secret. Raw `community_root` and channel keys are not accepted inline in Bahia configuration. The referenced JSON follows [CORD-05](https://github.com/concord-protocol/concord/blob/main/05.md) and contains `community_id`, `owner`, `owner_salt`, `community_root`, `root_epoch`, `control_pk`, up to 256 `channels` (`id`, `key`, `epoch`, `name`), one to five `relays`, `name`, and optional `expires_at`, `creator_npub`, and `label` fields. Bahia bounds the NIP-44 plaintext at 65,535 bytes, verifies the self-certifying community ID, validates key/channel/relay fields, and refuses expired bundles.
+`invite_bundle_env` names an environment variable; `invite_bundle_file` and `invite_bundle_sealed_file` must be absolute paths. Raw `community_root` and channel keys are not accepted inline in Bahia configuration. The referenced JSON follows [CORD-05](https://github.com/concord-protocol/concord/blob/main/05.md) and contains `community_id`, `owner`, `owner_salt`, `community_root`, `root_epoch`, `control_pk`, up to 256 `channels` (`id`, `key`, `epoch`, `name`), one to five `relays`, `name`, and optional `expires_at`, `creator_npub`, and `label` fields. Bahia bounds the NIP-44 plaintext at 65,535 bytes, verifies the self-certifying community ID, validates key/channel/relay fields, and refuses expired bundles.
 
 After Signet mints the agent identity, Bahia builds a kind-`3313` rumor with empty tags and the bundle JSON as content, encrypts it to the new agent through the Signet-held staff key, signs the kind-`13` seal through Signet, and creates the kind-`1059` outer giftwrap with a single-use ephemeral key. The outer tags are exactly `p=<agent-pubkey>` and `k=3313`. Bahia requires every relay declared in the bundle to be present in `soul_factory.relays` or `additional_relays`, authenticates only that declared set, requires an accepted relay `OK` from every declared relay, fails the Signet provisioning step closed on any configuration, encryption, signing, AUTH, or publish error, and records successful community IDs as `concord_communities` without recording bundle contents.
 
-Configure every relay declared in each bundle in `soul_factory.relays` or `additional_relays`, and configure the newly provisioned agent's Concord client to watch at least one of them. Direct Invites cannot be revoked after delivery; accidental disclosure requires the CORD-06 rekey/refounding process before the old holder loses access.
+Configure every relay declared in each bundle in `soul_factory.relays` or `additional_relays`, and configure the newly provisioned agent's Concord client to watch at least one of them. Direct Invites cannot be revoked after delivery; accidental disclosure requires the CORD-06 rekey/refounding process below before the old holder loses access.
+
+### Signet-backed custody
+
+`invite_bundle_sealed_file` is the custody form. The file holds only a NIP-44 payload sealed to the Signet-held staff key, so a leaked backup, container image, or config dump yields ciphertext instead of a community's access keys. Bahia opens it lazily through the bunker for each provisioning or rotation and keeps no plaintext copy, so material rotated by another process is picked up without a restart. The sealed plaintext is a custody document:
+
+```json
+{ "version": 1, "invite_bundle": { "community_id": "…" }, "control_root": "<64-char-hex>" }
+```
+
+`control_root` is the CORD-02 §2 staff write secret. It is minted by a Refounding, is never placed in an invite, and never leaves custody. A file sealed with a bare `CommunityInvite` is also accepted, and the first Refounding upgrades it to the document form. Writes are verified before they land: Bahia re-opens the fresh payload through Signet and requires it to match before atomically replacing the file at mode `0600`, so custody is never overwritten with material the bunker cannot reopen. `invite_bundle_env` and `invite_bundle_file` remain supported but are read-only, and rotation refuses to run against them.
+
+### CORD-06 rekeys and refoundings
+
+`FullProvisioner.RotateConcordCommunity` performs an explicit [CORD-06](https://github.com/concord-protocol/concord/blob/main/06.md) rotation after a membership change or an accidental disclosure. A rotation names its scope and its **surviving** members; the caller supplies that membership, and anyone omitted is severed from the rotated scope.
+
+- A **Rekey** (`ChannelIDs`) mints a fresh key for each named Private Channel and bumps only that channel's epoch. A Public Channel derives from the `community_root` (CORD-03), so requesting one alone is refused.
+- A **Refounding** (`Refound: true`) rolls the `community_root`, bumps `root_epoch`, mints a fresh `control_root` beside it, and republishes `control_pk` as `group_key("concord/control-signer", control_root, community_id, new_epoch).pk` — the CORD-06 §3 split upgrade. Public Channels follow the base for free; Private Channels rotate only when named.
+
+The derivations are the frozen CORD-02 Appendix A shapes (HKDF-SHA256 with `info = utf8(label) || 0x00 || id[32] || epoch_be[8]`, `scalar_normalize`, and the A.5 epoch-key commitment). Bahia builds the rotated bundle in full before writing anything, round-trips unknown bundle and channel fields verbatim, revalidates its own minted bundle against the relay bus, seals it into custody, and only then redistributes it to the survivors as CORD-05 §6 Direct Invites. A rotation is resumable rather than atomic: if redistribution fails partway, custody already holds the new material and the receipt is returned alongside the error so delivery can be re-run idempotently.
+
+The returned `ConcordRotationReceipt` is safe to log or persist. It records community, epochs, per-channel `prevcommit` continuity commitments, and recipients — never a `community_root`, `control_root`, or channel key. Redistribution reaches only the supplied recipients: fleet agents provisioned outside that list, or members Bahia does not know about, must be re-invited separately or they lose access to the rotated scope.
+
+Bahia does not yet mint kind-`3303` Rekey Blobs. Those carry fixed-width binary plaintexts that cannot survive a NIP-46 JSON round trip to the bunker, so publishing them would require a binary-safe encrypt path in Signet; until then, fresh material reaches members through the Direct Invite lane instead.
 
 ## Signet transport and secret handling
 

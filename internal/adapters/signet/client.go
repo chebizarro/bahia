@@ -341,6 +341,46 @@ func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plain
 	return ciphertext, nil
 }
 
+// NIP44Decrypt decrypts ciphertext from a counterparty using the Signet-held
+// staff key. Sealing custody to the staff pubkey and unsealing it here keeps
+// Concord invite material ciphertext at rest: the private key never leaves the
+// NIP-46 bunker in production.
+func (c *Client) NIP44Decrypt(ctx context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
+	c.mu.Lock()
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
+	bunker := c.bunker
+	clientSecretKey := c.clientSecretKey
+	c.mu.Unlock()
+
+	if !connected {
+		return "", ErrNotConnected
+	}
+	if mockMode {
+		secret, err := nostr.SecretKeyFromHex(clientSecretKey)
+		if err != nil {
+			return "", fmt.Errorf("decode mock Signet key: %w", err)
+		}
+		conversationKey, err := nip44.GenerateConversationKey(counterparty, secret)
+		if err != nil {
+			return "", fmt.Errorf("derive mock Signet NIP-44 conversation key: %w", err)
+		}
+		plaintext, err := nip44.Decrypt(ciphertext, conversationKey)
+		if err != nil {
+			return "", fmt.Errorf("mock Signet NIP-44 decrypt: %w", err)
+		}
+		return plaintext, nil
+	}
+	if bunker == nil {
+		return "", ErrNotConnected
+	}
+	plaintext, err := bunker.NIP44Decrypt(ctx, counterparty, ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("bunker nip44_decrypt: %w", err)
+	}
+	return plaintext, nil
+}
+
 // signMock signs with the explicit mock client's stable key for testing.
 func (c *Client) signMock(event *nostr.Event) error {
 	return signEventWithKey(event, c.clientSecretKey)

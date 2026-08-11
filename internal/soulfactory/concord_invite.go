@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -22,12 +23,15 @@ const (
 	concordInviteMaxRelays              = 5
 )
 
-// ConcordCommunity identifies one configured community and its CORD-05
-// CommunityInvite bundle. InviteBundle contains membership key material and
-// must be loaded from a secret source rather than inline operator config.
+// ConcordCommunity identifies one configured community and where its CORD-05
+// CommunityInvite bundle is kept. Exactly one custody source is required:
+// InviteBundle carries operator-supplied material (read-only), while
+// SealedBundlePath names a file holding only a NIP-44 payload sealed to the
+// Signet-held staff key, which is the rotation-capable form (CORD-06).
 type ConcordCommunity struct {
-	CommunityID  string
-	InviteBundle json.RawMessage
+	CommunityID      string
+	InviteBundle     json.RawMessage
+	SealedBundlePath string
 }
 
 type concordMembershipAssigner interface {
@@ -38,13 +42,57 @@ type concordInviteSigner interface {
 	Sign(context.Context, *nostr.Event) error
 	GetPublicKey(context.Context) (string, error)
 	NIP44Encrypt(context.Context, nostr.PubKey, string) (string, error)
+	NIP44Decrypt(context.Context, nostr.PubKey, string) (string, error)
 }
 
 type concordMembership struct {
 	signer      concordInviteSigner
-	communities []validatedConcordCommunity
+	communities []*concordCommunitySource
 	bus         *SoulFactoryRelayBus
 	now         func() time.Time
+	mintKey     func() (string, error)
+	// rotateMu serializes rotations. Each one is a read-modify-write over
+	// custody, so two concurrent rotations could otherwise both mint from the
+	// same epoch and leave one branch distributed but never persisted.
+	rotateMu sync.Mutex
+}
+
+// concordCommunitySource binds a configured community to its custody. Material
+// behind writable custody is resolved per operation so a CORD-06 rotation is
+// picked up without a restart, and is never cached in memory afterwards.
+type concordCommunitySource struct {
+	communityID string
+	custody     concordBundleCustody
+	cached      *validatedConcordCommunity
+}
+
+func (s *concordCommunitySource) resolve(ctx context.Context, bus *SoulFactoryRelayBus) (validatedConcordCommunity, concordCustodyRecord, error) {
+	record, err := s.custody.Load(ctx)
+	if err != nil {
+		return validatedConcordCommunity{}, concordCustodyRecord{}, fmt.Errorf("load Concord invite material from %s: %w", s.custody.Source(), err)
+	}
+	if s.cached != nil {
+		return *s.cached, record, nil
+	}
+	validated, err := validateConcordCommunity(record.Bundle, s.communityID, bus)
+	if err != nil {
+		return validatedConcordCommunity{}, concordCustodyRecord{}, err
+	}
+	return validated, record, nil
+}
+
+// validateConcordCommunity validates a bundle against its configured community
+// and binds its relays to the SoulFactory relay bus, failing closed on either.
+func validateConcordCommunity(bundle json.RawMessage, communityID string, bus *SoulFactoryRelayBus) (validatedConcordCommunity, error) {
+	validated, err := validateConcordInviteBundle(bundle, communityID)
+	if err != nil {
+		return validatedConcordCommunity{}, fmt.Errorf("Concord community %s invite bundle: %w", communityID, err)
+	}
+	validated.relayEndpoints, err = concordRelayEndpoints(bus, validated.relays)
+	if err != nil {
+		return validatedConcordCommunity{}, fmt.Errorf("Concord community %s relay configuration: %w", communityID, err)
+	}
+	return validated, nil
 }
 
 type validatedConcordCommunity struct {
@@ -83,16 +131,17 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 	}
 	inviteSigner, ok := signer.(concordInviteSigner)
 	if !ok {
-		return nil, fmt.Errorf("Concord onboarding requires a Signet signer with NIP-44 encryption")
+		return nil, fmt.Errorf("Concord onboarding requires a Signet signer with NIP-44 encryption and decryption")
 	}
 	if bus == nil {
 		return nil, fmt.Errorf("Concord onboarding requires a SoulFactory relay bus")
 	}
 
 	membership := &concordMembership{
-		signer: inviteSigner,
-		bus:    bus,
-		now:    time.Now,
+		signer:  inviteSigner,
+		bus:     bus,
+		now:     time.Now,
+		mintKey: mintConcordKey,
 	}
 	seen := make(map[string]struct{}, len(communities))
 	for i, community := range communities {
@@ -103,18 +152,37 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 		if _, duplicate := seen[communityID]; duplicate {
 			continue
 		}
-		validated, err := validateConcordInviteBundle(community.InviteBundle, communityID)
+		source, err := newConcordCommunitySource(communityID, community, inviteSigner, bus)
 		if err != nil {
-			return nil, fmt.Errorf("Concord community %s invite bundle: %w", communityID, err)
-		}
-		validated.relayEndpoints, err = concordRelayEndpoints(bus, validated.relays)
-		if err != nil {
-			return nil, fmt.Errorf("Concord community %s relay configuration: %w", communityID, err)
+			return nil, err
 		}
 		seen[communityID] = struct{}{}
-		membership.communities = append(membership.communities, validated)
+		membership.communities = append(membership.communities, source)
 	}
 	return membership, nil
+}
+
+func newConcordCommunitySource(communityID string, community ConcordCommunity, signer concordInviteSigner, bus *SoulFactoryRelayBus) (*concordCommunitySource, error) {
+	sealedPath := strings.TrimSpace(community.SealedBundlePath)
+	hasBundle := len(bytes.TrimSpace(community.InviteBundle)) > 0
+	if hasBundle == (sealedPath != "") {
+		return nil, fmt.Errorf("Concord community %s requires exactly one custody source", communityID)
+	}
+	if sealedPath != "" {
+		custody, err := newSealedConcordCustody(sealedPath, signer)
+		if err != nil {
+			return nil, fmt.Errorf("Concord community %s custody: %w", communityID, err)
+		}
+		return &concordCommunitySource{communityID: communityID, custody: custody}, nil
+	}
+	// Operator-supplied material is validated at construction so a malformed
+	// bundle fails the process at boot rather than mid-provision.
+	custody := &staticConcordCustody{bundle: append(json.RawMessage(nil), community.InviteBundle...)}
+	validated, err := validateConcordCommunity(custody.bundle, communityID, bus)
+	if err != nil {
+		return nil, err
+	}
+	return &concordCommunitySource{communityID: communityID, custody: custody, cached: &validated}, nil
 }
 
 // Assign sends a CORD-05 Direct Invite for every configured Concord community.
@@ -129,7 +197,15 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 	if err != nil {
 		return nil, fmt.Errorf("invalid provisioned agent pubkey: %w", err)
 	}
-	for _, community := range m.communities {
+	resolved := make([]validatedConcordCommunity, 0, len(m.communities))
+	for _, source := range m.communities {
+		community, _, resolveErr := source.resolve(ctx, m.bus)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		resolved = append(resolved, community)
+	}
+	for _, community := range resolved {
 		if community.expiresAt != nil && *community.expiresAt <= m.now().UnixMilli() {
 			return nil, fmt.Errorf("Concord community %s invite bundle is expired", community.communityID)
 		}
@@ -144,61 +220,71 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 		return nil, fmt.Errorf("invalid Concord staff pubkey from Signet: %w", err)
 	}
 
-	assigned := make([]string, 0, len(m.communities))
-	for _, community := range m.communities {
-		if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
-			return assigned, fmt.Errorf("authenticate Concord relays for %s: %w", community.communityID, err)
-		}
-		rumor := nostr.Event{
-			Kind:      concordDirectInviteKind,
-			PubKey:    staffPK,
-			CreatedAt: nostr.Now(),
-			Tags:      nostr.Tags{},
-			Content:   string(community.bundle),
-		}
-		rumor.ID = rumor.GetID()
-
-		wrap, err := nip59.GiftWrap(
-			rumor,
-			recipientPK,
-			func(plaintext string) (string, error) {
-				if len([]byte(plaintext)) > concordInviteMaxBytes {
-					return "", fmt.Errorf("Concord rumor exceeds NIP-44 plaintext limit")
-				}
-				ciphertext, encryptErr := m.signer.NIP44Encrypt(ctx, recipientPK, plaintext)
-				if encryptErr != nil {
-					return "", fmt.Errorf("Signet NIP-44 encrypt Concord rumor: %w", encryptErr)
-				}
-				return ciphertext, nil
-			},
-			func(seal *nostr.Event) error {
-				if seal == nil || seal.Kind != nostr.KindSeal {
-					return fmt.Errorf("Concord invite seal has invalid kind")
-				}
-				if signErr := m.signer.Sign(ctx, seal); signErr != nil {
-					return fmt.Errorf("Signet sign Concord invite seal: %w", signErr)
-				}
-				if seal.PubKey != staffPK || !validSignedEvent(seal) {
-					return fmt.Errorf("Signet returned an invalid Concord invite seal")
-				}
-				return nil
-			},
-			func(gift *nostr.Event) {
-				gift.Tags = append(gift.Tags, nostr.Tag{"k", "3313"})
-			},
-		)
-		if err != nil {
-			return assigned, fmt.Errorf("build Concord direct invite for %s: %w", community.communityID, err)
-		}
-		if !validConcordGiftWrap(wrap, recipient) {
-			return assigned, fmt.Errorf("build Concord direct invite for %s: invalid giftwrap", community.communityID)
-		}
-		if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
-			return assigned, fmt.Errorf("publish Concord direct invite for %s: %w", community.communityID, err)
+	assigned := make([]string, 0, len(resolved))
+	for _, community := range resolved {
+		if err := m.deliver(ctx, community, staffPK, recipientPK, recipient); err != nil {
+			return assigned, err
 		}
 		assigned = append(assigned, community.communityID)
 	}
 	return assigned, nil
+}
+
+// deliver mints and publishes one CORD-05 §6 Direct Invite. The rumor is
+// encrypted and its seal signed by the Signet-held staff identity; only the
+// outer kind-1059 giftwrap uses a local ephemeral key.
+func (m *concordMembership) deliver(ctx context.Context, community validatedConcordCommunity, staffPK, recipientPK nostr.PubKey, recipient string) error {
+	if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
+		return fmt.Errorf("authenticate Concord relays for %s: %w", community.communityID, err)
+	}
+	rumor := nostr.Event{
+		Kind:      concordDirectInviteKind,
+		PubKey:    staffPK,
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{},
+		Content:   string(community.bundle),
+	}
+	rumor.ID = rumor.GetID()
+
+	wrap, err := nip59.GiftWrap(
+		rumor,
+		recipientPK,
+		func(plaintext string) (string, error) {
+			if len([]byte(plaintext)) > concordInviteMaxBytes {
+				return "", fmt.Errorf("Concord rumor exceeds NIP-44 plaintext limit")
+			}
+			ciphertext, encryptErr := m.signer.NIP44Encrypt(ctx, recipientPK, plaintext)
+			if encryptErr != nil {
+				return "", fmt.Errorf("Signet NIP-44 encrypt Concord rumor: %w", encryptErr)
+			}
+			return ciphertext, nil
+		},
+		func(seal *nostr.Event) error {
+			if seal == nil || seal.Kind != nostr.KindSeal {
+				return fmt.Errorf("Concord invite seal has invalid kind")
+			}
+			if signErr := m.signer.Sign(ctx, seal); signErr != nil {
+				return fmt.Errorf("Signet sign Concord invite seal: %w", signErr)
+			}
+			if seal.PubKey != staffPK || !validSignedEvent(seal) {
+				return fmt.Errorf("Signet returned an invalid Concord invite seal")
+			}
+			return nil
+		},
+		func(gift *nostr.Event) {
+			gift.Tags = append(gift.Tags, nostr.Tag{"k", "3313"})
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("build Concord direct invite for %s: %w", community.communityID, err)
+	}
+	if !validConcordGiftWrap(wrap, recipient) {
+		return fmt.Errorf("build Concord direct invite for %s: invalid giftwrap", community.communityID)
+	}
+	if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
+		return fmt.Errorf("publish Concord direct invite for %s: %w", community.communityID, err)
+	}
+	return nil
 }
 
 func validateConcordInviteBundle(raw json.RawMessage, configuredCommunityID string) (validatedConcordCommunity, error) {

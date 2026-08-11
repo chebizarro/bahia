@@ -760,6 +760,7 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	controller := strings.Repeat("a", 64)
 	authorized := strings.Repeat("b", 64)
 	concordID := strings.Repeat("d", 64)
+	sealedConcordID := strings.Repeat("e", 64)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`soul_factory:
   enabled: true
@@ -785,6 +786,8 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
       invite_bundle_env: " FLEET_CONCORD_INVITE "
     - community_id: "` + concordID + `"
       invite_bundle_env: "FLEET_CONCORD_INVITE"
+    - community_id: "` + sealedConcordID + `"
+      invite_bundle_sealed_file: " /run/secrets/concord.sealed "
   authorized_pubkeys:
     - "` + authorized + `"
   soul_factory_pubkey: "` + controller + `"
@@ -826,7 +829,8 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	if got := cfg.SoulFactory.CommunikeysCommunities; len(got) != 1 || got[0].Pubkey != controller || strings.Join(got[0].Sections, ",") != "Apps,Chat,Threads" {
 		t.Fatalf("SoulFactory Communikeys communities = %#v", got)
 	}
-	if got := cfg.SoulFactory.ConcordCommunities; len(got) != 1 || got[0].CommunityID != concordID || got[0].InviteBundleEnv != "FLEET_CONCORD_INVITE" {
+	if got := cfg.SoulFactory.ConcordCommunities; len(got) != 2 || got[0].CommunityID != concordID || got[0].InviteBundleEnv != "FLEET_CONCORD_INVITE" ||
+		got[1].CommunityID != sealedConcordID || got[1].InviteBundleSealedFile != "/run/secrets/concord.sealed" {
 		t.Fatalf("SoulFactory Concord communities = %#v", got)
 	}
 	if cfg.SoulFactory.SoulFactoryPubkey != controller {
@@ -1008,7 +1012,7 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   concord_communities:
     - community_id: "` + validPubkey + `"
 `,
-			want: "requires exactly one of invite_bundle_env or invite_bundle_file",
+			want: "requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file",
 		},
 		{
 			name: "Concord community with two invite sources",
@@ -1018,7 +1022,26 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
       invite_bundle_env: "FLEET_CONCORD_INVITE"
       invite_bundle_file: "/run/secrets/concord.json"
 `,
-			want: "requires exactly one of invite_bundle_env or invite_bundle_file",
+			want: "requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file",
+		},
+		{
+			name: "Concord community with sealed and plaintext invite sources",
+			yaml: `soul_factory:
+  concord_communities:
+    - community_id: "` + validPubkey + `"
+      invite_bundle_env: "FLEET_CONCORD_INVITE"
+      invite_bundle_sealed_file: "/run/secrets/concord.sealed"
+`,
+			want: "requires exactly one of invite_bundle_env, invite_bundle_file, or invite_bundle_sealed_file",
+		},
+		{
+			name: "Concord community with relative sealed custody file",
+			yaml: `soul_factory:
+  concord_communities:
+    - community_id: "` + validPubkey + `"
+      invite_bundle_sealed_file: "secrets/concord.sealed"
+`,
+			want: "invite_bundle_sealed_file must be an absolute secret path",
 		},
 		{
 			name: "Concord community with relative invite file",
