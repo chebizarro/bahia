@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -202,7 +203,7 @@ func TestConcordRotationPublishesRekeyBlobs(t *testing.T) {
 	assertConcordTag(t, rumor, "newepoch", "4")
 	assertConcordTag(t, rumor, "prevepoch", "3")
 	assertConcordTag(t, rumor, "prevcommit", receipt.RootPrevCommit)
-	assertConcordTag(t, rumor, "chunk", "1", "1")
+	assertConcordTag(t, rumor, "chunk", "0", "1")
 
 	blobs := concordDecodeRekeyBlobs(t, rumor)
 	if len(blobs) != 2 {
@@ -300,7 +301,7 @@ func TestConcordRekeyChunksAtTheBlobCap(t *testing.T) {
 	counts := []int{concordRekeyBlobsPerEvent, 1}
 	for index, want := range counts {
 		rumor := concordUnwrapStream(t, address, fixture.endpoint.published[index], fixture.staff.pubkey)
-		assertConcordTag(t, rumor, "chunk", concordDecimal(uint64(index+1)), "2")
+		assertConcordTag(t, rumor, "chunk", concordDecimal(uint64(index)), "2")
 		assertConcordTag(t, rumor, "scope", fixture.privateChannelID)
 		assertConcordTag(t, rumor, "newepoch", "6")
 		assertConcordTag(t, rumor, "prevepoch", "5")
@@ -309,6 +310,78 @@ func TestConcordRekeyChunksAtTheBlobCap(t *testing.T) {
 			t.Fatalf("chunk %d blobs = %d, want %d", index+1, len(blobs), want)
 		}
 	}
+}
+
+// TestConcordRekeyChunkIndicesAreZeroBased pins the numbering a conformant
+// reader requires: CORD-06 §1 says only "chunk i of n", and a reader that
+// rejects index >= count (openclaw-nostr) drops a 1-based final chunk — which
+// for a single-chunk rotation is the whole rotation, and for an n-chunk one
+// keeps the set forever incomplete, so removal is never concluded (§2). The
+// indices of one rotation must therefore be exactly 0..n-1.
+func TestConcordRekeyChunkIndicesAreZeroBased(t *testing.T) {
+	fixture := newConcordRotationFixture(t, 3)
+	recipients := make([]string, 0, concordRekeyBlobsPerEvent+1)
+	for i := 0; i <= concordRekeyBlobsPerEvent; i++ {
+		recipients = append(recipients, newFakeSigner(t).pubkey)
+	}
+
+	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
+		CommunityID:   fixture.communityID,
+		ChannelIDs:    []string{fixture.privateChannelID},
+		Recipients:    recipients,
+		DirectInvites: []string{recipients[0]},
+	})
+	if err != nil {
+		t.Fatalf("Rotate() error = %v", err)
+	}
+	if len(receipt.Rekeys) != 1 || receipt.Rekeys[0].Chunks != 2 {
+		t.Fatalf("receipt rekeys = %#v", receipt.Rekeys)
+	}
+	chunks := receipt.Rekeys[0].Chunks
+
+	address := concordTestRekeyAddress(t, fixture.priorRoot, concordLabelRekeyPseudonym, fixture.privateChannelID, 6)
+	seen := make(map[uint64]int, chunks)
+	for index := 0; index < chunks; index++ {
+		rumor := concordUnwrapStream(t, address, fixture.endpoint.published[index], fixture.staff.pubkey)
+		i, n := concordChunkTag(t, rumor)
+		if n != uint64(chunks) {
+			t.Fatalf("chunk count = %d, want %d", n, chunks)
+		}
+		// The rule every conformant reader applies before folding a chunk.
+		if i >= n {
+			t.Fatalf("chunk index %d >= count %d: a conformant reader drops this chunk", i, n)
+		}
+		seen[i]++
+	}
+	for i := uint64(0); i < uint64(chunks); i++ {
+		if seen[i] != 1 {
+			t.Fatalf("chunk index %d appears %d times, want exactly once across 0..n-1", i, seen[i])
+		}
+	}
+}
+
+// concordChunkTag reads the CORD-06 §1 chunk tag as the pair (i, n).
+func concordChunkTag(t *testing.T, rumor nostr.Event) (uint64, uint64) {
+	t.Helper()
+	for _, tag := range rumor.Tags {
+		if len(tag) == 0 || tag[0] != "chunk" {
+			continue
+		}
+		if len(tag) != 3 {
+			t.Fatalf("chunk tag = %#v, want [chunk i n]", tag)
+		}
+		i, err := strconv.ParseUint(tag[1], 10, 64)
+		if err != nil {
+			t.Fatalf("chunk index %q: %v", tag[1], err)
+		}
+		n, err := strconv.ParseUint(tag[2], 10, 64)
+		if err != nil {
+			t.Fatalf("chunk count %q: %v", tag[2], err)
+		}
+		return i, n
+	}
+	t.Fatalf("chunk tag is missing from %#v", rumor.Tags)
+	return 0, 0
 }
 
 // TestConcordRekeyStaffChunksStayWithinTheNIP44Ceiling covers the tension
@@ -366,7 +439,7 @@ func TestConcordRekeyStaffChunksStayWithinTheNIP44Ceiling(t *testing.T) {
 		if len(rumor.String()) > concordStreamPlaintextLimit {
 			t.Fatalf("chunk %d rumor is %d bytes, past the NIP-44 ceiling", index+1, len(rumor.String()))
 		}
-		assertConcordTag(t, rumor, "chunk", concordDecimal(uint64(index+1)), concordDecimal(uint64(chunks)))
+		assertConcordTag(t, rumor, "chunk", concordDecimal(uint64(index)), concordDecimal(uint64(chunks)))
 		for _, blob := range concordDecodeRekeyBlobs(t, rumor) {
 			seen[blob.Locator]++
 		}

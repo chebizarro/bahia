@@ -199,7 +199,7 @@ func (m *concordMembership) publishConcordRekeys(
 			return published, fmt.Errorf("chunk %s rekey blobs: %w", scope.label(), err)
 		}
 		for index, chunk := range chunked {
-			rumor, err := m.buildConcordRekeyRumor(rotator, scope, chunk, index+1, len(chunked), citation)
+			rumor, err := m.buildConcordRekeyRumor(rotator, scope, chunk, index, len(chunked), citation)
 			if err != nil {
 				return published, err
 			}
@@ -299,6 +299,12 @@ func concordChunkRekeyBlobs(blobs []concordRekeyBlob) ([][]concordRekeyBlob, err
 // buildConcordRekeyRumor builds the kind-3303 rumor carrying one chunk. Every
 // chunk of a rotation repeats the same continuity fields so a receiver can
 // correlate them and tell a complete set from a missing one (CORD-06 §2).
+//
+// The chunk index is 0-based, i in 0..n-1: CORD-06 §1 says only "chunk i of n",
+// so a reader requiring index < count drops a 1-based final chunk — and with it
+// every single-chunk rotation — while one allowing index <= count folds either.
+// 0-based is the intersection every conformant reader accepts, and matches the
+// CORD-02 §5 snap tag this repo already mints (concord_compaction.go).
 //
 // The `vac` closes CORD-06 §3's Authority requirement: a rotation cites the
 // Grant it acts under like any CORD-04 authority action, so a lagging client
