@@ -233,7 +233,8 @@ func TestConcordRotationRedistributesToSurvivorInbox(t *testing.T) {
 	writeSealedConcordCustodyFile(t, path, staff, string(community.InviteBundle))
 
 	communityRelay := newFakeRelayEndpoint("wss://community.example")
-	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
+	// The channel's Rekey Blob chunk, then the survivor's direct invite.
+	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}, {Accepted: true}}
 	inboxRelay := newFakeRelayEndpoint("wss://inbox.example")
 	inboxRelay.publishResults = []RelayPublishResult{{Accepted: true}}
 	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, survivor, "wss://inbox.example"))

@@ -38,6 +38,24 @@ func (s fakeConcordSigner) NIP44Encrypt(_ context.Context, recipient nostr.PubKe
 	return nip44.Encrypt(plaintext, conversationKey)
 }
 
+// NIP44EncryptBytes mirrors Signet's binary-safe encrypt path. A Go string is
+// a byte string, so the fake carries binary plaintext verbatim; it is the
+// NIP-46 JSON transport, not NIP-44, that cannot.
+func (s fakeConcordSigner) NIP44EncryptBytes(_ context.Context, recipient nostr.PubKey, plaintext []byte) (string, error) {
+	if s.encryptErr != nil {
+		return "", s.encryptErr
+	}
+	secret, err := nostr.SecretKeyFromHex(s.secret)
+	if err != nil {
+		return "", err
+	}
+	conversationKey, err := nip44.GenerateConversationKey(recipient, secret)
+	if err != nil {
+		return "", err
+	}
+	return nip44.Encrypt(string(plaintext), conversationKey)
+}
+
 func (s fakeConcordSigner) NIP44Decrypt(_ context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
 	if s.decryptErr != nil {
 		return "", s.decryptErr

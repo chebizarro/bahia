@@ -809,6 +809,8 @@ func (p *FullProvisioner) RotateConcordCommunity(ctx context.Context, rotation C
 			"root_epoch", receipt.RootEpoch,
 			"rotated_channels", len(receipt.Channels),
 			"recipients", len(receipt.Recipients),
+			"direct_invites", len(receipt.DirectInvites),
+			"rekey_scopes", len(receipt.Rekeys),
 		)
 	}
 	return receipt, err

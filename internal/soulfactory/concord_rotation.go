@@ -26,6 +26,14 @@ type ConcordRotation struct {
 	ChannelIDs []string
 	// Recipients are the surviving members, as 32-byte lowercase hex pubkeys.
 	Recipients []string
+	// Staff names the survivors holding a Control-writing permission (CORD-04
+	// §3). Only they receive the next epoch's control_root in their base Rekey
+	// Blob (CORD-06 §1), so every entry must also appear in Recipients.
+	Staff []string
+	// DirectInvites narrows the CORD-05 §6 handoff to the survivors Soul
+	// Factory can reach individually; every Recipient still receives a Rekey
+	// Blob. Empty means every Recipient, which is the fleet-provisioned case.
+	DirectInvites []string
 	// Reason is operator audit context. It must never carry key material.
 	Reason string
 }
@@ -49,10 +57,13 @@ type ConcordRotationReceipt struct {
 	PrevRootEpoch  uint64                   `json:"prev_root_epoch"`
 	RootEpoch      uint64                   `json:"root_epoch"`
 	RootPrevCommit string                   `json:"root_prev_commit,omitempty"`
-	Channels       []ConcordChannelRotation `json:"channels,omitempty"`
-	Recipients     []string                 `json:"recipients"`
-	Reason         string                   `json:"reason,omitempty"`
-	RotatedAt      time.Time                `json:"rotated_at"`
+	Channels       []ConcordChannelRotation  `json:"channels,omitempty"`
+	Recipients     []string                  `json:"recipients"`
+	DirectInvites  []string                  `json:"direct_invites,omitempty"`
+	Staff          []string                  `json:"staff,omitempty"`
+	Rekeys         []ConcordRekeyPublication `json:"rekeys,omitempty"`
+	Reason         string                    `json:"reason,omitempty"`
+	RotatedAt      time.Time                 `json:"rotated_at"`
 }
 
 // concordCommunityRotator is the CORD-06 surface the provisioner exposes.
@@ -64,6 +75,11 @@ type concordRotationPlan struct {
 	bundle      json.RawMessage
 	controlRoot string
 	receipt     ConcordRotationReceipt
+	// priorRoot is the community_root every rekey address derives from, and
+	// scopes carry the fresh material each blob delivers. Neither is logged
+	// nor persisted; both die with the plan.
+	priorRoot []byte
+	scopes    []concordRekeyScope
 }
 
 // Rotate performs a CORD-06 Rekey or Refounding: it mints fresh material, bumps
@@ -95,6 +111,18 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	if err != nil {
 		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
 	}
+	staff, err := normalizeConcordStaff(rotation.Staff, recipients)
+	if err != nil {
+		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+	}
+	blobRecipients, err := concordRekeyRecipients(recipients, staff)
+	if err != nil {
+		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+	}
+	inviteTargets, err := normalizeConcordDirectInvites(rotation.DirectInvites, recipients)
+	if err != nil {
+		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+	}
 
 	current, record, err := source.resolve(ctx, m.bus)
 	if err != nil {
@@ -123,7 +151,21 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	}
 
 	receipt := plan.receipt
-	for _, recipient := range recipients {
+	// Every survivor is a recipient of the rotation itself; the Direct Invite
+	// list only records who was additionally handed the material out of band.
+	receipt.Recipients = recipients
+	receipt.Staff = staff
+
+	// CORD-06 §1: the Rekey Blobs are what lets a member outside the Direct
+	// Invite lane converge on the new epoch from the rekey address alone. They
+	// go out first, since the Direct Invites below are the narrower path.
+	rekeys, err := m.publishConcordRekeys(ctx, next, staffPK, plan.priorRoot, plan.scopes, blobRecipients)
+	receipt.Rekeys = rekeys
+	if err != nil {
+		return &receipt, fmt.Errorf("publish rotated Concord rekey blobs for %s: %w", communityID, err)
+	}
+
+	for _, recipient := range inviteTargets {
 		recipientPK, pkErr := nostr.PubKeyFromHex(recipient)
 		if pkErr != nil {
 			return &receipt, fmt.Errorf("redistribute rotated Concord material for %s: invalid recipient: %w", communityID, pkErr)
@@ -137,7 +179,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		if deliverErr := m.deliver(ctx, next, staffPK, recipientPK, recipient, inbox); deliverErr != nil {
 			return &receipt, fmt.Errorf("redistribute rotated Concord material for %s: %w", communityID, deliverErr)
 		}
-		receipt.Recipients = append(receipt.Recipients, recipient)
+		receipt.DirectInvites = append(receipt.DirectInvites, recipient)
 	}
 	return &receipt, nil
 }
@@ -196,6 +238,12 @@ func (m *concordMembership) planConcordRotation(raw json.RawMessage, record conc
 	}
 
 	priorRoot := bundle.CommunityRoot
+	// Every rekey address derives from the prior community_root (CORD-02 A.6),
+	// which keeps a rotation openable on either branch of a race (CORD-06 §3).
+	priorRoot32, err := concordID32(priorRoot)
+	if err != nil {
+		return plan, fmt.Errorf("community_root: %w", err)
+	}
 	nextRoot := priorRoot
 	nextRootEpoch := bundle.RootEpoch
 	controlRoot := record.ControlRoot
@@ -248,6 +296,27 @@ func (m *concordMembership) planConcordRotation(raw json.RawMessage, record conc
 		}
 		receipt.RootEpoch = nextRootEpoch
 		receipt.RootPrevCommit = prevCommit
+
+		nextRoot32, err := concordID32(nextRoot)
+		if err != nil {
+			return plan, fmt.Errorf("minted community_root: %w", err)
+		}
+		controlRoot32, err := concordID32(controlRoot)
+		if err != nil {
+			return plan, fmt.Errorf("minted control_root: %w", err)
+		}
+		plan.scopes = append(plan.scopes, concordRekeyScope{
+			base:           true,
+			scopeID:        concordBaseScopeID,
+			addressLabel:   concordLabelBaseRekeyPseudonym,
+			addressID:      communityID32,
+			prevEpoch:      bundle.RootEpoch,
+			newEpoch:       nextRootEpoch,
+			prevCommit:     prevCommit,
+			newKey:         nextRoot32,
+			newControlPK:   controlSigner.PubKey,
+			newControlRoot: controlRoot32,
+		})
 	}
 
 	for i, channel := range bundle.Channels {
@@ -275,6 +344,24 @@ func (m *concordMembership) planConcordRotation(raw json.RawMessage, record conc
 			}
 			channelKey = minted
 			channelEpoch = channel.Epoch + 1
+
+			channelID32, idErr := concordID32(channel.ID)
+			if idErr != nil {
+				return plan, fmt.Errorf("channel %s id: %w", channel.ID, idErr)
+			}
+			channelKey32, keyErr := concordID32(channelKey)
+			if keyErr != nil {
+				return plan, fmt.Errorf("minted channel %s key: %w", channel.ID, keyErr)
+			}
+			plan.scopes = append(plan.scopes, concordRekeyScope{
+				scopeID:      channelID32,
+				addressLabel: concordLabelRekeyPseudonym,
+				addressID:    channelID32,
+				prevEpoch:    channel.Epoch,
+				newEpoch:     channelEpoch,
+				prevCommit:   prevCommit,
+				newKey:       channelKey32,
+			})
 		}
 		if err := setConcordBundleFields(channels[i], map[string]any{
 			"key":   channelKey,
@@ -312,6 +399,7 @@ func (m *concordMembership) planConcordRotation(raw json.RawMessage, record conc
 	plan.bundle = rotated
 	plan.controlRoot = controlRoot
 	plan.receipt = receipt
+	plan.priorRoot = priorRoot32[:]
 	return plan, nil
 }
 
@@ -344,6 +432,89 @@ func normalizeConcordRecipients(recipients []string) ([]string, error) {
 		return nil, fmt.Errorf("at least one surviving recipient is required; a rotation with no recipients severs every member")
 	}
 	return normalized, nil
+}
+
+// normalizeConcordStaff validates the Control-writing survivors (CORD-04 §3).
+//
+// Staff must be survivors: a base Rekey Blob for a staff recipient carries the
+// next epoch's control_root, so handing one to somebody outside the rotation
+// would deliver the Control Plane's write secret to a member who is not even
+// receiving the root it belongs to.
+func normalizeConcordStaff(staff []string, recipients []string) ([]string, error) {
+	if len(staff) == 0 {
+		return nil, nil
+	}
+	surviving := make(map[string]struct{}, len(recipients))
+	for _, recipient := range recipients {
+		surviving[recipient] = struct{}{}
+	}
+	normalized := make([]string, 0, len(staff))
+	seen := make(map[string]struct{}, len(staff))
+	for _, member := range staff {
+		member = strings.ToLower(strings.TrimSpace(member))
+		if _, err := nostr.PubKeyFromHex(member); err != nil || !validConcordHex32(member) {
+			return nil, fmt.Errorf("staff %q is not a 32-byte lowercase hex pubkey", member)
+		}
+		if _, ok := surviving[member]; !ok {
+			return nil, fmt.Errorf("staff %s is not among the surviving recipients", member)
+		}
+		if _, duplicate := seen[member]; duplicate {
+			continue
+		}
+		seen[member] = struct{}{}
+		normalized = append(normalized, member)
+	}
+	return normalized, nil
+}
+
+// normalizeConcordDirectInvites resolves who additionally receives a CORD-05
+// §6 Direct Invite. An empty list means every survivor, the fleet-provisioned
+// case; a narrower one still leaves the omitted survivors converging from
+// their Rekey Blobs alone (CORD-06 §1).
+func normalizeConcordDirectInvites(directInvites []string, recipients []string) ([]string, error) {
+	if len(directInvites) == 0 {
+		return recipients, nil
+	}
+	surviving := make(map[string]struct{}, len(recipients))
+	for _, recipient := range recipients {
+		surviving[recipient] = struct{}{}
+	}
+	normalized := make([]string, 0, len(directInvites))
+	seen := make(map[string]struct{}, len(directInvites))
+	for _, target := range directInvites {
+		target = strings.ToLower(strings.TrimSpace(target))
+		if _, err := nostr.PubKeyFromHex(target); err != nil || !validConcordHex32(target) {
+			return nil, fmt.Errorf("direct invite %q is not a 32-byte lowercase hex pubkey", target)
+		}
+		if _, ok := surviving[target]; !ok {
+			return nil, fmt.Errorf("direct invite %s is not among the surviving recipients", target)
+		}
+		if _, duplicate := seen[target]; duplicate {
+			continue
+		}
+		seen[target] = struct{}{}
+		normalized = append(normalized, target)
+	}
+	return normalized, nil
+}
+
+// concordRekeyRecipients pairs each survivor with the blob form they receive,
+// preserving the caller's recipient order so a rotation chunks deterministically.
+func concordRekeyRecipients(recipients []string, staff []string) ([]concordRekeyRecipient, error) {
+	staffSet := make(map[string]struct{}, len(staff))
+	for _, member := range staff {
+		staffSet[member] = struct{}{}
+	}
+	blobRecipients := make([]concordRekeyRecipient, 0, len(recipients))
+	for _, recipient := range recipients {
+		pk, err := nostr.PubKeyFromHex(recipient)
+		if err != nil {
+			return nil, fmt.Errorf("invalid recipient: %w", err)
+		}
+		_, isStaff := staffSet[recipient]
+		blobRecipients = append(blobRecipients, concordRekeyRecipient{hex: recipient, pk: pk, staff: isStaff})
+	}
+	return blobRecipients, nil
 }
 
 // mintConcordKey mints a fresh 32-byte community, control, or channel key.

@@ -41,6 +41,10 @@ type concordInviteSigner interface {
 	Sign(context.Context, *nostr.Event) error
 	GetPublicKey(context.Context) (string, error)
 	NIP44Encrypt(context.Context, nostr.PubKey, string) (string, error)
+	// NIP44EncryptBytes encrypts a raw binary plaintext. CORD-06 rekey blobs
+	// are fixed-width binary, and NIP-46's JSON params cannot carry them, so
+	// this is a distinct transport rather than NIP44Encrypt over a cast.
+	NIP44EncryptBytes(context.Context, nostr.PubKey, []byte) (string, error)
 	NIP44Decrypt(context.Context, nostr.PubKey, string) (string, error)
 }
 

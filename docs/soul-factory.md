@@ -164,9 +164,19 @@ Configure every relay declared in each bundle in `soul_factory.relays` or `addit
 
 The derivations are the frozen CORD-02 Appendix A shapes (HKDF-SHA256 with `info = utf8(label) || 0x00 || id[32] || epoch_be[8]`, `scalar_normalize`, and the A.5 epoch-key commitment). Bahia builds the rotated bundle in full before writing anything, round-trips unknown bundle and channel fields verbatim, revalidates its own minted bundle against the relay bus, seals it into custody, and only then redistributes it to the survivors as CORD-05 §6 Direct Invites. A rotation is resumable rather than atomic: if redistribution fails partway, custody already holds the new material and the receipt is returned alongside the error so delivery can be re-run idempotently.
 
-The returned `ConcordRotationReceipt` is safe to log or persist. It records community, epochs, per-channel `prevcommit` continuity commitments, and recipients — never a `community_root`, `control_root`, or channel key. Redistribution reaches only the supplied recipients: fleet agents provisioned outside that list, or members Bahia does not know about, must be re-invited separately or they lose access to the rotated scope.
+The returned `ConcordRotationReceipt` is safe to log or persist. It records community, epochs, per-channel `prevcommit` continuity commitments, recipients, and the rekey addresses and chunk counts published — never a `community_root`, `control_root`, or channel key. A rotation reaches only the supplied `Recipients`: anyone omitted is severed from the rotated scope, which is the point, but a member Bahia does not know about is severed by accident.
 
-Bahia does not yet mint kind-`3303` Rekey Blobs. Those carry fixed-width binary plaintexts that cannot survive a NIP-46 JSON round trip to the bunker, so publishing them would require a binary-safe encrypt path in Signet; until then, fresh material reaches members through the Direct Invite lane instead.
+#### Rekey Blobs (kind 3303)
+
+Every rotation also publishes CORD-06 §1 Rekey Blobs, the lane that lets a member outside the fleet-provisioned set converge on the new epoch without being individually re-invited. `Recipients` receive a blob; `DirectInvites` narrows the CORD-05 §6 handoff to the survivors Bahia can giftwrap individually, and defaults to all of them. `Staff` names the survivors holding a Control-writing permission (CORD-04 §3).
+
+Blobs ride the rekey address derived from the **prior** `community_root` — `concord/base-rekey-pseudonym` over the `community_id` for a Refounding, `concord/rekey-pseudonym` over the `channel_id` for a Channel — at the new epoch, which is exactly the address a holder of the prior key precomputes and subscribes to. Each event is a CORD-01 reversed Stream wrap: a kind-`1059` authored by the rekey address with an ephemeral `p` tag, around an encrypted kind-`20013` seal signed by the Signet-held Rotator, around the kind-`3303` rumor. Every chunk carries `scope`, `newepoch`, `prevepoch`, `prevcommit`, and `chunk i n`.
+
+A blob's plaintext is fixed-width and the width declares the form: 72 bytes for a Channel (`scope_id ‖ epoch_be ‖ new_key`), 104 for a member's base rotation (`… ‖ new_control_pk`), 136 for a staff recipient (`… ‖ new_control_root`). The 72-byte *base* form is the legacy pre-split shape and is never minted. Its recipient finds it by the `concord/recipient-pseudonym` locator over `rotator_xonly || recipient_xonly`, both public, so a bunker-held account locates its blob without touching a secret.
+
+Chunking binds on two limits. CORD-06 caps an event at 120 blobs; the CORD-01 double wrap re-encrypts and base64s the payload twice, so 120 of the widest form would grow the wrap plaintext past NIP-44's 65535-byte ceiling. An event carries *up to* 120 blobs, so Bahia chunks on whichever limit binds first and a rotation to many staff simply spans more events.
+
+Blob plaintexts are binary and NIP-46 carries params as JSON strings, so the pairwise encryption uses Signet's binary-safe `nip44_encrypt_b64` (base64 in, NIP-44 payload out). A bunker without that method fails the rotation rather than encrypting U+FFFD-substituted material, so an out-of-date Signet is a loud error rather than blobs no client can use.
 
 ## Signet transport and secret handling
 
