@@ -289,12 +289,20 @@ func newConcordTestBus(t *testing.T, signer relayAuthSigner) *SoulFactoryRelayBu
 
 func concordTestCommunity(t *testing.T, expiresAt *int64) ConcordCommunity {
 	t.Helper()
-	owner := newFakeSigner(t)
+	return concordTestCommunityOwnedBy(t, newFakeSigner(t).pubkey, expiresAt)
+}
+
+// concordTestCommunityOwnedBy names the owner explicitly. A rotation resolves
+// its CORD-06 §3 authority against that npub — the owner cites no Grant, anyone
+// else must cite one from the folded Control Plane — so a rotating test hands in
+// its own staff key here rather than inheriting an unrelated owner.
+func concordTestCommunityOwnedBy(t *testing.T, ownerHex string, expiresAt *int64) ConcordCommunity {
+	t.Helper()
 	ownerSalt := strings.Repeat("1", 64)
-	communityID := computeConcordCommunityID(owner.pubkey, ownerSalt)
+	communityID := computeConcordCommunityID(ownerHex, ownerSalt)
 	bundle := concordInviteBundle{
 		CommunityID:   communityID,
-		Owner:         owner.pubkey,
+		Owner:         ownerHex,
 		OwnerSalt:     ownerSalt,
 		CommunityRoot: strings.Repeat("2", 64),
 		RootEpoch:     3,

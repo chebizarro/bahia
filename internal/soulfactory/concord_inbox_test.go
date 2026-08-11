@@ -228,7 +228,9 @@ func TestConcordInboxKeepsLatestRelayList(t *testing.T) {
 func TestConcordRotationRedistributesToSurvivorInbox(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	survivor := newFakeSigner(t)
-	community := concordTestCommunity(t, nil)
+	// Soul Factory rotates as the owner here, so CORD-04 §1 leaves the rotation
+	// uncited and no Control Plane fetch stands between it and delivery.
+	community := concordTestCommunityOwnedBy(t, staff.pubkey, nil)
 	path := filepath.Join(t.TempDir(), "custody.sealed")
 	writeSealedConcordCustodyFile(t, path, staff, string(community.InviteBundle))
 

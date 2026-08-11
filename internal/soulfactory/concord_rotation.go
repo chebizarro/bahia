@@ -52,11 +52,11 @@ type ConcordChannelRotation struct {
 // safe to log or persist: it names scopes, epochs, and recipients, and never
 // the material itself.
 type ConcordRotationReceipt struct {
-	CommunityID    string                   `json:"community_id"`
-	Refounded      bool                     `json:"refounded"`
-	PrevRootEpoch  uint64                   `json:"prev_root_epoch"`
-	RootEpoch      uint64                   `json:"root_epoch"`
-	RootPrevCommit string                   `json:"root_prev_commit,omitempty"`
+	CommunityID    string                    `json:"community_id"`
+	Refounded      bool                      `json:"refounded"`
+	PrevRootEpoch  uint64                    `json:"prev_root_epoch"`
+	RootEpoch      uint64                    `json:"root_epoch"`
+	RootPrevCommit string                    `json:"root_prev_commit,omitempty"`
 	Channels       []ConcordChannelRotation  `json:"channels,omitempty"`
 	Recipients     []string                  `json:"recipients"`
 	DirectInvites  []string                  `json:"direct_invites,omitempty"`
@@ -128,6 +128,25 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	if err != nil {
 		return nil, err
 	}
+	var bundle concordInviteBundle
+	if err := json.Unmarshal(current.bundle, &bundle); err != nil {
+		return nil, fmt.Errorf("Concord rotation for %s: decode current invite bundle: %w", communityID, err)
+	}
+	staffPK, err := m.staffPubKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// CORD-06 §3 Authority: the Grant this rotation acts under is resolved from
+	// the *current* epoch's folded Control Plane before anything is minted, so
+	// an unauthorized Rotator never reaches custody, and — per CORD-06 §3's
+	// failure rule — the state being rotated is acquired in full before the
+	// first publish.
+	citation, _, err := m.resolveConcordRotationAuthority(ctx, current, bundle, staffPK, false)
+	if err != nil {
+		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+	}
+
 	plan, err := m.planConcordRotation(current.bundle, record, rotation, communityID)
 	if err != nil {
 		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
@@ -142,10 +161,6 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, fmt.Errorf("Concord rotation for %s produced an expired invite bundle", communityID)
 	}
 
-	staffPK, err := m.staffPubKey(ctx)
-	if err != nil {
-		return nil, err
-	}
 	if err := source.custody.Store(ctx, concordCustodyRecord{Bundle: plan.bundle, ControlRoot: plan.controlRoot}); err != nil {
 		return nil, fmt.Errorf("persist rotated Concord material for %s: %w", communityID, err)
 	}
@@ -159,7 +174,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	// CORD-06 §1: the Rekey Blobs are what lets a member outside the Direct
 	// Invite lane converge on the new epoch from the rekey address alone. They
 	// go out first, since the Direct Invites below are the narrower path.
-	rekeys, err := m.publishConcordRekeys(ctx, next, staffPK, plan.priorRoot, plan.scopes, blobRecipients)
+	rekeys, err := m.publishConcordRekeys(ctx, next, staffPK, plan.priorRoot, plan.scopes, blobRecipients, citation)
 	receipt.Rekeys = rekeys
 	if err != nil {
 		return &receipt, fmt.Errorf("publish rotated Concord rekey blobs for %s: %w", communityID, err)

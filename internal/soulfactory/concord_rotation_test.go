@@ -433,6 +433,7 @@ type concordRotationFixture struct {
 	communityID      string
 	owner            string
 	priorRoot        string
+	priorControlRoot string
 	priorPrivateKey  string
 	publicChannelID  string
 	privateChannelID string
@@ -444,22 +445,43 @@ type concordRotationFixture struct {
 // bundle and channel fields that every rotation must round-trip.
 func newConcordRotationFixture(t *testing.T, publishes int) *concordRotationFixture {
 	t.Helper()
+	// The fleet-provisioned case: Soul Factory's Signet-held staff key minted
+	// the Community, so it rotates as the owner — whose authority the
+	// community_id itself proves — and CORD-04 §1 leaves the `vac` citation
+	// absent. newConcordRotationFixtureOwnedBy covers the Rotator who must cite.
+	return newConcordRotationFixtureOwnedBy(t, publishes, "")
+}
+
+// newConcordRotationFixtureOwnedBy names an owner other than the staff key. A
+// Rotator who is not the owner must cite the Grant it acts under (CORD-06 §3),
+// resolved from the folded Control Plane at the community's control_pk. The
+// empty string keeps the staff-is-owner default.
+func newConcordRotationFixtureOwnedBy(t *testing.T, publishes int, ownerHex string) *concordRotationFixture {
+	t.Helper()
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
-	owner := newFakeSigner(t)
+	if ownerHex == "" {
+		ownerHex = staff.pubkey
+	}
 	ownerSalt := strings.Repeat("1", 64)
-	communityID := computeConcordCommunityID(owner.pubkey, ownerSalt)
+	communityID := computeConcordCommunityID(ownerHex, ownerSalt)
 	priorRoot := strings.Repeat("2", 64)
+	priorControlRoot := strings.Repeat("5", 64)
 	publicChannelID := strings.Repeat("3", 64)
 	privateChannelID := strings.Repeat("7", 64)
 	priorPrivateKey := strings.Repeat("4", 64)
 
+	// The Control Plane address is the control_root-derived signer at the
+	// current epoch (CORD-02 §5), not an unrelated key: a fold has to be able
+	// to check each wrap's author against exactly this pubkey.
+	controlSigner := concordTestControlSigner(t, priorControlRoot, communityID, 3)
+
 	bundle := map[string]any{
 		"community_id":   communityID,
-		"owner":          owner.pubkey,
+		"owner":          ownerHex,
 		"owner_salt":     ownerSalt,
 		"community_root": priorRoot,
 		"root_epoch":     3,
-		"control_pk":     newFakeSigner(t).pubkey,
+		"control_pk":     controlSigner.PubKey.Hex(),
 		"channels": []map[string]any{
 			{"id": publicChannelID, "key": priorRoot, "epoch": 3, "name": "general", "topic": "ops"},
 			{"id": privateChannelID, "key": priorPrivateKey, "epoch": 5, "name": "staff"},
@@ -482,8 +504,15 @@ func newConcordRotationFixture(t *testing.T, publishes int) *concordRotationFixt
 	}
 	// Survivors in these fixtures publish no relay list, so every inbox lookup
 	// resolves empty and delivery stays on the community relays.
-	for range cap(endpoint.subscribeQueue) {
-		queueConcordInboxLookup(endpoint)
+	//
+	// Only the staff-is-owner default pre-fills: an owner cites no Grant, so no
+	// Control Plane fetch competes for the queue. A Rotator that must cite one
+	// gets an empty queue and seeds it itself, since the fetch is the *first*
+	// subscription a rotation makes and its events are the point of the test.
+	if ownerHex == staff.pubkey {
+		for range cap(endpoint.subscribeQueue) {
+			queueConcordInboxLookup(endpoint)
+		}
 	}
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
@@ -506,8 +535,9 @@ func newConcordRotationFixture(t *testing.T, publishes int) *concordRotationFixt
 		endpoint:         endpoint,
 		staff:            staff,
 		communityID:      communityID,
-		owner:            owner.pubkey,
+		owner:            ownerHex,
 		priorRoot:        priorRoot,
+		priorControlRoot: priorControlRoot,
 		priorPrivateKey:  priorPrivateKey,
 		publicChannelID:  publicChannelID,
 		privateChannelID: privateChannelID,
