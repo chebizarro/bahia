@@ -190,6 +190,39 @@ func TestConcordMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	}
 }
 
+func TestConcordMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
+	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
+	community := concordTestCommunity(t, nil)
+	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint.publishResults = []RelayPublishResult{
+		{Accepted: false, Reason: "auth-required: challenge pending"},
+		{Accepted: true},
+	}
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+	membership, err := newConcordMembership([]ConcordCommunity{community}, staff, bus)
+	if err != nil {
+		t.Fatalf("newConcordMembership() error = %v", err)
+	}
+
+	recipient := newFakeSigner(t)
+	assigned, err := membership.Assign(t.Context(), recipient.pubkey)
+	if err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	if len(assigned) != 1 || assigned[0] != community.CommunityID {
+		t.Fatalf("Assign() communities = %#v", assigned)
+	}
+	if endpoint.publishCalls != 2 {
+		t.Fatalf("publish calls = %d, want auth-race retry", endpoint.publishCalls)
+	}
+	if len(endpoint.published) == 0 || !validConcordGiftWrap(endpoint.published[len(endpoint.published)-1], recipient.pubkey) {
+		t.Fatal("auth-race retry did not republish a valid CORD-05 direct invite")
+	}
+}
+
 func newConcordTestBus(t *testing.T, signer relayAuthSigner) *SoulFactoryRelayBus {
 	t.Helper()
 	endpoint := newFakeRelayEndpoint("wss://community.example")
