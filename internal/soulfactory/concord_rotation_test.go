@@ -110,10 +110,25 @@ func TestConcordRotationRefoundingRollsRootAndRedistributes(t *testing.T) {
 		t.Fatalf("unknown channel field lost: %s", fields["channels"])
 	}
 
-	// The base rotation's Rekey Blobs go out first (CORD-06 §1), then both
-	// survivors receive the rotated material as a CORD-05 direct invite.
-	if len(fixture.endpoint.published) != 3 {
-		t.Fatalf("published events = %d, want one rekey chunk and one invite per survivor", len(fixture.endpoint.published))
+	// CORD-06 §3's order: the base rotation's Rekey Blobs go out first, the
+	// compaction follows only after that root roll is published, the Guestbook
+	// snapshot is the best-effort final step, and both survivors then receive
+	// the rotated material as a CORD-05 direct invite.
+	if len(fixture.endpoint.published) != 4 {
+		t.Fatalf("published events = %d, want a rekey chunk, a snapshot chunk, and one invite per survivor", len(fixture.endpoint.published))
+	}
+	// This fixture's prior Control Plane carries no editions, so the compaction
+	// re-wraps nothing — an empty plane folds reliably, which is not the same as
+	// a plane that could not be folded (that aborts, see the Refounding tests).
+	if receipt.Compaction == nil || receipt.Compaction.Entities != 0 || receipt.Compaction.Epoch != 4 {
+		t.Fatalf("receipt compaction = %#v", receipt.Compaction)
+	}
+	if receipt.Compaction.Address != rotated.ControlPK {
+		t.Fatalf("compaction address = %s, want the rotated control_pk %s", receipt.Compaction.Address, rotated.ControlPK)
+	}
+	if receipt.GuestbookSnapshot == nil || receipt.GuestbookSnapshot.Chunks != 1 ||
+		receipt.GuestbookSnapshot.Members != 2 || receipt.GuestbookSnapshot.Error != "" {
+		t.Fatalf("receipt guestbook snapshot = %#v", receipt.GuestbookSnapshot)
 	}
 	if len(receipt.Rekeys) != 1 || receipt.Rekeys[0].Scope != strings.Repeat("0", 64) || receipt.Rekeys[0].Chunks != 1 {
 		t.Fatalf("receipt rekeys = %#v", receipt.Rekeys)
@@ -123,7 +138,7 @@ func TestConcordRotationRefoundingRollsRootAndRedistributes(t *testing.T) {
 		t.Fatalf("first published event is not the rekey wrap: %+v", fixture.endpoint.published[0])
 	}
 	for i, recipient := range []fakeSigner{first, second} {
-		delivered := concordUnwrapInvite(t, fixture.endpoint.published[i+1], recipient)
+		delivered := concordUnwrapInvite(t, fixture.endpoint.published[i+2], recipient)
 		if delivered != string(record.Bundle) {
 			t.Fatalf("recipient %d received stale material", i)
 		}
@@ -304,7 +319,9 @@ func TestConcordRotationFailsClosedWhenMintingFails(t *testing.T) {
 }
 
 func TestConcordRotationReceiptCarriesNoKeyMaterial(t *testing.T) {
-	fixture := newConcordRotationFixture(t, 3)
+	// A base rekey chunk, a private-channel rekey chunk, the Guestbook snapshot
+	// chunk, and the survivor's direct invite.
+	fixture := newConcordRotationFixture(t, 4)
 	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
 		CommunityID: fixture.communityID,
 		Refound:     true,
@@ -375,7 +392,9 @@ func TestConcordAssignDeliversRotatedMaterialWithoutRestart(t *testing.T) {
 }
 
 func TestConcordConcurrentRotationsAdvanceEpochsWithoutLosingOne(t *testing.T) {
-	fixture := newConcordRotationFixture(t, 4)
+	// Per rotation: a base rekey chunk, a Guestbook snapshot chunk, and the
+	// survivor's direct invite.
+	fixture := newConcordRotationFixture(t, 6)
 	first := newFakeSigner(t)
 	second := newFakeSigner(t)
 

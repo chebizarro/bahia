@@ -62,8 +62,30 @@ type ConcordRotationReceipt struct {
 	DirectInvites  []string                  `json:"direct_invites,omitempty"`
 	Staff          []string                  `json:"staff,omitempty"`
 	Rekeys         []ConcordRekeyPublication `json:"rekeys,omitempty"`
-	Reason         string                    `json:"reason,omitempty"`
-	RotatedAt      time.Time                 `json:"rotated_at"`
+	// Compaction and GuestbookSnapshot are set by a Refounding only (CORD-06
+	// §3). The snapshot is best-effort, so it may be present and carry an Error
+	// on a Refounding that otherwise succeeded.
+	Compaction        *ConcordCompaction        `json:"compaction,omitempty"`
+	GuestbookSnapshot *ConcordGuestbookSnapshot `json:"guestbook_snapshot,omitempty"`
+	Reason            string                    `json:"reason,omitempty"`
+	RotatedAt         time.Time                 `json:"rotated_at"`
+}
+
+// concordFoldIsCompactable enforces CORD-06 §3's abort rule: if the Refounder
+// cannot reliably fold all Control events, the Refounding must be aborted.
+//
+// A suspended entity is exactly that failure. Its chain forked, so no head is
+// trustworthy — and a compaction that silently omitted it would prune the
+// ancestors that still carried its state, turning a recoverable fork into a
+// permanent loss.
+func concordFoldIsCompactable(fold *concordControlFold) error {
+	if fold == nil {
+		return fmt.Errorf("CORD-06 §3 requires a folded Control Plane before a Refounding, and none was resolved")
+	}
+	if len(fold.suspended) > 0 {
+		return fmt.Errorf("%d Control Plane entities have forked chains; CORD-06 §3 aborts a Refounding it cannot reliably fold rather than compacting a partial one", len(fold.suspended))
+	}
+	return nil
 }
 
 // concordCommunityRotator is the CORD-06 surface the provisioner exposes.
@@ -80,6 +102,15 @@ type concordRotationPlan struct {
 	// nor persisted; both die with the plan.
 	priorRoot []byte
 	scopes    []concordRekeyScope
+	// Refounding only: the freshly minted material the compaction and the
+	// Guestbook snapshot publish under (CORD-06 §3). Key material, so like
+	// priorRoot these die with the plan and never reach a receipt or a log.
+	communityID32   [32]byte
+	nextRoot        [32]byte
+	nextControlRoot [32]byte
+	// nextControlPK is the address the compaction must land on — the same one
+	// the rotated bundle hands members — and is public.
+	nextControlPK string
 }
 
 // Rotate performs a CORD-06 Rekey or Refounding: it mints fresh material, bumps
@@ -142,9 +173,17 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	// an unauthorized Rotator never reaches custody, and — per CORD-06 §3's
 	// failure rule — the state being rotated is acquired in full before the
 	// first publish.
-	citation, _, err := m.resolveConcordRotationAuthority(ctx, current, bundle, staffPK, false)
+	// A Refounding additionally *needs* the fold: CORD-06 §3 has it compact the
+	// current Control Plane and republish it at the new epoch, and aborts the
+	// Refounding outright if it cannot reliably fold all Control events.
+	citation, fold, err := m.resolveConcordRotationAuthority(ctx, current, bundle, staffPK, rotation.Refound)
 	if err != nil {
 		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+	}
+	if rotation.Refound {
+		if err := concordFoldIsCompactable(fold); err != nil {
+			return nil, fmt.Errorf("Concord Refounding for %s: %w", communityID, err)
+		}
 	}
 
 	plan, err := m.planConcordRotation(current.bundle, record, rotation, communityID)
@@ -178,6 +217,26 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	receipt.Rekeys = rekeys
 	if err != nil {
 		return &receipt, fmt.Errorf("publish rotated Concord rekey blobs for %s: %w", communityID, err)
+	}
+
+	if rotation.Refound {
+		// CORD-06 §3: the compaction is republished only after confirmed
+		// publication of the root roll above, so a member who reaches the new
+		// Control address can already open it.
+		compaction, compactErr := m.republishConcordCompaction(
+			ctx, next, fold, plan.communityID32, plan.nextRoot[:], plan.nextControlRoot[:], receipt.RootEpoch, plan.nextControlPK)
+		receipt.Compaction = &compaction
+		if compactErr != nil {
+			return &receipt, fmt.Errorf("republish the compacted Concord Control Plane for %s: %w", communityID, compactErr)
+		}
+
+		// The Guestbook snapshot is CORD-06 §3's best-effort final step: a
+		// Refounding succeeds with or without it, and a member entering the new
+		// epoch to find their own state absent simply publishes a fresh Join.
+		// So its failure lands on the receipt and never on the return.
+		snapshot := m.seedConcordGuestbookSnapshot(
+			ctx, next, staffPK, plan.communityID32, plan.nextRoot[:], receipt.RootEpoch, recipients)
+		receipt.GuestbookSnapshot = &snapshot
 	}
 
 	for _, recipient := range inviteTargets {
@@ -320,6 +379,10 @@ func (m *concordMembership) planConcordRotation(raw json.RawMessage, record conc
 		if err != nil {
 			return plan, fmt.Errorf("minted control_root: %w", err)
 		}
+		plan.communityID32 = communityID32
+		plan.nextRoot = nextRoot32
+		plan.nextControlRoot = controlRoot32
+		plan.nextControlPK = controlSigner.PubKey.Hex()
 		plan.scopes = append(plan.scopes, concordRekeyScope{
 			base:           true,
 			scopeID:        concordBaseScopeID,

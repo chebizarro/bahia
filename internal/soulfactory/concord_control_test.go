@@ -539,12 +539,20 @@ func concordTestGrantEID(t *testing.T, communityIDHex, memberHex string) string 
 // authored by the control_root-derived address.
 func concordTestGrantEdition(t *testing.T, fixture *concordRotationFixture, granter fakeSigner, memberHex string, version uint64, prev string) concordTestEdition {
 	t.Helper()
-	eidHex := concordTestGrantEID(t, fixture.communityID, memberHex)
-	eid, err := concordID32(eidHex)
+	eid, err := concordID32(concordTestGrantEID(t, fixture.communityID, memberHex))
 	if err != nil {
 		t.Fatalf("grant eid: %v", err)
 	}
 	content := `{"member":"` + memberHex + `","role_ids":["` + strings.Repeat("a1", 32) + `"]}`
+	return concordTestControlEdition(t, fixture, granter, eid, version, prev, content)
+}
+
+// concordTestControlEdition publishes one signed edition at an arbitrary
+// coordinate onto the fixture's Control Plane.
+func concordTestControlEdition(t *testing.T, fixture *concordRotationFixture, actor fakeSigner, eid [32]byte, version uint64, prev, content string) concordTestEdition {
+	t.Helper()
+	eidHex := hex.EncodeToString(eid[:])
+	granter := actor
 
 	tags := nostr.Tags{{"vsk", "3"}, {"eid", eidHex}, {"ev", concordDecimal(version)}}
 	var prevBytes []byte
