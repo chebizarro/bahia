@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -220,9 +219,16 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 		return nil, fmt.Errorf("invalid Concord staff pubkey from Signet: %w", err)
 	}
 
+	// The inbox is a property of the recipient, not of a community, so it is
+	// resolved once even when several communities are assigned.
+	inbox, err := m.resolveConcordInbox(ctx, recipientPK)
+	if err != nil {
+		return nil, err
+	}
+
 	assigned := make([]string, 0, len(resolved))
 	for _, community := range resolved {
-		if err := m.deliver(ctx, community, staffPK, recipientPK, recipient); err != nil {
+		if err := m.deliver(ctx, community, staffPK, recipientPK, recipient, inbox); err != nil {
 			return assigned, err
 		}
 		assigned = append(assigned, community.communityID)
@@ -233,7 +239,12 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 // deliver mints and publishes one CORD-05 §6 Direct Invite. The rumor is
 // encrypted and its seal signed by the Signet-held staff identity; only the
 // outer kind-1059 giftwrap uses a local ephemeral key.
-func (m *concordMembership) deliver(ctx context.Context, community validatedConcordCommunity, staffPK, recipientPK nostr.PubKey, recipient string) error {
+//
+// The wrap goes to the community's own relays and, when the recipient has
+// published one, to their giftwrap inbox. A recipient Bahia just provisioned
+// has no inbox yet and reads the fleet relays, so community relays alone carry
+// that case; a member invited or re-keyed later is reached where they read.
+func (m *concordMembership) deliver(ctx context.Context, community validatedConcordCommunity, staffPK, recipientPK nostr.PubKey, recipient string, inbox concordInbox) error {
 	if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
 		return fmt.Errorf("authenticate Concord relays for %s: %w", community.communityID, err)
 	}
@@ -283,6 +294,14 @@ func (m *concordMembership) deliver(ctx context.Context, community validatedConc
 	}
 	if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
 		return fmt.Errorf("publish Concord direct invite for %s: %w", community.communityID, err)
+	}
+	if inbox.empty() {
+		return nil
+	}
+	endpoints, closeEndpoints := concordInboxEndpoints(m.bus, inbox.relays)
+	defer closeEndpoints()
+	if err := publishConcordInviteToInbox(ctx, m.bus, endpoints, wrap); err != nil {
+		return fmt.Errorf("publish Concord direct invite for %s to the recipient's %s: %w", community.communityID, inbox.source, err)
 	}
 	return nil
 }
@@ -348,8 +367,7 @@ func validateConcordInviteBundle(raw json.RawMessage, configuredCommunityID stri
 		if relay != strings.TrimSpace(relay) {
 			return validatedConcordCommunity{}, fmt.Errorf("relays[%d] contains surrounding whitespace", i)
 		}
-		parsed, err := url.Parse(relay)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "ws" && parsed.Scheme != "wss") {
+		if !validConcordRelayURL(relay) {
 			return validatedConcordCommunity{}, fmt.Errorf("relays[%d] must be a ws or wss URL", i)
 		}
 		if _, duplicate := seenRelays[relay]; duplicate {

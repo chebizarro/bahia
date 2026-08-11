@@ -472,6 +472,11 @@ func newConcordRotationFixture(t *testing.T, publishes int) *concordRotationFixt
 	for range publishes {
 		endpoint.publishResults = append(endpoint.publishResults, RelayPublishResult{Accepted: true})
 	}
+	// Survivors in these fixtures publish no relay list, so every inbox lookup
+	// resolves empty and delivery stays on the community relays.
+	for range cap(endpoint.subscribeQueue) {
+		queueConcordInboxLookup(endpoint)
+	}
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
 		t.Fatalf("new relay bus: %v", err)

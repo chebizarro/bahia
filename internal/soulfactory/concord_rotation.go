@@ -128,7 +128,13 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		if pkErr != nil {
 			return &receipt, fmt.Errorf("redistribute rotated Concord material for %s: invalid recipient: %w", communityID, pkErr)
 		}
-		if deliverErr := m.deliver(ctx, next, staffPK, recipientPK, recipient); deliverErr != nil {
+		// Survivors are existing members, not freshly provisioned agents, so
+		// each is reached at their own giftwrap inbox when they publish one.
+		inbox, inboxErr := m.resolveConcordInbox(ctx, recipientPK)
+		if inboxErr != nil {
+			return &receipt, fmt.Errorf("redistribute rotated Concord material for %s: %w", communityID, inboxErr)
+		}
+		if deliverErr := m.deliver(ctx, next, staffPK, recipientPK, recipient, inbox); deliverErr != nil {
 			return &receipt, fmt.Errorf("redistribute rotated Concord material for %s: %w", communityID, deliverErr)
 		}
 		receipt.Recipients = append(receipt.Recipients, recipient)

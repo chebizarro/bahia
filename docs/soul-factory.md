@@ -135,6 +135,14 @@ soul_factory:
 
 After Signet mints the agent identity, Bahia builds a kind-`3313` rumor with empty tags and the bundle JSON as content, encrypts it to the new agent through the Signet-held staff key, signs the kind-`13` seal through Signet, and creates the kind-`1059` outer giftwrap with a single-use ephemeral key. The outer tags are exactly `p=<agent-pubkey>` and `k=3313`. Bahia requires every relay declared in the bundle to be present in `soul_factory.relays` or `additional_relays`, authenticates only that declared set, requires an accepted relay `OK` from every declared relay, fails the Signet provisioning step closed on any configuration, encryption, signing, AUTH, or publish error, and records successful community IDs as `concord_communities` without recording bundle contents.
 
+### Delivery targets
+
+CORD-05 §6 delivers a Direct Invite to the recipient's giftwrap inbox: the relays in their kind-`10050` DM relay list (NIP-17) when one exists, their NIP-65 read relays otherwise. Bahia resolves that inbox on the SoulFactory relays for every recipient and publishes the wrap there **in addition to** the community relays declared in the bundle.
+
+The two targets have different failure rules, because they have different owners. The community relays are operator-controlled and must all return an accepted `OK`, unchanged. An inbox list is recipient-controlled and may name a dead relay, so one acceptance is enough — but zero is a delivery failure, since publishing only where the recipient does not read is a silent drop. Only the recipient's own signed lists are honored, the list is capped at five `ws`/`wss` URLs with no embedded credentials, and a relay Bahia already holds is reused rather than re-dialed.
+
+A freshly provisioned fleet agent has published neither list at provisioning time and is configured to read the fleet relays, so its invite rides the community relays alone. The inbox path matters for the recipients that are not that case: an npub the fleet did not just provision, an agent that later moved to a different inbox relay set, and every survivor re-invited by a CORD-06 rotation.
+
 Configure every relay declared in each bundle in `soul_factory.relays` or `additional_relays`, and configure the newly provisioned agent's Concord client to watch at least one of them. Direct Invites cannot be revoked after delivery; accidental disclosure requires the CORD-06 rekey/refounding process below before the old holder loses access.
 
 ### Signet-backed custody

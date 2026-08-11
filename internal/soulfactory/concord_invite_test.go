@@ -61,6 +61,8 @@ func TestConcordMembershipAssignPublishesCORD05DirectInvite(t *testing.T) {
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
 	unrelated := newFakeRelayEndpoint("wss://unrelated.example")
 	unrelated.publishResults = []RelayPublishResult{{Accepted: true}}
+	queueConcordInboxLookup(endpoint)
+	queueConcordInboxLookup(unrelated)
 
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{unrelated, endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
@@ -191,6 +193,7 @@ func TestConcordMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	community := concordTestCommunity(t, nil)
 	endpoint := newFakeRelayEndpoint("wss://community.example")
 	endpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "restricted"}}
+	queueConcordInboxLookup(endpoint)
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
 		t.Fatalf("new relay bus: %v", err)
@@ -214,6 +217,7 @@ func TestConcordMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
 		{Accepted: false, Reason: "auth-required: challenge pending"},
 		{Accepted: true},
 	}
+	queueConcordInboxLookup(endpoint)
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
 	if err != nil {
 		t.Fatalf("new relay bus: %v", err)
@@ -239,10 +243,25 @@ func TestConcordMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
 	}
 }
 
+// queueConcordInboxLookup answers one inbox resolution on an endpoint. With no
+// events the recipient has published neither a kind-10050 nor a NIP-65 list,
+// which is the freshly provisioned agent case.
+func queueConcordInboxLookup(endpoint *fakeRelayEndpoint, events ...*nostr.Event) {
+	subscription := newFakeRelaySubscription()
+	for _, event := range events {
+		if event != nil {
+			subscription.events <- event
+		}
+	}
+	close(subscription.eose)
+	endpoint.subscribeQueue <- subscription
+}
+
 func newConcordTestBus(t *testing.T, signer relayAuthSigner) *SoulFactoryRelayBus {
 	t.Helper()
 	endpoint := newFakeRelayEndpoint("wss://community.example")
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
+	queueConcordInboxLookup(endpoint)
 	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(signer))
 	if err != nil {
 		t.Fatalf("new relay bus: %v", err)
