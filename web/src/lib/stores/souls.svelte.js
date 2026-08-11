@@ -46,6 +46,10 @@ export const runtimeCapabilities = $state([]);
 // SoulFactory disabled), in which case discovery falls back to capability-only.
 export const serverAgentRuntimes = $state([]);
 
+// serverPolicyKnown becomes true only after a successful policy fetch. Unknown
+// policy must fail closed: never present a target the server has not enabled.
+export const serverPolicy = $state({ known: false });
+
 export const voiceProviders = $state([
   { id: 'openai', label: 'OpenAI TTS', description: 'OpenAI text-to-speech voices' },
   { id: 'elevenlabs', label: 'ElevenLabs', description: 'ElevenLabs hosted voice personas' },
@@ -207,19 +211,20 @@ export function supportedRuntimeTargets({ method = SOUL_RUNTIME_METHODS.PROVISIO
 }
 
 function serverPolicyAllows(runtime) {
-  return serverAgentRuntimes.length === 0 || serverAgentRuntimes.includes(runtime);
+  return serverPolicy.known && serverAgentRuntimes.includes(runtime);
 }
 
 // Fetches the administratively enabled agent runtime list from the Bahia API.
-// Best effort: when the endpoint is unavailable the UI keeps capability-only
-// discovery rather than hiding runtimes behind an unreachable policy surface.
+// On failure the policy stays unknown and target discovery fails closed rather
+// than exposing runtimes the server has not enabled.
 export async function refreshServerAgentRuntimes() {
   if (!api) return;
   try {
     const data = await api.fetch('/soulfactory/runtimes');
     replaceStateArray(serverAgentRuntimes, Array.isArray(data?.agent_runtimes) ? data.agent_runtimes : []);
+    serverPolicy.known = true;
   } catch {
-    // Policy unknown; capability-only discovery remains in effect.
+    serverPolicy.known = false;
   }
 }
 

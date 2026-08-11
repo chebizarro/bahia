@@ -32,7 +32,7 @@
   const current = $derived(normalizeContent(currentConfig || soul?.content || {}));
   const pending = $derived(normalizeContent(pendingConfig || draft?.content || {}));
   const advertisedMethods = $derived(supportedRuntimeMethods({ runtime: soul?.runtime?.target || '', runtimePubkey: soul?.runtime?.runtime_pubkey || soul?.runtime?.runtimePubkey || '' }));
-  const methodAdvertised = $derived((method) => advertisedMethods === null || advertisedMethods.includes(method));
+  const methodAdvertised = $derived((method) => advertisedMethods !== null && advertisedMethods.includes(method));
   const unavailableSections = $derived(sectionOptions.filter((section) => !methodAdvertised(section.method)));
   const redeployAdvertised = $derived(methodAdvertised(SOUL_RUNTIME_METHODS.REDEPLOY));
   const reloadAdvertised = $derived(methodAdvertised('soulfactory.config.reload'));
@@ -221,7 +221,9 @@
       <label title={reloadAdvertised ? '' : `Not advertised by the live ${soul?.runtime?.target || 'runtime'} capability`}><input type="radio" name="update-mode" value="hot-reload" disabled={!reloadAdvertised} bind:group={updateMode} /> Hot-reload without restart</label>
       <label title={redeployAdvertised ? '' : `Not advertised by the live ${soul?.runtime?.target || 'runtime'} capability`}><input type="radio" name="update-mode" value="restart" disabled={!redeployAdvertised} bind:group={updateMode} /> Full redeploy / restart</label>
     </fieldset>
-    {#if unavailableSections.length > 0 || !redeployAdvertised || !reloadAdvertised}
+    {#if advertisedMethods === null}
+      <p class="capability-note">No live compatible capability is observed for {soul?.runtime?.target || 'this runtime'} (or it is not enabled in server policy); runtime controls are disabled until a fresh capability is advertised.</p>
+    {:else if unavailableSections.length > 0 || !redeployAdvertised || !reloadAdvertised}
       <p class="capability-note">Some controls are disabled because the live {soul?.runtime?.target || 'runtime'} capability does not advertise their methods{#if unavailableSections.length > 0}: {unavailableSections.map((section) => section.label).join(', ')}{/if}.</p>
     {/if}
   </div>

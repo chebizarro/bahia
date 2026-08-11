@@ -216,6 +216,74 @@ func TestRuntimeAdapterRejectsUnavailableOrIncompatibleTargets(t *testing.T) {
 	}
 }
 
+// TestRuntimeAdapterRejectsStaleCapabilities proves stale 30317 announcements
+// never gate dispatch, whether discovered or supplied by the caller.
+func TestRuntimeAdapterRejectsStaleCapabilities(t *testing.T) {
+	for _, tc := range runtimeConformanceCases {
+		t.Run(tc.name, func(t *testing.T) {
+			controller := newFakeSigner(t)
+			runtime := newFakeSigner(t)
+			runtimeAdapterTestRuntimeSecret = runtime.secret
+			runtimeAdapterTestRuntimePubkey = runtime.pubkey
+			now := time.Unix(1715700000, 0)
+			staleAt := now.Add(-DefaultMaxCapabilityAge - time.Minute)
+			staleCapability := signedRuntimeCapabilityEventAt(t, runtime, staleAt.Unix(), map[string]interface{}{
+				"schema":             domain.SoulFactoryRuntimeCapabilitySchema,
+				"runtime":            string(tc.target),
+				"methods":            []string{RuntimeMethodProvision},
+				"control_schema":     domain.SoulFactoryRuntimeControlSchema,
+				"controller_pubkeys": []string{controller.pubkey},
+			}, nostr.Tags{{tagParameterizedD, string(tc.target) + "-main"}, {tagRuntime, string(tc.target)}})
+
+			t.Run("stale discovery result is ineligible", func(t *testing.T) {
+				transport := &fakeRuntimeAdapterTransport{capabilities: []*nostr.Event{staleCapability}}
+				adapter := newConformanceAdapter(t, controller, tc.target, transport)
+				_, err := adapter.Execute(t.Context(), RuntimeAdapterRequest{
+					Method:   RuntimeMethodProvision,
+					Operator: RuntimeOperatorRef{Pubkey: stringsRepeat("a", 64), RequestEvent: stringsRepeat("b", 64)},
+					Soul:     RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
+					Target:   RuntimeTargetRef{Runtime: tc.target, AgentID: "scout"},
+				})
+				if err == nil || !strings.Contains(err.Error(), "no compatible") {
+					t.Fatalf("Execute error = %v, want no compatible capability", err)
+				}
+				if len(transport.published) != 0 {
+					t.Fatalf("published %d requests against stale capability", len(transport.published))
+				}
+			})
+
+			t.Run("stale caller-supplied capability is rejected", func(t *testing.T) {
+				transport := &fakeRuntimeAdapterTransport{}
+				adapter := newConformanceAdapter(t, controller, tc.target, transport)
+				stale := RuntimeCapability{
+					ID:                staleCapability.ID.Hex(),
+					Pubkey:            runtime.pubkey,
+					Runtime:           tc.target,
+					Schema:            domain.SoulFactoryRuntimeCapabilitySchema,
+					ControlSchema:     domain.SoulFactoryRuntimeControlSchema,
+					Methods:           []string{RuntimeMethodProvision},
+					ControllerPubkeys: []string{controller.pubkey},
+					CreatedAt:         staleAt,
+					Compatible:        true,
+				}
+				_, err := adapter.Execute(t.Context(), RuntimeAdapterRequest{
+					Method:     RuntimeMethodProvision,
+					Operator:   RuntimeOperatorRef{Pubkey: stringsRepeat("a", 64), RequestEvent: stringsRepeat("b", 64)},
+					Soul:       RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
+					Target:     RuntimeTargetRef{Runtime: tc.target, AgentID: "scout", RuntimePubkey: runtime.pubkey},
+					Capability: &stale,
+				})
+				if err == nil || !strings.Contains(err.Error(), "stale") {
+					t.Fatalf("Execute error = %v, want stale capability rejection", err)
+				}
+				if len(transport.published) != 0 {
+					t.Fatalf("published %d requests against stale capability", len(transport.published))
+				}
+			})
+		})
+	}
+}
+
 // TestRuntimeCapabilityLatestWinsAcrossRuntimes proves replaceable latest-wins
 // dedupe behaves identically for every runtime target.
 func TestRuntimeCapabilityLatestWinsAcrossRuntimes(t *testing.T) {

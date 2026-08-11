@@ -38,6 +38,11 @@ const (
 	RuntimeMethodConfigReload    = "soulfactory.config.reload"
 
 	kindNIP65RelayListMetadata = 10002
+
+	// DefaultMaxCapabilityAge is the default freshness bound for kind:30317
+	// runtime capability announcements. Stale capabilities must not gate
+	// dispatch: a runtime that stops republishing loses eligibility.
+	DefaultMaxCapabilityAge = 10 * time.Minute
 )
 
 // RuntimeAdapter invokes the shared SoulFactory runtime-control contract for a
@@ -72,6 +77,10 @@ type RuntimeAdapterConfig struct {
 	Logger           *slog.Logger
 	Now              func() time.Time
 	CapabilityLimit  int
+	// MaxCapabilityAge bounds how old a 30317 capability announcement may be
+	// before it is considered stale and ineligible for dispatch. Zero uses
+	// DefaultMaxCapabilityAge.
+	MaxCapabilityAge time.Duration
 }
 
 // RuntimeCapability is the normalized kind:30317 SoulFactory runtime capability
@@ -168,6 +177,7 @@ type runtimeControlAdapter struct {
 	logger           *slog.Logger
 	now              func() time.Time
 	capabilityLimit  int
+	maxCapabilityAge time.Duration
 }
 
 func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapter, error) {
@@ -194,6 +204,10 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 	if limit <= 0 {
 		limit = 50
 	}
+	maxAge := config.MaxCapabilityAge
+	if maxAge <= 0 {
+		maxAge = DefaultMaxCapabilityAge
+	}
 	return &runtimeControlAdapter{
 		target:           config.Target,
 		controllerPubkey: strings.TrimSpace(config.ControllerPubkey),
@@ -204,10 +218,22 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 		logger:           logger.With("component", "soulfactory-runtime-adapter", "runtime", string(config.Target)),
 		now:              firstNowFunc(config.Now),
 		capabilityLimit:  limit,
+		maxCapabilityAge: maxAge,
 	}, nil
 }
 
 func (a *runtimeControlAdapter) Runtime() domain.RuntimeTarget { return a.target }
+
+// capabilityStale reports whether a 30317 capability is too old to gate
+// dispatch. Future-dated events within a small clock-skew window are accepted;
+// anything older than MaxCapabilityAge is ineligible.
+func (a *runtimeControlAdapter) capabilityStale(capability RuntimeCapability) bool {
+	if capability.CreatedAt.IsZero() {
+		return true
+	}
+	age := a.now().Sub(capability.CreatedAt)
+	return age > a.maxCapabilityAge
+}
 
 func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy domain.SoulRelayPolicySpec) ([]RuntimeCapability, error) {
 	transport, closeTransport, err := a.transportForRelays(discoveryRelays(policy, a.relays))
@@ -230,6 +256,9 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 	for _, event := range events {
 		capability, ok := ParseRuntimeCapabilityEvent(event)
 		if !ok || !capability.Supports(a.target, "", a.controllerPubkey) {
+			continue
+		}
+		if a.capabilityStale(capability) {
 			continue
 		}
 		key := firstNonEmpty(capability.Coordinate, capability.ID)
@@ -383,6 +412,9 @@ func (a *runtimeControlAdapter) prepareRequest(ctx context.Context, req *Runtime
 	}
 	if req.Capability.Pubkey != "" && req.Capability.Pubkey != req.Target.RuntimePubkey {
 		return fmt.Errorf("runtime capability pubkey %s does not match target %s", req.Capability.Pubkey, req.Target.RuntimePubkey)
+	}
+	if a.capabilityStale(*req.Capability) {
+		return fmt.Errorf("runtime capability %s is stale (older than %s); refusing dispatch until a fresh 30317 is observed", req.Capability.ID, a.maxCapabilityAge)
 	}
 	if req.IdempotencyKey == "" {
 		req.IdempotencyKey = runtimeIdempotencyKey(a.controllerPubkey, req.Method, req.Operator.RequestEvent, req.Target.RuntimePubkey, req.Target.AgentID, req.Soul.SpecHash)

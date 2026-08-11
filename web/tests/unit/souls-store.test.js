@@ -335,6 +335,10 @@ describe('Souls Store', () => {
       expect(soulsModule.drafts).toHaveLength(1);
       expect(soulsModule.drafts[0]).toMatchObject({ agentId: 'scout' });
       expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+      // Unknown server policy fails closed.
+      expect(soulsModule.supportedRuntimeTargets()).toEqual([]);
+      soulsModule.serverAgentRuntimes.push('openclaw');
+      soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeTargets()).toEqual(['openclaw']);
       expect(soulsModule.loading.souls).toBe(false);
     });
@@ -725,6 +729,8 @@ describe('Souls Store', () => {
       ]);
 
       expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+      soulsModule.serverAgentRuntimes.push('openclaw');
+      soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['openclaw']);
     });
 
@@ -760,6 +766,8 @@ describe('Souls Store', () => {
         }
       ]);
 
+      soulsModule.serverAgentRuntimes.push('openclaw', 'metiq');
+      soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toEqual(
         expect.arrayContaining(['soulfactory.provision', 'soulfactory.config.reload'])
       );
@@ -787,10 +795,12 @@ describe('Souls Store', () => {
         { id: 'cap-mq', kind: 30317, pubkey: 'runtime-mq', created_at: 100, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
       ]);
 
-      // Unknown policy (empty) keeps capability-only discovery.
-      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['metiq', 'openclaw']);
+      // Unknown policy fails closed even with live compatible capabilities.
+      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual([]);
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toBeNull();
 
       soulsModule.serverAgentRuntimes.push('metiq');
+      soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['metiq']);
       expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toBeNull();
       expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toEqual(['soulfactory.provision']);
