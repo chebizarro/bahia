@@ -145,7 +145,7 @@ A returned agent `bunker_uri` may contain a one-time connection secret. It is re
 
 ## Runtime integration
 
-Runtime choices are capability-gated by compatible `30317` announcements. The packaged OpenClaw wrapper supports:
+Runtime choices are capability-gated by compatible `30317` announcements intersected with the administratively enabled runtime set (`soul_factory.agent_runtimes`). Bahia instantiates the generic runtime-control adapter for every enabled target; runtime targets are extensible protocol identifiers, so registering an additional conforming runtime is configuration, not new code. The packaged OpenClaw wrapper supports:
 
 - `soulfactory.provision`
 - `soulfactory.update`
@@ -169,6 +169,8 @@ The current `soul_factory` block is defined in `internal/config/config.go`:
 ```yaml
 soul_factory:
   enabled: true
+  agent_runtimes:
+    - openclaw
   relays:
     - wss://relay.example.com
   additional_relays: []
@@ -190,6 +192,25 @@ soul_factory:
 ```
 
 When enabled outside development mode, validation requires at least one relay, a Signet bunker URI, at least one authorized pubkey, positive timeouts, and a valid LLM origin/model/key. Workspace fields are optional but jointly constrained when `workspace_gitea_url` is set.
+
+### Agent runtime enablement
+
+`agent_runtimes` is the administrative enablement list for SoulFactory agent runtimes.
+
+- Unset: defaults to `[openclaw]`, preserving prior single-runtime behavior.
+- Entries are normalized to lowercase; empty, malformed (`^[a-z0-9][a-z0-9._-]{0,63}$`), and duplicate targets fail config validation. Startup fails fast on any invalid entry — enabled targets are never silently omitted.
+- Bahia builds one generic runtime-control adapter per enabled target and installs the same registry in the provisioning engine and the lifecycle/customization handler, so dispatch cannot diverge between paths.
+- Enablement is necessary but not sufficient: dispatch additionally requires a live, trusted, schema-compatible `30317` capability advertising the requested method. Capability advertisement is not authorization — runtime bridges independently validate the controller pubkey, and Bahia fails closed before side effects when no compatible capability exists.
+- The web UI intersects live compatible capabilities with this list (via `GET /api/v1/soulfactory/runtimes`) and gates lifecycle controls by advertised methods.
+
+Rollout of an additional runtime (for example `metiq`): deploy the runtime bridge, publish its `30317`, add the target to `agent_runtimes`, restart Bahia. Rollback is removing the target and restarting; the absent-entry default keeps `openclaw` available at all times.
+
+### Missing or stale capability diagnostics
+
+- Target enabled but not selectable in UI: no compatible `30317` seen, or it was filtered by server policy. Inspect `30317` events tagged with the runtime for schema, `control-schema`, methods, and `controller` tags.
+- `no compatible <target> runtime capability found for method <m>`: the live capability does not advertise `m`, advertises a different controller set, or is stale/incompatible.
+- `no runtime adapter configured for <target>`: the draft/request targets a runtime absent from `agent_runtimes`; enable it or correct the draft.
+- Exact replay returns the cached `38386`; reused keys with conflicting input return `duplicate_conflict` without side effects.
 
 ## Troubleshooting
 

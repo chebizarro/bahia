@@ -110,8 +110,12 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	}
 	// Lifecycle requests are orchestrated by lifecycle_handler.go, not the
 	// provisioning engine. Installing the handler here preserves the Bahia
-	// integration side effects previously wired through FullProvisioner.
+	// integration side effects previously wired through FullProvisioner. The
+	// lifecycle handler receives the same runtime adapter registry as the
+	// provisioner so dispatch never diverges between provisioning and
+	// lifecycle/customization paths.
 	reactor.lifecycleHandler = NewLifecycleHandler(reactor, bahiaIntegration, nil, logger)
+	reactor.lifecycleHandler.SetRuntimeAdapters(config.RuntimeAdapters)
 	return p
 }
 

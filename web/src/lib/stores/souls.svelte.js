@@ -15,6 +15,7 @@ import {
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
 import { ensureRelayConnection } from '$lib/nostr/client.js';
+import api from '$lib/api/client.js';
 import { createReadModelMetadataTracker } from '$lib/nostr/pool-utils.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
@@ -39,6 +40,11 @@ export const drafts = $state([]);
 
 // Runtime capability announcements (kind 30317)
 export const runtimeCapabilities = $state([]);
+
+// Server policy: administratively enabled SoulFactory agent runtimes reported
+// by the Bahia API (non-secret). Empty means unknown (older server or
+// SoulFactory disabled), in which case discovery falls back to capability-only.
+export const serverAgentRuntimes = $state([]);
 
 export const voiceProviders = $state([
   { id: 'openai', label: 'OpenAI TTS', description: 'OpenAI text-to-speech voices' },
@@ -192,11 +198,50 @@ export function supportedRuntimeTargets({ method = SOUL_RUNTIME_METHODS.PROVISIO
   return Array.from(new Set(
     runtimeCapabilities
       .filter((capability) => capability.compatible)
+      .filter((capability) => serverPolicyAllows(capability.runtime))
       .filter((capability) => !method || capability.methods.includes(method))
       .filter((capability) => !controllerPubkey || capability.controllerPubkeys.length === 0 || capability.controllerPubkeys.includes(controllerPubkey))
       .map((capability) => capability.runtime)
       .filter(Boolean)
   ));
+}
+
+function serverPolicyAllows(runtime) {
+  return serverAgentRuntimes.length === 0 || serverAgentRuntimes.includes(runtime);
+}
+
+// Fetches the administratively enabled agent runtime list from the Bahia API.
+// Best effort: when the endpoint is unavailable the UI keeps capability-only
+// discovery rather than hiding runtimes behind an unreachable policy surface.
+export async function refreshServerAgentRuntimes() {
+  if (!api) return;
+  try {
+    const data = await api.fetch('/soulfactory/runtimes');
+    replaceStateArray(serverAgentRuntimes, Array.isArray(data?.agent_runtimes) ? data.agent_runtimes : []);
+  } catch {
+    // Policy unknown; capability-only discovery remains in effect.
+  }
+}
+
+/**
+ * Methods advertised by the newest compatible live capability for a runtime
+ * target. When runtimePubkey is known, pubkey-matching capabilities win over
+ * target-level ones. Returns null when no compatible capability is observed so
+ * callers can distinguish "not advertised" from "not discovered".
+ */
+export function supportedRuntimeMethods({ runtime = '', runtimePubkey = '' } = {}) {
+  const candidates = runtimeCapabilities
+    .filter((capability) => capability.compatible)
+    .filter((capability) => serverPolicyAllows(capability.runtime))
+    .filter((capability) => !runtime || capability.runtime === runtime)
+    .sort(newestFirst);
+  if (candidates.length === 0) return null;
+  const selected = runtimePubkey
+    ? candidates.filter((capability) => capability.pubkey === runtimePubkey)
+    : [];
+  const source = selected.length > 0 ? selected : (runtimePubkey ? [] : candidates);
+  if (source.length === 0) return null;
+  return Array.from(new Set(source.flatMap((capability) => capability.methods || [])));
 }
 
 // --- Replaceable event state helpers ---
@@ -440,6 +485,9 @@ export async function subscribeToSoulFactoryUpdates(options = null) {
   loading.drafts = true;
   loading.capabilities = true;
   error.value = null;
+
+  // Server policy is advisory context, not a subscription gate.
+  refreshServerAgentRuntimes();
 
   try {
     await ensureRelayConnection();

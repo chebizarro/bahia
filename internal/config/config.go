@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -196,7 +197,11 @@ type DNSProjectionConfig struct {
 
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
-	Enabled                       bool                   `koanf:"enabled" yaml:"enabled"`
+	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	// AgentRuntimes is the validated list of administratively enabled
+	// SoulFactory agent runtime targets (for example openclaw, metiq).
+	// When unset it defaults to [openclaw] to preserve prior behavior.
+	AgentRuntimes                 []string               `koanf:"agent_runtimes" yaml:"agent_runtimes"`
 	Relays                        []string               `koanf:"relays" yaml:"relays"`
 	AdditionalRelays              []string               `koanf:"additional_relays" yaml:"additional_relays"`
 	NIP05Relays                   []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
@@ -1482,6 +1487,43 @@ func normalizeStringList(values []string) []string {
 	return normalized
 }
 
+// agentRuntimeIDPattern constrains SoulFactory agent runtime target IDs to
+// stable lowercase protocol identifiers suitable for Nostr tag values.
+var agentRuntimeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// DefaultAgentRuntimes preserves the historical single-runtime behavior when
+// soul_factory.agent_runtimes is not configured.
+var DefaultAgentRuntimes = []string{"openclaw"}
+
+// normalizeAgentRuntimeList validates the administratively enabled SoulFactory
+// agent runtime list. An unset list defaults to DefaultAgentRuntimes; an
+// explicitly configured list rejects empty, malformed, and duplicate targets.
+func normalizeAgentRuntimeList(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return append([]string(nil), DefaultAgentRuntimes...), nil
+	}
+	if len(values) > 16 {
+		return nil, fmt.Errorf("at most 16 agent runtimes may be enabled, got %d", len(values))
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for i, raw := range values {
+		target := strings.ToLower(strings.TrimSpace(raw))
+		if target == "" {
+			return nil, fmt.Errorf("entry %d must not be empty", i)
+		}
+		if !agentRuntimeIDPattern.MatchString(target) {
+			return nil, fmt.Errorf("entry %d %q is not a valid runtime target id (expected %s)", i, raw, agentRuntimeIDPattern.String())
+		}
+		if _, ok := seen[target]; ok {
+			return nil, fmt.Errorf("entry %d duplicates runtime target %q", i, target)
+		}
+		seen[target] = struct{}{}
+		normalized = append(normalized, target)
+	}
+	return normalized, nil
+}
+
 func normalizePubkeyList(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -2310,6 +2352,11 @@ func (c *Config) validateSoulFactory() error {
 	if !sf.Enabled {
 		return nil
 	}
+	runtimes, err := normalizeAgentRuntimeList(sf.AgentRuntimes)
+	if err != nil {
+		return fmt.Errorf("config validation failed: soul_factory.agent_runtimes: %w", err)
+	}
+	sf.AgentRuntimes = runtimes
 	if len(sf.Relays) == 0 {
 		return fmt.Errorf("config validation failed: soul_factory.relays requires at least one relay when soul_factory.enabled=true")
 	}

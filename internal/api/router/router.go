@@ -343,6 +343,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier3Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/tools", toolH.GetProfile)
 			}
 
+			// SoulFactory agent runtime policy (read, non-secret)
+			if deps.Config != nil && deps.Config.SoulFactory.Enabled {
+				sfH := handlers.NewSoulFactoryHandler(deps.Config)
+				r.With(tier3Gate).Get("/soulfactory/runtimes", sfH.GetRuntimes)
+			}
+
 			// Blossom (read)
 			if deps.Blossom != nil {
 				blossomH := handlers.NewBlossomHandler(deps.Blossom)

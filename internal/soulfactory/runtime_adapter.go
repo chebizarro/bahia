@@ -132,6 +132,14 @@ type RuntimeControlError struct {
 type OpenClawRuntimeAdapter struct{ *runtimeControlAdapter }
 type MetiqRuntimeAdapter struct{ *runtimeControlAdapter }
 
+// NewRuntimeAdapter constructs the generic SoulFactory runtime-control adapter
+// for any protocol-conforming runtime target. Runtime targets are extensible
+// protocol identifiers: registering an additional runtime requires only
+// configuration, not a new adapter type.
+func NewRuntimeAdapter(config RuntimeAdapterConfig) (RuntimeAdapter, error) {
+	return newRuntimeControlAdapter(config)
+}
+
 func NewOpenClawRuntimeAdapter(config RuntimeAdapterConfig) (*OpenClawRuntimeAdapter, error) {
 	config.Target = domain.RuntimeTargetOpenClaw
 	adapter, err := newRuntimeControlAdapter(config)

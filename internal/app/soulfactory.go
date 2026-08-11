@@ -37,8 +37,8 @@ var (
 	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
 		return signetAdapter.NewClient(cfg, logger)
 	}
-	newSoulFactoryOpenClawRuntimeAdapter = func(cfg soulfactory.RuntimeAdapterConfig) (soulfactory.RuntimeAdapter, error) {
-		return soulfactory.NewOpenClawRuntimeAdapter(cfg)
+	newSoulFactoryRuntimeAdapter = func(cfg soulfactory.RuntimeAdapterConfig) (soulfactory.RuntimeAdapter, error) {
+		return soulfactory.NewRuntimeAdapter(cfg)
 	}
 	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *slog.Logger) soulfactory.SoulGenerator {
 		return llm.NewSoulGenerator(cfg, logger)
@@ -87,16 +87,10 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		return nil, err
 	}
 
-	runtimeAdapter, err := newSoulFactoryOpenClawRuntimeAdapter(soulfactory.RuntimeAdapterConfig{
-		Target:           domain.RuntimeTargetOpenClaw,
-		ControllerPubkey: controllerPubkey,
-		Signer:           signer,
-		Relays:           allRelays,
-		Logger:           slogLogger,
-	})
+	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, controllerPubkey, signer, allRelays, slogLogger)
 	if err != nil {
 		_ = closeSigner()
-		return nil, fmt.Errorf("creating SoulFactory OpenClaw runtime adapter: %w", err)
+		return nil, err
 	}
 
 	generator := newSoulFactorySoulGenerator(llm.Config{
@@ -155,21 +149,52 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			NgitRelays:            allRelays,
 			GatewayPort:           sf.WorkspaceGatewayPort,
 		},
-		RuntimeAdapters: map[domain.RuntimeTarget]soulfactory.RuntimeAdapter{
-			domain.RuntimeTargetOpenClaw: runtimeAdapter,
-		},
+		RuntimeAdapters: runtimeAdapters,
 	}, nil)
 	if err := reactor.InstallProvisioningEngine(provisioner); err != nil {
 		_ = closeSigner()
 		return nil, err
 	}
 
-	logger.Info("SoulFactory OpenClaw reactor configured", zap.Strings("relays", sf.Relays), zap.Strings("additional_relays", sf.AdditionalRelays), zap.String("controller_pubkey", controllerPubkey))
+	logger.Info("SoulFactory runtime reactor configured", zap.Strings("relays", sf.Relays), zap.Strings("additional_relays", sf.AdditionalRelays), zap.Strings("agent_runtimes", sf.AgentRuntimes), zap.String("controller_pubkey", controllerPubkey))
 	return &soulFactoryRuntime{
 		reactor: reactor,
 		runner:  &soulFactoryRunner{reactor: reactor},
 		close:   closeSigner,
 	}, nil
+}
+
+// buildSoulFactoryRuntimeAdapters instantiates the generic runtime-control
+// adapter for every administratively enabled agent runtime target. Startup
+// fails on any invalid or failing target; enabled targets are never silently
+// omitted from the registry.
+func buildSoulFactoryRuntimeAdapters(targets []string, controllerPubkey string, signer soulFactorySignerClient, relays []string, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("soul_factory.agent_runtimes is empty; configuration validation must default or reject it before startup")
+	}
+	adapters := make(map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, len(targets))
+	for _, target := range targets {
+		target = strings.ToLower(strings.TrimSpace(target))
+		if target == "" {
+			return nil, fmt.Errorf("soul_factory.agent_runtimes contains an empty runtime target")
+		}
+		runtimeTarget := domain.RuntimeTarget(target)
+		if _, exists := adapters[runtimeTarget]; exists {
+			return nil, fmt.Errorf("soul_factory.agent_runtimes contains duplicate runtime target %q", target)
+		}
+		adapter, err := newSoulFactoryRuntimeAdapter(soulfactory.RuntimeAdapterConfig{
+			Target:           runtimeTarget,
+			ControllerPubkey: controllerPubkey,
+			Signer:           signer,
+			Relays:           relays,
+			Logger:           logger,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("creating SoulFactory runtime adapter for %q: %w", target, err)
+		}
+		adapters[runtimeTarget] = adapter
+	}
+	return adapters, nil
 }
 
 func soulFactoryNIP29Groups(groups []config.NIP29Group) []soulfactory.NIP29Group {
