@@ -161,17 +161,17 @@ func (r *Reactor) Run(ctx context.Context) error {
 		"additional_relays", r.config.AdditionalRelays,
 	)
 
-	// Backfill the newest request/action so an accepted event resumes after a
-	// reactor restart. Existing terminal-result checks make this idempotent;
-	// the subscription remains open for all subsequent live events.
+	// Backfill the queued request/action backlog so accepted events resume after
+	// a reactor or signer outage. Existing terminal-result checks make replay
+	// idempotent; the subscription remains open for subsequent live events.
 	filters := []nostr.Filter{
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
-			Limit: 1,
+			Limit: 1000,
 		},
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
-			Limit: 1,
+			Limit: 1000,
 		},
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},

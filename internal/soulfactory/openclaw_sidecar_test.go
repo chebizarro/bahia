@@ -108,14 +108,29 @@ func newTestOpenClawSidecar(t *testing.T, runtime, controller fakeSigner, transp
 
 func TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods(t *testing.T) {
 	got := OpenClawCommandDriver{Command: "openclaw-soulfactory-control"}.Methods()
-	want := []string{RuntimeMethodProvision, RuntimeMethodPersonaUpdate, RuntimeMethodRevoke}
+	want := []string{RuntimeMethodProvision, RuntimeMethodUpdate, RuntimeMethodPersonaUpdate, RuntimeMethodRevoke}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("default command-driver methods = %#v, want %#v", got, want)
 	}
-	for _, unsupported := range []string{RuntimeMethodUpdate, RuntimeMethodSuspend, RuntimeMethodResume, RuntimeMethodAvatarGenerate, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure} {
+	for _, unsupported := range []string{RuntimeMethodSuspend, RuntimeMethodResume, RuntimeMethodAvatarGenerate, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure} {
 		if stringInSlice(unsupported, got) {
 			t.Fatalf("default command-driver methods over-advertise unsupported wrapper method %s in %#v", unsupported, got)
 		}
+	}
+}
+
+func TestOpenClawSidecarReadinessRequiresCapabilityAndSubscriptionEOSE(t *testing.T) {
+	sidecar := &OpenClawSidecar{}
+	if state := sidecar.Readiness(); state.Ready {
+		t.Fatalf("initial readiness = %+v, want not ready", state)
+	}
+	sidecar.markCapabilityPublished()
+	if state := sidecar.Readiness(); state.Ready || !state.CapabilityPublished {
+		t.Fatalf("capability-only readiness = %+v, want not ready", state)
+	}
+	sidecar.markSubscriptionEOSE()
+	if state := sidecar.Readiness(); !state.Ready || !state.SubscriptionEOSE {
+		t.Fatalf("fully initialized readiness = %+v, want ready", state)
 	}
 }
 

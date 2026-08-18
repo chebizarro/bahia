@@ -220,7 +220,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	loomClientOptions := []loom.ClientOption{loom.WithWorkerRepo(workerRepo)}
-	loomCanonicalSigner, err := newLoomCanonicalProjectionSigner(ctx, cfg, relayURLs, logger)
+	loomCanonicalSigner, loomSignetManager, err := newLoomCanonicalProjectionSigner(cfg, relayURLs, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configuring Loom canonical projection signer: %w", err)
 	}
@@ -425,6 +425,9 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
+	if loomSignetManager != nil {
+		bgManager.RegisterWithOptions(loomSignetManager, RunnerTier(Tier1), RunnerRequired(false))
+	}
 	if securityRepo != nil {
 		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger), RunnerTier(Tier3))
 	}
@@ -446,6 +449,7 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
+	registerSignetHealthCheck(healthProvider, loomSignetManager, Tier1)
 	if !dbAvailable && policy.RequestedTier > Tier1 {
 		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerTier(Tier1), RunnerRequired(false))
 	}
@@ -462,6 +466,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}()
 	if soulFactoryRuntime != nil {
+		bgManager.RegisterWithOptions(soulFactoryRuntime.connection, RunnerTier(Tier2), RunnerRequired(false))
+		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection, Tier2)
 		bgManager.RegisterWithOptions(soulFactoryRuntime.runner, RunnerTier(Tier2))
 		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
 	}
@@ -1021,7 +1027,14 @@ func New(cfg *config.Config) (*App, error) {
 	var assistantOrchestrator *service.AssistantOrchestrator
 	var assistantIdentity service.AssistantIdentity
 	if cfg.Assistant.Enabled {
-		identity := bootstrapOperatorAssistant(ctx, cfg, controlPlaneRelays, logger)
+		identity, assistantSignetManager, assistantBootstrapRunner := bootstrapOperatorAssistant(cfg, controlPlaneRelays, logger)
+		if assistantSignetManager != nil {
+			bgManager.RegisterWithOptions(assistantSignetManager, RunnerTier(Tier1), RunnerRequired(false))
+			registerSignetHealthCheck(healthProvider, assistantSignetManager, Tier1)
+		}
+		if assistantBootstrapRunner != nil {
+			bgManager.RegisterWithOptions(assistantBootstrapRunner, RunnerTier(Tier1), RunnerRequired(false))
+		}
 		assistantIdentity = identity
 		var assistantDNS service.AssistantDNSRegistry
 		if dnsProjector != nil {
@@ -3108,13 +3121,13 @@ func assistantToolNames(server *mcp.Server) []string {
 	return names
 }
 
-func newLoomCanonicalProjectionSigner(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) (loom.CanonicalSigner, error) {
+func newLoomCanonicalProjectionSigner(cfg *config.Config, relays []string, logger *zap.Logger) (loom.CanonicalSigner, *signetAdapter.ConnectionManager, error) {
 	if cfg == nil || !cfg.Loom.CanonicalProjection.Enabled {
-		return nil, nil
+		return nil, nil, nil
 	}
 	projection := cfg.Loom.CanonicalProjection
 	if strings.TrimSpace(projection.SignetBunkerURI) == "" && !cfg.DevMode {
-		return nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
+		return nil, nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
 	}
 	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{
 		BunkerURI:       projection.SignetBunkerURI,
@@ -3124,20 +3137,69 @@ func newLoomCanonicalProjectionSigner(ctx context.Context, cfg *config.Config, r
 		AllowMock:       cfg.DevMode,
 	}, slog.Default())
 	if err != nil {
-		return nil, fmt.Errorf("initialize Signet client: %w", err)
+		return nil, nil, fmt.Errorf("initialize Signet client: %w", err)
 	}
-	if err := signetClient.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connect Signet client: %w", err)
-	}
-	if signetClient.IsMockMode() {
-		logger.Warn("Loom canonical projection will use Signet dev/mock signer")
-	} else {
-		logger.Info("Loom canonical projection will use Signet/NIP-46 signer")
-	}
-	return signetClient, nil
+	manager := signetAdapter.NewConnectionManager(signetClient, signetAdapter.ConnectionManagerConfig{
+		Name: "loom", AttemptTimeout: projection.SignetConnectTimeout, Logger: slog.Default(),
+	})
+	logger.Info("Loom canonical projection Signet client configured for asynchronous connection")
+	return signetClient, manager, nil
 }
 
-func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) service.AssistantIdentity {
+func registerSignetHealthCheck(provider *HealthProvider, manager *signetAdapter.ConnectionManager, tier Tier) {
+	if provider == nil || manager == nil {
+		return
+	}
+	provider.RegisterCheck(manager.Name(), int(tier), func() HealthCheck {
+		state := manager.State()
+		status := HealthStatusWarn
+		message := "Signet signer is disconnected; signing-required operations fail with ErrNotConnected"
+		if state.Connected {
+			status = HealthStatusPass
+			message = "Signet signer is connected"
+		}
+		details := map[string]string{
+			"state":        "disconnected",
+			"last_error":   state.LastError,
+			"last_attempt": "",
+			"last_success": "",
+		}
+		if state.Connected {
+			details["state"] = "connected"
+		}
+		if !state.LastAttempt.IsZero() {
+			details["last_attempt"] = state.LastAttempt.Format(time.RFC3339Nano)
+		}
+		if !state.LastSuccess.IsZero() {
+			details["last_success"] = state.LastSuccess.Format(time.RFC3339Nano)
+		}
+		return HealthCheck{Name: manager.Name(), Status: status, Message: message, Tier: int(tier), Details: details}
+	})
+}
+
+type operatorAssistantBootstrapRunner struct {
+	signer  *signetAdapter.Client
+	reactor *soulfactory.Reactor
+	logger  *zap.Logger
+}
+
+func (r *operatorAssistantBootstrapRunner) Name() string { return "operator-assistant-soul-bootstrap" }
+
+func (r *operatorAssistantBootstrapRunner) Run(ctx context.Context) error {
+	for {
+		if err := r.signer.WaitUntilConnected(ctx); err != nil {
+			return nil
+		}
+		if _, err := soulfactory.EnsureOperatorAssistantSoul(ctx, r.reactor); err != nil && ctx.Err() == nil {
+			r.logger.Warn("operator assistant soul bootstrap failed", zap.Error(err))
+		}
+		if err := r.signer.WaitUntilDisconnected(ctx); err != nil {
+			return nil
+		}
+	}
+}
+
+func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap.Logger) (service.AssistantIdentity, *signetAdapter.ConnectionManager, BackgroundRunner) {
 	identity := service.AssistantIdentity{AgentID: soulfactory.OperatorAssistantAgentID}
 	if cfg != nil && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 		if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
@@ -3145,25 +3207,19 @@ func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays 
 		}
 	}
 	if cfg == nil || (!cfg.DevMode && !cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
-		return identity
+		return identity, nil, nil
 	}
 	slogLogger := slog.Default()
 	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock}, slogLogger)
 	if err != nil {
 		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
-		return identity
-	}
-	if err := signetClient.Connect(ctx); err != nil {
-		logger.Warn("operator assistant signet connection failed; using service-key attribution fallback", zap.Error(err))
-		return identity
+		return identity, nil, nil
 	}
 	soulReactor := soulfactory.NewReactor(soulfactory.Config{Relays: relays, AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys}, nil, signetClient, slogLogger)
-	bootstrapped, err := soulfactory.EnsureOperatorAssistantSoul(ctx, soulReactor)
-	if err != nil {
-		logger.Warn("operator assistant soul bootstrap failed; using service-key attribution fallback", zap.Error(err))
-		return identity
-	}
-	return service.AssistantIdentity{AgentID: bootstrapped.AgentID, Pubkey: bootstrapped.Pubkey, Npub: bootstrapped.Npub}
+	manager := signetAdapter.NewConnectionManager(signetClient, signetAdapter.ConnectionManagerConfig{
+		Name: "operator-assistant", AttemptTimeout: cfg.Assistant.SignetConnectTimeout, Logger: slogLogger,
+	})
+	return identity, manager, &operatorAssistantBootstrapRunner{signer: signetClient, reactor: soulReactor, logger: logger}
 }
 
 func loadAssistantSessions(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger) []domain.AssistantSession {

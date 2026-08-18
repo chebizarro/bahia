@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "BRS-AC-001", "text": "app.New performs no synchronous Signet network connection."},
+    {"id": "BRS-AC-002", "text": "Each Signet client reconnects using bounded attempts, backoff, jitter, and fresh deadline-free connection lifetime contexts."},
+    {"id": "BRS-AC-003", "text": "Disconnected signing fails explicitly and readiness is degraded with connection diagnostics while liveness stays healthy."},
+    {"id": "BRS-AC-004", "text": "Soul Factory waits for signing readiness and replays queued history without repeating terminal work."},
+    {"id": "BRS-AC-005", "text": "The OpenClaw sidecar readiness signal requires capability publication and subscription EOSE."}
+  ]
+}

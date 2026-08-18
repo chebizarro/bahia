@@ -1,0 +1,9 @@
+{
+  "tests": [
+    {"test_id": "BRS-T-001", "ac_ids": ["BRS-AC-001", "BRS-AC-003"], "target": "internal/app/app_startup_test.go"},
+    {"test_id": "BRS-T-002", "ac_ids": ["BRS-AC-002"], "target": "internal/adapters/signet/connection_manager_test.go"},
+    {"test_id": "BRS-T-003", "ac_ids": ["BRS-AC-003"], "target": "internal/app/health_test.go"},
+    {"test_id": "BRS-T-004", "ac_ids": ["BRS-AC-004"], "target": "internal/soulfactory/reactor_test.go"},
+    {"test_id": "BRS-T-005", "ac_ids": ["BRS-AC-005"], "target": "cmd/openclaw-soulfactory-sidecar/main_test.go"}
+  ]
+}

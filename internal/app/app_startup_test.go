@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,8 +105,12 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 
 	require.NotNil(t, app.SoulFactory)
 	require.True(t, appHasRunner(app, "soulfactory"))
-	require.True(t, signer.connected)
-	require.NoError(t, signer.connectCtx.Err(), "SoulFactory signer connection must outlive startup")
+	require.False(t, signer.connected, "app.New must not synchronously connect Signet")
+	require.Zero(t, signer.connectCalls, "app.New must not start a stale Signet attempt")
+	require.True(t, appHasRunner(app, "signet-soulfactory"))
+	recorder := httptest.NewRecorder()
+	app.HTTPServer.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Len(t, adapterConfigs, 1)
 	adapterConfig := adapterConfigs[0]
 	require.Equal(t, domain.RuntimeTargetOpenClaw, adapterConfig.Target)
@@ -373,11 +379,12 @@ func startupTestConfig(mode Mode) *config.Config {
 }
 
 type fakeSoulFactorySigner struct {
-	secret     string
-	pubkey     string
-	connected  bool
-	closed     bool
-	connectCtx context.Context
+	secret       string
+	pubkey       string
+	connected    bool
+	closed       bool
+	connectCtx   context.Context
+	connectCalls int
 }
 
 func newFakeSoulFactorySigner(t *testing.T) *fakeSoulFactorySigner {
@@ -387,10 +394,44 @@ func newFakeSoulFactorySigner(t *testing.T) *fakeSoulFactorySigner {
 }
 
 func (s *fakeSoulFactorySigner) Connect(ctx context.Context) error {
+	s.connectCalls++
 	s.connected = true
 	s.connectCtx = ctx
 	return nil
 }
+
+func (s *fakeSoulFactorySigner) Ping(context.Context) error {
+	if !s.connected {
+		return signetAdapter.ErrNotConnected
+	}
+	return nil
+}
+
+func (s *fakeSoulFactorySigner) IsConnected() bool { return s.connected }
+
+func (s *fakeSoulFactorySigner) WaitUntilConnected(ctx context.Context) error {
+	for !s.connected {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+func (s *fakeSoulFactorySigner) WaitUntilDisconnected(ctx context.Context) error {
+	for s.connected {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+func (s *fakeSoulFactorySigner) ConfiguredPublicKey() (string, error) { return s.pubkey, nil }
 
 func (s *fakeSoulFactorySigner) GetPublicKey(context.Context) (string, error) {
 	return s.pubkey, nil

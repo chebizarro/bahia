@@ -55,12 +55,15 @@ Use the Bahia SoulFactory controller pubkey (resolved from the controller's Sign
   -trusted-controller-pubkeys '<soulfactory-controller-pubkey>' \
   -relays wss://relay.example.com \
   -control-relays wss://relay.example.com \
+  -health-addr 127.0.0.1:8081 \
   -idempotency-store /var/lib/bahia/openclaw-soulfactory-sidecar-idempotency.json
 ```
 
 Deploy it as a supervised service. Persist both the key file and idempotency store with restrictive permissions. The JSON store lets exact `38384` replay after restart republish the cached `38386` without repeating local side effects.
 
 The relay bus handles stored-event backfill then remains live, reconnects with backoff, and retries a subscription after NIP-42 auth when a relay sends `auth-required:`.
+
+The sidecar exposes `GET /health` for process liveness and `GET /ready` for functional readiness on `-health-addr` (default `127.0.0.1:8081`). Readiness returns HTTP 200 only after the kind-`30317` capability was accepted by a relay and the control subscription reached EOSE. Before both conditions it returns HTTP 503 with `capability_published`, `subscription_eose`, and `last_error` fields. Supervised-service healthchecks must use `/ready`, not a PID-only check; use `/health` only as a separate liveness probe.
 
 ## 5. Verify capability publication
 
@@ -96,7 +99,7 @@ If configured `soul_factory.nip29_groups` fail AUTH or relay `OK`, provisioning 
 
 After a controlled sidecar restart, replay the exact `38384` and confirm it republishes the cached result without rerunning OpenClaw commands.
 
-The Bahia reactor separately backfills the newest `5950`, newest `1950`, and stored `38386` results. A late valid success `38386` can reconcile an earlier deploy-stage timeout without repeating earlier provisioning stages.
+The Bahia reactor separately backfills queued `5950` and `1950` events (up to 1000 of each per relay subscription) and stored `38386` results. A late valid success `38386` can reconcile an earlier deploy-stage timeout without repeating earlier provisioning stages.
 
 ## 8. Rollback
 

@@ -373,13 +373,17 @@ func TestClient_SignNIP98_ExplicitMockMode(t *testing.T) {
 	}
 }
 
-func TestNewClientDoesNotInstallOperationDeadlines(t *testing.T) {
+func TestNewClientKeepsConnectAttemptTimeoutOutOfOperationContexts(t *testing.T) {
 	client, err := NewClient(Config{ConnectTimeout: 2 * time.Second, SignTimeout: 3 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	if client == nil {
 		t.Fatal("NewClient() returned nil")
+	}
+	manager := NewConnectionManager(client, ConnectionManagerConfig{})
+	if manager.cfg.AttemptTimeout != 2*time.Second {
+		t.Fatalf("manager attempt timeout = %s, want 2s", manager.cfg.AttemptTimeout)
 	}
 }
 

@@ -181,6 +181,7 @@ var constantJustifications = map[string]KindJustification{
 	"AssistantTranscript":            omitted("AssistantTranscript", kinds.AssistantTranscript, "canonical-alias", "semantic alias for CAS agent heartbeat kind 30316 used by assistant transcript sidecar reads; not a Bahia legacy migration input"),
 	"CASControlState":                omitted("CASControlState", kinds.CASControlState, "canonical-target", "canonical CAS control-plane state output; legacy read models map to this kind"),
 	"LoomWorkerAdvertisement":        omitted("LoomWorkerAdvertisement", kinds.LoomWorkerAdvertisement, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"LoomJobRequest":                 omitted("LoomJobRequest", kinds.LoomJobRequest, "interop", "open Loom protocol request consumed directly, not a Bahia legacy kind to rewrite"),
 	"LoomJobStatusUpdate":            omitted("LoomJobStatusUpdate", kinds.LoomJobStatusUpdate, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
 	"LoomJobResult":                  omitted("LoomJobResult", kinds.LoomJobResult, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
 	"LoomJobCancellation":            omitted("LoomJobCancellation", kinds.LoomJobCancellation, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),

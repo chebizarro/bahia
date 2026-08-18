@@ -131,7 +131,7 @@ func (p *HealthProvider) Readiness() HealthSnapshot {
 	snapshot.Status = SnapshotStatusHealthy
 	if !snapshot.Ready {
 		snapshot.Status = SnapshotStatusUnhealthy
-	} else if p.modePolicy.IsDegraded() {
+	} else if p.modePolicy.IsDegraded() || checksWarn(snapshot.Checks) {
 		snapshot.Status = SnapshotStatusDegraded
 	}
 	return snapshot
@@ -258,9 +258,18 @@ func (p *HealthProvider) backgroundRunnersCheck(activeTier int) HealthCheck {
 
 func checksPass(checks []HealthCheck) bool {
 	for _, check := range checks {
-		if check.Status != HealthStatusPass {
+		if check.Status == HealthStatusFail || check.Status == HealthStatusUnknown {
 			return false
 		}
 	}
 	return true
+}
+
+func checksWarn(checks []HealthCheck) bool {
+	for _, check := range checks {
+		if check.Status == HealthStatusWarn {
+			return true
+		}
+	}
+	return false
 }

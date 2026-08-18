@@ -1,0 +1,5 @@
+{
+  "feature_id": "BAHIA_RESILIENT_SIGNET_STARTUP",
+  "external_task": "bahia-resilient-signet-startup-20260818",
+  "intent": "Bahia startup, liveness, and non-signing relay consumption remain available while Signet is unavailable, with automatic bounded reconnect and explicit degraded readiness."
+}

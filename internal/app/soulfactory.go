@@ -23,14 +23,20 @@ import (
 type soulFactorySignerClient interface {
 	soulfactory.Signer
 	Connect(context.Context) error
+	Ping(context.Context) error
+	IsConnected() bool
+	WaitUntilConnected(context.Context) error
+	WaitUntilDisconnected(context.Context) error
+	ConfiguredPublicKey() (string, error)
 	GetPublicKey(context.Context) (string, error)
 	Close() error
 }
 
 type soulFactoryRuntime struct {
-	reactor *soulfactory.Reactor
-	runner  BackgroundRunner
-	close   func() error
+	reactor    *soulfactory.Reactor
+	runner     BackgroundRunner
+	connection *signetAdapter.ConnectionManager
+	close      func() error
 }
 
 var (
@@ -71,17 +77,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		return nil, fmt.Errorf("creating SoulFactory Signet client: %w", err)
 	}
 	closeSigner := func() error { return signer.Close() }
-	startupCtx, cancelStartup := context.WithTimeout(ctx, sf.StartupTimeout)
-	defer cancelStartup()
-	// The NIP-46 client retains its Connect context for the lifetime of its
-	// response subscription. Its own ConnectTimeout bounds the handshake; pass
-	// the application context here so the subscription survives startup.
-	if err := signer.Connect(ctx); err != nil {
-		_ = closeSigner()
-		return nil, fmt.Errorf("connecting SoulFactory Signet client: %w", err)
-	}
-
-	controllerPubkey, err := resolveSoulFactoryControllerPubkey(startupCtx, sf.SoulFactoryPubkey, signer)
+	controllerPubkey, err := resolveSoulFactoryControllerPubkey(ctx, sf.SoulFactoryPubkey, signer)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -156,11 +152,15 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		return nil, err
 	}
 
-	logger.Info("SoulFactory runtime reactor configured", zap.Strings("relays", sf.Relays), zap.Strings("additional_relays", sf.AdditionalRelays), zap.Strings("agent_runtimes", sf.AgentRuntimes), zap.String("controller_pubkey", controllerPubkey))
+	connection := signetAdapter.NewConnectionManager(signer, signetAdapter.ConnectionManagerConfig{
+		Name: "soulfactory", AttemptTimeout: sf.StartupTimeout, Logger: slogLogger,
+	})
+	logger.Info("SoulFactory runtime reactor configured; Signet connection will start asynchronously", zap.Strings("relays", sf.Relays), zap.Strings("additional_relays", sf.AdditionalRelays), zap.Strings("agent_runtimes", sf.AgentRuntimes), zap.String("controller_pubkey", controllerPubkey))
 	return &soulFactoryRuntime{
-		reactor: reactor,
-		runner:  &soulFactoryRunner{reactor: reactor},
-		close:   closeSigner,
+		reactor:    reactor,
+		runner:     &soulFactoryRunner{reactor: reactor, signer: signer, controllerPubkey: controllerPubkey},
+		connection: connection,
+		close:      closeSigner,
 	}, nil
 }
 
@@ -265,28 +265,25 @@ func resolveSoulFactoryControllerPubkey(ctx context.Context, configured string, 
 	if signer == nil {
 		return "", fmt.Errorf("SoulFactory Signet signer is not configured")
 	}
-	signerPubkey, err := signer.GetPublicKey(ctx)
+	configured = strings.ToLower(strings.TrimSpace(configured))
+	if configured != "" {
+		if err := validateSoulFactoryHexPubkey(configured); err != nil {
+			return "", fmt.Errorf("SoulFactory configured pubkey is invalid: %w", err)
+		}
+		return configured, nil
+	}
+	signerPubkey, err := signer.ConfiguredPublicKey()
 	if err != nil {
 		return "", fmt.Errorf("resolving SoulFactory Signet pubkey: %w", err)
 	}
 	signerPubkey = strings.ToLower(strings.TrimSpace(signerPubkey))
-	configured = strings.ToLower(strings.TrimSpace(configured))
 	if signerPubkey == "" {
 		return "", fmt.Errorf("SoulFactory Signet pubkey is empty")
 	}
 	if err := validateSoulFactoryHexPubkey(signerPubkey); err != nil {
 		return "", fmt.Errorf("SoulFactory Signet pubkey is invalid: %w", err)
 	}
-	if configured == "" {
-		return signerPubkey, nil
-	}
-	if err := validateSoulFactoryHexPubkey(configured); err != nil {
-		return "", fmt.Errorf("SoulFactory configured pubkey is invalid: %w", err)
-	}
-	if signerPubkey != configured {
-		return "", fmt.Errorf("SoulFactory configured pubkey %s does not match Signet pubkey %s", configured, signerPubkey)
-	}
-	return configured, nil
+	return signerPubkey, nil
 }
 
 func validateSoulFactoryHexPubkey(pubkey string) error {
@@ -333,7 +330,9 @@ func firstConfiguredBlossomServer(cfg config.BlossomConfig) string {
 }
 
 type soulFactoryRunner struct {
-	reactor *soulfactory.Reactor
+	reactor          *soulfactory.Reactor
+	signer           soulFactorySignerClient
+	controllerPubkey string
 }
 
 func (r *soulFactoryRunner) Name() string { return "soulfactory" }
@@ -342,7 +341,44 @@ func (r *soulFactoryRunner) Run(ctx context.Context) error {
 	if r == nil || r.reactor == nil {
 		return fmt.Errorf("SoulFactory reactor is not configured")
 	}
-	return r.reactor.Run(ctx)
+	if r.signer == nil {
+		return fmt.Errorf("SoulFactory signer is not configured")
+	}
+	// Subscription starts only after signing is available. This avoids consuming
+	// a request that cannot publish a durable terminal result. On disconnect the
+	// subscription is restarted after recovery, replaying unfinished history.
+	for {
+		if err := r.signer.WaitUntilConnected(ctx); err != nil {
+			return nil
+		}
+		signerPubkey, err := r.signer.GetPublicKey(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve connected SoulFactory signer pubkey: %w", err)
+		}
+		if !strings.EqualFold(strings.TrimSpace(signerPubkey), strings.TrimSpace(r.controllerPubkey)) {
+			return fmt.Errorf("SoulFactory configured pubkey %s does not match Signet pubkey %s", r.controllerPubkey, signerPubkey)
+		}
+		runCtx, cancel := context.WithCancel(ctx)
+		result := make(chan error, 1)
+		go func() { result <- r.reactor.Run(runCtx) }()
+		disconnected := make(chan error, 1)
+		go func() { disconnected <- r.signer.WaitUntilDisconnected(runCtx) }()
+		select {
+		case err := <-result:
+			cancel()
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		case <-disconnected:
+			cancel()
+			<-result
+		case <-ctx.Done():
+			cancel()
+			<-result
+			return nil
+		}
+	}
 }
 
 var _ soulFactorySignerClient = (*signetAdapter.Client)(nil)

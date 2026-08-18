@@ -32,7 +32,7 @@ func attachPublishCapture(reactor *Reactor) *capturedPublish {
 	return capture
 }
 
-func TestReactorBackfillsLatestRequestAndActionBeforeLiveUpdates(t *testing.T) {
+func TestReactorBackfillsRequestAndActionBacklogBeforeLiveUpdates(t *testing.T) {
 	endpoint := newFakeRelayEndpoint("wss://relay.example")
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
@@ -55,7 +55,7 @@ func TestReactorBackfillsLatestRequestAndActionBeforeLiveUpdates(t *testing.T) {
 		t.Fatalf("subscription filters = %d, want provisioning, lifecycle, and runtime-result filters", len(filters))
 	}
 	for _, filter := range filters {
-		wantLimit := 1
+		wantLimit := 1000
 		if slices.Contains(filter.Kinds, nostr.Kind(domain.KindRuntimeControlResult)) {
 			wantLimit = 100
 		}
