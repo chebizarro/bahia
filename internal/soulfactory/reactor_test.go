@@ -73,6 +73,102 @@ func TestReactorBackfillsRequestAndActionBacklogBeforeLiveUpdates(t *testing.T) 
 	}
 }
 
+type blockingProvisioningEngine struct {
+	started chan string
+	release <-chan struct{}
+}
+
+func (e blockingProvisioningEngine) Provision(ctx context.Context, req *domain.ProvisioningRequest, _ *domain.ProvisioningRun) (*domain.AgentSoul, error) {
+	e.started <- req.AgentID
+	<-e.release
+	return nil, ctx.Err()
+}
+
+func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
+	factory := newFakeSigner(t)
+	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	subscription := newFakeRelaySubscription()
+	endpoint.subscribeQueue <- subscription
+	bus, err := newSoulFactoryRelayBusFromEndpoints(
+		[]relayBusEndpoint{endpoint},
+		WithRelayBusBackoff(immediateRelayBusBackoff),
+	)
+	if err != nil {
+		t.Fatalf("new relay bus: %v", err)
+	}
+
+	release := make(chan struct{})
+	started := make(chan string, reactorHandlerWorkers+1)
+	reactor := NewReactor(
+		Config{
+			Relays:            []string{endpoint.url},
+			SoulFactoryPubkey: factory.pubkey,
+			AuthorizedPubkeys: []string{factory.pubkey},
+		},
+		nil,
+		factory,
+		slog.Default(),
+		WithProvisioningEngine(blockingProvisioningEngine{started: started, release: release}),
+	)
+	reactor.relayBus = bus
+	reactor.findProvisioningResultFn = func(context.Context, string) (*nostr.Event, error) {
+		return nil, nil
+	}
+	reactor.publishFn = func(context.Context, *nostr.Event, []string) error { return nil }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- reactor.Run(ctx) }()
+	<-endpoint.subscribeCalls
+
+	for i := 0; i < reactorHandlerWorkers+1; i++ {
+		event := &nostr.Event{
+			Kind:      nostr.Kind(domain.KindProvisioningRequest),
+			CreatedAt: nostr.Now(),
+			Tags:      nostr.Tags{{tagAgentID, fmt.Sprintf("agent-%d", i)}},
+			Content:   fmt.Sprintf(`{"brief":"provision agent %d"}`, i),
+		}
+		if err := factory.Sign(t.Context(), event); err != nil {
+			t.Fatalf("sign request %d: %v", i, err)
+		}
+		subscription.events <- event
+	}
+	for i := 0; i < reactorHandlerWorkers; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("handler %d did not start", i)
+		}
+	}
+	select {
+	case agentID := <-started:
+		t.Fatalf("more than %d handlers ran concurrently; extra agent %s started", reactorHandlerWorkers, agentID)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		t.Fatalf("Run returned before in-flight handlers drained: %v", err)
+	default:
+	}
+
+	close(release)
+	select {
+	case err := <-runDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after in-flight handlers drained")
+	}
+	for requestID, run := range reactor.runs {
+		if run.Status == domain.ProvisioningStatusRunning {
+			t.Fatalf("request %s remained running after reactor shutdown", requestID)
+		}
+	}
+}
+
 func TestLateRuntimeSuccessProjectsSoulAndTerminalResultExactlyOnce(t *testing.T) {
 	factory := newFakeSigner(t)
 	operator := newFakeSigner(t)
