@@ -10,13 +10,15 @@ import (
 )
 
 type managedClientFake struct {
-	mu           sync.Mutex
-	attempts     int
-	failures     int
-	pingFailures int
-	block        bool
-	connected    bool
-	active       atomic.Int32
+	mu            sync.Mutex
+	attempts      int
+	failures      int
+	pingFailures  int
+	block         bool
+	connected     bool
+	active        atomic.Int32
+	contexts      chan context.Context
+	cancelRelease <-chan struct{}
 }
 
 func (f *managedClientFake) Connect(ctx context.Context) error {
@@ -26,9 +28,17 @@ func (f *managedClientFake) Connect(ctx context.Context) error {
 	f.attempts++
 	attempt := f.attempts
 	block := f.block
+	contexts := f.contexts
+	cancelRelease := f.cancelRelease
 	f.mu.Unlock()
+	if contexts != nil {
+		contexts <- ctx
+	}
 	if block {
 		<-ctx.Done()
+		if cancelRelease != nil {
+			<-cancelRelease
+		}
 		return ctx.Err()
 	}
 	if attempt <= f.failures {
@@ -92,6 +102,92 @@ func TestConnectionManagerTimesOutInitialAttemptAndStopsCleanly(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Run() did not stop during retry")
+	}
+	if active := client.active.Load(); active != 0 {
+		t.Fatalf("active Connect goroutines = %d, want 0", active)
+	}
+}
+
+func TestConnectionManagerUsesDeadlineFreeLifetimeAndForwardsCancellation(t *testing.T) {
+	contexts := make(chan context.Context, 1)
+	client := &managedClientFake{block: true, contexts: contexts}
+	manager := NewConnectionManager(client, ConnectionManagerConfig{
+		Name: "lifetime", AttemptTimeout: time.Hour,
+		MinBackoff: time.Hour, MaxBackoff: time.Hour,
+		HeartbeatInterval: time.Hour, JitterFraction: -1,
+	})
+	parent, cancel := context.WithTimeout(context.Background(), time.Hour)
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(parent) }()
+
+	var lifetime context.Context
+	select {
+	case lifetime = <-contexts:
+	case <-time.After(time.Second):
+		t.Fatal("Connect was not called")
+	}
+	if _, ok := lifetime.Deadline(); ok {
+		t.Fatal("Connect lifetime inherited the parent deadline")
+	}
+	cancel()
+	select {
+	case <-lifetime.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Connect lifetime was not cancelled with the parent")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not stop")
+	}
+}
+
+func TestConnectionManagerWaitsForTimedOutAttemptToExit(t *testing.T) {
+	contexts := make(chan context.Context, 2)
+	release := make(chan struct{})
+	client := &managedClientFake{block: true, contexts: contexts, cancelRelease: release}
+	manager := NewConnectionManager(client, ConnectionManagerConfig{
+		Name: "slow-cancel", AttemptTimeout: 10 * time.Millisecond,
+		MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond,
+		HeartbeatInterval: time.Hour, JitterFraction: -1,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+
+	var attempt context.Context
+	select {
+	case attempt = <-contexts:
+	case <-time.After(time.Second):
+		t.Fatal("Connect was not called")
+	}
+	select {
+	case <-attempt.Done():
+	case <-time.After(time.Second):
+		t.Fatal("attempt was not cancelled after its timeout")
+	}
+	if got := client.Attempts(); got != 1 {
+		t.Fatalf("Connect attempts while cancellation was delayed = %d, want 1", got)
+	}
+	select {
+	case <-contexts:
+		t.Fatal("a second Connect attempt started before the first exited")
+	default:
+	}
+
+	close(release)
+	waitManagerState(t, manager, func(state ConnectionState) bool { return state.LastError != "" })
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not stop")
 	}
 	if active := client.active.Load(); active != 0 {
 		t.Fatalf("active Connect goroutines = %d, want 0", active)

@@ -53,10 +53,9 @@ type ConnectionManager struct {
 	client ManagedClient
 	cfg    ConnectionManagerConfig
 
-	mu        sync.RWMutex
-	state     ConnectionState
-	changes   chan ConnectionState
-	attemptWG sync.WaitGroup
+	mu      sync.RWMutex
+	state   ConnectionState
+	changes chan ConnectionState
 }
 
 func NewConnectionManager(client ManagedClient, cfg ConnectionManagerConfig) *ConnectionManager {
@@ -113,7 +112,6 @@ func (m *ConnectionManager) Run(ctx context.Context) error {
 	if m == nil || m.client == nil {
 		return fmt.Errorf("Signet connection manager client is not configured")
 	}
-	defer m.attemptWG.Wait()
 	backoff := m.cfg.MinBackoff
 	for {
 		if ctx.Err() != nil {
@@ -152,11 +150,9 @@ func (m *ConnectionManager) connectAttempt(ctx context.Context) (context.CancelF
 	m.publishStateLocked()
 	m.mu.Unlock()
 
-	lifetimeCtx, cancelLifetime := context.WithCancel(ctx)
+	lifetimeCtx, cancelLifetime := deadlineFreeLifetime(ctx)
 	result := make(chan error, 1)
-	m.attemptWG.Add(1)
 	go func() {
-		defer m.attemptWG.Done()
 		result <- m.client.Connect(lifetimeCtx)
 	}()
 	timer := time.NewTimer(m.cfg.AttemptTimeout)
@@ -176,10 +172,26 @@ func (m *ConnectionManager) connectAttempt(ctx context.Context) (context.CancelF
 		return cancelLifetime, nil
 	case <-timer.C:
 		cancelLifetime()
+		// Do not start another attempt until this one has observed cancellation
+		// and exited. This keeps exactly one Connect call active per manager.
+		<-result
 		return nil, fmt.Errorf("Signet connection attempt timed out after %s", m.cfg.AttemptTimeout)
 	case <-ctx.Done():
 		cancelLifetime()
+		<-result
 		return nil, ctx.Err()
+	}
+}
+
+func deadlineFreeLifetime(parent context.Context) (context.Context, context.CancelFunc) {
+	// ConnectBunker retains this context for the full subscription lifetime, so
+	// parent values are preserved but its deadline/cancellation are detached.
+	// Cancellation is then forwarded explicitly without copying the deadline.
+	lifetime, cancelLifetime := context.WithCancel(context.WithoutCancel(parent))
+	stopForwarding := context.AfterFunc(parent, cancelLifetime)
+	return lifetime, func() {
+		stopForwarding()
+		cancelLifetime()
 	}
 }
 

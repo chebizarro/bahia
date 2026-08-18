@@ -9,6 +9,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
+	"fiatjaf.com/nostr/nip46"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -33,6 +34,46 @@ func TestNewClient_WithSecretKey(t *testing.T) {
 	}
 	if client.clientSecretKey != sk {
 		t.Error("NewClient() should use provided secret key")
+	}
+}
+
+func TestClient_CloseCancelsOwnedLifetimeAndClearsAgentBunkers(t *testing.T) {
+	client, err := NewClient(Config{AllowMock: true}, nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	parent := context.Background()
+	lifetime, cancelLifetime := context.WithCancel(parent)
+	client.setConnection(nil, lifetime, cancelLifetime, true)
+
+	client.mu.Lock()
+	generation := client.connectionGeneration
+	client.agents["agent"] = &AgentIdentity{
+		AgentID:          "agent",
+		bunkerClient:     &nip46.BunkerClient{},
+		bunkerGeneration: generation,
+	}
+	client.mu.Unlock()
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-lifetime.Done():
+	default:
+		t.Fatal("Close() did not cancel the client-owned connection lifetime")
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.connected || client.lifetime != nil || client.lifetimeCancel != nil {
+		t.Fatalf("client remained connected after Close: connected=%v lifetime=%v cancel=%v", client.connected, client.lifetime, client.lifetimeCancel != nil)
+	}
+	if client.agents["agent"].bunkerClient != nil || client.agents["agent"].bunkerGeneration != 0 {
+		t.Fatal("Close() did not clear the cached agent bunker")
+	}
+	if client.connectionGeneration == generation {
+		t.Fatal("Close() did not advance the connection generation")
 	}
 }
 
