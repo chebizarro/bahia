@@ -277,7 +277,9 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			eose = nil
 		case event, ok := <-sub.Events:
 			if !ok {
-				return fmt.Errorf("OpenClaw SoulFactory sidecar subscription closed")
+				err := fmt.Errorf("OpenClaw SoulFactory sidecar subscription closed")
+				s.setReadinessError(err)
+				return err
 			}
 			if _, err := s.HandleControlEvent(ctx, event); err != nil {
 				s.logger.Warn("OpenClaw SoulFactory request rejected or failed", "event", event.ID, "error", err)
@@ -287,7 +289,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 }
 
 func (s *OpenClawSidecar) PublishCapability(ctx context.Context) error {
-	event, err := s.BuildCapabilityEvent()
+	event, err := s.BuildCapabilityEvent(ctx)
 	if err != nil {
 		return err
 	}
@@ -352,7 +354,7 @@ func (s *OpenClawSidecar) clearSubscriptionReadiness() {
 	s.readinessMu.Unlock()
 }
 
-func (s *OpenClawSidecar) BuildCapabilityEvent() (*nostr.Event, error) {
+func (s *OpenClawSidecar) BuildCapabilityEvent(ctx context.Context) (*nostr.Event, error) {
 	content, err := json.Marshal(map[string]interface{}{
 		"schema":             domain.SoulFactoryRuntimeCapabilitySchema,
 		"runtime":            string(domain.RuntimeTargetOpenClaw),
@@ -390,7 +392,7 @@ func (s *OpenClawSidecar) BuildCapabilityEvent() (*nostr.Event, error) {
 	appendRelayTags("control", s.relayHints.Control)
 	tags = append(tags, s.capabilityTags...)
 	event := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeCapability), CreatedAt: nostr.Timestamp(s.now().Unix()), Tags: tags, Content: string(content)}
-	if err := signGoNostrEvent(context.Background(), s.signer, event); err != nil {
+	if err := signGoNostrEvent(ctx, s.signer, event); err != nil {
 		return nil, fmt.Errorf("sign OpenClaw capability: %w", err)
 	}
 	if event.PubKey.Hex() != s.runtimePubkey {
