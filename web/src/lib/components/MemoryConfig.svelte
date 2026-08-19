@@ -23,7 +23,7 @@
     { id: 'long-term', label: 'Long-term', description: 'Favor durable facts and workspace knowledge across many sessions.' },
     { id: 'ephemeral', label: 'Ephemeral', description: 'Prefer short-lived context unless an event explicitly marks memory for retention.' }
   ];
-  const rerankModels = ['cohere-rerank-v3', 'rerank-english-v3.0', 'bge-reranker-large', 'local-reranker'];
+  const rerankModels = ['rerank-v3.5', 'cohere-rerank-v3', 'rerank-english-v3.0', 'rerank-multilingual-v3.0'];
 
   let reindexing = $state(false);
   let reindexMessage = $state('');
@@ -234,7 +234,7 @@
           <h4>Reranking</h4>
           <p>Optionally rerank retrieved chunks after vector search for higher precision.</p>
         </div>
-        <label class="toggle-row"><input type="checkbox" checked={search.rerank || false} disabled={disabled || reindexing} onchange={(event) => patchSearch({ rerank: event.currentTarget.checked })} /> Enabled</label>
+        <label class="toggle-row"><input type="checkbox" checked={search.rerank || false} disabled={disabled || reindexing} onchange={(event) => patchSearch(event.currentTarget.checked ? { rerank: true, rerank_model: rerankModels.includes(search.rerank_model) ? search.rerank_model : rerankModels[0] } : { rerank: false, rerank_model: '' })} /> Enabled</label>
       </div>
 
       {#if search.rerank || showAdvanced}

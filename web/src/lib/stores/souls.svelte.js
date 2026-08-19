@@ -343,6 +343,23 @@ export function createDefaultMemorySpec(overrides = {}) {
   };
 }
 
+const SUPPORTED_RERANK_MODELS = new Set([
+  'cohere-rerank-v3',
+  'rerank-v3.5',
+  'rerank-english-v3.0',
+  'rerank-multilingual-v3.0'
+]);
+
+export function normalizeProvisioningMemorySpec(memory = {}) {
+  const normalized = createDefaultMemorySpec(memory);
+  if (!normalized.search.rerank) {
+    delete normalized.search.rerank_model;
+  } else if (!SUPPORTED_RERANK_MODELS.has(normalized.search.rerank_model)) {
+    normalized.search.rerank_model = 'rerank-v3.5';
+  }
+  return normalized;
+}
+
 /** @returns {SoulPersonaSpec} */
 export function createDefaultPersonaSpec(overrides = {}) {
   return {
@@ -805,6 +822,9 @@ export async function publishSoulDraft({ agentId, content = {}, templateRef = ''
   await ensureAuthenticated('Authentication required to save soul drafts');
 
   const draftContent = normalizeSoulDraftContent({ schema: SOUL_DRAFT_SCHEMA_V2, ...content });
+  if (draftContent.memory) {
+    draftContent.memory = normalizeProvisioningMemorySpec(draftContent.memory);
+  }
   const id = agentId || draftContent.agent_id || draftContent.agentId || draftContent.identity?.name?.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
   if (!id) throw new Error('Draft requires an agent id');
 

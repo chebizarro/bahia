@@ -210,6 +210,23 @@ describe('Souls Store', () => {
     return { filters, handlers, cleanup };
   }
 
+  it('removes a stale rerank model when reranking is disabled', () => {
+    const memory = soulsModule.normalizeProvisioningMemorySpec({
+      search: { rerank: false, rerank_model: 'local-reranker' }
+    });
+
+    expect(memory.search.rerank).toBe(false);
+    expect(memory.search).not.toHaveProperty('rerank_model');
+  });
+
+  it('maps an unsupported enabled reranker to the backend default', () => {
+    const memory = soulsModule.normalizeProvisioningMemorySpec({
+      search: { rerank: true, rerank_model: 'local-reranker' }
+    });
+
+    expect(memory.search.rerank_model).toBe('rerank-v3.5');
+  });
+
   function applyBackfill(handlers, events) {
     for (const event of events) {
       handlers.onEvent(event);

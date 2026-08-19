@@ -457,6 +457,12 @@
       });
 
       publishResults = request.publishResults;
+      // The controller can publish a terminal result immediately. Restarting after
+      // relay acceptance performs a stored-event query and closes that live-event race.
+      if (provisioningCleanup) provisioningCleanup();
+      provisioningCleanup = trackProvisioningRun(request.event.id, {
+        onError: (message) => console.error('[souls/new] provisioning failed:', message)
+      });
       step = 3;
     } catch (err) {
       error = err.message || 'Failed to publish provisioning request';
