@@ -453,6 +453,7 @@
           provisioningCleanup = trackProvisioningRun(event.id, {
             onError: (message) => console.error('[souls/new] provisioning failed:', message)
           });
+          currentRun = provisioningRuns.get(event.id);
         }
       });
 
@@ -463,6 +464,7 @@
       provisioningCleanup = trackProvisioningRun(request.event.id, {
         onError: (message) => console.error('[souls/new] provisioning failed:', message)
       });
+      currentRun = provisioningRuns.get(request.event.id);
       step = 3;
     } catch (err) {
       error = err.message || 'Failed to publish provisioning request';
