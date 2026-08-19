@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,16 +107,82 @@ func newTestOpenClawSidecar(t *testing.T, runtime, controller fakeSigner, transp
 	return sidecar
 }
 
+type cancellationCheckingSigner struct {
+	sawCancelled bool
+}
+
+func (s *cancellationCheckingSigner) Sign(ctx context.Context, _ *nostr.Event) error {
+	s.sawCancelled = errors.Is(ctx.Err(), context.Canceled)
+	return ctx.Err()
+}
+
+func TestOpenClawCapabilitySigningUsesCallerContext(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, &fakeOpenClawSidecarTransport{}, &fakeOpenClawDriver{})
+	signer := &cancellationCheckingSigner{}
+	sidecar.signer = signer
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := sidecar.BuildCapabilityEvent(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("BuildCapabilityEvent() error = %v, want context cancellation", err)
+	}
+	if !signer.sawCancelled {
+		t.Fatal("capability signer did not receive the cancelled caller context")
+	}
+}
+
+func TestOpenClawSidecarRecordsUnexpectedSubscriptionClosure(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	events := make(chan *nostr.Event)
+	close(events)
+	eose := make(chan struct{})
+	transport := &fakeOpenClawSidecarTransport{sub: &RelayBusSubscription{
+		Events:            events,
+		EndOfStoredEvents: eose,
+	}}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, &fakeOpenClawDriver{})
+
+	err := sidecar.Run(t.Context())
+	if err == nil {
+		t.Fatal("Run() error = nil, want unexpected subscription closure")
+	}
+	readiness := sidecar.Readiness()
+	if readiness.LastError == "" {
+		t.Fatalf("readiness after subscription closure = %+v, want last_error", readiness)
+	}
+	if !strings.Contains(readiness.LastError, "subscription closed") {
+		t.Fatalf("readiness last_error = %q, want subscription closure", readiness.LastError)
+	}
+}
+
 func TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods(t *testing.T) {
 	got := OpenClawCommandDriver{Command: "openclaw-soulfactory-control"}.Methods()
-	want := []string{RuntimeMethodProvision, RuntimeMethodPersonaUpdate, RuntimeMethodRevoke}
+	want := []string{RuntimeMethodProvision, RuntimeMethodUpdate, RuntimeMethodPersonaUpdate, RuntimeMethodRevoke}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("default command-driver methods = %#v, want %#v", got, want)
 	}
-	for _, unsupported := range []string{RuntimeMethodUpdate, RuntimeMethodSuspend, RuntimeMethodResume, RuntimeMethodAvatarGenerate, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure} {
+	for _, unsupported := range []string{RuntimeMethodSuspend, RuntimeMethodResume, RuntimeMethodAvatarGenerate, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure} {
 		if stringInSlice(unsupported, got) {
 			t.Fatalf("default command-driver methods over-advertise unsupported wrapper method %s in %#v", unsupported, got)
 		}
+	}
+}
+
+func TestOpenClawSidecarReadinessRequiresCapabilityAndSubscriptionEOSE(t *testing.T) {
+	sidecar := &OpenClawSidecar{}
+	if state := sidecar.Readiness(); state.Ready {
+		t.Fatalf("initial readiness = %+v, want not ready", state)
+	}
+	sidecar.markCapabilityPublished()
+	if state := sidecar.Readiness(); state.Ready || !state.CapabilityPublished {
+		t.Fatalf("capability-only readiness = %+v, want not ready", state)
+	}
+	sidecar.markSubscriptionEOSE()
+	if state := sidecar.Readiness(); !state.Ready || !state.SubscriptionEOSE {
+		t.Fatalf("fully initialized readiness = %+v, want ready", state)
 	}
 }
 

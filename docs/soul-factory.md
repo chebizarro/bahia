@@ -258,6 +258,10 @@ Rollout of an additional runtime (for example `metiq`): deploy the runtime bridg
 
 ## Troubleshooting
 
+### Signet unavailable at startup
+
+Bahia starts its HTTP listener and non-signing relay consumers without waiting for the Soul Factory bunker. Inspect `GET /ready` for the `signet-soulfactory` check and its `state`, `last_error`, `last_attempt`, and `last_success` details. Disconnection degrades readiness rather than liveness. Fix the bunker or NIP-46 relay and allow the built-in reconnect loop to recover; no Bahia restart is required. The reactor begins or restarts its historical subscription only after signing is available, then replays the queued request backlog while terminal-result deduplication prevents repeated provisioning.
+
 ### No provisioning result
 
 - Confirm a relay accepted the signed request.

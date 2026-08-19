@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"fiatjaf.com/nostr"
 
@@ -54,6 +57,7 @@ func main() {
 	writeRelays := flag.String("write-relays", env("OPENCLAW_SOULFACTORY_WRITE_RELAYS", ""), "comma-separated write relay hints in capability announcements")
 	controlRelays := flag.String("control-relays", env("OPENCLAW_SOULFACTORY_CONTROL_RELAYS", ""), "comma-separated control relay hints in capability announcements")
 	storePath := flag.String("idempotency-store", env("OPENCLAW_SOULFACTORY_IDEMPOTENCY_STORE", defaultStorePath()), "durable JSON idempotency store path")
+	healthAddr := flag.String("health-addr", env("OPENCLAW_SOULFACTORY_HEALTH_ADDR", "127.0.0.1:8081"), "HTTP address for /health and /ready")
 	flag.Var(&args, "arg", "argument to append to the OpenClaw control command; repeatable")
 	flag.Parse()
 
@@ -116,9 +120,45 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := sidecar.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	healthServer := newHealthServer(*healthAddr, sidecar)
+	healthErr := make(chan error, 1)
+	go func() {
+		if err := healthServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			healthErr <- err
+			stop()
+		}
+	}()
+	defer healthServer.Shutdown(context.Background()) //nolint:errcheck
+	runErr := sidecar.Run(ctx)
+	select {
+	case err := <-healthErr:
+		fatalf("sidecar health server stopped: %v", err)
+	default:
+	}
+	if err := runErr; err != nil && !errors.Is(err, context.Canceled) {
 		fatalf("sidecar stopped: %v", err)
 	}
+}
+
+type readinessProvider interface {
+	Readiness() soulfactory.OpenClawSidecarReadiness
+}
+
+func newHealthServer(addr string, sidecar readinessProvider) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"alive": true})
+	})
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
+		state := sidecar.Readiness()
+		w.Header().Set("Content-Type", "application/json")
+		if !state.Ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		_ = json.NewEncoder(w).Encode(state)
+	})
+	return &http.Server{Addr: strings.TrimSpace(addr), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 }
 
 const maxPrivateKeyFileBytes = 4096

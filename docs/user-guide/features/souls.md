@@ -315,7 +315,7 @@ Provisioning requires configured requester pubkeys in `soul_factory.authorized_p
 
 ### Provisioning Fails at Signet
 
-Check bunker connectivity and the configured bunker URI/private-key inputs used by your deployment. The current CLI does not register `bahia auth login`.
+Check `GET /ready` and find `signet-soulfactory`. Its `state`, `last_error`, `last_attempt`, and `last_success` fields distinguish an unattempted connection, an active outage, and recovery. Bahia remains live and retries automatically; signing-required operations fail explicitly while disconnected. After the bunker or NIP-46 relay recovers, readiness returns from degraded to healthy without a restart and the reactor replays queued provisioning history. Also verify the configured bunker URI/private-key inputs used by your deployment. The current CLI does not register `bahia auth login`.
 
 ### Avatar Generation Fails
 

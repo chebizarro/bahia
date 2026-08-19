@@ -67,23 +67,30 @@ type Client struct {
 	clientSecretKey string // Ephemeral key for NIP-46 session
 	requireReal     bool   // Fail closed unless a real Signet bunker is configured and reachable
 	allowMock       bool   // Explicit test/dev-only mock signing mode
+	connectTimeout  time.Duration
 
-	mu        sync.Mutex
-	bunker    *nip46.BunkerClient // Active NIP-46 connection
-	agents    map[string]*AgentIdentity
-	connected bool
-	lifetime  context.Context
+	connectMu            sync.Mutex
+	mu                   sync.Mutex
+	bunker               *nip46.BunkerClient // Active NIP-46 connection
+	agents               map[string]*AgentIdentity
+	connected            bool
+	lifetime             context.Context
+	lifetimeCancel       context.CancelFunc
+	connectionGeneration uint64
+	stateChanged         chan struct{}
 }
 
 // AgentIdentity holds the identity info for a provisioned agent.
 type AgentIdentity struct {
-	AgentID       string
-	Pubkey        string
-	Npub          string
-	BunkerURI     string
-	bunkerClient  *nip46.BunkerClient // Agent-specific bunker connection
-	mockSecretKey string              // Explicit mock-mode-only agent signing key
-	mockStatus    string              // Explicit mock-mode-only lifecycle status
+	connectMu        sync.Mutex
+	AgentID          string
+	Pubkey           string
+	Npub             string
+	BunkerURI        string
+	bunkerClient     *nip46.BunkerClient // Agent-specific bunker connection
+	bunkerGeneration uint64
+	mockSecretKey    string // Explicit mock-mode-only agent signing key
+	mockStatus       string // Explicit mock-mode-only lifecycle status
 }
 
 // Config holds Signet client configuration.
@@ -93,7 +100,7 @@ type Config struct {
 	ClientSecretKey string        // Optional: persistent client key (generated if empty)
 	RequireReal     bool          // When true, missing/unreachable bunker is a hard error
 	AllowMock       bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
-	ConnectTimeout  time.Duration // Deprecated: caller context controls connection lifetime
+	ConnectTimeout  time.Duration // Bounds each connection attempt without becoming the successful connection lifetime
 	SignTimeout     time.Duration // Deprecated: caller context controls signing lifetime
 }
 
@@ -117,27 +124,43 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		clientSecretKey: clientSK,
 		requireReal:     config.RequireReal,
 		allowMock:       config.AllowMock,
+		connectTimeout:  config.ConnectTimeout,
 		agents:          make(map[string]*AgentIdentity),
+		stateChanged:    make(chan struct{}),
 	}
 
 	return c, nil
 }
 
+// ConnectAttemptTimeout returns the configured orchestration timeout.
+func (c *Client) ConnectAttemptTimeout() time.Duration { return c.connectTimeout }
+
 // Connect establishes connection to the Signet bunker.
 func (c *Client) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+	connectCtx, cancelConnect := context.WithCancel(ctx)
+	installed := false
+	defer func() {
+		if !installed {
+			cancelConnect()
+		}
+	}()
 
+	c.mu.Lock()
 	if c.connected {
+		c.mu.Unlock()
 		return nil
 	}
+	c.mu.Unlock()
 
 	if c.bunkerURI == "" {
 		if c.requireReal || !c.allowMock {
 			return ErrNoBunkerConfigured
 		}
 		c.logger.Warn("no bunker URI configured, running in explicit dev/mock mode")
-		c.connected = true
+		c.setConnection(nil, connectCtx, cancelConnect, true)
+		installed = true
 		return nil
 	}
 
@@ -154,7 +177,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	// context is therefore the connection lifetime; installing a child deadline
 	// here silently kills later NIP-46 RPCs.
 	bunker, err := nip46.ConnectBunker(
-		ctx,
+		connectCtx,
 		clientSecret,
 		c.bunkerURI,
 		c.pool,
@@ -165,16 +188,93 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect to bunker: %w", err)
 	}
-	if err := bunker.Ping(ctx); err != nil {
+	if err := bunker.Ping(connectCtx); err != nil {
 		return fmt.Errorf("bunker ping failed: %w", err)
 	}
 
-	c.bunker = bunker
-	c.connected = true
-	c.lifetime = ctx
+	c.setConnection(bunker, connectCtx, cancelConnect, true)
+	installed = true
 
 	c.logger.Info("connected to Signet bunker")
 	return nil
+}
+
+// Ping verifies that the currently installed bunker connection is responsive.
+func (c *Client) Ping(ctx context.Context) error {
+	c.mu.Lock()
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
+	bunker := c.bunker
+	c.mu.Unlock()
+	if !connected {
+		return ErrNotConnected
+	}
+	if mockMode {
+		return nil
+	}
+	if bunker == nil {
+		return ErrNotConnected
+	}
+	if err := bunker.Ping(ctx); err != nil {
+		return fmt.Errorf("bunker ping failed: %w", err)
+	}
+	return nil
+}
+
+// WaitUntilConnected blocks until a connection is available or ctx is cancelled.
+func (c *Client) WaitUntilConnected(ctx context.Context) error {
+	return c.waitForConnectionState(ctx, true)
+}
+
+// WaitUntilDisconnected blocks until the current connection is lost or ctx is cancelled.
+func (c *Client) WaitUntilDisconnected(ctx context.Context) error {
+	return c.waitForConnectionState(ctx, false)
+}
+
+func (c *Client) waitForConnectionState(ctx context.Context, want bool) error {
+	for {
+		c.mu.Lock()
+		connected := c.connected
+		changed := c.stateChanged
+		c.mu.Unlock()
+		if connected == want {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (c *Client) setConnection(bunker *nip46.BunkerClient, lifetime context.Context, cancel context.CancelFunc, connected bool) {
+	c.mu.Lock()
+	previousCancel := c.lifetimeCancel
+	changed := c.connected != connected || c.bunker != bunker
+	c.bunker = bunker
+	c.lifetime = lifetime
+	c.lifetimeCancel = cancel
+	c.connected = connected
+	if changed {
+		c.connectionGeneration++
+		c.clearAgentBunkersLocked()
+	}
+	if changed {
+		close(c.stateChanged)
+		c.stateChanged = make(chan struct{})
+	}
+	c.mu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+	}
+}
+
+func (c *Client) clearAgentBunkersLocked() {
+	for _, identity := range c.agents {
+		identity.bunkerClient = nil
+		identity.bunkerGeneration = 0
+	}
 }
 
 // IsConnected returns whether the client is connected to a bunker.
@@ -459,6 +559,11 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 	connected := c.connected
 	identity, ok := c.agents[agentID]
 	mockMode := c.allowMock && c.bunkerURI == ""
+	var mockStatus, mockSecretKey string
+	if ok {
+		mockStatus = identity.mockStatus
+		mockSecretKey = identity.mockSecretKey
+	}
 	c.mu.Unlock()
 
 	if !connected {
@@ -470,30 +575,50 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 	}
 
 	if mockMode {
-		if identity.mockStatus == AgentStatusSuspended {
+		if mockStatus == AgentStatusSuspended {
 			return fmt.Errorf("%w: %s", ErrAgentSuspended, agentID)
 		}
-		if identity.mockSecretKey == "" {
+		if mockSecretKey == "" {
 			return fmt.Errorf("mock agent missing signing key: %s", agentID)
 		}
 		c.logger.Debug("signing as agent (explicit mock mode)", "agent_id", agentID)
-		return signEventWithKey(event, identity.mockSecretKey)
+		return signEventWithKey(event, mockSecretKey)
 	}
 
-	// Connect to agent's bunker if needed
-	if identity.bunkerClient == nil {
+	// Serialize connection establishment and signing per agent. Cached bunker
+	// clients are scoped to the parent connection generation and are discarded
+	// whenever that lifetime ends.
+	identity.connectMu.Lock()
+	defer identity.connectMu.Unlock()
+	c.mu.Lock()
+	if !c.connected {
+		c.mu.Unlock()
+		return ErrNotConnected
+	}
+	generation := c.connectionGeneration
+	connectCtx := c.lifetime
+	agentBunker := identity.bunkerClient
+	if identity.bunkerGeneration != generation {
+		agentBunker = nil
+		identity.bunkerClient = nil
+		identity.bunkerGeneration = 0
+	}
+	bunkerURI := identity.BunkerURI
+	pubkey := identity.Pubkey
+	c.mu.Unlock()
+
+	if agentBunker == nil {
 		clientSecret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
 		if err != nil {
 			return fmt.Errorf("decode Signet client secret key: %w", err)
 		}
-		connectCtx := c.lifetime
 		if connectCtx == nil {
-			connectCtx = ctx
+			return ErrNotConnected
 		}
 		bunker, err := nip46.ConnectBunker(
 			connectCtx,
 			clientSecret,
-			identity.BunkerURI,
+			bunkerURI,
 			c.pool,
 			nil,
 		)
@@ -502,15 +627,21 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		}
 
 		c.mu.Lock()
+		if !c.connected || c.connectionGeneration != generation {
+			c.mu.Unlock()
+			return ErrNotConnected
+		}
 		identity.bunkerClient = bunker
+		identity.bunkerGeneration = generation
 		c.mu.Unlock()
+		agentBunker = bunker
 	}
 
-	if err := identity.bunkerClient.SignEvent(ctx, event); err != nil {
+	if err := agentBunker.SignEvent(ctx, event); err != nil {
 		return fmt.Errorf("agent sign_event: %w", err)
 	}
 
-	c.logger.Debug("signed as agent", "agent_id", agentID, "pubkey", redactPubkey(identity.Pubkey))
+	c.logger.Debug("signed as agent", "agent_id", agentID, "pubkey", redactPubkey(pubkey))
 	return nil
 }
 
@@ -696,6 +827,24 @@ func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return pubkey.Hex(), nil
+}
+
+// ConfiguredPublicKey returns the identity encoded in configuration without
+// requiring a live bunker connection. It is safe for startup wiring only; a
+// successful connection still verifies operational access before signing.
+func (c *Client) ConfiguredPublicKey() (string, error) {
+	if strings.TrimSpace(c.bunkerURI) != "" {
+		pubkey, _, _, err := ParseBunkerURI(c.bunkerURI)
+		return pubkey, err
+	}
+	if c.allowMock && strings.TrimSpace(c.bunkerURI) == "" {
+		pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(c.clientSecretKey)
+		if err != nil {
+			return "", fmt.Errorf("derive mock public key: %w", err)
+		}
+		return pubkey, nil
+	}
+	return "", fmt.Errorf("Signet signing pubkey is unavailable before connection")
 }
 
 type signetJSONRPCRequest struct {
@@ -909,17 +1058,24 @@ func encodeNostrAuthorizationEvent(event any) (string, error) {
 // Close shuts down the client and all connections.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Close agent bunker connections
-	for _, identity := range c.agents {
-		if identity.bunkerClient != nil {
-			// Note: BunkerClient doesn't have a Close method currently
-		}
-	}
-
+	cancelLifetime := c.lifetimeCancel
+	changed := c.connected || c.bunker != nil
 	c.connected = false
 	c.bunker = nil
+	c.lifetime = nil
+	c.lifetimeCancel = nil
+	if changed {
+		c.connectionGeneration++
+	}
+	c.clearAgentBunkersLocked()
+	if changed {
+		close(c.stateChanged)
+		c.stateChanged = make(chan struct{})
+	}
+	c.mu.Unlock()
+	if cancelLifetime != nil {
+		cancelLifetime()
+	}
 
 	c.logger.Info("signet client closed")
 	return nil

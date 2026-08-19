@@ -204,6 +204,21 @@ The workload desired state supplies the operational details that are not part of
 
 Compose routing is fail closed. Once the resolved deployment unit has `runtime_type: compose`, Bahia requires `ownership_mode: bahia_managed`, a non-empty managed `endpoint_ref`, a non-empty `compose_dir`, and an available runtime lifecycle. Missing or invalid configuration, render/apply errors, and unhealthy results fail the deployment; Bahia does not fall back to a Loom job or the obsolete bare `docker run` path.
 
+## Signet readiness diagnosis and recovery
+
+`GET /health` is process liveness and remains independent of Signet. The bundled Compose healthcheck intentionally uses it so a bunker or relay outage does not create a restart loop. Load balancers, deployment rollout gates, and operator checks should use `GET /ready`.
+
+Each configured signer appears as `signet-loom`, `signet-soulfactory`, or `signet-operator-assistant` in `checks`. A disconnected signer has `status: warn`; the snapshot remains ready but reports `status: degraded`. Its `details` contain:
+
+- `state`: `connected` or `disconnected`;
+- `last_error`: the latest attempt or heartbeat failure;
+- `last_attempt`: UTC RFC3339 timestamp for the latest attempt;
+- `last_success`: UTC RFC3339 timestamp for the latest successful connection.
+
+Signing-required calls fail immediately with `signet client is not connected` while the dependency is down. Relay consumers that do not require signing continue running. Diagnose the `last_error`, then verify the configured bunker URI, NIP-46 relay reachability/AUTH, and bunker process. Do not delete or rotate the persistent Signet client secret merely to retry: Bahia automatically makes bounded attempts with exponential backoff and jitter. After the relay or bunker recovers, confirm `state=connected`, a newer `last_success`, and an overall readiness transition back to `healthy`; no Bahia restart is required.
+
+Soul Factory does not consume provisioning requests until its signer is connected, because consuming a request without the ability to publish a durable terminal result is unsafe. On connection or reconnection it subscribes with historical filters for the queued `5950`/`1950` backlog. Existing terminal-result and in-flight reservations prevent duplicate provisioning.
+
 ## Deployment Units and Targeting
 
 Environment targeting is typed and additive. Each environment owns a `targeting` object with `default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, and `default_reconcile_mode`. `default_reconcile_mode` accepts `observe_only`, `auto_apply`, `approval_required`, or `disabled`; `secret_scope_mode` accepts `service`, `environment`, or `unit`.

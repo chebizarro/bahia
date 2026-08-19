@@ -36,6 +36,12 @@ type Config struct {
 	PublishLegacyLifecycleResults bool   // migration-only 1951 alias for lifecycle action results
 }
 
+const (
+	reactorHandlerWorkers = 8
+	reactorHandlerQueue   = 64
+	reactorHandlerShards  = 32
+)
+
 // Reactor subscribes to Nostr events and dispatches handlers.
 type Reactor struct {
 	config                   Config
@@ -52,8 +58,9 @@ type Reactor struct {
 	findLifecycleResultFn    func(context.Context, string) (*nostr.Event, error)
 	findProvisioningResultFn func(context.Context, string) (*nostr.Event, error)
 
-	mu   sync.Mutex
-	runs map[string]*domain.ProvisioningRun // requestID -> run
+	mu            sync.Mutex
+	runs          map[string]*domain.ProvisioningRun // requestID -> run
+	handlerShards [reactorHandlerShards]sync.Mutex
 }
 
 // SoulGenerator generates soul content from briefs.
@@ -161,17 +168,17 @@ func (r *Reactor) Run(ctx context.Context) error {
 		"additional_relays", r.config.AdditionalRelays,
 	)
 
-	// Backfill the newest request/action so an accepted event resumes after a
-	// reactor restart. Existing terminal-result checks make this idempotent;
-	// the subscription remains open for all subsequent live events.
+	// Backfill the queued request/action backlog so accepted events resume after
+	// a reactor or signer outage. Existing terminal-result checks make replay
+	// idempotent; the subscription remains open for subsequent live events.
 	filters := []nostr.Filter{
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
-			Limit: 1,
+			Limit: 1000,
 		},
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
-			Limit: 1,
+			Limit: 1000,
 		},
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},
@@ -197,6 +204,28 @@ func (r *Reactor) Run(ctx context.Context) error {
 		return err
 	}
 	defer sub.Close()
+
+	handlerCtx, cancelHandlers := context.WithCancel(ctx)
+	jobs := make(chan *nostr.Event, reactorHandlerQueue)
+	var handlerWG sync.WaitGroup
+	for range reactorHandlerWorkers {
+		handlerWG.Add(1)
+		go func() {
+			defer handlerWG.Done()
+			for event := range jobs {
+				if handlerCtx.Err() != nil {
+					return
+				}
+				r.handleEvent(handlerCtx, event)
+			}
+		}()
+	}
+	defer func() {
+		cancelHandlers()
+		close(jobs)
+		handlerWG.Wait()
+	}()
+
 	eose := sub.EndOfStoredEvents
 
 	for {
@@ -217,23 +246,55 @@ func (r *Reactor) Run(ctx context.Context) error {
 				return ErrSoulFactoryUnavailable
 			}
 
-			r.handleEvent(ctx, ev)
+			select {
+			case jobs <- ev:
+			case <-ctx.Done():
+				r.logger.Info("reactor shutting down")
+				return ctx.Err()
+			}
 		}
 	}
 }
 
-// handleEvent dispatches events to the appropriate handler.
+// handleEvent dispatches one event synchronously. Run owns the bounded worker
+// pool and waits for every in-flight handler before a subscription can restart.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
+	shard := r.handlerShard(event)
+	shard.Lock()
+	defer shard.Unlock()
+
 	switch event.Kind {
 	case nostr.Kind(domain.KindProvisioningRequest):
-		go r.handleProvisioningRequest(ctx, event)
+		r.handleProvisioningRequest(ctx, event)
 	case nostr.Kind(domain.KindSoulAction):
-		go r.handleSoulAction(ctx, event)
+		r.handleSoulAction(ctx, event)
 	case nostr.Kind(domain.KindRuntimeControlResult):
-		go r.handleLateRuntimeResult(ctx, event)
+		r.handleLateRuntimeResult(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
+}
+
+func (r *Reactor) handlerShard(event *nostr.Event) *sync.Mutex {
+	key := ""
+	if event != nil {
+		key = tagValue(event.Tags, tagAgentID)
+		if key == "" {
+			key = tagValue(event.Tags, tagSoul)
+		}
+		if key == "" {
+			key = tagValue(event.Tags, tagEvent)
+		}
+		if key == "" {
+			key = event.ID.Hex()
+		}
+	}
+	var hash uint32 = 2166136261
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= 16777619
+	}
+	return &r.handlerShards[hash%uint32(len(r.handlerShards))]
 }
 
 // handleLateRuntimeResult projects durable runtime truth after a request-scoped

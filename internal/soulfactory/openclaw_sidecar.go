@@ -139,20 +139,31 @@ type OpenClawSidecarConfig struct {
 }
 
 type OpenClawSidecar struct {
-	runtimePubkey  string
-	signer         soulClientSigner
-	trusted        map[string]struct{}
-	trustedList    []string
-	identifier     string
-	relays         []string
-	relayHints     domain.SoulRelayPolicySpec
-	transport      RuntimeAdapterTransport
-	driver         OpenClawControlDriver
-	store          OpenClawIdempotencyStore
-	logger         *slog.Logger
-	now            func() time.Time
-	methods        []string
-	capabilityTags nostr.Tags
+	runtimePubkey       string
+	signer              soulClientSigner
+	trusted             map[string]struct{}
+	trustedList         []string
+	identifier          string
+	relays              []string
+	relayHints          domain.SoulRelayPolicySpec
+	transport           RuntimeAdapterTransport
+	driver              OpenClawControlDriver
+	store               OpenClawIdempotencyStore
+	logger              *slog.Logger
+	now                 func() time.Time
+	methods             []string
+	capabilityTags      nostr.Tags
+	readinessMu         sync.RWMutex
+	capabilityPublished bool
+	subscriptionEOSE    bool
+	lastReadinessError  string
+}
+
+type OpenClawSidecarReadiness struct {
+	Ready               bool   `json:"ready"`
+	CapabilityPublished bool   `json:"capability_published"`
+	SubscriptionEOSE    bool   `json:"subscription_eose"`
+	LastError           string `json:"last_error,omitempty"`
 }
 
 func NewOpenClawSidecar(config OpenClawSidecarConfig) (*OpenClawSidecar, error) {
@@ -226,7 +237,10 @@ func (s *OpenClawSidecar) Close() {
 }
 
 func (s *OpenClawSidecar) Run(ctx context.Context) error {
+	s.resetReadiness()
+	defer s.clearSubscriptionReadiness()
 	if err := s.PublishCapability(ctx); err != nil {
+		s.setReadinessError(err)
 		return err
 	}
 	authors := make([]nostr.PubKey, 0, len(s.trustedList))
@@ -248,6 +262,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 	}}
 	sub, err := s.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
+		s.setReadinessError(err)
 		return fmt.Errorf("subscribe OpenClaw SoulFactory sidecar: %w", err)
 	}
 	defer sub.Close()
@@ -258,10 +273,13 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-eose:
 			s.logger.Info("OpenClaw SoulFactory sidecar backfill complete")
+			s.markSubscriptionEOSE()
 			eose = nil
 		case event, ok := <-sub.Events:
 			if !ok {
-				return fmt.Errorf("OpenClaw SoulFactory sidecar subscription closed")
+				err := fmt.Errorf("OpenClaw SoulFactory sidecar subscription closed")
+				s.setReadinessError(err)
+				return err
 			}
 			if _, err := s.HandleControlEvent(ctx, event); err != nil {
 				s.logger.Warn("OpenClaw SoulFactory request rejected or failed", "event", event.ID, "error", err)
@@ -271,7 +289,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 }
 
 func (s *OpenClawSidecar) PublishCapability(ctx context.Context) error {
-	event, err := s.BuildCapabilityEvent()
+	event, err := s.BuildCapabilityEvent(ctx)
 	if err != nil {
 		return err
 	}
@@ -282,10 +300,61 @@ func (s *OpenClawSidecar) PublishCapability(ctx context.Context) error {
 	if accepted == 0 {
 		return fmt.Errorf("OpenClaw runtime capability was not accepted by any relay")
 	}
+	s.markCapabilityPublished()
 	return nil
 }
 
-func (s *OpenClawSidecar) BuildCapabilityEvent() (*nostr.Event, error) {
+func (s *OpenClawSidecar) Readiness() OpenClawSidecarReadiness {
+	if s == nil {
+		return OpenClawSidecarReadiness{LastError: "sidecar is not configured"}
+	}
+	s.readinessMu.RLock()
+	defer s.readinessMu.RUnlock()
+	return OpenClawSidecarReadiness{
+		Ready:               s.capabilityPublished && s.subscriptionEOSE,
+		CapabilityPublished: s.capabilityPublished,
+		SubscriptionEOSE:    s.subscriptionEOSE,
+		LastError:           s.lastReadinessError,
+	}
+}
+
+func (s *OpenClawSidecar) markCapabilityPublished() {
+	s.readinessMu.Lock()
+	s.capabilityPublished = true
+	s.lastReadinessError = ""
+	s.readinessMu.Unlock()
+}
+
+func (s *OpenClawSidecar) markSubscriptionEOSE() {
+	s.readinessMu.Lock()
+	s.subscriptionEOSE = true
+	s.lastReadinessError = ""
+	s.readinessMu.Unlock()
+}
+
+func (s *OpenClawSidecar) setReadinessError(err error) {
+	s.readinessMu.Lock()
+	if err != nil {
+		s.lastReadinessError = err.Error()
+	}
+	s.readinessMu.Unlock()
+}
+
+func (s *OpenClawSidecar) resetReadiness() {
+	s.readinessMu.Lock()
+	s.capabilityPublished = false
+	s.subscriptionEOSE = false
+	s.lastReadinessError = ""
+	s.readinessMu.Unlock()
+}
+
+func (s *OpenClawSidecar) clearSubscriptionReadiness() {
+	s.readinessMu.Lock()
+	s.subscriptionEOSE = false
+	s.readinessMu.Unlock()
+}
+
+func (s *OpenClawSidecar) BuildCapabilityEvent(ctx context.Context) (*nostr.Event, error) {
 	content, err := json.Marshal(map[string]interface{}{
 		"schema":             domain.SoulFactoryRuntimeCapabilitySchema,
 		"runtime":            string(domain.RuntimeTargetOpenClaw),
@@ -323,7 +392,7 @@ func (s *OpenClawSidecar) BuildCapabilityEvent() (*nostr.Event, error) {
 	appendRelayTags("control", s.relayHints.Control)
 	tags = append(tags, s.capabilityTags...)
 	event := &nostr.Event{Kind: nostr.Kind(domain.KindRuntimeCapability), CreatedAt: nostr.Timestamp(s.now().Unix()), Tags: tags, Content: string(content)}
-	if err := signGoNostrEvent(context.Background(), s.signer, event); err != nil {
+	if err := signGoNostrEvent(ctx, s.signer, event); err != nil {
 		return nil, fmt.Errorf("sign OpenClaw capability: %w", err)
 	}
 	if event.PubKey.Hex() != s.runtimePubkey {

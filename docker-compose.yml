@@ -51,6 +51,11 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # Container health is liveness-only so a Signet outage does not restart Bahia.
+    # Traffic gates and operators should use http://bahia:8080/ready.
+    labels:
+      io.bahia.health.liveness: "http://localhost:8080/health"
+      io.bahia.health.readiness: "http://localhost:8080/ready"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 10s

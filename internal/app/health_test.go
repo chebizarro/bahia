@@ -1,8 +1,12 @@
 package app
 
 import (
+	"context"
+	"log/slog"
 	"testing"
+	"time"
 
+	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -17,6 +21,55 @@ func TestHealthProviderLivenessAlwaysHealthy(t *testing.T) {
 	require.Equal(t, string(ModeFull), snapshot.Mode)
 }
 
+func TestSignetRecoveryFlipsReadinessHealthyWithoutRestart(t *testing.T) {
+	client, err := signetAdapter.NewClient(signetAdapter.Config{AllowMock: true, ConnectTimeout: 50 * time.Millisecond}, slog.Default())
+	require.NoError(t, err)
+	manager := signetAdapter.NewConnectionManager(client, signetAdapter.ConnectionManagerConfig{Name: "test", HeartbeatInterval: time.Hour})
+	provider := NewHealthProvider(NewModePolicy(ModeFull), nil)
+	registerSignetHealthCheck(provider, manager, Tier1)
+
+	degraded := provider.Readiness()
+	require.Equal(t, SnapshotStatusDegraded, degraded.Status)
+	require.True(t, degraded.Ready)
+	requireCheckStatus(t, degraded.Checks, manager.Name(), HealthStatusWarn)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+	waitForManagerConnection(t, manager)
+
+	healthy := provider.Readiness()
+	require.Equal(t, SnapshotStatusHealthy, healthy.Status)
+	require.True(t, healthy.Ready)
+	requireCheckStatus(t, healthy.Checks, manager.Name(), HealthStatusPass)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("connection manager did not stop")
+	}
+}
+
+func waitForManagerConnection(t *testing.T, manager *signetAdapter.ConnectionManager) {
+	t.Helper()
+	if manager.State().Connected {
+		return
+	}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case state := <-manager.Changes():
+			if state.Connected {
+				return
+			}
+		case <-timer.C:
+			t.Fatal("Signet manager did not connect")
+		}
+	}
+}
+
 func TestHealthProviderReadinessWithNoChecksPasses(t *testing.T) {
 	provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
 
@@ -27,6 +80,19 @@ func TestHealthProviderReadinessWithNoChecksPasses(t *testing.T) {
 	requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusPass)
 	requireCheckStatus(t, snapshot.Checks, "bootstrap_ready", HealthStatusPass)
 	requireCheckStatus(t, snapshot.Checks, "background_runners", HealthStatusPass)
+}
+
+func TestHealthProviderWarningDependencyIsDegradedButReady(t *testing.T) {
+	provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+	provider.RegisterCheck("signet-test", int(Tier1), func() HealthCheck {
+		return HealthCheck{Name: "signet-test", Status: HealthStatusWarn, Message: "disconnected", Tier: int(Tier1)}
+	})
+
+	snapshot := provider.Readiness()
+
+	require.Equal(t, SnapshotStatusDegraded, snapshot.Status)
+	require.True(t, snapshot.Ready)
+	requireCheckStatus(t, snapshot.Checks, "signet-test", HealthStatusWarn)
 }
 
 func TestHealthProviderReadinessWithFailedRequiredRunnerReturnsUnhealthy(t *testing.T) {

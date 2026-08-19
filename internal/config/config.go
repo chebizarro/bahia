@@ -258,12 +258,13 @@ type AssistantConfig struct {
 	// When false (the default), the legacy planner uses non-streaming chat completions;
 	// some OpenAI-compatible providers do not emit delta.content for streamed
 	// response_format (json_schema) outputs, so streaming is opt-in per provider.
-	LLMStreaming    bool                       `koanf:"llm_streaming" yaml:"llm_streaming"`
-	SignetBunkerURI string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetAllowMock bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock"`
-	Agentic         AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
-	Permissions     AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
-	MCP             AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
+	LLMStreaming         bool                       `koanf:"llm_streaming" yaml:"llm_streaming"`
+	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock"`
+	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout"`
+	Agentic              AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
+	Permissions          AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
+	MCP                  AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
 	// Item 10 extensibility surface. Each block points at directories of
 	// markdown+frontmatter (subagents/skills/commands) or JSON (hooks) sources.
 	Subagents AssistantExtensionSourceConfig `koanf:"subagents" yaml:"subagents"`
@@ -459,11 +460,12 @@ type LoomConfig struct {
 // LoomCanonicalProjectionConfig controls projection of Loom-native status/result
 // events into canonical CAS 30900 state and 4903 audit events.
 type LoomCanonicalProjectionConfig struct {
-	Enabled               bool   `koanf:"enabled" yaml:"enabled"`
-	SignetBunkerURI       string `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetClientSecretKey string `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
-	AllowRawKeyDev        bool   `koanf:"allow_raw_key_dev" yaml:"allow_raw_key_dev"`
-	RawPrivateKey         string `koanf:"raw_private_key" yaml:"raw_private_key"`
+	Enabled               bool          `koanf:"enabled" yaml:"enabled"`
+	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	SignetConnectTimeout  time.Duration `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout"`
+	AllowRawKeyDev        bool          `koanf:"allow_raw_key_dev" yaml:"allow_raw_key_dev"`
+	RawPrivateKey         string        `koanf:"raw_private_key" yaml:"raw_private_key"`
 }
 
 const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
@@ -1324,6 +1326,9 @@ func (c *Config) validateLoom() error {
 	projection.SignetBunkerURI = strings.TrimSpace(projection.SignetBunkerURI)
 	projection.SignetClientSecretKey = strings.TrimSpace(projection.SignetClientSecretKey)
 	projection.RawPrivateKey = strings.TrimSpace(projection.RawPrivateKey)
+	if projection.SignetConnectTimeout == 0 {
+		projection.SignetConnectTimeout = 15 * time.Second
+	}
 
 	if projection.AllowRawKeyDev {
 		return fmt.Errorf("config validation failed: loom.canonical_projection.allow_raw_key_dev is unavailable in validated runtime configuration; use Signet/NIP-46 projection signing")
@@ -1336,6 +1341,9 @@ func (c *Config) validateLoom() error {
 	}
 	if projection.SignetBunkerURI == "" && !c.DevMode {
 		return fmt.Errorf("config validation failed: loom.canonical_projection.signet_bunker_uri is required when loom.canonical_projection.enabled=true outside dev_mode")
+	}
+	if projection.SignetConnectTimeout <= 0 {
+		return fmt.Errorf("config validation failed: loom.canonical_projection.signet_connect_timeout must be > 0 when enabled")
 	}
 	return nil
 }
@@ -1616,6 +1624,12 @@ func (c *Config) validateAssistant() error {
 	assistant.LLMModel = strings.TrimSpace(assistant.LLMModel)
 	assistant.LLMAPIKey = strings.TrimSpace(assistant.LLMAPIKey)
 	assistant.SignetBunkerURI = strings.TrimSpace(assistant.SignetBunkerURI)
+	if assistant.SignetConnectTimeout == 0 {
+		assistant.SignetConnectTimeout = 15 * time.Second
+	}
+	if assistant.SignetConnectTimeout < 0 {
+		return fmt.Errorf("config validation failed: assistant.signet_connect_timeout must not be negative")
+	}
 	if assistant.LLMBaseURL == "" {
 		assistant.LLMBaseURL = "https://api.openai.com"
 	}
