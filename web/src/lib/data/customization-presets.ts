@@ -68,7 +68,7 @@ export const customizationPresets: CustomizationPreset[] = [
         strategy: 'project-aware',
         auto_index: true,
         retention_days: 180,
-        search: { top_k: 12, score_threshold: 0.75, rerank: true, rerank_model: 'default' }
+        search: { top_k: 12, score_threshold: 0.75, rerank: true, rerank_model: 'rerank-v3.5' }
       },
       avatar: {
         generation: { prompt: 'A focused technical expert avatar with subtle circuit and terminal motifs', style_preset: 'corporate', provider: 'flux-comfyui', width: 512, height: 512 },
