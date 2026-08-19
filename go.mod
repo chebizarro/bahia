@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	cuelang.org/go v0.11.0
 	fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026
-	git.sharegap.net/cascadia/cascadia-go v1.2.0
+	git.sharegap.net/cascadia/cascadia-go v1.2.1
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
@@ -36,6 +36,7 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
 )
@@ -361,7 +362,6 @@ require (
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

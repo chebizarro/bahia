@@ -19,7 +19,6 @@ jobs:
       COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
       RELEASE_ROOT: /srv/data/bahia-controlplane/releases
       EDGE_HEALTH_HOST: 172.17.0.1
-      ATHENS_PROXY: http://192.168.40.104:3005
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
       PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
     steps:
@@ -61,9 +60,6 @@ jobs:
           command -v curl >/dev/null
           docker version >/dev/null
           docker compose version >/dev/null
-          curl -fsS \
-            "$ATHENS_PROXY/git.sharegap.net/cascadia/cascadia-go/@v/v1.2.0.info" \
-            >/dev/null
 
           test -f Dockerfile
           test -f web/Dockerfile
@@ -82,8 +78,6 @@ jobs:
 
           tag="github-${GITHUB_SHA::7}"
           docker build \
-            --build-arg GOPROXY="https://proxy.golang.org,$ATHENS_PROXY" \
-            --build-arg GONOSUMDB="git.sharegap.net/cascadia/*" \
             --build-arg VERSION_BASE=0.1.0 \
             --build-arg GIT_COMMIT="$GITHUB_SHA" \
             --build-arg VERSION="0.1.0-$GITHUB_SHA" \
