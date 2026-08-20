@@ -112,7 +112,7 @@ func validateImmutableUpdate(current, next *Run) error {
 	if current.RequestID != next.RequestID || current.RunID != next.RunID || current.RootKey != next.RootKey || current.AgentID != next.AgentID || current.SpecHash != next.SpecHash || !current.CreatedAt.Equal(next.CreatedAt) {
 		return fmt.Errorf("%w: immutable saga identity changed", ErrConflict)
 	}
-	if len(next.Resources) < len(current.Resources) || len(next.Transitions) < len(current.Transitions) || len(next.Compensations) < len(current.Compensations) {
+	if len(next.Resources) < len(current.Resources) || len(next.Transitions) < len(current.Transitions) || len(next.Compensations) < len(current.Compensations) || len(next.Failures) < len(current.Failures) {
 		return fmt.Errorf("%w: append-only saga history was truncated", ErrConflict)
 	}
 	for i := range current.Resources {
@@ -128,6 +128,11 @@ func validateImmutableUpdate(current, next *Run) error {
 	for i := range current.Compensations {
 		if current.Compensations[i] != next.Compensations[i] {
 			return fmt.Errorf("%w: compensation history was rewritten", ErrConflict)
+		}
+	}
+	for i := range current.Failures {
+		if current.Failures[i] != next.Failures[i] {
+			return fmt.Errorf("%w: failure history was rewritten", ErrConflict)
 		}
 	}
 	return nil

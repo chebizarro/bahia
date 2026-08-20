@@ -22,6 +22,20 @@ tests:
         values: '0 0 0 0 0 12 12 12 12 12'
       - series: 'bahia_tier_rejections_total{tier="3"}'
         values: '0 0 0 0 0 6 6 6 6 6'
+      - series: 'bahia_openclaw_provisioning_stage_age_seconds{instance="canary-a",build="build-a",request_id="request-a",run_id="run-a",agent_id="agent-a",stage="signer_enrolled"}'
+        values: '1000x10'
+      - series: 'bahia_openclaw_provisioning_signet_unauthorized_responses{instance="canary-a",build="build-a",request_id="request-a",run_id="run-a",agent_id="agent-a",stage="rolled_back"}'
+        values: '3x10'
+      - series: 'bahia_openclaw_provisioning_correlation_mismatches{instance="canary-a",build="build-a",request_id="request-a",run_id="run-a",agent_id="agent-a",stage="rolled_back"}'
+        values: '1x10'
+      - series: 'bahia_openclaw_provisioning_progress_ratio{instance="canary-b",build="build-a",request_id="request-b",run_id="run-b",agent_id="agent-b",stage="running"}'
+        values: '1x10'
+      - series: 'bahia_openclaw_provisioning_terminal_projection{instance="canary-b",build="build-a",request_id="request-b",run_id="run-b",agent_id="agent-b",stage="running"}'
+        values: '0x10'
+      - series: 'bahia_openclaw_provisioning_false_running{instance="canary-c",build="build-a",request_id="request-c",run_id="run-c",agent_id="agent-c",stage="running"}'
+        values: '1x10'
+      - series: 'bahia_openclaw_provisioning_orphan_candidates{instance="canary-d",build="build-a",request_id="request-d",run_id="run-d",agent_id="agent-d",stage="rolled_back"}'
+        values: '1x10'
       - series: 'up{job="node",expected_state="up",host="ai-02",instance="192.168.30.100:9100"}'
         values: '0x15'
       - series: 'up{job="node",expected_state="down",host="roost",instance="192.168.20.100:9100"}'
@@ -99,6 +113,48 @@ tests:
             exp_annotations:
               summary: "Bahia dependency-tier rejection rate has spiked"
               runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
+      - eval_time: 6m
+        alertname: BahiaOpenClawProvisioningStageStuck
+        exp_alerts:
+          - exp_labels: {agent_id: agent-a, build: build-a, instance: canary-a, request_id: request-a, run_id: run-a, severity: warning, stage: signer_enrolled}
+            exp_annotations:
+              summary: "OpenClaw provisioning run run-a is stuck at signer_enrolled"
+              runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - eval_time: 6m
+        alertname: BahiaOpenClawRepeatedSignetUnauthorized
+        exp_alerts:
+          - exp_labels: {agent_id: agent-a, build: build-a, instance: canary-a, request_id: request-a, run_id: run-a, severity: warning, stage: rolled_back}
+            exp_annotations:
+              summary: "OpenClaw provisioning run run-a has repeated unauthorized Signet responses"
+              runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - eval_time: 2m
+        alertname: BahiaOpenClawCorrelationMismatch
+        exp_alerts:
+          - exp_labels: {agent_id: agent-a, build: build-a, instance: canary-a, request_id: request-a, run_id: run-a, severity: critical, stage: rolled_back}
+            exp_annotations:
+              summary: "OpenClaw provisioning run run-a has resource correlation mismatches"
+              runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - eval_time: 6m
+        alertname: BahiaOpenClawProgressWithoutTerminal
+        exp_alerts:
+          - exp_labels: {agent_id: agent-b, build: build-a, instance: canary-b, request_id: request-b, run_id: run-b, severity: critical, stage: running}
+            exp_annotations:
+              summary: "OpenClaw provisioning run run-b reached 100% without terminal projection"
+              runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - eval_time: 2m
+        alertname: BahiaOpenClawFalseRunning
+        exp_alerts:
+          - exp_labels: {agent_id: agent-c, build: build-a, instance: canary-c, request_id: request-c, run_id: run-c, severity: critical, stage: running}
+            exp_annotations:
+              summary: "OpenClaw provisioning run run-c claims running without DM or terminal evidence"
+              runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - eval_time: 6m
+        alertname: BahiaOpenClawOrphanCandidates
+        exp_alerts:
+          - exp_labels: {agent_id: agent-d, build: build-a, instance: canary-d, request_id: request-d, run_id: run-d, severity: critical, stage: rolled_back}
+            exp_annotations:
+              summary: "OpenClaw provisioning run run-d has owned resources left after compensation"
+              runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
       - eval_time: 6m
         alertname: NodeExporterDown
         exp_alerts:

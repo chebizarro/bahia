@@ -179,6 +179,7 @@ type Run struct {
 	Resources     []Resource     `json:"resources,omitempty"`
 	Compensations []Compensation `json:"compensations,omitempty"`
 	Transitions   []Transition   `json:"transitions,omitempty"`
+	Failures      []Failure      `json:"failures,omitempty"`
 	Failure       *Failure       `json:"failure,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
@@ -214,6 +215,7 @@ func (r *Run) clone() *Run {
 	out.Resources = append([]Resource(nil), r.Resources...)
 	out.Compensations = append([]Compensation(nil), r.Compensations...)
 	out.Transitions = append([]Transition(nil), r.Transitions...)
+	out.Failures = append([]Failure(nil), r.Failures...)
 	if r.Failure != nil {
 		f := *r.Failure
 		out.Failure = &f
@@ -247,6 +249,23 @@ func (r *Run) validate() error {
 			return fmt.Errorf("immutable lineage conflict for %s/%s", resource.System, resource.Kind)
 		}
 		seen[resource.key()] = resource
+	}
+	for _, failure := range r.Failures {
+		if err := validatePublicFailure(failure); err != nil {
+			return err
+		}
+	}
+	if r.Failure != nil {
+		if err := validatePublicFailure(*r.Failure); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePublicFailure(failure Failure) error {
+	if !isForwardStage(failure.Stage) || failure.Code != safePublicCode(failure.Code) || failure.Message != safePublicMessage(failure.Code) || failure.At.IsZero() {
+		return fmt.Errorf("%w: failure history is not a sanitized public record", ErrConflict)
 	}
 	return nil
 }
