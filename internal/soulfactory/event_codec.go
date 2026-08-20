@@ -306,6 +306,36 @@ func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 			soul.Runtime.RuntimeBinding = value
 		case tagRuntimeState:
 			soul.Runtime.State = value
+		case "provider":
+			soul.Runtime.Provider = value
+		case "model":
+			soul.Runtime.Model = value
+		case "run-id":
+			if soul.Readiness == nil {
+				soul.Readiness = &domain.SoulReadinessEvidence{}
+			}
+			soul.Readiness.RunID = value
+		case "request-id":
+			if soul.Readiness == nil {
+				soul.Readiness = &domain.SoulReadinessEvidence{}
+			}
+			soul.Readiness.RequestID = value
+		case "readiness":
+			if value == "verified" && soul.Readiness == nil {
+				soul.Readiness = &domain.SoulReadinessEvidence{}
+			}
+		case "readiness-ms":
+			if duration, err := strconv.ParseInt(value, 10, 64); err == nil {
+				if soul.Readiness == nil {
+					soul.Readiness = &domain.SoulReadinessEvidence{}
+				}
+				soul.Readiness.TotalDurationMS = duration
+			}
+		case "probe-event":
+			if soul.Readiness == nil {
+				soul.Readiness = &domain.SoulReadinessEvidence{}
+			}
+			soul.Readiness.ProbeEventIDs = append(soul.Readiness.ProbeEventIDs, value)
 		case tagCapability:
 			soul.CapabilityRef = value
 			soul.Runtime.CapabilityRef = firstNonEmpty(soul.Runtime.CapabilityRef, value)
@@ -713,18 +743,22 @@ func cloneDraftJSONValue(value interface{}) interface{} {
 }
 
 // BuildProvisioningStatusEvent builds a kind:6950 progress event.
-func BuildProvisioningStatusEvent(requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) *nostr.Event {
+func BuildProvisioningStatusEvent(requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string, runID ...string) *nostr.Event {
+	tags := nostr.Tags{
+		{tagEvent, requestEvent.ID.Hex(), "", "reply"},
+		{tagPubkey, requestEvent.PubKey.Hex()},
+		{tagStatus, "processing"},
+		{tagStep, string(step)},
+		{tagProgress, strconv.Itoa(current), strconv.Itoa(total)},
+	}
+	if len(runID) > 0 {
+		appendTag(&tags, "run-id", runID[0])
+	}
 	return &nostr.Event{
 		Kind:      domain.KindProvisioningStatus,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{tagEvent, requestEvent.ID.Hex(), "", "reply"},
-			{tagPubkey, requestEvent.PubKey.Hex()},
-			{tagStatus, "processing"},
-			{tagStep, string(step)},
-			{tagProgress, strconv.Itoa(current), strconv.Itoa(total)},
-		},
-		Content: message,
+		Tags:      tags,
+		Content:   message,
 	}
 }
 
@@ -742,6 +776,9 @@ func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain
 		"workspace_url":     soul.WorkspaceRepoURL,
 		"qdrant_collection": soul.QdrantCollection,
 		"bahia_service_id":  soul.BahiaServiceID,
+		"provider":          soul.Runtime.Provider,
+		"model":             soul.Runtime.Model,
+		"readiness":         soul.Readiness,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal provisioning result content: %w", err)
@@ -760,18 +797,22 @@ func BuildProvisioningSuccessResultEvent(requestEvent *nostr.Event, soul *domain
 }
 
 // BuildProvisioningErrorResultEvent builds a kind:7950 error result event.
-func BuildProvisioningErrorResultEvent(requestEvent *nostr.Event, step, message string) *nostr.Event {
+func BuildProvisioningErrorResultEvent(requestEvent *nostr.Event, step, message string, runID ...string) *nostr.Event {
+	tags := nostr.Tags{
+		{tagEvent, requestEvent.ID.Hex(), "", "reply"},
+		{tagPubkey, requestEvent.PubKey.Hex()},
+		{tagStatus, "error"},
+		{tagStep, step},
+		{"error", step},
+	}
+	if len(runID) > 0 {
+		appendTag(&tags, "run-id", runID[0])
+	}
 	return &nostr.Event{
 		Kind:      domain.KindProvisioningResult,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{tagEvent, requestEvent.ID.Hex(), "", "reply"},
-			{tagPubkey, requestEvent.PubKey.Hex()},
-			{tagStatus, "error"},
-			{tagStep, step},
-			{"error", step},
-		},
-		Content: message,
+		Tags:      tags,
+		Content:   message,
 	}
 }
 
@@ -1001,6 +1042,17 @@ func appendResultContextTags(tags *nostr.Tags, soul *domain.AgentSoul) {
 	appendTag(tags, tagRuntimePubkey, soul.Runtime.RuntimePubkey)
 	appendTag(tags, tagRuntimeBinding, soul.Runtime.RuntimeBinding)
 	appendTag(tags, tagRuntimeState, soul.Runtime.State)
+	appendTag(tags, "provider", soul.Runtime.Provider)
+	appendTag(tags, "model", soul.Runtime.Model)
+	if soul.Readiness != nil {
+		appendTag(tags, "request-id", soul.Readiness.RequestID)
+		appendTag(tags, "run-id", soul.Readiness.RunID)
+		appendTag(tags, "readiness", "verified")
+		appendTag(tags, "readiness-ms", strconv.FormatInt(soul.Readiness.TotalDurationMS, 10))
+		for _, eventID := range soul.Readiness.ProbeEventIDs {
+			appendTag(tags, "probe-event", eventID)
+		}
+	}
 	appendTag(tags, tagCapability, firstNonEmpty(soul.CapabilityRef, soul.Runtime.CapabilityRef))
 	for _, relay := range soul.RelayPolicy.Read {
 		appendTag(tags, tagRelayRead, relay)

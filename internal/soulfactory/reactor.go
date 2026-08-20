@@ -318,6 +318,13 @@ func (r *Reactor) handleLateRuntimeResult(ctx context.Context, event *nostr.Even
 		r.logger.Warn("late runtime result has no usable Soul checkpoint", "event_id", event.ID, "error", err)
 		return
 	}
+	// A late runtime-control success proves only configuration. It cannot stand
+	// in for Bahia's independent external DM probe, so it must never resurrect
+	// an unverified soul as running.
+	if soul.Readiness == nil || soul.Readiness.RequestID != result.OperatorRequestEvent || soul.Readiness.RunID == "" {
+		r.logger.Warn("ignoring late runtime success without independent readiness evidence", "event_id", event.ID, "agent_id", soul.AgentID)
+		return
+	}
 	if current, err := r.GetSoul(ctx, soul.AgentID); err == nil && current != nil &&
 		current.SpecHash == soul.SpecHash && current.Runtime.RuntimeBinding == soul.Runtime.RuntimeBinding &&
 		current.Status == domain.SoulStatusActive {
@@ -507,7 +514,7 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error()); publishErr != nil {
+		if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error(), run.ID.String()); publishErr != nil {
 			logger.Error("failed to publish provisioning error", "error", publishErr)
 		}
 		return
@@ -556,8 +563,8 @@ func (r *Reactor) parseSoulAction(event *nostr.Event) (*domain.SoulAction, error
 }
 
 // publishStatus publishes a kind:6950 progress event.
-func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) error {
-	event := BuildProvisioningStatusEvent(requestEvent, step, current, total, message)
+func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string, runID ...string) error {
+	event := BuildProvisioningStatusEvent(requestEvent, step, current, total, message, runID...)
 
 	if err := r.signer.Sign(ctx, event); err != nil {
 		return fmt.Errorf("sign status event: %w", err)
@@ -601,8 +608,8 @@ func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Eve
 }
 
 // publishError publishes a kind:7950 error result event.
-func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
-	event := BuildProvisioningErrorResultEvent(requestEvent, step, message)
+func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string, runID ...string) error {
+	event := BuildProvisioningErrorResultEvent(requestEvent, step, message, runID...)
 
 	if err := r.signer.Sign(ctx, event); err != nil {
 		return fmt.Errorf("sign error event: %w", err)

@@ -169,7 +169,7 @@ func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
 	}
 }
 
-func TestLateRuntimeSuccessProjectsSoulAndTerminalResultExactlyOnce(t *testing.T) {
+func TestLateRuntimeSuccessWithoutReadinessNeverProjectsRunningTerminal(t *testing.T) {
 	factory := newFakeSigner(t)
 	operator := newFakeSigner(t)
 	runtime := newFakeSigner(t)
@@ -283,17 +283,11 @@ func TestLateRuntimeSuccessProjectsSoulAndTerminalResultExactlyOnce(t *testing.T
 	capture := attachPublishCapture(reactor)
 
 	reactor.handleLateRuntimeResult(t.Context(), result)
-	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 1 {
-		t.Fatalf("late Soul publish count = %d, want 1", got)
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 0 {
+		t.Fatalf("late runtime-only success published Soul: count=%d", got)
 	}
-	if got := len(capture.eventsByKind(domain.KindProvisioningResult)); got != 1 {
-		t.Fatalf("late terminal publish count = %d, want 1", got)
-	}
-	projected := capture.eventsByKind(domain.KindAgentSoul)[0]
-	if findTag(projected, tagStatus) != string(domain.SoulStatusActive) ||
-		findTag(projected, tagRuntimeState) != "running" ||
-		findTag(projected, tagRuntimeBinding) != "openclaw://agents/scout" {
-		t.Fatalf("late projected Soul tags = %+v", projected.Tags)
+	if got := len(capture.eventsByKind(domain.KindProvisioningResult)); got != 0 {
+		t.Fatalf("late runtime-only success published terminal result: count=%d", got)
 	}
 
 	queueRecoveryQueries()
@@ -306,11 +300,11 @@ func TestLateRuntimeSuccessProjectsSoulAndTerminalResultExactlyOnce(t *testing.T
 		}, nil
 	}
 	reactor.handleLateRuntimeResult(t.Context(), result)
-	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 1 {
-		t.Fatalf("duplicate late result republished Soul: count=%d", got)
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 0 {
+		t.Fatalf("duplicate late result published Soul: count=%d", got)
 	}
-	if got := len(capture.eventsByKind(domain.KindProvisioningResult)); got != 1 {
-		t.Fatalf("duplicate late result republished terminal result: count=%d", got)
+	if got := len(capture.eventsByKind(domain.KindProvisioningResult)); got != 0 {
+		t.Fatalf("duplicate late result published terminal result: count=%d", got)
 	}
 }
 
@@ -792,6 +786,9 @@ func (a *trackingRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapterRe
 			"state":           "running",
 			"spec_hash":       req.Soul.SpecHash,
 			"capability_ref":  "capability-event",
+			"account_id":      req.Target.AgentID + "-account",
+			"provider":        "routstr",
+			"model":           "routstr/model-a",
 		},
 		Event: &nostr.Event{PubKey: soulTestPubKey("runtime-pubkey")},
 	}, nil
@@ -898,7 +895,7 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		}, nil
 	}
 	runtime := &trackingRuntimeAdapter{}
-	full := NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}, OpenClawReadiness: acceptingOpenClawReadiness{}}, nil)
 	reactor.provisioner = full
 
 	request := buildProvisioningEvent(
@@ -946,6 +943,9 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		"approval-policy": "operator",
 		"avatar-ref":      "blob:avatar",
 		"voice-ref":       "blob:voice",
+		"provider":        "routstr",
+		"model":           "routstr/model-a",
+		"readiness":       "verified",
 	} {
 		if got := findTag(soulEvent, tagName); got != want {
 			t.Fatalf("soul tag %s = %q, want %q; tags=%#v", tagName, got, want, soulEvent.Tags)
@@ -964,6 +964,13 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 	}
 	if !eventKindBefore(capture.events, domain.KindAgentSoul, domain.KindProvisioningResult) {
 		t.Fatalf("final 31951 was not published before terminal 7950: %#v", capture.events)
+	}
+	if got := findTag(results[0], "run-id"); got == "" || got != findTag(soulEvent, "run-id") {
+		t.Fatalf("terminal/soul run correlation mismatch: result=%q soul=%q", got, findTag(soulEvent, "run-id"))
+	}
+	statusEvents := capture.eventsByKind(domain.KindProvisioningStatus)
+	if len(statusEvents) != len(domain.ProvisioningSteps)+OpenClawReadinessGateCount() {
+		t.Fatalf("status event count = %d, want base and readiness gates", len(statusEvents))
 	}
 }
 
@@ -1081,6 +1088,43 @@ func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testi
 	}
 	if !strings.Contains(results[0].Content, "runtime rejected provision") {
 		t.Fatalf("error result content = %q, want runtime error", results[0].Content)
+	}
+}
+
+func TestReadinessFailurePublishesOnlyCorrelatedErrorAndNeverRunningSoul(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(
+		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
+		&capturingGenerator{}, signer, slog.Default(),
+	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	capture := attachPublishCapture(reactor)
+	draft := &domain.SoulDraft{
+		EventID: "readiness-failure-draft", AgentID: "scout", CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Brief: "Signer must be ready", SpecHash: "sha256:readiness-failure",
+			Runtime:     domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			RelayPolicy: domain.SoulRelayPolicySpec{Read: []string{"wss://relay.example"}, Write: []string{"wss://relay.example"}},
+		},
+	}
+	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
+	runtime := &trackingRuntimeAdapter{}
+	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{
+		RuntimeAdapters:   map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime},
+		OpenClawReadiness: rejectingOpenClawReadiness{gate: ReadinessSigner},
+	}, nil)
+	request := buildProvisioningEvent(t, signer.pubkey, "readiness-failure", nostr.Tags{{"agent-id", "scout"}, {"draft-event", draft.EventID}, {"spec-hash", draft.Content.SpecHash}}, `{}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 0 {
+		t.Fatalf("readiness failure published %d running Soul events", got)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 || findTag(results[0], "status") != "error" || findTag(results[0], "run-id") == "" || !strings.Contains(results[0].Content, "NIP-46 signer is not connected") {
+		t.Fatalf("readiness terminal error = %#v", results)
+	}
+	if strings.Contains(results[0].Content, "nsec1") {
+		t.Fatalf("readiness error leaked secret-shaped detail: %q", results[0].Content)
 	}
 }
 
