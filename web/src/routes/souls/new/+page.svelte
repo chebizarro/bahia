@@ -57,6 +57,7 @@
     { id: 'personality', label: 'Personality', description: 'Traits and prompt sections' },
     { id: 'runtime', label: 'Runtime', description: 'Capability, scope, relays' }
   ];
+	const provisioningResumeKey = 'bahia:soulfactory:last-provisioning-request';
 
 
   let step = $state(1);
@@ -145,6 +146,28 @@
   function clone(value) {
     return JSON.parse(JSON.stringify(value || {}));
   }
+
+  function rememberProvisioningRequest(id, expectedAuthor = '', trackedAgentId = '') {
+	  if (typeof localStorage !== 'undefined' && id) {
+		localStorage.setItem(provisioningResumeKey, JSON.stringify({ requestId: id, expectedAuthor, agentId: trackedAgentId }));
+	  }
+  }
+
+  function resumedProvisioningRequest() {
+	  if (typeof localStorage === 'undefined') return null;
+	  const stored = localStorage.getItem(provisioningResumeKey) || '';
+	  if (!stored) return null;
+	  try {
+		const parsed = JSON.parse(stored);
+		return parsed?.requestId ? parsed : null;
+	  } catch {
+		return { requestId: stored, expectedAuthor: '', agentId: '' };
+	  }
+  }
+
+	function handleProvisioningComplete(data = {}) {
+	  agentId = data.agent_id || data.agentId || data.soul_id || agentId;
+	}
 
   function mergeSpec(base, updates) {
     if (!updates) return clone(base);
@@ -451,6 +474,8 @@
         beforePublish: (event) => {
           requestEventId = event.id;
           provisioningCleanup = trackProvisioningRun(event.id, {
+			expectedAuthor: selectedCapability?.controllerPubkeys?.[0] || '',
+			onComplete: handleProvisioningComplete,
             onError: (message) => console.error('[souls/new] provisioning failed:', message)
           });
           currentRun = provisioningRuns.get(event.id);
@@ -458,13 +483,9 @@
       });
 
       publishResults = request.publishResults;
-      // The controller can publish a terminal result immediately. Restarting after
-      // relay acceptance performs a stored-event query and closes that live-event race.
-      if (provisioningCleanup) provisioningCleanup();
-      provisioningCleanup = trackProvisioningRun(request.event.id, {
-        onError: (message) => console.error('[souls/new] provisioning failed:', message)
-      });
-      currentRun = provisioningRuns.get(request.event.id);
+	  // Keep the pre-publish subscription: abandoning it here can discard a fast
+	  // terminal event. Persist only after at least one relay accepted the request.
+	  rememberProvisioningRequest(request.event.id, selectedCapability?.controllerPubkeys?.[0] || '', agentId);
       step = 3;
     } catch (err) {
       error = err.message || 'Failed to publish provisioning request';
@@ -472,6 +493,9 @@
         provisioningCleanup();
         provisioningCleanup = null;
       }
+	  if (requestEventId && typeof localStorage !== 'undefined' && localStorage.getItem(provisioningResumeKey) === requestEventId) {
+		localStorage.removeItem(provisioningResumeKey);
+	  }
     } finally {
       submitting = false;
       publishing = false;
@@ -499,6 +523,18 @@
         loadRuntimeCapabilities(),
         loadSouls()
       ]);
+	  const resume = resumedProvisioningRequest();
+	  if (resume?.requestId && !requestEventId) {
+		requestEventId = resume.requestId;
+		agentId = resume.agentId || agentId;
+		provisioningCleanup = trackProvisioningRun(resume.requestId, {
+		  expectedAuthor: resume.expectedAuthor || '',
+		  onComplete: handleProvisioningComplete,
+		  onError: (message) => console.error('[souls/new] provisioning failed:', message)
+		});
+		currentRun = provisioningRuns.get(resume.requestId);
+		step = 3;
+	  }
     }
 
     void untrack(() => initializeNostr());

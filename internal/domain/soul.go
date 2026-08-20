@@ -147,6 +147,20 @@ type SoulRuntimeSpec struct {
 	CapabilityRef  string        `json:"capability_ref,omitempty"`
 	RuntimeBinding string        `json:"runtime_binding,omitempty"`
 	State          string        `json:"state,omitempty"`
+	Provider       string        `json:"provider,omitempty"`
+	Model          string        `json:"model,omitempty"`
+}
+
+// SoulReadinessEvidence contains only public correlation evidence from the
+// independent OpenClaw DM readiness probe. It must never contain prompts,
+// decrypted content, keys, bunker URIs, or provider credentials.
+type SoulReadinessEvidence struct {
+	RequestID       string           `json:"request_id"`
+	RunID           string           `json:"run_id"`
+	VerifiedAt      time.Time        `json:"verified_at"`
+	TotalDurationMS int64            `json:"total_duration_ms"`
+	GateTimingsMS   map[string]int64 `json:"gate_timings_ms,omitempty"`
+	ProbeEventIDs   []string         `json:"probe_event_ids,omitempty"`
 }
 
 // SoulRelayPolicySpec captures read/write/control relay policy for a soul.
@@ -299,19 +313,20 @@ type AgentSoul struct {
 	DeployStatus   string     `json:"deploy_status,omitempty"`
 
 	// Draft/runtime reconciliation
-	DraftRef             string              `json:"draft_ref,omitempty"`
-	DraftEventID         string              `json:"draft_event_id,omitempty"`
-	PreviousDraftRef     string              `json:"previous_draft_ref,omitempty"`
-	PreviousDraftEventID string              `json:"previous_draft_event_id,omitempty"`
-	SpecHash             string              `json:"spec_hash,omitempty"`
-	PreviousSpecHash     string              `json:"previous_spec_hash,omitempty"`
-	Runtime              SoulRuntimeSpec     `json:"runtime,omitempty"`
-	RelayPolicy          SoulRelayPolicySpec `json:"relay_policy,omitempty"`
-	PermissionSpec       SoulPermissionSpec  `json:"permissions,omitempty"`
-	Workspace            SoulWorkspaceSpec   `json:"workspace,omitempty"`
-	Assets               SoulAssetRefs       `json:"assets,omitempty"`
-	CapabilityRef        string              `json:"capability_ref,omitempty"`
-	LastResultRef        string              `json:"last_result_ref,omitempty"`
+	DraftRef             string                 `json:"draft_ref,omitempty"`
+	DraftEventID         string                 `json:"draft_event_id,omitempty"`
+	PreviousDraftRef     string                 `json:"previous_draft_ref,omitempty"`
+	PreviousDraftEventID string                 `json:"previous_draft_event_id,omitempty"`
+	SpecHash             string                 `json:"spec_hash,omitempty"`
+	PreviousSpecHash     string                 `json:"previous_spec_hash,omitempty"`
+	Runtime              SoulRuntimeSpec        `json:"runtime,omitempty"`
+	RelayPolicy          SoulRelayPolicySpec    `json:"relay_policy,omitempty"`
+	PermissionSpec       SoulPermissionSpec     `json:"permissions,omitempty"`
+	Workspace            SoulWorkspaceSpec      `json:"workspace,omitempty"`
+	Assets               SoulAssetRefs          `json:"assets,omitempty"`
+	CapabilityRef        string                 `json:"capability_ref,omitempty"`
+	LastResultRef        string                 `json:"last_result_ref,omitempty"`
+	Readiness            *SoulReadinessEvidence `json:"readiness,omitempty"`
 
 	// Lifecycle
 	CreatedAt     time.Time  `json:"created_at"`

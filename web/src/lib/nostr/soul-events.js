@@ -31,7 +31,8 @@ export function parseSoulEvent(event) {
     workspaceSpec: {},
     assets: {},
     capabilityRef: '',
-    lastResultRef: ''
+	lastResultRef: '',
+	readiness: { verified: false, requestId: '', runId: '', durationMs: 0, probeEventIds: [] }
   };
 
   for (const tag of event.tags) {
@@ -58,6 +59,13 @@ export function parseSoulEvent(event) {
       case 'runtime-pubkey': soul.runtime.runtime_pubkey = tag[1]; break;
       case 'runtime-binding': soul.runtime.runtime_binding = tag[1]; break;
       case 'runtime-state': soul.runtime.state = tag[1]; break;
+	  case 'provider': soul.runtime.provider = tag[1]; break;
+	  case 'model': soul.runtime.model = tag[1]; break;
+	  case 'run-id': soul.readiness.runId = tag[1]; break;
+	  case 'request-id': soul.readiness.requestId = tag[1]; break;
+	  case 'readiness': soul.readiness.verified = tag[1] === 'verified'; break;
+	  case 'readiness-ms': soul.readiness.durationMs = Number.parseInt(tag[1], 10) || 0; break;
+	  case 'probe-event': soul.readiness.probeEventIds.push(tag[1]); break;
       case 'capability': soul.capabilityRef = tag[1]; soul.runtime.capability_ref = tag[1]; break;
       case 'last-result': soul.lastResultRef = tag[1]; break;
     }
@@ -88,6 +96,7 @@ export function parseSoulEvent(event) {
     soul.draftRef = soul.draftRef || content.draft_ref || content.draftRef || '';
     soul.capabilityRef = soul.capabilityRef || content.capability_ref || content.capabilityRef || soul.runtime.capability_ref || '';
     soul.lastResultRef = soul.lastResultRef || content.last_result_ref || content.lastResultRef || '';
+	soul.readiness = { ...soul.readiness, ...(content.readiness || {}) };
   }
 
   return soul;

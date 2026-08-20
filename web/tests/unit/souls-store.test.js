@@ -562,6 +562,8 @@ describe('Souls Store', () => {
         kind: KINDS.PROVISIONING_STATUS,
         content: 'Creating Qdrant collection',
         tags: [
+		  ['e', requestEventId],
+		  ['run-id', 'run-1'],
           ['step', 'qdrant'],
           ['progress', '3', '8']
         ]
@@ -602,9 +604,12 @@ describe('Souls Store', () => {
       
       const resultEvent = {
         id: 'result-success-1',
+		created_at: 100,
         kind: KINDS.PROVISIONING_RESULT,
         content: '{"agentId":"agent-new","npub":"npub123"}',
         tags: [
+		  ['e', requestEventId],
+		  ['run-id', 'run-1'],
           ['status', 'success'],
           ['soul', 'soul-event-id']
         ]
@@ -620,7 +625,7 @@ describe('Souls Store', () => {
       expect(run.result.data).toEqual({ agentId: 'agent-new', npub: 'npub123' });
 
       expect(onComplete).toHaveBeenCalledWith({ agentId: 'agent-new', npub: 'npub123' });
-      expect(unsub).toHaveBeenCalledTimes(1);
+	  expect(unsub).not.toHaveBeenCalled();
     });
 
     it('should handle failed result event and call onError', () => {
@@ -640,9 +645,11 @@ describe('Souls Store', () => {
       
       const resultEvent = {
         id: 'result-error-1',
+		created_at: 100,
         kind: KINDS.PROVISIONING_RESULT,
         content: 'Qdrant collection creation failed',
         tags: [
+		  ['e', requestEventId],
           ['status', 'error']
         ]
       };
@@ -657,7 +664,7 @@ describe('Souls Store', () => {
       expect(run.result.error).toBe('Qdrant collection creation failed');
 
       expect(onError).toHaveBeenCalledWith('Qdrant collection creation failed');
-      expect(unsub).toHaveBeenCalledTimes(1);
+	  expect(unsub).not.toHaveBeenCalled();
     });
 
     it('should update pending message after EOSE while waiting for live updates', () => {
@@ -714,6 +721,59 @@ describe('Souls Store', () => {
 
       vi.useRealTimers();
     });
+
+	it('deduplicates snapshot/live overlap and rejects wrong request, run, and author correlation', () => {
+	  const requestEventId = 'req-correlated';
+	  let handlers;
+	  const onProgress = vi.fn();
+	  mockNostr.subscribe.mockImplementation((_filters, incoming) => { handlers = incoming; return vi.fn(); });
+	  soulsModule.trackProvisioningRun(requestEventId, { expectedAuthor: 'factory', onProgress });
+
+	  const { KINDS } = require('../../src/lib/nostr/client.js');
+	  const valid = { id: 'status-valid', pubkey: 'factory', kind: KINDS.PROVISIONING_STATUS, content: 'Checking signer', tags: [['e', requestEventId], ['run-id', 'run-a'], ['step', 'nip46_signer'], ['progress', '3', '14']] };
+	  handlers.onEvent(valid);
+	  handlers.onEvent(valid);
+	  handlers.onEvent({ ...valid, id: 'wrong-request', tags: [['e', 'abandoned'], ['run-id', 'run-a'], ['progress', '4', '14']] });
+	  handlers.onEvent({ ...valid, id: 'wrong-run', tags: [['e', requestEventId], ['run-id', 'run-b'], ['progress', '4', '14']] });
+	  handlers.onEvent({ ...valid, id: 'wrong-author', pubkey: 'attacker' });
+
+	  const run = soulsModule.provisioningRuns.get(requestEventId);
+	  expect(run.runId).toBe('run-a');
+	  expect(run.statusEvents).toHaveLength(1);
+	  expect(onProgress).toHaveBeenCalledTimes(1);
+	});
+
+	it('replaces progress immediately with retained terminal and lets a newer terminal supersede stale failure', () => {
+	  const requestEventId = 'req-terminal-order';
+	  let handlers;
+	  mockNostr.subscribe.mockImplementation((_filters, incoming) => { handlers = incoming; return vi.fn(); });
+	  soulsModule.trackProvisioningRun(requestEventId, {});
+	  const { KINDS } = require('../../src/lib/nostr/client.js');
+	  handlers.onEvent({ id: 'progress', created_at: 90, kind: KINDS.PROVISIONING_STATUS, content: 'DM probe', tags: [['e', requestEventId], ['run-id', 'run-a'], ['progress', '13', '14']] });
+	  handlers.onEvent({ id: 'failure', created_at: 100, kind: KINDS.PROVISIONING_RESULT, content: 'relay timeout', tags: [['e', requestEventId], ['run-id', 'run-a'], ['status', 'error']] });
+	  expect(soulsModule.provisioningRuns.get(requestEventId).status).toBe('failed');
+	  handlers.onEvent({ id: 'success', created_at: 101, kind: KINDS.PROVISIONING_RESULT, content: '{"agentId":"scout"}', tags: [['e', requestEventId], ['run-id', 'run-a'], ['status', 'success']] });
+	  expect(soulsModule.provisioningRuns.get(requestEventId).status).toBe('completed');
+	  handlers.onEvent({ id: 'late-progress', created_at: 102, kind: KINDS.PROVISIONING_STATUS, content: 'stale', tags: [['e', requestEventId], ['run-id', 'run-a'], ['progress', '14', '14']] });
+	  expect(soulsModule.provisioningRuns.get(requestEventId).status).toBe('completed');
+	});
+
+	it('bounds 100 percent without terminal in an actionable reconciliation error state', () => {
+	  vi.useFakeTimers();
+	  const requestEventId = 'req-missing-terminal';
+	  let handlers;
+	  mockNostr.subscribe.mockImplementation((_filters, incoming) => { handlers = incoming; return vi.fn(); });
+	  soulsModule.trackProvisioningRun(requestEventId, { reconciliationTimeoutMs: 5000 });
+	  const { KINDS } = require('../../src/lib/nostr/client.js');
+	  handlers.onEvent({ id: 'status-100', kind: KINDS.PROVISIONING_STATUS, content: 'All gates complete', tags: [['e', requestEventId], ['run-id', 'run-a'], ['progress', '14', '14']] });
+	  expect(soulsModule.provisioningRuns.get(requestEventId).status).toBe('reconciling');
+	  vi.advanceTimersByTime(5000);
+	  const run = soulsModule.provisioningRuns.get(requestEventId);
+	  expect(run.status).toBe('reconciliation_error');
+	  expect(run.retryState).toBe('terminal_missing');
+	  expect(run.message).toContain('do not assume the soul is running');
+	  vi.useRealTimers();
+	});
 
     it('should return cleanup function that removes run from store', () => {
       const requestEventId = 'req-event-cleanup';

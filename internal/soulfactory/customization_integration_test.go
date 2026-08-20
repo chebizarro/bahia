@@ -38,7 +38,7 @@ func TestIntegrationCreateSoulWithFullCustomization(t *testing.T) {
 		return &domain.SoulTemplate{EventID: "template-event", Identifier: "scout", Name: "Scout Template", Tier: domain.SoulTierHeavy, BasePrompt: "Scout with full customization"}, nil
 	}
 	runtime := &integrationRuntimeAdapter{runtime: domain.RuntimeTargetOpenClaw, bindingPrefix: "openclaw"}
-	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}, OpenClawReadiness: acceptingOpenClawReadiness{}}, nil)
 
 	request := buildProvisioningEvent(t, signer.pubkey, "create-full-customization", nostr.Tags{{"agent-id", draft.AgentID}, {"draft-event", draft.EventID}, {"spec-hash", draft.Content.SpecHash}}, `{"brief":"Create full customization"}`)
 	reactor.handleProvisioningRequest(t.Context(), request)
@@ -113,7 +113,7 @@ func TestIntegrationApplyTemplatePresetToNewSoul(t *testing.T) {
 		return &domain.SoulTemplate{EventID: "template-event", Identifier: "analyst", Name: "Analyst Preset", Tier: domain.SoulTierStandard, BasePrompt: "Analyze with rigor", DefaultKinds: []int{1, domain.KindSoulAction}, DefaultTools: []domain.ToolGrant{{MCPServer: "search", Scopes: []string{"read"}}}}, nil
 	}
 	runtime := &integrationRuntimeAdapter{runtime: domain.RuntimeTargetOpenClaw, bindingPrefix: "openclaw"}
-	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}, OpenClawReadiness: acceptingOpenClawReadiness{}}, nil)
 
 	reactor.handleProvisioningRequest(t.Context(), buildProvisioningEvent(t, signer.pubkey, "template-preset", nostr.Tags{{"agent-id", "analyst"}, {"template", templateRef}, {"draft-event", draft.EventID}, {"spec-hash", draft.Content.SpecHash}}, `{}`))
 	if len(runtime.requests) != 1 || runtime.requests[0].Params["persona"] == nil || runtime.requests[0].Params["voice"] == nil {
@@ -214,7 +214,11 @@ func runIntegrationProvisionForRuntime(t *testing.T, signer fakeSigner, target d
 	attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	runtime := &integrationRuntimeAdapter{runtime: target, bindingPrefix: binding, methods: []string{RuntimeMethodProvision, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure, RuntimeMethodPersonaUpdate, RuntimeMethodAvatarGenerate}}
-	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{target: runtime}}, nil)
+	config := FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{target: runtime}}
+	if target == domain.RuntimeTargetOpenClaw {
+		config.OpenClawReadiness = acceptingOpenClawReadiness{}
+	}
+	reactor.provisioner = NewFullProvisioner(reactor, config, nil)
 	reactor.handleProvisioningRequest(t.Context(), buildProvisioningEvent(t, signer.pubkey, string(target)+"-provision", nostr.Tags{{"agent-id", draft.AgentID}, {"draft-event", draft.EventID}, {"spec-hash", content.SpecHash}}, `{}`))
 	return runtime
 }
@@ -303,5 +307,5 @@ func (a *integrationRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapte
 		return &RuntimeControlResultEnvelope{Schema: domain.SoulFactoryRuntimeControlSchema, Method: req.Method, Status: "failed", Error: &RuntimeControlError{Code: "runtime_error", Message: "runtime error"}}, fmt.Errorf("runtime error")
 	}
 	runtimePubkey := firstNonEmpty(req.Target.RuntimePubkey, soulTestPubKeyHex(string(req.Target.Runtime)+"-runtime-pubkey"))
-	return &RuntimeControlResultEnvelope{Schema: domain.SoulFactoryRuntimeControlSchema, Method: req.Method, IdempotencyKey: "sha256:test", OperatorRequestEvent: req.Operator.RequestEvent, RequestEvent: "runtime-request", Status: "success", Result: map[string]interface{}{"agent_id": req.Target.AgentID, "runtime": req.Target.Runtime, "runtime_pubkey": runtimePubkey, "runtime_binding": a.bindingPrefix + "://agents/" + req.Target.AgentID, "state": "running", "spec_hash": req.Soul.SpecHash, "capability_ref": "capability-" + string(req.Target.Runtime)}, Event: &nostr.Event{PubKey: soulTestPubKey(runtimePubkey)}}, nil
+	return &RuntimeControlResultEnvelope{Schema: domain.SoulFactoryRuntimeControlSchema, Method: req.Method, IdempotencyKey: "sha256:test", OperatorRequestEvent: req.Operator.RequestEvent, RequestEvent: "runtime-request", Status: "success", Result: map[string]interface{}{"agent_id": req.Target.AgentID, "runtime": req.Target.Runtime, "runtime_pubkey": runtimePubkey, "runtime_binding": a.bindingPrefix + "://agents/" + req.Target.AgentID, "state": "running", "spec_hash": req.Soul.SpecHash, "capability_ref": "capability-" + string(req.Target.Runtime), "account_id": req.Target.AgentID + "-account", "provider": "routstr", "model": "routstr/model-a"}, Event: &nostr.Event{PubKey: soulTestPubKey(runtimePubkey)}}, nil
 }

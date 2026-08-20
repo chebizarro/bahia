@@ -615,6 +615,8 @@ function parseRunStatusEvent(event, defaultTotal) {
     soulRef: getTag(event, 'soul'),
     agentId: getTag(event, 'agent-id'),
     specHash: getTag(event, 'spec-hash'),
+	requestId: getTag(event, 'e'),
+	runId: getTag(event, 'run-id'),
     event
   };
 }
@@ -637,6 +639,8 @@ function parseRunResultEvent(event) {
     requestKind: getTag(event, 'request-kind', data?.request_kind || data?.requestKind || ''),
     agentId: getTag(event, 'agent-id', data?.agent_id || data?.agentId || ''),
     specHash: getTag(event, 'spec-hash', data?.spec_hash || data?.specHash || ''),
+	requestId: getTag(event, 'e', data?.request_id || data?.requestId || ''),
+	runId: getTag(event, 'run-id', data?.run_id || data?.runId || ''),
     data: data && typeof data === 'object' ? data : {},
     legacyKind: event.kind === KINDS.SOUL_ACTION_LEGACY_RESULT,
     event
@@ -645,7 +649,10 @@ function parseRunResultEvent(event) {
 
 // Track a provisioning or lifecycle run. Terminal state comes only from explicit 7950
 // (or legacy 1951 migration alias) result events, never from EOSE, CLOSED, or local time.
-export function trackLifecycleRun(requestEventId, { type = 'provisioning', action = '', onProgress, onComplete, onError } = {}) {
+export function trackLifecycleRun(requestEventId, {
+  type = 'provisioning', action = '', expectedAuthor = '', reconciliationTimeoutMs = 30000,
+  onProgress, onComplete, onError
+} = {}) {
   const defaultTotal = type === 'provisioning' ? 8 : 0;
   const run = $state({
     id: requestEventId,
@@ -657,34 +664,79 @@ export function trackLifecycleRun(requestEventId, { type = 'provisioning', actio
     message: type === 'provisioning' ? 'Waiting for provisioning events…' : 'Waiting for lifecycle events…',
     result: null,
     statusEvents: [],
-    closedRelays: []
+	closedRelays: [],
+	runId: '',
+	startedAt: Date.now(),
+	updatedAt: Date.now(),
+	retryState: 'subscribed',
+	reconciliation: null
   });
 
   provisioningRuns.set(requestEventId, run);
 
   const seenEventIds = new Set();
-  let finished = false;
+	let reconciliationTimer = null;
+	let callbackTerminalId = '';
+	let latestTerminal = null;
   const resultKinds = [KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT].filter(Boolean);
+	const statusFilter = { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] };
+	const resultFilter = { kinds: resultKinds, '#e': [requestEventId] };
+	if (expectedAuthor) {
+		statusFilter.authors = [expectedAuthor];
+		resultFilter.authors = [expectedAuthor];
+	}
+
+	const clearReconciliationTimer = () => {
+		if (reconciliationTimer !== null) clearTimeout(reconciliationTimer);
+		reconciliationTimer = null;
+	};
+	const beginTerminalReconciliation = (currentRun) => {
+		clearReconciliationTimer();
+		currentRun.status = 'reconciling';
+		currentRun.retryState = 'reconciling_terminal';
+		currentRun.reconciliation = { startedAt: Date.now(), timeoutMs: reconciliationTimeoutMs };
+		currentRun.message = 'All readiness checks reported complete. Reconciling the retained terminal result…';
+		reconciliationTimer = setTimeout(() => {
+			const active = provisioningRuns.get(requestEventId);
+			if (!active || active.result) return;
+			active.status = 'reconciliation_error';
+			active.retryState = 'terminal_missing';
+			active.updatedAt = Date.now();
+			active.message = 'Readiness reached 100%, but no correlated terminal result arrived. Reconnect or retry reconciliation; do not assume the soul is running.';
+		}, Math.max(1, reconciliationTimeoutMs));
+	};
 
   const unsub = nostr.subscribe([
-    { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] },
-    { kinds: resultKinds, '#e': [requestEventId] }
+	statusFilter,
+	resultFilter
   ], {
     onEvent: (event) => {
-      if (finished) return;
       if (event?.id && seenEventIds.has(event.id)) return;
       if (event?.id) seenEventIds.add(event.id);
+		if (expectedAuthor && event?.pubkey !== expectedAuthor) return;
+		if (getTag(event, 'e') !== requestEventId) return;
 
       if (event.kind === KINDS.PROVISIONING_STATUS) {
         const status = parseRunStatusEvent(event, defaultTotal);
         const currentRun = provisioningRuns.get(requestEventId);
-        if (currentRun) {
+		if (currentRun?.result) return;
+		if (currentRun?.runId && status.runId && currentRun.runId !== status.runId) return;
+		if (currentRun) {
+		  if (status.runId) currentRun.runId = status.runId;
           currentRun.status = 'running';
           currentRun.step = status.step;
           currentRun.progress = status.progress;
           currentRun.message = status.message;
           currentRun.action = currentRun.action || status.action;
           currentRun.statusEvents.push(status);
+		  currentRun.updatedAt = Date.now();
+		  currentRun.retryState = 'live';
+		  if (status.progress.total > 0 && status.progress.current >= status.progress.total) {
+			beginTerminalReconciliation(currentRun);
+		  } else {
+			clearReconciliationTimer();
+			currentRun.reconciliation = null;
+		  }
         }
 
         if (onProgress) onProgress({ step: status.step, progress: status.progress, message: status.message });
@@ -693,20 +745,29 @@ export function trackLifecycleRun(requestEventId, { type = 'provisioning', actio
 
       if (resultKinds.includes(event.kind)) {
         const result = parseRunResultEvent(event);
+		if (run.runId && result.runId && run.runId !== result.runId) return;
+		const terminalOrder = [Number(event.created_at) || 0, event.id || ''];
+		if (latestTerminal && (terminalOrder[0] < latestTerminal[0] || (terminalOrder[0] === latestTerminal[0] && terminalOrder[1] <= latestTerminal[1]))) return;
+		latestTerminal = terminalOrder;
         const currentRun = provisioningRuns.get(requestEventId);
         if (currentRun) {
+		  clearReconciliationTimer();
+		  if (result.runId) currentRun.runId = result.runId;
           currentRun.status = result.success ? 'completed' : 'failed';
           currentRun.action = currentRun.action || result.action;
           currentRun.message = result.success
             ? (type === 'provisioning' ? 'Provisioning complete' : 'Lifecycle action complete')
             : result.error;
           currentRun.result = result;
+		  currentRun.updatedAt = Date.now();
+		  currentRun.terminalAt = Date.now();
+		  currentRun.retryState = 'terminal';
+		  currentRun.reconciliation = null;
         }
 
-        finished = true;
-        unsub();
-
-        if (result.success) {
+		if (callbackTerminalId === result.id) return;
+		callbackTerminalId = result.id;
+		if (result.success) {
           if (onComplete) onComplete(result.data);
         } else if (onError) {
           onError(result.error);
@@ -714,19 +775,20 @@ export function trackLifecycleRun(requestEventId, { type = 'provisioning', actio
       }
     },
     onEose: () => {
-      if (finished) return;
       const currentRun = provisioningRuns.get(requestEventId);
-      if (currentRun && currentRun.status === 'pending') {
+		if (currentRun && currentRun.status === 'pending' && !currentRun.result) {
+		currentRun.retryState = 'live_after_snapshot';
         currentRun.message = type === 'provisioning'
           ? 'Request published. Waiting for live provisioning updates…'
           : 'Request published. Waiting for live lifecycle updates…';
       }
     },
     onClosed: (reason, relay) => {
-      if (finished) return;
       const currentRun = provisioningRuns.get(requestEventId);
-      if (currentRun) {
+		if (currentRun && !currentRun.result) {
         currentRun.closedRelays.push({ relay, reason });
+		currentRun.retryState = 'reconnect_required';
+		currentRun.updatedAt = Date.now();
         currentRun.message = reason
           ? `Relay closed this subscription: ${reason}. Waiting for an explicit ${type} result…`
           : `Relay closed this subscription. Waiting for an explicit ${type} result…`;
@@ -735,7 +797,7 @@ export function trackLifecycleRun(requestEventId, { type = 'provisioning', actio
   });
 
   return () => {
-    finished = true;
+	clearReconciliationTimer();
     unsub();
     provisioningRuns.delete(requestEventId);
   };
