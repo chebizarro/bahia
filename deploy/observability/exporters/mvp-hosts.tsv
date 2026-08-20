@@ -1,0 +1,9 @@
+# host	ssh_target	listen_address	expected
+edge-01	agent@192.168.40.104	192.168.40.104	up
+max	local	192.168.40.15	up
+core-01	bizarro@192.168.40.1	192.168.40.1	up
+storage-01	agent@192.168.40.107	192.168.40.107	up
+btc-01	agent@192.168.40.10	192.168.40.10	up
+lemmy	agent@192.168.40.110	192.168.40.110	up
+ai-02	agent@192.168.30.100	192.168.30.100	up
+roost	agent@192.168.20.100	192.168.20.100	expected-down

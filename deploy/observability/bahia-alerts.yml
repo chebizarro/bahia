@@ -62,3 +62,43 @@ groups:
         annotations:
           summary: "Bahia dependency-tier rejection rate has spiked"
           runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
+      - alert: NodeExporterDown
+        expr: up{job="node",expected_state="up"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node exporter is unavailable on {{ $labels.host }}"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#nodeexporterdown"
+      - alert: HostMemoryPressure
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host {{ $labels.host }} has less than 10% available memory"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#hostmemorypressure"
+      - alert: HostFilesystemPressure
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.10) and on(instance,device,mountpoint,fstype) node_filesystem_readonly == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host {{ $labels.host }} filesystem {{ $labels.mountpoint }} has less than 10% free space"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#hostfilesystempressure"
+      - alert: LemmyGPUExporterDown
+        expr: up{job="nvidia_gpu",host="lemmy"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Lemmy GPU exporter is unavailable"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#lemmygpuexporterdown"
+      - alert: LemmyGPUMemoryPressure
+        expr: nvidia_smi_memory_used_bytes{host="lemmy"} / nvidia_smi_memory_total_bytes{host="lemmy"} > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lemmy GPU {{ $labels.uuid }} has more than 90% VRAM allocated"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#lemmygpumemorypressure"

@@ -14,3 +14,27 @@ scrape_configs:
         labels:
           environment: edge-01-production
           service: bahia
+
+  - job_name: node
+    static_configs:
+      - targets: [192.168.40.104:9100]
+        labels: {host: edge-01, expected_state: up}
+      - targets: [192.168.40.15:9100]
+        labels: {host: max, expected_state: up}
+      - targets: [192.168.40.1:9100]
+        labels: {host: core-01, expected_state: up}
+      - targets: [192.168.40.107:9100]
+        labels: {host: storage-01, expected_state: up}
+      - targets: [192.168.40.10:9100]
+        labels: {host: btc-01, expected_state: up}
+      - targets: [192.168.40.110:9100]
+        labels: {host: lemmy, expected_state: up}
+      - targets: [192.168.30.100:9100]
+        labels: {host: ai-02, expected_state: up}
+      - targets: [192.168.20.100:9100]
+        labels: {host: roost, expected_state: down}
+
+  - job_name: nvidia_gpu
+    static_configs:
+      - targets: [192.168.40.110:9835]
+        labels: {host: lemmy, expected_state: up}

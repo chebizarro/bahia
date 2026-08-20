@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "AC1", "text": "Every reachable expected-up MVP host exports node filesystem, inode, and memory metrics on its declared monitoring address."},
+    {"id": "AC2", "text": "Lemmy exports real NVIDIA utilization and VRAM metrics from its installed GPUs."},
+    {"id": "AC3", "text": "Exporter listeners do not bind wildcard or non-monitoring addresses."},
+    {"id": "AC4", "text": "Roost is explicitly expected-down and every other unreachable expected-up host is reported as a blocker."},
+    {"id": "AC5", "text": "Prometheus can scrape every expected-up target and source metrics feed the WS6 pressure rules."}
+  ]
+}
