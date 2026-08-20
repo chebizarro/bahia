@@ -1,0 +1,12 @@
+{
+  "feature_id": "OPENCLAW_DEDICATED_RUNTIME_ORCHESTRATION",
+  "criteria": [
+    {"id": "AC-1", "statement": "Dedicated runtime names and labels are deterministic and collision-safe across request, run, and agent identities."},
+    {"id": "AC-2", "statement": "Compose configuration pins immutable artifacts and defines persistence, limits, restart, health, logging, network, and restrictive secret mounts."},
+    {"id": "AC-3", "statement": "Exact replay adopts a matching healthy deployment without creating another; restart is reconciled."},
+    {"id": "AC-4", "statement": "Conflicting ownership or desired spec is rejected without mutation, and delete removes only exactly owned resources."},
+    {"id": "AC-5", "statement": "Provisioning returns complete resource lineage and cleans up an owned partial deployment after later-stage failure."},
+    {"id": "AC-6", "statement": "Two concurrent souls have distinct runtime, workspace, config, identity, and account state."},
+    {"id": "AC-7", "statement": "Non-dry-run shared existing-container provisioning is rejected before any incumbent mutation."}
+  ]
+}

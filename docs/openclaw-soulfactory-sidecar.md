@@ -58,7 +58,7 @@ Other methods are rejected unless the operator explicitly configures a driver th
 }
 ```
 
-The wrapper supports dry-run verification or an existing container through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and `OPENCLAW_SOULFACTORY_CONTAINER`. It implements optimistic spec-hash checks for `soulfactory.update`.
+The wrapper supports dry-run verification and dedicated non-dry-run gateways through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose`. Shared `existing-container` provisioning is rejected. It implements optimistic spec-hash checks for `soulfactory.update`.
 
 The command receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH`.
 

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,14 +43,21 @@ var agentIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$`)
 type Config struct {
 	Root            string
 	OpenClawBin     string
+	DockerBin       string
 	RuntimeMode     string
 	Container       string
+	ImageDigest     string
+	SourceCommit    string
+	CPUs            string
+	Memory          string
+	PIDsLimit       int
 	DefaultModel    string
 	DefaultBindings []string
 	RequiredPlugins []string
 	DryRun          bool
 	Now             func() time.Time
 	Runner          CommandRunner
+	Orchestrator    RuntimeOrchestrator
 }
 
 type CommandRunner interface {
@@ -93,13 +101,23 @@ func (e CommandExecutionError) Error() string { return e.Message }
 type State struct {
 	AgentID          string   `json:"agent_id"`
 	SoulID           string   `json:"soul_id"`
+	AccountID        string   `json:"account_id,omitempty"`
+	Model            string   `json:"model,omitempty"`
 	SpecHash         string   `json:"spec_hash"`
+	RuntimeSpecHash  string   `json:"runtime_spec_hash,omitempty"`
 	State            string   `json:"state"`
 	RuntimeBinding   string   `json:"runtime_binding"`
 	Workspace        string   `json:"workspace"`
+	WorkspaceID      string   `json:"workspace_id,omitempty"`
 	AgentDir         string   `json:"agent_dir"`
 	RuntimeMode      string   `json:"runtime_mode"`
+	DeploymentID     string   `json:"deployment_id,omitempty"`
+	RunID            string   `json:"run_id,omitempty"`
+	ContainerID      string   `json:"container_id,omitempty"`
 	Container        string   `json:"container,omitempty"`
+	ImageDigest      string   `json:"image_digest,omitempty"`
+	SourceCommit     string   `json:"source_commit,omitempty"`
+	ConfigRevision   string   `json:"config_revision,omitempty"`
 	CreatedAt        int64    `json:"created_at"`
 	UpdatedAt        int64    `json:"updated_at"`
 	LastMethod       string   `json:"last_method"`
@@ -137,8 +155,14 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	return Config{
 		Root:            strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_ROOT")),
 		OpenClawBin:     strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_OPENCLAW_BIN")),
+		DockerBin:       strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_DOCKER_BIN")),
 		RuntimeMode:     strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_RUNTIME_MODE")),
 		Container:       strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_CONTAINER")),
+		ImageDigest:     strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_IMAGE")),
+		SourceCommit:    strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_SOURCE_COMMIT")),
+		CPUs:            strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_CPUS")),
+		Memory:          strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_MEMORY")),
+		PIDsLimit:       intFromString(getenv("OPENCLAW_SOULFACTORY_PIDS_LIMIT")),
 		DefaultModel:    strings.TrimSpace(getenv("OPENCLAW_SOULFACTORY_DEFAULT_MODEL")),
 		DefaultBindings: splitCSV(getenv("OPENCLAW_SOULFACTORY_DEFAULT_BINDINGS")),
 		RequiredPlugins: splitCSV(getenv("OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS")),
@@ -195,6 +219,7 @@ func (e *Executor) update(ctx context.Context, invocation soulfactory.OpenClawCo
 	if !ok || state.State == "revoked" {
 		return rejected(ErrorMissingRequired, "update requires existing non-revoked OpenClaw agent state", false, nil)
 	}
+	paths = e.pathsForState(state)
 	if replay, replayed := e.replayOutcome(invocation, paths, state); replayed {
 		return replay
 	}
@@ -263,7 +288,7 @@ func (e *Executor) update(ctx context.Context, invocation soulfactory.OpenClawCo
 		return failed(ErrorExecutionFailed, "write provenance: "+err.Error(), true, nil)
 	}
 	if !e.config.DryRun {
-		if outcome := e.runOpenClaw(ctx, e.containerArgs("agents", "set-identity", "--agent", invocation.AgentID, "--identity-file", paths.IdentityFile, "--json")...); outcome != nil {
+		if outcome := e.runOpenClaw(ctx, e.containerArgsFor(state.Container, "agents", "set-identity", "--agent", invocation.AgentID, "--identity-file", containerWorkspace+"/IDENTITY.md", "--json")...); outcome != nil {
 			state.State = "failed"
 			state.LastReason = errorMessage(outcome)
 			state.UpdatedAt = e.config.Now().Unix()
@@ -339,11 +364,34 @@ func resolveConfig(config Config) (Config, error) {
 		}
 		config.Root = filepath.Join(home, ".openclaw", "soulfactory")
 	}
+	absoluteRoot, err := filepath.Abs(config.Root)
+	if err != nil {
+		return config, fmt.Errorf("resolve OPENCLAW_SOULFACTORY_ROOT: %w", err)
+	}
+	config.Root = absoluteRoot
 	if strings.TrimSpace(config.OpenClawBin) == "" {
 		config.OpenClawBin = "openclaw"
 	}
+	if strings.TrimSpace(config.DockerBin) == "" {
+		config.DockerBin = "docker"
+	}
 	if strings.TrimSpace(config.RuntimeMode) == "" {
-		config.RuntimeMode = RuntimeModeExistingContainer
+		config.RuntimeMode = RuntimeModePerAgentCompose
+	}
+	if strings.TrimSpace(config.CPUs) == "" {
+		config.CPUs = "1.0"
+	}
+	if strings.TrimSpace(config.Memory) == "" {
+		config.Memory = "1g"
+	}
+	if config.PIDsLimit == 0 {
+		config.PIDsLimit = 256
+	}
+	if cpus, err := strconv.ParseFloat(config.CPUs, 64); err != nil || cpus <= 0 {
+		return config, fmt.Errorf("OPENCLAW_SOULFACTORY_CPUS must be positive")
+	}
+	if strings.TrimSpace(config.Memory) == "" || config.PIDsLimit <= 0 {
+		return config, fmt.Errorf("OPENCLAW_SOULFACTORY_MEMORY and OPENCLAW_SOULFACTORY_PIDS_LIMIT must be positive")
 	}
 	if config.RuntimeMode != RuntimeModeExistingContainer && config.RuntimeMode != RuntimeModePerAgentCompose {
 		return config, fmt.Errorf("OPENCLAW_SOULFACTORY_RUNTIME_MODE must be existing-container or per-agent-compose")
@@ -360,6 +408,9 @@ func resolveConfig(config Config) (Config, error) {
 	}
 	if config.Runner == nil {
 		config.Runner = ExecRunner{}
+	}
+	if config.Orchestrator == nil {
+		config.Orchestrator = DockerComposeOrchestrator{DockerBin: config.DockerBin, Runner: config.Runner}
 	}
 	return config, nil
 }
@@ -384,32 +435,53 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 	if err := requireObjectParams(invocation.Params, "identity", "runtime", "permissions", "relay_policy", "workspace", "assets"); err != nil {
 		return rejected(ErrorMissingRequired, err.Error(), false, nil)
 	}
-	if e.config.RuntimeMode == RuntimeModePerAgentCompose && !e.config.DryRun {
-		return rejected(ErrorUnsupportedMethod, "per-agent-compose runtime mode requires a container orchestration implementation before non-dry-run use", false, nil)
+	if !e.config.DryRun && e.config.RuntimeMode != RuntimeModePerAgentCompose {
+		return rejected(ErrorUnsupportedMethod, "externally reachable OpenClaw souls require per-agent-compose; shared existing-container provisioning is disabled", false, nil)
 	}
-	if e.config.RuntimeMode == RuntimeModeExistingContainer && !e.config.DryRun && strings.TrimSpace(e.config.Container) == "" {
-		return rejected(ErrorMissingRequired, "OPENCLAW_SOULFACTORY_CONTAINER is required for existing-container non-dry-run provisioning", false, nil)
-	}
-	if !e.config.DryRun {
-		if outcome := e.ensureRuntimePlugins(ctx); outcome != nil {
-			return outcome
-		}
-	}
-
 	paths := e.paths(invocation.AgentID)
+	if e.config.RuntimeMode == RuntimeModePerAgentCompose || !e.config.DryRun {
+		deploymentID := deterministicRuntimeName(invocation.AgentID, invocation.Envelope.Operator.RequestEvent, invocation.Envelope.IdempotencyKey)
+		paths = e.pathsForDeployment(invocation.AgentID, deploymentID)
+	}
+	spec, err := e.runtimeSpec(invocation, paths)
+	if err != nil {
+		return rejected(ErrorMissingRequired, err.Error(), false, nil)
+	}
 	if state, ok, err := readJSONFile[State](paths.State); err != nil {
 		return failed(ErrorExecutionFailed, "read existing OpenClaw agent state: "+err.Error(), true, nil)
 	} else if ok {
-		return e.existingProvisionOutcome(invocation, paths, state)
+		outcome := e.existingProvisionOutcome(invocation, paths, state)
+		if outcome.Status != StatusSuccess || e.config.DryRun {
+			return outcome
+		}
+		lineage, reconcileErr := e.config.Orchestrator.Reconcile(ctx, spec)
+		if reconcileErr != nil {
+			return failed(ErrorExecutionFailed, reconcileErr.Error(), true, nil)
+		}
+		if pluginOutcome := e.ensureRuntimePlugins(ctx, spec); pluginOutcome != nil {
+			return pluginOutcome
+		}
+		applyLineage(&state, lineage)
+		state.UpdatedAt = e.config.Now().Unix()
+		outcome = success(e.resultFromState(state, state.UpdatedAt))
+		if err := e.persistInvocationOutcome(invocation, outcome, state, paths); err != nil {
+			return failed(ErrorExecutionFailed, err.Error(), true, nil)
+		}
+		return outcome
 	}
 
-	if err := os.MkdirAll(paths.OpenClawDir, 0o700); err != nil {
-		return failed(ErrorExecutionFailed, "create OpenClaw agent workspace: "+err.Error(), true, nil)
-	}
-	if err := os.MkdirAll(paths.AgentDir, 0o700); err != nil {
-		return failed(ErrorExecutionFailed, "create OpenClaw agent directory: "+err.Error(), true, nil)
+	for _, directory := range []string{filepath.Dir(paths.AgentRoot), paths.AgentRoot, filepath.Dir(paths.RuntimeRoot), paths.RuntimeRoot, paths.Workspace, paths.OpenClawDir, paths.AgentDir, paths.ConfigDir} {
+		if directory == "." || directory == "" {
+			continue
+		}
+		if err := ensurePrivateDirectory(directory); err != nil {
+			return failed(ErrorExecutionFailed, "create dedicated OpenClaw runtime directory: "+err.Error(), true, nil)
+		}
 	}
 	if err := e.renderProvisionWorkspace(invocation, paths); err != nil {
+		return failed(ErrorExecutionFailed, err.Error(), true, nil)
+	}
+	if err := e.renderRuntimeFiles(invocation, spec, paths); err != nil {
 		return failed(ErrorExecutionFailed, err.Error(), true, nil)
 	}
 	warnings := e.baseWarnings()
@@ -417,13 +489,22 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 	state := State{
 		AgentID:          invocation.AgentID,
 		SoulID:           invocation.SoulID,
+		AccountID:        spec.AccountID,
+		Model:            spec.Model,
 		SpecHash:         invocation.SpecHash,
-		State:            "running",
+		RuntimeSpecHash:  invocation.SpecHash,
+		State:            "creating",
 		RuntimeBinding:   runtimeBinding(invocation.AgentID),
 		Workspace:        paths.Workspace,
+		WorkspaceID:      "workspace://" + spec.DeploymentID,
 		AgentDir:         paths.AgentDir,
 		RuntimeMode:      e.config.RuntimeMode,
-		Container:        e.config.Container,
+		DeploymentID:     spec.DeploymentID,
+		RunID:            spec.RunID,
+		Container:        spec.ContainerName,
+		ImageDigest:      spec.ImageDigest,
+		SourceCommit:     spec.SourceCommit,
+		ConfigRevision:   spec.ConfigRevision,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 		LastMethod:       invocation.Method,
@@ -433,12 +514,34 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 		RuntimePubkey:    invocation.Envelope.Target.RuntimePubkey,
 	}
 	if !e.config.DryRun {
-		if outcome := e.runProvisionCommands(ctx, invocation, paths); outcome != nil {
+		if outcome := e.bootstrapRuntimePlugins(ctx, spec); outcome != nil {
+			_ = e.config.Orchestrator.Delete(ctx, spec)
+			state.State = "failed"
+			state.LastReason = errorMessage(outcome)
+			return e.persistFailure(invocation, outcome, state, paths)
+		}
+		lineage, reconcileErr := e.config.Orchestrator.Reconcile(ctx, spec)
+		if reconcileErr != nil {
+			_ = e.config.Orchestrator.Delete(ctx, spec)
+			state.State = "failed"
+			state.LastReason = reconcileErr.Error()
+			return e.persistFailure(invocation, failed(ErrorExecutionFailed, reconcileErr.Error(), true, nil), state, paths)
+		}
+		applyLineage(&state, lineage)
+		if outcome := e.ensureRuntimePlugins(ctx, spec); outcome != nil {
+			_ = e.config.Orchestrator.Delete(ctx, spec)
+			state.State = "failed"
+			state.LastReason = errorMessage(outcome)
+			return e.persistFailure(invocation, outcome, state, paths)
+		}
+		if outcome := e.runProvisionCommands(ctx, invocation, paths, spec); outcome != nil {
+			_ = e.config.Orchestrator.Delete(ctx, spec)
 			state.State = "failed"
 			state.LastReason = errorMessage(outcome)
 			return e.persistFailure(invocation, outcome, state, paths)
 		}
 	}
+	state.State = "running"
 	outcome := success(e.resultFromState(state, now))
 	if err := e.persistInvocationOutcome(invocation, outcome, state, paths); err != nil {
 		return failed(ErrorExecutionFailed, err.Error(), true, nil)
@@ -446,15 +549,240 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 	return outcome
 }
 
-// ensureRuntimePlugins treats plugins as shared runtime prerequisites, not
-// per-agent state. A newly installed plugin requires one gateway restart, so
-// provisioning stops before creating agent state and succeeds on retry after
-// the runtime has restarted and reports the plugin as loaded.
-func (e *Executor) ensureRuntimePlugins(ctx context.Context) *soulfactory.OpenClawControlOutcome {
+func (e *Executor) bootstrapRuntimePlugins(ctx context.Context, spec RuntimeSpec) *soulfactory.OpenClawControlOutcome {
+	prefix := []string{
+		"compose", "--project-name", spec.DeploymentID, "--file", spec.ComposePath,
+		"run", "--rm", "--no-deps", "--name", spec.DeploymentID + "-bootstrap",
+	}
+	labels := runtimeLabels(spec)
+	labelKeys := make([]string, 0, len(labels))
+	for key := range labels {
+		labelKeys = append(labelKeys, key)
+	}
+	sort.Strings(labelKeys)
+	for _, key := range labelKeys {
+		prefix = append(prefix, "--label", key+"="+labels[key])
+	}
+	prefix = append(prefix, "-e", "OPENCLAW_CONFIG_PATH=/tmp/openclaw-bootstrap.json", "gateway", "node", "dist/index.js")
+	out, err := e.config.Runner.Run(ctx, e.config.DockerBin, append(prefix, "plugins", "list", "--json")...)
+	if err != nil {
+		return failed(ErrorExecutionFailed, "inspect dedicated OpenClaw bootstrap plugins: "+err.Error(), true, nil)
+	}
+	var inventory interface{}
+	if err := json.Unmarshal(out, &inventory); err != nil {
+		return failed(ErrorExecutionFailed, "parse dedicated OpenClaw bootstrap plugin inventory: "+err.Error(), true, nil)
+	}
+	for _, requirement := range e.config.RequiredPlugins {
+		id, source, _ := parsePluginRequirement(requirement)
+		if pluginLoaded(inventory, id) {
+			continue
+		}
+		if _, err := e.config.Runner.Run(ctx, e.config.DockerBin, append(prefix, "plugins", "install", source)...); err != nil {
+			return failed(ErrorExecutionFailed, "install dedicated OpenClaw bootstrap plugin: "+err.Error(), true, nil)
+		}
+	}
+	return nil
+}
+
+func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation, paths localPaths) (RuntimeSpec, error) {
+	runtimeParams, _ := invocation.Params["runtime"].(map[string]interface{})
+	accountID := strings.TrimSpace(firstNonEmpty(firstString(runtimeParams, "account_id"), firstString(runtimeParams, "nostr_account_id")))
+	if accountID == "" {
+		if bahiaParams, ok := invocation.Params["bahia"].(map[string]interface{}); ok {
+			accountID = firstString(bahiaParams, "nostr_pubkey")
+		}
+	}
+	if accountID == "" {
+		if !e.config.DryRun {
+			return RuntimeSpec{}, fmt.Errorf("runtime.account_id is required for exact Nostr account-to-agent binding")
+		}
+		accountID = "unassigned"
+	}
+	requestID := strings.TrimSpace(invocation.Envelope.Operator.RequestEvent)
+	runID := strings.TrimSpace(invocation.Envelope.IdempotencyKey)
+	if requestID == "" || runID == "" {
+		return RuntimeSpec{}, fmt.Errorf("operator request event and idempotency key are required for dedicated runtime ownership")
+	}
+	secrets, err := secretFilesFromParams(invocation.Params)
+	if err != nil {
+		return RuntimeSpec{}, err
+	}
+	pluginIDs := make([]string, 0, len(e.config.RequiredPlugins))
+	for _, requirement := range e.config.RequiredPlugins {
+		id, _, err := parsePluginRequirement(requirement)
+		if err != nil {
+			return RuntimeSpec{}, err
+		}
+		pluginIDs = append(pluginIDs, id)
+	}
+	if !e.config.DryRun {
+		if !immutableImagePattern.MatchString(e.config.ImageDigest) {
+			return RuntimeSpec{}, fmt.Errorf("OPENCLAW_SOULFACTORY_IMAGE must use an immutable OCI digest")
+		}
+		if !sourceCommitPattern.MatchString(e.config.SourceCommit) {
+			return RuntimeSpec{}, fmt.Errorf("OPENCLAW_SOULFACTORY_SOURCE_COMMIT must be a pinned lowercase hexadecimal commit")
+		}
+		foundNostr := false
+		for _, id := range pluginIDs {
+			foundNostr = foundNostr || id == "nostr"
+		}
+		if !foundNostr {
+			return RuntimeSpec{}, fmt.Errorf("OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS must explicitly install and allowlist the nostr plugin")
+		}
+	}
+	model := firstString(runtimeParams, "model")
+	if model == "" {
+		model = e.config.DefaultModel
+	}
+	if !e.config.DryRun && model == "" {
+		return RuntimeSpec{}, fmt.Errorf("runtime.model or OPENCLAW_SOULFACTORY_DEFAULT_MODEL is required")
+	}
+	revisionInput, err := json.Marshal(map[string]interface{}{
+		"invocation": invocation, "image": e.config.ImageDigest, "source_commit": e.config.SourceCommit,
+		"plugins": e.config.RequiredPlugins, "cpus": e.config.CPUs, "memory": e.config.Memory,
+		"pids_limit": e.config.PIDsLimit, "runtime_user": fmt.Sprintf("%d:%d", os.Geteuid(), os.Getegid()), "model": model, "secret_files": secrets,
+	})
+	if err != nil {
+		return RuntimeSpec{}, fmt.Errorf("marshal dedicated runtime revision input: %w", err)
+	}
+	deploymentID := deterministicRuntimeName(invocation.AgentID, requestID, runID)
+	containerName := deploymentID + "-gateway"
+	if e.config.DryRun && e.config.RuntimeMode == RuntimeModeExistingContainer && strings.TrimSpace(e.config.Container) != "" {
+		containerName = strings.TrimSpace(e.config.Container)
+	}
+	return RuntimeSpec{
+		DeploymentID:   deploymentID,
+		ContainerName:  containerName,
+		AgentID:        invocation.AgentID,
+		SoulID:         invocation.SoulID,
+		AccountID:      accountID,
+		Model:          model,
+		RequestID:      requestID,
+		RunID:          runID,
+		SpecHash:       invocation.SpecHash,
+		ImageDigest:    e.config.ImageDigest,
+		SourceCommit:   e.config.SourceCommit,
+		ConfigRevision: runtimeConfigRevision(revisionInput),
+		ComposePath:    paths.ComposePath,
+		ConfigDir:      paths.ConfigDir,
+		Workspace:      paths.Workspace,
+		AgentDir:       paths.AgentDir,
+		SecretFiles:    secrets,
+		PluginIDs:      uniqueStrings(pluginIDs),
+		CPUs:           e.config.CPUs,
+		Memory:         e.config.Memory,
+		PIDsLimit:      e.config.PIDsLimit,
+		User:           fmt.Sprintf("%d:%d", os.Geteuid(), os.Getegid()),
+	}, nil
+}
+
+func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvocation, spec RuntimeSpec, paths localPaths) error {
+	pluginEntries := make(map[string]interface{}, len(spec.PluginIDs))
+	for _, id := range spec.PluginIDs {
+		pluginEntries[id] = map[string]interface{}{"enabled": true}
+	}
+	runtimeParams, _ := invocation.Params["runtime"].(map[string]interface{})
+	nostrConfig, _ := runtimeParams["nostr"].(map[string]interface{})
+	nostrConfig = cloneObject(nostrConfig)
+	nostrConfig["enabled"] = true
+	nostrConfig["defaultAccount"] = spec.AccountID
+	if _, ok := nostrConfig["relays"]; !ok {
+		if relayPolicy, ok := invocation.Params["relay_policy"].(map[string]interface{}); ok {
+			nostrConfig["relays"] = relayPolicy["control"]
+		}
+	}
+	secretRefs := make(map[string]interface{}, len(spec.SecretFiles))
+	for name := range spec.SecretFiles {
+		ref := map[string]interface{}{"source": "file", "path": "/run/secrets/" + name}
+		secretRefs[name] = ref
+		switch name {
+		case "nip46", "nip46_client", "nip46Secret":
+			nostrConfig["nip46Secret"] = ref
+		case "nip46_connect", "nip46ConnectSecret":
+			nostrConfig["nip46ConnectSecret"] = ref
+		}
+	}
+	runtimeConfig := map[string]interface{}{
+		"plugins": map[string]interface{}{
+			"allow":   spec.PluginIDs,
+			"entries": pluginEntries,
+		},
+		"channels": map[string]interface{}{"nostr": nostrConfig},
+	}
+	runtimeMetadata := map[string]interface{}{
+		"schema": "bahia-openclaw-runtime/v1",
+		"ownership": map[string]interface{}{
+			"agentId":        invocation.AgentID,
+			"soulId":         invocation.SoulID,
+			"accountId":      spec.AccountID,
+			"model":          spec.Model,
+			"configRevision": spec.ConfigRevision,
+			"secretFiles":    secretRefs,
+		},
+	}
+	if err := atomicWriteJSON(paths.RuntimeConfig, runtimeConfig, 0o600); err != nil {
+		return fmt.Errorf("write dedicated OpenClaw config: %w", err)
+	}
+	if err := atomicWriteJSON(paths.RuntimeMetadata, runtimeMetadata, 0o600); err != nil {
+		return fmt.Errorf("write dedicated OpenClaw runtime metadata: %w", err)
+	}
+	if err := atomicWriteFile(paths.ComposePath, renderCompose(spec), 0o600); err != nil {
+		return fmt.Errorf("write dedicated OpenClaw compose specification: %w", err)
+	}
+	return nil
+}
+
+func applyLineage(state *State, lineage RuntimeLineage) {
+	state.DeploymentID = lineage.DeploymentID
+	state.ContainerID = lineage.ContainerID
+	state.Container = lineage.ContainerName
+	state.ImageDigest = lineage.ImageDigest
+	state.ConfigRevision = lineage.ConfigRevision
+	state.WorkspaceID = lineage.WorkspaceID
+	state.AccountID = lineage.AccountID
+}
+
+func (e *Executor) runtimeSpecFromState(state State, paths localPaths) RuntimeSpec {
+	return RuntimeSpec{
+		DeploymentID:   state.DeploymentID,
+		ContainerName:  state.Container,
+		AgentID:        state.AgentID,
+		SoulID:         state.SoulID,
+		AccountID:      state.AccountID,
+		Model:          state.Model,
+		RequestID:      state.OperatorRequest,
+		RunID:          state.RunID,
+		SpecHash:       firstNonEmpty(state.RuntimeSpecHash, state.SpecHash),
+		ImageDigest:    state.ImageDigest,
+		SourceCommit:   state.SourceCommit,
+		ConfigRevision: state.ConfigRevision,
+		ComposePath:    paths.ComposePath,
+		ConfigDir:      paths.ConfigDir,
+		Workspace:      paths.Workspace,
+		AgentDir:       paths.AgentDir,
+		CPUs:           e.config.CPUs,
+		Memory:         e.config.Memory,
+		PIDsLimit:      e.config.PIDsLimit,
+		User:           fmt.Sprintf("%d:%d", os.Geteuid(), os.Getegid()),
+	}
+}
+
+func removeRuntimeData(paths localPaths) error {
+	for _, path := range []string{paths.Workspace, paths.AgentDir, paths.ConfigDir} {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureRuntimePlugins installs requirements only inside the owned dedicated
+// gateway and verifies them after a controlled restart.
+func (e *Executor) ensureRuntimePlugins(ctx context.Context, spec RuntimeSpec) *soulfactory.OpenClawControlOutcome {
 	if len(e.config.RequiredPlugins) == 0 {
 		return nil
 	}
-	out, outcome := e.runOpenClawOutput(ctx, e.containerArgs("plugins", "list", "--json")...)
+	out, outcome := e.runOpenClawOutput(ctx, e.containerArgsFor(spec.ContainerName, "plugins", "list", "--json")...)
 	if outcome != nil {
 		return outcome
 	}
@@ -467,13 +795,22 @@ func (e *Executor) ensureRuntimePlugins(ctx context.Context) *soulfactory.OpenCl
 		if pluginLoaded(inventory, id) {
 			continue
 		}
-		if _, installOutcome := e.runOpenClawOutput(ctx, e.containerArgs("plugins", "install", source)...); installOutcome != nil {
+		if _, installOutcome := e.runOpenClawOutput(ctx, e.containerArgsFor(spec.ContainerName, "plugins", "install", source)...); installOutcome != nil {
 			return installOutcome
 		}
-		return failed(ErrorRuntimeUnavailable, fmt.Sprintf("installed required OpenClaw plugin %q from %q; restart the shared gateway, then retry provisioning", id, source), true, map[string]interface{}{
-			"plugin_id":        id,
-			"restart_required": true,
-		})
+		if _, err := e.config.Runner.Run(ctx, e.config.DockerBin, "restart", spec.ContainerName); err != nil {
+			return failed(ErrorExecutionFailed, "restart dedicated OpenClaw gateway after plugin installation: "+err.Error(), true, nil)
+		}
+		if _, err := e.config.Orchestrator.Reconcile(ctx, spec); err != nil {
+			return failed(ErrorRuntimeUnavailable, "dedicated OpenClaw gateway did not recover after plugin installation: "+err.Error(), true, nil)
+		}
+		out, outcome = e.runOpenClawOutput(ctx, e.containerArgsFor(spec.ContainerName, "plugins", "list", "--json")...)
+		if outcome != nil {
+			return outcome
+		}
+		if err := json.Unmarshal(out, &inventory); err != nil || !pluginLoaded(inventory, id) {
+			return failed(ErrorRuntimeUnavailable, fmt.Sprintf("required OpenClaw plugin %q was not loaded after dedicated gateway restart", id), true, nil)
+		}
 	}
 	return nil
 }
@@ -556,28 +893,20 @@ func (e *Executor) renderProvisionWorkspace(invocation soulfactory.OpenClawContr
 	return atomicWriteJSON(paths.Provenance, provenance, 0o600)
 }
 
-func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, paths localPaths) *soulfactory.OpenClawControlOutcome {
-	args := e.containerArgs("agents", "add", invocation.AgentID, "--workspace", paths.Workspace, "--agent-dir", paths.AgentDir, "--non-interactive", "--json")
-	model := firstString(invocation.Params, "model")
-	if model == "" {
-		if runtimeParam, ok := invocation.Params["runtime"].(map[string]interface{}); ok {
-			model = firstString(runtimeParam, "model")
-		}
-	}
-	if model == "" {
-		model = e.config.DefaultModel
-	}
-	if model != "" {
-		args = append(args, "--model", model)
+func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, paths localPaths, spec RuntimeSpec) *soulfactory.OpenClawControlOutcome {
+	args := e.containerArgsFor(spec.ContainerName, "agents", "add", invocation.AgentID, "--workspace", containerWorkspace, "--agent-dir", containerAgentDir, "--non-interactive", "--json")
+	if spec.Model != "" {
+		args = append(args, "--model", spec.Model)
 	}
 	if outcome := e.runOpenClaw(ctx, args...); outcome != nil {
 		return outcome
 	}
-	if outcome := e.runOpenClaw(ctx, e.containerArgs("agents", "set-identity", "--agent", invocation.AgentID, "--identity-file", paths.IdentityFile, "--json")...); outcome != nil {
+	if outcome := e.runOpenClaw(ctx, e.containerArgsFor(spec.ContainerName, "agents", "set-identity", "--agent", invocation.AgentID, "--identity-file", containerWorkspace+"/IDENTITY.md", "--json")...); outcome != nil {
 		return outcome
 	}
-	for _, binding := range e.config.DefaultBindings {
-		if outcome := e.runOpenClaw(ctx, e.containerArgs("agents", "bind", "--agent", invocation.AgentID, "--bind", binding, "--json")...); outcome != nil {
+	bindings := append([]string{"nostr:" + spec.AccountID}, e.config.DefaultBindings...)
+	for _, binding := range uniqueStrings(bindings) {
+		if outcome := e.runOpenClaw(ctx, e.containerArgsFor(spec.ContainerName, "agents", "bind", "--agent", invocation.AgentID, "--bind", binding, "--json")...); outcome != nil {
 			return outcome
 		}
 	}
@@ -593,6 +922,7 @@ func (e *Executor) personaUpdate(invocation soulfactory.OpenClawControlInvocatio
 	if !ok {
 		return rejected(ErrorMissingRequired, "persona update requires existing non-revoked OpenClaw agent state", false, nil)
 	}
+	paths = e.pathsForState(state)
 	if replay, replayed := e.replayOutcome(invocation, paths, state); replayed {
 		return replay
 	}
@@ -661,36 +991,36 @@ func (e *Executor) revoke(ctx context.Context, invocation soulfactory.OpenClawCo
 	if !ok {
 		return rejected(ErrorMissingRequired, "revoke requires existing OpenClaw agent state", false, nil)
 	}
+	paths = e.pathsForState(state)
 	if replay, replayed := e.replayOutcome(invocation, paths, state); replayed {
 		return replay
 	}
 	if state.SpecHash != invocation.SpecHash {
 		return rejected(ErrorSpecHashMismatch, "revoke spec_hash does not match local state", false, map[string]interface{}{"existing_spec_hash": state.SpecHash, "requested_spec_hash": invocation.SpecHash})
 	}
-	effectiveContainer := firstNonEmpty(e.config.Container, state.Container)
-	if !e.config.DryRun && e.config.RuntimeMode == RuntimeModeExistingContainer && effectiveContainer == "" {
-		return rejected(ErrorMissingRequired, "OPENCLAW_SOULFACTORY_CONTAINER or persisted state.container is required for existing-container non-dry-run revoke", false, nil)
-	}
 	if !e.config.DryRun {
-		if outcome := e.runOpenClaw(ctx, e.containerArgsFor(effectiveContainer, "agents", "unbind", "--agent", invocation.AgentID, "--all", "--json")...); outcome != nil {
+		if state.RuntimeMode != RuntimeModePerAgentCompose {
+			return rejected(ErrorUnsupportedMethod, "refusing to mutate a shared existing-container deployment during revoke", false, nil)
+		}
+		spec := e.runtimeSpecFromState(state, paths)
+		if outcome := e.runOpenClaw(ctx, e.containerArgsFor(state.Container, "agents", "unbind", "--agent", invocation.AgentID, "--all", "--json")...); outcome != nil {
 			state.State = "failed"
 			state.UpdatedAt = e.config.Now().Unix()
 			state.LastMethod = invocation.Method
 			state.LastReason = errorMessage(outcome)
 			return e.persistFailure(invocation, outcome, state, paths)
 		}
-		if boolParam(invocation.Params, "delete_workspace") {
-			if outcome := e.runOpenClaw(ctx, e.containerArgsFor(effectiveContainer, "agents", "delete", invocation.AgentID, "--force", "--json")...); outcome != nil {
-				state.State = "failed"
-				state.UpdatedAt = e.config.Now().Unix()
-				state.LastMethod = invocation.Method
-				state.LastReason = errorMessage(outcome)
-				return e.persistFailure(invocation, outcome, state, paths)
-			}
+		if err := e.config.Orchestrator.Delete(ctx, spec); err != nil {
+			outcome := failed(ErrorExecutionFailed, err.Error(), true, nil)
+			state.State = "failed"
+			state.UpdatedAt = e.config.Now().Unix()
+			state.LastMethod = invocation.Method
+			state.LastReason = errorMessage(outcome)
+			return e.persistFailure(invocation, outcome, state, paths)
 		}
 	}
 	if boolParam(invocation.Params, "delete_workspace") {
-		if err := os.RemoveAll(paths.Workspace); err != nil {
+		if err := removeRuntimeData(paths); err != nil {
 			outcome := failed(ErrorExecutionFailed, "delete OpenClaw workspace: "+err.Error(), true, nil)
 			state.State = "failed"
 			state.UpdatedAt = e.config.Now().Unix()
@@ -737,7 +1067,7 @@ func (e *Executor) containerArgs(args ...string) []string {
 }
 
 func (e *Executor) containerArgsFor(container string, args ...string) []string {
-	if e.config.RuntimeMode == RuntimeModeExistingContainer && strings.TrimSpace(container) != "" {
+	if strings.TrimSpace(container) != "" {
 		return append([]string{"--container", strings.TrimSpace(container)}, args...)
 	}
 	return append([]string{}, args...)
@@ -747,36 +1077,73 @@ func (e *Executor) paths(agentID string) localPaths {
 	agentRoot := filepath.Join(e.config.Root, "agents", agentID)
 	workspace := filepath.Join(agentRoot, "workspace")
 	return localPaths{
-		AgentRoot:      agentRoot,
-		Workspace:      workspace,
-		AgentDir:       filepath.Join(agentRoot, "agent"),
-		OpenClawDir:    filepath.Join(workspace, ".openclaw"),
-		IdentityFile:   filepath.Join(workspace, "IDENTITY.md"),
-		SoulFile:       filepath.Join(workspace, "SOUL.md"),
-		AgentsFile:     filepath.Join(workspace, "AGENTS.md"),
-		MemoryFile:     filepath.Join(workspace, "MEMORY.md"),
-		Provenance:     filepath.Join(workspace, ".openclaw", "soulfactory.json"),
-		PersonaFile:    filepath.Join(workspace, ".openclaw", "soulfactory-persona.json"),
-		State:          filepath.Join(agentRoot, "state.json"),
-		LastInvocation: filepath.Join(agentRoot, "last-invocation.json"),
-		LastOutcome:    filepath.Join(agentRoot, "last-outcome.json"),
+		AgentRoot:       agentRoot,
+		Workspace:       workspace,
+		AgentDir:        filepath.Join(agentRoot, "agent"),
+		OpenClawDir:     filepath.Join(workspace, ".openclaw"),
+		ConfigDir:       filepath.Join(agentRoot, "config"),
+		ComposePath:     filepath.Join(agentRoot, "compose.yaml"),
+		RuntimeConfig:   filepath.Join(agentRoot, "config", "openclaw.json"),
+		RuntimeMetadata: filepath.Join(agentRoot, "config", "bahia-runtime.json"),
+		IdentityFile:    filepath.Join(workspace, "IDENTITY.md"),
+		SoulFile:        filepath.Join(workspace, "SOUL.md"),
+		AgentsFile:      filepath.Join(workspace, "AGENTS.md"),
+		MemoryFile:      filepath.Join(workspace, "MEMORY.md"),
+		Provenance:      filepath.Join(workspace, ".openclaw", "soulfactory.json"),
+		PersonaFile:     filepath.Join(workspace, ".openclaw", "soulfactory-persona.json"),
+		State:           filepath.Join(agentRoot, "state.json"),
+		LastInvocation:  filepath.Join(agentRoot, "last-invocation.json"),
+		LastOutcome:     filepath.Join(agentRoot, "last-outcome.json"),
 	}
 }
 
+func (e *Executor) pathsForDeployment(agentID, deploymentID string) localPaths {
+	paths := e.paths(agentID)
+	runtimeRoot := filepath.Join(paths.AgentRoot, "deployments", deploymentID)
+	workspace := filepath.Join(runtimeRoot, "workspace")
+	paths.RuntimeRoot = runtimeRoot
+	paths.Workspace = workspace
+	paths.AgentDir = filepath.Join(runtimeRoot, "agent")
+	paths.OpenClawDir = filepath.Join(workspace, ".openclaw")
+	paths.ConfigDir = filepath.Join(runtimeRoot, "config")
+	paths.ComposePath = filepath.Join(runtimeRoot, "compose.yaml")
+	paths.RuntimeConfig = filepath.Join(runtimeRoot, "config", "openclaw.json")
+	paths.RuntimeMetadata = filepath.Join(runtimeRoot, "config", "bahia-runtime.json")
+	paths.IdentityFile = filepath.Join(workspace, "IDENTITY.md")
+	paths.SoulFile = filepath.Join(workspace, "SOUL.md")
+	paths.AgentsFile = filepath.Join(workspace, "AGENTS.md")
+	paths.MemoryFile = filepath.Join(workspace, "MEMORY.md")
+	paths.Provenance = filepath.Join(workspace, ".openclaw", "soulfactory.json")
+	paths.PersonaFile = filepath.Join(workspace, ".openclaw", "soulfactory-persona.json")
+	return paths
+}
+
+func (e *Executor) pathsForState(state State) localPaths {
+	if state.RuntimeMode == RuntimeModePerAgentCompose && state.DeploymentID != "" {
+		return e.pathsForDeployment(state.AgentID, state.DeploymentID)
+	}
+	return e.paths(state.AgentID)
+}
+
 type localPaths struct {
-	AgentRoot      string
-	Workspace      string
-	AgentDir       string
-	OpenClawDir    string
-	IdentityFile   string
-	SoulFile       string
-	AgentsFile     string
-	MemoryFile     string
-	Provenance     string
-	PersonaFile    string
-	State          string
-	LastInvocation string
-	LastOutcome    string
+	AgentRoot       string
+	RuntimeRoot     string
+	Workspace       string
+	AgentDir        string
+	OpenClawDir     string
+	ConfigDir       string
+	ComposePath     string
+	RuntimeConfig   string
+	RuntimeMetadata string
+	IdentityFile    string
+	SoulFile        string
+	AgentsFile      string
+	MemoryFile      string
+	Provenance      string
+	PersonaFile     string
+	State           string
+	LastInvocation  string
+	LastOutcome     string
 }
 
 func (e *Executor) baseWarnings() []string {
@@ -784,25 +1151,33 @@ func (e *Executor) baseWarnings() []string {
 	if e.config.DryRun {
 		warnings = append(warnings, "dry-run mode recorded local state without invoking OpenClaw CLI")
 	}
-	if e.config.RuntimeMode == RuntimeModePerAgentCompose {
-		warnings = append(warnings, "per-agent-compose runtime mode rendered local state only")
+	if e.config.DryRun && e.config.RuntimeMode == RuntimeModePerAgentCompose {
+		warnings = append(warnings, "dry-run rendered the dedicated runtime specification without creating a container")
 	}
 	return warnings
 }
 
 func (e *Executor) resultFromState(state State, observedAt int64) map[string]interface{} {
 	return map[string]interface{}{
-		"agent_id":        state.AgentID,
-		"runtime":         string(domain.RuntimeTargetOpenClaw),
-		"runtime_binding": state.RuntimeBinding,
-		"state":           state.State,
-		"spec_hash":       state.SpecHash,
-		"workspace":       state.Workspace,
-		"agent_dir":       state.AgentDir,
-		"runtime_mode":    state.RuntimeMode,
-		"container":       state.Container,
-		"observed_at":     observedAt,
-		"warnings":        append([]string{}, state.Warnings...),
+		"agent_id":                  state.AgentID,
+		"runtime":                   string(domain.RuntimeTargetOpenClaw),
+		"runtime_binding":           state.RuntimeBinding,
+		"state":                     state.State,
+		"spec_hash":                 state.SpecHash,
+		"workspace":                 state.Workspace,
+		"workspace_path_identifier": state.WorkspaceID,
+		"agent_dir":                 state.AgentDir,
+		"runtime_mode":              state.RuntimeMode,
+		"deployment_id":             state.DeploymentID,
+		"container_id":              state.ContainerID,
+		"container":                 state.Container,
+		"image_digest":              state.ImageDigest,
+		"source_commit":             state.SourceCommit,
+		"config_revision":           state.ConfigRevision,
+		"account_id":                state.AccountID,
+		"model":                     state.Model,
+		"observed_at":               observedAt,
+		"warnings":                  append([]string{}, state.Warnings...),
 	}
 }
 
@@ -1002,15 +1377,15 @@ func containsInlinePrivateSecret(value interface{}) bool {
 }
 
 func isInlinePrivateSecretKey(normalized string) bool {
-	if strings.HasSuffix(normalized, "ref") || strings.HasSuffix(normalized, "uri") || strings.HasSuffix(normalized, "url") {
+	if strings.HasSuffix(normalized, "ref") || strings.HasSuffix(normalized, "uri") || strings.HasSuffix(normalized, "url") || strings.HasSuffix(normalized, "file") || strings.HasSuffix(normalized, "files") || strings.HasSuffix(normalized, "path") {
 		return false
 	}
-	for _, marker := range []string{"privatekey", "secretkey", "nsec", "seedphrase", "mnemonic"} {
+	for _, marker := range []string{"privatekey", "secretkey", "nsec", "seedphrase", "mnemonic", "apikey", "password", "token"} {
 		if strings.Contains(normalized, marker) {
 			return true
 		}
 	}
-	return false
+	return strings.HasSuffix(normalized, "secret")
 }
 
 func looksLikeInlinePrivateSecretValue(value string) bool {
@@ -1019,6 +1394,9 @@ func looksLikeInlinePrivateSecretValue(value string) bool {
 		return true
 	}
 	if strings.Contains(normalized, "-----begin") && strings.Contains(normalized, "private key") {
+		return true
+	}
+	if strings.Contains(normalized, "secret=") || strings.Contains(normalized, "connect_secret=") {
 		return true
 	}
 	return false
@@ -1102,6 +1480,18 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func intFromString(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return -1
+	}
+	return parsed
 }
 
 func truthy(value string) bool {

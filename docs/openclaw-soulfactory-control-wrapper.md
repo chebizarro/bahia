@@ -17,12 +17,12 @@ soulfactory.revoke
 
 Any other method, including `soulfactory.suspend`, `soulfactory.resume`, and `soulfactory.redeploy`, is rejected with a structured `unsupported_method` outcome by the wrapper unless a different command implementation is explicitly configured. The sidecar command driver also defaults to the same conservative method set, so unsupported methods are not advertised by default. `soulfactory.update` applies optimistic spec-hash checks and accepts either `update_mode=replace` with `resolved_spec`, or `update_mode=merge` with a patch over the persisted canonical prior spec.
 
-The wrapper supports two execution modes:
+The wrapper supports dedicated execution and a compatibility-only dry-run mode:
 
 - **Dry run**: `OPENCLAW_SOULFACTORY_DRY_RUN=1` validates input, renders deterministic workspace/state/audit files, and returns the same outcome shape without invoking the OpenClaw CLI.
-- **Existing container**: `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` targets an existing containerized OpenClaw runtime. Non-dry-run provision requires `OPENCLAW_SOULFACTORY_CONTAINER`; the wrapper invokes `openclaw --container <container> ...` and never launches a persistent bare-metal gateway or agent runtime.
+- **Dedicated runtime**: `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose` creates or adopts one owned Docker Compose gateway for the requested soul.
 
-`per-agent-compose` is accepted as a configuration value for dry-run state rendering, but non-dry-run `per-agent-compose` provisioning is rejected until container orchestration for that mode is implemented.
+Non-dry-run `existing-container` provisioning is rejected. This prevents an external soul from being inserted into or mutating an incumbent gateway such as Marjam or SNR.
 
 ## Goals
 
@@ -47,9 +47,9 @@ The wrapper supports two execution modes:
 
 ## Runtime deployment doctrine
 
-Provisioned OpenClaw souls must run under Docker, not as bare-metal user services or background processes. The wrapper is allowed to be a host-local command because it is an adapter invoked by the sidecar, but any persistent OpenClaw runtime it targets must be an existing containerized OpenClaw gateway for the implemented non-dry-run path.
+Provisioned OpenClaw souls run under Docker, not as bare-metal user services or background processes. The wrapper creates a deterministic, ownership-labelled Compose project and gateway with separate persistent config, agent, and workspace mounts.
 
-The wrapper must not run `openclaw gateway run`, `openclaw gateway start`, `go run`, `npm start`, or a user-level systemd service as the long-lived runtime for a provisioned soul. Non-dry-run existing-container operations use container-targeted CLI arguments:
+The wrapper does not run `openclaw gateway run`, `openclaw gateway start`, `go run`, `npm start`, or a user-level systemd service on the host. Agent configuration commands target only the newly reconciled owned container:
 
 ```text
 openclaw --container <container> agents add ...
@@ -59,14 +59,9 @@ openclaw --container <container> agents unbind ...
 openclaw --container <container> agents delete ...
 ```
 
-Plugins are shared gateway prerequisites. They are not installed once per
-agent. When `OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS` is configured, provision
-first runs `plugins list --json`. A missing plugin is installed into the
-target container, but agent state is not created: the wrapper returns a
-retryable `runtime_unavailable` result with `restart_required=true`. After the
-gateway is restarted, replaying the provision request proceeds only when the
-plugin reports `status=loaded`. This prevents a half-provisioned agent from
-being advertised before its channel implementation is active.
+Plugins are installed only in the dedicated gateway. A missing required plugin
+is installed, the owned gateway is restarted, readiness is reconciled, and the
+plugin inventory must report it loaded before agent creation continues.
 
 The current `openclaw-nostr` configuration resolver exposes one top-level
 Nostr identity per gateway. A shared gateway can therefore route that identity
@@ -136,12 +131,17 @@ The wrapper reads configuration from environment variables:
 
 - `OPENCLAW_SOULFACTORY_ROOT`: base directory for generated agent workspaces and state. Default: `~/.openclaw/soulfactory`.
 - `OPENCLAW_SOULFACTORY_OPENCLAW_BIN`: OpenClaw CLI path. Default: `openclaw`.
-- `OPENCLAW_SOULFACTORY_RUNTIME_MODE`: `existing-container` or `per-agent-compose`. Default: `existing-container`.
-- `OPENCLAW_SOULFACTORY_CONTAINER`: container name used when `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container`; required for non-dry-run provision and required for non-dry-run revoke unless persisted state already contains a container.
-- `OPENCLAW_SOULFACTORY_DEFAULT_MODEL`: fallback model for `openclaw agents add --model`.
+- `OPENCLAW_SOULFACTORY_RUNTIME_MODE`: default `per-agent-compose`. `existing-container` is accepted only for dry-run compatibility and rejected for non-dry-run external provisioning.
+- `OPENCLAW_SOULFACTORY_DOCKER_BIN`: Docker CLI path. Default: `docker`.
+- `OPENCLAW_SOULFACTORY_IMAGE`: OpenClaw image reference pinned as `repository@sha256:<64 hex>`; required for non-dry-run provisioning.
+- `OPENCLAW_SOULFACTORY_SOURCE_COMMIT`: pinned lowercase hexadecimal OpenClaw source commit; required for non-dry-run provisioning.
+- `OPENCLAW_SOULFACTORY_CPUS`, `OPENCLAW_SOULFACTORY_MEMORY`, `OPENCLAW_SOULFACTORY_PIDS_LIMIT`: per-gateway resource limits. Defaults: `1.0`, `1g`, and `256`.
+- `OPENCLAW_SOULFACTORY_DEFAULT_MODEL`: fallback model for `openclaw agents add --model`; non-dry-run provisioning requires either this value or `runtime.model`.
 - `OPENCLAW_SOULFACTORY_DEFAULT_BINDINGS`: comma-separated channel bindings to add on non-dry-run provision.
-- `OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS`: comma-separated `plugin-id=install-source` requirements. For the Nostr runtime use `nostr=npm:openclaw-nostr`. Missing plugins are installed before agent mutation and require a shared-gateway restart plus provision retry.
+- `OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS`: comma-separated `plugin-id=install-source` requirements. Non-dry-run external souls require an explicit `nostr=<pinned-install-source>` entry.
 - `OPENCLAW_SOULFACTORY_DRY_RUN`: when truthy (`1`, `true`, `yes`, `y`, or `on`), validate and render state but skip OpenClaw CLI mutations.
+
+The resolved provision params supply `runtime.model`, `runtime.account_id` (or the Signet-created `bahia.nostr_pubkey`), and optional public `runtime.nostr` channel configuration. `runtime.secret_files` maps secret names to absolute host file paths. Files must be regular, owned by the wrapper user, and mode `0600` or stricter; recognized `nip46_client` and `nip46_connect` files become OpenClaw file SecretRefs under `/run/secrets`. Inline tokens, passwords, private keys, and NIP-46 secrets are rejected.
 
 For the Lemmy-hosted Gemma 4 deployment, set:
 
@@ -219,14 +219,13 @@ For `soulfactory.provision`, the wrapper:
 1. Validates required params already accepted by the sidecar: `identity`, `runtime`, `permissions`, `relay_policy`, `workspace`, and `assets`.
 2. Rejects unsafe `agent_id` values and inline private secret material before local mutation.
 3. Rejects if an existing local state file has the same `agent_id` with a different `spec_hash`, or if the request is not an exact replay of the recorded invocation.
-4. Resolves the runtime target from `OPENCLAW_SOULFACTORY_RUNTIME_MODE`.
-5. Creates deterministic workspace and agent directories.
-6. Renders `IDENTITY.md`, `SOUL.md`, `AGENTS.md`, `MEMORY.md`, and `.openclaw/soulfactory.json`.
+4. Requires dedicated mode, an immutable image digest, pinned source commit, exact Nostr account ID, and explicit Nostr plugin requirement.
+5. Derives collision-safe project/container names from agent, operator-request, and idempotency/run IDs.
+6. Renders identity files, OpenClaw config with plugin allowlist and file SecretRefs, ownership metadata, and a resource-limited Compose specification.
 7. In dry-run, skips OpenClaw CLI mutations and records a warning.
-8. In non-dry-run existing-container mode, runs `openclaw --container <container> agents add <agent-id> --workspace <workspace> --agent-dir <agent-dir> --non-interactive --json`, adding `--model` when configured or supplied by params.
-9. In non-dry-run existing-container mode, runs `openclaw --container <container> agents set-identity --agent <agent-id> --identity-file <workspace>/IDENTITY.md --json`.
-10. In non-dry-run existing-container mode, adds configured bindings with `openclaw --container <container> agents bind --agent <agent-id> --bind <binding> --json`.
-11. Writes `state.json`, `last-invocation.json`, and `last-outcome.json`.
+8. Bootstraps missing required plugins in an ephemeral owned Compose container, then inspects and reconciles the gateway to health.
+9. Verifies loaded plugins, creates the selected-model agent, sets identity, and binds exactly `nostr:<account-id>`.
+10. Writes state/audit files with container/deployment ID, immutable image, config revision, workspace identifier, and agent/account lineage.
 
 Exact replays return the same logical outcome without repeating mutation work. Conflicting replays reject with `duplicate_conflict`.
 
@@ -251,8 +250,8 @@ For `soulfactory.revoke`, the wrapper:
 1. Requires existing local state.
 2. Requires `reason` and `revoke_runtime_credentials` params.
 3. Requires the invocation `spec_hash` to match local state.
-4. In non-dry-run existing-container mode, runs `openclaw --container <container> agents unbind --agent <agent-id> --all --json` using configured `OPENCLAW_SOULFACTORY_CONTAINER` or the persisted state container.
-5. If `delete_workspace=true`, runs `openclaw --container <container> agents delete <agent-id> --force --json` in non-dry-run mode and removes the generated workspace directory.
+4. Verifies persisted dedicated-resource ownership, unbinds the owned agent, and deletes only its matching Compose deployment.
+5. If `delete_workspace=true`, removes that soul's generated workspace, config, and agent directories after the deployment is removed.
 6. Records local state `revoked`, preserves audit files, and writes `last-invocation.json` / `last-outcome.json`.
 7. If `revoke_runtime_credentials=true`, returns success with a warning that credential revocation was requested but no OpenClaw credential-revocation command is configured.
 

@@ -1,0 +1,13 @@
+{
+  "feature_id": "OPENCLAW_DEDICATED_RUNTIME_ORCHESTRATION",
+  "task_id": "bahia-openclaw-dedicated-runtime-orchestration-20260819",
+  "intent": "Provision every external OpenClaw soul into a dedicated, replay-safe, ownership-verified container runtime without mutating incumbent gateways.",
+  "runtime_mode": "per-agent-compose",
+  "invariants": [
+    "non-dry-run existing-container provisioning is rejected before mutation",
+    "image references use immutable OCI digests and source revisions use pinned commits",
+    "resource names and ownership labels bind agent, request, run, soul, and spec identity",
+    "secret content is supplied only by restrictively permissioned file mounts",
+    "reconcile and delete fail closed on any ownership or spec mismatch"
+  ]
+}
