@@ -532,6 +532,7 @@ func (e *Engine) fail(ctx context.Context, run *Run, stage Stage, cause error, c
 	from := run.Stage
 	run.Stage = target
 	run.Failure = &Failure{Stage: stage, Code: code, Message: message, Retryable: canRetry, At: e.now().UTC()}
+	run.Failures = append(run.Failures, *run.Failure)
 	run.Transitions = append(run.Transitions, Transition{From: from, To: target, At: e.now().UTC()})
 	if target == StageFailedTerminal || target == StageFailedRecoverable {
 		e.retention.Mark(run, e.now())
@@ -591,6 +592,7 @@ func (e *Engine) failAndRollback(ctx context.Context, run *Run, stage Stage, cau
 	from := run.Stage
 	run.Stage = StageRollbackPending
 	run.Failure = &Failure{Stage: stage, Code: code, Message: message, Retryable: false, At: e.now().UTC()}
+	run.Failures = append(run.Failures, *run.Failure)
 	run.Transitions = append(run.Transitions, Transition{From: from, To: StageRollbackPending, At: e.now().UTC()})
 	if err := e.save(ctx, run); err != nil {
 		return nil, err
@@ -614,6 +616,7 @@ func (e *Engine) rollbackFail(ctx context.Context, run *Run, stage Stage, cause 
 		run.Transitions = append(run.Transitions, Transition{From: from, To: StageFailedTerminal, At: e.now().UTC()})
 		e.retention.Mark(run, e.now())
 	}
+	run.Failures = append(run.Failures, *run.Failure)
 	if err := e.save(ctx, run); err != nil {
 		return nil, err
 	}

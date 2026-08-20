@@ -1,0 +1,21 @@
+{
+  "feature_id": "OPENCLAW_ROLLOUT_CONFORMANCE",
+  "task_id": "bahia-openclaw-rollout-conformance-20260819",
+  "objective": "Prove the integrated dedicated-runtime, Signet enrollment, and durable saga path in a disposable environment and make unsafe rollout states observable and operable.",
+  "evidence_boundary": "Repository sources and disposable fakes only in Track A; no live hosts, relays, Signet, or runtimes contacted.",
+  "observability": [
+    "run/stage/build/instance identity",
+    "stage age and duration proxy",
+    "retry/reconciliation/rollback history",
+    "Signet and relay readiness",
+    "DM gate",
+    "terminal projection",
+    "false-running, orphan, denial, and correlation evidence"
+  ],
+  "rollout": [
+    "disposable canary",
+    "second canary",
+    "controlled production",
+    "identity-preserving rollback"
+  ]
+}
