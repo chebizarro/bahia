@@ -76,7 +76,7 @@ Revoke/compensate never deletes a valid Signet-custodied identity and never touc
 4. Start the Metiq bridge on its dedicated host/container boundary with persistent idempotency/binding state, health/readiness, limits, restart policy, logs, and backup/restore configured by Track B.
 5. Require a fresh signed Metiq `30317` from the pinned runtime pubkey, addressed to the trusted controller and advertising `soulfactory.provision` plus exactly one lifecycle method selected for the disposable test.
 6. Provision only a disposable soul. Capture event IDs for `31952 → 5950 → 38384 → 38386 → 31951/7950`.
-7. Inspect Metiq local state after first provision, exact replay, conflicting replay, supported lifecycle request, unsupported direct request, and restart. Record counts plus one-way binding and process-instance fingerprints only.
+7. Inspect Metiq local state after first provision, exact provision replay, conflicting provision replay, first suspend, exact suspend replay, conflicting suspend replay, fresh-key re-suspend of the already-suspended agent, unsupported direct request, and restart. Require both suspend successes to report `result.state == "suspended"`, require the re-suspend result to report `result.idempotent == true`, and record counts plus one-way binding and process-instance fingerprints only.
 8. Restart the Metiq bridge: require a distinct process-instance fingerprint, a newer `30317`, unchanged binding/effect count, and recovered state. Restart Bahia and record a distinct Bahia process-instance fingerprint while withholding or delaying the runtime result, then prove either EOSE backfill or late-result reconciliation to the correlated `7950`/`31951`.
 9. Confirm Marjam and SNR before/after event IDs and fingerprints are identical.
 10. Restore the prior config in the rollback gate, restart Bahia, prove its digest equals the captured prior digest, and reconfirm OpenClaw/Marjam/SNR. Do not delete the valid Metiq identity or public event lineage.
@@ -116,8 +116,9 @@ Evidence may contain only reviewed commit/image/config digests, timestamps, chec
 - [ ] Metiq idempotency/binding state survives bridge restart; provision count remains exactly one across replay/conflict/restart.
 - [ ] Every event ID has a valid NIP-01 ID/signature and exact author/kind/address/correlation lineage.
 - [ ] `31951` and `7950` contain no private or one-time secret material.
-- [ ] Exactly one advertised lifecycle method succeeds; an unadvertised method returns non-retryable `unsupported_method` without a local effect.
-- [ ] Conflicting idempotency reuse returns non-retryable `duplicate_conflict`; exact replay is a no-op with the cached logical result.
+- [ ] The advertised suspend succeeds with `result.state == "suspended"`; a fresh-key re-suspend also succeeds with `result.state == "suspended"` and `result.idempotent == true`, without another local effect.
+- [ ] Provision and suspend conflicting idempotency reuse each return non-retryable `duplicate_conflict` before mutation; exact replay of each request is a no-op with the same correlated cached logical result.
+- [ ] An unadvertised method returns non-retryable `unsupported_method` without a local effect.
 - [ ] Newer `30317`, recovered binding/state, and Bahia backfill or late-result reconciliation are proven after restart.
 - [ ] Marjam, SNR, and OpenClaw identity/state/bindings remain unchanged.
 - [ ] Candidate rollback restores the captured prior config digest and OpenClaw remains operational.

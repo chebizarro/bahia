@@ -6,7 +6,7 @@ Task: `bahia-agent-runtimes-infrastructure-20260810`
 
 - Production overlay and exact runtime pubkey trust configuration are implemented.
 - Containerized Signet provisioning extends the merged OpenClaw enrollment path with a dedicated Metiq signing-only profile, protected client state, exact-client policy, cleanup, reconciliation, revoke, and compensation.
-- The relay/EOSE validator and in-memory CI source cover the complete requested disposable-soul lineage and local-state assertions while reports contain event IDs/check outcomes only.
+- The relay/EOSE validator and in-memory CI source cover the complete requested disposable-soul lineage, including suspended-state results, exact replay and conflicting replay for both provision and suspend, and fresh-key idempotent re-suspend without another local effect, while reports contain event IDs/check outcomes only.
 - The runbook defines captured-prior config digest, isolated rollback rehearsal, immutable evidence capture, independent validation, and explicit Marjam/SNR/OpenClaw non-migration gates.
 
 ## Verification status
