@@ -557,6 +557,24 @@ func (e *Executor) renderProvisionWorkspace(invocation soulfactory.OpenClawContr
 }
 
 func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, paths localPaths) *soulfactory.OpenClawControlOutcome {
+	contract, outcome := parseSignetIdentityContract(invocation)
+	if outcome != nil {
+		return outcome
+	}
+	if contract != nil {
+		batch, err := json.Marshal([]map[string]interface{}{
+			{"path": "channels.nostr.nip46", "value": true},
+			{"path": "channels.nostr.nip46BunkerUrl", "value": contract.BunkerURL},
+			{"path": "channels.nostr.nip46Secret", "value": map[string]interface{}{"source": "file", "path": contract.ClientKeyRef}},
+			{"path": "channels.nostr.nip46SignerRelays", "value": contract.Relays},
+		})
+		if err != nil {
+			return failed(ErrorExecutionFailed, "marshal OpenClaw NIP-46 config patch: "+err.Error(), false, nil)
+		}
+		if outcome := e.runOpenClaw(ctx, e.containerArgs("config", "set", "--batch-json", string(batch))...); outcome != nil {
+			return outcome
+		}
+	}
 	args := e.containerArgs("agents", "add", invocation.AgentID, "--workspace", paths.Workspace, "--agent-dir", paths.AgentDir, "--non-interactive", "--json")
 	model := firstString(invocation.Params, "model")
 	if model == "" {
@@ -582,6 +600,31 @@ func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfact
 		}
 	}
 	return nil
+}
+
+func parseSignetIdentityContract(invocation soulfactory.OpenClawControlInvocation) (*soulfactory.OpenClawSignetIdentityContract, *soulfactory.OpenClawControlOutcome) {
+	bahia, _ := invocation.Params["bahia"].(map[string]interface{})
+	raw, exists := bahia["signet_identity"]
+	if !exists {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, rejected(ErrorMissingRequired, "invalid OpenClaw Signet identity contract", false, nil)
+	}
+	var contract soulfactory.OpenClawSignetIdentityContract
+	if err := json.Unmarshal(data, &contract); err != nil {
+		return nil, rejected(ErrorMissingRequired, "invalid OpenClaw Signet identity contract", false, nil)
+	}
+	if contract.Schema != soulfactory.OpenClawSignetIdentityContractSchema || contract.AgentID != invocation.AgentID ||
+		contract.ManagedPubkey == "" || contract.ClientPubkey == "" || !filepath.IsAbs(contract.ClientKeyRef) ||
+		contract.BunkerURL == "" || strings.Contains(contract.BunkerURL, "secret=") || len(contract.Relays) == 0 {
+		return nil, rejected(ErrorMissingRequired, "OpenClaw Signet identity contract is incomplete or contains a one-time secret", false, nil)
+	}
+	if contract.ControllerPubkey != invocation.Envelope.Controller.Pubkey || contract.RuntimePubkey != invocation.Envelope.Target.RuntimePubkey {
+		return nil, rejected(ErrorMissingRequired, "OpenClaw Signet identity contract does not match the addressed controller/runtime", false, nil)
+	}
+	return &contract, nil
 }
 
 func (e *Executor) personaUpdate(invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {

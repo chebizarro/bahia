@@ -108,6 +108,27 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		_ = closeSigner()
 		return nil, err
 	}
+	var signetEnrollment soulfactory.OpenClawSignetEnrollment
+	if sf.OpenClawSignetEnabled {
+		signetctl, err := soulfactory.NewContainerSignetctl(soulfactory.SignetctlConfig{
+			Container: sf.OpenClawSignetContainer, ConfigPath: sf.OpenClawSignetConfigPath,
+			ProvisionerCredentialFile: sf.OpenClawSignetProvisionerFile,
+			CredentialOwnerUID:        os.Geteuid(),
+		})
+		if err != nil {
+			_ = closeSigner()
+			return nil, fmt.Errorf("configure containerized signetctl: %w", err)
+		}
+		signetEnrollment, err = soulfactory.NewOpenClawSignetEnrollmentManager(soulfactory.OpenClawSignetEnrollmentConfig{
+			StateDir: sf.OpenClawSignetStateDir, ClientKeyDir: sf.OpenClawSignetClientKeyDir,
+			FileOwnerUID: os.Geteuid(), PolicyAdmin: signetctl,
+			Verifier: soulfactory.NIP46ConnectivityVerifier{},
+		})
+		if err != nil {
+			_ = closeSigner()
+			return nil, fmt.Errorf("configure OpenClaw Signet enrollment: %w", err)
+		}
+	}
 
 	reactor := soulfactory.NewReactor(soulfactory.Config{
 		Relays:            sf.Relays,
@@ -149,7 +170,9 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			NgitRelays:            allRelays,
 			GatewayPort:           sf.WorkspaceGatewayPort,
 		},
-		RuntimeAdapters: runtimeAdapters,
+		RuntimeAdapters:         runtimeAdapters,
+		SignetEnrollment:        signetEnrollment,
+		SignetProvisionerPubkey: sf.OpenClawSignetProvisionerPubkey,
 	}, nil)
 	if err := reactor.InstallProvisioningEngine(provisioner); err != nil {
 		_ = closeSigner()

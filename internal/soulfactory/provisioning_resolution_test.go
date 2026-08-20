@@ -89,6 +89,12 @@ func TestProvisionRuntimeParamsCarrySanitizedSoulCheckpoint(t *testing.T) {
 		Tier:     domain.SoulTierStandard,
 		Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw},
 		SpecHash: "sha256:spec",
+		SignetIdentity: &OpenClawSignetIdentityContract{
+			Schema: OpenClawSignetIdentityContractSchema, AgentID: "scout",
+			ManagedPubkey: strings.Repeat("a", 64), ClientPubkey: strings.Repeat("b", 64),
+			BunkerURL:    "bunker://" + strings.Repeat("c", 64) + "?relay=wss%3A%2F%2Frelay.example",
+			ClientKeyRef: "/run/openclaw/signet/scout.nip46-client",
+		},
 	}
 	soul := &domain.AgentSoul{
 		ID:             uuid.New(),
@@ -119,6 +125,10 @@ func TestProvisionRuntimeParamsCarrySanitizedSoulCheckpoint(t *testing.T) {
 	}
 	if checkpoint.BunkerURI != "" {
 		t.Fatalf("checkpoint bunker URI = %q, want empty", checkpoint.BunkerURI)
+	}
+	contract, ok := bahia["signet_identity"].(*OpenClawSignetIdentityContract)
+	if !ok || contract.ClientKeyRef != "/run/openclaw/signet/scout.nip46-client" || contract.ManagedPubkey != soul.NostrPubkey {
+		t.Fatalf("runtime Signet identity contract = %#v", bahia["signet_identity"])
 	}
 }
 

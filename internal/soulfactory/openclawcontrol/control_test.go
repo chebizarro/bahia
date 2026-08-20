@@ -355,6 +355,58 @@ func TestNonDryRunUsesContainerizedOpenClawCommands(t *testing.T) {
 	}
 }
 
+func TestProvisionAppliesSecretFreeSignetContractByProtectedFileReference(t *testing.T) {
+	runner := &recordingRunner{}
+	executor := newTestExecutor(t, t.TempDir(), false, runner)
+	invocation := testProvisionInvocation("agent-signet", "sha256:signet")
+	contract := soulfactory.OpenClawSignetIdentityContract{
+		Schema: soulfactory.OpenClawSignetIdentityContractSchema, AgentID: invocation.AgentID,
+		ControllerPubkey: invocation.Envelope.Controller.Pubkey, RuntimePubkey: invocation.Envelope.Target.RuntimePubkey,
+		ManagedPubkey: strings.Repeat("a", 64), ProvisionerPubkey: strings.Repeat("b", 64),
+		ClientPubkey: strings.Repeat("c", 64), BunkerPubkey: strings.Repeat("d", 64),
+		BunkerURL:    "bunker://" + strings.Repeat("d", 64) + "?relay=wss%3A%2F%2Frelay.example",
+		ClientKeyRef: "/run/openclaw/signet/agent-signet.nip46-client", Relays: []string{"wss://relay.example"},
+	}
+	invocation.Params["bahia"] = map[string]interface{}{"signet_identity": contract}
+	outcome := executor.Execute(t.Context(), invocation)
+	assertSuccess(t, outcome, "running")
+	if len(runner.calls) != 4 || !containsArgSequence(runner.calls[0].args, "config", "set", "--batch-json") {
+		t.Fatalf("command sequence = %+v, want NIP-46 config before add/set-identity/bind", runner.calls)
+	}
+	joined := strings.Join(runner.calls[0].args, " ")
+	if strings.Contains(joined, "secret=") || !strings.Contains(joined, contract.ClientKeyRef) || !strings.Contains(joined, contract.BunkerURL) {
+		t.Fatalf("unsafe or incomplete OpenClaw NIP-46 config command: %s", joined)
+	}
+}
+
+func TestProvisionRejectsMismatchedOrSecretBearingSignetContractBeforeCommands(t *testing.T) {
+	for _, mutate := range []func(*soulfactory.OpenClawSignetIdentityContract){
+		func(contract *soulfactory.OpenClawSignetIdentityContract) {
+			contract.RuntimePubkey = strings.Repeat("f", 64)
+		},
+		func(contract *soulfactory.OpenClawSignetIdentityContract) {
+			contract.BunkerURL += "&secret=must-not-pass"
+		},
+	} {
+		runner := &recordingRunner{}
+		executor := newTestExecutor(t, t.TempDir(), false, runner)
+		invocation := testProvisionInvocation("agent-signet-reject", "sha256:signet")
+		contract := soulfactory.OpenClawSignetIdentityContract{
+			Schema: soulfactory.OpenClawSignetIdentityContractSchema, AgentID: invocation.AgentID,
+			ControllerPubkey: invocation.Envelope.Controller.Pubkey, RuntimePubkey: invocation.Envelope.Target.RuntimePubkey,
+			ManagedPubkey: strings.Repeat("a", 64), ClientPubkey: strings.Repeat("c", 64),
+			BunkerURL:    "bunker://" + strings.Repeat("d", 64) + "?relay=wss%3A%2F%2Frelay.example",
+			ClientKeyRef: "/run/openclaw/signet/client", Relays: []string{"wss://relay.example"},
+		}
+		mutate(&contract)
+		invocation.Params["bahia"] = map[string]interface{}{"signet_identity": contract}
+		outcome := executor.Execute(t.Context(), invocation)
+		if outcome.Status != StatusRejected || len(runner.calls) != 0 {
+			t.Fatalf("outcome=%+v calls=%+v, want pre-command rejection", outcome, runner.calls)
+		}
+	}
+}
+
 func TestProvisionRequiresLoadedRuntimePluginBeforeAgentMutation(t *testing.T) {
 	runner := &recordingRunner{outputs: [][]byte{
 		[]byte(`{"plugins":[]}`),
