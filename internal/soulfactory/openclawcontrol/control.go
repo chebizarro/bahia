@@ -438,12 +438,16 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 	if !e.config.DryRun && e.config.RuntimeMode != RuntimeModePerAgentCompose {
 		return rejected(ErrorUnsupportedMethod, "externally reachable OpenClaw souls require per-agent-compose; shared existing-container provisioning is disabled", false, nil)
 	}
+	contract, contractOutcome := parseSignetIdentityContract(invocation)
+	if contractOutcome != nil {
+		return contractOutcome
+	}
 	paths := e.paths(invocation.AgentID)
 	if e.config.RuntimeMode == RuntimeModePerAgentCompose || !e.config.DryRun {
 		deploymentID := deterministicRuntimeName(invocation.AgentID, invocation.Envelope.Operator.RequestEvent, invocation.Envelope.IdempotencyKey)
 		paths = e.pathsForDeployment(invocation.AgentID, deploymentID)
 	}
-	spec, err := e.runtimeSpec(invocation, paths)
+	spec, err := e.runtimeSpec(invocation, paths, contract)
 	if err != nil {
 		return rejected(ErrorMissingRequired, err.Error(), false, nil)
 	}
@@ -534,7 +538,7 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 			state.LastReason = errorMessage(outcome)
 			return e.persistFailure(invocation, outcome, state, paths)
 		}
-		if outcome := e.runProvisionCommands(ctx, invocation, paths, spec); outcome != nil {
+		if outcome := e.runProvisionCommands(ctx, invocation, paths, spec, contract); outcome != nil {
 			_ = e.config.Orchestrator.Delete(ctx, spec)
 			state.State = "failed"
 			state.LastReason = errorMessage(outcome)
@@ -584,7 +588,7 @@ func (e *Executor) bootstrapRuntimePlugins(ctx context.Context, spec RuntimeSpec
 	return nil
 }
 
-func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation, paths localPaths) (RuntimeSpec, error) {
+func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation, paths localPaths, contract *soulfactory.OpenClawSignetIdentityContract) (RuntimeSpec, error) {
 	runtimeParams, _ := invocation.Params["runtime"].(map[string]interface{})
 	accountID := strings.TrimSpace(firstNonEmpty(firstString(runtimeParams, "account_id"), firstString(runtimeParams, "nostr_account_id")))
 	if accountID == "" {
@@ -606,6 +610,16 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 	secrets, err := secretFilesFromParams(invocation.Params)
 	if err != nil {
 		return RuntimeSpec{}, err
+	}
+	if contract != nil {
+		clientKeyPath := filepath.Clean(contract.ClientKeyRef)
+		if existing, ok := secrets["nip46_client"]; ok && filepath.Clean(existing) != clientKeyPath {
+			return RuntimeSpec{}, fmt.Errorf("runtime.secret_files.nip46_client conflicts with the Signet identity contract")
+		}
+		secrets["nip46_client"] = clientKeyPath
+		if err := validateSecretFiles(secrets); err != nil {
+			return RuntimeSpec{}, err
+		}
 	}
 	pluginIDs := make([]string, 0, len(e.config.RequiredPlugins))
 	for _, requirement := range e.config.RequiredPlugins {
@@ -893,7 +907,21 @@ func (e *Executor) renderProvisionWorkspace(invocation soulfactory.OpenClawContr
 	return atomicWriteJSON(paths.Provenance, provenance, 0o600)
 }
 
-func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, paths localPaths, spec RuntimeSpec) *soulfactory.OpenClawControlOutcome {
+func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, paths localPaths, spec RuntimeSpec, contract *soulfactory.OpenClawSignetIdentityContract) *soulfactory.OpenClawControlOutcome {
+	if contract != nil {
+		batch, err := json.Marshal([]map[string]interface{}{
+			{"path": "channels.nostr.nip46", "value": true},
+			{"path": "channels.nostr.nip46BunkerUrl", "value": contract.BunkerURL},
+			{"path": "channels.nostr.nip46Secret", "value": map[string]interface{}{"source": "file", "path": "/run/secrets/nip46_client"}},
+			{"path": "channels.nostr.nip46SignerRelays", "value": contract.Relays},
+		})
+		if err != nil {
+			return failed(ErrorExecutionFailed, "marshal OpenClaw NIP-46 config patch: "+err.Error(), false, nil)
+		}
+		if outcome := e.runOpenClaw(ctx, e.containerArgsFor(spec.ContainerName, "config", "set", "--batch-json", string(batch))...); outcome != nil {
+			return outcome
+		}
+	}
 	args := e.containerArgsFor(spec.ContainerName, "agents", "add", invocation.AgentID, "--workspace", containerWorkspace, "--agent-dir", containerAgentDir, "--non-interactive", "--json")
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
@@ -911,6 +939,31 @@ func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfact
 		}
 	}
 	return nil
+}
+
+func parseSignetIdentityContract(invocation soulfactory.OpenClawControlInvocation) (*soulfactory.OpenClawSignetIdentityContract, *soulfactory.OpenClawControlOutcome) {
+	bahia, _ := invocation.Params["bahia"].(map[string]interface{})
+	raw, exists := bahia["signet_identity"]
+	if !exists {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, rejected(ErrorMissingRequired, "invalid OpenClaw Signet identity contract", false, nil)
+	}
+	var contract soulfactory.OpenClawSignetIdentityContract
+	if err := json.Unmarshal(data, &contract); err != nil {
+		return nil, rejected(ErrorMissingRequired, "invalid OpenClaw Signet identity contract", false, nil)
+	}
+	if contract.Schema != soulfactory.OpenClawSignetIdentityContractSchema || contract.AgentID != invocation.AgentID ||
+		contract.ManagedPubkey == "" || contract.ClientPubkey == "" || !filepath.IsAbs(contract.ClientKeyRef) ||
+		contract.BunkerURL == "" || strings.Contains(contract.BunkerURL, "secret=") || len(contract.Relays) == 0 {
+		return nil, rejected(ErrorMissingRequired, "OpenClaw Signet identity contract is incomplete or contains a one-time secret", false, nil)
+	}
+	if contract.ControllerPubkey != invocation.Envelope.Controller.Pubkey || contract.RuntimePubkey != invocation.Envelope.Target.RuntimePubkey {
+		return nil, rejected(ErrorMissingRequired, "OpenClaw Signet identity contract does not match the addressed controller/runtime", false, nil)
+	}
+	return &contract, nil
 }
 
 func (e *Executor) personaUpdate(invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {

@@ -201,27 +201,34 @@ type SoulFactoryConfig struct {
 	// AgentRuntimes is the validated list of administratively enabled
 	// SoulFactory agent runtime targets (for example openclaw, metiq).
 	// When unset it defaults to [openclaw] to preserve prior behavior.
-	AgentRuntimes                 []string               `koanf:"agent_runtimes" yaml:"agent_runtimes"`
-	Relays                        []string               `koanf:"relays" yaml:"relays"`
-	AdditionalRelays              []string               `koanf:"additional_relays" yaml:"additional_relays"`
-	NIP05Relays                   []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
-	NIP29Groups                   []NIP29Group           `koanf:"nip29_groups" yaml:"nip29_groups"`
-	CommunikeysCommunities        []CommunikeysCommunity `koanf:"communikeys_communities" yaml:"communikeys_communities"`
-	ConcordCommunities            []ConcordCommunity     `koanf:"concord_communities" yaml:"concord_communities"`
-	AuthorizedPubkeys             []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
-	SoulFactoryPubkey             string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
-	SignetBunkerURI               string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetClientSecretKey         string                 `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
-	StartupTimeout                time.Duration          `koanf:"startup_timeout" yaml:"startup_timeout"`
-	LLMBaseURL                    string                 `koanf:"llm_base_url" yaml:"llm_base_url"`
-	LLMModel                      string                 `koanf:"llm_model" yaml:"llm_model"`
-	LLMAPIKey                     string                 `koanf:"llm_api_key" yaml:"llm_api_key"`
-	LLMTimeout                    time.Duration          `koanf:"llm_timeout" yaml:"llm_timeout"`
-	WorkspaceGiteaURL             string                 `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
-	WorkspaceTemplateDir          string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
-	WorkspacePrivateKeyRef        string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
-	WorkspaceAgentMemoryMCPURLRef string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
-	WorkspaceGatewayPort          int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
+	AgentRuntimes                   []string               `koanf:"agent_runtimes" yaml:"agent_runtimes"`
+	Relays                          []string               `koanf:"relays" yaml:"relays"`
+	AdditionalRelays                []string               `koanf:"additional_relays" yaml:"additional_relays"`
+	NIP05Relays                     []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
+	NIP29Groups                     []NIP29Group           `koanf:"nip29_groups" yaml:"nip29_groups"`
+	CommunikeysCommunities          []CommunikeysCommunity `koanf:"communikeys_communities" yaml:"communikeys_communities"`
+	ConcordCommunities              []ConcordCommunity     `koanf:"concord_communities" yaml:"concord_communities"`
+	AuthorizedPubkeys               []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
+	SoulFactoryPubkey               string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
+	SignetBunkerURI                 string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetClientSecretKey           string                 `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	StartupTimeout                  time.Duration          `koanf:"startup_timeout" yaml:"startup_timeout"`
+	LLMBaseURL                      string                 `koanf:"llm_base_url" yaml:"llm_base_url"`
+	LLMModel                        string                 `koanf:"llm_model" yaml:"llm_model"`
+	LLMAPIKey                       string                 `koanf:"llm_api_key" yaml:"llm_api_key"`
+	LLMTimeout                      time.Duration          `koanf:"llm_timeout" yaml:"llm_timeout"`
+	WorkspaceGiteaURL               string                 `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
+	WorkspaceTemplateDir            string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
+	WorkspacePrivateKeyRef          string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
+	WorkspaceAgentMemoryMCPURLRef   string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
+	WorkspaceGatewayPort            int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
+	OpenClawSignetEnabled           bool                   `koanf:"openclaw_signet_enabled" yaml:"openclaw_signet_enabled"`
+	OpenClawSignetStateDir          string                 `koanf:"openclaw_signet_state_dir" yaml:"openclaw_signet_state_dir"`
+	OpenClawSignetClientKeyDir      string                 `koanf:"openclaw_signet_client_key_dir" yaml:"openclaw_signet_client_key_dir"`
+	OpenClawSignetContainer         string                 `koanf:"openclaw_signet_container" yaml:"openclaw_signet_container"`
+	OpenClawSignetConfigPath        string                 `koanf:"openclaw_signet_config_path" yaml:"openclaw_signet_config_path"`
+	OpenClawSignetProvisionerFile   string                 `koanf:"openclaw_signet_provisioner_file" yaml:"openclaw_signet_provisioner_file"`
+	OpenClawSignetProvisionerPubkey string                 `koanf:"openclaw_signet_provisioner_pubkey" yaml:"openclaw_signet_provisioner_pubkey"`
 }
 
 // NIP29Group identifies a fleet group that newly provisioned souls join.
@@ -2368,6 +2375,12 @@ func (c *Config) validateSoulFactory() error {
 	sf.WorkspaceTemplateDir = strings.TrimSpace(sf.WorkspaceTemplateDir)
 	sf.WorkspacePrivateKeyRef = strings.TrimSpace(sf.WorkspacePrivateKeyRef)
 	sf.WorkspaceAgentMemoryMCPURLRef = strings.TrimSpace(sf.WorkspaceAgentMemoryMCPURLRef)
+	sf.OpenClawSignetStateDir = strings.TrimSpace(sf.OpenClawSignetStateDir)
+	sf.OpenClawSignetClientKeyDir = strings.TrimSpace(sf.OpenClawSignetClientKeyDir)
+	sf.OpenClawSignetContainer = strings.TrimSpace(sf.OpenClawSignetContainer)
+	sf.OpenClawSignetConfigPath = strings.TrimSpace(sf.OpenClawSignetConfigPath)
+	sf.OpenClawSignetProvisionerFile = strings.TrimSpace(sf.OpenClawSignetProvisionerFile)
+	sf.OpenClawSignetProvisionerPubkey = strings.ToLower(strings.TrimSpace(sf.OpenClawSignetProvisionerPubkey))
 	if sf.StartupTimeout == 0 {
 		sf.StartupTimeout = 15 * time.Second
 	}
@@ -2405,6 +2418,25 @@ func (c *Config) validateSoulFactory() error {
 	}
 	if sf.StartupTimeout <= 0 {
 		return fmt.Errorf("config validation failed: soul_factory.startup_timeout must be > 0 when soul_factory.enabled=true")
+	}
+	if sf.OpenClawSignetEnabled {
+		for name, path := range map[string]string{
+			"openclaw_signet_state_dir":        sf.OpenClawSignetStateDir,
+			"openclaw_signet_client_key_dir":   sf.OpenClawSignetClientKeyDir,
+			"openclaw_signet_provisioner_file": sf.OpenClawSignetProvisionerFile,
+		} {
+			if !filepath.IsAbs(path) {
+				return fmt.Errorf("config validation failed: soul_factory.%s must be an absolute path when OpenClaw Signet enrollment is enabled", name)
+			}
+		}
+		if sf.OpenClawSignetContainer == "" || sf.OpenClawSignetConfigPath == "" {
+			return fmt.Errorf("config validation failed: soul_factory.openclaw_signet_container and openclaw_signet_config_path are required when OpenClaw Signet enrollment is enabled")
+		}
+		provisioners, err := normalizePubkeyList([]string{sf.OpenClawSignetProvisionerPubkey})
+		if err != nil || len(provisioners) != 1 {
+			return fmt.Errorf("config validation failed: soul_factory.openclaw_signet_provisioner_pubkey must be a 64-character hex pubkey")
+		}
+		sf.OpenClawSignetProvisionerPubkey = provisioners[0]
 	}
 	if sf.LLMBaseURL == "" {
 		return fmt.Errorf("config validation failed: soul_factory.llm_base_url is required when soul_factory.enabled=true")

@@ -422,6 +422,77 @@ func TestNonDryRunUsesContainerizedOpenClawCommands(t *testing.T) {
 	}
 }
 
+func TestProvisionAppliesSecretFreeSignetContractToDedicatedRuntime(t *testing.T) {
+	root := t.TempDir()
+	clientKeyRef := filepath.Join(root, "signet", "agent-signet.nip46-client")
+	if err := os.MkdirAll(filepath.Dir(clientKeyRef), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clientKeyRef, []byte(strings.Repeat("1", 64)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{}
+	orchestrator := &recordingOrchestrator{}
+	executor, err := New(Config{
+		Root: root, OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := testProvisionInvocation("agent-signet", "sha256:signet")
+	contract := soulfactory.OpenClawSignetIdentityContract{
+		Schema: soulfactory.OpenClawSignetIdentityContractSchema, AgentID: invocation.AgentID,
+		ControllerPubkey: invocation.Envelope.Controller.Pubkey, RuntimePubkey: invocation.Envelope.Target.RuntimePubkey,
+		ManagedPubkey: strings.Repeat("a", 64), ProvisionerPubkey: strings.Repeat("b", 64),
+		ClientPubkey: strings.Repeat("c", 64), BunkerPubkey: strings.Repeat("d", 64),
+		BunkerURL:    "bunker://" + strings.Repeat("d", 64) + "?relay=wss%3A%2F%2Frelay.example",
+		ClientKeyRef: clientKeyRef, Relays: []string{"wss://relay.example"},
+	}
+	invocation.Params["bahia"] = map[string]interface{}{"signet_identity": contract}
+	outcome := executor.Execute(t.Context(), invocation)
+	assertSuccess(t, outcome, "running")
+	if len(orchestrator.reconciles) != 1 || orchestrator.reconciles[0].SecretFiles["nip46_client"] != clientKeyRef {
+		t.Fatalf("Signet client key was not mounted into the owned runtime: %+v", orchestrator.reconciles)
+	}
+	if len(runner.calls) != 6 || !containsArgSequence(runner.calls[2].args, "--container", orchestrator.reconciles[0].ContainerName, "config", "set", "--batch-json") {
+		t.Fatalf("command sequence = %+v, want dedicated-container NIP-46 config before add/set-identity/bind", runner.calls)
+	}
+	joined := strings.Join(runner.calls[2].args, " ")
+	if strings.Contains(joined, "secret=") || strings.Contains(joined, clientKeyRef) || !strings.Contains(joined, "/run/secrets/nip46_client") || !strings.Contains(joined, contract.BunkerURL) {
+		t.Fatalf("unsafe or incomplete OpenClaw NIP-46 config command: %s", joined)
+	}
+}
+
+func TestProvisionRejectsMismatchedOrSecretBearingSignetContractBeforeCommands(t *testing.T) {
+	for _, mutate := range []func(*soulfactory.OpenClawSignetIdentityContract){
+		func(contract *soulfactory.OpenClawSignetIdentityContract) {
+			contract.RuntimePubkey = strings.Repeat("f", 64)
+		},
+		func(contract *soulfactory.OpenClawSignetIdentityContract) {
+			contract.BunkerURL += "&secret=must-not-pass"
+		},
+	} {
+		runner := &recordingRunner{}
+		executor := newTestExecutor(t, t.TempDir(), false, runner)
+		invocation := testProvisionInvocation("agent-signet-reject", "sha256:signet")
+		contract := soulfactory.OpenClawSignetIdentityContract{
+			Schema: soulfactory.OpenClawSignetIdentityContractSchema, AgentID: invocation.AgentID,
+			ControllerPubkey: invocation.Envelope.Controller.Pubkey, RuntimePubkey: invocation.Envelope.Target.RuntimePubkey,
+			ManagedPubkey: strings.Repeat("a", 64), ClientPubkey: strings.Repeat("c", 64),
+			BunkerURL:    "bunker://" + strings.Repeat("d", 64) + "?relay=wss%3A%2F%2Frelay.example",
+			ClientKeyRef: "/run/openclaw/signet/client", Relays: []string{"wss://relay.example"},
+		}
+		mutate(&contract)
+		invocation.Params["bahia"] = map[string]interface{}{"signet_identity": contract}
+		outcome := executor.Execute(t.Context(), invocation)
+		if outcome.Status != StatusRejected || len(runner.calls) != 0 {
+			t.Fatalf("outcome=%+v calls=%+v, want pre-command rejection", outcome, runner.calls)
+		}
+	}
+}
+
 func TestNonDryRunExactReplayAdoptsWithoutRepeatingAgentMutation(t *testing.T) {
 	runner := &recordingRunner{}
 	orchestrator := &recordingOrchestrator{}

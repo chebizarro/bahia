@@ -45,6 +45,8 @@ type FullProvisioner struct {
 	concordMembership        concordMembershipAssigner
 	concordMembershipErr     error
 	runtimeAdapters          map[domain.RuntimeTarget]RuntimeAdapter
+	signetEnrollment         OpenClawSignetEnrollment
+	signetProvisionerPubkey  string
 	lookupSoul               func(context.Context, string) (*domain.AgentSoul, error)
 }
 
@@ -57,12 +59,14 @@ type FullProvisionerConfig struct {
 	Workspace   WorkspaceConfig
 	NIP05       NIP05Config
 	// NIP05Relays are advertised for provisioned identities. They must be explicitly configured when NIP-05 is enabled.
-	NIP05Relays            []string
-	NIP29Groups            []NIP29Group
-	CommunikeysCommunities []CommunikeysCommunity
-	ConcordCommunities     []ConcordCommunity
-	Bahia                  BahiaIntegrationConfig
-	RuntimeAdapters        map[domain.RuntimeTarget]RuntimeAdapter
+	NIP05Relays             []string
+	NIP29Groups             []NIP29Group
+	CommunikeysCommunities  []CommunikeysCommunity
+	ConcordCommunities      []ConcordCommunity
+	Bahia                   BahiaIntegrationConfig
+	RuntimeAdapters         map[domain.RuntimeTarget]RuntimeAdapter
+	SignetEnrollment        OpenClawSignetEnrollment
+	SignetProvisionerPubkey string
 }
 
 // NewFullProvisioner creates a provisioner with all adapters.
@@ -94,6 +98,8 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 		concordMembershipErr:     concordErr,
 		nip05Relays:              append([]string(nil), config.NIP05Relays...),
 		runtimeAdapters:          cloneRuntimeAdapters(config.RuntimeAdapters),
+		signetEnrollment:         config.SignetEnrollment,
+		signetProvisionerPubkey:  strings.ToLower(strings.TrimSpace(config.SignetProvisionerPubkey)),
 		lookupSoul:               reactor.GetSoul,
 	}
 	if len(config.Blossom.Servers) > 0 {
@@ -238,7 +244,15 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	soul.NostrPubkey = pubkey
 	soul.NostrNpub = npub
-	soul.BunkerURI = bunkerURI
+	if p.signetEnrollment != nil && resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+		if err := p.signetEnrollment.StageHandoff(ctx, resolved.AgentID, bunkerURI); err != nil {
+			p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("protect OpenClaw one-time bunker handoff: %w", err)
+		}
+		soul.BunkerURI = ""
+	} else {
+		soul.BunkerURI = bunkerURI
+	}
 
 	var assignedGroups []string
 	var assignedCommunities []string
@@ -608,6 +622,11 @@ func (p *FullProvisioner) RevokeSoul(ctx context.Context, soulRef, reason string
 		}
 	}
 	if soul.NostrPubkey != "" {
+		if p.signetEnrollment != nil && soul.Runtime.Target == domain.RuntimeTargetOpenClaw {
+			if err := p.signetEnrollment.Revoke(ctx, soul.AgentID); err != nil {
+				return fmt.Errorf("revoke OpenClaw NIP-46 client access: %w", err)
+			}
+		}
 		if err := p.reactor.signer.RevokeAgent(ctx, soul.NostrPubkey); err != nil {
 			return fmt.Errorf("revoke signer access: %w", err)
 		}
@@ -725,6 +744,29 @@ func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *dom
 	if adapter == nil {
 		return nil, fmt.Errorf("no runtime adapter configured for %s", resolved.Runtime.Target)
 	}
+	var capability *RuntimeCapability
+	if p.signetEnrollment != nil && resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+		capabilities, err := adapter.DiscoverCapabilities(ctx, resolved.RelayPolicy)
+		if err != nil {
+			return nil, fmt.Errorf("discover OpenClaw runtime for Signet enrollment: %w", err)
+		}
+		capability = selectRuntimeCapability(capabilities, resolved.Runtime.Target, RuntimeMethodProvision, p.reactor.config.SoulFactoryPubkey, resolved.Runtime.RuntimePubkey)
+		if capability == nil || strings.TrimSpace(capability.Pubkey) == "" {
+			return nil, fmt.Errorf("no exact OpenClaw runtime identity is available for Signet enrollment")
+		}
+		resolved.Runtime.RuntimePubkey = capability.Pubkey
+		contract, err := p.signetEnrollment.Enroll(ctx, OpenClawSignetEnrollmentRequest{
+			AgentID: resolved.AgentID, ControllerPubkey: p.reactor.config.SoulFactoryPubkey,
+			RuntimePubkey: capability.Pubkey, ManagedPubkey: soul.NostrPubkey,
+			ProvisionerPubkey: p.signetProvisionerPubkey, BunkerURI: soul.BunkerURI,
+			AllowedKinds: soul.AllowedKinds,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("enroll OpenClaw Signet identity: %w", err)
+		}
+		resolved.SignetIdentity = contract
+		soul.BunkerURI = ""
+	}
 	result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
 		Method: RuntimeMethodProvision,
 		Operator: RuntimeOperatorRef{
@@ -743,6 +785,7 @@ func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *dom
 		},
 		Params:      resolved.provisionRuntimeParams(soul),
 		DraftPolicy: resolved.RelayPolicy,
+		Capability:  capability,
 		RequestKind: domain.KindProvisioningRequest,
 	})
 	if err != nil {

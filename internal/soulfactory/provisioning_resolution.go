@@ -26,16 +26,17 @@ type resolvedProvisioningSpec struct {
 	DraftEventID string
 	SpecHash     string
 
-	Identity    domain.SoulIdentitySpec
-	Persona     domain.SoulPersonaSpec
-	Avatar      domain.SoulAvatarSpec
-	Voice       domain.SoulVoiceSpec
-	Memory      domain.SoulMemorySpec
-	Runtime     domain.SoulRuntimeSpec
-	Permissions domain.SoulPermissionSpec
-	RelayPolicy domain.SoulRelayPolicySpec
-	Workspace   domain.SoulWorkspaceSpec
-	Assets      domain.SoulAssetRefs
+	Identity       domain.SoulIdentitySpec
+	Persona        domain.SoulPersonaSpec
+	Avatar         domain.SoulAvatarSpec
+	Voice          domain.SoulVoiceSpec
+	Memory         domain.SoulMemorySpec
+	Runtime        domain.SoulRuntimeSpec
+	Permissions    domain.SoulPermissionSpec
+	RelayPolicy    domain.SoulRelayPolicySpec
+	Workspace      domain.SoulWorkspaceSpec
+	Assets         domain.SoulAssetRefs
+	SignetIdentity *OpenClawSignetIdentityContract
 }
 
 func (p *FullProvisioner) resolveProvisioningSpec(ctx context.Context, req *domain.ProvisioningRequest) (*resolvedProvisioningSpec, error) {
@@ -235,6 +236,9 @@ func (s *resolvedProvisioningSpec) provisionRuntimeParams(soul *domain.AgentSoul
 		"nostr_npub":      soul.NostrNpub,
 		"workspace_repo":  soul.WorkspaceRepoURL,
 		"soul_checkpoint": checkpoint,
+	}
+	if s.SignetIdentity != nil {
+		params["bahia"].(map[string]interface{})["signet_identity"] = s.SignetIdentity
 	}
 	return params
 }
