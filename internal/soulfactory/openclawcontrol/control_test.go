@@ -15,8 +15,9 @@ import (
 )
 
 type recordingRunner struct {
-	calls []commandCall
-	err   error
+	calls   []commandCall
+	err     error
+	outputs [][]byte
 }
 
 type commandCall struct {
@@ -28,6 +29,9 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([
 	r.calls = append(r.calls, commandCall{name: name, args: append([]string{}, args...)})
 	if r.err != nil {
 		return nil, r.err
+	}
+	if len(r.outputs) >= len(r.calls) {
+		return r.outputs[len(r.calls)-1], nil
 	}
 	return []byte(`{"ok":true}`), nil
 }
@@ -348,6 +352,62 @@ func TestNonDryRunUsesContainerizedOpenClawCommands(t *testing.T) {
 	}
 	if !containsArgSequence(runner.calls[0].args, "agents", "add") || !containsArgSequence(runner.calls[1].args, "agents", "set-identity") || !containsArgSequence(runner.calls[2].args, "agents", "bind") {
 		t.Fatalf("unexpected command sequence: %+v", runner.calls)
+	}
+}
+
+func TestProvisionRequiresLoadedRuntimePluginBeforeAgentMutation(t *testing.T) {
+	runner := &recordingRunner{outputs: [][]byte{
+		[]byte(`{"plugins":[]}`),
+		[]byte(`{"installed":true}`),
+	}}
+	executor, err := New(Config{
+		Root: t.TempDir(), OpenClawBin: "openclaw-test",
+		RuntimeMode: RuntimeModeExistingContainer, Container: "openclaw-gateway",
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr"}, Runner: runner,
+	})
+	if err != nil {
+		t.Fatalf("New executor: %v", err)
+	}
+	outcome := executor.Execute(t.Context(), testProvisionInvocation("agent-plugin", "sha256:plugin"))
+	if outcome.Status != StatusFailed || outcome.Error == nil || outcome.Error.Code != ErrorRuntimeUnavailable {
+		t.Fatalf("outcome = %+v, want restart-required runtime failure", outcome)
+	}
+	if len(runner.calls) != 2 || !containsArgSequence(runner.calls[0].args, "plugins", "list", "--json") || !containsArgSequence(runner.calls[1].args, "plugins", "install", "npm:openclaw-nostr") {
+		t.Fatalf("unexpected plugin bootstrap calls: %+v", runner.calls)
+	}
+	if _, err := os.Stat(filepath.Join(executor.config.Root, "agents", "agent-plugin")); !os.IsNotExist(err) {
+		t.Fatalf("agent state must not be created before plugin restart, stat err=%v", err)
+	}
+}
+
+func TestProvisionContinuesWhenRequiredRuntimePluginIsLoaded(t *testing.T) {
+	runner := &recordingRunner{outputs: [][]byte{
+		[]byte(`{"plugins":[{"id":"nostr","status":"loaded","enabled":true}]}`),
+	}}
+	executor, err := New(Config{
+		Root: t.TempDir(), OpenClawBin: "openclaw-test",
+		RuntimeMode: RuntimeModeExistingContainer, Container: "openclaw-gateway",
+		DefaultBindings: []string{"nostr:dm"},
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr"}, Runner: runner,
+	})
+	if err != nil {
+		t.Fatalf("New executor: %v", err)
+	}
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-plugin", "sha256:plugin")), "running")
+	if len(runner.calls) != 4 {
+		t.Fatalf("calls = %d, want plugin preflight plus add/set-identity/bind: %+v", len(runner.calls), runner.calls)
+	}
+	for _, call := range runner.calls {
+		if !containsArgSequence(call.args, "--container", "openclaw-gateway") {
+			t.Fatalf("command did not target configured container: %+v", call)
+		}
+	}
+}
+
+func TestRequiredPluginConfigRejectsAmbiguousInstallSource(t *testing.T) {
+	_, err := New(Config{RequiredPlugins: []string{"npm:openclaw-nostr"}})
+	if err == nil || !strings.Contains(err.Error(), "plugin-id=install-source") {
+		t.Fatalf("New error = %v, want explicit plugin mapping error", err)
 	}
 }
 

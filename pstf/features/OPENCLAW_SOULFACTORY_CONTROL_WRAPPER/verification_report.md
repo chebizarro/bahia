@@ -17,6 +17,40 @@ The wrapper itself was implemented by Item 1. Item 4 / `bahia-7qt9` created the 
 - OCSCW-AC-007: `TestNonDryRunUsesContainerizedOpenClawCommands`.
 - OCSCW-AC-008: `TestCommandFailurePersistsFailedAuditState`.
 - OCSCW-AC-009: `TestOpenClawSidecarCommandDriverInvokesWrapperDryRunAndCachesReplay`, `TestOpenClawSidecarRejectsIdempotencyReuseWithChangedParams`, and `TestOpenClawSidecarReportsIdempotencyPersistenceFailure`.
+- OCSCW-AC-010: `TestProvisionRequiresLoadedRuntimePluginBeforeAgentMutation`, `TestProvisionContinuesWhenRequiredRuntimePluginIsLoaded`, and `TestRequiredPluginConfigRejectsAmbiguousInstallSource`.
+
+## Runtime plugin and Marjam vertical slice — 2026-08-06
+
+The wrapper now treats channel plugins as shared-runtime prerequisites. The
+focused source was formatted and tested with Go 1.26.3 in an ephemeral
+container. The container used the operator's existing read-only Git credential
+file to fetch private module `git.sharegap.net/cascadia/cascadia-go` v1.0.1;
+credential values were neither printed nor persisted in the repository.
+
+```text
+go test ./internal/soulfactory/openclawcontrol -count=1
+ok github.com/openagentsinc/bahia/internal/soulfactory/openclawcontrol 0.153s
+```
+
+The broader wrapper command package also passed. The existing
+`internal/soulfactory` package remains red for two baseline issues outside this
+change: `TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods` expects a
+method list that omits the already-implemented `soulfactory.update`, and the
+nested wrapper build requires `-buildvcs=false` when the worktree is mounted
+without its parent Git metadata. These failures were not treated as evidence
+for or against OCSCW-AC-010.
+
+Live vertical-slice evidence on the existing Soul Factory runtime:
+
+- `openclaw-nostr` plugin id `nostr` reports loaded and enabled and is pinned in `plugins.allow`.
+- Marjam uses `lemmy-local/google_gemma-4-26B-A4B-it-Q4_K_M.gguf`; a live inbound Nostr DM invoked that model and returned HTTP 200.
+- Signet reports one active persistent client for `marjam`.
+- The one-time pairing secret was removed after adoption; a second gateway restart resumed NIP-46 and connected to both configured relays without connect fallback.
+- Marjam is bound to `nostr:marjam`; an allowlisted NIP-17 canary DM was received and produced a signed self-echo reply event.
+
+Scale caveat: the installed plugin currently resolves only one configured
+top-level Nostr identity per gateway. Independent Soul Factory identities need
+per-soul gateways until multi-account configuration is implemented end to end.
 
 ## Fixture coverage
 
