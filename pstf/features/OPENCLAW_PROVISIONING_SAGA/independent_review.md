@@ -14,3 +14,5 @@ The reviewed findings were addressed by:
 - restart, concurrent isolation, multi-resource compensation, and every-forward-stage failure injection tests.
 
 A final high-severity pass additionally led to non-expiring recoverable lineage, checkpoint-and-compensate handling for invalid post-apply reality, sanitized returned errors, and expanded before/after mutation failure classes.
+
+The last focused pass added restart pre-inspection adoption of owned conflict lineage for compensation and sanitized every terminal-driver error returned to operators.

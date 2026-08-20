@@ -147,6 +147,22 @@
         "OCS-06"
       ],
       "test": "TestProductionShapedFailureClassesRemainRecoverableOrCompensated"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-02",
+        "OCS-04"
+      ],
+      "test": "TestRestartPreinspectionCheckpointsAndCompensatesOwnedConflict"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-06",
+        "OCS-07"
+      ],
+      "test": "TestTerminalDriverErrorsAreRedactedFromOperator"
     }
   ]
 }

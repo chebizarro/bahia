@@ -708,3 +708,46 @@ func TestProductionShapedFailureClassesRemainRecoverableOrCompensated(t *testing
 		})
 	}
 }
+
+func TestRestartPreinspectionCheckpointsAndCompensatesOwnedConflict(t *testing.T) {
+	engine, drivers, store := fixtureEngine(t, func(ds map[Stage]*memoryDriver) {
+		ds[StageIdentityReserved].resource = &Resource{Stage: StageIdentityReserved, System: "signet", Kind: "identity", ExternalID: "created-before-crash", SpecHash: "sha256:wrong", Ownership: OwnershipCreated, OwnerRunID: "run-crash-conflict", IdempotencyKey: "lost", CorrelationID: "wrong-correlation", CompensationOrder: CompensateSignetPolicy}
+	})
+	ctx := context.Background()
+	_, _ = engine.Start(ctx, "request-crash-conflict", "run-crash-conflict", "agent-crash-conflict", "sha256:spec")
+	_, err := engine.Reconcile(ctx, "request-crash-conflict", false)
+	if err == nil {
+		t.Fatal("expected conflict")
+	}
+	run, _ := store.Load(ctx, "request-crash-conflict")
+	if run.Stage != StageRolledBack {
+		t.Fatalf("stage=%s", run.Stage)
+	}
+	found := false
+	for _, resource := range run.Resources {
+		if resource.Stage == StageIdentityReserved && resource.Conflict {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("restart conflict lineage was not checkpointed")
+	}
+	if drivers[StageIdentityReserved].resource != nil {
+		t.Fatal("created-before-crash resource was orphaned")
+	}
+}
+
+func TestTerminalDriverErrorsAreRedactedFromOperator(t *testing.T) {
+	secret := "token=terminal-secret"
+	engine, drivers, _ := fixtureEngine(t, nil)
+	ctx := context.Background()
+	_, _ = engine.Start(ctx, "request-terminal-secret", "run-terminal-secret", "agent-terminal-secret", "sha256:spec")
+	if _, err := engine.Reconcile(ctx, "request-terminal-secret", false); err != nil {
+		t.Fatal(err)
+	}
+	drivers[StageRunning].inspectErr = errors.New(secret)
+	_, err := engine.Reconcile(ctx, "request-terminal-secret", false)
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("unsafe terminal error=%v", err)
+	}
+}

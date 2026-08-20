@@ -247,6 +247,11 @@ func (e *Engine) Reconcile(ctx context.Context, requestID string, dryRun bool) (
 		}
 		obs = enforceObservation(run, stage, obs)
 		if obs.Reality == RealityConflict {
+			if !dryRun {
+				if err := e.checkpointConflictResources(ctx, run, stage, obs.Resources); err != nil {
+					return nil, err
+				}
+			}
 			if dryRun {
 				report := reportFor(run, true)
 				report.Actions = append(report.Actions, observationAction(stage, obs))
@@ -545,7 +550,7 @@ func (e *Engine) fail(ctx context.Context, run *Run, stage Stage, cause error, c
 func (e *Engine) ensureTerminal(ctx context.Context, run *Run) error {
 	obs, err := e.terminal.InspectTerminal(ctx, snapshot(run), run.Stage, run.Failure)
 	if err != nil {
-		return err
+		return &SafeError{Code: "terminal_projection_mismatch", Retryable: true}
 	}
 	if obs.Reality == RealityConflict {
 		return &SafeError{Code: "terminal_projection_conflict", Retryable: false}
@@ -555,11 +560,11 @@ func (e *Engine) ensureTerminal(ctx context.Context, run *Run) error {
 		applyErr := e.terminal.PublishTerminal(ctx, snapshot(run), run.Stage, run.Failure, key)
 		obs, err = e.terminal.InspectTerminal(ctx, snapshot(run), run.Stage, run.Failure)
 		if err != nil {
-			return err
+			return &SafeError{Code: "terminal_projection_mismatch", Retryable: true}
 		}
 		if obs.Reality != RealityMatching {
 			if applyErr != nil {
-				return applyErr
+				return &SafeError{Code: "terminal_projection_mismatch", Retryable: true}
 			}
 			return &SafeError{Code: "terminal_projection_mismatch", Retryable: true}
 		}
