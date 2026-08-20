@@ -65,10 +65,7 @@ func (e *SafeError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Cause != nil {
-		return e.Code + ": " + e.Cause.Error()
-	}
-	return e.Code
+	return safePublicMessage(safePublicCode(e.Code))
 }
 func (e *SafeError) Unwrap() error {
 	if e == nil {
@@ -118,7 +115,7 @@ func NewEngine(store Store, drivers []StageDriver, opts ...Option) (*Engine, err
 	if store == nil {
 		return nil, errors.New("saga store is required")
 	}
-	e := &Engine{store: store, drivers: make(map[Stage]StageDriver), now: time.Now, retention: RetentionPolicy{FailedFor: 30 * 24 * time.Hour, RecoverableFor: 30 * 24 * time.Hour, RolledBackFor: 7 * 24 * time.Hour}}
+	e := &Engine{store: store, drivers: make(map[Stage]StageDriver), now: time.Now, retention: RetentionPolicy{FailedFor: 30 * 24 * time.Hour, RolledBackFor: 7 * 24 * time.Hour}}
 	for _, driver := range drivers {
 		if driver == nil {
 			return nil, errors.New("nil saga stage driver")
@@ -288,6 +285,9 @@ func (e *Engine) Reconcile(ctx context.Context, requestID string, dryRun bool) (
 		applyErr := driver.Apply(ctx, snapshot(run), run.StageKey(stage))
 		// Response loss is never answered by blind repeat: inspect and correlate first.
 		verified, verifyErr := driver.Inspect(ctx, snapshot(run), nil)
+		if verifyErr == nil {
+			verified = enforceObservation(run, stage, verified)
+		}
 		if verifyErr == nil && verified.Reality == RealityMatching && len(verified.Resources) > 0 {
 			if err := e.checkpointResources(ctx, run, stage, verified.Resources); err != nil {
 				return nil, err
@@ -299,6 +299,12 @@ func (e *Engine) Reconcile(ctx context.Context, requestID string, dryRun bool) (
 				return reportFor(run, false), nil
 			}
 			continue
+		}
+		if verifyErr == nil && verified.Reality == RealityConflict {
+			if err := e.checkpointConflictResources(ctx, run, stage, verified.Resources); err != nil {
+				return nil, err
+			}
+			return e.failAndRollback(ctx, run, stage, &SafeError{Code: "ownership_conflict", Retryable: false})
 		}
 		if applyErr != nil {
 			if retryable(applyErr) {
@@ -362,7 +368,7 @@ func (e *Engine) SafeAbort(ctx context.Context, requestID string, dryRun bool) (
 			continue
 		}
 		observed, ok := observedResource(obs.Resources, resource.key())
-		if obs.Reality != RealityMatching || !ok || observed.Ownership != OwnershipCreated || observed.OwnerRunID != run.RunID || observed.SpecHash != resource.SpecHash {
+		if obs.Reality != RealityMatching || !ok || observed.Ownership != OwnershipCreated || observed.OwnerRunID != run.RunID || (!resource.Conflict && observed.SpecHash != resource.SpecHash) {
 			return e.rollbackFail(ctx, run, resource.Stage, &SafeError{Code: "rollback_ownership_conflict", Message: "resource ownership changed; compensation refused", Retryable: false}, false)
 		}
 		if err := driver.Compensate(ctx, snapshot(run), resource, run.CompensationKey(resource)); err != nil {
@@ -463,6 +469,31 @@ func (e *Engine) checkpointResources(ctx context.Context, run *Run, stage Stage,
 	return nil
 }
 
+func (e *Engine) checkpointConflictResources(ctx context.Context, run *Run, stage Stage, resources []Resource) error {
+	for _, resource := range resources {
+		if resource.Ownership != OwnershipCreated || resource.OwnerRunID != run.RunID {
+			continue
+		}
+		resource.Stage = stage
+		resource.Conflict = true
+		resource.IdempotencyKey = run.StageKey(stage)
+		resource.ExternalID = PublicResourceRef(resource.System, resource.Kind, resource.ExternalID)
+		resource.SpecHash = DeriveKey(run.RootKey, "conflict-spec/"+resource.SpecHash)
+		resource.CorrelationID = DeriveKey(run.RootKey, "conflict-correlation/"+resource.CorrelationID)
+		if resource.RecordedAt.IsZero() {
+			resource.RecordedAt = e.now().UTC()
+		}
+		if err := resource.validate(run.RunID); err != nil {
+			return err
+		}
+		run.Resources = append(run.Resources, resource)
+		if err := e.save(ctx, run); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *Engine) transition(ctx context.Context, run *Run, to Stage) error {
 	if !validStage(to) {
 		return fmt.Errorf("invalid saga transition target %q", to)
@@ -505,10 +536,10 @@ func (e *Engine) fail(ctx context.Context, run *Run, stage Stage, cause error, c
 	}
 	if run.Stage == StageFailedTerminal {
 		if terminalErr := e.ensureTerminal(ctx, run); terminalErr != nil {
-			return reportFor(run, false), errors.Join(cause, terminalErr)
+			return reportFor(run, false), &SafeError{Code: "terminal_projection_mismatch", Retryable: true}
 		}
 	}
-	return reportFor(run, false), cause
+	return reportFor(run, false), &SafeError{Code: code, Message: message, Retryable: canRetry}
 }
 
 func (e *Engine) ensureTerminal(ctx context.Context, run *Run) error {
@@ -561,9 +592,9 @@ func (e *Engine) failAndRollback(ctx context.Context, run *Run, stage Stage, cau
 	}
 	report, abortErr := e.SafeAbort(ctx, run.RequestID, false)
 	if abortErr != nil {
-		return report, errors.Join(cause, abortErr)
+		return report, &SafeError{Code: "stage_failed", Retryable: false}
 	}
-	return report, cause
+	return report, &SafeError{Code: code, Message: message, Retryable: false}
 }
 
 func (e *Engine) rollbackFail(ctx context.Context, run *Run, stage Stage, cause error, canRetry bool) (*Report, error) {
@@ -583,10 +614,10 @@ func (e *Engine) rollbackFail(ctx context.Context, run *Run, stage Stage, cause 
 	}
 	if run.Stage == StageFailedTerminal {
 		if terminalErr := e.ensureTerminal(ctx, run); terminalErr != nil {
-			return reportFor(run, false), errors.Join(cause, terminalErr)
+			return reportFor(run, false), &SafeError{Code: "terminal_projection_mismatch", Retryable: true}
 		}
 	}
-	return reportFor(run, false), cause
+	return reportFor(run, false), &SafeError{Code: code, Message: message, Retryable: canRetry}
 }
 
 func publicFailure(err error) (string, string) {
@@ -670,15 +701,18 @@ func enforceObservation(run *Run, stage Stage, obs Observation) Observation {
 		return obs
 	}
 	if len(obs.Resources) == 0 {
-		return Observation{Reality: RealityConflict}
+		obs.Reality = RealityConflict
+		return obs
 	}
 	for _, resource := range obs.Resources {
 		if resource.SpecHash != run.SpecHash || resource.CorrelationID != run.RequestID {
-			return Observation{Reality: RealityConflict}
+			obs.Reality = RealityConflict
+			return obs
 		}
 	}
 	if stage.terminalProjection() && !hasTerminalProjection(obs.Resources, run, stage) {
-		return Observation{Reality: RealityConflict}
+		obs.Reality = RealityConflict
+		return obs
 	}
 	return obs
 }

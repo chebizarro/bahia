@@ -19,6 +19,7 @@ type memoryDriver struct {
 	conflict          bool
 	applyErr          error
 	applyLeavesAbsent bool
+	postApplySpec     string
 	inspectErr        error
 	applyCount        int
 	compensateCount   int
@@ -67,6 +68,9 @@ func (d *memoryDriver) Apply(_ context.Context, snap Snapshot, key string) error
 		kind = ResourceProvisioningResult
 	}
 	resource := Resource{Stage: d.stage, System: systemFor(d.stage), Kind: kind, ExternalID: string(d.stage) + "-id", SpecHash: snap.SpecHash, Ownership: OwnershipCreated, OwnerRunID: snap.RunID, IdempotencyKey: key, CorrelationID: snap.RequestID, CompensationOrder: rankFor(d.stage)}
+	if d.postApplySpec != "" {
+		resource.SpecHash = d.postApplySpec
+	}
 	if d.stage == StageRunning {
 		resource.AuthoritativeStage = StageRunning
 	}
@@ -462,7 +466,10 @@ func TestPublicFailureAndOperatorReportDoNotEchoAdapterSecrets(t *testing.T) {
 	})
 	ctx := context.Background()
 	_, _ = engine.Start(ctx, "request-secret", "run-secret", "agent-secret", "sha256:spec")
-	_, _ = engine.Reconcile(ctx, "request-secret", false)
+	_, returned := engine.Reconcile(ctx, "request-secret", false)
+	if returned == nil || strings.Contains(returned.Error(), secret) {
+		t.Fatalf("unsafe returned error = %v", returned)
+	}
 	run, _ := store.Load(ctx, "request-secret")
 	if run.Failure == nil || run.Failure.Code != "stage_failed" || run.Failure.Message == secret {
 		t.Fatalf("unsafe failure = %#v", run.Failure)
@@ -581,6 +588,122 @@ func TestFailureMatrixCompensatesAtEveryForwardStage(t *testing.T) {
 				if driver.resource != nil || len(driver.extraResources) > 0 {
 					t.Fatalf("orphan at %s", stage)
 				}
+			}
+		})
+	}
+}
+
+func TestRecoverableRunWithOwnedResourcesIsNotPurged(t *testing.T) {
+	engine, drivers, store := fixtureEngine(t, func(ds map[Stage]*memoryDriver) { ds[StageRuntimeAllocated].inspectErr = errors.New("offline") })
+	ctx := context.Background()
+	_, _ = engine.Start(ctx, "request-retain", "run-retain", "agent-retain", "sha256:spec")
+	_, _ = engine.Reconcile(ctx, "request-retain", false)
+	run, _ := store.Load(ctx, "request-retain")
+	if run.Stage != StageFailedRecoverable || len(run.Resources) == 0 || run.RetainUntil != nil {
+		t.Fatalf("recoverable retention = %#v", run)
+	}
+	removed, err := PurgeExpired(ctx, store, time.Now().Add(365*24*time.Hour))
+	if err != nil || removed != 0 {
+		t.Fatalf("removed=%d err=%v", removed, err)
+	}
+	if drivers[StageIdentityReserved].resource == nil {
+		t.Fatal("test did not retain external owned resource")
+	}
+}
+
+func TestWrongPostApplyRealityIsCheckpointedAndCompensated(t *testing.T) {
+	engine, drivers, store := fixtureEngine(t, func(ds map[Stage]*memoryDriver) { ds[StageRuntimeAllocated].postApplySpec = "sha256:wrong" })
+	ctx := context.Background()
+	_, _ = engine.Start(ctx, "request-post-conflict", "run-post-conflict", "agent-post-conflict", "sha256:spec")
+	_, err := engine.Reconcile(ctx, "request-post-conflict", false)
+	if err == nil {
+		t.Fatal("expected post-apply conflict")
+	}
+	run, _ := store.Load(ctx, "request-post-conflict")
+	if run.Stage != StageRolledBack {
+		t.Fatalf("stage=%s", run.Stage)
+	}
+	found := false
+	for _, resource := range run.Resources {
+		if resource.Stage == StageRuntimeAllocated && resource.Conflict {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("conflicting created lineage was not checkpointed")
+	}
+	if drivers[StageRuntimeAllocated].resource != nil {
+		t.Fatal("conflicting created runtime was orphaned")
+	}
+}
+
+func TestResponseLossAfterEverySideEffectRefetchesWithoutDuplicate(t *testing.T) {
+	for _, stage := range forwardStages {
+		t.Run(string(stage), func(t *testing.T) {
+			lost := &SafeError{Code: "response_lost", Message: "not persisted", Retryable: true}
+			engine, drivers, _ := fixtureEngine(t, func(ds map[Stage]*memoryDriver) { ds[stage].applyErr = lost })
+			ctx := context.Background()
+			request := "lost-" + string(stage)
+			_, _ = engine.Start(ctx, request, "run-"+string(stage), "agent-"+string(stage), "sha256:spec")
+			report, err := engine.Reconcile(ctx, request, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Stage != StageRunning {
+				t.Fatalf("stage=%s", report.Stage)
+			}
+			if drivers[stage].applyCount != 1 {
+				t.Fatalf("apply count=%d", drivers[stage].applyCount)
+			}
+		})
+	}
+}
+
+func TestProductionShapedFailureClassesRemainRecoverableOrCompensated(t *testing.T) {
+	cases := []struct {
+		name    string
+		stage   Stage
+		inspect bool
+		cause   error
+	}{
+		{"identity_timeout", StageIdentityReserved, true, errors.New("timeout")},
+		{"container_failure", StageRuntimeAllocated, false, &SafeError{Code: "stage_failed", Retryable: false}},
+		{"signet_denial", StageSignerEnrolled, false, &SafeError{Code: "policy_denied", Retryable: false}},
+		{"relay_disconnect", StageNostrConfigured, true, errors.New("relay disconnected")},
+		{"invalid_model", StageLLMVerified, false, &SafeError{Code: "stage_failed", Retryable: false}},
+		{"dm_relay_disconnect", StageDMVerified, true, errors.New("relay disconnected")},
+		{"bahia_publish_timeout", StageRunning, true, errors.New("publish timeout")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine, drivers, store := fixtureEngine(t, func(ds map[Stage]*memoryDriver) {
+				if tc.inspect {
+					ds[tc.stage].inspectErr = tc.cause
+				} else {
+					ds[tc.stage].applyErr = tc.cause
+					ds[tc.stage].applyLeavesAbsent = true
+				}
+			})
+			ctx := context.Background()
+			request := "class-" + tc.name
+			_, _ = engine.Start(ctx, request, "run-"+tc.name, "agent-"+tc.name, "sha256:spec")
+			_, err := engine.Reconcile(ctx, request, false)
+			if err == nil {
+				t.Fatal("expected injected failure")
+			}
+			run, _ := store.Load(ctx, request)
+			if tc.inspect {
+				if run.Stage != StageFailedRecoverable {
+					t.Fatalf("stage=%s", run.Stage)
+				}
+				drivers[tc.stage].inspectErr = nil
+				if _, abortErr := engine.SafeAbort(ctx, request, false); abortErr != nil {
+					t.Fatal(abortErr)
+				}
+				run, _ = store.Load(ctx, request)
+			}
+			if run.Stage != StageRolledBack {
+				t.Fatalf("final stage=%s", run.Stage)
 			}
 		})
 	}

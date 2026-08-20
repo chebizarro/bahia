@@ -82,6 +82,7 @@ type Resource struct {
 	IdempotencyKey     string           `json:"idempotency_key"`
 	CorrelationID      string           `json:"correlation_id"`
 	AuthoritativeStage Stage            `json:"authoritative_stage,omitempty"`
+	Conflict           bool             `json:"conflict,omitempty"`
 	CompensationOrder  CompensationRank `json:"compensation_order"`
 	RecordedAt         time.Time        `json:"recorded_at"`
 }
@@ -236,10 +237,10 @@ func (r *Run) validate() error {
 		if err := resource.validate(r.RunID); err != nil {
 			return err
 		}
-		if resource.SpecHash != r.SpecHash {
+		if !resource.Conflict && resource.SpecHash != r.SpecHash {
 			return fmt.Errorf("resource spec does not match saga request for %s/%s", resource.System, resource.Kind)
 		}
-		if resource.CorrelationID != r.RequestID {
+		if !resource.Conflict && resource.CorrelationID != r.RequestID {
 			return fmt.Errorf("resource correlation does not match saga request for %s/%s", resource.System, resource.Kind)
 		}
 		if previous, ok := seen[resource.key()]; ok && (previous.SpecHash != resource.SpecHash || previous.Ownership != resource.Ownership || previous.OwnerRunID != resource.OwnerRunID) {

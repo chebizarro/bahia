@@ -253,9 +253,8 @@ func writeAtomic(path string, run *Run) error {
 
 // RetentionPolicy deletes only expired failed or rolled-back runs; running history is retained.
 type RetentionPolicy struct {
-	FailedFor      time.Duration
-	RecoverableFor time.Duration
-	RolledBackFor  time.Duration
+	FailedFor     time.Duration
+	RolledBackFor time.Duration
 }
 
 func (p RetentionPolicy) Mark(run *Run, now time.Time) {
@@ -263,8 +262,6 @@ func (p RetentionPolicy) Mark(run *Run, now time.Time) {
 	switch run.Stage {
 	case StageFailedTerminal:
 		duration = p.FailedFor
-	case StageFailedRecoverable:
-		duration = p.RecoverableFor
 	case StageRolledBack:
 		duration = p.RolledBackFor
 	}
@@ -281,10 +278,15 @@ func PurgeExpired(ctx context.Context, store Store, now time.Time) (int, error) 
 	}
 	removed := 0
 	for _, run := range runs {
+		// Recoverable runs retain intent and ownership lineage until an operator
+		// reconciles or safely aborts them; time alone may never orphan resources.
+		if run.Stage == StageFailedRecoverable {
+			continue
+		}
 		if run.RetainUntil == nil || now.UTC().Before(*run.RetainUntil) {
 			continue
 		}
-		if run.Stage != StageFailedTerminal && run.Stage != StageFailedRecoverable && run.Stage != StageRolledBack {
+		if run.Stage != StageFailedTerminal && run.Stage != StageRolledBack {
 			continue
 		}
 		if err := store.Delete(ctx, run.RequestID, run.Version); err != nil {

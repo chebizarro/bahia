@@ -22,6 +22,6 @@
     "failed_terminal_days": 30,
     "rolled_back_days": 7,
     "running": "retained",
-    "failed_recoverable_days": 30
+    "failed_recoverable": "retained until reconcile or safe-abort reaches a terminal state"
   }
 }

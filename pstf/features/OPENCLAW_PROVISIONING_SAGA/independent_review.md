@@ -12,3 +12,5 @@ The reviewed findings were addressed by:
 - allowlisted public errors, omission of adapter detail, and one-way external resource references;
 - retention for recoverable failures as well as terminal failures and rolled-back runs;
 - restart, concurrent isolation, multi-resource compensation, and every-forward-stage failure injection tests.
+
+A final high-severity pass additionally led to non-expiring recoverable lineage, checkpoint-and-compensate handling for invalid post-apply reality, sanitized returned errors, and expanded before/after mutation failure classes.
