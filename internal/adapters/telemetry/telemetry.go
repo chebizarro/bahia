@@ -43,6 +43,7 @@ type Provider struct {
 	fleetHealthWorkers fleetHealthWorkerSource
 	fleetHealthStates  fleetHealthStateSource
 	now                func() time.Time
+	nostrFleetHealth   *nostrFleetHealthProjector
 	tracerProvider     *sdktrace.TracerProvider
 	meterProvider      *sdkmetric.MeterProvider
 	setupErr           error
@@ -168,6 +169,7 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 		metrics: NewMetrics(),
 		now:     time.Now,
 	}
+	p.nostrFleetHealth = newNostrFleetHealthProjector(func() time.Time { return p.now() })
 
 	if !cfg.Enabled {
 		logger.Info("telemetry disabled")
@@ -686,6 +688,7 @@ func (m *Metrics) SetCashuWalletBalance(mintURL string, balance int64) {
 func (p *Provider) MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fleetHealth := p.fleetHealthSnapshot(r.Context(), p.now().UTC())
+		nostrFleetHealth := p.nostrFleetHealth.snapshot(p.now().UTC())
 		m := p.metrics
 		m.mu.RLock()
 		defer m.mu.RUnlock()
@@ -1011,6 +1014,7 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			fmt.Fprintf(w, "bahia_loom_jobs_total{status=%q} %d\n", status, count)
 		}
 		renderFleetHealthMetrics(w, fleetHealth)
+		renderNostrFleetHealthMetrics(w, nostrFleetHealth)
 
 		// Cashu payment metrics
 		fmt.Fprintln(w, "# HELP bahia_cashu_payments_total Total Cashu payments by status")
@@ -1029,6 +1033,49 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			fmt.Fprintf(w, "bahia_cashu_wallet_balance_sats{mint=%q} %d\n", mint, balance)
 		}
 	}
+}
+
+func renderNostrFleetHealthMetrics(w http.ResponseWriter, snapshot NostrFleetHealthSnapshot) {
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_subscription_active Whether the canonical relay subscription is active")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_subscription_active gauge")
+	fmt.Fprintf(w, "bahia_fleet_health_projector_subscription_active %d\n", boolGauge(snapshot.SubscriptionActive))
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_caught_up Whether canonical relay history reached EOSE")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_caught_up gauge")
+	fmt.Fprintf(w, "bahia_fleet_health_projector_caught_up %d\n", boolGauge(snapshot.CaughtUp))
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_last_event_timestamp_seconds Latest canonical observable event timestamp")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_last_event_timestamp_seconds gauge")
+	fmt.Fprintf(w, "bahia_fleet_health_projector_last_event_timestamp_seconds %d\n", unixOrZero(snapshot.LastEventAt))
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_last_ingested_timestamp_seconds Latest canonical observable ingestion timestamp")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_last_ingested_timestamp_seconds gauge")
+	fmt.Fprintf(w, "bahia_fleet_health_projector_last_ingested_timestamp_seconds %d\n", unixOrZero(snapshot.LastIngestedAt))
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_relay_closed_total Relay CLOSED frames observed by the projector subscription")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_relay_closed_total counter")
+	fmt.Fprintf(w, "bahia_fleet_health_projector_relay_closed_total %d\n", snapshot.RelayClosedTotal)
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_errors_total Rejected or over-limit observable projections")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_errors_total counter")
+	fmt.Fprintf(w, "bahia_fleet_health_projector_errors_total %d\n", snapshot.ProjectionErrors)
+	for _, domain := range []string{"agent", "worker", "service", "deployment", "runtime", "relay", "control_plane"} {
+		for _, status := range []string{"healthy", "degraded", "unhealthy", "unknown"} {
+			fmt.Fprintf(w, "bahia_fleet_health_nostr_entities{domain=%q,status=%q} %d\n", domain, status, snapshot.Entities[domain+":"+status])
+		}
+	}
+	for _, entity := range sortedFloatKeys(snapshot.HeartbeatLagSeconds) {
+		fmt.Fprintf(w, "bahia_fleet_health_nostr_heartbeat_lag_seconds{entity=%q} %.0f\n", entity, snapshot.HeartbeatLagSeconds[entity])
+	}
+}
+
+func unixOrZero(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.Unix()
+}
+
+func boolGauge(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func renderFleetHealthMetrics(w http.ResponseWriter, snapshot FleetHealthSnapshot) {

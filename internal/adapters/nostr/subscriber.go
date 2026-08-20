@@ -24,7 +24,10 @@ import (
 var DefaultInboundKinds = []int{
 	// Canonical Bahia observables.
 	KindCASControlState,
+	KindCASAudit,
 	KindNIP38Status,
+	kinds.AssistantTranscript,
+	kinds.SoulFactoryRuntimeCapability,
 	kinds.ContextVMToolsList,
 	kinds.ContextVMResourcesList,
 	kinds.ContextVMResourceTemplatesList,
@@ -48,6 +51,16 @@ var DefaultInboundKinds = []int{
 // dispatched asynchronously.
 type EventHandler func(ctx context.Context, ev *nostr.Event)
 
+// IngestionObserver receives subscription lifecycle signals after transport
+// handling. It lets projections distinguish relay/projector availability from
+// the health of subjects represented by events.
+type IngestionObserver interface {
+	ObserveSubscriptionStart()
+	ObserveSubscriptionEnd()
+	ObserveEOSE()
+	ObserveRelayClosed(relayURL, reason string)
+}
+
 // Subscriber connects to Nostr relays and persists inbound events
 // to the nostr_events audit table. It implements app.BackgroundRunner.
 type Subscriber struct {
@@ -60,6 +73,7 @@ type Subscriber struct {
 	backfillLimit          int // max events to fetch on catch-up (0 = no limit)
 	authorizedAuthorScopes AuthorizedAuthorScopes
 	now                    func() time.Time
+	ingestionObservers     []IngestionObserver
 
 	// lastSeenByKind tracks newest created_at values processed in this process.
 	lastSeenMu     sync.Mutex
@@ -87,6 +101,15 @@ func WithKinds(kinds []int) SubscriberOption {
 // WithHandler adds a callback invoked for each received event.
 func WithHandler(h EventHandler) SubscriberOption {
 	return func(s *Subscriber) { s.handlers = append(s.handlers, h) }
+}
+
+// WithIngestionObserver registers a subscription lifecycle observer.
+func WithIngestionObserver(observer IngestionObserver) SubscriberOption {
+	return func(s *Subscriber) {
+		if observer != nil {
+			s.ingestionObservers = append(s.ingestionObservers, observer)
+		}
+	}
 }
 
 // WithDeduplicator sets a custom deduplicator. If not set, a default one is created.
@@ -186,6 +209,14 @@ func (s *Subscriber) IsCaughtUp() bool {
 func (s *Subscriber) subscribe(ctx context.Context, backoff *Backoff) error {
 	// Reset caught-up state on new subscription.
 	s.caughtUp.Store(false)
+	for _, observer := range s.ingestionObservers {
+		observer.ObserveSubscriptionStart()
+	}
+	defer func() {
+		for _, observer := range s.ingestionObservers {
+			observer.ObserveSubscriptionEnd()
+		}
+	}()
 
 	filters, err := s.buildSubscriptionFilters(ctx)
 	if err != nil {
@@ -248,6 +279,9 @@ func (s *Subscriber) handleEOSE(backoff *Backoff) {
 	}
 	if !s.caughtUp.Load() {
 		s.caughtUp.Store(true)
+		for _, observer := range s.ingestionObservers {
+			observer.ObserveEOSE()
+		}
 		s.logger.Info("EOSE received: caught up with stored events",
 			zap.Ints("kinds", s.kinds),
 		)
@@ -263,6 +297,9 @@ func (s *Subscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, 
 		zap.String("subscription_id", closed.SubscriptionID),
 		zap.String("reason", closed.Reason),
 	)
+	for _, observer := range s.ingestionObservers {
+		observer.ObserveRelayClosed(closed.RelayURL, closed.Reason)
+	}
 	if !IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || s.pool == nil {
 		return false
 	}
