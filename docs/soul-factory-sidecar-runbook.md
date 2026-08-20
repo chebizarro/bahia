@@ -39,7 +39,7 @@ The packaged wrapper supports:
 soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
 ```
 
-For real execution use `OPENCLAW_SOULFACTORY_RUNTIME_MODE=existing-container` and set `OPENCLAW_SOULFACTORY_CONTAINER`. Dry-run mode renders deterministic state/workspace files without calling the OpenClaw CLI.
+For real execution use `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose` (the default), an immutable `OPENCLAW_SOULFACTORY_IMAGE`, a pinned `OPENCLAW_SOULFACTORY_SOURCE_COMMIT`, and an explicit Nostr plugin requirement. Shared `existing-container` provisioning is rejected. Dry-run mode renders deterministic state/workspace/runtime files without calling Docker or the OpenClaw CLI.
 
 If `openclaw` is not on PATH, set `OPENCLAW_SOULFACTORY_OPENCLAW_BIN`. The older `OPENCLAW_SOULFACTORY_BIN` name is not read by the wrapper.
 
