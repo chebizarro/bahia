@@ -1,0 +1,280 @@
+name: Deploy OpenClaw Soul Factory Sidecar
+
+# Runner contract: the target runner must have the labels `self-hosted`, `max`,
+# and `docker`; a writable GitHub workspace/temp directory; git, Docker Engine,
+# Docker Compose, Python 3, and base64; Docker access sufficient to inspect,
+# tag, and recreate containers; and read access to COMPOSE_FILE. The existing
+# Compose project must define COMPOSE_SERVICE with a /ready-based healthcheck.
+# No host SSH credentials or runtime secrets are consumed by this workflow.
+# All target-host commands are isolated in this job and use the local Docker CLI,
+# so an explicitly approved SSH/remote-Docker transport can replace that boundary
+# later without moving release-revision selection or deployment policy off Actions.
+# The image source is this repository: Dockerfile builds and packages both
+# cmd/openclaw-soulfactory-sidecar and cmd/openclaw-soulfactory-control.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact 40-character Bahia release commit SHA to deploy
+        required: true
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bahia-openclaw-soulfactory-sidecar-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, max, docker]
+    timeout-minutes: 30
+    outputs:
+      image_digest: ${{ steps.deploy.outputs.image_digest }}
+      release_sha: ${{ steps.release.outputs.sha }}
+    env:
+      COMPOSE_FILE: /home/majordomo/.openclaw/state/openclaw-soulfactory/docker-compose.yml
+      COMPOSE_SERVICE: openclaw-soulfactory-sidecar
+      IMAGE_REPOSITORY: local/bahia-openclaw-soulfactory-sidecar
+    steps:
+      - name: Checkout exact release revision
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.release_sha || '' }}
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+          : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+          : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
+          [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "release" ]]
+
+          mkdir -p "$GITHUB_WORKSPACE"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --depth=1 origin "$REQUESTED_SHA"
+            release_version="$REQUESTED_SHA"
+          else
+            : "${RELEASE_TAG:?published release tag is required}"
+            git check-ref-format "refs/tags/$RELEASE_TAG"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG"
+            release_version="$RELEASE_TAG"
+          fi
+
+          sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$sha" == "$REQUESTED_SHA" ]]
+          fi
+          git checkout --force --detach "$sha"
+          [[ "$(git rev-parse HEAD)" == "$sha" ]]
+
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight max deployment boundary
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          [[ "$COMPOSE_FILE" == "/home/majordomo/.openclaw/state/openclaw-soulfactory/docker-compose.yml" ]]
+          [[ "$COMPOSE_SERVICE" == "openclaw-soulfactory-sidecar" ]]
+          [[ "$IMAGE_REPOSITORY" == "local/bahia-openclaw-soulfactory-sidecar" ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          command -v git >/dev/null
+          command -v docker >/dev/null
+          command -v python3 >/dev/null
+          command -v base64 >/dev/null
+          docker version >/dev/null
+          docker compose version >/dev/null
+
+          test -f Dockerfile
+          test -d cmd/openclaw-soulfactory-sidecar
+          test -d cmd/openclaw-soulfactory-control
+          test -r "$COMPOSE_FILE"
+
+          project_dir="$(dirname "$COMPOSE_FILE")"
+          docker compose --project-directory "$project_dir" -f "$COMPOSE_FILE" config --quiet
+          docker compose --project-directory "$project_dir" -f "$COMPOSE_FILE" config --services \
+            | grep -Fx "$COMPOSE_SERVICE" >/dev/null
+
+          incumbent_id="$(docker compose --project-directory "$project_dir" -f "$COMPOSE_FILE" ps -q "$COMPOSE_SERVICE")"
+          [[ "$incumbent_id" =~ ^[0-9a-f]{12,64}$ ]]
+          [[ "$(docker inspect --format '{{.State.Status}}' "$incumbent_id")" == "running" ]]
+          [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$incumbent_id")" != "missing" ]]
+
+      - name: Build SHA-tagged sidecar image
+        id: build
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          image_ref="${IMAGE_REPOSITORY}:${RELEASE_SHA}"
+          source_url="https://github.com/${GITHUB_REPOSITORY}"
+          docker build \
+            --build-arg VERSION_BASE=0.1.0 \
+            --build-arg GIT_COMMIT="$RELEASE_SHA" \
+            --build-arg VERSION="$RELEASE_VERSION" \
+            --label "org.opencontainers.image.title=Bahia OpenClaw Soul Factory Sidecar" \
+            --label "org.opencontainers.image.description=Bahia-owned OpenClaw Soul Factory runtime-control sidecar" \
+            --label "org.opencontainers.image.source=$source_url" \
+            --label "org.opencontainers.image.revision=$RELEASE_SHA" \
+            --label "org.opencontainers.image.version=$RELEASE_VERSION" \
+            --label "org.opencontainers.image.created=$created" \
+            -t "$image_ref" .
+
+          image_digest="$(docker image inspect --format '{{.Id}}' "$image_ref")"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref")" == "$RELEASE_SHA" ]]
+          [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$image_ref")" == "$source_url" ]]
+          [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_ref")" == "$RELEASE_VERSION" ]]
+          [[ -n "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.title"}}' "$image_ref")" ]]
+          [[ -n "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.description"}}' "$image_ref")" ]]
+          [[ -n "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.created"}}' "$image_ref")" ]]
+
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+
+      - name: Recreate sidecar and enforce release gates
+        id: deploy
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          IMAGE_REF: ${{ steps.build.outputs.image_ref }}
+          EXPECTED_IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+          IMAGE_CREATED: ${{ steps.build.outputs.created }}
+        run: |
+          set -euo pipefail
+
+          project_dir="$(dirname "$COMPOSE_FILE")"
+          incumbent_id="$(docker compose --project-directory "$project_dir" -f "$COMPOSE_FILE" ps -q "$COMPOSE_SERVICE")"
+          prior_digest="$(docker inspect --format '{{.Image}}' "$incumbent_id")"
+          [[ "$prior_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker image inspect "$prior_digest" >/dev/null
+
+          rollback_ref="${IMAGE_REPOSITORY}:rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker tag "$prior_digest" "$rollback_ref"
+
+          deploy_override="$RUNNER_TEMP/openclaw-soulfactory-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.yml"
+          rollback_override="$RUNNER_TEMP/openclaw-soulfactory-rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.yml"
+          artifact_file="$RUNNER_TEMP/openclaw-soulfactory-image-${RELEASE_SHA}.json"
+          printf 'services:\n  %s:\n    image: "%s"\n    pull_policy: never\n' \
+            "$COMPOSE_SERVICE" "$IMAGE_REF" > "$deploy_override"
+          printf 'services:\n  %s:\n    image: "%s"\n    pull_policy: never\n' \
+            "$COMPOSE_SERVICE" "$rollback_ref" > "$rollback_override"
+          chmod 600 "$deploy_override" "$rollback_override"
+
+          rollback_armed=1
+          rollback() {
+            status=$?
+            if [[ "$rollback_armed" == "1" ]]; then
+              echo "Sidecar release gate failed; restoring captured prior image digest $prior_digest" >&2
+              set +e
+              docker compose --project-directory "$project_dir" \
+                -f "$COMPOSE_FILE" -f "$rollback_override" config --quiet
+              docker compose --project-directory "$project_dir" \
+                -f "$COMPOSE_FILE" -f "$rollback_override" \
+                up -d --no-deps --force-recreate "$COMPOSE_SERVICE"
+              restored_id="$(docker compose --project-directory "$project_dir" -f "$COMPOSE_FILE" ps -q "$COMPOSE_SERVICE")"
+              restored_digest="$(docker inspect --format '{{.Image}}' "$restored_id" 2>/dev/null)"
+              if [[ "$restored_digest" != "$prior_digest" ]]; then
+                echo "Rollback verification failed: running image does not match captured prior digest" >&2
+              fi
+              set -e
+            fi
+            rm -f "$deploy_override" "$rollback_override"
+            exit "$status"
+          }
+          trap rollback EXIT
+
+          docker compose --project-directory "$project_dir" \
+            -f "$COMPOSE_FILE" -f "$deploy_override" config --quiet
+          docker compose --project-directory "$project_dir" \
+            -f "$COMPOSE_FILE" -f "$deploy_override" \
+            up -d --no-deps --force-recreate "$COMPOSE_SERVICE"
+
+          container_id="$(docker compose --project-directory "$project_dir" -f "$COMPOSE_FILE" ps -q "$COMPOSE_SERVICE")"
+          [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]]
+
+          health=""
+          for ((attempt = 1; attempt <= 60; attempt++)); do
+            state="$(docker inspect --format '{{.State.Status}}' "$container_id")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")"
+            if [[ "$health" == "healthy" ]]; then
+              break
+            fi
+            [[ "$state" == "running" ]]
+            [[ "$health" != "missing" ]]
+            sleep 5
+          done
+          [[ "$health" == "healthy" ]]
+
+          readiness="$(docker exec "$container_id" wget -qO- http://127.0.0.1:8081/ready)"
+          printf '%s' "$readiness" | python3 -c '
+          import json
+          import sys
+          state = json.load(sys.stdin)
+          required = ("ready", "capability_published", "subscription_eose")
+          missing = [key for key in required if state.get(key) is not True]
+          if missing:
+              raise SystemExit("sidecar readiness/capability gate failed: " + ", ".join(missing))
+          '
+
+          running_digest="$(docker inspect --format '{{.Image}}' "$container_id")"
+          running_revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container_id")"
+          [[ "$running_digest" == "$EXPECTED_IMAGE_DIGEST" ]]
+          [[ "$running_revision" == "$RELEASE_SHA" ]]
+
+          ARTIFACT_FILE="$artifact_file" python3 -c '
+          import json
+          import os
+          from pathlib import Path
+          record = {
+              "schema": "bahia-openclaw-soulfactory-sidecar-release/v1",
+              "image_repository": os.environ["IMAGE_REPOSITORY"],
+              "image_tag": os.environ["RELEASE_SHA"],
+              "image_digest": os.environ["EXPECTED_IMAGE_DIGEST"],
+              "revision": os.environ["RELEASE_SHA"],
+              "version": os.environ["RELEASE_VERSION"],
+              "created": os.environ["IMAGE_CREATED"],
+          }
+          Path(os.environ["ARTIFACT_FILE"]).write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+          '
+
+          echo "image_digest=$running_digest" >> "$GITHUB_OUTPUT"
+          echo "artifact_file=$artifact_file" >> "$GITHUB_OUTPUT"
+          printf '### OpenClaw Soul Factory sidecar release\n\n- Revision: `%s`\n- Image digest: `%s`\n' \
+            "$RELEASE_SHA" "$running_digest" >> "$GITHUB_STEP_SUMMARY"
+
+          rollback_armed=0
+          trap - EXIT
+          rm -f "$deploy_override" "$rollback_override"
+          docker image rm "$rollback_ref" >/dev/null
+
+      - name: Upload sanitized image digest record
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-soulfactory-sidecar-${{ steps.release.outputs.sha }}
+          path: ${{ steps.deploy.outputs.artifact_file }}
+          if-no-files-found: error
+          retention-days: 30

@@ -41,3 +41,11 @@ Verified for the owned sidecar vertical slice.
 - Soul Factory web capability/update verification passed: 73 tests across `souls-store.test.js` and `nostr-client-parsing.test.js`; the production web build also completed.
 - The live `openclaw-soulfactory-sidecar` was rebuilt from `618ab42e`, recreated, and reached healthy status.
 - Replacement kind `30317` event `b363bdf670979dfe9d4c6282e7b5ef524356398d17007a4f65408f5373968a43` is present on both `relay.sharegap.net` and the Bahia browser relay. Its signature verifies and its method set includes `soulfactory.update` alongside provision, persona update, and revoke.
+
+## Release acceptance gate — 2026-08-20
+
+- Bead `bahia-openclaw-complete-agent-provisioning-20260819.5` adds `.github/workflows/deploy-openclaw-soulfactory-sidecar.yml`; it is dispatch/published-release only and selects an exact Bahia commit before building.
+- Repository evidence confirms the sidecar image source is in Bahia: `Dockerfile` builds and packages `cmd/openclaw-soulfactory-sidecar` and `cmd/openclaw-soulfactory-control`. No external source checkout is required.
+- The workflow targets `[self-hosted, max, docker]`, overlays only the existing `openclaw-soulfactory-sidecar` Compose service, preserves the host Compose file and sibling services, captures the incumbent image digest, and restores that digest on rollout-gate failure.
+- Acceptance gates require Docker health, `/ready` fields `ready`, `capability_published`, and `subscription_eose`, the expected running image ID, and `org.opencontainers.image.revision` equal to the selected release SHA. The sanitized artifact contains only public image provenance and the immutable image digest.
+- Static verification: Ruby YAML parse, `bash -n` for every workflow `run` block, and `git diff --check`. `actionlint` was unavailable locally. No workflow was dispatched and no live infrastructure was changed.
