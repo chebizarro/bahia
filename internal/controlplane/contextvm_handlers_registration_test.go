@@ -10,6 +10,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// commandEventFromPublishes returns the non-progress, non-response publish.
+// The progress ack is published concurrently with the handler, so its order
+// relative to the command event is nondeterministic; the response is last.
+func commandEventFromPublishes(t *testing.T, events []nostr.Event) nostr.Event {
+	t.Helper()
+	for _, ev := range events[:len(events)-1] {
+		var rpc ContextVMJSONRPCRequest
+		if err := json.Unmarshal([]byte(ev.Content), &rpc); err == nil && rpc.Method == ContextVMProgressNotificationMethod {
+			continue
+		}
+		return ev
+	}
+	t.Fatalf("no command event found among %d publishes", len(events))
+	return nostr.Event{}
+}
+
 func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
 	tests := []struct {
 		method  string
@@ -35,7 +51,7 @@ func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
 			if len(publisher.events) != 3 {
 				t.Fatalf("published events = %d, want progress ack + command + response", len(publisher.events))
 			}
-			commandEvent := publisher.events[1]
+			commandEvent := commandEventFromPublishes(t, publisher.events)
 			var rpc ContextVMJSONRPCRequest
 			if err := json.Unmarshal([]byte(commandEvent.Content), &rpc); err != nil {
 				t.Fatalf("command event content is not ContextVM JSON-RPC: %v", err)
@@ -79,11 +95,12 @@ func TestBackupAliasContextVMHandlersDispatchWebAliases(t *testing.T) {
 			if len(publisher.events) != 3 {
 				t.Fatalf("published events = %d, want progress ack + command + response", len(publisher.events))
 			}
-			if publisher.events[1].Kind != nostr.Kind(tc.kind) {
-				t.Fatalf("command kind = %d, want %d", publisher.events[1].Kind, tc.kind)
+			commandEvent := commandEventFromPublishes(t, publisher.events)
+			if commandEvent.Kind != nostr.Kind(tc.kind) {
+				t.Fatalf("command kind = %d, want %d", commandEvent.Kind, tc.kind)
 			}
-			if tagValueNostr(publisher.events[1].Tags, "command") != tc.action {
-				t.Fatalf("command tag = %q, want %q", tagValueNostr(publisher.events[1].Tags, "command"), tc.action)
+			if tagValueNostr(commandEvent.Tags, "command") != tc.action {
+				t.Fatalf("command tag = %q, want %q", tagValueNostr(commandEvent.Tags, "command"), tc.action)
 			}
 			payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 			if payload["status"] != "submitted" || payload["action"] != tc.action || payload["request_event_id"] == "" {

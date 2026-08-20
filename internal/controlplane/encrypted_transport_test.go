@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,10 +23,13 @@ const (
 )
 
 type mockEncryptedPublisher struct {
+	mu     sync.Mutex
 	events []nostr.Event
 }
 
 func (m *mockEncryptedPublisher) Publish(_ context.Context, ev nostr.Event) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.events = append(m.events, ev)
 	return 1, nil
 }
