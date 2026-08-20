@@ -22,9 +22,12 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip46"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 const OpenClawSignetIdentityContractSchema = "bahia.openclaw-signet-identity.v1"
+const RuntimeSignetIdentityContractSchema = "bahia.runtime-signet-identity.v1"
 
 var openClawNIP46Methods = []string{
 	"connect",
@@ -42,6 +45,25 @@ var openClawFleetEventKinds = []int{
 	cascadia.CAS_INTENT,
 	cascadia.CAS_AGENT_HEARTBEAT,
 	cascadia.CAS_AGENT_CAPABILITY,
+}
+
+// SignetEnrollmentProfile defines the exact NIP-46 authority granted to one
+// enrollment class. Profiles never admit wildcard clients, methods, or kinds.
+type SignetEnrollmentProfile struct {
+	ContractSchema string
+	Methods        []string
+	EventKinds     []int
+}
+
+// MetiqRuntimeSignetEnrollmentProfile grants a dedicated Metiq bridge only
+// the operations and event kinds needed to advertise capability and sign
+// correlated runtime-control results.
+func MetiqRuntimeSignetEnrollmentProfile() SignetEnrollmentProfile {
+	return SignetEnrollmentProfile{
+		ContractSchema: RuntimeSignetIdentityContractSchema,
+		Methods:        []string{"connect", "get_public_key", "get_relays", "ping", "sign_event"},
+		EventKinds:     []int{cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult},
+	}
 }
 
 // OpenClawSignetIdentityContract is the secret-free durable identity boundary
@@ -109,10 +131,12 @@ type OpenClawSignetEnrollmentConfig struct {
 	Verifier     SignetConnectivityVerifier
 	Now          func() time.Time
 	Random       io.Reader
+	Profile      *SignetEnrollmentProfile
 }
 
 type OpenClawSignetEnrollmentManager struct {
-	config OpenClawSignetEnrollmentConfig
+	config  OpenClawSignetEnrollmentConfig
+	profile SignetEnrollmentProfile
 }
 
 func NewOpenClawSignetEnrollmentManager(config OpenClawSignetEnrollmentConfig) (*OpenClawSignetEnrollmentManager, error) {
@@ -131,7 +155,27 @@ func NewOpenClawSignetEnrollmentManager(config OpenClawSignetEnrollmentConfig) (
 	if config.Random == nil {
 		config.Random = rand.Reader
 	}
-	return &OpenClawSignetEnrollmentManager{config: config}, nil
+	profile := SignetEnrollmentProfile{
+		ContractSchema: OpenClawSignetIdentityContractSchema,
+		Methods:        append([]string(nil), openClawNIP46Methods...),
+		EventKinds:     append([]int(nil), openClawFleetEventKinds...),
+	}
+	if config.Profile != nil {
+		for _, method := range config.Profile.Methods {
+			if strings.TrimSpace(method) == "*" {
+				return nil, fmt.Errorf("Signet enrollment profile methods must not contain wildcards")
+			}
+		}
+		profile = SignetEnrollmentProfile{
+			ContractSchema: strings.TrimSpace(config.Profile.ContractSchema),
+			Methods:        uniqueSortedStrings(config.Profile.Methods),
+			EventKinds:     normalizedKinds(config.Profile.EventKinds),
+		}
+	}
+	if profile.ContractSchema == "" || len(profile.Methods) == 0 || len(profile.EventKinds) == 0 {
+		return nil, fmt.Errorf("Signet enrollment profile requires schema, methods, and event kinds")
+	}
+	return &OpenClawSignetEnrollmentManager{config: config, profile: profile}, nil
 }
 
 func (m *OpenClawSignetEnrollmentManager) StageHandoff(_ context.Context, agentID, bunkerURI string) error {
@@ -158,8 +202,8 @@ func (m *OpenClawSignetEnrollmentManager) Enroll(ctx context.Context, req OpenCl
 		if err := matchEnrollmentIdentity(*existing, req); err != nil {
 			return nil, err
 		}
-		desiredMethods := append([]string(nil), openClawNIP46Methods...)
-		desiredKinds := normalizedKinds(append(append([]int(nil), req.AllowedKinds...), openClawFleetEventKinds...))
+		desiredMethods := append([]string(nil), m.profile.Methods...)
+		desiredKinds := normalizedKinds(append(append([]int(nil), req.AllowedKinds...), m.profile.EventKinds...))
 		if err := m.config.PolicyAdmin.SetPolicy(ctx, req.AgentID, SignetClientPolicy{ClientPubkey: existing.ClientPubkey, Methods: desiredMethods, EventKinds: desiredKinds}); err != nil {
 			return nil, fmt.Errorf("reconcile existing Signet client policy: %w", err)
 		}
@@ -205,8 +249,8 @@ func (m *OpenClawSignetEnrollmentManager) Enroll(ctx context.Context, req OpenCl
 		return nil, fmt.Errorf("decode durable NIP-46 client key: %w", err)
 	}
 	clientPubkey := secretKey.Public().Hex()
-	methods := append([]string(nil), openClawNIP46Methods...)
-	kinds := normalizedKinds(append(append([]int(nil), req.AllowedKinds...), openClawFleetEventKinds...))
+	methods := append([]string(nil), m.profile.Methods...)
+	kinds := normalizedKinds(append(append([]int(nil), req.AllowedKinds...), m.profile.EventKinds...))
 	policy := SignetClientPolicy{ClientPubkey: clientPubkey, Methods: methods, EventKinds: kinds}
 	if err := m.config.PolicyAdmin.SetPolicy(ctx, req.AgentID, policy); err != nil {
 		return nil, fmt.Errorf("set exact-client Signet policy: %w", err)
@@ -221,7 +265,7 @@ func (m *OpenClawSignetEnrollmentManager) Enroll(ctx context.Context, req OpenCl
 	}
 
 	contract := &OpenClawSignetIdentityContract{
-		Schema: OpenClawSignetIdentityContractSchema, AgentID: req.AgentID,
+		Schema: m.profile.ContractSchema, AgentID: req.AgentID,
 		ControllerPubkey: strings.ToLower(req.ControllerPubkey), RuntimePubkey: strings.ToLower(req.RuntimePubkey),
 		ManagedPubkey: strings.ToLower(req.ManagedPubkey), ProvisionerPubkey: strings.ToLower(req.ProvisionerPubkey),
 		ClientPubkey: clientPubkey, BunkerPubkey: bunkerPubkey, BunkerURL: bunkerURL,
@@ -258,7 +302,7 @@ func (m *OpenClawSignetEnrollmentManager) Inspect(_ context.Context, agentID str
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parse OpenClaw Signet enrollment state: %w", err)
 	}
-	if state.Schema != OpenClawSignetIdentityContractSchema || state.AgentID != agentID {
+	if state.Schema != m.profile.ContractSchema || state.AgentID != agentID {
 		return nil, fmt.Errorf("OpenClaw Signet enrollment state identity mismatch")
 	}
 	if _, err := readProtectedFile(state.ClientKeyRef, m.config.FileOwnerUID); err != nil {
@@ -384,6 +428,53 @@ func (NIP46ConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, cl
 	return nil
 }
 
+// NIP46SigningConnectivityVerifier verifies the signing-only authority used by
+// a runtime bridge without requesting unrelated NIP-44 permissions.
+type NIP46SigningConnectivityVerifier struct{}
+
+func (NIP46SigningConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, clientKeyFile, expectedPubkey string, eventKinds []int) error {
+	bunkerURI := bunkerURIOrFile
+	if !strings.HasPrefix(bunkerURI, "bunker://") {
+		data, err := readProtectedFile(clientPathClean(bunkerURI), os.Geteuid())
+		if err != nil {
+			return err
+		}
+		bunkerURI = strings.TrimSpace(string(data))
+	}
+	keyData, err := readProtectedFile(clientPathClean(clientKeyFile), os.Geteuid())
+	if err != nil {
+		return err
+	}
+	clientKey, err := nostr.SecretKeyFromHex(strings.TrimSpace(string(keyData)))
+	if err != nil {
+		return fmt.Errorf("decode NIP-46 client key: %w", err)
+	}
+	lifetime, cancel := context.WithCancel(ctx)
+	defer cancel()
+	bunker, err := nip46.ConnectBunker(lifetime, clientKey, bunkerURI, nil, nil)
+	if err != nil {
+		return fmt.Errorf("connect NIP-46 bunker: %w", err)
+	}
+	pubkey, err := bunker.GetPublicKey(ctx)
+	if err != nil {
+		return fmt.Errorf("get NIP-46 managed pubkey: %w", err)
+	}
+	if pubkey.Hex() != strings.ToLower(strings.TrimSpace(expectedPubkey)) {
+		return fmt.Errorf("NIP-46 managed pubkey %s does not match expected %s", pubkey.Hex(), expectedPubkey)
+	}
+	if err := bunker.Ping(ctx); err != nil {
+		return fmt.Errorf("ping NIP-46 bunker: %w", err)
+	}
+	if len(eventKinds) == 0 {
+		return fmt.Errorf("NIP-46 signing verification requires at least one allowed event kind")
+	}
+	event := &nostr.Event{Kind: nostr.Kind(eventKinds[0]), CreatedAt: nostr.Now(), Tags: nostr.Tags{}, Content: ""}
+	if err := bunker.SignEvent(ctx, event); err != nil {
+		return fmt.Errorf("verify NIP-46 sign_event: %w", err)
+	}
+	return nil
+}
+
 type SignetctlConfig struct {
 	DockerBin                 string
 	Container                 string
@@ -402,11 +493,12 @@ type ExecSignetctlRunner struct{}
 func (ExecSignetctlRunner) Run(ctx context.Context, name string, args []string, stdin []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = bytes.NewReader(stdin)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("signetctl failed: %s", strings.TrimSpace(stderr.String()))
+		// signetctl failures can include echoed RPC payloads. Keep stderr out of
+		// host logs so a failed provision cannot expose a one-time bunker URI.
+		return nil, fmt.Errorf("signetctl failed: %w", err)
 	}
 	return out, nil
 }
@@ -442,6 +534,29 @@ func (c *ContainerSignetctl) SetPolicy(ctx context.Context, agentID string, poli
 	}
 	_, err = c.run(ctx, "set-policy", agentID, string(payload))
 	return err
+}
+
+// Provision creates or retrieves a Signet-custodied identity and returns its
+// one-time bunker URI only to the caller for immediate protected-file handoff.
+func (c *ContainerSignetctl) Provision(ctx context.Context, identityID string) (string, error) {
+	if !safeAgentID(identityID) {
+		return "", fmt.Errorf("invalid Signet identity id")
+	}
+	out, err := c.run(ctx, "provision", identityID)
+	if err != nil {
+		return "", err
+	}
+	bunkerURI, err := signetctlBunkerURI(out)
+	for i := range out {
+		out[i] = 0
+	}
+	if err != nil {
+		return "", err
+	}
+	if _, _, _, err := sanitizeOneTimeBunkerURI(bunkerURI); err != nil {
+		return "", fmt.Errorf("Signet provision returned an invalid one-time bunker URI: %w", err)
+	}
+	return bunkerURI, nil
 }
 
 func (c *ContainerSignetctl) RevokeClient(ctx context.Context, clientPubkey string) error {
@@ -517,6 +632,47 @@ func validateSignetctlResponse(output []byte) error {
 		}
 	}
 	return nil
+}
+
+func signetctlBunkerURI(output []byte) (string, error) {
+	start := bytes.LastIndex(output, []byte("\n{"))
+	if start >= 0 {
+		start++
+	} else {
+		start = bytes.IndexByte(output, '{')
+	}
+	if start < 0 {
+		return "", fmt.Errorf("signetctl provision returned no JSON-RPC response")
+	}
+	var response interface{}
+	if err := json.Unmarshal(bytes.TrimSpace(output[start:]), &response); err != nil {
+		return "", fmt.Errorf("parse signetctl provision response: %w", err)
+	}
+	if bunkerURI := findStringField(response, "bunker_uri"); bunkerURI != "" {
+		return bunkerURI, nil
+	}
+	return "", fmt.Errorf("signetctl provision response omitted bunker_uri")
+}
+
+func findStringField(value interface{}, key string) string {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		if found, ok := typed[key].(string); ok {
+			return strings.TrimSpace(found)
+		}
+		for _, child := range typed {
+			if found := findStringField(child, key); found != "" {
+				return found
+			}
+		}
+	case []interface{}:
+		for _, child := range typed {
+			if found := findStringField(child, key); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
 
 func responseContainsCode(value interface{}, code string) bool {

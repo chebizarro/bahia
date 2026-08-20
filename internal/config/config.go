@@ -201,7 +201,10 @@ type SoulFactoryConfig struct {
 	// AgentRuntimes is the validated list of administratively enabled
 	// SoulFactory agent runtime targets (for example openclaw, metiq).
 	// When unset it defaults to [openclaw] to preserve prior behavior.
-	AgentRuntimes                   []string               `koanf:"agent_runtimes" yaml:"agent_runtimes"`
+	AgentRuntimes []string `koanf:"agent_runtimes" yaml:"agent_runtimes"`
+	// RuntimePubkeys pins each enabled runtime target to the exact signing
+	// identities whose kind:30317 capabilities Bahia may trust.
+	RuntimePubkeys                  map[string][]string    `koanf:"runtime_pubkeys" yaml:"runtime_pubkeys"`
 	Relays                          []string               `koanf:"relays" yaml:"relays"`
 	AdditionalRelays                []string               `koanf:"additional_relays" yaml:"additional_relays"`
 	NIP05Relays                     []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
@@ -2395,6 +2398,30 @@ func (c *Config) validateSoulFactory() error {
 		return fmt.Errorf("config validation failed: soul_factory.agent_runtimes: %w", err)
 	}
 	sf.AgentRuntimes = runtimes
+	enabledRuntimes := make(map[string]struct{}, len(runtimes))
+	for _, runtime := range runtimes {
+		enabledRuntimes[runtime] = struct{}{}
+	}
+	normalizedRuntimePubkeys := make(map[string][]string, len(sf.RuntimePubkeys))
+	for rawTarget, rawPubkeys := range sf.RuntimePubkeys {
+		target := strings.ToLower(strings.TrimSpace(rawTarget))
+		if target == "" || !agentRuntimeIDPattern.MatchString(target) || target != rawTarget {
+			return fmt.Errorf("config validation failed: soul_factory.runtime_pubkeys key %q must be a normalized runtime target id", rawTarget)
+		}
+		if _, enabled := enabledRuntimes[target]; !enabled {
+			return fmt.Errorf("config validation failed: soul_factory.runtime_pubkeys target %q is not enabled in agent_runtimes", target)
+		}
+		pubkeys, err := normalizePubkeyList(rawPubkeys)
+		if err != nil || len(pubkeys) == 0 {
+			return fmt.Errorf("config validation failed: soul_factory.runtime_pubkeys.%s requires at least one 64-character hex pubkey", target)
+		}
+		normalizedRuntimePubkeys[target] = pubkeys
+	}
+	if len(normalizedRuntimePubkeys) == 0 {
+		sf.RuntimePubkeys = nil
+	} else {
+		sf.RuntimePubkeys = normalizedRuntimePubkeys
+	}
 	if len(sf.Relays) == 0 {
 		return fmt.Errorf("config validation failed: soul_factory.relays requires at least one relay when soul_factory.enabled=true")
 	}

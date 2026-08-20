@@ -255,6 +255,11 @@ The app-level Soul Factory reactor is disabled by default. Enable it only with e
 ```yaml
 soul_factory:
   enabled: true
+  agent_runtimes:
+    - openclaw
+  runtime_pubkeys:
+    openclaw:
+      - "<64-char OpenClaw runtime pubkey>"
   relays:
     - wss://relay.example.com
   additional_relays:
@@ -285,7 +290,7 @@ soul_factory:
   workspace_gateway_port: 18780
 ```
 
-When enabled, Bahia starts a Nostr-native Soul Factory reactor and OpenClaw runtime adapter. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory.
+When enabled, Bahia starts a Nostr-native Soul Factory reactor and one generic adapter for every `agent_runtimes` entry. `runtime_pubkeys` can pin each target to exact capability/result signing identities; production multi-runtime enablement pins every enabled runtime so an unknown signed `30317` cannot become eligible. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory. See the [Metiq runtime enablement runbook](../../runbooks/metiq-runtime-enablement.md) for the protected config, Signet enrollment, live validation, evidence, and rollback procedure.
 
 When `nip29_groups` is configured, provisioning uses the Signet-custodied Soul Factory controller to authenticate with each group relay and publish a NIP-29 `put-user` event after the new identity is minted. Every relay must acknowledge the assignment or provisioning fails closed. The new soul never receives or handles raw signing-key material.
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 type recordingSignetPolicyAdmin struct {
@@ -211,16 +212,57 @@ func TestOpenClawSignetEnrollmentRevokeRemovesBindingAndFiles(t *testing.T) {
 	}
 }
 
+func TestMetiqSignetEnrollmentUsesSigningOnlyExactClientProfile(t *testing.T) {
+	root := t.TempDir()
+	admin := &recordingSignetPolicyAdmin{}
+	verifier := &recordingConnectivityVerifier{}
+	profile := MetiqRuntimeSignetEnrollmentProfile()
+	manager, err := NewOpenClawSignetEnrollmentManager(OpenClawSignetEnrollmentConfig{
+		StateDir: filepath.Join(root, "state"), ClientKeyDir: filepath.Join(root, "keys"),
+		FileOwnerUID: os.Geteuid(), PolicyAdmin: admin, Verifier: verifier, Profile: &profile,
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x43}, 32)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := enrollmentRequestForTest()
+	req.AgentID = "metiq-runtime"
+	req.RuntimePubkey = req.ManagedPubkey
+	req.AllowedKinds = nil
+	contract, err := manager.Enroll(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.Schema != RuntimeSignetIdentityContractSchema || len(admin.policies) != 1 || admin.policies[0].ClientPubkey != contract.ClientPubkey {
+		t.Fatalf("contract=%+v policies=%+v", contract, admin.policies)
+	}
+	wantMethods := []string{"connect", "get_public_key", "get_relays", "ping", "sign_event"}
+	if !reflect.DeepEqual(admin.policies[0].Methods, wantMethods) {
+		t.Fatalf("methods=%v want=%v", admin.policies[0].Methods, wantMethods)
+	}
+	wantKinds := []int{cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult}
+	if !reflect.DeepEqual(admin.policies[0].EventKinds, wantKinds) {
+		t.Fatalf("event kinds=%v want=%v", admin.policies[0].EventKinds, wantKinds)
+	}
+	if containsString(admin.policies[0].Methods, "nip44_encrypt") || containsString(admin.policies[0].Methods, "nip44_decrypt") || containsString(admin.policies[0].Methods, "*") {
+		t.Fatalf("Metiq policy is broader than signing-only: %+v", admin.policies[0])
+	}
+}
+
 type recordingSignetctlRunner struct {
 	name  string
 	args  []string
 	stdin []byte
+	out   []byte
 }
 
 func (r *recordingSignetctlRunner) Run(_ context.Context, name string, args []string, stdin []byte) ([]byte, error) {
 	r.name = name
 	r.args = append([]string(nil), args...)
 	r.stdin = append([]byte(nil), stdin...)
+	if r.out != nil {
+		return append([]byte(nil), r.out...), nil
+	}
 	return []byte(`{"jsonrpc":"2.0","id":"matched","result":{"ok":true}}`), nil
 }
 
@@ -285,6 +327,37 @@ func TestValidateSignetctlResponseChecksRequestIDBeforeResult(t *testing.T) {
 		`{"jsonrpc":"2.0","id":"current","result":{"response":{"code":"policy_set_not_persisted"}}}`)
 	if err := validateSignetctlResponse(nonDurable); err == nil || !strings.Contains(err.Error(), "not durably") {
 		t.Fatalf("non-durable response error = %v", err)
+	}
+}
+
+func TestContainerSignetctlProvisionReturnsOneTimeURIWithoutCredentialInArgv(t *testing.T) {
+	credential := "nsec1host-only-provisioner"
+	credentialFile := filepath.Join(t.TempDir(), "provisioner")
+	if err := os.WriteFile(credentialFile, []byte(credential+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bunkerURI := "bunker://" + strings.Repeat("5", 64) + "?relay=wss%3A%2F%2Frelay.example&secret=one-time"
+	runner := &recordingSignetctlRunner{out: []byte(`{"jsonrpc":"2.0","id":"matched","result":{"bunker_uri":"` + bunkerURI + `"}}`)}
+	client, err := NewContainerSignetctl(SignetctlConfig{
+		Container: "signetd", ConfigPath: "/data/signet.toml",
+		ProvisionerCredentialFile: credentialFile, CredentialOwnerUID: os.Geteuid(), Runner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Provision(t.Context(), "metiq-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != bunkerURI {
+		t.Fatal("provision did not return the one-time handoff")
+	}
+	joinedArgs := strings.Join(append([]string{runner.name}, runner.args...), " ")
+	if strings.Contains(joinedArgs, credential) || strings.Contains(joinedArgs, bunkerURI) {
+		t.Fatal("credential or one-time handoff leaked into host argv")
+	}
+	if !strings.Contains(joinedArgs, "provision metiq-runtime") {
+		t.Fatalf("signetctl argv = %s", joinedArgs)
 	}
 }
 

@@ -1,0 +1,12 @@
+{
+  "identity_id": "metiq-runtime",
+  "controller_pubkey": "<SOULFACTORY_CONTROLLER_PUBKEY_HEX>",
+  "runtime_pubkey": "<METIQ_RUNTIME_PUBKEY_HEX>",
+  "managed_pubkey": "<METIQ_RUNTIME_PUBKEY_HEX>",
+  "provisioner_pubkey": "<SIGNET_PROVISIONER_PUBKEY_HEX>",
+  "state_dir": "/var/lib/bahia/soulfactory/runtime-signet",
+  "client_key_dir": "/var/lib/bahia/soulfactory/runtime-signet/clients",
+  "signet_container": "signetd",
+  "signet_config_path": "/etc/signet/signet.conf",
+  "provisioner_credential_file": "/run/secrets/signet-provisioner-nsec"
+}

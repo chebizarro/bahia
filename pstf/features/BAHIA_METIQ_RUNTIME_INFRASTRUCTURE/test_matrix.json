@@ -1,0 +1,12 @@
+{
+  "feature_id": "BAHIA_METIQ_RUNTIME_INFRASTRUCTURE",
+  "tests": [
+    {"command":"go test ./internal/config ./internal/app","criteria":["BMI-AC-001"]},
+    {"command":"go test ./internal/soulfactory -run 'TestRuntimeAdapterRejectsUntrustedRuntimeIdentity|TestContainerSignetctl|TestMetiqSignetEnrollment|TestValidateRuntimeScenario'","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003","BMI-AC-004","BMI-AC-005"]},
+    {"command":"go test ./cmd/metiq-signet-enrollment ./cmd/soulfactory-runtime-validate","criteria":["BMI-AC-002","BMI-AC-003"]},
+    {"command":"go vet ./internal/config ./internal/app ./internal/soulfactory ./cmd/metiq-signet-enrollment ./cmd/soulfactory-runtime-validate","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003"]},
+    {"command":"go build ./... && go test ./...","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003","BMI-AC-004","BMI-AC-005"]},
+    {"command":"scripts/rehearse_metiq_config_rollback.sh <prior> <candidate>","criteria":["BMI-AC-001","BMI-AC-004"],"environment":"Track A disposable protected copies or Track B controlled gate"},
+    {"command":"soulfactory-runtime-validate -scenario <sanitized.json> -relays <canonical-set>","criteria":["BMI-AC-003","BMI-AC-004","BMI-AC-005"],"environment":"Track B live infrastructure only"}
+  ]
+}
