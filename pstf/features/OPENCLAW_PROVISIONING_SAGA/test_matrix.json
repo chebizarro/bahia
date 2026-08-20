@@ -1,0 +1,168 @@
+{
+  "feature_id": "OPENCLAW_PROVISIONING_SAGA",
+  "tests": [
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-03"
+      ],
+      "test": "TestReconcilePersistsEveryStageAndReplayIsSideEffectFree"
+    },
+    {
+      "criteria": [
+        "OCS-02"
+      ],
+      "test": "TestAmbiguousApplyRefetchesAndCorrelatesWithoutBlindRepeat"
+    },
+    {
+      "criteria": [
+        "OCS-03",
+        "OCS-04"
+      ],
+      "test": "TestConflictIsRejectedBeforeMutationAndCreatedResourcesRollBack"
+    },
+    {
+      "criteria": [
+        "OCS-04"
+      ],
+      "test": "TestSafeAbortNeverDeletesAdoptedResource"
+    },
+    {
+      "criteria": [
+        "OCS-05"
+      ],
+      "test": "TestStaleCheckpointCannotOverwriteNewerSuccess"
+    },
+    {
+      "criteria": [
+        "OCS-07"
+      ],
+      "test": "TestDryRunInspectsWithoutMutation"
+    },
+    {
+      "criteria": [
+        "OCS-08"
+      ],
+      "test": "TestRetentionPurgesOnlyExpiredFailedState"
+    },
+    {
+      "criteria": [
+        "OCS-02"
+      ],
+      "test": "TestRetryResumesFailedStageInsteadOfSkippingIt"
+    },
+    {
+      "criteria": [
+        "OCS-04"
+      ],
+      "test": "TestNonRetryableMutationFailureCompensatesPartialRun"
+    },
+    {
+      "criteria": [
+        "OCS-07"
+      ],
+      "test": "TestOperatorCommandsExposeInspectionAndDryRun"
+    },
+    {
+      "criteria": [
+        "OCS-04"
+      ],
+      "test": "TestMultiResourceStageCompensatesEachResourceIndependently"
+    },
+    {
+      "criteria": [
+        "OCS-03"
+      ],
+      "test": "TestMatchingWrongSpecIsRejectedBeforeMutation"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-05"
+      ],
+      "test": "TestStoreRejectsCurrentVersionLineageRewrite"
+    },
+    {
+      "criteria": [
+        "OCS-06"
+      ],
+      "test": "TestRolledBackTerminalProjectionContainsCorrelated7950And31951"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-07"
+      ],
+      "test": "TestPublicFailureAndOperatorReportDoNotEchoAdapterSecrets"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-02",
+        "OCS-03"
+      ],
+      "test": "TestRestartLoadsCheckpointAndResumesFromInspectedReality"
+    },
+    {
+      "criteria": [
+        "OCS-03",
+        "OCS-05"
+      ],
+      "test": "TestConcurrentRunsRemainIsolatedInSharedDurableStore"
+    },
+    {
+      "criteria": [
+        "OCS-02",
+        "OCS-04",
+        "OCS-06"
+      ],
+      "test": "TestFailureMatrixCompensatesAtEveryForwardStage"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-08"
+      ],
+      "test": "TestRecoverableRunWithOwnedResourcesIsNotPurged"
+    },
+    {
+      "criteria": [
+        "OCS-02",
+        "OCS-03",
+        "OCS-04"
+      ],
+      "test": "TestWrongPostApplyRealityIsCheckpointedAndCompensated"
+    },
+    {
+      "criteria": [
+        "OCS-02",
+        "OCS-03"
+      ],
+      "test": "TestResponseLossAfterEverySideEffectRefetchesWithoutDuplicate"
+    },
+    {
+      "criteria": [
+        "OCS-02",
+        "OCS-04",
+        "OCS-06"
+      ],
+      "test": "TestProductionShapedFailureClassesRemainRecoverableOrCompensated"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-02",
+        "OCS-04"
+      ],
+      "test": "TestRestartPreinspectionCheckpointsAndCompensatesOwnedConflict"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-06",
+        "OCS-07"
+      ],
+      "test": "TestTerminalDriverErrorsAreRedactedFromOperator"
+    }
+  ]
+}

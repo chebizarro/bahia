@@ -1,0 +1,69 @@
+{
+  "schema": "bahia.runtime-validation-scenario.v1",
+  "runtime": "metiq",
+  "agent_id": "<DISPOSABLE_AGENT_ID>",
+  "controller_pubkey": "<SOULFACTORY_CONTROLLER_PUBKEY_HEX>",
+  "runtime_pubkey": "<METIQ_RUNTIME_PUBKEY_HEX>",
+  "lifecycle_method": "soulfactory.suspend",
+  "events": {
+    "draft_31952": "<EVENT_ID_HEX>",
+    "provision_request_5950": "<EVENT_ID_HEX>",
+    "capability_before_30317": "<EVENT_ID_HEX>",
+    "provision_control_38384": "<EVENT_ID_HEX>",
+    "provision_runtime_result_38386": "<EVENT_ID_HEX>",
+    "soul_31951": "<EVENT_ID_HEX>",
+    "provision_result_7950": "<EVENT_ID_HEX>",
+    "lifecycle_control_38384": "<EVENT_ID_HEX>",
+    "lifecycle_runtime_result_38386": "<EVENT_ID_HEX>",
+    "replay_runtime_result_38386": "<EVENT_ID_HEX>",
+    "conflict_control_38384": "<EVENT_ID_HEX>",
+    "conflict_runtime_result_38386": "<EVENT_ID_HEX>",
+    "unsupported_control_38384": "<EVENT_ID_HEX>",
+    "unsupported_runtime_result_38386": "<EVENT_ID_HEX>",
+    "capability_after_restart_30317": "<EVENT_ID_HEX>",
+    "reconciled_result_7950": "<EVENT_ID_HEX>"
+  },
+  "local_state": {
+    "provision_effects_after_first": 1,
+    "provision_effects_after_replay": 1,
+    "provision_effects_after_conflict": 1,
+    "provision_effects_after_restart": 1,
+    "lifecycle_effects_before": 0,
+    "lifecycle_effects_after_honored": 1,
+    "lifecycle_effects_after_unsupported": 1,
+    "binding_before_restart": "sha256:<SANITIZED_BINDING_FINGERPRINT_HEX>",
+    "binding_after_restart": "sha256:<SANITIZED_BINDING_FINGERPRINT_HEX>",
+    "runtime_instance_before_restart": "sha256:<SANITIZED_INSTANCE_FINGERPRINT_HEX>",
+    "runtime_instance_after_restart": "sha256:<DIFFERENT_SANITIZED_INSTANCE_FINGERPRINT_HEX>",
+    "bahia_instance_before_restart": "sha256:<SANITIZED_INSTANCE_FINGERPRINT_HEX>",
+    "bahia_instance_after_restart": "sha256:<DIFFERENT_SANITIZED_INSTANCE_FINGERPRINT_HEX>",
+    "state_recovered": true,
+    "reconciliation": "<backfill|late_result>"
+  },
+  "incumbents": [
+    {
+      "name": "Marjam",
+      "identity_pubkey": "<MARJAM_IDENTITY_PUBKEY_HEX>",
+      "runtime_pubkey": "<OPENCLAW_RUNTIME_PUBKEY_HEX>",
+      "before_event_id": "<EVENT_ID_HEX>",
+      "after_event_id": "<SAME_EVENT_ID_HEX>",
+      "before_fingerprint": "sha256:<SANITIZED_PUBLIC_STATE_FINGERPRINT_HEX>",
+      "after_fingerprint": "sha256:<SAME_SANITIZED_PUBLIC_STATE_FINGERPRINT_HEX>"
+    },
+    {
+      "name": "SNR",
+      "identity_pubkey": "<SNR_IDENTITY_PUBKEY_HEX>",
+      "runtime_pubkey": "<OPENCLAW_RUNTIME_PUBKEY_HEX>",
+      "before_event_id": "<EVENT_ID_HEX>",
+      "after_event_id": "<SAME_EVENT_ID_HEX>",
+      "before_fingerprint": "sha256:<SANITIZED_PUBLIC_STATE_FINGERPRINT_HEX>",
+      "after_fingerprint": "sha256:<SAME_SANITIZED_PUBLIC_STATE_FINGERPRINT_HEX>"
+    }
+  ],
+  "rollback": {
+    "prior_config_digest": "sha256:<PRIOR_CONFIG_DIGEST_HEX>",
+    "enabled_config_digest": "sha256:<ENABLED_CONFIG_DIGEST_HEX>",
+    "restored_config_digest": "sha256:<PRIOR_CONFIG_DIGEST_HEX>",
+    "rehearsed": true
+  }
+}

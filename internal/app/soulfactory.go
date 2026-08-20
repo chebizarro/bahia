@@ -87,7 +87,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		return nil, err
 	}
 
-	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, controllerPubkey, signer, allRelays, slogLogger)
+	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, slogLogger)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -107,6 +107,27 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
+	}
+	var signetEnrollment soulfactory.OpenClawSignetEnrollment
+	if sf.OpenClawSignetEnabled {
+		signetctl, err := soulfactory.NewContainerSignetctl(soulfactory.SignetctlConfig{
+			Container: sf.OpenClawSignetContainer, ConfigPath: sf.OpenClawSignetConfigPath,
+			ProvisionerCredentialFile: sf.OpenClawSignetProvisionerFile,
+			CredentialOwnerUID:        os.Geteuid(),
+		})
+		if err != nil {
+			_ = closeSigner()
+			return nil, fmt.Errorf("configure containerized signetctl: %w", err)
+		}
+		signetEnrollment, err = soulfactory.NewOpenClawSignetEnrollmentManager(soulfactory.OpenClawSignetEnrollmentConfig{
+			StateDir: sf.OpenClawSignetStateDir, ClientKeyDir: sf.OpenClawSignetClientKeyDir,
+			FileOwnerUID: os.Geteuid(), PolicyAdmin: signetctl,
+			Verifier: soulfactory.NIP46ConnectivityVerifier{},
+		})
+		if err != nil {
+			_ = closeSigner()
+			return nil, fmt.Errorf("configure OpenClaw Signet enrollment: %w", err)
+		}
 	}
 
 	reactor := soulfactory.NewReactor(soulfactory.Config{
@@ -149,7 +170,9 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			NgitRelays:            allRelays,
 			GatewayPort:           sf.WorkspaceGatewayPort,
 		},
-		RuntimeAdapters: runtimeAdapters,
+		RuntimeAdapters:         runtimeAdapters,
+		SignetEnrollment:        signetEnrollment,
+		SignetProvisionerPubkey: sf.OpenClawSignetProvisionerPubkey,
 	}, nil)
 	if err := reactor.InstallProvisioningEngine(provisioner); err != nil {
 		_ = closeSigner()
@@ -172,7 +195,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 // adapter for every administratively enabled agent runtime target. Startup
 // fails on any invalid or failing target; enabled targets are never silently
 // omitted from the registry.
-func buildSoulFactoryRuntimeAdapters(targets []string, controllerPubkey string, signer soulFactorySignerClient, relays []string, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
+func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("soul_factory.agent_runtimes is empty; configuration validation must default or reject it before startup")
 	}
@@ -187,11 +210,12 @@ func buildSoulFactoryRuntimeAdapters(targets []string, controllerPubkey string, 
 			return nil, fmt.Errorf("soul_factory.agent_runtimes contains duplicate runtime target %q", target)
 		}
 		adapter, err := newSoulFactoryRuntimeAdapter(soulfactory.RuntimeAdapterConfig{
-			Target:           runtimeTarget,
-			ControllerPubkey: controllerPubkey,
-			Signer:           signer,
-			Relays:           relays,
-			Logger:           logger,
+			Target:                runtimeTarget,
+			ControllerPubkey:      controllerPubkey,
+			TrustedRuntimePubkeys: append([]string(nil), runtimePubkeys[target]...),
+			Signer:                signer,
+			Relays:                relays,
+			Logger:                logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("creating SoulFactory runtime adapter for %q: %w", target, err)

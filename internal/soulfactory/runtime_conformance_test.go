@@ -237,6 +237,52 @@ func TestRuntimeAdapterRejectsUnavailableOrIncompatibleTargets(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdapterRejectsUntrustedRuntimeIdentity(t *testing.T) {
+	controller := newFakeSigner(t)
+	trustedRuntime := newFakeSigner(t)
+	untrustedRuntime := newFakeSigner(t)
+	capability := conformanceCapability(t, controller, untrustedRuntime, domain.RuntimeTargetMetiq, []string{RuntimeMethodProvision})
+	transport := &fakeRuntimeAdapterTransport{capabilities: []*nostr.Event{capability}}
+	adapter, err := NewRuntimeAdapter(RuntimeAdapterConfig{
+		Target: domain.RuntimeTargetMetiq, ControllerPubkey: controller.pubkey,
+		TrustedRuntimePubkeys: []string{trustedRuntime.pubkey}, Signer: controller,
+		Relays: []string{"wss://fallback.example"}, Transport: transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.DiscoverCapabilities(t.Context(), domain.SoulRelayPolicySpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities) != 0 {
+		t.Fatalf("untrusted capabilities = %+v, want none", capabilities)
+	}
+	if len(transport.filters) == 0 || len(transport.filters[0].Authors) != 1 || transport.filters[0].Authors[0].Hex() != trustedRuntime.pubkey {
+		t.Fatalf("capability filter authors = %+v, want exact trusted runtime", transport.filters)
+	}
+
+	supplied := RuntimeCapability{
+		ID: "untrusted", Pubkey: untrustedRuntime.pubkey, Runtime: domain.RuntimeTargetMetiq,
+		Schema: domain.SoulFactoryRuntimeCapabilitySchema, ControlSchema: domain.SoulFactoryRuntimeControlSchema,
+		Methods: []string{RuntimeMethodProvision}, ControllerPubkeys: []string{controller.pubkey},
+		CreatedAt: time.Now(), Compatible: true,
+	}
+	_, err = adapter.Execute(t.Context(), RuntimeAdapterRequest{
+		Method:     RuntimeMethodProvision,
+		Operator:   RuntimeOperatorRef{Pubkey: stringsRepeat("a", 64), RequestEvent: stringsRepeat("b", 64)},
+		Soul:       RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
+		Target:     RuntimeTargetRef{Runtime: domain.RuntimeTargetMetiq, RuntimePubkey: untrustedRuntime.pubkey, AgentID: "scout"},
+		Capability: &supplied,
+	})
+	if err == nil || !strings.Contains(err.Error(), "is not trusted") {
+		t.Fatalf("Execute error = %v, want untrusted runtime rejection", err)
+	}
+	if len(transport.published) != 0 {
+		t.Fatalf("published %d requests for untrusted runtime", len(transport.published))
+	}
+}
+
 // TestRuntimeAdapterRejectsStaleCapabilities proves 30317 announcements outside
 // the freshness window never gate dispatch, whether discovered or supplied by
 // the caller, in both the stale and future-skew directions.

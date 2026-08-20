@@ -1,0 +1,9 @@
+{
+  "feature_id": "BAHIA_METIQ_RUNTIME_INFRASTRUCTURE",
+  "external_task": "bahia-agent-runtimes-infrastructure-20260810",
+  "title": "Reproducible Metiq runtime enablement and live validation inputs",
+  "intent": "Provide secret-safe, production-shaped Bahia configuration, dedicated Metiq Signet identity enrollment automation, a relay-backed disposable-soul validation harness with CI doubles, and immutable evidence/rollback procedures without mutating live infrastructure in Track A.",
+  "observed_behavior_before": "Bahia registered generic runtime adapters and had OpenClaw Signet enrollment primitives, but runtime capability authors were not configuration-pinned, no dedicated Metiq runtime identity operator tool existed, and no single harness mapped live Metiq event lineage plus local exactly-once/restart evidence to the infrastructure acceptance criteria.",
+  "intended_behavior": "Production configuration enables OpenClaw and Metiq concurrently with exact runtime identity pins. Containerized signetctl provisions and enrolls a dedicated Metiq identity through protected file-backed NIP-46 material and exact-client least privilege. The validator checks signed public event lineage, local-effect evidence, restart/reconciliation, incumbent safety, secret hygiene, and captured-digest rollback while emitting only sanitized identifiers and outcomes.",
+  "scope_boundary": "Repository artifacts only. This feature does not deploy, contact live hosts/relays/Signet, publish intents, migrate incumbents, or update the external Nostrig task."
+}

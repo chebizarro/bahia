@@ -62,6 +62,54 @@ groups:
         annotations:
           summary: "Bahia dependency-tier rejection rate has spiked"
           runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
+      - alert: BahiaOpenClawProvisioningStageStuck
+        expr: bahia_openclaw_provisioning_stage_age_seconds{stage!~"running|rolled_back|failed_terminal"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenClaw provisioning run {{ $labels.run_id }} is stuck at {{ $labels.stage }}"
+          runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - alert: BahiaOpenClawProgressWithoutTerminal
+        expr: (bahia_openclaw_provisioning_progress_ratio == 1) and on(instance,build,request_id,run_id,agent_id,stage) (bahia_openclaw_provisioning_terminal_projection == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenClaw provisioning run {{ $labels.run_id }} reached 100% without terminal projection"
+          runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - alert: BahiaOpenClawFalseRunning
+        expr: bahia_openclaw_provisioning_false_running > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenClaw provisioning run {{ $labels.run_id }} claims running without DM or terminal evidence"
+          runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - alert: BahiaOpenClawOrphanCandidates
+        expr: bahia_openclaw_provisioning_orphan_candidates > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenClaw provisioning run {{ $labels.run_id }} has owned resources left after compensation"
+          runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - alert: BahiaOpenClawRepeatedSignetUnauthorized
+        expr: bahia_openclaw_provisioning_signet_unauthorized_responses >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenClaw provisioning run {{ $labels.run_id }} has repeated unauthorized Signet responses"
+          runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - alert: BahiaOpenClawCorrelationMismatch
+        expr: bahia_openclaw_provisioning_correlation_mismatches > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenClaw provisioning run {{ $labels.run_id }} has resource correlation mismatches"
+          runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
       - alert: NodeExporterDown
         expr: up{job="node",expected_state="up"} == 0
         for: 5m

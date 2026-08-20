@@ -76,13 +76,16 @@ type RuntimeAdapterTransportFactory func([]string) (RuntimeAdapterTransport, err
 type RuntimeAdapterConfig struct {
 	Target           domain.RuntimeTarget
 	ControllerPubkey string
-	Signer           soulClientSigner
-	Relays           []string
-	Transport        RuntimeAdapterTransport
-	TransportFactory RuntimeAdapterTransportFactory
-	Logger           *slog.Logger
-	Now              func() time.Time
-	CapabilityLimit  int
+	// TrustedRuntimePubkeys, when configured, restricts capability discovery
+	// and dispatch to these exact runtime signing identities.
+	TrustedRuntimePubkeys []string
+	Signer                soulClientSigner
+	Relays                []string
+	Transport             RuntimeAdapterTransport
+	TransportFactory      RuntimeAdapterTransportFactory
+	Logger                *slog.Logger
+	Now                   func() time.Time
+	CapabilityLimit       int
 	// MaxCapabilityAge bounds how old a 30317 capability announcement may be
 	// before it is considered stale and ineligible for dispatch. Zero uses
 	// DefaultMaxCapabilityAge.
@@ -178,17 +181,18 @@ func NewMetiqRuntimeAdapter(config RuntimeAdapterConfig) (*MetiqRuntimeAdapter, 
 }
 
 type runtimeControlAdapter struct {
-	target           domain.RuntimeTarget
-	controllerPubkey string
-	signer           soulClientSigner
-	relays           []string
-	transport        RuntimeAdapterTransport
-	factory          RuntimeAdapterTransportFactory
-	logger           *slog.Logger
-	now              func() time.Time
-	capabilityLimit  int
-	maxCapabilityAge time.Duration
-	maxFutureSkew    time.Duration
+	target                domain.RuntimeTarget
+	controllerPubkey      string
+	trustedRuntimePubkeys map[string]struct{}
+	signer                soulClientSigner
+	relays                []string
+	transport             RuntimeAdapterTransport
+	factory               RuntimeAdapterTransportFactory
+	logger                *slog.Logger
+	now                   func() time.Time
+	capabilityLimit       int
+	maxCapabilityAge      time.Duration
+	maxFutureSkew         time.Duration
 }
 
 func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapter, error) {
@@ -200,6 +204,14 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 	}
 	if config.Signer == nil {
 		return nil, fmt.Errorf("SoulFactory service signer is required")
+	}
+	trustedRuntimePubkeys := make(map[string]struct{}, len(config.TrustedRuntimePubkeys))
+	for _, rawPubkey := range config.TrustedRuntimePubkeys {
+		pubkey := strings.ToLower(strings.TrimSpace(rawPubkey))
+		if !isHexPubkey(pubkey) {
+			return nil, fmt.Errorf("trusted runtime pubkey must be 64 lowercase hexadecimal characters")
+		}
+		trustedRuntimePubkeys[pubkey] = struct{}{}
 	}
 	logger := config.Logger
 	if logger == nil {
@@ -224,21 +236,30 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 		maxSkew = DefaultMaxCapabilityFutureSkew
 	}
 	return &runtimeControlAdapter{
-		target:           config.Target,
-		controllerPubkey: strings.TrimSpace(config.ControllerPubkey),
-		signer:           config.Signer,
-		relays:           normalizeSoulRelays(config.Relays),
-		transport:        config.Transport,
-		factory:          factory,
-		logger:           logger.With("component", "soulfactory-runtime-adapter", "runtime", string(config.Target)),
-		now:              firstNowFunc(config.Now),
-		capabilityLimit:  limit,
-		maxCapabilityAge: maxAge,
-		maxFutureSkew:    maxSkew,
+		target:                config.Target,
+		controllerPubkey:      strings.TrimSpace(config.ControllerPubkey),
+		trustedRuntimePubkeys: trustedRuntimePubkeys,
+		signer:                config.Signer,
+		relays:                normalizeSoulRelays(config.Relays),
+		transport:             config.Transport,
+		factory:               factory,
+		logger:                logger.With("component", "soulfactory-runtime-adapter", "runtime", string(config.Target)),
+		now:                   firstNowFunc(config.Now),
+		capabilityLimit:       limit,
+		maxCapabilityAge:      maxAge,
+		maxFutureSkew:         maxSkew,
 	}, nil
 }
 
 func (a *runtimeControlAdapter) Runtime() domain.RuntimeTarget { return a.target }
+
+func (a *runtimeControlAdapter) trustsRuntimePubkey(pubkey string) bool {
+	if len(a.trustedRuntimePubkeys) == 0 {
+		return true
+	}
+	_, trusted := a.trustedRuntimePubkeys[strings.ToLower(strings.TrimSpace(pubkey))]
+	return trusted
+}
 
 // capabilityStale reports whether a 30317 capability is ineligible to gate
 // dispatch: older than MaxCapabilityAge, dated more than MaxCapabilityFutureSkew
@@ -263,6 +284,21 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 		Tags:  nostr.TagMap{tagRuntime: []string{string(a.target)}},
 		Limit: a.capabilityLimit,
 	}}
+	if len(a.trustedRuntimePubkeys) > 0 {
+		filters[0].Authors = make([]nostr.PubKey, 0, len(a.trustedRuntimePubkeys))
+		pubkeys := make([]string, 0, len(a.trustedRuntimePubkeys))
+		for pubkey := range a.trustedRuntimePubkeys {
+			pubkeys = append(pubkeys, pubkey)
+		}
+		sort.Strings(pubkeys)
+		for _, pubkey := range pubkeys {
+			parsed, err := nostr.PubKeyFromHex(pubkey)
+			if err != nil {
+				return nil, fmt.Errorf("parse trusted runtime pubkey: %w", err)
+			}
+			filters[0].Authors = append(filters[0].Authors, parsed)
+		}
+	}
 	events, err := collectRuntimeAdapterEvents(ctx, transport, filters)
 	if err != nil {
 		return nil, err
@@ -271,7 +307,7 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 	latestByCoordinate := map[string]RuntimeCapability{}
 	for _, event := range events {
 		capability, ok := ParseRuntimeCapabilityEvent(event)
-		if !ok || !capability.Supports(a.target, "", a.controllerPubkey) {
+		if !ok || !a.trustsRuntimePubkey(capability.Pubkey) || !capability.Supports(a.target, "", a.controllerPubkey) {
 			continue
 		}
 		if a.capabilityStale(capability) {
@@ -428,6 +464,9 @@ func (a *runtimeControlAdapter) prepareRequest(ctx context.Context, req *Runtime
 	}
 	if req.Capability.Pubkey != "" && req.Capability.Pubkey != req.Target.RuntimePubkey {
 		return fmt.Errorf("runtime capability pubkey %s does not match target %s", req.Capability.Pubkey, req.Target.RuntimePubkey)
+	}
+	if !a.trustsRuntimePubkey(req.Target.RuntimePubkey) {
+		return fmt.Errorf("runtime pubkey %s is not trusted for target %s", req.Target.RuntimePubkey, a.target)
 	}
 	if a.capabilityStale(*req.Capability) {
 		return fmt.Errorf("runtime capability %s is outside the freshness window (max age %s, max future skew %s); refusing dispatch until a fresh 30317 is observed", req.Capability.ID, a.maxCapabilityAge, a.maxFutureSkew)

@@ -1,4 +1,5 @@
 <script>
+	import { onMount } from 'svelte';
   import {
     AvatarIcon,
     DeploymentIcon,
@@ -26,8 +27,19 @@
     { id: 'qdrant', label: 'Setup Memory', icon: MemoryIcon },
     { id: 'memory', label: 'Seed Context', icon: SeedIcon },
     { id: 'workspace', label: 'Init Workspace', icon: WorkspaceIcon },
-    { id: 'deploy', label: 'Deploy Agent', icon: DeploymentIcon }
+	{ id: 'deploy', label: 'Configure Runtime', icon: DeploymentIcon },
+	{ id: 'runtime_health', label: 'Runtime Health', icon: DeploymentIcon },
+	{ id: 'account_route', label: 'Exclusive Route', icon: IdentityIcon },
+	{ id: 'nip46_signer', label: 'NIP-46 Signer', icon: IdentityIcon },
+	{ id: 'nip17_subscriptions', label: 'NIP-17 Relays', icon: ProfileIcon },
+	{ id: 'model_inference', label: 'Model Inference', icon: MemoryIcon },
+	{ id: 'dm_round_trip', label: 'Encrypted DM Probe', icon: SuccessIcon }
   ];
+	let now = $state(Date.now());
+	onMount(() => {
+		const interval = setInterval(() => { now = Date.now(); }, 1000);
+		return () => clearInterval(interval);
+	});
 
   const currentStepIdx = $derived(steps.findIndex((s) => s.id === run?.step));
   const progressPercent = $derived(
@@ -35,6 +47,7 @@
       ? Math.round((run.progress.current / run.progress.total) * 100)
       : 0
   );
+	const elapsedSeconds = $derived(Math.max(0, Math.floor((now - (run?.startedAt || now)) / 1000)));
 </script>
 
 <div class="provisioning-progress">
@@ -54,6 +67,12 @@
           <code>{run.result.data.npub}</code>
         </div>
       {/if}
+	  {#if run.result?.data?.provider || run.result?.data?.model}
+		<div class="result-info">
+		  <span class="label">Provider / model:</span>
+		  <code>{run.result.data.provider || 'unknown'} / {run.result.data.model || 'unknown'}</code>
+		</div>
+	  {/if}
       {#if onComplete}
         <button class="btn-primary" onclick={onComplete}>
           View Soul
@@ -65,7 +84,15 @@
       <span class="icon" aria-hidden="true"><ErrorIcon size={48} strokeWidth={1.5} /></span>
       <h3>Provisioning Failed</h3>
       <p>{run.result?.error || run.message || 'An error occurred'}</p>
+	  {#if run.result?.runId || run.runId}<p><code>Run {run.result?.runId || run.runId}</code></p>{/if}
     </div>
+	{:else if run.status === 'reconciliation_error'}
+	  <div class="failed">
+		<span class="icon" aria-hidden="true"><ErrorIcon size={48} strokeWidth={1.5} /></span>
+		<h3>Terminal Result Missing</h3>
+		<p>{run.message}</p>
+		<p><code>Request {run.id}{run.runId ? ` · Run ${run.runId}` : ''}</code></p>
+	  </div>
   {:else}
     <div class="progress-header">
       <h3>Provisioning Soul</h3>
@@ -80,6 +107,12 @@
       <span class="spinner"></span>
       {run.message || 'Processing...'}
     </div>
+	<div class="run-context">
+	  <span>Stage: {run.step || 'waiting'}</span>
+	  <span>Elapsed: {elapsedSeconds}s</span>
+	  <span>Relay state: {run.retryState || 'subscribed'}</span>
+	  {#if run.runId}<span>Run: <code>{run.runId}</code></span>{/if}
+	</div>
     
     <div class="steps-list">
       {#each steps as step, idx}
@@ -245,6 +278,15 @@
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 0.5rem;
   }
+
+	.run-context {
+	  display: flex;
+	  flex-wrap: wrap;
+	  gap: 0.5rem 1rem;
+	  margin: -0.75rem 0 1rem;
+	  color: var(--text-muted);
+	  font-size: 0.75rem;
+	}
   
   .step {
     display: flex;

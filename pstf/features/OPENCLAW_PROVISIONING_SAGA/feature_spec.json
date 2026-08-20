@@ -1,0 +1,27 @@
+{
+  "feature_id": "OPENCLAW_PROVISIONING_SAGA",
+  "task_id": "bahia-openclaw-transaction-reconciliation-20260819",
+  "objective": "Make OpenClaw provisioning restart-safe, inspect-before-mutate, idempotent, and safely compensating across external systems.",
+  "authoritative_state": "The durable saga checkpoint is authoritative. Terminal relay projections may advance it only after correlated kind 7950 and kind 31951 reality is inspected by the running-stage driver.",
+  "stages": [
+    "requested",
+    "identity_reserved",
+    "runtime_allocated",
+    "signer_enrolled",
+    "nostr_configured",
+    "llm_verified",
+    "dm_verified",
+    "running",
+    "rollback_pending",
+    "rolled_back",
+    "failed_recoverable",
+    "failed_terminal"
+  ],
+  "integration_boundary": "One StageDriver per forward stage inspects real state and implements create-or-adopt and compensation. Runtime and Signet implementations remain outside this feature package.",
+  "retention": {
+    "failed_terminal_days": 30,
+    "rolled_back_days": 7,
+    "running": "retained",
+    "failed_recoverable": "retained until reconcile or safe-abort reaches a terminal state"
+  }
+}

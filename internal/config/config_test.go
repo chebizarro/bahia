@@ -898,7 +898,7 @@ func TestLoadSoulFactoryAgentRuntimes(t *testing.T) {
 	})
 
 	t.Run("normalizes and preserves multiple runtimes", func(t *testing.T) {
-		cfg := load(t, "soul_factory:\n  agent_runtimes: [\" OpenClaw \", \"metiq\", \"synthetic-3\"]\n"+strings.TrimPrefix(base, "soul_factory:\n"))
+		cfg := load(t, "soul_factory:\n  agent_runtimes: [\" OpenClaw \", \"metiq\", \"synthetic-3\"]\n  runtime_pubkeys:\n    openclaw: [\""+strings.Repeat("d", 64)+"\"]\n    metiq: [\""+strings.Repeat("e", 64)+"\"]\n"+strings.TrimPrefix(base, "soul_factory:\n"))
 		got := cfg.SoulFactory.AgentRuntimes
 		want := []string{"openclaw", "metiq", "synthetic-3"}
 		if len(got) != len(want) {
@@ -908,6 +908,9 @@ func TestLoadSoulFactoryAgentRuntimes(t *testing.T) {
 			if got[i] != want[i] {
 				t.Fatalf("AgentRuntimes = %v, want %v", got, want)
 			}
+		}
+		if got := cfg.SoulFactory.RuntimePubkeys; len(got) != 2 || got["openclaw"][0] != strings.Repeat("d", 64) || got["metiq"][0] != strings.Repeat("e", 64) {
+			t.Fatalf("RuntimePubkeys = %v", got)
 		}
 	})
 }
@@ -1108,6 +1111,38 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
   llm_api_key: "secret"
 `,
 			want: "duplicates runtime target",
+		},
+		{
+			name: "runtime pubkey target is not enabled",
+			yaml: `soul_factory:
+  enabled: true
+  agent_runtimes: ["openclaw"]
+  runtime_pubkeys:
+    metiq: ["` + validPubkey + `"]
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "runtime_pubkeys target \"metiq\" is not enabled",
+		},
+		{
+			name: "runtime pubkey is invalid",
+			yaml: `soul_factory:
+  enabled: true
+  agent_runtimes: ["openclaw", "metiq"]
+  runtime_pubkeys:
+    metiq: ["not-hex"]
+  relays: ["wss://relay.example"]
+  authorized_pubkeys: ["` + validPubkey + `"]
+  signet_bunker_uri: "bunker://` + validPubkey + `"
+  llm_base_url: "https://llm.example"
+  llm_model: "soul-model"
+  llm_api_key: "secret"
+`,
+			want: "runtime_pubkeys.metiq requires at least one 64-character hex pubkey",
 		},
 	}
 

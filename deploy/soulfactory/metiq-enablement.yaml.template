@@ -1,0 +1,24 @@
+# Render this protected overlay with values captured from the approved
+# production baseline. Angle-bracket values must not reach Bahia unchanged.
+soul_factory:
+  enabled: true
+  agent_runtimes:
+    - openclaw
+    - metiq
+  runtime_pubkeys:
+    openclaw:
+      - "<OPENCLAW_RUNTIME_PUBKEY_HEX>"
+    metiq:
+      - "<METIQ_RUNTIME_PUBKEY_HEX>"
+  relays:
+    - "<CANONICAL_SERVICE_RELAY_1>"
+    - "<CANONICAL_SERVICE_RELAY_2>"
+    - "<CANONICAL_SERVICE_RELAY_3>"
+  additional_relays: []
+  authorized_pubkeys:
+    - "<SOULFACTORY_OPERATOR_PUBKEY_HEX>"
+  soul_factory_pubkey: "<SOULFACTORY_CONTROLLER_PUBKEY_HEX>"
+
+# Preserve every other soul_factory key from the captured prior configuration.
+# Signet bunker/client material and LLM credentials remain in their existing
+# protected injection path; never render them into this overlay or evidence.

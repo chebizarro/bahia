@@ -1,0 +1,44 @@
+{
+  "feature_id": "OPENCLAW_ROLLOUT_CONFORMANCE",
+  "tests": [
+    {
+      "criteria": [
+        "ORC-01",
+        "ORC-02"
+      ],
+      "test": "TestOpenClawProvisioningConformanceDisposableEnvironment"
+    },
+    {
+      "criteria": [
+        "ORC-03"
+      ],
+      "test": "TestMonitorExportsSecretFreeRunStageReadinessAndTerminalMetrics"
+    },
+    {
+      "criteria": [
+        "ORC-03"
+      ],
+      "test": "TestMonitorRetainsRetryRollbackAndSignetDenialEvidence"
+    },
+    {
+      "criteria": [
+        "ORC-03"
+      ],
+      "test": "TestStoreRejectsFailureHistoryRewrite"
+    },
+    {
+      "criteria": [
+        "ORC-04"
+      ],
+      "test": "deploy/observability/bahia-alerts.test.yml"
+    },
+    {
+      "criteria": [
+        "ORC-05",
+        "ORC-06",
+        "ORC-07"
+      ],
+      "test": "document review against authoritative task and repository evidence"
+    }
+  ]
+}

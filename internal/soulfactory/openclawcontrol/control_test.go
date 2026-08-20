@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,8 +16,10 @@ import (
 )
 
 type recordingRunner struct {
+	mu      sync.Mutex
 	calls   []commandCall
 	err     error
+	errAt   int
 	outputs [][]byte
 }
 
@@ -26,15 +29,58 @@ type commandCall struct {
 }
 
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, commandCall{name: name, args: append([]string{}, args...)})
-	if r.err != nil {
+	if r.err != nil && (r.errAt == 0 || r.errAt == len(r.calls)) {
 		return nil, r.err
 	}
 	if len(r.outputs) >= len(r.calls) {
 		return r.outputs[len(r.calls)-1], nil
 	}
+	if containsArgSequence(args, "plugins", "list", "--json") {
+		return []byte(`{"plugins":[{"id":"nostr","status":"loaded","enabled":true}]}`), nil
+	}
 	return []byte(`{"ok":true}`), nil
 }
+
+type recordingOrchestrator struct {
+	mu         sync.Mutex
+	reconciles []RuntimeSpec
+	deletes    []RuntimeSpec
+	err        error
+}
+
+func (o *recordingOrchestrator) Inspect(context.Context, RuntimeSpec) (RuntimeInspection, error) {
+	return RuntimeInspection{}, o.err
+}
+
+func (o *recordingOrchestrator) Reconcile(_ context.Context, spec RuntimeSpec) (RuntimeLineage, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.reconciles = append(o.reconciles, spec)
+	if o.err != nil {
+		return RuntimeLineage{}, o.err
+	}
+	return RuntimeLineage{
+		DeploymentID: spec.DeploymentID, ContainerID: "container-" + spec.AgentID,
+		ContainerName: spec.ContainerName, ImageDigest: spec.ImageDigest,
+		ConfigRevision: spec.ConfigRevision, WorkspaceID: "workspace://" + spec.DeploymentID,
+		AgentID: spec.AgentID, AccountID: spec.AccountID, Health: "healthy",
+	}, nil
+}
+
+func (o *recordingOrchestrator) Delete(_ context.Context, spec RuntimeSpec) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.deletes = append(o.deletes, spec)
+	return o.err
+}
+
+const (
+	testImageDigest  = "ghcr.io/openagents/openclaw@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testSourceCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
 func TestProvisionDryRunCreatesWorkspaceStateAndReplaysIdempotently(t *testing.T) {
 	root := t.TempDir()
@@ -43,7 +89,7 @@ func TestProvisionDryRunCreatesWorkspaceStateAndReplaysIdempotently(t *testing.T
 
 	outcome := executor.Execute(t.Context(), invocation)
 	assertSuccess(t, outcome, "running")
-	workspace := filepath.Join(root, "agents", "agent-alice", "workspace")
+	workspace := readStateForTest(t, root, "agent-alice").Workspace
 	for _, rel := range []string{"SOUL.md", "IDENTITY.md", "AGENTS.md", "MEMORY.md", ".openclaw/soulfactory.json"} {
 		if _, err := os.Stat(filepath.Join(workspace, rel)); err != nil {
 			t.Fatalf("expected workspace file %s: %v", rel, err)
@@ -96,6 +142,14 @@ func TestProvisionRejectsUnsafeAgentIDAndInlinePrivateSecret(t *testing.T) {
 		t.Fatalf("nostr private key outcome = %+v", outcome)
 	}
 
+	nip46Secret := testProvisionInvocation("agent-nip46-secret", "sha256:spec")
+	nip46Secret.Params["runtime"].(map[string]interface{})["nostr"] = map[string]interface{}{
+		"nip46Secret": strings.Repeat("a", 64),
+	}
+	if outcome := executor.Execute(t.Context(), nip46Secret); outcome.Status != StatusRejected || outcome.Error.Code != ErrorMissingRequired {
+		t.Fatalf("inline NIP-46 secret outcome = %+v", outcome)
+	}
+
 	secretRef := testProvisionInvocation("agent-secret-ref", "sha256:spec")
 	secretRef.Params["runtime"].(map[string]interface{})["nostr_private_key_ref"] = "secret://souls/openclaw/nostr-private-key"
 	if outcome := executor.Execute(t.Context(), secretRef); outcome.Status != StatusSuccess {
@@ -124,7 +178,8 @@ func TestPersonaUpdateWritesPersonaAndWarning(t *testing.T) {
 	if len(warnings) == 0 || !strings.Contains(strings.Join(warnings, "\n"), "hot reload is not confirmed") {
 		t.Fatalf("persona warnings = %#v", outcome.Result["warnings"])
 	}
-	personaPath := filepath.Join(root, "agents", "agent-alice", "workspace", ".openclaw", "soulfactory-persona.json")
+	workspace := readStateForTest(t, root, "agent-alice").Workspace
+	personaPath := filepath.Join(workspace, ".openclaw", "soulfactory-persona.json")
 	data, err := os.ReadFile(personaPath)
 	if err != nil {
 		t.Fatalf("read persona state: %v", err)
@@ -132,7 +187,7 @@ func TestPersonaUpdateWritesPersonaAndWarning(t *testing.T) {
 	if !strings.Contains(string(data), "You are SteadyBot.") || !strings.Contains(string(data), "system_prompt_override") {
 		t.Fatalf("persona state did not contain mapped prompt:\n%s", data)
 	}
-	agents, err := os.ReadFile(filepath.Join(root, "agents", "agent-alice", "workspace", "AGENTS.md"))
+	agents, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
 	if err != nil {
 		t.Fatalf("read AGENTS.md: %v", err)
 	}
@@ -151,7 +206,7 @@ func TestRevokeRecordsStateAndHonorsWorkspaceDeletion(t *testing.T) {
 		"delete_workspace":           false,
 	})
 	assertSuccess(t, executor.Execute(t.Context(), keep), "revoked")
-	if _, err := os.Stat(filepath.Join(root, "agents", "agent-keep", "workspace", "SOUL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(readStateForTest(t, root, "agent-keep").Workspace, "SOUL.md")); err != nil {
 		t.Fatalf("workspace should remain when delete_workspace=false: %v", err)
 	}
 
@@ -163,7 +218,8 @@ func TestRevokeRecordsStateAndHonorsWorkspaceDeletion(t *testing.T) {
 	})
 	outcome := executor.Execute(t.Context(), remove)
 	assertSuccess(t, outcome, "revoked")
-	if _, err := os.Stat(filepath.Join(root, "agents", "agent-delete", "workspace")); !os.IsNotExist(err) {
+	deletedWorkspace := readStateForTest(t, root, "agent-delete").Workspace
+	if _, err := os.Stat(deletedWorkspace); !os.IsNotExist(err) {
 		t.Fatalf("workspace should be removed when delete_workspace=true, stat err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "agents", "agent-delete", "state.json")); err != nil {
@@ -182,13 +238,13 @@ func TestNonDryRunRevokeUsesPersistedContainerAndReplaysWithoutCommands(t *testi
 	assertSuccess(t, setup.Execute(t.Context(), testProvisionInvocation("agent-revoke", "sha256:spec")), "running")
 
 	revokeRunner := &recordingRunner{}
+	orchestrator := &recordingOrchestrator{}
 	revoker, err := New(Config{
-		Root:        root,
-		OpenClawBin: "openclaw-test",
-		RuntimeMode: RuntimeModeExistingContainer,
-		DryRun:      false,
-		Now:         func() time.Time { return time.Unix(1715700005, 0).UTC() },
-		Runner:      revokeRunner,
+		Root: root, OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest,
+		SourceCommit: testSourceCommit, RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"},
+		Now:    func() time.Time { return time.Unix(1715700005, 0).UTC() },
+		Runner: revokeRunner, Orchestrator: orchestrator,
 	})
 	if err != nil {
 		t.Fatalf("New revoker: %v", err)
@@ -203,8 +259,11 @@ func TestNonDryRunRevokeUsesPersistedContainerAndReplaysWithoutCommands(t *testi
 	if len(revokeRunner.calls) != 1 {
 		t.Fatalf("revoke command calls = %d, want one unbind before replay: %+v", len(revokeRunner.calls), revokeRunner.calls)
 	}
-	if !containsArgSequence(revokeRunner.calls[0].args, "--container", "openclaw-gateway") || !containsArgSequence(revokeRunner.calls[0].args, "agents", "unbind") {
+	if !containsArgSequence(revokeRunner.calls[0].args, "--container", readStateForTest(t, root, "agent-revoke").Container) || !containsArgSequence(revokeRunner.calls[0].args, "agents", "unbind") {
 		t.Fatalf("revoke command did not use persisted container unbind: %+v", revokeRunner.calls[0])
+	}
+	if len(orchestrator.deletes) != 1 {
+		t.Fatalf("dedicated deployment deletes = %d, want one", len(orchestrator.deletes))
 	}
 }
 
@@ -252,7 +311,7 @@ func TestUpdateReplacesResolvedSpecAndRefreshesIdentity(t *testing.T) {
 	if state.SpecHash != "sha256:new" || state.LastMethod != soulfactory.RuntimeMethodUpdate {
 		t.Fatalf("updated state = %+v", state)
 	}
-	identity, err := os.ReadFile(filepath.Join(root, "agents", "agent-update", "workspace", "IDENTITY.md"))
+	identity, err := os.ReadFile(filepath.Join(readStateForTest(t, root, "agent-update").Workspace, "IDENTITY.md"))
 	if err != nil || !strings.Contains(string(identity), "Alice Updated") {
 		t.Fatalf("updated identity = %q, err=%v", identity, err)
 	}
@@ -295,11 +354,12 @@ func TestUpdateMergeAppliesPatchToCanonicalPriorSpec(t *testing.T) {
 		},
 	}))
 	assertSuccess(t, outcome, "running")
-	identity, err := os.ReadFile(filepath.Join(root, "agents", "agent-merge", "workspace", "IDENTITY.md"))
+	workspace := readStateForTest(t, root, "agent-merge").Workspace
+	identity, err := os.ReadFile(filepath.Join(workspace, "IDENTITY.md"))
 	if err != nil || !strings.Contains(string(identity), "Merged Alice") || !strings.Contains(string(identity), "Operate audited OpenClaw tasks") {
 		t.Fatalf("merged identity = %q, err=%v", identity, err)
 	}
-	provenance, ok, err := readJSONFile[map[string]interface{}](filepath.Join(root, "agents", "agent-merge", "workspace", ".openclaw", "soulfactory.json"))
+	provenance, ok, err := readJSONFile[map[string]interface{}](filepath.Join(workspace, ".openclaw", "soulfactory.json"))
 	if err != nil || !ok {
 		t.Fatalf("read provenance: ok=%v err=%v", ok, err)
 	}
@@ -335,48 +395,186 @@ func TestUnsupportedMethodRejected(t *testing.T) {
 
 func TestNonDryRunUsesContainerizedOpenClawCommands(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := newTestExecutor(t, t.TempDir(), false, runner)
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, false, runner)
 	outcome := executor.Execute(t.Context(), testProvisionInvocation("agent-alice", "sha256:spec"))
 	assertSuccess(t, outcome, "running")
-	if len(runner.calls) != 3 {
-		t.Fatalf("command count = %d, want add/set-identity/bind: %+v", len(runner.calls), runner.calls)
+	for _, key := range []string{"deployment_id", "container_id", "image_digest", "config_revision", "workspace_path_identifier", "agent_id", "account_id"} {
+		if strings.TrimSpace(stringValue(outcome.Result[key])) == "" {
+			t.Fatalf("lineage field %s missing from %+v", key, outcome.Result)
+		}
 	}
+	if len(runner.calls) != 5 {
+		t.Fatalf("command count = %d, want bootstrap/runtime plugin inspections plus add/set-identity/bind: %+v", len(runner.calls), runner.calls)
+	}
+	container := readStateForTest(t, root, "agent-alice").Container
 	for _, call := range runner.calls {
 		joined := strings.Join(append([]string{call.name}, call.args...), " ")
 		if strings.Contains(joined, "gateway run") || strings.Contains(joined, "gateway start") || strings.Contains(joined, "go run") || strings.Contains(joined, "npm start") {
 			t.Fatalf("forbidden persistent bare-metal command emitted: %s", joined)
 		}
-		if !containsArgSequence(call.args, "--container", "openclaw-gateway") {
+		if call.name == "openclaw-test" && !containsArgSequence(call.args, "--container", container) {
 			t.Fatalf("command did not target configured container: %+v", call)
 		}
 	}
-	if !containsArgSequence(runner.calls[0].args, "agents", "add") || !containsArgSequence(runner.calls[1].args, "agents", "set-identity") || !containsArgSequence(runner.calls[2].args, "agents", "bind") {
+	if runner.calls[0].name != "docker-test" || !containsArgSequence(runner.calls[0].args, "compose") || !containsArgSequence(runner.calls[0].args, "run") || !containsArgSequence(runner.calls[1].args, "plugins", "list") || !containsArgSequence(runner.calls[2].args, "agents", "add") || !containsArgSequence(runner.calls[2].args, "--model", "gpt-test") || !containsArgSequence(runner.calls[3].args, "agents", "set-identity") || !containsArgSequence(runner.calls[4].args, "agents", "bind", "--agent", "agent-alice", "--bind", "nostr:account-alice") {
 		t.Fatalf("unexpected command sequence: %+v", runner.calls)
 	}
 }
 
-func TestProvisionRequiresLoadedRuntimePluginBeforeAgentMutation(t *testing.T) {
+func TestProvisionAppliesSecretFreeSignetContractToDedicatedRuntime(t *testing.T) {
+	root := t.TempDir()
+	clientKeyRef := filepath.Join(root, "signet", "agent-signet.nip46-client")
+	if err := os.MkdirAll(filepath.Dir(clientKeyRef), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clientKeyRef, []byte(strings.Repeat("1", 64)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{}
+	orchestrator := &recordingOrchestrator{}
+	executor, err := New(Config{
+		Root: root, OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := testProvisionInvocation("agent-signet", "sha256:signet")
+	contract := soulfactory.OpenClawSignetIdentityContract{
+		Schema: soulfactory.OpenClawSignetIdentityContractSchema, AgentID: invocation.AgentID,
+		ControllerPubkey: invocation.Envelope.Controller.Pubkey, RuntimePubkey: invocation.Envelope.Target.RuntimePubkey,
+		ManagedPubkey: strings.Repeat("a", 64), ProvisionerPubkey: strings.Repeat("b", 64),
+		ClientPubkey: strings.Repeat("c", 64), BunkerPubkey: strings.Repeat("d", 64),
+		BunkerURL:    "bunker://" + strings.Repeat("d", 64) + "?relay=wss%3A%2F%2Frelay.example",
+		ClientKeyRef: clientKeyRef, Relays: []string{"wss://relay.example"},
+	}
+	invocation.Params["bahia"] = map[string]interface{}{"signet_identity": contract}
+	outcome := executor.Execute(t.Context(), invocation)
+	assertSuccess(t, outcome, "running")
+	if len(orchestrator.reconciles) != 1 || orchestrator.reconciles[0].SecretFiles["nip46_client"] != clientKeyRef {
+		t.Fatalf("Signet client key was not mounted into the owned runtime: %+v", orchestrator.reconciles)
+	}
+	if len(runner.calls) != 6 || !containsArgSequence(runner.calls[2].args, "--container", orchestrator.reconciles[0].ContainerName, "config", "set", "--batch-json") {
+		t.Fatalf("command sequence = %+v, want dedicated-container NIP-46 config before add/set-identity/bind", runner.calls)
+	}
+	joined := strings.Join(runner.calls[2].args, " ")
+	if strings.Contains(joined, "secret=") || strings.Contains(joined, clientKeyRef) || !strings.Contains(joined, "/run/secrets/nip46_client") || !strings.Contains(joined, contract.BunkerURL) {
+		t.Fatalf("unsafe or incomplete OpenClaw NIP-46 config command: %s", joined)
+	}
+}
+
+func TestProvisionRejectsMismatchedOrSecretBearingSignetContractBeforeCommands(t *testing.T) {
+	for _, mutate := range []func(*soulfactory.OpenClawSignetIdentityContract){
+		func(contract *soulfactory.OpenClawSignetIdentityContract) {
+			contract.RuntimePubkey = strings.Repeat("f", 64)
+		},
+		func(contract *soulfactory.OpenClawSignetIdentityContract) {
+			contract.BunkerURL += "&secret=must-not-pass"
+		},
+	} {
+		runner := &recordingRunner{}
+		executor := newTestExecutor(t, t.TempDir(), false, runner)
+		invocation := testProvisionInvocation("agent-signet-reject", "sha256:signet")
+		contract := soulfactory.OpenClawSignetIdentityContract{
+			Schema: soulfactory.OpenClawSignetIdentityContractSchema, AgentID: invocation.AgentID,
+			ControllerPubkey: invocation.Envelope.Controller.Pubkey, RuntimePubkey: invocation.Envelope.Target.RuntimePubkey,
+			ManagedPubkey: strings.Repeat("a", 64), ClientPubkey: strings.Repeat("c", 64),
+			BunkerURL:    "bunker://" + strings.Repeat("d", 64) + "?relay=wss%3A%2F%2Frelay.example",
+			ClientKeyRef: "/run/openclaw/signet/client", Relays: []string{"wss://relay.example"},
+		}
+		mutate(&contract)
+		invocation.Params["bahia"] = map[string]interface{}{"signet_identity": contract}
+		outcome := executor.Execute(t.Context(), invocation)
+		if outcome.Status != StatusRejected || len(runner.calls) != 0 {
+			t.Fatalf("outcome=%+v calls=%+v, want pre-command rejection", outcome, runner.calls)
+		}
+	}
+}
+
+func TestNonDryRunExactReplayAdoptsWithoutRepeatingAgentMutation(t *testing.T) {
+	runner := &recordingRunner{}
+	orchestrator := &recordingOrchestrator{}
+	executor, err := New(Config{
+		Root: t.TempDir(), OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := testProvisionInvocation("agent-replay", "sha256:spec")
+	assertSuccess(t, executor.Execute(t.Context(), invocation), "running")
+	mutationCalls := countAgentMutationCalls(runner.calls)
+	assertSuccess(t, executor.Execute(t.Context(), invocation), "running")
+	if countAgentMutationCalls(runner.calls) != mutationCalls || len(orchestrator.reconciles) != 2 {
+		t.Fatalf("replay repeated mutations or skipped adoption: commands=%+v reconciles=%d", runner.calls, len(orchestrator.reconciles))
+	}
+}
+
+func TestNonDryRunRejectsSharedExistingContainerWithoutMutation(t *testing.T) {
+	runner := &recordingRunner{}
+	orchestrator := &recordingOrchestrator{}
+	executor, err := New(Config{
+		Root: t.TempDir(), RuntimeMode: RuntimeModeExistingContainer, Container: "marjam-gateway",
+		ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := executor.Execute(t.Context(), testProvisionInvocation("external-soul", "sha256:spec"))
+	if outcome.Status != StatusRejected || outcome.Error == nil || outcome.Error.Code != ErrorUnsupportedMethod {
+		t.Fatalf("shared runtime outcome = %+v", outcome)
+	}
+	if len(runner.calls) != 0 || len(orchestrator.reconciles) != 0 {
+		t.Fatalf("shared incumbent was mutated: runner=%+v reconciles=%+v", runner.calls, orchestrator.reconciles)
+	}
+}
+
+func TestProvisionCommandFailureDeletesOnlyOwnedPartialDeployment(t *testing.T) {
+	runner := &recordingRunner{err: CommandExecutionError{Message: "agent creation failed"}, errAt: 3}
+	orchestrator := &recordingOrchestrator{}
+	executor, err := New(Config{
+		Root: t.TempDir(), OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := executor.Execute(t.Context(), testProvisionInvocation("agent-partial", "sha256:spec"))
+	if outcome.Status != StatusFailed || len(orchestrator.reconciles) != 1 || len(orchestrator.deletes) != 1 {
+		t.Fatalf("partial-create cleanup outcome=%+v reconciles=%d deletes=%d", outcome, len(orchestrator.reconciles), len(orchestrator.deletes))
+	}
+	if orchestrator.deletes[0].DeploymentID != orchestrator.reconciles[0].DeploymentID {
+		t.Fatalf("cleanup ownership changed: create=%+v delete=%+v", orchestrator.reconciles[0], orchestrator.deletes[0])
+	}
+}
+
+func TestProvisionBootstrapsPluginBeforeGatewayAndVerifiesBeforeAgentMutation(t *testing.T) {
 	runner := &recordingRunner{outputs: [][]byte{
 		[]byte(`{"plugins":[]}`),
 		[]byte(`{"installed":true}`),
+		[]byte(`{"plugins":[{"id":"nostr","status":"loaded","enabled":true}]}`),
 	}}
+	orchestrator := &recordingOrchestrator{}
 	executor, err := New(Config{
-		Root: t.TempDir(), OpenClawBin: "openclaw-test",
-		RuntimeMode: RuntimeModeExistingContainer, Container: "openclaw-gateway",
-		RequiredPlugins: []string{"nostr=npm:openclaw-nostr"}, Runner: runner,
+		Root: t.TempDir(), OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
 	})
 	if err != nil {
 		t.Fatalf("New executor: %v", err)
 	}
 	outcome := executor.Execute(t.Context(), testProvisionInvocation("agent-plugin", "sha256:plugin"))
-	if outcome.Status != StatusFailed || outcome.Error == nil || outcome.Error.Code != ErrorRuntimeUnavailable {
-		t.Fatalf("outcome = %+v, want restart-required runtime failure", outcome)
-	}
-	if len(runner.calls) != 2 || !containsArgSequence(runner.calls[0].args, "plugins", "list", "--json") || !containsArgSequence(runner.calls[1].args, "plugins", "install", "npm:openclaw-nostr") {
+	assertSuccess(t, outcome, "running")
+	if len(runner.calls) != 6 || runner.calls[0].name != "docker-test" || !containsArgSequence(runner.calls[0].args, "compose") || !containsArgSequence(runner.calls[0].args, "run") || !containsArgSequence(runner.calls[0].args, "plugins", "list", "--json") || !containsArgSequence(runner.calls[1].args, "plugins", "install", "npm:openclaw-nostr@1.0.0") || !containsArgSequence(runner.calls[2].args, "plugins", "list", "--json") {
 		t.Fatalf("unexpected plugin bootstrap calls: %+v", runner.calls)
 	}
-	if _, err := os.Stat(filepath.Join(executor.config.Root, "agents", "agent-plugin")); !os.IsNotExist(err) {
-		t.Fatalf("agent state must not be created before plugin restart, stat err=%v", err)
+	if len(orchestrator.reconciles) != 1 {
+		t.Fatalf("runtime reconciles = %d, want one gateway create after plugin bootstrap", len(orchestrator.reconciles))
 	}
 }
 
@@ -384,21 +582,21 @@ func TestProvisionContinuesWhenRequiredRuntimePluginIsLoaded(t *testing.T) {
 	runner := &recordingRunner{outputs: [][]byte{
 		[]byte(`{"plugins":[{"id":"nostr","status":"loaded","enabled":true}]}`),
 	}}
+	orchestrator := &recordingOrchestrator{}
 	executor, err := New(Config{
-		Root: t.TempDir(), OpenClawBin: "openclaw-test",
-		RuntimeMode: RuntimeModeExistingContainer, Container: "openclaw-gateway",
-		DefaultBindings: []string{"nostr:dm"},
-		RequiredPlugins: []string{"nostr=npm:openclaw-nostr"}, Runner: runner,
+		Root: t.TempDir(), OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"}, Runner: runner, Orchestrator: orchestrator,
 	})
 	if err != nil {
 		t.Fatalf("New executor: %v", err)
 	}
 	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-plugin", "sha256:plugin")), "running")
-	if len(runner.calls) != 4 {
-		t.Fatalf("calls = %d, want plugin preflight plus add/set-identity/bind: %+v", len(runner.calls), runner.calls)
+	if len(runner.calls) != 5 {
+		t.Fatalf("calls = %d, want bootstrap/runtime plugin checks plus add/set-identity/bind: %+v", len(runner.calls), runner.calls)
 	}
 	for _, call := range runner.calls {
-		if !containsArgSequence(call.args, "--container", "openclaw-gateway") {
+		if call.name == "openclaw-test" && !containsArgSequence(call.args, "--container", orchestrator.reconciles[0].ContainerName) {
 			t.Fatalf("command did not target configured container: %+v", call)
 		}
 	}
@@ -411,17 +609,31 @@ func TestRequiredPluginConfigRejectsAmbiguousInstallSource(t *testing.T) {
 	}
 }
 
+func TestRuntimeModeDefaultsToDedicatedCompose(t *testing.T) {
+	executor, err := FromEnv(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.config.RuntimeMode != RuntimeModePerAgentCompose {
+		t.Fatalf("runtime mode = %q", executor.config.RuntimeMode)
+	}
+}
+
 func newTestExecutor(t *testing.T, root string, dryRun bool, runner CommandRunner) *Executor {
 	t.Helper()
+	orchestrator := &recordingOrchestrator{}
 	executor, err := New(Config{
 		Root:            root,
 		OpenClawBin:     "openclaw-test",
-		RuntimeMode:     RuntimeModeExistingContainer,
-		Container:       "openclaw-gateway",
-		DefaultBindings: []string{"nostr:dm"},
+		DockerBin:       "docker-test",
+		RuntimeMode:     RuntimeModePerAgentCompose,
+		ImageDigest:     testImageDigest,
+		SourceCommit:    testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"},
 		DryRun:          dryRun,
 		Now:             func() time.Time { return time.Unix(1715700005, 0).UTC() },
 		Runner:          runner,
+		Orchestrator:    orchestrator,
 	})
 	if err != nil {
 		t.Fatalf("New executor: %v", err)
@@ -457,8 +669,8 @@ func testInvocation(method, agentID, specHash string, params map[string]interfac
 func provisionParams() map[string]interface{} {
 	return map[string]interface{}{
 		"identity":     map[string]interface{}{"name": "Alice", "purpose": "Operate audited OpenClaw tasks"},
-		"runtime":      map[string]interface{}{"target": "openclaw", "model": "gpt-test"},
-		"permissions":  map[string]interface{}{"allowed_kinds": []interface{}{30317, 38386}},
+		"runtime":      map[string]interface{}{"target": "openclaw", "model": "gpt-test", "account_id": "account-alice"},
+		"permissions":  map[string]interface{}{"allowed_kinds": []interface{}{domain.KindAgentSoul, domain.KindRuntimeControlResult}},
 		"relay_policy": map[string]interface{}{"control": []interface{}{"wss://relay.example"}},
 		"workspace":    map[string]interface{}{"mode": "generated"},
 		"assets":       map[string]interface{}{},
@@ -503,4 +715,14 @@ func containsArgSequence(args []string, seq ...string) bool {
 		}
 	}
 	return false
+}
+
+func countAgentMutationCalls(calls []commandCall) int {
+	count := 0
+	for _, call := range calls {
+		if containsArgSequence(call.args, "agents", "add") || containsArgSequence(call.args, "agents", "set-identity") || containsArgSequence(call.args, "agents", "bind") {
+			count++
+		}
+	}
+	return count
 }

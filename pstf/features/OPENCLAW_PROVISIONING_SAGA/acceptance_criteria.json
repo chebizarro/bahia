@@ -1,0 +1,13 @@
+{
+  "feature_id": "OPENCLAW_PROVISIONING_SAGA",
+  "criteria": [
+    {"id":"OCS-01","text":"Every required stage and immutable secret-free resource lineage is durably persisted."},
+    {"id":"OCS-02","text":"Every mutation is preceded and followed by external inspection; ambiguous responses are correlated without blind repeat."},
+    {"id":"OCS-03","text":"Matching resources are adopted, conflicts fail before mutation, and replay creates no side effects."},
+    {"id":"OCS-04","text":"Compensation runs in reverse dependency order and never removes adopted, pre-existing, incumbent, or ownership-mismatched resources."},
+    {"id":"OCS-05","text":"Optimistic versions prevent an old error from overwriting newer success."},
+    {"id":"OCS-06","text":"Running requires correlated Bahia terminal-projection lineage covering authoritative 7950/31951 inspection."},
+    {"id":"OCS-07","text":"Operators can inspect, retry, reconcile, and safe-abort with non-mutating dry-run reports."},
+    {"id":"OCS-08","text":"Expired failed and rolled-back state is purged by explicit retention while successful state remains."}
+  ]
+}

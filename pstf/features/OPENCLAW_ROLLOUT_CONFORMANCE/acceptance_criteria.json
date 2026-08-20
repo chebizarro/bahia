@@ -1,0 +1,33 @@
+{
+  "feature_id": "OPENCLAW_ROLLOUT_CONFORMANCE",
+  "criteria": [
+    {
+      "id": "ORC-01",
+      "text": "Two disposable souls provision sequentially and concurrently with isolated lineage and DM routing."
+    },
+    {
+      "id": "ORC-02",
+      "text": "Exact replay, conflicting replay, process restarts, relay disconnect/backfill, and failure compensation are deterministic."
+    },
+    {
+      "id": "ORC-03",
+      "text": "Durable secret-free observability identifies build, instance, run, stage, readiness, DM gate, terminal truth, retries, rollback, denial, orphan, and mismatch evidence."
+    },
+    {
+      "id": "ORC-04",
+      "text": "Alert definitions cover stuck stage, progress without terminal, false running, orphan candidates, repeated Signet denial, and correlation mismatch."
+    },
+    {
+      "id": "ORC-05",
+      "text": "Repository-derived inventory maps incumbents to ownership rules without credentials or live contact."
+    },
+    {
+      "id": "ORC-06",
+      "text": "Operator runbooks cover deploy, inspect, trace, retry, reconcile, abort, backup/restore, policy rotation, cleanup, rollback, and incident response."
+    },
+    {
+      "id": "ORC-07",
+      "text": "Rollout uses pinned source commits, requires immutable image digests, progresses through two canaries, and preserves valid identities on rollback."
+    }
+  ]
+}

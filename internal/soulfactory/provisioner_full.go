@@ -45,6 +45,9 @@ type FullProvisioner struct {
 	concordMembership        concordMembershipAssigner
 	concordMembershipErr     error
 	runtimeAdapters          map[domain.RuntimeTarget]RuntimeAdapter
+	signetEnrollment         OpenClawSignetEnrollment
+	signetProvisionerPubkey  string
+	openClawReadiness        OpenClawReadiness
 	lookupSoul               func(context.Context, string) (*domain.AgentSoul, error)
 }
 
@@ -57,12 +60,15 @@ type FullProvisionerConfig struct {
 	Workspace   WorkspaceConfig
 	NIP05       NIP05Config
 	// NIP05Relays are advertised for provisioned identities. They must be explicitly configured when NIP-05 is enabled.
-	NIP05Relays            []string
-	NIP29Groups            []NIP29Group
-	CommunikeysCommunities []CommunikeysCommunity
-	ConcordCommunities     []ConcordCommunity
-	Bahia                  BahiaIntegrationConfig
-	RuntimeAdapters        map[domain.RuntimeTarget]RuntimeAdapter
+	NIP05Relays             []string
+	NIP29Groups             []NIP29Group
+	CommunikeysCommunities  []CommunikeysCommunity
+	ConcordCommunities      []ConcordCommunity
+	Bahia                   BahiaIntegrationConfig
+	RuntimeAdapters         map[domain.RuntimeTarget]RuntimeAdapter
+	SignetEnrollment        OpenClawSignetEnrollment
+	SignetProvisionerPubkey string
+	OpenClawReadiness       OpenClawReadiness
 }
 
 // NewFullProvisioner creates a provisioner with all adapters.
@@ -94,6 +100,9 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 		concordMembershipErr:     concordErr,
 		nip05Relays:              append([]string(nil), config.NIP05Relays...),
 		runtimeAdapters:          cloneRuntimeAdapters(config.RuntimeAdapters),
+		signetEnrollment:         config.SignetEnrollment,
+		signetProvisionerPubkey:  strings.ToLower(strings.TrimSpace(config.SignetProvisionerPubkey)),
+		openClawReadiness:        config.OpenClawReadiness,
 		lookupSoul:               reactor.GetSoul,
 	}
 	if len(config.Blossom.Servers) > 0 {
@@ -160,11 +169,14 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	}
 
 	totalSteps := len(domain.ProvisioningSteps)
+	if resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+		totalSteps += OpenClawReadinessGateCount()
+	}
 
 	// Step 1: Generate soul content
 	logger.Info("step 1/8: generating soul content")
 	run.CurrentStep = domain.StepGenerate
-	if err := p.publishProgress(ctx, requestEvent, domain.StepGenerate, 1, totalSteps, "Generating soul content via LLM..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepGenerate, 1, totalSteps, "Generating soul content via LLM...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -225,7 +237,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 2: Register with Signet
 	logger.Info("step 2/8: registering with Signet")
 	run.CurrentStep = domain.StepSignet
-	if err := p.publishProgress(ctx, requestEvent, domain.StepSignet, 2, totalSteps, "Registering keypair with Signet..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepSignet, 2, totalSteps, "Registering keypair with Signet...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -238,7 +250,15 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	soul.NostrPubkey = pubkey
 	soul.NostrNpub = npub
-	soul.BunkerURI = bunkerURI
+	if p.signetEnrollment != nil && resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+		if err := p.signetEnrollment.StageHandoff(ctx, resolved.AgentID, bunkerURI); err != nil {
+			p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("protect OpenClaw one-time bunker handoff: %w", err)
+		}
+		soul.BunkerURI = ""
+	} else {
+		soul.BunkerURI = bunkerURI
+	}
 
 	var assignedGroups []string
 	var assignedCommunities []string
@@ -286,7 +306,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 3: Generate and upload avatar
 	logger.Info("step 3/8: generating avatar")
 	run.CurrentStep = domain.StepAvatar
-	if err := p.publishProgress(ctx, requestEvent, domain.StepAvatar, 3, totalSteps, "Generating avatar via FLUX..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepAvatar, 3, totalSteps, "Generating avatar via FLUX...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -324,7 +344,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 4: Publish Nostr profile
 	logger.Info("step 4/8: publishing Nostr profile")
 	run.CurrentStep = domain.StepProfile
-	if err := p.publishProgress(ctx, requestEvent, domain.StepProfile, 4, totalSteps, "Publishing Nostr profile (kind:0)..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepProfile, 4, totalSteps, "Publishing Nostr profile (kind:0)...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -344,7 +364,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 5: Create Qdrant collection
 	logger.Info("step 5/8: creating Qdrant collection")
 	run.CurrentStep = domain.StepQdrant
-	if err := p.publishProgress(ctx, requestEvent, domain.StepQdrant, 5, totalSteps, "Creating vector memory collection..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepQdrant, 5, totalSteps, "Creating vector memory collection...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -368,7 +388,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 6: Seed agent-memory
 	logger.Info("step 6/8: seeding agent memory")
 	run.CurrentStep = domain.StepMemory
-	if err := p.publishProgress(ctx, requestEvent, domain.StepMemory, 6, totalSteps, "Seeding agent memory..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepMemory, 6, totalSteps, "Seeding agent memory...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -400,7 +420,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 7: Initialize workspace
 	logger.Info("step 7/8: initializing workspace")
 	run.CurrentStep = domain.StepWorkspace
-	if err := p.publishProgress(ctx, requestEvent, domain.StepWorkspace, 7, totalSteps, "Initializing workspace repository..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepWorkspace, 7, totalSteps, "Initializing workspace repository...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -425,7 +445,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	// Step 8: Register NIP-05 and finalize
 	logger.Info("step 8/8: registering NIP-05 and finalizing")
 	run.CurrentStep = domain.StepDeploy
-	if err := p.publishProgress(ctx, requestEvent, domain.StepDeploy, 8, totalSteps, "Registering NIP-05 and finalizing..."); err != nil {
+	if err := p.publishProgress(ctx, requestEvent, domain.StepDeploy, 8, totalSteps, "Registering NIP-05 and configuring runtime...", run.ID.String()); err != nil {
 		return nil, err
 	}
 
@@ -476,6 +496,47 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 			return nil, err
 		}
+		if resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+			soul.Runtime.State = "readiness_pending"
+		}
+	}
+
+	if resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+		if p.openClawReadiness == nil {
+			return nil, fmt.Errorf("verify OpenClaw readiness: readiness verifier is not configured")
+		}
+		accountID := stringResult(runtimeResult.Result, "account_id")
+		model := stringResult(runtimeResult.Result, "model")
+		provider := stringResult(runtimeResult.Result, "provider")
+		if provider == "" {
+			provider = providerFromModel(model)
+		}
+		soul.Runtime.Provider = provider
+		soul.Runtime.Model = model
+		requiredRelays := requiredReadinessRelays(soul.RelayPolicy.Read, soul.RelayPolicy.Write, soul.RelayPolicy.Control)
+		evidence, err := p.openClawReadiness.Verify(ctx, OpenClawReadinessRequest{
+			RequestID: run.RequestID, RunID: run.ID.String(), AgentID: soul.AgentID,
+			AccountID: accountID, RuntimeBinding: soul.Runtime.RuntimeBinding,
+			ManagedPubkey: soul.NostrPubkey, Provider: provider, Model: model,
+			RequiredRelays: requiredRelays,
+		}, func(progress OpenClawReadinessProgress) error {
+			current := len(domain.ProvisioningSteps) + progress.Current
+			return p.publishProgress(ctx, requestEvent, domain.ProvisioningStep(progress.Gate), current, totalSteps, progress.Message, run.ID.String())
+		})
+		if err != nil {
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, fmt.Errorf("verify OpenClaw readiness: %w", err)
+		}
+		gateTimings := make(map[string]int64, len(evidence.GateTimingsMS))
+		for gate, duration := range evidence.GateTimingsMS {
+			gateTimings[string(gate)] = duration
+		}
+		soul.Readiness = &domain.SoulReadinessEvidence{
+			RequestID: evidence.RequestID, RunID: evidence.RunID, VerifiedAt: evidence.VerifiedAt,
+			TotalDurationMS: evidence.TotalDurationMS, GateTimingsMS: gateTimings,
+			ProbeEventIDs: append([]string(nil), evidence.ProbeEventIDs...),
+		}
+		soul.Runtime.State = "running"
 	}
 
 	// Register with bahia if integration is configured
@@ -608,6 +669,11 @@ func (p *FullProvisioner) RevokeSoul(ctx context.Context, soulRef, reason string
 		}
 	}
 	if soul.NostrPubkey != "" {
+		if p.signetEnrollment != nil && soul.Runtime.Target == domain.RuntimeTargetOpenClaw {
+			if err := p.signetEnrollment.Revoke(ctx, soul.AgentID); err != nil {
+				return fmt.Errorf("revoke OpenClaw NIP-46 client access: %w", err)
+			}
+		}
 		if err := p.reactor.signer.RevokeAgent(ctx, soul.NostrPubkey); err != nil {
 			return fmt.Errorf("revoke signer access: %w", err)
 		}
@@ -679,12 +745,20 @@ func (p *FullProvisioner) RedeploySoul(ctx context.Context, soulRef string) erro
 	return nil
 }
 
-func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) error {
-	if err := p.reactor.PublishStatus(ctx, requestEvent, step, current, total, message); err != nil {
+func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string, runID ...string) error {
+	if err := p.reactor.PublishStatus(ctx, requestEvent, step, current, total, message, runID...); err != nil {
 		p.reactor.logger.Error("failed to publish progress", "step", step, "error", err)
 		return fmt.Errorf("publish progress %s: %w", step, err)
 	}
 	return nil
+}
+
+func providerFromModel(model string) string {
+	model = strings.TrimSpace(model)
+	if provider, _, ok := strings.Cut(model, "/"); ok {
+		return strings.TrimSpace(provider)
+	}
+	return ""
 }
 
 func explicitNIP05Relays(configured []string) ([]string, error) {
@@ -725,6 +799,29 @@ func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *dom
 	if adapter == nil {
 		return nil, fmt.Errorf("no runtime adapter configured for %s", resolved.Runtime.Target)
 	}
+	var capability *RuntimeCapability
+	if p.signetEnrollment != nil && resolved.Runtime.Target == domain.RuntimeTargetOpenClaw {
+		capabilities, err := adapter.DiscoverCapabilities(ctx, resolved.RelayPolicy)
+		if err != nil {
+			return nil, fmt.Errorf("discover OpenClaw runtime for Signet enrollment: %w", err)
+		}
+		capability = selectRuntimeCapability(capabilities, resolved.Runtime.Target, RuntimeMethodProvision, p.reactor.config.SoulFactoryPubkey, resolved.Runtime.RuntimePubkey)
+		if capability == nil || strings.TrimSpace(capability.Pubkey) == "" {
+			return nil, fmt.Errorf("no exact OpenClaw runtime identity is available for Signet enrollment")
+		}
+		resolved.Runtime.RuntimePubkey = capability.Pubkey
+		contract, err := p.signetEnrollment.Enroll(ctx, OpenClawSignetEnrollmentRequest{
+			AgentID: resolved.AgentID, ControllerPubkey: p.reactor.config.SoulFactoryPubkey,
+			RuntimePubkey: capability.Pubkey, ManagedPubkey: soul.NostrPubkey,
+			ProvisionerPubkey: p.signetProvisionerPubkey, BunkerURI: soul.BunkerURI,
+			AllowedKinds: soul.AllowedKinds,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("enroll OpenClaw Signet identity: %w", err)
+		}
+		resolved.SignetIdentity = contract
+		soul.BunkerURI = ""
+	}
 	result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
 		Method: RuntimeMethodProvision,
 		Operator: RuntimeOperatorRef{
@@ -743,6 +840,7 @@ func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *dom
 		},
 		Params:      resolved.provisionRuntimeParams(soul),
 		DraftPolicy: resolved.RelayPolicy,
+		Capability:  capability,
 		RequestKind: domain.KindProvisioningRequest,
 	})
 	if err != nil {
