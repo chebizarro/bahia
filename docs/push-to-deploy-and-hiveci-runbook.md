@@ -66,15 +66,16 @@ The checked-in workflow is `.github/workflows/deploy-edge.yml`. It:
 2. requires the `self-hosted`, `edge-01`, and `docker` runner labels;
 3. serializes deploys with `cancel-in-progress: false`;
 4. grants only `contents: read` GitHub token permissions;
-5. preflights the branch, SHA, Docker access, Compose path, release root, backup directory, and required local tools;
-6. builds `local/bahia-controlplane-bahia:github-<shortsha>` from the repository root;
-7. builds `local/bahia-controlplane-web:github-<shortsha>` from `web/Dockerfile`;
-8. stages the checkout to `/srv/data/bahia-controlplane/releases/github-<shortsha>` with `rsync -a --delete --exclude .git`;
-9. captures the pre-rollout validated relay-policy event ID/hash/author/timestamp and backs up the live Compose file;
-10. resolves the locally built backend and web image IDs and writes immutable `repository@sha256:<digest>` references;
-11. validates and applies the updated Compose file;
-12. waits for `/ready`, then requires the same-or-newer hydrated relay-policy projection plus relay and web reachability;
-13. automatically restores the previous Compose file and services if any post-mutation gate fails:
+5. installs the pinned root-level Node dependency for the Soul gallery gate and preflights its WebSocket runtime;
+6. preflights the branch, SHA, Docker access, Compose path, release root, backup directory, and required local tools;
+7. builds `local/bahia-controlplane-bahia:github-<shortsha>` from the repository root;
+8. builds `local/bahia-controlplane-web:github-<shortsha>` from `web/Dockerfile`;
+9. stages the checkout to `/srv/data/bahia-controlplane/releases/github-<shortsha>` with `rsync -a --delete --exclude .git`;
+10. captures the pre-rollout validated relay-policy event ID/hash/author/timestamp and backs up the live Compose file;
+11. resolves the locally built backend and web image IDs and writes immutable `repository@sha256:<digest>` references;
+12. validates and applies the updated Compose file;
+13. waits for `/ready`, then requires the same-or-newer hydrated relay-policy projection plus relay, web, and Soul gallery reachability;
+14. automatically restores the previous Compose file and services if any post-mutation gate fails:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/ready
@@ -139,6 +140,7 @@ python3 -m unittest discover -s test/scripts -p 'test_*.py'
 
 ### Operational Notes
 
+- The Soul gallery gate prefers the Node runtime's global `WebSocket` and loads the pinned root `ws` devDependency when the global is absent (including Node 18). Run `npm ci --include=dev --ignore-scripts && npm run check:soul-gallery-gate` to validate startup without contacting a relay; `npm test` exercises both global-present and global-absent startup paths.
 - `/health` is liveness, not the active-tier readiness gate. Before declaring the edge rollout ready, operators must also require `curl -fsS http://127.0.0.1:8080/ready`; Bahia returns `503` when required readiness checks fail.
 - The workflow automatically restores the prior Compose file and restarts the three services when the post-rollout readiness, projection, relay, or web gate fails.
 - Keep `cancel-in-progress: false`; interrupted production deploys are worse than serialized deploys.

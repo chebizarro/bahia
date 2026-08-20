@@ -3,6 +3,34 @@
 // Fail a rollout unless the public browser relay exposes both a deployed Soul
 // and an unresolved draft. This checks the same Nostr read model used by the UI.
 
+async function resolveWebSocket() {
+  if (typeof globalThis.WebSocket === 'function') {
+    return { WebSocketImplementation: globalThis.WebSocket, websocketSource: 'global' };
+  }
+
+  try {
+    const { WebSocket } = await import('ws');
+    if (typeof WebSocket !== 'function') throw new Error('the ws package did not export WebSocket');
+    return { WebSocketImplementation: WebSocket, websocketSource: 'ws' };
+  } catch (error) {
+    throw new Error(`WebSocket is unavailable; run npm ci --include=dev at the repository root (${error.message})`);
+  }
+}
+
+let WebSocketImplementation;
+let websocketSource;
+try {
+  ({ WebSocketImplementation, websocketSource } = await resolveWebSocket());
+} catch (error) {
+  console.error(`soul_gallery_rollout_gate: ${error.message}`);
+  process.exit(1);
+}
+
+if (process.argv.includes('--preflight')) {
+  console.log(JSON.stringify({ websocketSource }));
+  process.exit(0);
+}
+
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 2) args.set(process.argv[i], process.argv[i + 1]);
 
@@ -21,7 +49,7 @@ function query(url) {
   return new Promise((resolve, reject) => {
     const subscription = `bahia-gallery-gate-${Date.now()}`;
     const events = [];
-    const socket = new WebSocket(url);
+    const socket = new WebSocketImplementation(url);
     const timer = setTimeout(() => {
       socket.close();
       reject(new Error('timed out waiting for browser relay EOSE'));
