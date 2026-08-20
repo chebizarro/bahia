@@ -865,6 +865,25 @@ type signetJSONRPCResponse struct {
 	} `json:"error,omitempty"`
 }
 
+func consumeSignetManagementResponse(requestID string, resp signetJSONRPCResponse, out interface{}) (bool, error) {
+	// A management subscription intentionally includes up to twelve hours of
+	// NIP-59 history. Correlate before interpreting either an error or result so
+	// a terminal response for an older request cannot abort the current one.
+	if resp.ID != requestID {
+		return false, nil
+	}
+	if resp.Error != nil {
+		return true, fmt.Errorf("Signet management error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	if out == nil || len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return true, nil
+	}
+	if err := json.Unmarshal(resp.Result, out); err != nil {
+		return true, fmt.Errorf("parse Signet management result: %w", err)
+	}
+	return true, nil
+}
+
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
 	bunkerPubkey, relayURLs, _, err := ParseBunkerURI(c.bunkerURI)
 	if err != nil {
@@ -998,22 +1017,11 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil {
 			continue
 		}
-		if resp.Error != nil {
-			return fmt.Errorf("Signet management error %d: %s", resp.Error.Code, resp.Error.Message)
-		}
-		if resp.ID != requestID {
+		matched, err := consumeSignetManagementResponse(requestID, resp, out)
+		if !matched {
 			continue
 		}
-		if out == nil {
-			return nil
-		}
-		if len(resp.Result) == 0 || string(resp.Result) == "null" {
-			return nil
-		}
-		if err := json.Unmarshal(resp.Result, out); err != nil {
-			return fmt.Errorf("parse Signet management result: %w", err)
-		}
-		return nil
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("await Signet management response: %w", err)

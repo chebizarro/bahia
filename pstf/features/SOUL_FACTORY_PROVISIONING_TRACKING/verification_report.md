@@ -71,3 +71,10 @@ The approved feature slice is now fully verified against the current acceptance 
 
 ## Recommendation
 `SOUL_FACTORY_PROVISIONING_TRACKING` can move to confidence scoring / adversarial review / final HITL review for the approved slice.
+
+## 2026-08-19 Production Correlation Regression
+
+- **Observed:** Signet successfully and idempotently provisioned `snr`, but Bahia aborted after decrypting a historical `-32002` response addressed to the same controller identity.
+- **Root cause:** `internal/adapters/signet/client.go` interpreted `resp.Error` before comparing `resp.ID` with the active JSON-RPC request ID. The intentionally broad twelve-hour NIP-59 catch-up therefore allowed an unrelated historical error to terminate a new request.
+- **Fix:** Correlate every decrypted response by request ID before interpreting either its error or result.
+- **Deterministic evidence:** `go test ./internal/adapters/signet` passes in `golang:1.26.3-alpine`, including `TestConsumeSignetManagementResponseCorrelatesBeforeError` for stale-error followed by current-success ordering.
