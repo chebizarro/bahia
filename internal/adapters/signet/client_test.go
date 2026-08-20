@@ -2,6 +2,7 @@ package signet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -11,6 +12,35 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
+
+func TestConsumeSignetManagementResponseCorrelatesBeforeError(t *testing.T) {
+	stale := signetJSONRPCResponse{ID: "older-request"}
+	stale.Error = &struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    string `json:"data,omitempty"`
+	}{Code: -32002, Message: "sender is not an authorized Signet provisioner"}
+
+	matched, err := consumeSignetManagementResponse("current-request", stale, nil)
+	if matched || err != nil {
+		t.Fatalf("stale error matched=%v error=%v, want ignored", matched, err)
+	}
+
+	var got struct {
+		Pubkey string `json:"pubkey"`
+	}
+	current := signetJSONRPCResponse{
+		ID:     "current-request",
+		Result: json.RawMessage(`{"pubkey":"abc123"}`),
+	}
+	matched, err = consumeSignetManagementResponse("current-request", current, &got)
+	if !matched || err != nil {
+		t.Fatalf("current success matched=%v error=%v", matched, err)
+	}
+	if got.Pubkey != "abc123" {
+		t.Fatalf("pubkey=%q, want abc123", got.Pubkey)
+	}
+}
 
 func TestNewClient(t *testing.T) {
 	client, err := NewClient(Config{}, nil)
