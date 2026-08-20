@@ -39,6 +39,12 @@
         "ORC-07"
       ],
       "test": "document review against authoritative task and repository evidence"
+    },
+    {
+      "criteria": [
+        "ORC-07"
+      ],
+      "test": "scripts/soul_gallery_rollout_gate_preflight.test.mjs"
     }
   ]
 }

@@ -1,0 +1,12 @@
+{
+  "name": "bahia-rollout-gates",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:soul-gallery-gate": "node scripts/soul_gallery_rollout_gate.mjs --preflight",
+    "test": "node --test scripts/soul_gallery_rollout_gate_preflight.test.mjs"
+  },
+  "devDependencies": {
+    "ws": "8.21.3"
+  }
+}

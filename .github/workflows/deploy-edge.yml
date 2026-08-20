@@ -43,6 +43,15 @@ jobs:
             fetch --no-tags --depth=1 origin "$GITHUB_SHA"
           git checkout --force --detach FETCH_HEAD
 
+      - name: Prepare Soul gallery rollout gate runtime
+        run: |
+          set -euo pipefail
+
+          command -v node >/dev/null
+          command -v npm >/dev/null
+          npm ci --include=dev --ignore-scripts
+          npm run check:soul-gallery-gate
+
       - name: Preflight edge deploy inputs
         run: |
           set -euo pipefail
@@ -58,6 +67,7 @@ jobs:
           command -v rsync >/dev/null
           command -v python3 >/dev/null
           command -v node >/dev/null
+          command -v npm >/dev/null
           command -v curl >/dev/null
           docker version >/dev/null
           docker compose version >/dev/null

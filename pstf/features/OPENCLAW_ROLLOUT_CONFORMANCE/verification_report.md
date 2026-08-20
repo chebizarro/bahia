@@ -26,3 +26,10 @@ Final integration verification at merge `e1f48e7498245d2ba26de5855af77333914c3e1
 - web lint — 0 errors and 0 warnings; unit tests — 88 files / 675 tests passed; production build — passed
 
 Track B must capture immutable deployed OCI digests, exercise the harness against isolated real dependencies, rehearse rollback, and independently verify incumbent reachability; Track A does not contact live systems.
+
+Gallery gate runtime verification on branch `fix/soul-gallery-gate-node-runtime-20260820`:
+
+- the gate prefers a server-side Node global `WebSocket` and falls back to the pinned `ws` package when the global is absent;
+- `npm run check:soul-gallery-gate` validates startup without contacting a relay;
+- `npm test` deterministically covers both global-present and global-absent startup paths;
+- `.github/workflows/deploy-edge.yml` installs the pinned dependency and runs the startup preflight before any deployment mutation.
