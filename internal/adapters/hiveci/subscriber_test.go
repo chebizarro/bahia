@@ -201,6 +201,52 @@ func TestHandleEventIngestsValidWorkflowRunAndResult(t *testing.T) {
 	require.Equal(t, nostrutil.EventIDHex(result), called)
 }
 
+func TestReleaseWorkflowRunDispatchPreservesRepositoryAndRef(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), nil)
+	s.now = func() time.Time { return now }
+	var dispatched WorkflowRunDispatch
+	s.SetRunConsumer(func(_ context.Context, run WorkflowRunDispatch) { dispatched = run })
+
+	run := signedHiveCIEvent(t, kindWorkflowRun, now, nostr.Tags{
+		{"a", "30617:pk:bahia"}, {"commit", "abc"}, {"branch", "v0.2.0-rc.1"},
+		{"ref", "refs/tags/v0.2.0-rc.1"}, {"repo", "https://git.example/bahia.git"},
+		{"workflow", ".github/workflows/release.yml"}, {"triggered-by", "nip34-tag"},
+		{"publisher", publisher}, {"release", "true"},
+	})
+	s.handleEvent(context.Background(), run)
+
+	require.Equal(t, nostrutil.EventIDHex(run), dispatched.RunEventID)
+	require.Equal(t, "https://git.example/bahia.git", dispatched.Repository)
+	require.Equal(t, "refs/tags/v0.2.0-rc.1", dispatched.Ref)
+	require.Equal(t, ".github/workflows/release.yml", dispatched.Workflow)
+	require.True(t, dispatched.Release)
+}
+
+func TestReleaseWorkflowRunReplayDispatchesOnlyOnce(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), nil)
+	s.now = func() time.Time { return now }
+	dispatches := 0
+	s.SetRunConsumer(func(context.Context, WorkflowRunDispatch) { dispatches++ })
+
+	run := signedHiveCIEvent(t, kindWorkflowRun, now, nostr.Tags{
+		{"a", "30617:pk:bahia"}, {"commit", "abc"}, {"branch", "v0.2.0-rc.1"},
+		{"ref", "refs/tags/v0.2.0-rc.1"}, {"repo", "https://git.example/bahia.git"},
+		{"workflow", ".github/workflows/release.yml"}, {"triggered-by", "nip34-tag"},
+		{"publisher", publisher}, {"release", "true"},
+	})
+
+	s.handleEvent(context.Background(), run)
+	s.handleEvent(context.Background(), run)
+
+	require.Equal(t, 1, dispatches)
+}
+
 func TestSubscribeAuthRequiredClosedAuthenticatesAndRetriesImmediately(t *testing.T) {
 	repo := newTestHiveRepo()
 	now := time.Unix(1_700_000_000, 0).UTC()

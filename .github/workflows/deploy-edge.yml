@@ -57,6 +57,7 @@ jobs:
           command -v docker >/dev/null
           command -v rsync >/dev/null
           command -v python3 >/dev/null
+          command -v node >/dev/null
           command -v curl >/dev/null
           docker version >/dev/null
           docker compose version >/dev/null
@@ -66,6 +67,7 @@ jobs:
           test -d docs
           test -f scripts/deploy_edge_compose_update.py
           test -f scripts/relay_policy_rollout_gate.py
+          test -f scripts/soul_gallery_rollout_gate.mjs
           test -f "$COMPOSE_FILE"
           test -w "$CONTROLPLANE_ROOT"
           mkdir -p "$RELEASE_ROOT" "$CONTROLPLANE_ROOT/backups"
@@ -164,6 +166,9 @@ jobs:
             -fsS -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null
           curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
             -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null
+          node scripts/soul_gallery_rollout_gate.mjs \
+            --relay "$PUBLIC_BAHIA_BOOTSTRAP_RELAYS" \
+            --expected-soul marjam
 
           rollback_armed=0
           trap - EXIT

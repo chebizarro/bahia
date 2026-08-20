@@ -36,7 +36,7 @@ func testDesiredSpec() *domain.DesiredServiceSpec {
 		Entrypoint:       []string{"/docker-entrypoint.sh"},
 		WorkDir:          "/app",
 		Env: map[string]string{
-			"APP_ENV":  "production",
+			"APP_ENV":   "production",
 			"LOG_LEVEL": "info",
 		},
 		SecretRefs: []domain.DesiredSecretRef{
@@ -53,8 +53,8 @@ func testDesiredSpec() *domain.DesiredServiceSpec {
 				RedactedValue: "REDACTED(API_KEY)",
 			},
 		},
-		Ports:         []string{"8080:80", "9090:9090"},
-		Volumes:       []string{"/data/api:/app/data:ro", "/tmp/cache:/cache"},
+		Ports:   []string{"8080:80", "9090:9090"},
+		Volumes: []string{"/data/api:/app/data:ro", "/tmp/cache:/cache"},
 		Labels: map[string]string{
 			"bahia.managed":        "true",
 			"bahia.service_id":     testServiceID.String(),
@@ -98,6 +98,17 @@ func TestBahiaContainerNameNilSpec(t *testing.T) {
 	t.Parallel()
 	if name := BahiaContainerName(nil); name != "" {
 		t.Errorf("BahiaContainerName(nil) = %q, want empty", name)
+	}
+}
+
+func TestBahiaContainerNamePreservesAdoptedRuntimeName(t *testing.T) {
+	spec := &domain.DesiredServiceSpec{
+		EnvironmentID:    uuid.MustParse("12345678-1234-1234-1234-123456789abc"),
+		StableServiceKey: "web",
+		DockerExtension:  &domain.DockerExtension{ContainerName: "bahia-web"},
+	}
+	if name := BahiaContainerName(spec); name != "bahia-web" {
+		t.Fatalf("BahiaContainerName() = %q, want adopted name", name)
 	}
 }
 
@@ -629,8 +640,8 @@ func TestFindBahiaManagedContainer_PrefersLabels(t *testing.T) {
 	t.Parallel()
 
 	labelContainer := DockerContainer{
-		ID:     "label-match-id",
-		Names:  []string{"/some-other-name"},
+		ID:    "label-match-id",
+		Names: []string{"/some-other-name"},
 		Labels: map[string]string{
 			"bahia.service_id":     testServiceID.String(),
 			"bahia.environment_id": testEnvironmentID.String(),

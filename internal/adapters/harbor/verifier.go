@@ -49,7 +49,12 @@ func (v *Verifier) VerifyImage(ctx context.Context, imageRepo, reference string)
 // parseImageRepo splits "project/repo" into its components.
 // Supports multi-level repos like "project/sub/repo" where project is the first segment.
 func parseImageRepo(imageRepo string) (project, repo string, err error) {
-	parts := strings.SplitN(imageRepo, "/", 2)
+	imageRepo = strings.TrimSpace(imageRepo)
+	parts := strings.Split(imageRepo, "/")
+	if len(parts) >= 3 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost") {
+		imageRepo = strings.Join(parts[1:], "/")
+	}
+	parts = strings.SplitN(imageRepo, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("invalid image repo format %q: expected \"project/repository\"", imageRepo)
 	}

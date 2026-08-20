@@ -40,6 +40,7 @@ const (
 	ContextVMMethodEnvironmentCreate       = "environment/create"
 	ContextVMMethodEnvironmentUpdate       = "environment/update"
 	ContextVMMethodEnvironmentDelete       = "environment/delete"
+	ContextVMMethodArtifactRegister        = "artifact/register"
 
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
 )
@@ -72,6 +73,7 @@ type RegistryMutationBackend interface {
 	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
 	UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, expectedUpdatedAt time.Time) error
 	DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error
+	RegisterArtifact(ctx context.Context, artifact *domain.Artifact) error
 }
 
 type EncryptedRouteHandlersConfig struct {
@@ -145,6 +147,42 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentCreate, h.CreateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
+	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegister, h.RegisterArtifact)
+}
+
+func (h *EncryptedRouteHandlers) RegisterArtifact(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("artifact registry mutation handling is not configured")
+	}
+	var payload dto.RegisterArtifactRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	if payload.BuildID == uuid.Nil || payload.ServiceID == uuid.Nil {
+		return nil, fmt.Errorf("build_id and service_id are required")
+	}
+	if strings.TrimSpace(payload.ImageRepo) == "" || strings.TrimSpace(payload.ImageTag) == "" || strings.TrimSpace(payload.ImageDigest) == "" {
+		return nil, fmt.Errorf("image_repo, image_tag, and image_digest are required")
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermWriteServices); err != nil {
+		return nil, err
+	}
+	scanStatus := domain.ScanStatus(strings.TrimSpace(payload.ScanStatus))
+	if scanStatus == "" {
+		scanStatus = domain.ScanStatusUnknown
+	}
+	artifact := &domain.Artifact{
+		BuildID: payload.BuildID, ServiceID: payload.ServiceID,
+		ImageRepo: strings.TrimSpace(payload.ImageRepo), ImageTag: strings.TrimSpace(payload.ImageTag),
+		ImageDigest: strings.TrimSpace(payload.ImageDigest), ManifestMediaType: strings.TrimSpace(payload.ManifestMediaType),
+		SizeBytes: payload.SizeBytes, SBOMURL: strings.TrimSpace(payload.SBOMURL), SignatureRef: strings.TrimSpace(payload.SignatureRef),
+		ScanStatus: scanStatus, Metadata: payload.Metadata,
+	}
+	if err := h.registry.RegisterArtifact(ctx, artifact); err != nil {
+		return nil, fmt.Errorf("failed to register artifact: %w", err)
+	}
+	return map[string]any{"status": "registered", "artifact": artifact, "artifact_id": artifact.ID.String()}, nil
 }
 
 type encryptedRouteHandler = EncryptedRequestHandler
@@ -319,6 +357,21 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 			svc.RuntimeConfig = &domain.ServiceRuntimeConfig{}
 		}
 		svc.RuntimeConfig.Managed = managed
+	}
+	if payload.AdoptedPublicEnvironment != nil {
+		if svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+			return nil, fmt.Errorf("adopted_public_environment requires an already-adopted service")
+		}
+		if svc.RuntimeConfig.Adopted.Environment == nil {
+			svc.RuntimeConfig.Adopted.Environment = map[string]string{}
+		}
+		for key, value := range payload.AdoptedPublicEnvironment {
+			key = strings.TrimSpace(key)
+			if !strings.HasPrefix(key, "PUBLIC_") {
+				return nil, fmt.Errorf("adopted public environment key %q must use the PUBLIC_ prefix", key)
+			}
+			svc.RuntimeConfig.Adopted.Environment[key] = value
+		}
 	}
 	if err := h.registry.UpdateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("failed to update service: %w", err)

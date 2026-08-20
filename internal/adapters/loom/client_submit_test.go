@@ -155,6 +155,7 @@ func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
 		Params: map[string]string{
 			"repo":     "https://git.sharegap.net/cascadia/loom-worker.git",
 			"ref":      "main",
+			"run":      "5401-event-id",
 			"workflow": ".github/workflows/package-deb.yaml",
 			"payment":  "forged-payment",
 			"p":        strings.Repeat("f", 64),
@@ -171,6 +172,7 @@ func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
 	for key, want := range map[string]string{
 		"repo":     "https://git.sharegap.net/cascadia/loom-worker.git",
 		"ref":      "main",
+		"run":      "5401-event-id",
 		"workflow": ".github/workflows/package-deb.yaml",
 	} {
 		if got := getTagValue(event.Tags, key); got != want {

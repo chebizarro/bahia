@@ -144,7 +144,7 @@ func (s *sqliteStore) SweepRetention(ctx context.Context, now time.Time, eventRe
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM events
 		WHERE (kind IN (?, ?, ?) AND created_at < ?)
-		   OR (kind NOT IN (?, ?, ?) AND created_at < ?)`,
+		   OR (kind NOT IN (?, ?, ?) AND replaceable_key IS NULL AND created_at < ?)`,
 		kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, requestCutoff,
 		kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, eventCutoff)
 	if err != nil {

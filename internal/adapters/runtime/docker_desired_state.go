@@ -23,6 +23,11 @@ func BahiaContainerName(spec *domain.DesiredServiceSpec) string {
 	if spec == nil {
 		return ""
 	}
+	if spec.DockerExtension != nil {
+		if adoptedName := strings.TrimSpace(spec.DockerExtension.ContainerName); adoptedName != "" {
+			return adoptedName
+		}
+	}
 	// Use short environment ID prefix (first 8 chars) + stable key.
 	envPrefix := spec.EnvironmentID.String()[:8]
 	return fmt.Sprintf("bahia-%s-%s", envPrefix, spec.StableServiceKey)

@@ -63,6 +63,10 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 	}
 	slogLogger := slog.Default()
 	sf := cfg.SoulFactory
+	// Soul read models and drafts are browser-facing state. Always include the
+	// configured browser relays in the SoulFactory publish set so a valid
+	// service-relay projection cannot silently disappear from the gallery.
+	sf.AdditionalRelays = mergeRelayLists(sf.AdditionalRelays, cfg.Nostr.BrowserRelayPolicyRelays())
 	allRelays := mergeSoulFactoryRelays(sf)
 
 	signer, err := newSoulFactorySignetClient(signetAdapter.Config{
@@ -297,18 +301,24 @@ func validateSoulFactoryHexPubkey(pubkey string) error {
 }
 
 func mergeSoulFactoryRelays(cfg config.SoulFactoryConfig) []string {
+	return mergeRelayLists(cfg.Relays, cfg.AdditionalRelays)
+}
+
+func mergeRelayLists(relayLists ...[]string) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
-	for _, relay := range append(append([]string{}, cfg.Relays...), cfg.AdditionalRelays...) {
-		relay = strings.TrimSpace(relay)
-		if relay == "" {
-			continue
+	for _, relays := range relayLists {
+		for _, relay := range relays {
+			relay = strings.TrimSpace(relay)
+			if relay == "" {
+				continue
+			}
+			if _, exists := seen[relay]; exists {
+				continue
+			}
+			seen[relay] = struct{}{}
+			out = append(out, relay)
 		}
-		if _, exists := seen[relay]; exists {
-			continue
-		}
-		seen[relay] = struct{}{}
-		out = append(out, relay)
 	}
 	return out
 }

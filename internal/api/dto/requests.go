@@ -42,15 +42,16 @@ type CreateServiceRequest struct {
 
 // UpdateServiceRequest represents a request to update a service.
 type UpdateServiceRequest struct {
-	ID                   uuid.UUID                    `json:"id"`
-	Name                 *string                      `json:"name,omitempty"`
-	RepoURL              *string                      `json:"repo_url,omitempty"`
-	Repository           *RepositoryRefRequest        `json:"repository,omitempty"`
-	ArtifactRepo         *string                      `json:"artifact_repo,omitempty"`
-	DefaultBranch        *string                      `json:"default_branch,omitempty"`
-	RuntimeType          *string                      `json:"runtime_type,omitempty"`
-	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
-	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
+	ID                       uuid.UUID                    `json:"id"`
+	Name                     *string                      `json:"name,omitempty"`
+	RepoURL                  *string                      `json:"repo_url,omitempty"`
+	Repository               *RepositoryRefRequest        `json:"repository,omitempty"`
+	ArtifactRepo             *string                      `json:"artifact_repo,omitempty"`
+	DefaultBranch            *string                      `json:"default_branch,omitempty"`
+	RuntimeType              *string                      `json:"runtime_type,omitempty"`
+	ManagedRuntimeConfig     *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
+	AdoptedPublicEnvironment map[string]string            `json:"adopted_public_environment,omitempty"`
+	IdempotencyKey           string                       `json:"idempotency_key,omitempty"`
 }
 
 // DeleteServiceRequest deletes a service through the signer-first control plane.

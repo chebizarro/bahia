@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -266,7 +267,11 @@ func buildRendererExtensions(spec *domain.DesiredServiceSpec, svc *domain.Servic
 		spec.ComposeExtension = ext
 
 	case domain.RuntimeTypeDocker:
-		spec.DockerExtension = &domain.DockerExtension{}
+		ext := &domain.DockerExtension{}
+		if adopted != nil {
+			ext.ContainerName = strings.TrimSpace(adopted.TargetName)
+		}
+		spec.DockerExtension = ext
 
 	case domain.RuntimeTypePodman:
 		spec.PodmanExtension = &domain.PodmanExtension{}
