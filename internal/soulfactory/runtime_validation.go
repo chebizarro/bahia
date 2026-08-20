@@ -69,22 +69,27 @@ func (s *RelayRuntimeValidationEventSource) LoadEvents(ctx context.Context, even
 }
 
 type RuntimeValidationEventIDs struct {
-	Draft                    string `json:"draft_31952"`
-	ProvisionRequest         string `json:"provision_request_5950"`
-	CapabilityBefore         string `json:"capability_before_30317"`
-	ProvisionControl         string `json:"provision_control_38384"`
-	ProvisionRuntimeResult   string `json:"provision_runtime_result_38386"`
-	Soul                     string `json:"soul_31951"`
-	ProvisionResult          string `json:"provision_result_7950"`
-	LifecycleControl         string `json:"lifecycle_control_38384"`
-	LifecycleRuntimeResult   string `json:"lifecycle_runtime_result_38386"`
-	ReplayRuntimeResult      string `json:"replay_runtime_result_38386"`
-	ConflictControl          string `json:"conflict_control_38384"`
-	ConflictRuntimeResult    string `json:"conflict_runtime_result_38386"`
-	UnsupportedControl       string `json:"unsupported_control_38384"`
-	UnsupportedRuntimeResult string `json:"unsupported_runtime_result_38386"`
-	CapabilityAfterRestart   string `json:"capability_after_restart_30317"`
-	ReconciledResult         string `json:"reconciled_result_7950"`
+	Draft                          string `json:"draft_31952"`
+	ProvisionRequest               string `json:"provision_request_5950"`
+	CapabilityBefore               string `json:"capability_before_30317"`
+	ProvisionControl               string `json:"provision_control_38384"`
+	ProvisionRuntimeResult         string `json:"provision_runtime_result_38386"`
+	Soul                           string `json:"soul_31951"`
+	ProvisionResult                string `json:"provision_result_7950"`
+	LifecycleControl               string `json:"lifecycle_control_38384"`
+	LifecycleRuntimeResult         string `json:"lifecycle_runtime_result_38386"`
+	ReplayRuntimeResult            string `json:"replay_runtime_result_38386"`
+	ConflictControl                string `json:"conflict_control_38384"`
+	ConflictRuntimeResult          string `json:"conflict_runtime_result_38386"`
+	LifecycleReplayRuntimeResult   string `json:"lifecycle_replay_runtime_result_38386"`
+	LifecycleConflictControl       string `json:"lifecycle_conflict_control_38384"`
+	LifecycleConflictRuntimeResult string `json:"lifecycle_conflict_runtime_result_38386"`
+	ResuspendControl               string `json:"resuspend_control_38384"`
+	ResuspendRuntimeResult         string `json:"resuspend_runtime_result_38386"`
+	UnsupportedControl             string `json:"unsupported_control_38384"`
+	UnsupportedRuntimeResult       string `json:"unsupported_runtime_result_38386"`
+	CapabilityAfterRestart         string `json:"capability_after_restart_30317"`
+	ReconciledResult               string `json:"reconciled_result_7950"`
 }
 
 func (ids RuntimeValidationEventIDs) all() []string {
@@ -92,7 +97,9 @@ func (ids RuntimeValidationEventIDs) all() []string {
 		ids.Draft, ids.ProvisionRequest, ids.CapabilityBefore, ids.ProvisionControl,
 		ids.ProvisionRuntimeResult, ids.Soul, ids.ProvisionResult, ids.LifecycleControl,
 		ids.LifecycleRuntimeResult, ids.ReplayRuntimeResult, ids.ConflictControl,
-		ids.ConflictRuntimeResult, ids.UnsupportedControl, ids.UnsupportedRuntimeResult,
+		ids.ConflictRuntimeResult, ids.LifecycleReplayRuntimeResult, ids.LifecycleConflictControl,
+		ids.LifecycleConflictRuntimeResult, ids.ResuspendControl, ids.ResuspendRuntimeResult,
+		ids.UnsupportedControl, ids.UnsupportedRuntimeResult,
 		ids.CapabilityAfterRestart, ids.ReconciledResult,
 	}
 }
@@ -104,6 +111,9 @@ type RuntimeLocalStateEvidence struct {
 	ProvisionEffectsAfterRestart     int    `json:"provision_effects_after_restart"`
 	LifecycleEffectsBefore           int    `json:"lifecycle_effects_before"`
 	LifecycleEffectsAfterHonored     int    `json:"lifecycle_effects_after_honored"`
+	LifecycleEffectsAfterReplay      int    `json:"lifecycle_effects_after_replay"`
+	LifecycleEffectsAfterConflict    int    `json:"lifecycle_effects_after_conflict"`
+	LifecycleEffectsAfterResuspend   int    `json:"lifecycle_effects_after_resuspend"`
 	LifecycleEffectsAfterUnsupported int    `json:"lifecycle_effects_after_unsupported"`
 	BindingBeforeRestart             string `json:"binding_before_restart"`
 	BindingAfterRestart              string `json:"binding_after_restart"`
@@ -164,6 +174,9 @@ func ValidateRuntimeScenario(ctx context.Context, source RuntimeValidationEventS
 	if scenario.Runtime != domain.RuntimeTargetMetiq {
 		fail("runtime must be metiq")
 	}
+	if scenario.LifecycleMethod != RuntimeMethodSuspend {
+		fail("lifecycle method must be soulfactory.suspend")
+	}
 	if scenario.AgentID == "" || !isHexPubkey(scenario.ControllerPubkey) || !isHexPubkey(scenario.RuntimePubkey) || scenario.ControllerPubkey == scenario.RuntimePubkey {
 		fail("agent id and exact controller/runtime pubkeys are required")
 	}
@@ -207,6 +220,11 @@ func ValidateRuntimeScenario(ctx context.Context, source RuntimeValidationEventS
 	replayResult := get(scenario.Events.ReplayRuntimeResult, domain.KindRuntimeControlResult, scenario.RuntimePubkey)
 	conflictControl := get(scenario.Events.ConflictControl, domain.KindRuntimeControlRequest, scenario.ControllerPubkey)
 	conflictResult := get(scenario.Events.ConflictRuntimeResult, domain.KindRuntimeControlResult, scenario.RuntimePubkey)
+	lifecycleReplayResult := get(scenario.Events.LifecycleReplayRuntimeResult, domain.KindRuntimeControlResult, scenario.RuntimePubkey)
+	lifecycleConflictControl := get(scenario.Events.LifecycleConflictControl, domain.KindRuntimeControlRequest, scenario.ControllerPubkey)
+	lifecycleConflictResult := get(scenario.Events.LifecycleConflictRuntimeResult, domain.KindRuntimeControlResult, scenario.RuntimePubkey)
+	resuspendControl := get(scenario.Events.ResuspendControl, domain.KindRuntimeControlRequest, scenario.ControllerPubkey)
+	resuspendResult := get(scenario.Events.ResuspendRuntimeResult, domain.KindRuntimeControlResult, scenario.RuntimePubkey)
 	unsupportedControl := get(scenario.Events.UnsupportedControl, domain.KindRuntimeControlRequest, scenario.ControllerPubkey)
 	unsupportedResult := get(scenario.Events.UnsupportedRuntimeResult, domain.KindRuntimeControlResult, scenario.RuntimePubkey)
 	capabilityAfter := get(scenario.Events.CapabilityAfterRestart, domain.KindRuntimeCapability, scenario.RuntimePubkey)
@@ -244,16 +262,14 @@ func ValidateRuntimeScenario(ctx context.Context, source RuntimeValidationEventS
 	}
 
 	provisionEnvelope := validateControlLineage(provisionControl, provisionRuntimeResult, scenario, RuntimeMethodProvision, fail)
-	validateControlLineage(lifecycleControl, lifecycleResult, scenario, scenario.LifecycleMethod, fail)
+	lifecycleEnvelope := validateControlLineage(lifecycleControl, lifecycleResult, scenario, scenario.LifecycleMethod, fail)
 	if parsed, ok := parseRuntimeControlResultEvent(provisionRuntimeResult); !ok || parsed.Status != "success" {
 		fail("Metiq provisioning 38386 is not successful")
 	}
-	if parsed, ok := parseRuntimeControlResultEvent(lifecycleResult); !ok || parsed.Status != "success" {
-		fail("advertised lifecycle method was not honored")
+	if parsed, ok := parseRuntimeControlResultEvent(lifecycleResult); !ok || parsed.Status != "success" || parsed.Result["state"] != "suspended" {
+		fail("advertised suspend lifecycle method did not return success with result.state suspended")
 	}
-	if parsed, ok := parseRuntimeControlResultEvent(replayResult); !ok || provisionEnvelope == nil || parsed.IdempotencyKey != provisionEnvelope.IdempotencyKey || parsed.Status != "success" {
-		fail("exact replay did not return the successful cached logical outcome")
-	}
+	validateRuntimeReplay(provisionRuntimeResult, replayResult, provisionEnvelope, "provision", fail)
 	conflictEnvelope := validateControlLineage(conflictControl, conflictResult, scenario, "", fail)
 	if parsed, ok := parseRuntimeControlResultEvent(conflictResult); !ok || parsed.Status != "rejected" || parsed.Error == nil || parsed.Error.Code != "duplicate_conflict" || parsed.Error.Retryable {
 		fail("conflicting replay did not fail closed with non-retryable duplicate_conflict")
@@ -265,6 +281,26 @@ func ValidateRuntimeScenario(ctx context.Context, source RuntimeValidationEventS
 		if provisionControl.ID == conflictControl.ID || (provisionEnvelope.Method == conflictEnvelope.Method && provisionEnvelope.Soul.SpecHash == conflictEnvelope.Soul.SpecHash && provisionEnvelope.Operator.RequestEvent == conflictEnvelope.Operator.RequestEvent) {
 			fail("duplicate_conflict request did not change bound input")
 		}
+	}
+	validateRuntimeReplay(lifecycleResult, lifecycleReplayResult, lifecycleEnvelope, "suspend", fail)
+	lifecycleConflictEnvelope := validateControlLineage(lifecycleConflictControl, lifecycleConflictResult, scenario, scenario.LifecycleMethod, fail)
+	if parsed, ok := parseRuntimeControlResultEvent(lifecycleConflictResult); !ok || parsed.Status != "rejected" || parsed.Error == nil || parsed.Error.Code != "duplicate_conflict" || parsed.Error.Retryable {
+		fail("conflicting suspend replay did not fail closed with non-retryable duplicate_conflict")
+	}
+	if lifecycleEnvelope != nil && lifecycleConflictEnvelope != nil {
+		if lifecycleEnvelope.IdempotencyKey != lifecycleConflictEnvelope.IdempotencyKey {
+			fail("suspend duplicate_conflict request did not reuse the original idempotency key")
+		}
+		if lifecycleControl.ID == lifecycleConflictControl.ID || (lifecycleEnvelope.Method == lifecycleConflictEnvelope.Method && lifecycleEnvelope.Soul.SpecHash == lifecycleConflictEnvelope.Soul.SpecHash && lifecycleEnvelope.Operator.RequestEvent == lifecycleConflictEnvelope.Operator.RequestEvent) {
+			fail("suspend duplicate_conflict request did not change bound input")
+		}
+	}
+	resuspendEnvelope := validateControlLineage(resuspendControl, resuspendResult, scenario, scenario.LifecycleMethod, fail)
+	if parsed, ok := parseRuntimeControlResultEvent(resuspendResult); !ok || parsed.Status != "success" || parsed.Result["state"] != "suspended" || parsed.Result["idempotent"] != true {
+		fail("idempotent re-suspend did not return success with suspended state and idempotent result")
+	}
+	if lifecycleEnvelope != nil && resuspendEnvelope != nil && lifecycleEnvelope.IdempotencyKey == resuspendEnvelope.IdempotencyKey {
+		fail("idempotent re-suspend did not use a fresh idempotency key")
 	}
 	unsupportedEnvelope := validateControlLineage(unsupportedControl, unsupportedResult, scenario, "", fail)
 	if unsupportedEnvelope != nil && stringInSlice(unsupportedEnvelope.Method, capBefore.Methods) {
@@ -293,8 +329,12 @@ func ValidateRuntimeScenario(ctx context.Context, source RuntimeValidationEventS
 	if state.ProvisionEffectsAfterFirst != 1 || state.ProvisionEffectsAfterReplay != 1 || state.ProvisionEffectsAfterConflict != 1 || state.ProvisionEffectsAfterRestart != 1 {
 		fail("local Metiq provisioning was not exactly once across replay/conflict/restart")
 	}
-	if state.LifecycleEffectsAfterHonored != state.LifecycleEffectsBefore+1 || state.LifecycleEffectsAfterUnsupported != state.LifecycleEffectsAfterHonored {
-		fail("lifecycle method effects do not prove one honored and unsupported no-op")
+	if state.LifecycleEffectsAfterHonored != state.LifecycleEffectsBefore+1 ||
+		state.LifecycleEffectsAfterReplay != state.LifecycleEffectsAfterHonored ||
+		state.LifecycleEffectsAfterConflict != state.LifecycleEffectsAfterHonored ||
+		state.LifecycleEffectsAfterResuspend != state.LifecycleEffectsAfterHonored ||
+		state.LifecycleEffectsAfterUnsupported != state.LifecycleEffectsAfterHonored {
+		fail("lifecycle method effects do not prove one suspend plus replay, conflict, re-suspend, and unsupported no-ops")
 	}
 	if !validSHA256Digest(state.BindingBeforeRestart) || state.BindingBeforeRestart != state.BindingAfterRestart || !state.StateRecovered {
 		fail("runtime binding/state was not recovered across restart")
@@ -344,6 +384,28 @@ func ValidateRuntimeScenario(ctx context.Context, source RuntimeValidationEventS
 		return report, fmt.Errorf("runtime validation failed: %s", strings.Join(report.Failures, "; "))
 	}
 	return report, nil
+}
+
+func validateRuntimeReplay(original, replay *nostr.Event, envelope *RuntimeControlEnvelope, label string, fail func(string, ...interface{})) {
+	originalResult, originalOK := parseRuntimeControlResultEvent(original)
+	replayResult, replayOK := parseRuntimeControlResultEvent(replay)
+	if !originalOK || !replayOK || envelope == nil || replayResult.Status != "success" ||
+		replayResult.Method != originalResult.Method || replayResult.IdempotencyKey != envelope.IdempotencyKey ||
+		replayResult.RequestEvent != originalResult.RequestEvent || replayResult.OperatorRequestEvent != originalResult.OperatorRequestEvent ||
+		!runtimeResultsEqual(replayResult.Result, originalResult.Result) {
+		fail("exact %s replay did not return the same correlated successful logical result", label)
+	}
+	for _, tag := range []string{tagEvent, tagPubkey, tagMethod, tagIdempotencyKey, tagAgentID, tagSoul, tagSpecHash, tagSchema, tagStatus} {
+		if original != nil && replay != nil && tagValue(replay.Tags, tag) != tagValue(original.Tags, tag) {
+			fail("exact %s replay did not preserve the correlated %s tag", label, tag)
+		}
+	}
+}
+
+func runtimeResultsEqual(left, right map[string]interface{}) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func validateControlLineage(request *nostr.Event, result *nostr.Event, scenario RuntimeValidationScenario, expectedMethod string, fail func(string, ...interface{})) *RuntimeControlEnvelope {

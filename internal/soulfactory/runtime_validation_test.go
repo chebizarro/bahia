@@ -58,13 +58,62 @@ func TestValidateRuntimeScenarioRejectsSecretAndNonExactlyOnceEvidence(t *testin
 	}
 }
 
+func TestValidateRuntimeScenarioRejectsInvalidSuspendEvidence(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*testing.T, *RuntimeValidationScenario, validationMemorySource)
+		wantFailure string
+	}{
+		{
+			name: "result state",
+			mutate: func(t *testing.T, scenario *RuntimeValidationScenario, source validationMemorySource) {
+				replaceValidationResult(t, scenario, source, &scenario.Events.LifecycleRuntimeResult, map[string]interface{}{"state": "running"}, nil)
+			},
+			wantFailure: "result.state suspended",
+		},
+		{
+			name: "replay logical result",
+			mutate: func(t *testing.T, scenario *RuntimeValidationScenario, source validationMemorySource) {
+				replaceValidationResult(t, scenario, source, &scenario.Events.LifecycleReplayRuntimeResult, map[string]interface{}{"state": "running"}, nil)
+			},
+			wantFailure: "exact suspend replay",
+		},
+		{
+			name: "conflict mutation",
+			mutate: func(_ *testing.T, scenario *RuntimeValidationScenario, _ validationMemorySource) {
+				scenario.LocalState.LifecycleEffectsAfterConflict++
+			},
+			wantFailure: "conflict, re-suspend, and unsupported no-ops",
+		},
+		{
+			name: "re-suspend result",
+			mutate: func(t *testing.T, scenario *RuntimeValidationScenario, source validationMemorySource) {
+				replaceValidationResult(t, scenario, source, &scenario.Events.ResuspendRuntimeResult, map[string]interface{}{"state": "suspended"}, nil)
+			},
+			wantFailure: "idempotent re-suspend",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scenario, source := runtimeValidationFixture(t)
+			test.mutate(t, &scenario, source)
+			report, err := ValidateRuntimeScenario(t.Context(), source, scenario)
+			if err == nil || report.Passed || !containsFailure(report.Failures, test.wantFailure) {
+				t.Fatalf("report=%+v err=%v", report, err)
+			}
+		})
+	}
+}
+
 var validationControllerSecret string
+var validationRuntimeSecret string
 
 func runtimeValidationFixture(t *testing.T) (RuntimeValidationScenario, validationMemorySource) {
 	t.Helper()
 	controller := newFakeSigner(t)
 	runtime := newFakeSigner(t)
 	validationControllerSecret = controller.secret
+	validationRuntimeSecret = runtime.secret
 	operator := newFakeSigner(t)
 	agentID := "metiq-disposable"
 	specHash := "sha256:" + strings.Repeat("1", 64)
@@ -98,13 +147,18 @@ func runtimeValidationFixture(t *testing.T) (RuntimeValidationScenario, validati
 	}, nostr.Tags{{tagParameterizedD, "metiq-main"}, {tagRuntime, string(domain.RuntimeTargetMetiq)}})
 
 	provisionControl := validationControl(t, controller, runtime.pubkey, agentID, request.ID.Hex(), RuntimeMethodProvision, "idem-provision", specHash)
-	provisionRuntimeResult := validationResult(t, runtime, controller.pubkey, provisionControl, "success", nil)
+	provisionRuntimeResult := validationResult(t, runtime, controller.pubkey, provisionControl, "success", map[string]interface{}{"state": "running"}, nil)
 	lifecycleControl := validationControl(t, controller, runtime.pubkey, agentID, strings.Repeat("2", 64), RuntimeMethodSuspend, "idem-suspend", specHash)
-	lifecycleRuntimeResult := validationResult(t, runtime, controller.pubkey, lifecycleControl, "success", nil)
+	lifecycleRuntimeResult := validationResult(t, runtime, controller.pubkey, lifecycleControl, "success", map[string]interface{}{"state": "suspended"}, nil)
+	lifecycleReplayRuntimeResult := validationReplayResult(t, runtime, lifecycleRuntimeResult)
 	conflictControl := validationControl(t, controller, runtime.pubkey, agentID, strings.Repeat("3", 64), RuntimeMethodProvision, "idem-provision", "sha256:"+strings.Repeat("4", 64))
-	conflictRuntimeResult := validationResult(t, runtime, controller.pubkey, conflictControl, "rejected", &RuntimeControlError{Code: "duplicate_conflict", Message: "conflict", Retryable: false})
-	unsupportedControl := validationControl(t, controller, runtime.pubkey, agentID, strings.Repeat("5", 64), RuntimeMethodResume, "idem-unsupported", specHash)
-	unsupportedRuntimeResult := validationResult(t, runtime, controller.pubkey, unsupportedControl, "rejected", &RuntimeControlError{Code: "unsupported_method", Message: "unsupported", Retryable: false})
+	conflictRuntimeResult := validationResult(t, runtime, controller.pubkey, conflictControl, "rejected", nil, &RuntimeControlError{Code: "duplicate_conflict", Message: "conflict", Retryable: false})
+	lifecycleConflictControl := validationControl(t, controller, runtime.pubkey, agentID, strings.Repeat("4", 64), RuntimeMethodSuspend, "idem-suspend", specHash)
+	lifecycleConflictRuntimeResult := validationResult(t, runtime, controller.pubkey, lifecycleConflictControl, "rejected", nil, &RuntimeControlError{Code: "duplicate_conflict", Message: "conflict", Retryable: false})
+	resuspendControl := validationControl(t, controller, runtime.pubkey, agentID, strings.Repeat("5", 64), RuntimeMethodSuspend, "idem-resuspend", specHash)
+	resuspendRuntimeResult := validationResult(t, runtime, controller.pubkey, resuspendControl, "success", map[string]interface{}{"state": "suspended", "idempotent": true}, nil)
+	unsupportedControl := validationControl(t, controller, runtime.pubkey, agentID, strings.Repeat("6", 64), RuntimeMethodResume, "idem-unsupported", specHash)
+	unsupportedRuntimeResult := validationResult(t, runtime, controller.pubkey, unsupportedControl, "rejected", nil, &RuntimeControlError{Code: "unsupported_method", Message: "unsupported", Retryable: false})
 
 	soul := &domain.AgentSoul{AgentID: agentID, Name: "Metiq Disposable", Purpose: "Conformance", Tier: domain.SoulTierStandard,
 		Status: domain.SoulStatusActive, NostrPubkey: operator.pubkey, DraftRef: "31952:" + operator.pubkey + ":" + agentID,
@@ -118,7 +172,7 @@ func runtimeValidationFixture(t *testing.T) (RuntimeValidationScenario, validati
 	}
 	signValidationEvent(t, controller, provisionResult)
 
-	events := []*nostr.Event{draft, request, capabilityBefore, provisionControl, provisionRuntimeResult, soulEvent, provisionResult, lifecycleControl, lifecycleRuntimeResult, conflictControl, conflictRuntimeResult, unsupportedControl, unsupportedRuntimeResult, capabilityAfter}
+	events := []*nostr.Event{draft, request, capabilityBefore, provisionControl, provisionRuntimeResult, soulEvent, provisionResult, lifecycleControl, lifecycleRuntimeResult, lifecycleReplayRuntimeResult, conflictControl, conflictRuntimeResult, lifecycleConflictControl, lifecycleConflictRuntimeResult, resuspendControl, resuspendRuntimeResult, unsupportedControl, unsupportedRuntimeResult, capabilityAfter}
 	source := validationMemorySource{}
 	for _, event := range events {
 		source[event.ID.Hex()] = event
@@ -131,11 +185,13 @@ func runtimeValidationFixture(t *testing.T) (RuntimeValidationScenario, validati
 			ProvisionControl: provisionControl.ID.Hex(), ProvisionRuntimeResult: provisionRuntimeResult.ID.Hex(), Soul: soulEvent.ID.Hex(), ProvisionResult: provisionResult.ID.Hex(),
 			LifecycleControl: lifecycleControl.ID.Hex(), LifecycleRuntimeResult: lifecycleRuntimeResult.ID.Hex(), ReplayRuntimeResult: provisionRuntimeResult.ID.Hex(),
 			ConflictControl: conflictControl.ID.Hex(), ConflictRuntimeResult: conflictRuntimeResult.ID.Hex(), UnsupportedControl: unsupportedControl.ID.Hex(), UnsupportedRuntimeResult: unsupportedRuntimeResult.ID.Hex(),
+			LifecycleReplayRuntimeResult: lifecycleReplayRuntimeResult.ID.Hex(), LifecycleConflictControl: lifecycleConflictControl.ID.Hex(), LifecycleConflictRuntimeResult: lifecycleConflictRuntimeResult.ID.Hex(),
+			ResuspendControl: resuspendControl.ID.Hex(), ResuspendRuntimeResult: resuspendRuntimeResult.ID.Hex(),
 			CapabilityAfterRestart: capabilityAfter.ID.Hex(), ReconciledResult: provisionResult.ID.Hex(),
 		},
 		LocalState: RuntimeLocalStateEvidence{
 			ProvisionEffectsAfterFirst: 1, ProvisionEffectsAfterReplay: 1, ProvisionEffectsAfterConflict: 1, ProvisionEffectsAfterRestart: 1,
-			LifecycleEffectsBefore: 0, LifecycleEffectsAfterHonored: 1, LifecycleEffectsAfterUnsupported: 1,
+			LifecycleEffectsBefore: 0, LifecycleEffectsAfterHonored: 1, LifecycleEffectsAfterReplay: 1, LifecycleEffectsAfterConflict: 1, LifecycleEffectsAfterResuspend: 1, LifecycleEffectsAfterUnsupported: 1,
 			BindingBeforeRestart: "sha256:" + strings.Repeat("6", 64), BindingAfterRestart: "sha256:" + strings.Repeat("6", 64), StateRecovered: true, Reconciliation: "backfill",
 			RuntimeInstanceBeforeRestart: "sha256:" + strings.Repeat("d", 64), RuntimeInstanceAfterRestart: "sha256:" + strings.Repeat("e", 64),
 			BahiaInstanceBeforeRestart: "sha256:" + strings.Repeat("f", 64), BahiaInstanceAfterRestart: "sha256:" + strings.Repeat("0", 64),
@@ -164,7 +220,7 @@ func validationControl(t *testing.T, controller fakeSigner, runtimePubkey, agent
 	return event
 }
 
-func validationResult(t *testing.T, runtime fakeSigner, controllerPubkey string, request *nostr.Event, status string, resultErr *RuntimeControlError) *nostr.Event {
+func validationResult(t *testing.T, runtime fakeSigner, controllerPubkey string, request *nostr.Event, status string, result map[string]interface{}, resultErr *RuntimeControlError) *nostr.Event {
 	t.Helper()
 	envelope, err := ParseRuntimeControlRequestEvent(request)
 	if err != nil {
@@ -173,7 +229,7 @@ func validationResult(t *testing.T, runtime fakeSigner, controllerPubkey string,
 	content, err := json.Marshal(RuntimeControlResultEnvelope{
 		Schema: domain.SoulFactoryRuntimeControlSchema, Method: envelope.Method, IdempotencyKey: envelope.IdempotencyKey,
 		RequestEvent: request.ID.Hex(), OperatorRequestEvent: envelope.Operator.RequestEvent, Status: status,
-		Result: map[string]interface{}{"state": "running"}, Error: resultErr,
+		Result: result, Error: resultErr,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -184,6 +240,29 @@ func validationResult(t *testing.T, runtime fakeSigner, controllerPubkey string,
 	}, Content: string(content)}
 	signValidationEvent(t, runtime, event)
 	return event
+}
+
+func validationReplayResult(t *testing.T, runtime fakeSigner, original *nostr.Event) *nostr.Event {
+	t.Helper()
+	replay := *original
+	replay.CreatedAt++
+	signValidationEvent(t, runtime, &replay)
+	return &replay
+}
+
+func replaceValidationResult(t *testing.T, scenario *RuntimeValidationScenario, source validationMemorySource, eventID *string, result map[string]interface{}, resultErr *RuntimeControlError) {
+	t.Helper()
+	original := source[*eventID]
+	parsed, ok := parseRuntimeControlResultEvent(original)
+	if !ok {
+		t.Fatalf("parse fixture result %s", *eventID)
+	}
+	request := source[parsed.RequestEvent]
+	runtime := fakeSigner{secret: validationRuntimeSecret, pubkey: original.PubKey.Hex()}
+	replacement := validationResult(t, runtime, tagValue(original.Tags, tagPubkey), request, parsed.Status, result, resultErr)
+	delete(source, *eventID)
+	source[replacement.ID.Hex()] = replacement
+	*eventID = replacement.ID.Hex()
 }
 
 func signValidationEvent(t *testing.T, signer fakeSigner, event *nostr.Event) {

@@ -2,7 +2,7 @@
   "feature_id": "BAHIA_METIQ_RUNTIME_INFRASTRUCTURE",
   "tests": [
     {"command":"go test ./internal/config ./internal/app","criteria":["BMI-AC-001"]},
-    {"command":"go test ./internal/soulfactory -run 'TestRuntimeAdapterRejectsUntrustedRuntimeIdentity|TestContainerSignetctl|TestMetiqSignetEnrollment|TestValidateRuntimeScenario'","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003","BMI-AC-004","BMI-AC-005"]},
+    {"command":"go test ./internal/soulfactory -run 'TestRuntimeAdapterRejectsUntrustedRuntimeIdentity|TestContainerSignetctl|TestMetiqSignetEnrollment|TestValidateRuntimeScenario'","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003","BMI-AC-004","BMI-AC-005"],"description":"CI doubles prove suspend returns suspended state, exact provision and suspend replays return the same correlated result without effects, conflicting provision and suspend replays reject before mutation, and fresh-key re-suspend succeeds idempotently without another effect."},
     {"command":"go test ./cmd/metiq-signet-enrollment ./cmd/soulfactory-runtime-validate","criteria":["BMI-AC-002","BMI-AC-003"]},
     {"command":"go vet ./internal/config ./internal/app ./internal/soulfactory ./cmd/metiq-signet-enrollment ./cmd/soulfactory-runtime-validate","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003"]},
     {"command":"go build ./... && go test ./...","criteria":["BMI-AC-001","BMI-AC-002","BMI-AC-003","BMI-AC-004","BMI-AC-005"]},
