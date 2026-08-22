@@ -38,17 +38,47 @@ func (a *RegistrationAudit) AuditReleaseRejection(ctx context.Context, source *n
 }
 
 func (a *RegistrationAudit) AuditReleaseRegistration(ctx context.Context, release domain.HiveCIAcceptedRelease, artifact *domain.Artifact, decision string, decisionErr error) error {
+	record, err := a.PrepareReleaseRegistrationAudit(ctx, release, artifact, decision, decisionErr)
+	if err != nil {
+		return err
+	}
+	_, err = a.events.Record(ctx, record)
+	if err != nil {
+		return fmt.Errorf("persist artifact registration audit outbox event: %w", err)
+	}
+	return nil
+}
+
+func (a *RegistrationAudit) PrepareReleaseRegistrationAudit(
+	ctx context.Context,
+	release domain.HiveCIAcceptedRelease,
+	artifact *domain.Artifact,
+	decision string,
+	decisionErr error,
+) (*repository.NostrEventRecord, error) {
 	artifactID := ""
 	if artifact != nil {
 		artifactID = artifact.ID.String()
 	}
-	return a.record(ctx, decision, release.ResultEventID, release.Result.ReleaseIdentity,
+	return a.prepare(ctx, decision, release.ResultEventID, release.Result.ReleaseIdentity,
 		release.Result.Manifest.Repository, release.Result.Manifest.Digest, artifactID, decisionErr)
 }
 
 func (a *RegistrationAudit) record(ctx context.Context, decision, resultEventID, releaseIdentity, imageRepo, imageDigest, artifactID string, decisionErr error) error {
+	record, err := a.prepare(ctx, decision, resultEventID, releaseIdentity, imageRepo, imageDigest, artifactID, decisionErr)
+	if err != nil {
+		return err
+	}
+	_, err = a.events.Record(ctx, record)
+	if err != nil {
+		return fmt.Errorf("persist artifact registration audit outbox event: %w", err)
+	}
+	return nil
+}
+
+func (a *RegistrationAudit) prepare(ctx context.Context, decision, resultEventID, releaseIdentity, imageRepo, imageDigest, artifactID string, decisionErr error) (*repository.NostrEventRecord, error) {
 	if a == nil || a.signer == nil || a.events == nil {
-		return fmt.Errorf("artifact registration audit dependencies are not configured")
+		return nil, fmt.Errorf("artifact registration audit dependencies are not configured")
 	}
 	now := a.now().UTC()
 	reason := ""
@@ -69,7 +99,7 @@ func (a *RegistrationAudit) record(ctx context.Context, decision, resultEventID,
 	}
 	content, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("encode artifact registration audit: %w", err)
+		return nil, fmt.Errorf("encode artifact registration audit: %w", err)
 	}
 	tags := nostr.Tags{
 		{"domain", "artifact"}, {"entity", "registration"}, {"type", "artifact.registration.decision"},
@@ -88,20 +118,16 @@ func (a *RegistrationAudit) record(ctx context.Context, decision, resultEventID,
 		Tags: append(nostr.Tags{{"-"}}, tags...), Content: string(content),
 	}
 	if err := a.signer.SignEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign artifact registration audit: %w", err)
+		return nil, fmt.Errorf("sign artifact registration audit: %w", err)
 	}
 	tagsJSON, err := json.Marshal(event.Tags)
 	if err != nil {
-		return fmt.Errorf("encode artifact registration audit tags: %w", err)
+		return nil, fmt.Errorf("encode artifact registration audit tags: %w", err)
 	}
-	_, err = a.events.Record(ctx, &repository.NostrEventRecord{
+	return &repository.NostrEventRecord{
 		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
 		Content: event.Content, Tags: tagsJSON, Sig: hex.EncodeToString(event.Sig[:]),
 		CreatedAt: event.CreatedAt.Time(), ReceivedAt: now,
 		EntityType: "artifact_registration", PublishState: repository.NostrPublishStatePending,
-	})
-	if err != nil {
-		return fmt.Errorf("persist artifact registration audit outbox event: %w", err)
-	}
-	return nil
+	}, nil
 }

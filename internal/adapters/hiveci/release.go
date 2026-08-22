@@ -38,6 +38,7 @@ var (
 	ErrInvalidRelease             = errors.New("invalid Hive-CI RELEASE result")
 	ErrUntrustedReleaseAttestor   = errors.New("untrusted Hive-CI release attestor")
 	ErrReleaseEvidenceUnavailable = errors.New("Hive-CI release evidence unavailable")
+	ErrReleaseLineagePending      = errors.New("Hive-CI release is waiting for signed workflow lineage")
 	ErrReleasePolicyDenied        = errors.New("Hive-CI release denied by repository policy")
 	ErrReleaseWorkerNotAdmitted   = errors.New("Hive-CI release worker is not admitted")
 	ErrReleaseArtifactUnavailable = errors.New("Hive-CI release artifact is unavailable")
@@ -53,10 +54,20 @@ type ResolvedReleaseArtifact struct {
 	Size      int64
 }
 
+type WorkerAdmissionEvidence struct {
+	WorkerIdentity     string
+	WorkerCapability   string
+	WorkerAdEventID    string
+	WorkerAdvertisedAt time.Time
+	DecisionCode       string
+	CapacityClass      string
+	PressureLevel      string
+}
+
 type ReleaseEvidence interface {
 	GetWorkflowRunEvent(context.Context, string) (*nostr.Event, error)
 	ListPipelinePolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error)
-	IsWorkerAdmitted(context.Context, string, string) (bool, error)
+	AdmitWorker(context.Context, string, string, string) (WorkerAdmissionEvidence, bool, error)
 	ResolveArtifact(context.Context, domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error)
 }
 
@@ -125,7 +136,7 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: load signed 5401: %v", ErrReleaseEvidenceUnavailable, err)
 	}
 	if run == nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: signed 5401 is missing", ErrReleaseEvidenceUnavailable)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: signed 5401 %s is missing", ErrReleaseLineagePending, result.Lineage.WorkflowRunEventID)
 	}
 	if err := nostradapter.ValidateInboundEvent(run, now, nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: stored 5401 signature boundary: %v", ErrInvalidRelease, err)
@@ -149,7 +160,9 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		return domain.HiveCIReleaseCommitResult{}, err
 	}
 
-	admitted, err := i.evidence.IsWorkerAdmitted(ctx, result.Execution.WorkerIdentity, result.Execution.WorkerCapability)
+	workerAdmission, admitted, err := i.evidence.AdmitWorker(
+		ctx, result.Execution.WorkerIdentity, result.Execution.WorkerCapability, runEvidence.workerAd,
+	)
 	if err != nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: worker admission lookup: %v", ErrReleaseEvidenceUnavailable, err)
 	}
@@ -198,8 +211,14 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		Workflow: runEvidence.workflow, Branch: runEvidence.branch, PolicyID: policy.ID.String(), Policy: policy,
 		WorkflowRunSignedEvent: string(runJSON),
 		WorkerAdmissionEvidence: map[string]any{
-			"state": "admitted", "worker_identity": result.Execution.WorkerIdentity,
-			"worker_capability": result.Execution.WorkerCapability, "workflow_issuer": run.PubKey.Hex(),
+			"state": "admitted", "worker_identity": workerAdmission.WorkerIdentity,
+			"worker_capability":    workerAdmission.WorkerCapability,
+			"worker_ad_event_id":   workerAdmission.WorkerAdEventID,
+			"worker_advertised_at": workerAdmission.WorkerAdvertisedAt.UTC().Format(time.RFC3339Nano),
+			"decision_code":        workerAdmission.DecisionCode,
+			"capacity_class":       workerAdmission.CapacityClass,
+			"pressure_level":       workerAdmission.PressureLevel,
+			"workflow_issuer":      run.PubKey.Hex(),
 		},
 		RollbackCompatibility: policyMetadataObject(policy.Metadata, "rollback_compatibility"),
 		HealthReadinessContracts: map[string]any{
@@ -334,7 +353,7 @@ func validateReleaseEnvelope(event *nostr.Event, result domain.HiveCIReleaseResu
 }
 
 type workflowRunEvidence struct {
-	repo, workflow, branch, reviewPolicy, policyDigest string
+	repo, workflow, branch, reviewPolicy, policyDigest, workerAd string
 }
 
 func validateWorkflowRun(run *nostr.Event, result domain.HiveCIReleaseResult) (workflowRunEvidence, error) {
@@ -381,7 +400,7 @@ func validateWorkflowRun(run *nostr.Event, result domain.HiveCIReleaseResult) (w
 		return workflowRunEvidence{}, fmt.Errorf("%w: 5401 policy digest is invalid", ErrInvalidRelease)
 	}
 	return workflowRunEvidence{repo: repo, workflow: workflow, branch: branch,
-		reviewPolicy: reviewPolicy, policyDigest: policyDigest}, nil
+		reviewPolicy: reviewPolicy, policyDigest: policyDigest, workerAd: workerAd}, nil
 }
 
 func (i *ReleaseIngestor) authorizePolicy(ctx context.Context, run workflowRunEvidence, result domain.HiveCIReleaseResult, attestor string) (domain.HiveCIPipelinePolicy, error) {
@@ -431,40 +450,40 @@ func policyMetadataMatches(metadata map[string]any, run workflowRunEvidence, res
 		"release_image_repository": result.Manifest.Repository,
 	}
 	for key, want := range expected {
-		if raw, exists := metadata[key]; exists {
-			value, ok := raw.(string)
-			if !ok || value != want {
-				return false
-			}
-		}
-	}
-	if raw, exists := metadata["release_attestors"]; exists {
-		values, ok := raw.([]string)
-		if !ok {
-			untyped, untypedOK := raw.([]any)
-			if !untypedOK {
-				return false
-			}
-			values = make([]string, 0, len(untyped))
-			for _, value := range untyped {
-				text, textOK := value.(string)
-				if !textOK {
-					return false
-				}
-				values = append(values, text)
-			}
-		}
-		found := false
-		for _, value := range values {
-			if strings.ToLower(strings.TrimSpace(value)) == attestor {
-				found = true
-			}
-		}
-		if !found {
+		raw, exists := metadata[key]
+		value, ok := raw.(string)
+		if !exists || !ok || strings.TrimSpace(value) == "" || value != want {
 			return false
 		}
 	}
-	return true
+	raw, exists := metadata["release_attestors"]
+	if !exists {
+		return false
+	}
+	values, ok := raw.([]string)
+	if !ok {
+		untyped, untypedOK := raw.([]any)
+		if !untypedOK {
+			return false
+		}
+		values = make([]string, 0, len(untyped))
+		for _, value := range untyped {
+			text, textOK := value.(string)
+			if !textOK {
+				return false
+			}
+			values = append(values, text)
+		}
+	}
+	if len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == attestor {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyResolvedArtifact(name string, descriptor domain.HiveCIReleaseArtifact, object ResolvedReleaseArtifact) error {

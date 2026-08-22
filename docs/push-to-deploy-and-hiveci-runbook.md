@@ -265,10 +265,22 @@ hiveci:
     - "<hive-ci-release-attestor-pubkey>"
   policies:
     - repo_coordinate: "30617:<grasp-gitea-pubkey>:chebizarro/bahia"
-      workflow_path: ".github/workflows/hive-ci-build.yml"
+      workflow_path: ".gitea/workflows/release.yml"
       service_name: bahia
       environment_name: edge-01
-      metadata: {}
+      metadata:
+        workflow_digest: "<sha256-hex-from-signed-5401>"
+        policy_digest: "<policy-digest-from-signed-5401>"
+        review_policy: "<review-policy-from-signed-5401>"
+        source_repo_identity: "gitea.example/chebizarro/bahia"
+        release_image_repository: "harbor.example/chebizarro/bahia"
+        release_attestors:
+          - "<hive-ci-release-attestor-pubkey>"
+        rollback_compatibility:
+          compatible_from_digests:
+            - "sha256:<currently-staged-manifest>"
+        health_contract: {type: http, path: /health, timeout_seconds: 10}
+        readiness_contract: {type: http, path: /ready, timeout_seconds: 15}
 ```
 
 The `repo_coordinate` is whatever grasp-gitea puts in the `["a", ...]` tag of
@@ -283,6 +295,11 @@ docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
       GROUP BY 1, 2 ORDER BY 4 DESC;"
 ```
 
+All six release constraints above are mandatory and exact-match. Omitting a
+constraint, using an empty attestor list, or leaving placeholder values causes
+RELEASE registration to fail closed. The rollback and health/readiness objects
+are also required before a later canary promotion can be authorized.
+
 After adding the config, restart Bahia.  The startup log will show
 `hiveci pipeline policy ensured` for each configured policy.
 
@@ -296,10 +313,28 @@ idempotent insert pattern:
 REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
 SERVICE_NAME="bahia"
 ENV_NAME="edge-01"
+WORKFLOW_DIGEST="<sha256-hex-from-5401>"
+POLICY_DIGEST="<policy-digest-from-5401>"
+REVIEW_POLICY="<review-policy-from-5401>"
+SOURCE_REPO="<gitea-host/org/repo>"
+IMAGE_REPO="<harbor-host/project/repo>"
+RELEASE_ATTESTOR="<release-attestor-pubkey>"
+PREVIOUS_DIGEST="sha256:<currently-staged-manifest>"
+HEALTH_PATH="/health"
+READINESS_PATH="/ready"
 
 sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
     -e "s|:SERVICE_NAME:|$SERVICE_NAME|g" \
     -e "s|:ENV_NAME:|$ENV_NAME|g" \
+    -e "s|:WORKFLOW_DIGEST:|$WORKFLOW_DIGEST|g" \
+    -e "s|:POLICY_DIGEST:|$POLICY_DIGEST|g" \
+    -e "s|:REVIEW_POLICY:|$REVIEW_POLICY|g" \
+    -e "s|:SOURCE_REPO:|$SOURCE_REPO|g" \
+    -e "s|:IMAGE_REPO:|$IMAGE_REPO|g" \
+    -e "s|:RELEASE_ATTESTOR:|$RELEASE_ATTESTOR|g" \
+    -e "s|:PREVIOUS_DIGEST:|$PREVIOUS_DIGEST|g" \
+    -e "s|:HEALTH_PATH:|$HEALTH_PATH|g" \
+    -e "s|:READINESS_PATH:|$READINESS_PATH|g" \
   scripts/seed_hiveci_pipeline_policy.sql \
   | docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
       exec -T postgres psql -U bahia -d bahia

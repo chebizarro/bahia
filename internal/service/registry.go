@@ -754,6 +754,74 @@ func (s *RegistryService) RegisterArtifact(ctx context.Context, a *domain.Artifa
 	return s.persistArtifact(ctx, a)
 }
 
+type ReleaseArtifactAuditPreparer func(*domain.Artifact) (*repository.NostrEventRecord, error)
+
+// RegisterReleaseArtifactWithAudit atomically persists the release build,
+// digest-only artifact, and signed audit outbox evidence.
+func (s *RegistryService) RegisterReleaseArtifactWithAudit(
+	ctx context.Context,
+	build *domain.Build,
+	artifact *domain.Artifact,
+	proof ReleaseArtifactVerificationProof,
+	prepareAudit ReleaseArtifactAuditPreparer,
+) error {
+	if s == nil || s.txExecutor == nil || build == nil || artifact == nil || prepareAudit == nil {
+		return fmt.Errorf("atomic release registration and audit are not configured")
+	}
+	buildCreated := false
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Services == nil || repos.Builds == nil || repos.Artifacts == nil || repos.NostrEvents == nil {
+			return fmt.Errorf("release registration transaction repositories are not configured")
+		}
+		existing, err := repos.Builds.GetByCISystemRunID(ctx, build.CISystem, build.CIRunID)
+		if err != nil {
+			return fmt.Errorf("lookup release build in transaction: %w", err)
+		}
+		if existing != nil {
+			if existing.ServiceID != build.ServiceID || existing.Status != domain.BuildStatusSucceeded ||
+				!strings.EqualFold(existing.GitSHA, build.GitSHA) {
+				return fmt.Errorf("existing release build conflicts with accepted lineage")
+			}
+			*build = *existing
+		} else if err := repos.Builds.Create(ctx, build); err != nil {
+			return fmt.Errorf("register release build in transaction: %w", err)
+		} else {
+			buildCreated = true
+		}
+		artifact.BuildID = build.ID
+		txRegistry := *s
+		txRegistry.services = repos.Services
+		txRegistry.builds = repos.Builds
+		txRegistry.artifacts = repos.Artifacts
+		txRegistry.publisher = &events.NoopPublisher{}
+		txRegistry.txExecutor = nil
+		if err := txRegistry.RegisterReleaseArtifact(ctx, artifact, proof); err != nil {
+			return err
+		}
+		audit, err := prepareAudit(artifact)
+		if err != nil {
+			return fmt.Errorf("prepare release registration audit: %w", err)
+		}
+		inserted, err := repos.NostrEvents.Record(ctx, audit)
+		if err != nil {
+			return fmt.Errorf("persist release registration audit: %w", err)
+		}
+		if !inserted {
+			return fmt.Errorf("release registration audit event conflicts with existing outbox evidence")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if buildCreated {
+		s.publisher.Publish(ctx, events.Event{
+			Type: events.EventBuildRegistered, EntityID: build.ID.String(), Data: build,
+		})
+	}
+	s.publishArtifactRegistered(ctx, artifact)
+	return nil
+}
+
 // RegisterReleaseArtifact registers an accepted Hive-CI RELEASE strictly by
 // its immutable manifest digest. The producer's optional tag is retained only
 // inside signed evidence metadata and is never an artifact lookup key.
@@ -1017,6 +1085,152 @@ func (s *RegistryService) ListArtifactsByBuild(ctx context.Context, buildID uuid
 
 // --- Deployment Intent operations ---
 
+type DeploymentDecisionAuditPreparer func() (*repository.NostrEventRecord, error)
+
+// CreateDeploymentIntentWithAudit atomically persists an intent, any authorized
+// desired-state transition, and its signed audit outbox evidence.
+func (s *RegistryService) CreateDeploymentIntentWithAudit(
+	ctx context.Context,
+	intent *domain.DeploymentIntent,
+	prepareAudit DeploymentDecisionAuditPreparer,
+) error {
+	if s == nil || s.txExecutor == nil || intent == nil || prepareAudit == nil {
+		return fmt.Errorf("atomic deployment intent and audit are not configured")
+	}
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Services == nil || repos.Environments == nil || repos.Artifacts == nil ||
+			repos.Intents == nil || repos.State == nil || repos.NostrEvents == nil {
+			return fmt.Errorf("deployment intent transaction repositories are not configured")
+		}
+		txRegistry := *s
+		txRegistry.services = repos.Services
+		txRegistry.environments = repos.Environments
+		txRegistry.artifacts = repos.Artifacts
+		txRegistry.intents = repos.Intents
+		txRegistry.state = repos.State
+		txRegistry.publisher = &events.NoopPublisher{}
+		txRegistry.txExecutor = nil
+		if err := txRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
+			return err
+		}
+		audit, err := prepareAudit()
+		if err != nil {
+			return fmt.Errorf("prepare deployment decision audit: %w", err)
+		}
+		inserted, err := repos.NostrEvents.Record(ctx, audit)
+		if err != nil {
+			return fmt.Errorf("persist deployment decision audit: %w", err)
+		}
+		if !inserted {
+			return fmt.Errorf("deployment decision audit event conflicts with existing outbox evidence")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{Type: events.EventDeploymentIntentCreated, EntityID: intent.ID.String(), Data: intent})
+	if intent.Status == domain.IntentStatusApproved {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+				ArtifactID: intent.ArtifactID.String(), IntentID: intent.ID.String(),
+			},
+		})
+		s.publisher.Publish(ctx, events.Event{
+			Type: events.EventDeploymentIntentApproved, EntityID: intent.ID.String(),
+			Data: events.ResourceData{
+				ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+				ArtifactID: intent.ArtifactID.String(), IntentID: intent.ID.String(),
+			},
+		})
+	}
+	return nil
+}
+
+// DecideDeploymentIntentWithAudit atomically applies a protected promotion
+// approval/rejection and records the signed decision evidence.
+func (s *RegistryService) DecideDeploymentIntentWithAudit(
+	ctx context.Context,
+	id uuid.UUID,
+	approve bool,
+	prepareAudit DeploymentDecisionAuditPreparer,
+) error {
+	if s == nil || s.txExecutor == nil || prepareAudit == nil {
+		return fmt.Errorf("atomic deployment decision and audit are not configured")
+	}
+	var intent *domain.DeploymentIntent
+	stateChanged := approve
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Intents == nil || repos.State == nil || repos.NostrEvents == nil {
+			return fmt.Errorf("deployment decision transaction repositories are not configured")
+		}
+		var err error
+		intent, err = repos.Intents.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if intent == nil {
+			return fmt.Errorf("deployment intent %s not found", id)
+		}
+		txRegistry := *s
+		txRegistry.intents = repos.Intents
+		txRegistry.state = repos.State
+		txRegistry.publisher = &events.NoopPublisher{}
+		txRegistry.txExecutor = nil
+		if approve {
+			err = txRegistry.ApproveDeploymentIntent(ctx, id)
+		} else {
+			before, stateErr := repos.State.Get(ctx, intent.ServiceID, intent.EnvironmentID)
+			if stateErr != nil {
+				return stateErr
+			}
+			stateChanged = before != nil && before.DesiredIntentID != nil && *before.DesiredIntentID == id
+			err = txRegistry.RejectDeploymentIntent(ctx, id)
+		}
+		if err != nil {
+			return err
+		}
+		audit, err := prepareAudit()
+		if err != nil {
+			return fmt.Errorf("prepare deployment approval audit: %w", err)
+		}
+		inserted, err := repos.NostrEvents.Record(ctx, audit)
+		if err != nil {
+			return fmt.Errorf("persist deployment approval audit: %w", err)
+		}
+		if !inserted {
+			return fmt.Errorf("deployment approval audit event conflicts with existing outbox evidence")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if stateChanged {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+				ArtifactID: intent.ArtifactID.String(), IntentID: id.String(),
+			},
+		})
+	}
+	eventType := events.EventDeploymentIntentRejected
+	if approve {
+		eventType = events.EventDeploymentIntentApproved
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type: eventType, EntityID: id.String(),
+		Data: events.ResourceData{
+			ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+			ArtifactID: intent.ArtifactID.String(), IntentID: id.String(),
+		},
+	})
+	return nil
+}
+
 // CreateDeploymentIntent creates a new deployment intent and updates the environment service state.
 func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain.DeploymentIntent) error {
 	// Validate referenced entities exist.
@@ -1135,6 +1349,33 @@ func (s *RegistryService) GetDeploymentIntent(ctx context.Context, id uuid.UUID)
 
 func (s *RegistryService) UpdateDeploymentIntentDesiredState(ctx context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
 	return s.intents.UpdateDesiredState(ctx, id, desiredState, desiredHash)
+}
+
+type releasePromotionIntentLookup interface {
+	GetByReleasePromotionKey(context.Context, uuid.UUID, uuid.UUID, string, string) (*domain.DeploymentIntent, error)
+}
+
+func (s *RegistryService) GetDeploymentIntentByReleasePromotionKey(
+	ctx context.Context,
+	serviceID, environmentID uuid.UUID,
+	requester, idempotencyKey string,
+) (*domain.DeploymentIntent, error) {
+	if lookup, ok := s.intents.(releasePromotionIntentLookup); ok {
+		return lookup.GetByReleasePromotionKey(ctx, serviceID, environmentID, requester, idempotencyKey)
+	}
+	intents, err := s.intents.ListByServiceEnv(ctx, serviceID, environmentID, 10000, 0)
+	if err != nil {
+		return nil, err
+	}
+	for index := range intents {
+		intent := &intents[index]
+		if intent.Metadata["release_promotion"] == true &&
+			intent.Metadata["promotion_requester"] == requester &&
+			intent.Metadata["promotion_idempotency_key"] == idempotencyKey {
+			return intent, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {

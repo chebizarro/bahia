@@ -453,6 +453,10 @@ hiveci:
   
   # CI registration never promotes; promotion requires a separately
   # authorized promotion intent.
+
+  # Each release policy must explicitly bind workflow_digest, policy_digest,
+  # review_policy, source_repo_identity, release_image_repository, and a
+  # non-empty release_attestors list. Missing constraints fail closed.
   
   # Retry configuration
   retry_interval: 30s
@@ -484,6 +488,17 @@ kind `25910` mutation using generated method schema `bahia.deploy.v2`:
   }
 }
 ```
+
+For fully-qualified producer repositories such as
+`harbor.example/project/image`, Bahia must have a configured registry/Harbor
+adapter whose authority matches the repository. It retrieves the manifest,
+SBOM, and provenance bytes through the OCI Distribution API by their signed
+digests. If that byte-capable resolver is absent, unreachable, unauthorized, or
+returns missing/mismatched bytes, registration fails closed; Bahia never falls
+back to a tag or to metadata-only existence checks. OCI blob responses do not
+carry descriptor media types, so SBOM/provenance media types remain bound to the
+signed descriptors while bytes, digest, size, and document structure are
+verified.
 
 Bahia accepts the mutation only when the signer has deployment permission, the
 pipeline policy binds the exact service and staged environment, the environment

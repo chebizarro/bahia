@@ -766,9 +766,9 @@ func addRepositoryCILinkedService(
 }
 
 func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
-	// Idempotent insert: only creates the policy if no row with the same
-	// (repo_coordinate, workflow_path, service_id, environment_id) exists.
-	// We COALESCE branch_pattern to handle NULL equality in the WHERE check.
+	// Reconcile config-owned policy state in place, or insert it when absent.
+	// This lets upgrades replace formerly permissive metadata with mandatory
+	// release constraints. COALESCE preserves NULL branch-pattern equality.
 	metadata := policy.Metadata
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -778,10 +778,21 @@ func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy do
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
+		WITH reconciled AS (
+			UPDATE hiveci_pipeline_policies
+			SET enabled = $6, metadata = $7, updated_at = now()
+			WHERE repo_coordinate = $1
+			AND workflow_path = $2
+			AND COALESCE(branch_pattern, '') = COALESCE(NULLIF($3, ''), '')
+			AND service_id = $4
+			AND environment_id = $5
+			RETURNING id
+		)
 		INSERT INTO hiveci_pipeline_policies
 			(repo_coordinate, workflow_path, branch_pattern, service_id, environment_id, enabled, metadata)
 		SELECT $1, $2, NULLIF($3, ''), $4, $5, $6, $7
-		WHERE NOT EXISTS (
+		WHERE NOT EXISTS (SELECT 1 FROM reconciled)
+		AND NOT EXISTS (
 			SELECT 1 FROM hiveci_pipeline_policies
 			WHERE repo_coordinate = $1
 			AND workflow_path = $2

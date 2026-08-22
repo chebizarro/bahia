@@ -29,8 +29,25 @@ func NewSignedReleasePromotionAudit(signer nostr.Signer, events promotionAuditSt
 }
 
 func (a *SignedReleasePromotionAudit) AuditPromotionDecision(ctx context.Context, decision ReleasePromotionDecision, status string, decisionErr error) error {
+	record, err := a.PreparePromotionDecisionAudit(ctx, decision, status, decisionErr)
+	if err != nil {
+		return err
+	}
+	_, err = a.events.Record(ctx, record)
+	if err != nil {
+		return fmt.Errorf("persist release promotion audit outbox event: %w", err)
+	}
+	return nil
+}
+
+func (a *SignedReleasePromotionAudit) PreparePromotionDecisionAudit(
+	ctx context.Context,
+	decision ReleasePromotionDecision,
+	status string,
+	decisionErr error,
+) (*repository.NostrEventRecord, error) {
 	if a == nil || a.signer == nil || a.events == nil {
-		return fmt.Errorf("release promotion audit dependencies are not configured")
+		return nil, fmt.Errorf("release promotion audit dependencies are not configured")
 	}
 	now := a.now().UTC()
 	reason := ""
@@ -53,7 +70,7 @@ func (a *SignedReleasePromotionAudit) AuditPromotionDecision(ctx context.Context
 		"recorded_at":              now.Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		return fmt.Errorf("encode release promotion audit: %w", err)
+		return nil, fmt.Errorf("encode release promotion audit: %w", err)
 	}
 	tags := nostr.Tags{
 		{"-"}, {"domain", "artifact"}, {"entity", "promotion"},
@@ -75,22 +92,18 @@ func (a *SignedReleasePromotionAudit) AuditPromotionDecision(ctx context.Context
 		Tags: tags, Content: string(content),
 	}
 	if err := a.signer.SignEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign release promotion audit: %w", err)
+		return nil, fmt.Errorf("sign release promotion audit: %w", err)
 	}
 	tagsJSON, err := json.Marshal(event.Tags)
 	if err != nil {
-		return fmt.Errorf("encode release promotion audit tags: %w", err)
+		return nil, fmt.Errorf("encode release promotion audit tags: %w", err)
 	}
-	_, err = a.events.Record(ctx, &repository.NostrEventRecord{
+	return &repository.NostrEventRecord{
 		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
 		Content: event.Content, Tags: tagsJSON, Sig: hex.EncodeToString(event.Sig[:]),
 		CreatedAt: event.CreatedAt.Time(), ReceivedAt: now,
 		EntityType: "release_promotion", PublishState: repository.NostrPublishStatePending,
-	})
-	if err != nil {
-		return fmt.Errorf("persist release promotion audit outbox event: %w", err)
-	}
-	return nil
+	}, nil
 }
 
 var _ ReleasePromotionAuditor = (*SignedReleasePromotionAudit)(nil)

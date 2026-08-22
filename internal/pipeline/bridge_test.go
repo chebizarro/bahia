@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	registryadapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -360,6 +361,26 @@ func (m *mockCanonicalRegistry) RegisterVerifiedArtifact(ctx context.Context, ar
 	artifact.Metadata["verification"] = map[string]any{"source": proof.Source, "manifest_digest": proof.ManifestDigest, "state": "verified"}
 	artifact.Metadata["supply_chain"] = map[string]any{"policy_state": proof.PolicyState}
 	return m.artifacts.Create(ctx, artifact)
+}
+
+func (m *mockCanonicalRegistry) RegisterReleaseArtifactWithAudit(
+	ctx context.Context,
+	build *domain.Build,
+	artifact *domain.Artifact,
+	proof service.ReleaseArtifactVerificationProof,
+	prepare service.ReleaseArtifactAuditPreparer,
+) error {
+	if existing := m.builds.byRun[build.CIRunID]; existing != nil {
+		*build = *existing
+	} else if err := m.RegisterBuild(ctx, build); err != nil {
+		return err
+	}
+	artifact.BuildID = build.ID
+	if err := m.RegisterReleaseArtifact(ctx, artifact, proof); err != nil {
+		return err
+	}
+	_, err := prepare(artifact)
+	return err
 }
 
 func (m *mockCanonicalRegistry) RegisterReleaseArtifact(ctx context.Context, artifact *domain.Artifact, proof service.ReleaseArtifactVerificationProof) error {
@@ -778,6 +799,17 @@ type recordingReleaseAuditor struct {
 func (a *recordingReleaseAuditor) AuditReleaseRegistration(_ context.Context, _ domain.HiveCIAcceptedRelease, _ *domain.Artifact, decision string, _ error) error {
 	a.decisions = append(a.decisions, decision)
 	return nil
+}
+
+func (a *recordingReleaseAuditor) PrepareReleaseRegistrationAudit(
+	_ context.Context,
+	_ domain.HiveCIAcceptedRelease,
+	_ *domain.Artifact,
+	decision string,
+	_ error,
+) (*repository.NostrEventRecord, error) {
+	a.decisions = append(a.decisions, decision)
+	return &repository.NostrEventRecord{ID: uuid.NewString()}, nil
 }
 
 func TestBridge_RegisterAcceptedReleaseIsExactlyOnceDigestOnlyAndDoesNotPromote(t *testing.T) {

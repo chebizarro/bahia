@@ -20,6 +20,7 @@ var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type ReleaseRegistrationAuditor interface {
 	AuditReleaseRegistration(context.Context, domain.HiveCIAcceptedRelease, *domain.Artifact, string, error) error
+	PrepareReleaseRegistrationAudit(context.Context, domain.HiveCIAcceptedRelease, *domain.Artifact, string, error) (*repository.NostrEventRecord, error)
 }
 
 type artifactRegistry interface {
@@ -89,20 +90,11 @@ func (b *Bridge) SetReleaseRegistrationAuditor(auditor ReleaseRegistrationAudito
 // desired-state dependency.
 func (b *Bridge) RegisterAcceptedRelease(ctx context.Context, release domain.HiveCIAcceptedRelease) (artifact *domain.Artifact, err error) {
 	defer func() {
-		if b == nil || b.releaseAuditor == nil {
+		if err == nil || b == nil || b.releaseAuditor == nil {
 			return
 		}
-		decision := "accepted"
-		if err != nil {
-			decision = "rejected"
-		}
-		if auditErr := b.releaseAuditor.AuditReleaseRegistration(ctx, release, artifact, decision, err); auditErr != nil {
-			if err == nil {
-				err = fmt.Errorf("persist artifact registration audit: %w", auditErr)
-				artifact = nil
-			} else {
-				err = fmt.Errorf("%v; persist rejection audit: %w", err, auditErr)
-			}
+		if auditErr := b.releaseAuditor.AuditReleaseRegistration(ctx, release, artifact, "rejected", err); auditErr != nil {
+			err = fmt.Errorf("%v; persist rejection audit: %w", err, auditErr)
 		}
 	}()
 	if b == nil || b.registry == nil || b.buildRepo == nil || b.serviceRepo == nil || b.artifactRepo == nil {
@@ -134,9 +126,6 @@ func (b *Bridge) RegisterAcceptedRelease(ctx context.Context, release domain.Hiv
 				"release_result_event_id": release.ResultEventID, "lineage": release.Result.Lineage,
 			},
 		}
-		if err := b.registry.RegisterBuild(ctx, build); err != nil {
-			return nil, fmt.Errorf("register release build: %w", err)
-		}
 	} else if build.ServiceID != policy.ServiceID || build.Status != domain.BuildStatusSucceeded ||
 		!strings.EqualFold(build.GitSHA, release.Result.Lineage.Commit) {
 		return nil, fmt.Errorf("existing release build conflicts with accepted lineage")
@@ -147,16 +136,29 @@ func (b *Bridge) RegisterAcceptedRelease(ctx context.Context, release domain.Hiv
 		ImageDigest: release.Result.Manifest.Digest,
 		ImageTag:    "",
 	}
-	releaseRegistry, ok := b.registry.(interface {
-		RegisterReleaseArtifact(context.Context, *domain.Artifact, service.ReleaseArtifactVerificationProof) error
+	if b.releaseAuditor == nil {
+		return nil, fmt.Errorf("release registration audit is not configured")
+	}
+	atomicRegistry, ok := b.registry.(interface {
+		RegisterReleaseArtifactWithAudit(
+			context.Context,
+			*domain.Build,
+			*domain.Artifact,
+			service.ReleaseArtifactVerificationProof,
+			service.ReleaseArtifactAuditPreparer,
+		) error
 	})
 	if !ok {
-		return nil, fmt.Errorf("digest-only release artifact registry is not configured")
+		return nil, fmt.Errorf("atomic digest-only release artifact registry is not configured")
 	}
-	if err := releaseRegistry.RegisterReleaseArtifact(ctx, artifact, service.ReleaseArtifactVerificationProof{
-		Release: release, VerifiedAt: time.Now().UTC(),
-	}); err != nil {
-		return nil, fmt.Errorf("register accepted release artifact: %w", err)
+	if err := atomicRegistry.RegisterReleaseArtifactWithAudit(
+		ctx, build, artifact,
+		service.ReleaseArtifactVerificationProof{Release: release, VerifiedAt: time.Now().UTC()},
+		func(committed *domain.Artifact) (*repository.NostrEventRecord, error) {
+			return b.releaseAuditor.PrepareReleaseRegistrationAudit(ctx, release, committed, "accepted", nil)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("register accepted release artifact with audit: %w", err)
 	}
 	return artifact, nil
 }

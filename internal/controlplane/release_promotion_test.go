@@ -27,8 +27,20 @@ func (f *promotionRegistryFake) GetArtifact(_ context.Context, id uuid.UUID) (*d
 func (f *promotionRegistryFake) GetEnvironmentServiceState(context.Context, uuid.UUID, uuid.UUID) (*domain.EnvironmentServiceState, error) {
 	return f.state, nil
 }
-func (f *promotionRegistryFake) ListDeploymentIntents(context.Context, uuid.UUID, uuid.UUID, int, int) ([]domain.DeploymentIntent, error) {
-	return f.intents, nil
+func (f *promotionRegistryFake) GetDeploymentIntentByReleasePromotionKey(
+	_ context.Context,
+	serviceID, environmentID uuid.UUID,
+	requester, idempotencyKey string,
+) (*domain.DeploymentIntent, error) {
+	for index := range f.intents {
+		intent := &f.intents[index]
+		if intent.ServiceID == serviceID && intent.EnvironmentID == environmentID &&
+			intent.Metadata["promotion_requester"] == requester &&
+			intent.Metadata["promotion_idempotency_key"] == idempotencyKey {
+			return intent, nil
+		}
+	}
+	return nil, nil
 }
 
 type promotionAuditStoreFake struct {

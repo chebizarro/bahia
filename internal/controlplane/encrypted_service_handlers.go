@@ -288,10 +288,6 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 			metadata[key] = value
 		}
 		approvalMetadata["promotion"] = promotionDecision.Metadata
-		if err = h.releasePromotions.Audit(ctx, promotionDecision, "accepted", nil); err != nil {
-			return nil, fmt.Errorf("persist authorized promotion audit: %w", err)
-		}
-		promotionAcceptedAudit = true
 	}
 
 	intent := &domain.DeploymentIntent{
@@ -307,7 +303,17 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		DesiredState:     desiredState,
 		DesiredHash:      desiredState.DesiredHash,
 	}
-	if err = h.registry.CreateDeploymentIntent(ctx, intent); err != nil {
+	if promotionRequested {
+		err = h.registry.CreateDeploymentIntentWithAudit(ctx, intent, func() (*repository.NostrEventRecord, error) {
+			return h.releasePromotions.PrepareAudit(ctx, promotionDecision, "accepted", nil)
+		})
+		if err == nil {
+			promotionAcceptedAudit = true
+		}
+	} else {
+		err = h.registry.CreateDeploymentIntent(ctx, intent)
+	}
+	if err != nil {
 		createErr := err
 		if promotionRequested {
 			replayDecision, replayErr := h.releasePromotions.Authorize(
@@ -319,6 +325,10 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 			}
 			if replayDecision.ExistingIntent != nil {
 				promotionDecision = replayDecision
+				if err = h.releasePromotions.Audit(ctx, promotionDecision, "accepted", nil); err != nil {
+					return nil, fmt.Errorf("persist promotion replay audit: %w", err)
+				}
+				promotionAcceptedAudit = true
 				existing := replayDecision.ExistingIntent
 				return map[string]any{
 					"status": string(existing.Status), "intent_id": existing.ID.String(),
@@ -564,7 +574,7 @@ func (h *encryptedServiceHandlers) reject(ctx context.Context, request ContextVM
 	return h.decide(ctx, request, "reject")
 }
 
-func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVMRequest, methodDecision string) (any, error) {
+func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVMRequest, methodDecision string) (result any, err error) {
 	if h.registry == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -589,6 +599,31 @@ func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVM
 	if intent == nil {
 		return nil, fmt.Errorf("deployment intent not found")
 	}
+	promotionIntent, _ := intent.Metadata["release_promotion"].(bool)
+	promotionDecision := ReleasePromotionDecision{}
+	promotionAuditCompleted := false
+	if promotionIntent {
+		if h.releasePromotions == nil || request.Event == nil {
+			return nil, fmt.Errorf("registered release promotion audit is not configured")
+		}
+		promotionDecision = ReleasePromotionDecision{
+			ReleaseIdentity:        strings.TrimSpace(fmt.Sprint(intent.Metadata["release_identity"])),
+			ArtifactDigest:         strings.TrimSpace(fmt.Sprint(intent.Metadata["artifact_digest"])),
+			PreviousArtifactDigest: strings.TrimSpace(fmt.Sprint(intent.Metadata["previous_artifact_digest"])),
+			IdempotencyKey:         effectiveIdempotencyKey(request, params.IdempotencyKey),
+			Requester:              request.Event.PubKey.Hex(), RequestEventID: request.Event.ID.Hex(),
+			Fingerprint: strings.TrimSpace(fmt.Sprint(intent.Metadata["promotion_fingerprint"])),
+			Metadata:    intent.Metadata, ExistingIntent: intent,
+		}
+		defer func() {
+			if err == nil || promotionAuditCompleted {
+				return
+			}
+			if auditErr := h.releasePromotions.Audit(ctx, promotionDecision, "rejected", err); auditErr != nil {
+				err = fmt.Errorf("%v; persist protected promotion rejection audit: %w", err, auditErr)
+			}
+		}()
+	}
 	if _, _, err := h.authorizer.authorizeServiceEnvironment(
 		ctx,
 		request.Event,
@@ -610,9 +645,23 @@ func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVM
 		if evaluation != nil && (!evaluation.Allowed || evaluation.Blockers > 0) {
 			return nil, fmt.Errorf("deployment blocked by current policy: %s", summarizePolicyBlockReason(evaluation))
 		}
-		err = h.registry.ApproveDeploymentIntent(ctx, params.IntentID)
+		if promotionIntent {
+			err = h.registry.DecideDeploymentIntentWithAudit(ctx, params.IntentID, true, func() (*repository.NostrEventRecord, error) {
+				return h.releasePromotions.PrepareAudit(ctx, promotionDecision, "approved", nil)
+			})
+			promotionAuditCompleted = err == nil
+		} else {
+			err = h.registry.ApproveDeploymentIntent(ctx, params.IntentID)
+		}
 	} else {
-		err = h.registry.RejectDeploymentIntent(ctx, params.IntentID)
+		if promotionIntent {
+			err = h.registry.DecideDeploymentIntentWithAudit(ctx, params.IntentID, false, func() (*repository.NostrEventRecord, error) {
+				return h.releasePromotions.PrepareAudit(ctx, promotionDecision, "rejected", nil)
+			})
+			promotionAuditCompleted = err == nil
+		} else {
+			err = h.registry.RejectDeploymentIntent(ctx, params.IntentID)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s deployment intent: %w", decision, err)

@@ -20,12 +20,14 @@ type TxRepos struct {
 	Environments      EnvironmentRepository
 	Builds            BuildRepository
 	Artifacts         ArtifactRepository
+	Intents           DeploymentIntentRepository
 	DeploymentUnits   DeploymentUnitRepository
 	State             EnvironmentServiceStateRepository
 	Observations      RuntimeObservationRepository
 	Secrets           SecretRepository
 	AdoptedIdentities AdoptedRuntimeIdentityRepository
 	Security          SecurityRepository
+	NostrEvents       NostrEventRepository
 }
 
 type pgQueryer interface {
@@ -65,12 +67,14 @@ func (e *PgTxExecutor) WithinTx(ctx context.Context, fn func(repos TxRepos) erro
 		Environments:      newPgEnvironmentRepositoryWithDB(tx),
 		Builds:            newPgBuildRepositoryWithDB(tx),
 		Artifacts:         newPgArtifactRepositoryWithDB(tx),
+		Intents:           &PgDeploymentIntentRepository{pool: tx},
 		DeploymentUnits:   newPgDeploymentUnitRepositoryWithDB(tx),
 		State:             newPgEnvironmentServiceStateRepositoryWithDB(tx),
 		Observations:      newPgRuntimeObservationRepositoryWithDB(tx),
 		Secrets:           newPgSecretRepositoryWithDB(tx),
 		AdoptedIdentities: newPgAdoptedRuntimeIdentityRepositoryWithDB(tx),
 		Security:          newPgSecurityRepositoryWithDB(tx),
+		NostrEvents:       newPgNostrEventRepositoryWithDB(tx),
 	}
 	if err := fn(repos); err != nil {
 		return err

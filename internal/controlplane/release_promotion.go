@@ -13,6 +13,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 var promotionDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -35,11 +36,12 @@ type ReleasePromotionDecision struct {
 type releasePromotionRegistry interface {
 	GetArtifact(context.Context, uuid.UUID) (*domain.Artifact, error)
 	GetEnvironmentServiceState(context.Context, uuid.UUID, uuid.UUID) (*domain.EnvironmentServiceState, error)
-	ListDeploymentIntents(context.Context, uuid.UUID, uuid.UUID, int, int) ([]domain.DeploymentIntent, error)
+	GetDeploymentIntentByReleasePromotionKey(context.Context, uuid.UUID, uuid.UUID, string, string) (*domain.DeploymentIntent, error)
 }
 
 type ReleasePromotionAuditor interface {
 	AuditPromotionDecision(context.Context, ReleasePromotionDecision, string, error) error
+	PreparePromotionDecisionAudit(context.Context, ReleasePromotionDecision, string, error) (*repository.NostrEventRecord, error)
 }
 
 type ReleasePromotionAuthorizer struct {
@@ -56,6 +58,18 @@ func (a *ReleasePromotionAuthorizer) Audit(ctx context.Context, decision Release
 		return fmt.Errorf("promotion audit is not configured")
 	}
 	return a.auditor.AuditPromotionDecision(ctx, decision, status, decisionErr)
+}
+
+func (a *ReleasePromotionAuthorizer) PrepareAudit(
+	ctx context.Context,
+	decision ReleasePromotionDecision,
+	status string,
+	decisionErr error,
+) (*repository.NostrEventRecord, error) {
+	if a == nil || a.auditor == nil {
+		return nil, fmt.Errorf("promotion audit is not configured")
+	}
+	return a.auditor.PreparePromotionDecisionAudit(ctx, decision, status, decisionErr)
 }
 
 func (a *ReleasePromotionAuthorizer) Authorize(
@@ -114,16 +128,13 @@ func (a *ReleasePromotionAuthorizer) Authorize(
 	if err != nil {
 		return decision, err
 	}
-	intents, err := a.registry.ListDeploymentIntents(ctx, serviceID, environmentID, 200, 0)
+	intent, err := a.registry.GetDeploymentIntentByReleasePromotionKey(
+		ctx, serviceID, environmentID, decision.Requester, decision.IdempotencyKey,
+	)
 	if err != nil {
 		return decision, fmt.Errorf("load promotion replay state: %w", err)
 	}
-	for index := range intents {
-		intent := &intents[index]
-		if intent.Metadata["promotion_idempotency_key"] != decision.IdempotencyKey ||
-			intent.Metadata["promotion_requester"] != decision.Requester {
-			continue
-		}
+	if intent != nil {
 		decision.PreviousArtifactDigest = strings.TrimSpace(fmt.Sprint(intent.Metadata["previous_artifact_digest"]))
 		if decision.PreviousArtifactDigest == "" || stringParam(params, "previous_artifact_digest") != decision.PreviousArtifactDigest {
 			return decision, fmt.Errorf("%w: %s", ErrPromotionReplayConflict, decision.IdempotencyKey)

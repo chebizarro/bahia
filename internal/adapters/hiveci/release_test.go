@@ -32,8 +32,12 @@ func (f *releaseEvidenceFake) GetWorkflowRunEvent(context.Context, string) (*nos
 func (f *releaseEvidenceFake) ListPipelinePolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error) {
 	return f.policies, nil
 }
-func (f *releaseEvidenceFake) IsWorkerAdmitted(context.Context, string, string) (bool, error) {
-	return f.admitted, nil
+func (f *releaseEvidenceFake) AdmitWorker(_ context.Context, pubkey, capability, workerAdEventID string) (WorkerAdmissionEvidence, bool, error) {
+	return WorkerAdmissionEvidence{
+		WorkerIdentity: pubkey, WorkerCapability: capability, WorkerAdEventID: workerAdEventID,
+		WorkerAdvertisedAt: time.Unix(1_799_999_900, 0).UTC(), DecisionCode: "eligible",
+		CapacityClass: string(domain.WorkerCapacityOpen), PressureLevel: string(domain.WorkerPressureNominal),
+	}, f.admitted, nil
 }
 func (f *releaseEvidenceFake) ResolveArtifact(_ context.Context, artifact domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error) {
 	if artifact.Digest == f.unavailable {
@@ -280,7 +284,7 @@ func TestReleaseIngestorRejectsTrustLineagePolicyAndArtifactFailures(t *testing.
 		{name: "untrusted attestor", want: ErrUntrustedReleaseAttestor, mutate: func(_ *testing.T, f *releaseFixture) {
 			f.ingestor.trustedAttestors = map[string]struct{}{}
 		}},
-		{name: "missing signed run", want: ErrReleaseEvidenceUnavailable, mutate: func(_ *testing.T, f *releaseFixture) {
+		{name: "missing signed run", want: ErrReleaseLineagePending, mutate: func(_ *testing.T, f *releaseFixture) {
 			f.evidence.run = nil
 		}},
 		{name: "invalid run signature", want: ErrInvalidRelease, mutate: func(_ *testing.T, f *releaseFixture) {
@@ -303,6 +307,27 @@ func TestReleaseIngestorRejectsTrustLineagePolicyAndArtifactFailures(t *testing.
 		}},
 		{name: "policy digest mismatch", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
 			f.evidence.policies[0].Metadata["policy_digest"] = strings.Repeat("0", 64)
+		}},
+		{name: "missing workflow digest constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			delete(f.evidence.policies[0].Metadata, "workflow_digest")
+		}},
+		{name: "missing policy digest constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			delete(f.evidence.policies[0].Metadata, "policy_digest")
+		}},
+		{name: "missing review policy constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			delete(f.evidence.policies[0].Metadata, "review_policy")
+		}},
+		{name: "missing source repository identity constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			delete(f.evidence.policies[0].Metadata, "source_repo_identity")
+		}},
+		{name: "missing release image repository constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			delete(f.evidence.policies[0].Metadata, "release_image_repository")
+		}},
+		{name: "missing release attestors constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			delete(f.evidence.policies[0].Metadata, "release_attestors")
+		}},
+		{name: "empty release attestors constraint", want: ErrReleasePolicyDenied, mutate: func(_ *testing.T, f *releaseFixture) {
+			f.evidence.policies[0].Metadata["release_attestors"] = []any{}
 		}},
 		{name: "trigger lineage mismatch", want: ErrInvalidRelease, mutate: func(t *testing.T, f *releaseFixture) {
 			replaceReleaseTag(t, f.run, "trigger-envelope", strings.Repeat("0", 64), f.issuer)
@@ -432,7 +457,7 @@ func replaceResolvedContent(f *releaseFixture, descriptor *domain.HiveCIReleaseA
 func TestSubscriberDispatchesAcceptedReleaseAndExactReplay(t *testing.T) {
 	f := newReleaseFixture(t)
 	calls := 0
-	subscriber := &Subscriber{logger: zap.NewNop(), releases: f.ingestor,
+	subscriber := &Subscriber{logger: zap.NewNop(), releases: f.ingestor, evidenceEvents: &admissionEventRepo{},
 		onRelease: func(_ context.Context, commit domain.HiveCIReleaseCommitResult) {
 			calls++
 			if commit.Release.Result.Manifest.Digest != f.result.Manifest.Digest {
@@ -443,6 +468,37 @@ func TestSubscriberDispatchesAcceptedReleaseAndExactReplay(t *testing.T) {
 	subscriber.handleWorkflowResult(context.Background(), f.event)
 	if calls != 2 || f.store.commits != 1 {
 		t.Fatalf("release callback calls=%d durable commits=%d, want two decisions and one commit", calls, f.store.commits)
+	}
+}
+
+func TestSubscriberDurablyReprocessesReleaseDeliveredBeforeWorkflowRun(t *testing.T) {
+	f := newReleaseFixture(t)
+	storedRun := f.run
+	f.evidence.run = nil
+	events := &admissionEventRepo{}
+	calls := 0
+	subscriber := NewSubscriber(nil, newTestHiveRepo(), []string{f.issuer.Public().Hex()}, zap.NewNop(), nil)
+	subscriber.now = func() time.Time { return f.now }
+	subscriber.SetReleaseEvidenceRecorder(events)
+	subscriber.SetReleaseIngestor(f.ingestor, func(_ context.Context, commit domain.HiveCIReleaseCommitResult) {
+		calls++
+		if commit.Replay {
+			t.Fatal("first reprocessed release unexpectedly reported replay")
+		}
+	})
+
+	subscriber.handleEvent(context.Background(), f.event)
+	if calls != 0 || f.store.commits != 0 {
+		t.Fatalf("orphan release registered before lineage: callbacks=%d commits=%d", calls, f.store.commits)
+	}
+	if _, ok := events.records[f.event.ID.Hex()]; !ok {
+		t.Fatal("orphan release was not durably retained")
+	}
+
+	f.evidence.run = storedRun
+	subscriber.handleEvent(context.Background(), storedRun)
+	if calls != 1 || f.store.commits != 1 {
+		t.Fatalf("release not deterministically reprocessed after 5401: callbacks=%d commits=%d", calls, f.store.commits)
 	}
 }
 

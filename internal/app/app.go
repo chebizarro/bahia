@@ -847,7 +847,7 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, nostrEventRepo)
 			releaseEvidence := hiveciAdapter.NewRepositoryReleaseEvidence(
-				nostrEventRepo, hiveRepo, workerRepo, hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc),
+				nostrEventRepo, hiveRepo, workerRepo, hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector),
 			)
 			releaseIngestor := hiveciAdapter.NewReleaseIngestor(
 				releaseEvidence, hiveRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
