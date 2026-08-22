@@ -1069,30 +1069,12 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		return err
 	}
 
-	// Update the environment service state desired artifact.
-	state := &domain.EnvironmentServiceState{
-		ServiceID:           di.ServiceID,
-		EnvironmentID:       di.EnvironmentID,
-		DeploymentUnitID:    deploymentUnitIDForRunIntent(nil, di),
-		DesiredArtifactID:   &di.ArtifactID,
-		DesiredIntentID:     &di.ID,
-		DesiredRuntimeState: di.DesiredState,
-		DesiredHash:         di.DesiredHash,
-		DriftStatus:         domain.DriftStatusDeploying,
-	}
-	if err := s.state.Upsert(ctx, state); err != nil {
-		s.logger.Error("failed to update environment service state", zap.Error(err))
-	} else {
-		s.publisher.Publish(ctx, events.Event{
-			Type:     events.EventEnvironmentServiceStateChanged,
-			EntityID: di.ServiceID.String() + ":" + di.EnvironmentID.String(),
-			Data: events.ResourceData{
-				ServiceID:     di.ServiceID.String(),
-				EnvironmentID: di.EnvironmentID.String(),
-				ArtifactID:    di.ArtifactID.String(),
-				IntentID:      di.ID.String(),
-			},
-		})
+	// Pending or rejected intents are proposals only. Desired state advances
+	// exclusively after the intent has crossed the authorization boundary.
+	if di.Status == domain.IntentStatusApproved {
+		if err := s.advanceDesiredStateForIntent(ctx, di); err != nil {
+			return err
+		}
 	}
 
 	s.publisher.Publish(ctx, events.Event{
@@ -1119,6 +1101,31 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		zap.String("environment", env.Name),
 		zap.String("artifact", artifact.ImageDigest),
 	)
+	return nil
+}
+
+func (s *RegistryService) advanceDesiredStateForIntent(ctx context.Context, di *domain.DeploymentIntent) error {
+	if di == nil || di.Status != domain.IntentStatusApproved {
+		return fmt.Errorf("only approved deployment intents may advance desired state")
+	}
+	state := &domain.EnvironmentServiceState{
+		ServiceID: di.ServiceID, EnvironmentID: di.EnvironmentID,
+		DeploymentUnitID:  deploymentUnitIDForRunIntent(nil, di),
+		DesiredArtifactID: &di.ArtifactID, DesiredIntentID: &di.ID,
+		DesiredRuntimeState: di.DesiredState, DesiredHash: di.DesiredHash,
+		DriftStatus: domain.DriftStatusDeploying,
+	}
+	if err := s.state.Upsert(ctx, state); err != nil {
+		return fmt.Errorf("advance authorized deployment desired state: %w", err)
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: di.ServiceID.String() + ":" + di.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(),
+			ArtifactID: di.ArtifactID.String(), IntentID: di.ID.String(),
+		},
+	})
 	return nil
 }
 
@@ -1165,6 +1172,12 @@ func (s *RegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.U
 	}
 
 	if err := s.transitionDeploymentIntentDecision(ctx, id, domain.ApprovalStatusApproved, domain.IntentStatusApproved); err != nil {
+		return err
+	}
+	authorized := *di
+	authorized.ApprovalStatus = domain.ApprovalStatusApproved
+	authorized.Status = domain.IntentStatusApproved
+	if err := s.advanceDesiredStateForIntent(ctx, &authorized); err != nil {
 		return err
 	}
 

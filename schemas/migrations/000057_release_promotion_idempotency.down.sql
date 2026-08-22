@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS deployment_intents_release_promotion_idempotency_uq;

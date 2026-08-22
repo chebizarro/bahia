@@ -459,6 +459,42 @@ hiveci:
   max_retries: 10
 ```
 
+### Promoting a registered release
+
+A successful CI result only registers evidence. Promotion is a separate ContextVM
+kind `25910` mutation using generated method schema `bahia.deploy.v2`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "promote-release-identity",
+  "method": "service/deploy",
+  "params": {
+    "service_id": "<service-uuid>",
+    "environment_id": "<staged-environment-uuid>",
+    "deployment_unit_id": "<deployment-unit-uuid>",
+    "artifact_id": "<registered-artifact-uuid>",
+    "strategy": "canary",
+    "idempotency_key": "promote-release-identity",
+    "parameters": {
+      "release_identity": "hiveci-release:v1:<sha256>",
+      "artifact_digest": "sha256:<registered-manifest-digest>",
+      "previous_artifact_digest": "sha256:<current-desired-digest>"
+    }
+  }
+}
+```
+
+Bahia accepts the mutation only when the signer has deployment permission, the
+pipeline policy binds the exact service and staged environment, the environment
+strategy is `canary`, all registered manifest/SBOM/provenance and signed lineage
+evidence remains complete, rollback compatibility names the current artifact,
+and concrete health/readiness contracts are present. The resulting Loom job uses
+`repository@sha256:digest`; the signed producer tag is never a deployment input.
+Exact replays return the existing intent and conflicting replays fail closed.
+Every accepted or rejected promotion decision is written as signed kind `4903`
+audit evidence through the durable Nostr outbox.
+
 ## Monitoring
 
 - Liveness/health snapshot: `GET /health`

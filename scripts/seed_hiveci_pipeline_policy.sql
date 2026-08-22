@@ -115,13 +115,6 @@ WHERE s.name = ':SERVICE_NAME:'
   )
 RETURNING id, repo_coordinate, workflow_path, service_id, environment_id, enabled;
 
--- ============================================================
--- Step 4 (later): enable auto-deploy after artifact registration
---         is verified stable (runbook implementation order step 8)
---
--- UPDATE hiveci_pipeline_policies
--- SET    metadata = '{"auto_deploy_staging": true, "staging_environment": "edge-01"}'::jsonb,
---        updated_at = now()
--- WHERE  repo_coordinate = ':REPO_COORDINATE:'
---   AND  workflow_path   = '.github/workflows/hive-ci-build.yml';
--- ============================================================
+-- CI policies bind accepted release evidence to a Bahia service and staged
+-- environment only. They never authorize deployment. Promotion requires a
+-- separately signed ContextVM service/deploy mutation using bahia.deploy.v2.

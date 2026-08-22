@@ -1,0 +1,30 @@
+{
+  "feature_id": "CD_BAHIA_ARTIFACT_REGISTRATION",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "A valid signed RELEASE result registers exactly one immutable digest-only artifact with complete lineage, while exact replay converges and conflicting replay fails closed.",
+      "tests": ["go test ./internal/adapters/hiveci ./internal/pipeline ./internal/service"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Invalid signature, unknown worker, wrong repository/workflow/trigger/review policy, missing descriptors, digest mismatch, and replay conflict are rejected without artifact or desired-state mutation.",
+      "tests": ["go test ./internal/adapters/hiveci ./internal/pipeline ./internal/service"]
+    },
+    {
+      "id": "AC3",
+      "statement": "CI registration alone creates no promotion intent and changes no environment desired state.",
+      "tests": ["go test ./internal/pipeline ./internal/service"]
+    },
+    {
+      "id": "AC4",
+      "statement": "An RBAC-authorized bahia.deploy.v2 service/deploy request bound to the registered release, staged canary environment, previous digest, rollback metadata, and health/readiness contracts creates one digest-only canary.",
+      "tests": ["go test ./internal/controlplane ./internal/workflow"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Pending, unauthorized, invalid, and conflicting promotion decisions do not create a canary or unauthorized desired-state change, and every registration/promotion decision emits signed kind-4903 outbox evidence.",
+      "tests": ["go test ./internal/controlplane ./internal/pipeline ./internal/service ./internal/workflow"]
+    }
+  ]
+}

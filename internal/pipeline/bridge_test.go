@@ -557,8 +557,8 @@ func TestBridge_CISuccessNeverCreatesStagingIntent(t *testing.T) {
 		ServiceID:     uuid.New(),
 		EnvironmentID: envID,
 		Metadata: map[string]any{
-			"auto_deploy_staging": true,
-			"staging_environment": "edge-01-staging",
+			"legacy_ci_promotion_hint": true,
+			"legacy_staging_target":    "edge-01-staging",
 		},
 	}
 	b := newMockBuildRepo()
@@ -589,7 +589,7 @@ func TestBridge_CISuccessNeverCreatesProtectedEnvironmentIntent(t *testing.T) {
 	h.policy = &domain.HiveCIPipelinePolicy{
 		ServiceID:     uuid.New(),
 		EnvironmentID: envID,
-		Metadata:      map[string]any{"auto_deploy_staging": true},
+		Metadata:      map[string]any{"legacy_ci_promotion_hint": true},
 	}
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
@@ -612,14 +612,14 @@ func TestBridge_CISuccessNeverCreatesProtectedEnvironmentIntent(t *testing.T) {
 	}
 }
 
-func TestBridge_DuplicateIntentReused(t *testing.T) {
+func TestBridge_CISuccessDoesNotConsultExistingDeploymentIntents(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
 	envID := uuid.New()
 	h.policy = &domain.HiveCIPipelinePolicy{
 		ServiceID:     uuid.New(),
 		EnvironmentID: envID,
-		Metadata:      map[string]any{"auto_deploy_staging": true},
+		Metadata:      map[string]any{"legacy_ci_promotion_hint": true},
 	}
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
@@ -744,13 +744,13 @@ func TestBridge_RejectsTagDigestMismatch(t *testing.T) {
 	}
 }
 
-func TestBridge_NoAutoDeployPolicySkipped(t *testing.T) {
+func TestBridge_CISuccessWithoutPromotionMetadataRegistersOnlyArtifact(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
 	h.policy = &domain.HiveCIPipelinePolicy{
 		ServiceID:     uuid.New(),
 		EnvironmentID: uuid.New(),
-		Metadata:      map[string]any{"auto_deploy_staging": false},
+		Metadata:      map[string]any{},
 	}
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
@@ -767,7 +767,7 @@ func TestBridge_NoAutoDeployPolicySkipped(t *testing.T) {
 		t.Fatalf("ProcessResult error: %v", err)
 	}
 	if i.created != 0 {
-		t.Fatalf("expected no intent for disabled auto-deploy, created=%d", i.created)
+		t.Fatalf("expected CI registration to leave deployment intents untouched, created=%d", i.created)
 	}
 }
 

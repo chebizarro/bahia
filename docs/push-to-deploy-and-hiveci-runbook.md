@@ -158,36 +158,26 @@ git push
   -> hive-ci-runner consumes 5401 and runs the workflow
   -> workflow builds/pushes image and writes .hiveci-result.json
   -> hive-ci-runner publishes kind 5402 workflow result
-  -> Bahia ingests 5402 and registers build/artifact
-  -> Bahia creates or receives deployment intent
-  -> Bahia/Loom executes deployment
+  -> Bahia ingests the terminal RELEASE 5402 and registers a digest-only artifact
+  -> an operator separately signs an authorized ContextVM promotion intent
+  -> Bahia/Loom executes a staged canary from the registered digest
 ```
 
-### Required 5402 Artifact Fields
+### Required terminal RELEASE 5402 contract
 
-Bahia's Hive CI subscriber accepts artifact metadata from either `5402` tags or JSON content:
+Artifact registration consumes the canonical **second** kind `5402` emitted by
+the grasp-gitea release-provenance path. Both the signed tags and JSON content
+must identify `RELEASE`, and the result must be terminal and successful. The
+content mirrors producer schema `hiveci.release-provenance.v1` with
+`release_identity`, full `lineage`, `execution.worker_identity`, immutable
+`manifest`, `sbom`, and `provenance` descriptors, plus the Signet artifact
+attestation. Bahia joins the trusted signed kind `5401`, worker admission, and
+repository policy evidence before accepting it.
 
-```json
-{
-  "image_repo": "harbor.sharegap.net/cascadia/bahia",
-  "image_tag": "master-<sha>",
-  "image_digest": "sha256:...",
-  "log_url": "..."
-}
-```
-
-The current runner also reads `.hiveci-result.json` from the workflow checkout. The workflow should write:
-
-```json
-{
-  "imageRepo": "harbor.sharegap.net/cascadia/bahia",
-  "imageTag": "master-<sha>",
-  "imageDigest": "sha256:...",
-  "logURL": "..."
-}
-```
-
-Without `image_repo`, `image_tag`, and `image_digest`, Bahia correctly leaves the result in `artifact_pending`.
+The producer's optional `image_tag` is evidence only. It is never an artifact
+identity, lookup, copy, or deployment input. The older `.hiveci-result.json`
+shape used for an ordinary build-result `5402` does **not** qualify as a terminal
+RELEASE registration.
 
 ### Hive Workflow Contract
 
@@ -246,11 +236,8 @@ Bahia needs:
 - registry inspection configured for the target registry;
 - a trusted release-attestor key and OCI/Blossom evidence resolver for RELEASE results.
 
-The bridge already transitions successful `5402` results:
-
-- missing image metadata -> `artifact_pending`;
-- missing registry manifest -> `artifact_pending`;
-- valid image metadata and manifest -> build and artifact records.
+The bridge still handles ordinary successful build-result `5402` events through
+the legacy artifact-pending flow. That flow is separate from release acceptance.
 
 A terminal RELEASE result is registered only after manifest, SBOM, and in-toto
 provenance bytes match every signed descriptor and lineage binding. The
@@ -337,7 +324,7 @@ until an authorized intent is accepted, no environment desired state changes.
 6. ✅ Script for `hiveci_pipeline_policies` row available; run seeder once
    repo coordinate is known (see §Seeding above).
 7. Verify Bahia creates the artifact instead of `artifact_pending`.
-8. Enable auto-deploy policy only after artifact registration is stable.
+8. Submit a separately signed, RBAC-authorized ContextVM `service/deploy` promotion intent and verify the staged canary before any wider rollout.
 
 ## Retirement Condition For Immediate Relief
 

@@ -1375,14 +1375,17 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:          logger,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
+		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, nostrEventRepo)
+		releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
-			Registry:         registry,
-			RuntimeLifecycle: runtimeLifecycleSvc,
-			Policy:           policySvc,
-			PublicRoutes:     publicRoutePlanner,
-			Services:         serviceRepo,
-			RBAC:             tenantRBAC,
-			Logger:           logger,
+			Registry:          registry,
+			RuntimeLifecycle:  runtimeLifecycleSvc,
+			Policy:            policySvc,
+			PublicRoutes:      publicRoutePlanner,
+			Services:          serviceRepo,
+			RBAC:              tenantRBAC,
+			ReleasePromotions: releasePromotionAuthorizer,
+			Logger:            logger,
 		})
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)

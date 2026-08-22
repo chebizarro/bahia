@@ -77,7 +77,7 @@ func TestHiveCIWorkflowIngestion(t *testing.T) {
 		// 2. Publish kind 5402 Workflow Result with success + image tags
 		// 3. Verify Build record created
 		// 4. Verify Artifact record created (linked to Build)
-		// 5. Verify DeploymentIntent created (if auto-deploy enabled)
+		// 5. Verify CI registration created no DeploymentIntent; promotion is separately signed and authorized
 		t.Log("Would test successful workflow → build + artifact creation")
 	})
 
