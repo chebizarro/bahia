@@ -785,9 +785,9 @@ type HiveCIPolicyConfig struct {
 type HiveCIConfig struct {
 	Enabled                         bool                 `koanf:"enabled"`
 	TrustedCIPubkeys                []string             `koanf:"trusted_ci_pubkeys"`
+	TrustedReleaseAttestors         []string             `koanf:"trusted_release_attestors"`
 	AutoRegisterBuilds              bool                 `koanf:"auto_register_builds"`
 	AllowManualArtifactRegistration bool                 `koanf:"allow_manual_artifact_registration"`
-	AutoDeployStagingEnvironment    string               `koanf:"auto_deploy_staging_environment"`
 	RetryInterval                   time.Duration        `koanf:"retry_interval"`
 	MaxRetries                      int                  `koanf:"max_retries"`
 	Policies                        []HiveCIPolicyConfig `koanf:"policies" yaml:"policies"`

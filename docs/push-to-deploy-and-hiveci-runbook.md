@@ -244,14 +244,19 @@ Bahia needs:
 - relay list including the relay where `5401` and `5402` are published;
 - a `hiveci_pipeline_policies` row matching the repo coordinate and workflow path;
 - registry inspection configured for the target registry;
-- policy metadata if auto deploy is wanted.
+- a trusted release-attestor key and OCI/Blossom evidence resolver for RELEASE results.
 
 The bridge already transitions successful `5402` results:
 
 - missing image metadata -> `artifact_pending`;
 - missing registry manifest -> `artifact_pending`;
-- valid image metadata and manifest -> build and artifact records;
-- `auto_deploy_staging=true` metadata -> deployment intent.
+- valid image metadata and manifest -> build and artifact records.
+
+A terminal RELEASE result is registered only after manifest, SBOM, and in-toto
+provenance bytes match every signed descriptor and lineage binding. The
+artifact identity is `repository@sha256:digest`; any signed image tag is stored
+only as evidence. CI success never creates a deployment intent or mutates
+desired state. Promotion is a separately authorized control-plane action.
 
 ### Seeding the Pipeline Policy Row
 
@@ -268,7 +273,9 @@ every startup:
 hiveci:
   enabled: true
   trusted_ci_pubkeys:
-    - "<hive-ci-runner-pubkey>"
+    - "<hive-ci-dispatcher-pubkey>"
+  trusted_release_attestors:
+    - "<hive-ci-release-attestor-pubkey>"
   policies:
     - repo_coordinate: "30617:<grasp-gitea-pubkey>:chebizarro/bahia"
       workflow_path: ".github/workflows/hive-ci-build.yml"
@@ -314,23 +321,11 @@ sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
 The script also includes discovery queries for repo coordinates, services,
 environments, and existing policies.
 
-#### Enabling auto-deploy (later)
+#### Promotion authorization
 
-Only after step 8 of the Implementation Order is verified:
-
-```bash
-REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
-
-docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
-  exec -T postgres psql -U bahia -d bahia -c "
-UPDATE hiveci_pipeline_policies
-SET    metadata   = '{\"auto_deploy_staging\": true, \"staging_environment\": \"edge-01\"}'::jsonb,
-       updated_at = now()
-WHERE  repo_coordinate = '${REPO_COORD}'
-  AND  workflow_path   = '.github/workflows/hive-ci-build.yml';"
-```
-
-Or update the config `metadata` field and restart.
+Do not enable promotion through Hive-CI policy metadata. Registered digests are
+eligible inputs to the separate signed promotion-intent control-plane path;
+until an authorized intent is accepted, no environment desired state changes.
 
 ### Implementation Order
 

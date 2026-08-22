@@ -18,6 +18,10 @@ import (
 
 var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
+type ReleaseRegistrationAuditor interface {
+	AuditReleaseRegistration(context.Context, domain.HiveCIAcceptedRelease, *domain.Artifact, string, error) error
+}
+
 type artifactRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
 	UpdateBuildStatus(context.Context, uuid.UUID, domain.BuildStatus) error
@@ -40,6 +44,7 @@ type Bridge struct {
 	logger            *zap.Logger
 	trustedCI         map[string]struct{}
 	autoRegister      bool
+	releaseAuditor    ReleaseRegistrationAuditor
 }
 
 func NewBridge(
@@ -73,6 +78,87 @@ func NewBridge(
 		registry: registry, logger: logger.Named("pipeline-bridge"),
 		trustedCI: trusted, autoRegister: autoRegister,
 	}
+}
+
+func (b *Bridge) SetReleaseRegistrationAuditor(auditor ReleaseRegistrationAuditor) {
+	b.releaseAuditor = auditor
+}
+
+// RegisterAcceptedRelease converts the validated release boundary into one
+// digest-only Bahia artifact. It deliberately has no deployment-intent or
+// desired-state dependency.
+func (b *Bridge) RegisterAcceptedRelease(ctx context.Context, release domain.HiveCIAcceptedRelease) (artifact *domain.Artifact, err error) {
+	defer func() {
+		if b == nil || b.releaseAuditor == nil {
+			return
+		}
+		decision := "accepted"
+		if err != nil {
+			decision = "rejected"
+		}
+		if auditErr := b.releaseAuditor.AuditReleaseRegistration(ctx, release, artifact, decision, err); auditErr != nil {
+			if err == nil {
+				err = fmt.Errorf("persist artifact registration audit: %w", auditErr)
+				artifact = nil
+			} else {
+				err = fmt.Errorf("%v; persist rejection audit: %w", err, auditErr)
+			}
+		}
+	}()
+	if b == nil || b.registry == nil || b.buildRepo == nil || b.serviceRepo == nil || b.artifactRepo == nil {
+		return nil, fmt.Errorf("Hive-CI release artifact registration is not configured")
+	}
+	policy := release.Policy
+	if policy.ID == uuid.Nil || policy.ID.String() != release.PolicyID || policy.ServiceID == uuid.Nil ||
+		policy.RepoCoordinate != release.Result.Lineage.RepoAddress || policy.WorkflowPath != release.Workflow {
+		return nil, fmt.Errorf("accepted release policy snapshot is incomplete or conflicts with lineage")
+	}
+	svc, err := b.serviceRepo.GetByID(ctx, policy.ServiceID)
+	if err != nil {
+		return nil, fmt.Errorf("load release service: %w", err)
+	}
+	if svc == nil || strings.TrimSpace(svc.ArtifactRepo) != release.Result.Manifest.Repository {
+		return nil, fmt.Errorf("release repository does not match the policy service artifact repository")
+	}
+	build, err := b.buildRepo.GetByCISystemRunID(ctx, domain.CISystemHiveCI, release.Result.Lineage.WorkflowRunEventID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup release build: %w", err)
+	}
+	if build == nil {
+		build = &domain.Build{
+			ServiceID: policy.ServiceID, GitSHA: release.Result.Lineage.Commit, GitRef: release.Branch,
+			CISystem: domain.CISystemHiveCI, CIRunID: release.Result.Lineage.WorkflowRunEventID,
+			SourceEventID: release.Result.Lineage.WorkflowRunEventID, Status: domain.BuildStatusSucceeded,
+			Metadata: map[string]any{
+				"source": "hiveci_release", "release_identity": release.Result.ReleaseIdentity,
+				"release_result_event_id": release.ResultEventID, "lineage": release.Result.Lineage,
+			},
+		}
+		if err := b.registry.RegisterBuild(ctx, build); err != nil {
+			return nil, fmt.Errorf("register release build: %w", err)
+		}
+	} else if build.ServiceID != policy.ServiceID || build.Status != domain.BuildStatusSucceeded ||
+		!strings.EqualFold(build.GitSHA, release.Result.Lineage.Commit) {
+		return nil, fmt.Errorf("existing release build conflicts with accepted lineage")
+	}
+	artifact = &domain.Artifact{
+		BuildID: build.ID, ServiceID: policy.ServiceID,
+		ImageRepo:   release.Result.Manifest.Repository,
+		ImageDigest: release.Result.Manifest.Digest,
+		ImageTag:    "",
+	}
+	releaseRegistry, ok := b.registry.(interface {
+		RegisterReleaseArtifact(context.Context, *domain.Artifact, service.ReleaseArtifactVerificationProof) error
+	})
+	if !ok {
+		return nil, fmt.Errorf("digest-only release artifact registry is not configured")
+	}
+	if err := releaseRegistry.RegisterReleaseArtifact(ctx, artifact, service.ReleaseArtifactVerificationProof{
+		Release: release, VerifiedAt: time.Now().UTC(),
+	}); err != nil {
+		return nil, fmt.Errorf("register accepted release artifact: %w", err)
+	}
+	return artifact, nil
 }
 
 // ProcessResult consumes a newly persisted signed Hive-CI result.
@@ -269,9 +355,6 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 	if err := b.registry.RegisterVerifiedArtifact(ctx, artifact, proof); err != nil {
 		return nil, fmt.Errorf("register verified artifact: %w", err)
 	}
-	if err := b.autoCreateStagingIntent(ctx, policy, run, result, artifact); err != nil {
-		return nil, err
-	}
 	if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateProcessed); err != nil {
 		return nil, fmt.Errorf("mark result processed: %w", err)
 	}
@@ -379,54 +462,4 @@ func stripRegistryHost(imageRepo string) string {
 		return strings.TrimPrefix(u.Path, "/")
 	}
 	return imageRepo
-}
-
-func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.HiveCIPipelinePolicy, _ *domain.HiveCIWorkflowRun, result *domain.HiveCIWorkflowResult, artifact *domain.Artifact) error {
-	if policy == nil || policy.Metadata == nil || b.intentRepo == nil || b.envRepo == nil || artifact == nil {
-		return nil
-	}
-	autoDeploy, _ := policy.Metadata["auto_deploy_staging"].(bool)
-	if !autoDeploy {
-		return nil
-	}
-	targetEnvName, _ := policy.Metadata["staging_environment"].(string)
-	var env *domain.Environment
-	var err error
-	if strings.TrimSpace(targetEnvName) != "" {
-		env, err = b.envRepo.GetByName(ctx, strings.TrimSpace(targetEnvName))
-		if err != nil {
-			return fmt.Errorf("resolve staging environment by name: %w", err)
-		}
-	} else {
-		env, err = b.envRepo.GetByID(ctx, policy.EnvironmentID)
-		if err != nil {
-			return fmt.Errorf("resolve staging environment by id: %w", err)
-		}
-	}
-	if env == nil {
-		return nil
-	}
-	existing, err := b.intentRepo.GetByHiveResultEventID(ctx, result.ResultEventID)
-	if err != nil {
-		return fmt.Errorf("lookup existing deployment intent: %w", err)
-	}
-	if existing != nil {
-		return nil
-	}
-	approval := domain.ApprovalStatusNotRequired
-	status := domain.IntentStatusApproved
-	if env.Protected {
-		approval = domain.ApprovalStatusPending
-		status = domain.IntentStatusPending
-	}
-	intent := &domain.DeploymentIntent{
-		ServiceID: policy.ServiceID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
-		RequestedBy: "hive-ci-bridge", SourceKind: domain.SourceKindEventTriggered,
-		ApprovalStatus: approval, Status: status,
-		Metadata: map[string]any{"hive_ci_result_event_id": result.ResultEventID},
-	}
-	if err := b.intentRepo.Create(ctx, intent); err != nil {
-		return fmt.Errorf("create staging deployment intent: %w", err)
-	}
-	return nil
 }

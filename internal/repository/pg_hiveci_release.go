@@ -29,6 +29,10 @@ func (r *PgHiveCIRepository) CommitAcceptedRelease(ctx context.Context, release 
 	if err != nil {
 		return result, fmt.Errorf("encode accepted Hive-CI release: %w", err)
 	}
+	policyJSON, _ := json.Marshal(release.Policy)
+	workerJSON, _ := json.Marshal(release.WorkerAdmissionEvidence)
+	rollbackJSON, _ := json.Marshal(release.RollbackCompatibility)
+	healthJSON, _ := json.Marshal(release.HealthReadinessContracts)
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -50,16 +54,19 @@ func (r *PgHiveCIRepository) CommitAcceptedRelease(ctx context.Context, release 
 			release_identity, result_event_id, content_digest, attestor_pubkey,
 			workflow_run_event_id, workflow_path, branch, policy_id,
 			manifest_digest, sbom_digest, provenance_digest,
-			result_json, signed_event_json, accepted_at
+			result_json, signed_event_json, accepted_at,
+			policy_snapshot, workflow_run_signed_event, worker_admission_evidence,
+			rollback_compatibility, health_readiness_contracts
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid,
-			$9, $10, $11, $12, $13, $14
+			$9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 		)
 		ON CONFLICT (release_identity) DO NOTHING
 	`, release.Result.ReleaseIdentity, release.ResultEventID, release.ContentDigest, release.Attestor,
 		release.Result.Lineage.WorkflowRunEventID, release.Workflow, release.Branch, release.PolicyID,
 		release.Result.Manifest.Digest, release.Result.SBOM.Digest, release.Result.Provenance.Digest,
-		resultJSON, release.SignedEvent, release.AcceptedAt)
+		resultJSON, release.SignedEvent, release.AcceptedAt, policyJSON, release.WorkflowRunSignedEvent,
+		workerJSON, rollbackJSON, healthJSON)
 	if err != nil {
 		return result, fmt.Errorf("insert accepted Hive-CI release: %w", err)
 	}

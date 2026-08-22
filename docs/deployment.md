@@ -437,18 +437,22 @@ Enable automatic CI event ingestion:
 hiveci:
   enabled: true
   
-  # Trusted CI dispatcher pubkeys for external Hive-CI kind-5401 workflow-run events
+  # Trusted CI dispatcher pubkeys for signed kind-5401 workflow-run evidence
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
+
+  # Trusted release-attestor pubkeys for terminal RELEASE kind-5402 results
+  trusted_release_attestors:
+    - <hive-ci-release-attestor-pubkey>
   
-  # Verify successful CI results and register one immutable artifact
+  # Verify successful ordinary CI results and register one immutable artifact
   auto_register_builds: true
 
   # Advanced signed manual artifact registration (disabled by default)
   allow_manual_artifact_registration: false
   
-  # Auto-deploy to staging environment
-  auto_deploy_staging_environment: edge-01-staging
+  # CI registration never promotes; promotion requires a separately
+  # authorized promotion intent.
   
   # Retry configuration
   retry_interval: 30s

@@ -684,6 +684,11 @@ var immutableArtifactDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // ArtifactVerificationProof is produced only after a build-result registrar has
 // resolved the immutable manifest from Bahia's embedded OCI layout or a
 // configured external registry.
+type ReleaseArtifactVerificationProof struct {
+	Release    domain.HiveCIAcceptedRelease
+	VerifiedAt time.Time
+}
+
 type ArtifactVerificationProof struct {
 	Source                 string
 	ManifestDigest         string
@@ -747,6 +752,62 @@ func (s *RegistryService) RegisterArtifact(ctx context.Context, a *domain.Artifa
 		"tag": a.ImageTag, "state": "verified", "verified_at": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	return s.persistArtifact(ctx, a)
+}
+
+// RegisterReleaseArtifact registers an accepted Hive-CI RELEASE strictly by
+// its immutable manifest digest. The producer's optional tag is retained only
+// inside signed evidence metadata and is never an artifact lookup key.
+func (s *RegistryService) RegisterReleaseArtifact(ctx context.Context, a *domain.Artifact, proof ReleaseArtifactVerificationProof) error {
+	if err := s.validateArtifactBindingMode(ctx, a, false); err != nil {
+		return err
+	}
+	release := proof.Release
+	if a.ImageDigest != release.Result.Manifest.Digest || a.ImageRepo != release.Result.Manifest.Repository {
+		return fmt.Errorf("accepted release manifest does not match artifact identity")
+	}
+	if a.ImageTag != "" {
+		return fmt.Errorf("release artifacts must not persist a mutable image tag")
+	}
+	a.ManifestMediaType = release.Result.Manifest.MediaType
+	size := release.Result.Manifest.Size
+	a.SizeBytes = &size
+	a.SBOMURL = release.Result.SBOM.Repository + "@" + release.Result.SBOM.Digest
+	a.SignatureRef = release.ResultEventID
+	a.ScanStatus = domain.ScanStatusUnknown
+	verifiedAt := proof.VerifiedAt.UTC()
+	if proof.VerifiedAt.IsZero() {
+		verifiedAt = time.Now().UTC()
+	}
+	a.Metadata = map[string]any{
+		"registration_mode":          "hiveci_release_digest",
+		"promotion_authority":        "required",
+		"ci_mutates_desired_state":   false,
+		"signed_image_tag":           release.Result.ImageTag,
+		"release_identity":           release.Result.ReleaseIdentity,
+		"release_result_event_id":    release.ResultEventID,
+		"release_attestor":           release.Attestor,
+		"release_content_digest":     release.ContentDigest,
+		"signed_release_event":       release.SignedEvent,
+		"signed_workflow_run_event":  release.WorkflowRunSignedEvent,
+		"lineage":                    release.Result.Lineage,
+		"execution":                  release.Result.Execution,
+		"policy":                     release.Policy,
+		"worker_admission":           release.WorkerAdmissionEvidence,
+		"rollback_compatibility":     release.RollbackCompatibility,
+		"health_readiness_contracts": release.HealthReadinessContracts,
+		"verification": map[string]any{
+			"source": "oci_digest", "state": "verified", "verified_at": verifiedAt.Format(time.RFC3339Nano),
+			"manifest": release.Result.Manifest, "sbom": release.Result.SBOM, "provenance": release.Result.Provenance,
+		},
+	}
+	if err := s.persistArtifact(ctx, a); err != nil {
+		return err
+	}
+	if a.Metadata["release_identity"] != release.Result.ReleaseIdentity ||
+		a.Metadata["release_content_digest"] != release.ContentDigest {
+		return fmt.Errorf("existing artifact conflicts with accepted release lineage")
+	}
+	return nil
 }
 
 // RegisterVerifiedArtifact persists a build result only when the caller
@@ -814,6 +875,10 @@ func (s *RegistryService) RegisterVerifiedArtifact(ctx context.Context, a *domai
 }
 
 func (s *RegistryService) validateArtifactBinding(ctx context.Context, a *domain.Artifact) error {
+	return s.validateArtifactBindingMode(ctx, a, true)
+}
+
+func (s *RegistryService) validateArtifactBindingMode(ctx context.Context, a *domain.Artifact, requireTag bool) error {
 	if a == nil {
 		return fmt.Errorf("artifact is required")
 	}
@@ -823,7 +888,7 @@ func (s *RegistryService) validateArtifactBinding(ctx context.Context, a *domain
 	if a.BuildID == uuid.Nil || a.ServiceID == uuid.Nil {
 		return fmt.Errorf("build_id and service_id are required")
 	}
-	if a.ImageRepo == "" || a.ImageTag == "" {
+	if a.ImageRepo == "" || (requireTag && a.ImageTag == "") {
 		return fmt.Errorf("image repository and build-produced tag are required")
 	}
 	if !immutableArtifactDigest.MatchString(a.ImageDigest) {

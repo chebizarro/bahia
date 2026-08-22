@@ -341,6 +341,9 @@ func (r *RelayFirstRegistry) RegisterArtifact(ctx context.Context, a *domain.Art
 func (r *RelayFirstRegistry) RegisterVerifiedArtifact(ctx context.Context, a *domain.Artifact, proof ArtifactVerificationProof) error {
 	return r.delegate.RegisterVerifiedArtifact(ctx, a, proof)
 }
+func (r *RelayFirstRegistry) RegisterReleaseArtifact(ctx context.Context, a *domain.Artifact, proof ReleaseArtifactVerificationProof) error {
+	return r.delegate.RegisterReleaseArtifact(ctx, a, proof)
+}
 func (r *RelayFirstRegistry) GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error) {
 	return r.delegate.GetArtifact(ctx, id)
 }

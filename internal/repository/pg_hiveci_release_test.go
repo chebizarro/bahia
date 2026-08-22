@@ -47,7 +47,7 @@ func TestPgHiveCIReleaseRepositoryCommitNewReplayAndConflict(t *testing.T) {
 		release := acceptedReleaseStoreFixture()
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO hiveci_accepted_releases").
-			WithArgs(anyHiveCIReleaseArgs(14)...).
+			WithArgs(anyHiveCIReleaseArgs(19)...).
 			WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 		mock.ExpectCommit()
 
@@ -73,7 +73,7 @@ func TestPgHiveCIReleaseRepositoryCommitNewReplayAndConflict(t *testing.T) {
 		release := acceptedReleaseStoreFixture()
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO hiveci_accepted_releases").
-			WithArgs(anyHiveCIReleaseArgs(14)...).
+			WithArgs(anyHiveCIReleaseArgs(19)...).
 			WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 		mock.ExpectQuery("SELECT content_digest").
 			WithArgs(release.Result.ReleaseIdentity).
@@ -103,7 +103,7 @@ func TestPgHiveCIReleaseRepositoryCommitNewReplayAndConflict(t *testing.T) {
 		existing := "sha256:" + strings.Repeat("9", 64)
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO hiveci_accepted_releases").
-			WithArgs(anyHiveCIReleaseArgs(14)...).
+			WithArgs(anyHiveCIReleaseArgs(19)...).
 			WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 		mock.ExpectQuery("SELECT content_digest").
 			WithArgs(release.Result.ReleaseIdentity).

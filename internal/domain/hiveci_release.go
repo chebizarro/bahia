@@ -75,15 +75,20 @@ type HiveCIReleaseResult struct {
 // HiveCIAcceptedRelease is the validated durable ingest boundary. ImageTag is
 // retained only as producer evidence; consumers must use Manifest.Digest.
 type HiveCIAcceptedRelease struct {
-	Result        HiveCIReleaseResult `json:"result"`
-	ResultEventID string              `json:"result_event_id"`
-	Attestor      string              `json:"attestor"`
-	Workflow      string              `json:"workflow"`
-	Branch        string              `json:"branch"`
-	PolicyID      string              `json:"policy_id"`
-	ContentDigest string              `json:"content_digest"`
-	SignedEvent   string              `json:"signed_event"`
-	AcceptedAt    time.Time           `json:"accepted_at"`
+	Result                   HiveCIReleaseResult  `json:"result"`
+	ResultEventID            string               `json:"result_event_id"`
+	Attestor                 string               `json:"attestor"`
+	Workflow                 string               `json:"workflow"`
+	Branch                   string               `json:"branch"`
+	PolicyID                 string               `json:"policy_id"`
+	Policy                   HiveCIPipelinePolicy `json:"policy"`
+	WorkflowRunSignedEvent   string               `json:"workflow_run_signed_event"`
+	WorkerAdmissionEvidence  map[string]any       `json:"worker_admission_evidence"`
+	RollbackCompatibility    map[string]any       `json:"rollback_compatibility"`
+	HealthReadinessContracts map[string]any       `json:"health_readiness_contracts"`
+	ContentDigest            string               `json:"content_digest"`
+	SignedEvent              string               `json:"signed_event"`
+	AcceptedAt               time.Time            `json:"accepted_at"`
 }
 
 type HiveCIReleaseCommitResult struct {

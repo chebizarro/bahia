@@ -2,6 +2,8 @@ package hiveci
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -20,6 +22,7 @@ type releaseEvidenceFake struct {
 	run         *nostr.Event
 	policies    []domain.HiveCIPipelinePolicy
 	admitted    bool
+	objects     map[string]ResolvedReleaseArtifact
 	unavailable string
 }
 
@@ -32,8 +35,11 @@ func (f *releaseEvidenceFake) ListPipelinePolicies(context.Context) ([]domain.Hi
 func (f *releaseEvidenceFake) IsWorkerAdmitted(context.Context, string, string) (bool, error) {
 	return f.admitted, nil
 }
-func (f *releaseEvidenceFake) ArtifactAvailable(_ context.Context, artifact domain.HiveCIReleaseArtifact) (bool, error) {
-	return artifact.Digest != f.unavailable, nil
+func (f *releaseEvidenceFake) ResolveArtifact(_ context.Context, artifact domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error) {
+	if artifact.Digest == f.unavailable {
+		return ResolvedReleaseArtifact{}, nil
+	}
+	return f.objects[artifact.Digest], nil
 }
 
 type releaseStoreFake struct {
@@ -116,16 +122,24 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	lineage.WorkflowRunEventID = f.run.ID.Hex()
 
 	repositoryName := "harbor.example/team/bahia"
-	manifest := domain.HiveCIReleaseArtifact{Repository: repositoryName,
-		Digest: "sha256:" + strings.Repeat("1", 64), MediaType: ociImageManifestMediaType, Size: 321}
-	sbom := domain.HiveCIReleaseArtifact{Repository: repositoryName,
-		Digest: "sha256:" + strings.Repeat("2", 64), MediaType: cycloneDXJSONMediaType, Size: 654}
-	provenance := domain.HiveCIReleaseArtifact{Repository: repositoryName,
-		Digest: "sha256:" + strings.Repeat("3", 64), MediaType: inTotoJSONMediaType, Size: 987}
+	manifestContent := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"layers":[{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}`)
+	sbomContent := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5"}`)
+	manifest := releaseArtifactDescriptor(repositoryName, ociImageManifestMediaType, manifestContent)
+	sbom := releaseArtifactDescriptor(repositoryName, cycloneDXJSONMediaType, sbomContent)
 	identity, err := releaseIdentity(lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
+	provenanceContent, err := json.Marshal(map[string]any{
+		"_type":         inTotoStatementType,
+		"predicateType": releaseProvenanceType,
+		"subject":       []any{map[string]any{"name": repositoryName, "digest": map[string]string{"sha256": strings.TrimPrefix(manifest.Digest, "sha256:")}}},
+		"predicate":     map[string]any{"release_identity": identity, "lineage": lineage, "execution": execution, "sbom_digest": sbom.Digest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance := releaseArtifactDescriptor(repositoryName, inTotoJSONMediaType, provenanceContent)
 	f.result = domain.HiveCIReleaseResult{
 		SchemaVersion: domain.HiveCIReleaseSchemaV1, ResultType: domain.HiveCIReleaseResultType,
 		Status: "success", ReleaseIdentity: identity, Lineage: lineage, Execution: execution,
@@ -148,11 +162,25 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			"release_attestors":        []any{f.attestor.Public().Hex()},
 		},
 	}
-	f.evidence = &releaseEvidenceFake{run: f.run, policies: []domain.HiveCIPipelinePolicy{policy}, admitted: true}
+	f.evidence = &releaseEvidenceFake{run: f.run, policies: []domain.HiveCIPipelinePolicy{policy}, admitted: true,
+		objects: map[string]ResolvedReleaseArtifact{
+			manifest.Digest:   {Content: manifestContent, MediaType: manifest.MediaType, Size: manifest.Size},
+			sbom.Digest:       {Content: sbomContent, MediaType: sbom.MediaType, Size: sbom.Size},
+			provenance.Digest: {Content: provenanceContent, MediaType: provenance.MediaType, Size: provenance.Size},
+		},
+	}
 	f.ingestor = NewReleaseIngestor(f.evidence, f.store,
 		[]string{f.attestor.Public().Hex()}, []string{f.issuer.Public().Hex()})
 	f.ingestor.now = func() time.Time { return f.now }
 	return f
+}
+
+func releaseArtifactDescriptor(repository, mediaType string, content []byte) domain.HiveCIReleaseArtifact {
+	sum := sha256.Sum256(content)
+	return domain.HiveCIReleaseArtifact{
+		Repository: repository, MediaType: mediaType, Size: int64(len(content)),
+		Digest: "sha256:" + hex.EncodeToString(sum[:]),
+	}
 }
 
 func releaseEventFromResult(t *testing.T, result domain.HiveCIReleaseResult, signer nostr.SecretKey, at time.Time) *nostr.Event {
@@ -328,20 +356,93 @@ func TestReleaseIngestorRejectsTrustLineagePolicyAndArtifactFailures(t *testing.
 	}
 }
 
-func TestSubscriberDispatchesAcceptedReleaseExactlyOnce(t *testing.T) {
+func TestReleaseIngestorRejectsUnverifiedSupplyChainBytes(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   error
+		mutate func(*releaseFixture)
+	}{
+		{name: "missing manifest", want: ErrReleaseArtifactUnavailable, mutate: func(f *releaseFixture) {
+			f.evidence.unavailable = f.result.Manifest.Digest
+		}},
+		{name: "missing SBOM", want: ErrReleaseArtifactUnavailable, mutate: func(f *releaseFixture) {
+			f.evidence.unavailable = f.result.SBOM.Digest
+		}},
+		{name: "missing provenance", want: ErrReleaseArtifactUnavailable, mutate: func(f *releaseFixture) {
+			f.evidence.unavailable = f.result.Provenance.Digest
+		}},
+		{name: "manifest digest mismatch", mutate: func(f *releaseFixture) {
+			object := f.evidence.objects[f.result.Manifest.Digest]
+			object.Content = append([]byte(nil), object.Content...)
+			object.Content[0] ^= 1
+			f.evidence.objects[f.result.Manifest.Digest] = object
+		}},
+		{name: "SBOM size mismatch", mutate: func(f *releaseFixture) {
+			object := f.evidence.objects[f.result.SBOM.Digest]
+			object.Size++
+			f.evidence.objects[f.result.SBOM.Digest] = object
+		}},
+		{name: "provenance media type mismatch", mutate: func(f *releaseFixture) {
+			object := f.evidence.objects[f.result.Provenance.Digest]
+			object.MediaType = "application/json"
+			f.evidence.objects[f.result.Provenance.Digest] = object
+		}},
+		{name: "invalid OCI structure", mutate: func(f *releaseFixture) {
+			content := []byte(`{"schemaVersion":1}`)
+			replaceResolvedContent(f, &f.result.Manifest, content)
+		}},
+		{name: "invalid SBOM structure", mutate: func(f *releaseFixture) {
+			content := []byte(`{"bomFormat":"unknown"}`)
+			replaceResolvedContent(f, &f.result.SBOM, content)
+		}},
+		{name: "provenance subject mismatch", mutate: func(f *releaseFixture) {
+			content := []byte(`{"_type":"https://in-toto.io/Statement/v1","predicateType":"https://sharegap.net/hiveci/release-provenance/v1","subject":[],"predicate":{}}`)
+			replaceResolvedContent(f, &f.result.Provenance, content)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newReleaseFixture(t)
+			test.mutate(f)
+			f.result.ArtifactAttestation.Subjects = []domain.HiveCIReleaseArtifact{f.result.Manifest, f.result.SBOM, f.result.Provenance}
+			f.event = releaseEventFromResult(t, f.result, f.attestor, f.now)
+			want := test.want
+			if want == nil {
+				want = ErrInvalidRelease
+			}
+			if _, err := f.ingestor.Ingest(context.Background(), f.event); !errors.Is(err, want) {
+				t.Fatalf("error=%v, want %v", err, want)
+			}
+			if f.store.commits != 0 {
+				t.Fatal("unverified supply-chain bytes reached durable store")
+			}
+		})
+	}
+}
+
+func replaceResolvedContent(f *releaseFixture, descriptor *domain.HiveCIReleaseArtifact, content []byte) {
+	oldDigest := descriptor.Digest
+	*descriptor = releaseArtifactDescriptor(descriptor.Repository, descriptor.MediaType, content)
+	delete(f.evidence.objects, oldDigest)
+	f.evidence.objects[descriptor.Digest] = ResolvedReleaseArtifact{
+		Content: content, MediaType: descriptor.MediaType, Size: descriptor.Size,
+	}
+}
+
+func TestSubscriberDispatchesAcceptedReleaseAndExactReplay(t *testing.T) {
 	f := newReleaseFixture(t)
 	calls := 0
 	subscriber := &Subscriber{logger: zap.NewNop(), releases: f.ingestor,
-		onRelease: func(_ context.Context, release domain.HiveCIAcceptedRelease) {
+		onRelease: func(_ context.Context, commit domain.HiveCIReleaseCommitResult) {
 			calls++
-			if release.Result.Manifest.Digest != f.result.Manifest.Digest {
-				t.Fatalf("subscriber changed accepted digest: %+v", release)
+			if commit.Release.Result.Manifest.Digest != f.result.Manifest.Digest {
+				t.Fatalf("subscriber changed accepted digest: %+v", commit.Release)
 			}
 		}}
 	subscriber.handleWorkflowResult(context.Background(), f.event)
 	subscriber.handleWorkflowResult(context.Background(), f.event)
-	if calls != 1 || f.store.commits != 1 {
-		t.Fatalf("release callback calls=%d durable commits=%d, want one each", calls, f.store.commits)
+	if calls != 2 || f.store.commits != 1 {
+		t.Fatalf("release callback calls=%d durable commits=%d, want two decisions and one commit", calls, f.store.commits)
 	}
 }
 

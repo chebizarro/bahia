@@ -27,6 +27,8 @@ const (
 	cycloneDXJSONMediaType    = "application/vnd.cyclonedx+json"
 	spdxJSONMediaType         = "application/spdx+json"
 	inTotoJSONMediaType       = "application/vnd.in-toto+json"
+	inTotoStatementType       = "https://in-toto.io/Statement/v1"
+	releaseProvenanceType     = "https://sharegap.net/hiveci/release-provenance/v1"
 	signetAttestationType     = "https://sharegap.net/hiveci/signet-artifact-attestation/v1"
 	sourceProvenancePrefix    = "hiveci-source-provenance:v1:"
 )
@@ -45,11 +47,17 @@ var (
 	ociDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
+type ResolvedReleaseArtifact struct {
+	Content   []byte
+	MediaType string
+	Size      int64
+}
+
 type ReleaseEvidence interface {
 	GetWorkflowRunEvent(context.Context, string) (*nostr.Event, error)
 	ListPipelinePolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error)
 	IsWorkerAdmitted(context.Context, string, string) (bool, error)
-	ArtifactAvailable(context.Context, domain.HiveCIReleaseArtifact) (bool, error)
+	ResolveArtifact(context.Context, domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error)
 }
 
 type ReleaseStore interface {
@@ -148,6 +156,7 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 	if !admitted {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: %s", ErrReleaseWorkerNotAdmitted, result.Execution.WorkerIdentity)
 	}
+	resolved := make(map[string]ResolvedReleaseArtifact, 3)
 	for _, candidate := range []struct {
 		name     string
 		artifact domain.HiveCIReleaseArtifact
@@ -156,16 +165,29 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		{name: "sbom", artifact: result.SBOM},
 		{name: "provenance", artifact: result.Provenance},
 	} {
-		name, artifact := candidate.name, candidate.artifact
-		available, lookupErr := i.evidence.ArtifactAvailable(ctx, artifact)
+		object, lookupErr := i.evidence.ResolveArtifact(ctx, candidate.artifact)
 		if lookupErr != nil {
-			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: verify %s: %v", ErrReleaseEvidenceUnavailable, name, lookupErr)
+			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: resolve %s by digest: %v", ErrReleaseEvidenceUnavailable, candidate.name, lookupErr)
 		}
-		if !available {
-			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: %s %s", ErrReleaseArtifactUnavailable, name, artifact.Digest)
+		if err := verifyResolvedArtifact(candidate.name, candidate.artifact, object); err != nil {
+			return domain.HiveCIReleaseCommitResult{}, err
 		}
+		resolved[candidate.name] = object
+	}
+	if err := verifyOCIManifest(resolved["manifest"].Content); err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
+	}
+	if err := verifySBOM(result.SBOM.MediaType, resolved["sbom"].Content); err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
+	}
+	if err := verifyProvenance(result, resolved["provenance"].Content); err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
 	}
 
+	runJSON, err := json.Marshal(run)
+	if err != nil {
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: encode signed workflow event: %v", ErrInvalidRelease, err)
+	}
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: encode signed event: %v", ErrInvalidRelease, err)
@@ -173,7 +195,17 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 	contentHash := sha256.Sum256([]byte(event.Content))
 	accepted := domain.HiveCIAcceptedRelease{
 		Result: result, ResultEventID: event.ID.Hex(), Attestor: attestor,
-		Workflow: runEvidence.workflow, Branch: runEvidence.branch, PolicyID: policy.ID.String(),
+		Workflow: runEvidence.workflow, Branch: runEvidence.branch, PolicyID: policy.ID.String(), Policy: policy,
+		WorkflowRunSignedEvent: string(runJSON),
+		WorkerAdmissionEvidence: map[string]any{
+			"state": "admitted", "worker_identity": result.Execution.WorkerIdentity,
+			"worker_capability": result.Execution.WorkerCapability, "workflow_issuer": run.PubKey.Hex(),
+		},
+		RollbackCompatibility: policyMetadataObject(policy.Metadata, "rollback_compatibility"),
+		HealthReadinessContracts: map[string]any{
+			"health":    policyMetadataObject(policy.Metadata, "health_contract"),
+			"readiness": policyMetadataObject(policy.Metadata, "readiness_contract"),
+		},
 		ContentDigest: "sha256:" + hex.EncodeToString(contentHash[:]),
 		SignedEvent:   string(eventJSON), AcceptedAt: now,
 	}
@@ -379,6 +411,17 @@ func branchMatches(pattern, branch string) bool {
 	return err == nil && matched
 }
 
+func policyMetadataObject(metadata map[string]any, key string) map[string]any {
+	if metadata == nil {
+		return map[string]any{}
+	}
+	value, _ := metadata[key].(map[string]any)
+	if value == nil {
+		return map[string]any{}
+	}
+	return value
+}
+
 func policyMetadataMatches(metadata map[string]any, run workflowRunEvidence, result domain.HiveCIReleaseResult, attestor string) bool {
 	expected := map[string]string{
 		"workflow_digest":          result.Lineage.WorkflowDigest,
@@ -422,6 +465,97 @@ func policyMetadataMatches(metadata map[string]any, run workflowRunEvidence, res
 		}
 	}
 	return true
+}
+
+func verifyResolvedArtifact(name string, descriptor domain.HiveCIReleaseArtifact, object ResolvedReleaseArtifact) error {
+	if len(object.Content) == 0 {
+		return fmt.Errorf("%w: %s %s", ErrReleaseArtifactUnavailable, name, descriptor.Digest)
+	}
+	sum := sha256.Sum256(object.Content)
+	if "sha256:"+hex.EncodeToString(sum[:]) != descriptor.Digest {
+		return fmt.Errorf("%w: %s bytes do not match signed digest", ErrInvalidRelease, name)
+	}
+	if object.Size != descriptor.Size || int64(len(object.Content)) != descriptor.Size {
+		return fmt.Errorf("%w: %s bytes do not match signed size", ErrInvalidRelease, name)
+	}
+	if object.MediaType != descriptor.MediaType {
+		return fmt.Errorf("%w: %s media type does not match signed descriptor", ErrInvalidRelease, name)
+	}
+	return nil
+}
+
+func verifyOCIManifest(content []byte) error {
+	var manifest struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		MediaType     string `json:"mediaType"`
+		Config        struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+		Layers []struct {
+			Digest string `json:"digest"`
+		} `json:"layers"`
+	}
+	if json.Unmarshal(content, &manifest) != nil || manifest.SchemaVersion != 2 ||
+		(manifest.MediaType != "" && manifest.MediaType != ociImageManifestMediaType) ||
+		!ociDigestPattern.MatchString(manifest.Config.Digest) || len(manifest.Layers) == 0 {
+		return fmt.Errorf("%w: manifest is not a valid OCI image manifest", ErrInvalidRelease)
+	}
+	for _, layer := range manifest.Layers {
+		if !ociDigestPattern.MatchString(layer.Digest) {
+			return fmt.Errorf("%w: manifest layer digest is invalid", ErrInvalidRelease)
+		}
+	}
+	return nil
+}
+
+func verifySBOM(mediaType string, content []byte) error {
+	var document map[string]any
+	if json.Unmarshal(content, &document) != nil {
+		return fmt.Errorf("%w: SBOM is not valid JSON", ErrInvalidRelease)
+	}
+	switch mediaType {
+	case cycloneDXJSONMediaType:
+		if document["bomFormat"] != "CycloneDX" || strings.TrimSpace(fmt.Sprint(document["specVersion"])) == "" {
+			return fmt.Errorf("%w: SBOM is not a CycloneDX document", ErrInvalidRelease)
+		}
+	case spdxJSONMediaType:
+		version, _ := document["spdxVersion"].(string)
+		id, _ := document["SPDXID"].(string)
+		if !strings.HasPrefix(version, "SPDX-") || strings.TrimSpace(id) == "" {
+			return fmt.Errorf("%w: SBOM is not an SPDX document", ErrInvalidRelease)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported SBOM media type", ErrInvalidRelease)
+	}
+	return nil
+}
+
+func verifyProvenance(result domain.HiveCIReleaseResult, content []byte) error {
+	var statement struct {
+		Type          string `json:"_type"`
+		PredicateType string `json:"predicateType"`
+		Subject       []struct {
+			Name   string            `json:"name"`
+			Digest map[string]string `json:"digest"`
+		} `json:"subject"`
+		Predicate struct {
+			ReleaseIdentity string                        `json:"release_identity"`
+			Lineage         domain.HiveCIReleaseLineage   `json:"lineage"`
+			Execution       domain.HiveCIReleaseExecution `json:"execution"`
+			SBOMDigest      string                        `json:"sbom_digest"`
+		} `json:"predicate"`
+	}
+	if json.Unmarshal(content, &statement) != nil || statement.Type != inTotoStatementType ||
+		statement.PredicateType != releaseProvenanceType || len(statement.Subject) != 1 ||
+		statement.Subject[0].Name != result.Manifest.Repository ||
+		statement.Subject[0].Digest["sha256"] != strings.TrimPrefix(result.Manifest.Digest, "sha256:") ||
+		statement.Predicate.ReleaseIdentity != result.ReleaseIdentity ||
+		statement.Predicate.SBOMDigest != result.SBOM.Digest ||
+		!reflect.DeepEqual(statement.Predicate.Lineage, result.Lineage) ||
+		!reflect.DeepEqual(statement.Predicate.Execution, result.Execution) {
+		return fmt.Errorf("%w: provenance statement does not bind the signed release", ErrInvalidRelease)
+	}
+	return nil
 }
 
 func validateArtifact(name string, artifact domain.HiveCIReleaseArtifact, mediaType string) error {

@@ -362,6 +362,22 @@ func (m *mockCanonicalRegistry) RegisterVerifiedArtifact(ctx context.Context, ar
 	return m.artifacts.Create(ctx, artifact)
 }
 
+func (m *mockCanonicalRegistry) RegisterReleaseArtifact(ctx context.Context, artifact *domain.Artifact, proof service.ReleaseArtifactVerificationProof) error {
+	if artifact.ImageTag != "" {
+		return context.Canceled
+	}
+	if existing := m.artifacts.byDigest[artifactKey(artifact.ImageRepo, artifact.ImageDigest)]; existing != nil {
+		*artifact = *existing
+		return nil
+	}
+	artifact.Metadata = map[string]any{
+		"registration_mode": "hiveci_release_digest",
+		"signed_image_tag":  proof.Release.Result.ImageTag,
+		"lineage":           proof.Release.Result.Lineage,
+	}
+	return m.artifacts.Create(ctx, artifact)
+}
+
 func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i *mockIntentRepo, e *mockEnvRepo, o *mockOCIRepo) *Bridge {
 	serviceID := uuid.Nil
 	imageRepo := ""
@@ -533,7 +549,7 @@ func TestBridge_DuplicateArtifactReused(t *testing.T) {
 	}
 }
 
-func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
+func TestBridge_CISuccessNeverCreatesStagingIntent(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
 	envID := uuid.New()
@@ -561,28 +577,12 @@ func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
 	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
 		t.Fatalf("ProcessResult error: %v", err)
 	}
-	if i.created != 1 {
-		t.Fatalf("expected one intent created, got %d", i.created)
-	}
-	intent := i.byResultEventID["res-1"]
-	if intent == nil {
-		t.Fatalf("expected intent keyed by hive result event id")
-	}
-	if intent.ApprovalStatus != domain.ApprovalStatusNotRequired {
-		t.Fatalf("expected not_required approval, got %q", intent.ApprovalStatus)
-	}
-	if intent.Status != domain.IntentStatusApproved {
-		t.Fatalf("expected approved intent status, got %q", intent.Status)
-	}
-	if intent.SourceKind != domain.SourceKindEventTriggered {
-		t.Fatalf("expected source kind event_triggered, got %q", intent.SourceKind)
-	}
-	if intent.RequestedBy != "hive-ci-bridge" {
-		t.Fatalf("expected requested_by hive-ci-bridge, got %q", intent.RequestedBy)
+	if i.created != 0 || len(i.byResultEventID) != 0 {
+		t.Fatalf("CI success mutated promotion authority: created=%d intents=%d", i.created, len(i.byResultEventID))
 	}
 }
 
-func TestBridge_ProtectedEnvCreatesPendingIntent(t *testing.T) {
+func TestBridge_CISuccessNeverCreatesProtectedEnvironmentIntent(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
 	envID := uuid.New()
@@ -607,15 +607,8 @@ func TestBridge_ProtectedEnvCreatesPendingIntent(t *testing.T) {
 	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
 		t.Fatalf("ProcessResult error: %v", err)
 	}
-	intent := i.byResultEventID["res-1"]
-	if intent == nil {
-		t.Fatalf("expected intent")
-	}
-	if intent.ApprovalStatus != domain.ApprovalStatusPending {
-		t.Fatalf("expected pending approval, got %q", intent.ApprovalStatus)
-	}
-	if intent.Status != domain.IntentStatusPending {
-		t.Fatalf("expected pending intent status, got %q", intent.Status)
+	if i.created != 0 || len(i.byResultEventID) != 0 {
+		t.Fatalf("CI success mutated protected environment intent state: created=%d intents=%d", i.created, len(i.byResultEventID))
 	}
 }
 
@@ -775,5 +768,71 @@ func TestBridge_NoAutoDeployPolicySkipped(t *testing.T) {
 	}
 	if i.created != 0 {
 		t.Fatalf("expected no intent for disabled auto-deploy, created=%d", i.created)
+	}
+}
+
+type recordingReleaseAuditor struct {
+	decisions []string
+}
+
+func (a *recordingReleaseAuditor) AuditReleaseRegistration(_ context.Context, _ domain.HiveCIAcceptedRelease, _ *domain.Artifact, decision string, _ error) error {
+	a.decisions = append(a.decisions, decision)
+	return nil
+}
+
+func TestBridge_RegisterAcceptedReleaseIsExactlyOnceDigestOnlyAndDoesNotPromote(t *testing.T) {
+	serviceID := uuid.New()
+	policyID := uuid.New()
+	repositoryName := "harbor.example/team/bahia"
+	release := domain.HiveCIAcceptedRelease{
+		Result: domain.HiveCIReleaseResult{
+			ReleaseIdentity: domain.HiveCIReleaseIdentityPrefix + "identity",
+			ImageTag:        "release-latest",
+			Manifest:        domain.HiveCIReleaseArtifact{Repository: repositoryName, Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			SBOM:            domain.HiveCIReleaseArtifact{Repository: repositoryName, Digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			Provenance:      domain.HiveCIReleaseArtifact{Repository: repositoryName, Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+			Lineage: domain.HiveCIReleaseLineage{
+				WorkflowRunEventID: "run-release", RepoAddress: "30617:publisher:bahia",
+				Commit: "0123456789012345678901234567890123456789",
+			},
+		},
+		ResultEventID: "release-result", Workflow: ".gitea/workflows/release.yml", Branch: "main",
+		PolicyID: policyID.String(),
+		Policy: domain.HiveCIPipelinePolicy{
+			ID: policyID, ServiceID: serviceID, RepoCoordinate: "30617:publisher:bahia",
+			WorkflowPath: ".gitea/workflows/release.yml",
+		},
+	}
+	builds := newMockBuildRepo()
+	artifacts := newMockArtifactRepo()
+	intents := newMockIntentRepo()
+	registry := &mockCanonicalRegistry{builds: builds, artifacts: artifacts}
+	bridge := NewBridge(newMockHiveRepo(), &mockServiceRepo{service: &domain.Service{ID: serviceID, ArtifactRepo: repositoryName}},
+		builds, artifacts, intents, newMockEnvRepo(), nil, nil, registry, nil, true, nil)
+	auditor := &recordingReleaseAuditor{}
+	bridge.SetReleaseRegistrationAuditor(auditor)
+
+	first, err := bridge.RegisterAcceptedRelease(context.Background(), release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := bridge.RegisterAcceptedRelease(context.Background(), release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifacts.created != 1 || first.ID != second.ID {
+		t.Fatalf("registration was not exactly once: created=%d first=%s second=%s", artifacts.created, first.ID, second.ID)
+	}
+	if first.ImageTag != "" || first.ImageDigest != release.Result.Manifest.Digest {
+		t.Fatalf("artifact is not digest-only: %+v", first)
+	}
+	if got := first.Metadata["signed_image_tag"]; got != release.Result.ImageTag {
+		t.Fatalf("signed tag evidence=%v", got)
+	}
+	if intents.created != 0 || len(intents.byResultEventID) != 0 {
+		t.Fatalf("registration created a promotion intent")
+	}
+	if len(auditor.decisions) != 2 || auditor.decisions[0] != "accepted" || auditor.decisions[1] != "accepted" {
+		t.Fatalf("audit decisions=%v", auditor.decisions)
 	}
 }
