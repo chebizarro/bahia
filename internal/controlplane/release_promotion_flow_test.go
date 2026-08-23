@@ -417,8 +417,6 @@ func TestAcceptedReleaseContextVMPromotionCreatesDigestOnlyCanary(t *testing.T) 
 	ctx := context.Background()
 	orgID, serviceID, environmentID := uuid.New(), uuid.New(), uuid.New()
 	previousDigest := "sha256:" + strings.Repeat("1", 64)
-	releaseDigest := "sha256:" + strings.Repeat("2", 64)
-	releaseIdentity := domain.HiveCIReleaseIdentityPrefix + strings.Repeat("3", 64)
 	repositoryName := "harbor.example/team/bahia"
 	workflowPath := ".gitea/workflows/release.yml"
 	repoCoordinate := "30617:" + strings.Repeat("a", 64) + ":bahia"
@@ -456,48 +454,12 @@ func TestAcceptedReleaseContextVMPromotionCreatesDigestOnlyCanary(t *testing.T) 
 		service.WithRegistryTxExecutor(txExecutor),
 	)
 	policyID := uuid.New()
-	release := domain.HiveCIAcceptedRelease{
-		ResultEventID: "release-event", Attestor: strings.Repeat("b", 64), Workflow: workflowPath,
-		Branch: "refs/heads/master", PolicyID: policyID.String(), ContentDigest: "sha256:" + strings.Repeat("6", 64),
-		SignedEvent: "signed-5402", WorkflowRunSignedEvent: "signed-5401", AcceptedAt: time.Now().UTC(),
-		Policy: domain.HiveCIPipelinePolicy{
-			ID: policyID, RepoCoordinate: repoCoordinate, WorkflowPath: workflowPath,
-			ServiceID: serviceID, EnvironmentID: environmentID, Enabled: true,
-		},
-		WorkerAdmissionEvidence: map[string]any{"worker_identity": strings.Repeat("c", 64), "state": "admitted"},
-		RollbackCompatibility:   map[string]any{"compatible_from_digests": []any{previousDigest}},
-		HealthReadinessContracts: map[string]any{
-			"health":    map[string]any{"type": "http", "path": "/health", "timeout_seconds": 10},
-			"readiness": map[string]any{"type": "http", "path": "/ready", "timeout_seconds": 15},
-		},
-		Result: domain.HiveCIReleaseResult{
-			SchemaVersion: domain.HiveCIReleaseSchemaV1, ResultType: domain.HiveCIReleaseResultType,
-			Status: "success", ReleaseIdentity: releaseIdentity, ImageTag: "release-candidate",
-			Lineage: domain.HiveCIReleaseLineage{
-				WorkflowRunEventID: "workflow-run-event", RepoAddress: repoCoordinate,
-				Commit: strings.Repeat("d", 40), WorkflowDigest: "sha256:" + strings.Repeat("7", 64),
-			},
-			Execution: domain.HiveCIReleaseExecution{Complete: true, Status: "success", WorkerIdentity: strings.Repeat("c", 64)},
-			Manifest: domain.HiveCIReleaseArtifact{
-				Repository: repositoryName, Digest: releaseDigest,
-				MediaType: "application/vnd.oci.image.manifest.v1+json", Size: 100,
-			},
-			SBOM: domain.HiveCIReleaseArtifact{
-				Repository: repositoryName, Digest: "sha256:" + strings.Repeat("4", 64),
-				MediaType: "application/vnd.cyclonedx+json", Size: 200,
-			},
-			Provenance: domain.HiveCIReleaseArtifact{
-				Repository: repositoryName, Digest: "sha256:" + strings.Repeat("5", 64),
-				MediaType: "application/vnd.in-toto+json", Size: 300,
-			},
-		},
-	}
-	release = ingestPromotionFlowRelease(
+	release := ingestPromotionFlowRelease(
 		t, policyID, serviceID, environmentID,
 		repoCoordinate, repositoryName, workflowPath, previousDigest,
 	)
-	releaseDigest = release.Result.Manifest.Digest
-	releaseIdentity = release.Result.ReleaseIdentity
+	releaseDigest := release.Result.Manifest.Digest
+	releaseIdentity := release.Result.ReleaseIdentity
 	bridge := pipeline.NewBridge(
 		nil, svcRepo, buildRepo, artifactRepo, nil, nil, nil, nil, registry,
 		nil, false, zap.NewNop(),
