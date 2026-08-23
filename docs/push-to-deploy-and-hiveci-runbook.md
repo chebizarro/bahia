@@ -306,8 +306,9 @@ After adding the config, restart Bahia.  The startup log will show
 #### Operator SQL script (ad-hoc / pre-config)
 
 `scripts/seed_hiveci_pipeline_policy.sql` provides a standalone operator path
-for creating the policy row without restarting Bahia.  It uses the same
-idempotent insert pattern:
+for creating or hardening the policy row without restarting Bahia. It reconciles
+an existing matching row in place and inserts only when none exists, including
+when `branch_pattern` is NULL:
 
 ```bash
 REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"

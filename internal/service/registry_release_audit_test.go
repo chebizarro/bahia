@@ -196,6 +196,54 @@ func TestRegisterReleaseArtifactOutboxFailureRollsBackBuildAndArtifact(t *testin
 	}
 }
 
+func TestRelayFirstRegistryForwardsAtomicAcceptedReleaseRegistration(t *testing.T) {
+	serviceID := uuid.New()
+	repositoryName := "harbor.example/team/bahia"
+	services, environments := newMockServiceRepo(), newMockEnvRepo()
+	builds, artifacts := newMockBuildRepo(), newMockArtifactRepo()
+	intents, state := newMockIntentRepo(), newMockStateRepo()
+	services.services[serviceID] = &domain.Service{ID: serviceID, ArtifactRepo: repositoryName}
+	base := newReleaseDecisionRegistry(services, environments, builds, artifacts, intents, state)
+	relayFirst := NewRelayFirstRegistry(base, nil, nil, zap.NewNop())
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	build := &domain.Build{
+		ServiceID: serviceID, GitSHA: strings.Repeat("b", 40), CISystem: domain.CISystemHiveCI,
+		CIRunID: strings.Repeat("c", 64), Status: domain.BuildStatusSucceeded,
+	}
+	artifact := &domain.Artifact{ServiceID: serviceID, ImageRepo: repositoryName, ImageDigest: digest}
+	release := domain.HiveCIAcceptedRelease{
+		ResultEventID: strings.Repeat("d", 64), ContentDigest: "sha256:" + strings.Repeat("e", 64),
+		Result: domain.HiveCIReleaseResult{
+			ReleaseIdentity: domain.HiveCIReleaseIdentityPrefix + strings.Repeat("f", 64),
+			Manifest: domain.HiveCIReleaseArtifact{
+				Repository: repositoryName, Digest: digest,
+				MediaType: "application/vnd.oci.image.manifest.v1+json", Size: 100,
+			},
+			SBOM: domain.HiveCIReleaseArtifact{
+				Repository: repositoryName, Digest: "sha256:" + strings.Repeat("1", 64),
+			},
+		},
+	}
+	err := relayFirst.RegisterReleaseArtifactWithAudit(
+		context.Background(), build, artifact,
+		ReleaseArtifactVerificationProof{Release: release, VerifiedAt: time.Now().UTC()},
+		func(committed *domain.Artifact) (*repository.NostrEventRecord, error) {
+			if committed.ID == uuid.Nil {
+				t.Fatal("audit prepared before artifact received its durable identity")
+			}
+			return &repository.NostrEventRecord{ID: strings.Repeat("2", 64)}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("relay-first accepted release registration: %v", err)
+	}
+	if len(builds.builds) != 1 || len(artifacts.artifacts) != 1 || artifact.ID == uuid.Nil {
+		t.Fatalf("forwarded registration did not commit atomically: builds=%d artifacts=%d artifact=%+v",
+			len(builds.builds), len(artifacts.artifacts), artifact)
+	}
+}
+
 func TestCreatePromotionAuditFailureRollsBackIntentAndDesiredState(t *testing.T) {
 	serviceID, environmentID, artifactID := uuid.New(), uuid.New(), uuid.New()
 	services, environments := newMockServiceRepo(), newMockEnvRepo()

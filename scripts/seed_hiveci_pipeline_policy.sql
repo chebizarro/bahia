@@ -107,7 +107,7 @@ JOIN environments e ON e.id = p.environment_id
 ORDER BY p.created_at;
 
 -- ============================================================
--- Step 3: insert the policy row (idempotent)
+-- Step 3: reconcile or insert the policy row (idempotent)
 --
 -- Placeholders:
 --   :REPO_COORDINATE:  — NIP-34 repo coordinate from Step 0
@@ -123,6 +123,44 @@ ORDER BY p.created_at;
 --   :HEALTH_PATH:       — Concrete HTTP health endpoint path
 --   :READINESS_PATH:    — Concrete HTTP readiness endpoint path
 -- ============================================================
+WITH resolved_target AS (
+    SELECT
+        s.id AS service_id,
+        e.id AS environment_id,
+        jsonb_build_object(
+            'workflow_digest', ':WORKFLOW_DIGEST:',
+            'policy_digest', ':POLICY_DIGEST:',
+            'review_policy', ':REVIEW_POLICY:',
+            'source_repo_identity', ':SOURCE_REPO:',
+            'release_image_repository', ':IMAGE_REPO:',
+            'release_attestors', jsonb_build_array(':RELEASE_ATTESTOR:'),
+            'rollback_compatibility', jsonb_build_object(
+                'compatible_from_digests', jsonb_build_array(':PREVIOUS_DIGEST:')
+            ),
+            'health_contract', jsonb_build_object(
+                'type', 'http', 'path', ':HEALTH_PATH:', 'timeout_seconds', 10
+            ),
+            'readiness_contract', jsonb_build_object(
+                'type', 'http', 'path', ':READINESS_PATH:', 'timeout_seconds', 15
+            )
+        ) AS metadata
+    FROM services s, environments e
+    WHERE s.name = ':SERVICE_NAME:'
+      AND e.name = ':ENV_NAME:'
+),
+reconciled AS (
+    UPDATE hiveci_pipeline_policies p
+       SET enabled = TRUE,
+           metadata = target.metadata,
+           updated_at = now()
+      FROM resolved_target target
+     WHERE p.repo_coordinate = ':REPO_COORDINATE:'
+       AND p.workflow_path = '.gitea/workflows/release.yml'
+       AND COALESCE(p.branch_pattern, '') = ''
+       AND p.service_id = target.service_id
+       AND p.environment_id = target.environment_id
+    RETURNING p.id
+)
 INSERT INTO hiveci_pipeline_policies
     (repo_coordinate, workflow_path, branch_pattern,
      service_id, environment_id, enabled, metadata)
@@ -130,37 +168,20 @@ SELECT
     ':REPO_COORDINATE:',
     '.gitea/workflows/release.yml',
     NULL,
-    s.id,
-    e.id,
+    target.service_id,
+    target.environment_id,
     TRUE,
-    jsonb_build_object(
-        'workflow_digest', ':WORKFLOW_DIGEST:',
-        'policy_digest', ':POLICY_DIGEST:',
-        'review_policy', ':REVIEW_POLICY:',
-        'source_repo_identity', ':SOURCE_REPO:',
-        'release_image_repository', ':IMAGE_REPO:',
-        'release_attestors', jsonb_build_array(':RELEASE_ATTESTOR:'),
-        'rollback_compatibility', jsonb_build_object(
-            'compatible_from_digests', jsonb_build_array(':PREVIOUS_DIGEST:')
-        ),
-        'health_contract', jsonb_build_object(
-            'type', 'http', 'path', ':HEALTH_PATH:', 'timeout_seconds', 10
-        ),
-        'readiness_contract', jsonb_build_object(
-            'type', 'http', 'path', ':READINESS_PATH:', 'timeout_seconds', 15
-        )
-    )
-FROM services     s,
-     environments e
-WHERE s.name = ':SERVICE_NAME:'
-  AND e.name = ':ENV_NAME:'
+    target.metadata
+FROM resolved_target target
+WHERE NOT EXISTS (SELECT 1 FROM reconciled)
   AND NOT EXISTS (
-      SELECT 1 FROM hiveci_pipeline_policies p
+      SELECT 1
+      FROM hiveci_pipeline_policies p
       WHERE p.repo_coordinate = ':REPO_COORDINATE:'
-        AND p.workflow_path   = '.github/workflows/hive-ci-build.yml'
+        AND p.workflow_path = '.gitea/workflows/release.yml'
         AND COALESCE(p.branch_pattern, '') = ''
-        AND p.service_id  = s.id
-        AND p.environment_id = e.id
+        AND p.service_id = target.service_id
+        AND p.environment_id = target.environment_id
   )
 RETURNING id, repo_coordinate, workflow_path, service_id, environment_id, enabled;
 
