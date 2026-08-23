@@ -22,6 +22,7 @@ type artifactRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
 	UpdateBuildStatus(context.Context, uuid.UUID, domain.BuildStatus) error
 	RegisterVerifiedArtifact(context.Context, *domain.Artifact, service.ArtifactVerificationProof) error
+	CreateDeploymentIntent(context.Context, *domain.DeploymentIntent) error
 }
 
 // Bridge orchestrates trusted Hive-CI result -> Bahia build/artifact
@@ -382,7 +383,7 @@ func stripRegistryHost(imageRepo string) string {
 }
 
 func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.HiveCIPipelinePolicy, _ *domain.HiveCIWorkflowRun, result *domain.HiveCIWorkflowResult, artifact *domain.Artifact) error {
-	if policy == nil || policy.Metadata == nil || b.intentRepo == nil || b.envRepo == nil || artifact == nil {
+	if policy == nil || policy.Metadata == nil || b.intentRepo == nil || b.envRepo == nil || b.registry == nil || artifact == nil {
 		return nil
 	}
 	autoDeploy, _ := policy.Metadata["auto_deploy_staging"].(bool)
@@ -425,7 +426,7 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 		ApprovalStatus: approval, Status: status,
 		Metadata: map[string]any{"hive_ci_result_event_id": result.ResultEventID},
 	}
-	if err := b.intentRepo.Create(ctx, intent); err != nil {
+	if err := b.registry.CreateDeploymentIntent(ctx, intent); err != nil {
 		return fmt.Errorf("create staging deployment intent: %w", err)
 	}
 	return nil

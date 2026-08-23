@@ -66,15 +66,19 @@ func (m *stubEnvRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Enviro
 func (m *stubEnvRepo) Update(_ context.Context, _ *domain.Environment) error { return nil }
 func (m *stubEnvRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
 
-type stubBuildRepo struct{}
+type stubBuildRepo struct{ build *domain.Build }
 
 func (m *stubBuildRepo) Create(_ context.Context, b *domain.Build) error {
 	if b.ID == uuid.Nil {
 		b.ID = uuid.New()
 	}
+	m.build = b
 	return nil
 }
-func (m *stubBuildRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Build, error) {
+func (m *stubBuildRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Build, error) {
+	if m.build != nil && m.build.ID == id {
+		return m.build, nil
+	}
 	return nil, nil
 }
 func (m *stubBuildRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ int) ([]domain.Build, error) {
@@ -83,7 +87,10 @@ func (m *stubBuildRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ int) 
 func (m *stubBuildRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ domain.BuildStatus) error {
 	return nil
 }
-func (m *stubBuildRepo) GetByCISystemRunID(_ context.Context, _, _ string) (*domain.Build, error) {
+func (m *stubBuildRepo) GetByCISystemRunID(_ context.Context, ciSystem, ciRunID string) (*domain.Build, error) {
+	if m.build != nil && m.build.CISystem == ciSystem && m.build.CIRunID == ciRunID {
+		return m.build, nil
+	}
 	return nil, nil
 }
 
@@ -99,7 +106,10 @@ func (m *stubArtifactRepo) Create(_ context.Context, a *domain.Artifact) error {
 func (m *stubArtifactRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Artifact, error) {
 	return m.art, nil
 }
-func (m *stubArtifactRepo) GetByDigest(_ context.Context, _, _ string) (*domain.Artifact, error) {
+func (m *stubArtifactRepo) GetByDigest(_ context.Context, repo, digest string) (*domain.Artifact, error) {
+	if m.art != nil && m.art.ImageRepo == repo && m.art.ImageDigest == digest {
+		return m.art, nil
+	}
 	return nil, nil
 }
 func (m *stubArtifactRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ int) ([]domain.Artifact, error) {
@@ -108,8 +118,8 @@ func (m *stubArtifactRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ in
 func (m *stubArtifactRepo) ListByBuild(_ context.Context, _ uuid.UUID) ([]domain.Artifact, error) {
 	return nil, nil
 }
-func (m *stubArtifactRepo) GetByImageRepoDigest(_ context.Context, _, _ string) (*domain.Artifact, error) {
-	return nil, nil
+func (m *stubArtifactRepo) GetByImageRepoDigest(_ context.Context, repo, digest string) (*domain.Artifact, error) {
+	return m.GetByDigest(context.Background(), repo, digest)
 }
 
 type stubIntentRepo struct {
@@ -182,7 +192,14 @@ func (m *stubIntentRepo) UpdateDesiredState(_ context.Context, id uuid.UUID, des
 	}
 	return nil
 }
-func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, _ string) (*domain.DeploymentIntent, error) {
+func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, eventID string) (*domain.DeploymentIntent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, intent := range m.intents {
+		if intent.Metadata != nil && intent.Metadata["hive_ci_result_event_id"] == eventID {
+			return intent, nil
+		}
+	}
 	return nil, nil
 }
 func (m *stubIntentRepo) ListApprovedWithoutRuns(_ context.Context) ([]domain.DeploymentIntent, error) {

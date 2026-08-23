@@ -338,6 +338,7 @@ func (m *mockRegistryInspector) GetReferrers(_ context.Context, _, _ string) ([]
 type mockCanonicalRegistry struct {
 	builds    *mockBuildRepo
 	artifacts *mockArtifactRepo
+	intents   *mockIntentRepo
 	lastProof service.ArtifactVerificationProof
 }
 
@@ -361,6 +362,9 @@ func (m *mockCanonicalRegistry) RegisterVerifiedArtifact(ctx context.Context, ar
 	artifact.Metadata["supply_chain"] = map[string]any{"policy_state": proof.PolicyState}
 	return m.artifacts.Create(ctx, artifact)
 }
+func (m *mockCanonicalRegistry) CreateDeploymentIntent(ctx context.Context, intent *domain.DeploymentIntent) error {
+	return m.intents.Create(ctx, intent)
+}
 
 func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i *mockIntentRepo, e *mockEnvRepo, o *mockOCIRepo) *Bridge {
 	serviceID := uuid.Nil
@@ -372,7 +376,7 @@ func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i 
 		imageRepo = result.ImageRepo
 	}
 	services := &mockServiceRepo{service: &domain.Service{ID: serviceID, ArtifactRepo: imageRepo}}
-	registry := &mockCanonicalRegistry{builds: b, artifacts: a}
+	registry := &mockCanonicalRegistry{builds: b, artifacts: a, intents: i}
 	return NewBridge(h, services, b, a, i, e, o, nil, registry, []string{"trusted-pub"}, true, nil)
 }
 
