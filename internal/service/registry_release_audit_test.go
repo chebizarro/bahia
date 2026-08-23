@@ -74,7 +74,7 @@ func (e *releaseDecisionTxExecutor) WithinTx(ctx context.Context, fn func(reposi
 	e.builds.builds = txBuilds.builds
 	e.artifacts.artifacts = txArtifacts.artifacts
 	e.intents.intents = txIntents.intents
-	e.state.states = txState.states
+	e.state.replaceFrom(txState)
 	return nil
 }
 
