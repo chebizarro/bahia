@@ -161,7 +161,7 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 func (r *PgDeploymentIntentRepository) ListApprovedWithoutRuns(ctx context.Context) ([]domain.DeploymentIntent, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+intentColumns+` FROM deployment_intents di
-		WHERE di.approval_status = 'approved'
+		WHERE di.approval_status IN ('approved', 'not_required')
 		  AND di.status = 'approved'
 		  AND NOT EXISTS (
 			SELECT 1 FROM deployment_runs dr WHERE dr.deployment_intent_id = di.id

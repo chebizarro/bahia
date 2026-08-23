@@ -123,13 +123,17 @@ func (m *stubArtifactRepo) GetByImageRepoDigest(_ context.Context, repo, digest 
 }
 
 type stubIntentRepo struct {
-	mu                  sync.Mutex
-	intents             map[uuid.UUID]*domain.DeploymentIntent
-	approvedWithoutRuns []domain.DeploymentIntent
+	mu      sync.Mutex
+	intents map[uuid.UUID]*domain.DeploymentIntent
+	runs    *stubRunRepo
 }
 
-func newStubIntentRepo() *stubIntentRepo {
-	return &stubIntentRepo{intents: make(map[uuid.UUID]*domain.DeploymentIntent)}
+func newStubIntentRepo(runRepos ...*stubRunRepo) *stubIntentRepo {
+	runs := newStubRunRepo()
+	if len(runRepos) > 0 {
+		runs = runRepos[0]
+	}
+	return &stubIntentRepo{intents: make(map[uuid.UUID]*domain.DeploymentIntent), runs: runs}
 }
 
 func (m *stubIntentRepo) Create(_ context.Context, di *domain.DeploymentIntent) error {
@@ -205,7 +209,27 @@ func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, eventID strin
 func (m *stubIntentRepo) ListApprovedWithoutRuns(_ context.Context) ([]domain.DeploymentIntent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]domain.DeploymentIntent(nil), m.approvedWithoutRuns...), nil
+	m.runs.mu.Lock()
+	defer m.runs.mu.Unlock()
+
+	var intents []domain.DeploymentIntent
+	for _, intent := range m.intents {
+		if intent.Status != domain.IntentStatusApproved ||
+			(intent.ApprovalStatus != domain.ApprovalStatusApproved && intent.ApprovalStatus != domain.ApprovalStatusNotRequired) {
+			continue
+		}
+		hasRun := false
+		for _, run := range m.runs.runs {
+			if run.DeploymentIntentID == intent.ID {
+				hasRun = true
+				break
+			}
+		}
+		if !hasRun {
+			intents = append(intents, *intent)
+		}
+	}
+	return intents, nil
 }
 
 type stubRunRepo struct {
@@ -617,8 +641,8 @@ func newTestCoordinatorDeps() (
 	svcRepo := &stubServiceRepo{}
 	envRepo := &stubEnvRepo{}
 	artRepo := &stubArtifactRepo{}
-	intentRepo := newStubIntentRepo()
 	runRepo := newStubRunRepo()
+	intentRepo := newStubIntentRepo(runRepo)
 	stateRepo := newStubStateRepo()
 	return svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo
 }
@@ -946,48 +970,97 @@ func TestRecoverNonTerminalRuns_ResumesDirectRuntimeAndPersistsPhases(t *testing
 }
 
 func TestRecoverNonTerminalRuns_StartsApprovedIntentWithoutRun(t *testing.T) {
-	ctx := context.Background()
-	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
-	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
-	unit := &domain.DeploymentUnit{
-		ID: uuid.New(), EnvironmentID: env.ID, Key: "arcana",
-		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "arcana-local", ComposeDir: "/srv/arcana",
-		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
-	}
-	desired := &domain.DesiredServiceSpec{
-		SchemaVersion: domain.DesiredStateSchemaVersion,
-		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
-		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
-		DesiredHash: "sha256:reviewed",
-	}
-	intent := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
-		RequestedBy: "test", SourceKind: domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusApproved, Status: domain.IntentStatusApproved,
-		DesiredState: desired, DesiredHash: desired.DesiredHash,
-	}
-	if err := intentRepo.Create(ctx, intent); err != nil {
-		t.Fatal(err)
-	}
-	intentRepo.approvedWithoutRuns = []domain.DeploymentIntent{*intent}
+	for _, approvalStatus := range []domain.ApprovalStatus{domain.ApprovalStatusApproved, domain.ApprovalStatusNotRequired} {
+		t.Run(string(approvalStatus), func(t *testing.T) {
+			ctx := context.Background()
+			svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+			registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+			svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+			unit := &domain.DeploymentUnit{
+				ID: uuid.New(), EnvironmentID: env.ID, Key: "arcana",
+				RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "arcana-local", ComposeDir: "/srv/arcana",
+				ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+			}
+			desired := &domain.DesiredServiceSpec{
+				SchemaVersion: domain.DesiredStateSchemaVersion,
+				ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+				DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+				DesiredHash: "sha256:reviewed",
+			}
+			intent := &domain.DeploymentIntent{
+				ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+				RequestedBy: "test", SourceKind: domain.SourceKindManual,
+				ApprovalStatus: approvalStatus, Status: domain.IntentStatusApproved,
+				DesiredState: desired, DesiredHash: desired.DesiredHash,
+			}
+			if err := intentRepo.Create(ctx, intent); err != nil {
+				t.Fatal(err)
+			}
+			for _, excluded := range []domain.DeploymentIntent{
+				{ApprovalStatus: domain.ApprovalStatusRejected, Status: domain.IntentStatusRejected},
+				{ApprovalStatus: domain.ApprovalStatusPending, Status: domain.IntentStatusPending},
+				{ApprovalStatus: domain.ApprovalStatusPending, Status: domain.IntentStatusApproved},
+			} {
+				excluded.ServiceID = svc.ID
+				excluded.EnvironmentID = env.ID
+				excluded.DeploymentUnitID = &unit.ID
+				excluded.ArtifactID = art.ID
+				excluded.RequestedBy = "test"
+				excluded.SourceKind = domain.SourceKindManual
+				excluded.DesiredState = desired
+				excluded.DesiredHash = desired.DesiredHash
+				if err := intentRepo.Create(ctx, &excluded); err != nil {
+					t.Fatal(err)
+				}
+			}
+			intentWithRun := &domain.DeploymentIntent{
+				ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+				RequestedBy: "test", SourceKind: domain.SourceKindManual,
+				ApprovalStatus: approvalStatus, Status: domain.IntentStatusApproved,
+				DesiredState: desired, DesiredHash: desired.DesiredHash,
+			}
+			if err := intentRepo.Create(ctx, intentWithRun); err != nil {
+				t.Fatal(err)
+			}
+			if err := runRepo.Create(ctx, &domain.DeploymentRun{
+				DeploymentIntentID: intentWithRun.ID,
+				Status:             domain.RunStatusSucceeded,
+			}); err != nil {
+				t.Fatal(err)
+			}
 
-	lifecycle := &stubDeploymentRuntimeLifecycle{}
-	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, lifecycle))
-	if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
-		t.Fatalf("RecoverNonTerminalRuns: %v", err)
-	}
-	coord.wg.Wait()
-	if lifecycle.calls != 1 {
-		t.Fatalf("approved intent recovery runtime calls = %d, want 1", lifecycle.calls)
-	}
-	runs, err := registry.ListDeploymentRuns(ctx, intent.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 1 || runs[0].Status != domain.RunStatusSucceeded {
-		t.Fatalf("approved intent recovery runs = %#v", runs)
+			lifecycle := &stubDeploymentRuntimeLifecycle{}
+			unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+			coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, lifecycle))
+			if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+				t.Fatalf("RecoverNonTerminalRuns: %v", err)
+			}
+			coord.wg.Wait()
+			if lifecycle.calls != 1 {
+				t.Fatalf("approved intent recovery runtime calls = %d, want 1", lifecycle.calls)
+			}
+			runs, err := registry.ListDeploymentRuns(ctx, intent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 1 || runs[0].Status != domain.RunStatusSucceeded {
+				t.Fatalf("approved intent recovery runs = %#v", runs)
+			}
+			if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+				t.Fatalf("second RecoverNonTerminalRuns: %v", err)
+			}
+			coord.wg.Wait()
+			if lifecycle.calls != 1 {
+				t.Fatalf("idempotent recovery runtime calls = %d, want 1", lifecycle.calls)
+			}
+			existingRuns, err := registry.ListDeploymentRuns(ctx, intentWithRun.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(existingRuns) != 1 {
+				t.Fatalf("intent with existing run has %d runs, want 1", len(existingRuns))
+			}
+		})
 	}
 }
 
