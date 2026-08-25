@@ -288,6 +288,213 @@ func TestBuildHotReloadRuntimeCallsAddsMemoryReindexWhenAutoIndexEnabled(t *test
 	}
 }
 
+func TestLifecycleHandlerUpdateDispatchesRuntimeUpdateAndPersonaControls(t *testing.T) {
+	signer := newFakeSigner(t)
+	currentDraft := &domain.SoulDraft{
+		EventID:   "update-current-draft",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:      domain.SoulFactoryDraftSchemaV2,
+			Identity:    domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard},
+			Persona:     domain.SoulPersonaSpec{Traits: []string{"careful"}, Tone: "direct"},
+			Runtime:     domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			Permissions: domain.SoulPermissionSpec{AllowedKinds: []int{1, 30023}},
+			SpecHash:    "sha256:old",
+		},
+	}
+	proposedDraft := &domain.SoulDraft{
+		EventID:   "update-proposed-draft",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:           domain.SoulFactoryDraftSchemaV2,
+			Identity:         domain.SoulIdentitySpec{Name: "Scout Updated", Purpose: "Research deeply", Tier: domain.SoulTierHeavy},
+			Persona:          domain.SoulPersonaSpec{Traits: []string{"careful", "curious"}, Tone: "friendly"},
+			Runtime:          domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			Permissions:      domain.SoulPermissionSpec{AllowedKinds: []int{1}},
+			SpecHash:         "sha256:new",
+			PreviousSpecHash: "sha256:old",
+		},
+	}
+	draftRef := "31952:" + signer.pubkey + ":scout"
+	soul := &domain.AgentSoul{
+		ID: uuid.New(), AgentID: "scout", Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard,
+		Status: domain.SoulStatusActive, DraftRef: draftRef, DraftEventID: currentDraft.EventID,
+		SpecHash: "sha256:old", Runtime: domain.SoulRuntimeSpec{
+			Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey",
+			RuntimeBinding: "openclaw://agents/scout", State: "running",
+		},
+		AllowedKinds: []int{1, 30023}, PermissionSpec: currentDraft.Content.Permissions, CreatedAt: time.Now().UTC(),
+	}
+	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	capture := attachPublishCapture(reactor)
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	reactor.getDraftFn = func(_ context.Context, _ string, eventID string) (*domain.SoulDraft, error) {
+		switch eventID {
+		case currentDraft.EventID:
+			return currentDraft, nil
+		case proposedDraft.EventID:
+			return proposedDraft, nil
+		default:
+			return nil, nil
+		}
+	}
+	runtime := &trackingRuntimeAdapter{}
+	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime})
+
+	event := buildActionEvent(t, signer, "lifecycle-update", nostr.Tags{
+		{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionUpdate)},
+		{"draft", draftRef}, {"draft-event", proposedDraft.EventID},
+		{"spec-hash", "sha256:new"}, {"previous-spec-hash", "sha256:old"},
+	}, "")
+	if err := handler.HandleAction(t.Context(), event); err != nil {
+		t.Fatalf("HandleAction(update) error = %v", err)
+	}
+
+	if len(runtime.requests) != 2 {
+		t.Fatalf("runtime request count = %d, want update + persona update", len(runtime.requests))
+	}
+	if runtime.requests[0].Method != RuntimeMethodUpdate || runtime.requests[1].Method != RuntimeMethodPersonaUpdate {
+		t.Fatalf("runtime methods = %s, %s", runtime.requests[0].Method, runtime.requests[1].Method)
+	}
+	for _, req := range runtime.requests {
+		if req.Action != domain.SoulActionUpdate || req.RequestKind != domain.KindSoulAction || req.Soul.SpecHash != "sha256:new" || req.Soul.Draft != proposedDraft.EventID {
+			t.Fatalf("runtime update request context = %+v", req)
+		}
+	}
+	params := runtime.requests[0].Params
+	if params["previous_spec_hash"] != "sha256:old" || params["new_spec_hash"] != "sha256:new" || params["update_mode"] != "replace" {
+		t.Fatalf("runtime update params = %#v", params)
+	}
+	resolved, ok := params["resolved_spec"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("resolved_spec type = %T", params["resolved_spec"])
+	}
+	identity, ok := resolved["identity"].(map[string]interface{})
+	if !ok || identity["name"] != "Scout Updated" {
+		t.Fatalf("resolved identity = %#v", resolved["identity"])
+	}
+	persona, ok := runtime.requests[1].Params["persona"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("persona params = %#v", runtime.requests[1].Params)
+	}
+	traits, ok := persona["traits"].([]interface{})
+	if !ok || len(traits) != 2 {
+		t.Fatalf("persona traits = %#v", persona["traits"])
+	}
+	if soul.Name != "Scout Updated" || soul.Purpose != "Research deeply" || soul.Tier != domain.SoulTierHeavy {
+		t.Fatalf("updated soul identity = %q %q %s", soul.Name, soul.Purpose, soul.Tier)
+	}
+	if soul.DraftEventID != proposedDraft.EventID || soul.PreviousDraftEventID != currentDraft.EventID || soul.SpecHash != "sha256:new" || soul.PreviousSpecHash != "sha256:old" {
+		t.Fatalf("updated soul lineage = draft %q previous %q spec %q previous spec %q", soul.DraftEventID, soul.PreviousDraftEventID, soul.SpecHash, soul.PreviousSpecHash)
+	}
+	if soul.Runtime.RuntimeBinding != "openclaw://agents/scout" || soul.Runtime.State != "running" {
+		t.Fatalf("updated runtime observations = %+v", soul.Runtime)
+	}
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 1 {
+		t.Fatalf("soul publish count = %d, want 1", got)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 || findTag(results[0], "status") != "completed" {
+		t.Fatalf("update terminal results = %+v", results)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(results[0].Content), &payload); err != nil {
+		t.Fatalf("unmarshal update result: %v", err)
+	}
+	if payload["updated"] != true || payload["applied_change_count"] != float64(2) || payload["persona_updated"] != true {
+		t.Fatalf("update result payload = %#v", payload)
+	}
+}
+
+func TestLifecycleHandlerUpdateRollsBackRuntimeWhenPersonaUpdateFails(t *testing.T) {
+	signer := newFakeSigner(t)
+	currentDraft := &domain.SoulDraft{
+		EventID: "rollback-current-draft", AgentID: "scout", CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:   domain.SoulFactoryDraftSchemaV2,
+			Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard},
+			Persona:  domain.SoulPersonaSpec{Traits: []string{"careful"}},
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			SpecHash: "sha256:old",
+		},
+	}
+	proposedDraft := &domain.SoulDraft{
+		EventID: "rollback-proposed-draft", AgentID: "scout", CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:   domain.SoulFactoryDraftSchemaV2,
+			Identity: domain.SoulIdentitySpec{Name: "Scout Updated", Purpose: "Research deeply", Tier: domain.SoulTierStandard},
+			Persona:  domain.SoulPersonaSpec{Traits: []string{"curious"}},
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			SpecHash: "sha256:new", PreviousSpecHash: "sha256:old",
+		},
+	}
+	draftRef := "31952:" + signer.pubkey + ":scout"
+	soul := &domain.AgentSoul{
+		ID: uuid.New(), AgentID: "scout", Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard,
+		Status: domain.SoulStatusActive, DraftRef: draftRef, DraftEventID: currentDraft.EventID,
+		SpecHash: "sha256:old", Runtime: currentDraft.Content.Runtime, CreatedAt: time.Now().UTC(),
+	}
+	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	capture := attachPublishCapture(reactor)
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	reactor.getDraftFn = func(_ context.Context, _ string, eventID string) (*domain.SoulDraft, error) {
+		if eventID == currentDraft.EventID {
+			return currentDraft, nil
+		}
+		if eventID == proposedDraft.EventID {
+			return proposedDraft, nil
+		}
+		return nil, nil
+	}
+	runtime := &failingRuntimeAdapter{failOn: 2}
+	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime})
+	event := buildActionEvent(t, signer, "lifecycle-update-fails", nostr.Tags{
+		{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionUpdate)},
+		{"draft", draftRef}, {"draft-event", proposedDraft.EventID},
+		{"spec-hash", "sha256:new"}, {"previous-spec-hash", "sha256:old"},
+	}, "")
+	if err := handler.HandleAction(t.Context(), event); err == nil || !strings.Contains(err.Error(), "runtime error") {
+		t.Fatalf("HandleAction(update) error = %v, want runtime error", err)
+	}
+
+	if len(runtime.requests) != 4 {
+		t.Fatalf("runtime request count = %d, want update + persona + update rollback + persona rollback", len(runtime.requests))
+	}
+	wantMethods := []string{RuntimeMethodUpdate, RuntimeMethodPersonaUpdate, RuntimeMethodUpdate, RuntimeMethodPersonaUpdate}
+	for i, want := range wantMethods {
+		if runtime.requests[i].Method != want {
+			t.Fatalf("runtime request %d method = %s, want %s", i, runtime.requests[i].Method, want)
+		}
+	}
+	if runtime.requests[0].Action != domain.SoulActionUpdate || runtime.requests[1].Action != domain.SoulActionUpdate ||
+		runtime.requests[2].Action != domain.SoulActionRollback || runtime.requests[3].Action != domain.SoulActionRollback {
+		t.Fatalf("runtime request actions = %s, %s, %s, %s", runtime.requests[0].Action, runtime.requests[1].Action, runtime.requests[2].Action, runtime.requests[3].Action)
+	}
+	rollbackParams := runtime.requests[2].Params
+	if rollbackParams["previous_spec_hash"] != "sha256:new" || rollbackParams["new_spec_hash"] != "sha256:old" {
+		t.Fatalf("rollback update params = %#v", rollbackParams)
+	}
+	if runtime.requests[2].Soul.SpecHash != "sha256:old" || runtime.requests[3].Soul.SpecHash != "sha256:old" {
+		t.Fatalf("rollback soul hashes = %q, %q", runtime.requests[2].Soul.SpecHash, runtime.requests[3].Soul.SpecHash)
+	}
+	if soul.Name != "Scout" || soul.Purpose != "Research" || soul.DraftEventID != currentDraft.EventID || soul.SpecHash != "sha256:old" {
+		t.Fatalf("soul mutated after failed update = %+v", soul)
+	}
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 0 {
+		t.Fatalf("soul publish count after failed update = %d, want 0", got)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 || findTag(results[0], "status") != "error" {
+		t.Fatalf("failed update terminal results = %+v", results)
+	}
+}
+
 func TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress(t *testing.T) {
 	signer := newFakeSigner(t)
 	currentDraft := &domain.SoulDraft{

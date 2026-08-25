@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -138,11 +139,14 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 	}
 
 	var result *LifecycleExecutionResult
-	if action.Action == domain.SoulActionHotReload {
+	switch action.Action {
+	case domain.SoulActionHotReload:
 		result, err = h.handleHotReload(ctx, soul, action)
-	} else if action.Action == domain.SoulActionRollback {
+	case domain.SoulActionRollback:
 		result, err = h.handleRollback(ctx, soul, action)
-	} else {
+	case domain.SoulActionUpdate:
+		result, err = h.handleUpdate(ctx, soul, action)
+	default:
 		result, err = h.engine.ExecuteLifecycleAction(ctx, soul, action)
 	}
 	if err != nil {
@@ -308,6 +312,295 @@ type hotReloadRuntimeCall struct {
 	Section string
 	Method  string
 	Params  map[string]interface{}
+}
+
+type lifecycleUpdateDiff struct {
+	ChangedSections []string
+	Persona         bool
+}
+
+func diffLifecycleUpdateDrafts(current, proposed domain.SoulDraftContent) lifecycleUpdateDiff {
+	currentSpec := BuildProvisionRuntimeParamsFromDraft(current)
+	proposedSpec := BuildProvisionRuntimeParamsFromDraft(proposed)
+	sections := []string{"identity", "persona", "avatar", "voice", "memory", "runtime", "permissions", "relay_policy", "workspace", "assets"}
+	diff := lifecycleUpdateDiff{Persona: draftSectionChanged(current.Persona, proposed.Persona)}
+	for _, section := range sections {
+		if draftSectionChanged(currentSpec[section], proposedSpec[section]) {
+			diff.ChangedSections = append(diff.ChangedSections, section)
+		}
+	}
+	return diff
+}
+
+func (h *LifecycleHandler) handleUpdate(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error) {
+	if action.DraftRef == "" && action.DraftEventID == "" {
+		return nil, fmt.Errorf("update requires draft_ref or draft_event_id")
+	}
+	if soul.Status == domain.SoulStatusRevoked {
+		return nil, fmt.Errorf("cannot update revoked soul")
+	}
+
+	proposedDraft, err := h.lookupHotReloadDraft(ctx, action.DraftRef, action.DraftEventID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup proposed update draft: %w", err)
+	}
+	if proposedDraft == nil {
+		return nil, fmt.Errorf("proposed update draft not found")
+	}
+	if proposedDraft.AgentID != soul.AgentID {
+		return nil, fmt.Errorf("update draft agent %q does not match soul %q", proposedDraft.AgentID, soul.AgentID)
+	}
+
+	current, currentDraft, err := h.currentUpdateContent(ctx, soul)
+	if err != nil {
+		return nil, err
+	}
+	if currentDraft != nil && currentDraft.AgentID != soul.AgentID {
+		return nil, fmt.Errorf("current update draft agent %q does not match soul %q", currentDraft.AgentID, soul.AgentID)
+	}
+	if soul.SpecHash != "" && current.SpecHash != "" && current.SpecHash != soul.SpecHash {
+		return nil, fmt.Errorf("current update draft spec_hash %q does not match soul %q", current.SpecHash, soul.SpecHash)
+	}
+	proposed := proposedDraft.Content.MigrateToLatest()
+	if proposed.Runtime.Target != "" && soul.Runtime.Target != "" && proposed.Runtime.Target != soul.Runtime.Target {
+		return nil, fmt.Errorf("update cannot change runtime target from %s to %s", soul.Runtime.Target, proposed.Runtime.Target)
+	}
+	if proposed.Runtime.RuntimePubkey != "" && soul.Runtime.RuntimePubkey != "" && proposed.Runtime.RuntimePubkey != soul.Runtime.RuntimePubkey {
+		return nil, fmt.Errorf("update cannot change runtime pubkey")
+	}
+
+	previousSpecHash := firstNonEmpty(soul.SpecHash, current.SpecHash, computeDraftContentHash(current))
+	if previousSpecHash == "" {
+		return nil, fmt.Errorf("update requires current spec hash")
+	}
+	if action.PreviousSpecHash != "" && action.PreviousSpecHash != previousSpecHash {
+		return nil, fmt.Errorf("update previous_spec_hash %q does not match current %q", action.PreviousSpecHash, previousSpecHash)
+	}
+	if proposed.PreviousSpecHash != "" && proposed.PreviousSpecHash != previousSpecHash {
+		return nil, fmt.Errorf("update draft previous_spec_hash %q does not match current %q", proposed.PreviousSpecHash, previousSpecHash)
+	}
+	if action.SpecHash != "" && proposed.SpecHash != "" && action.SpecHash != proposed.SpecHash {
+		return nil, fmt.Errorf("update spec_hash %q does not match draft %q", action.SpecHash, proposed.SpecHash)
+	}
+	newSpecHash := firstNonEmpty(proposed.SpecHash, action.SpecHash, computeDraftContentHash(proposed))
+	if newSpecHash == "" {
+		return nil, fmt.Errorf("update requires proposed spec hash")
+	}
+
+	diff := diffLifecycleUpdateDrafts(current, proposed)
+	if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("update diff computed: %s", hotReloadSectionsText(diff.ChangedSections)), soul.AgentID); err != nil {
+		return nil, fmt.Errorf("publish update diff progress: %w", err)
+	}
+
+	adapter, target, runtimePubkey, err := h.selectHotReloadRuntime(soul, proposed)
+	if err != nil {
+		return nil, err
+	}
+	proposedDraftRef := firstNonEmpty(action.DraftRef, parameterizedCoordinate(domain.KindSoulDraft, proposedDraft.CreatedBy, proposedDraft.AgentID))
+	proposedDraftEventID := firstNonEmpty(proposedDraft.EventID, action.DraftEventID)
+	updateParams := buildLifecycleUpdateParams(proposed, previousSpecHash, newSpecHash, proposedDraftRef, proposedDraftEventID, diff.ChangedSections)
+	rollbackDraftRef := soul.DraftRef
+	rollbackDraftEventID := soul.DraftEventID
+	if currentDraft != nil {
+		rollbackDraftRef = firstNonEmpty(rollbackDraftRef, parameterizedCoordinate(domain.KindSoulDraft, currentDraft.CreatedBy, currentDraft.AgentID))
+		rollbackDraftEventID = firstNonEmpty(rollbackDraftEventID, currentDraft.EventID)
+	}
+	rollbackParams := buildLifecycleUpdateParams(current, previousSpecHash, previousSpecHash, rollbackDraftRef, rollbackDraftEventID, diff.ChangedSections)
+
+	var proposedPersonaParams, rollbackPersonaParams map[string]interface{}
+	if diff.Persona {
+		proposedPersonaParams, err = BuildPersonaRuntimeControlParams(proposed.Persona)
+		if err != nil {
+			return nil, fmt.Errorf("build proposed persona update: %w", err)
+		}
+		rollbackPersonaParams, err = BuildPersonaRuntimeControlParams(current.Persona)
+		if err != nil {
+			return nil, fmt.Errorf("build rollback persona update: %w", err)
+		}
+	}
+
+	calls := []hotReloadRuntimeCall{{Section: "spec", Method: RuntimeMethodUpdate, Params: updateParams}}
+	if diff.Persona {
+		calls = append(calls, hotReloadRuntimeCall{Section: "persona", Method: RuntimeMethodPersonaUpdate, Params: proposedPersonaParams})
+	}
+	applied := make([]map[string]interface{}, 0, len(calls))
+	updateApplied := false
+	personaAttempted := false
+	withRollback := func(cause error) error {
+		rollbackErr := h.rollbackRuntimeUpdate(ctx, soul, action, adapter, target, runtimePubkey, previousSpecHash, newSpecHash, rollbackDraftRef, rollbackDraftEventID, current.RelayPolicy, rollbackParams, rollbackPersonaParams, updateApplied, personaAttempted)
+		if rollbackErr != nil {
+			return fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
+		}
+		return cause
+	}
+	for _, call := range calls {
+		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applying update via %s", call.Method), soul.AgentID); err != nil {
+			progressErr := fmt.Errorf("publish %s update progress: %w", call.Section, err)
+			if updateApplied {
+				return nil, withRollback(progressErr)
+			}
+			return nil, progressErr
+		}
+		if call.Method == RuntimeMethodPersonaUpdate {
+			personaAttempted = true
+		}
+		result, executeErr := adapter.Execute(ctx, RuntimeAdapterRequest{
+			Method:      call.Method,
+			Operator:    RuntimeOperatorRef{Pubkey: action.Initiator, RequestEvent: action.EventID},
+			Soul:        RuntimeSoulRef{ID: soul.AgentID, Draft: proposedDraftEventID, SpecHash: newSpecHash},
+			Target:      RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
+			Params:      call.Params,
+			DraftPolicy: proposed.RelayPolicy,
+			RequestKind: domain.KindSoulAction,
+			Action:      domain.SoulActionUpdate,
+		})
+		if executeErr == nil && result == nil {
+			executeErr = fmt.Errorf("runtime returned no result")
+		}
+		if executeErr != nil {
+			return nil, withRollback(fmt.Errorf("update %s via %s: %w", call.Section, call.Method, executeErr))
+		}
+		if call.Method == RuntimeMethodUpdate {
+			updateApplied = true
+		}
+		applied = append(applied, map[string]interface{}{"section": call.Section, "method": call.Method, "status": result.Status, "result": result.Result})
+		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applied update via %s", call.Method), soul.AgentID); err != nil {
+			return nil, withRollback(fmt.Errorf("publish %s update applied progress: %w", call.Section, err))
+		}
+	}
+
+	applyUpdateDraftToSoul(soul, proposedDraft, proposed, action, newSpecHash, previousSpecHash, applied)
+	return &LifecycleExecutionResult{
+		PublishSoul: true,
+		Data: map[string]interface{}{
+			"updated": true, "draft_ref": proposedDraftRef, "draft_event_id": proposedDraftEventID,
+			"spec_hash": newSpecHash, "previous_spec_hash": previousSpecHash,
+			"changed_sections": diff.ChangedSections, "persona_updated": diff.Persona,
+			"applied_changes": applied, "applied_change_count": len(applied),
+		},
+	}, nil
+}
+
+func buildLifecycleUpdateParams(content domain.SoulDraftContent, previousSpecHash, newSpecHash, draftRef, draftEventID string, changedSections []string) map[string]interface{} {
+	return map[string]interface{}{
+		"schema": domain.SoulFactoryDraftSchemaLatest, "previous_spec_hash": previousSpecHash,
+		"new_spec_hash": newSpecHash, "update_mode": "replace",
+		"resolved_spec": BuildProvisionRuntimeParamsFromDraft(content),
+		"draft_ref":     draftRef, "draft_event_id": draftEventID,
+		"changed_sections": append([]string(nil), changedSections...),
+	}
+}
+
+func (h *LifecycleHandler) currentUpdateContent(ctx context.Context, soul *domain.AgentSoul) (domain.SoulDraftContent, *domain.SoulDraft, error) {
+	if soul.DraftRef != "" || soul.DraftEventID != "" {
+		draft, err := h.lookupHotReloadDraft(ctx, soul.DraftRef, soul.DraftEventID)
+		if err != nil {
+			return domain.SoulDraftContent{}, nil, fmt.Errorf("lookup current update draft: %w", err)
+		}
+		if draft == nil {
+			return domain.SoulDraftContent{}, nil, fmt.Errorf("current update draft not found")
+		}
+		return draft.Content.MigrateToLatest(), draft, nil
+	}
+	return synthesizeDraftContentFromSoul(soul), nil, nil
+}
+
+func (h *LifecycleHandler) rollbackRuntimeUpdate(
+	ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction, adapter RuntimeAdapter,
+	target domain.RuntimeTarget, runtimePubkey, previousSpecHash, newSpecHash, draftRef, draftEventID string,
+	policy domain.SoulRelayPolicySpec, updateParams, personaParams map[string]interface{},
+	updateApplied, personaAttempted bool,
+) error {
+	rollbackParams := cloneDraftJSONMap(updateParams)
+	if updateApplied {
+		rollbackParams["previous_spec_hash"] = newSpecHash
+	}
+	var rollbackErrors []error
+	if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("rolling back update via %s", RuntimeMethodUpdate), soul.AgentID); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("publish rollback update progress: %w", err))
+	}
+	result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
+		Method: RuntimeMethodUpdate, Operator: RuntimeOperatorRef{Pubkey: action.Initiator, RequestEvent: action.EventID},
+		Soul:   RuntimeSoulRef{ID: soul.AgentID, Draft: firstNonEmpty(draftEventID, draftRef), SpecHash: previousSpecHash},
+		Target: RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
+		Params: rollbackParams, DraftPolicy: policy, RequestKind: domain.KindSoulAction, Action: domain.SoulActionRollback,
+	})
+	if err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("rollback update: %w", err))
+	} else if result == nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("runtime returned no rollback update result"))
+	}
+	if personaAttempted {
+		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("rolling back update via %s", RuntimeMethodPersonaUpdate), soul.AgentID); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("publish rollback persona progress: %w", err))
+		}
+		result, err = adapter.Execute(ctx, RuntimeAdapterRequest{
+			Method: RuntimeMethodPersonaUpdate, Operator: RuntimeOperatorRef{Pubkey: action.Initiator, RequestEvent: action.EventID},
+			Soul:   RuntimeSoulRef{ID: soul.AgentID, Draft: firstNonEmpty(draftEventID, draftRef), SpecHash: previousSpecHash},
+			Target: RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
+			Params: personaParams, DraftPolicy: policy, RequestKind: domain.KindSoulAction, Action: domain.SoulActionRollback,
+		})
+		if err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("rollback persona: %w", err))
+		} else if result == nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("runtime returned no rollback persona result"))
+		}
+	}
+	return errors.Join(rollbackErrors...)
+}
+
+func applyUpdateDraftToSoul(soul *domain.AgentSoul, draft *domain.SoulDraft, proposed domain.SoulDraftContent, action *domain.SoulAction, newSpecHash, previousSpecHash string, applied []map[string]interface{}) {
+	currentDraftRef, currentDraftEventID := soul.DraftRef, soul.DraftEventID
+	soul.PreviousDraftRef, soul.PreviousDraftEventID = currentDraftRef, currentDraftEventID
+	soul.DraftRef = firstNonEmpty(action.DraftRef, parameterizedCoordinate(domain.KindSoulDraft, draft.CreatedBy, draft.AgentID))
+	soul.DraftEventID, soul.PreviousSpecHash, soul.SpecHash = draft.EventID, previousSpecHash, newSpecHash
+	soul.Name, soul.Purpose, soul.Tier = proposed.Identity.Name, firstNonEmpty(proposed.Identity.Purpose, proposed.Brief), proposed.Identity.Tier
+	soul.NIP05, soul.SoulMD, soul.IdentityMD = proposed.Identity.NIP05, proposed.SoulMD, proposed.IdentityMD
+	soul.AllowedKinds = append([]int(nil), proposed.Permissions.AllowedKinds...)
+	soul.ToolGrants = cloneUpdateToolGrants(proposed.Permissions.ToolGrants)
+	soul.PermissionSpec = proposed.Permissions
+	soul.PermissionSpec.AllowedKinds = append([]int(nil), proposed.Permissions.AllowedKinds...)
+	soul.PermissionSpec.ToolGrants = cloneUpdateToolGrants(proposed.Permissions.ToolGrants)
+	soul.RelayPolicy = proposed.RelayPolicy
+	soul.RelayPolicy.Read = append([]string(nil), proposed.RelayPolicy.Read...)
+	soul.RelayPolicy.Write = append([]string(nil), proposed.RelayPolicy.Write...)
+	soul.RelayPolicy.Control = append([]string(nil), proposed.RelayPolicy.Control...)
+	soul.Workspace, soul.Assets = proposed.Workspace, proposed.Assets
+	if proposed.Runtime.Target != "" {
+		soul.Runtime.Target = proposed.Runtime.Target
+	}
+	if proposed.Runtime.RuntimePubkey != "" {
+		soul.Runtime.RuntimePubkey = proposed.Runtime.RuntimePubkey
+	}
+	if proposed.Runtime.CapabilityRef != "" {
+		soul.Runtime.CapabilityRef = proposed.Runtime.CapabilityRef
+	}
+	applyRuntimeResultsToSoul(soul, applied)
+}
+
+func cloneUpdateToolGrants(grants []domain.ToolGrant) []domain.ToolGrant {
+	out := make([]domain.ToolGrant, len(grants))
+	for i, grant := range grants {
+		out[i] = grant
+		out[i].Scopes = append([]string(nil), grant.Scopes...)
+	}
+	return out
+}
+
+func applyRuntimeResultsToSoul(soul *domain.AgentSoul, applied []map[string]interface{}) {
+	for _, change := range applied {
+		result, _ := change["result"].(map[string]interface{})
+		if result == nil {
+			continue
+		}
+		soul.Runtime.RuntimePubkey = firstNonEmpty(stringResult(result, "runtime_pubkey"), soul.Runtime.RuntimePubkey)
+		soul.Runtime.RuntimeBinding = firstNonEmpty(stringResult(result, "runtime_binding"), soul.Runtime.RuntimeBinding)
+		soul.Runtime.State = firstNonEmpty(stringResult(result, "state"), soul.Runtime.State)
+		soul.Runtime.CapabilityRef = firstNonEmpty(stringResult(result, "capability_ref"), soul.Runtime.CapabilityRef)
+		soul.Runtime.Provider = firstNonEmpty(stringResult(result, "provider"), soul.Runtime.Provider)
+		soul.Runtime.Model = firstNonEmpty(stringResult(result, "model"), soul.Runtime.Model)
+		soul.CapabilityRef = firstNonEmpty(soul.Runtime.CapabilityRef, soul.CapabilityRef)
+	}
 }
 
 func (h *LifecycleHandler) handleHotReload(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error) {
@@ -604,17 +897,7 @@ func applyHotReloadDraftToSoul(soul *domain.AgentSoul, draft *domain.SoulDraft, 
 	if voiceRef := firstNonEmpty(proposed.Assets.VoiceRef, proposed.Voice.PersonaID); voiceRef != "" {
 		soul.Assets.VoiceRef = voiceRef
 	}
-	for _, change := range applied {
-		result, _ := change["result"].(map[string]interface{})
-		if result == nil {
-			continue
-		}
-		soul.Runtime.RuntimePubkey = firstNonEmpty(stringResult(result, "runtime_pubkey"), soul.Runtime.RuntimePubkey)
-		soul.Runtime.RuntimeBinding = firstNonEmpty(stringResult(result, "runtime_binding"), soul.Runtime.RuntimeBinding)
-		soul.Runtime.State = firstNonEmpty(stringResult(result, "state"), soul.Runtime.State)
-		soul.Runtime.CapabilityRef = firstNonEmpty(stringResult(result, "capability_ref"), soul.Runtime.CapabilityRef)
-		soul.CapabilityRef = firstNonEmpty(soul.Runtime.CapabilityRef, soul.CapabilityRef)
-	}
+	applyRuntimeResultsToSoul(soul, applied)
 }
 
 func hotReloadAvatarSection(content domain.SoulDraftContent) map[string]interface{} {
@@ -728,7 +1011,7 @@ func (e *localLifecycleEngine) ExecuteLifecycleAction(ctx context.Context, soul 
 	case domain.SoulActionRedeploy:
 		return e.handleRedeploy(ctx, soul, action)
 	case domain.SoulActionUpdate:
-		return e.handleUpdate(ctx, soul, action)
+		return nil, fmt.Errorf("update is orchestrated by lifecycle handler")
 	case domain.SoulActionHotReload:
 		return nil, fmt.Errorf("hot-reload is orchestrated by lifecycle handler")
 	case domain.SoulActionRollback:
@@ -856,32 +1139,6 @@ func (e *localLifecycleEngine) handleRedeploy(ctx context.Context, soul *domain.
 	return &LifecycleExecutionResult{
 		PublishSoul: true,
 		Data:        map[string]interface{}{"redeploying": true},
-	}, nil
-}
-
-// handleUpdate records additive lifecycle customization refs without invoking
-// runtime adapters. Draft-backed execution is intentionally left to bahia-a1so.3.
-func (e *localLifecycleEngine) handleUpdate(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error) {
-	if action.DraftRef == "" && action.SpecHash == "" {
-		return nil, fmt.Errorf("update requires draft_ref or spec_hash; patch-only updates are not applied in this slice")
-	}
-	if action.DraftRef != "" {
-		soul.DraftRef = action.DraftRef
-	}
-	if action.PreviousSpecHash != "" {
-		soul.PreviousSpecHash = action.PreviousSpecHash
-	}
-	if action.SpecHash != "" {
-		soul.SpecHash = action.SpecHash
-	}
-	return &LifecycleExecutionResult{
-		PublishSoul: true,
-		Data: map[string]interface{}{
-			"updated":            true,
-			"draft_ref":          action.DraftRef,
-			"spec_hash":          action.SpecHash,
-			"previous_spec_hash": action.PreviousSpecHash,
-		},
 	}, nil
 }
 
