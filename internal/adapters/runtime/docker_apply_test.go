@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1149,6 +1150,9 @@ type recordingDockerControlClient struct {
 	connectCalls   []connectCall
 
 	existingContainer *DockerContainer
+	findResults       []*DockerContainer
+	stopErr           error
+	findCalls         int
 }
 
 func (c *recordingDockerControlClient) ExecutionMode() RuntimeExecutionMode {
@@ -1160,6 +1164,15 @@ func (c *recordingDockerControlClient) ExecutionMode() RuntimeExecutionMode {
 
 func (c *recordingDockerControlClient) FindManagedContainer(_ context.Context, spec *domain.DesiredServiceSpec) (*DockerContainer, error) {
 	c.findSpec = spec
+	if len(c.findResults) > 0 {
+		idx := c.findCalls
+		if idx >= len(c.findResults) {
+			idx = len(c.findResults) - 1
+		}
+		c.findCalls++
+		return c.findResults[idx], nil
+	}
+	c.findCalls++
 	return c.existingContainer, nil
 }
 
@@ -1180,7 +1193,7 @@ func (c *recordingDockerControlClient) PullImage(_ context.Context, image string
 
 func (c *recordingDockerControlClient) StopContainer(_ context.Context, containerID string) error {
 	c.stopIDs = append(c.stopIDs, containerID)
-	return nil
+	return c.stopErr
 }
 
 func (c *recordingDockerControlClient) RemoveContainer(_ context.Context, containerID string) error {
@@ -1239,6 +1252,50 @@ func TestApplyDesiredState_DelegatesMutationsToControlClient(t *testing.T) {
 	}
 	if len(result.ResourceIDs) != 1 || result.ResourceIDs[0] != "delegated-container" {
 		t.Fatalf("resource IDs = %v, want [delegated-container]", result.ResourceIDs)
+	}
+}
+
+func TestApplyDesiredState_ContinuesWhenStopErrorLeavesContainerExited(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	running := &DockerContainer{
+		ID:    "old-container",
+		State: "running",
+		Labels: map[string]string{
+			"bahia.service_id":     testServiceID.String(),
+			"bahia.environment_id": testEnvironmentID.String(),
+			"bahia.desired_hash":   "sha256:old-hash",
+		},
+	}
+	exited := &DockerContainer{
+		ID:     "old-container",
+		State:  "exited",
+		Labels: running.Labels,
+	}
+	control := &recordingDockerControlClient{
+		findResults: []*DockerContainer{running, exited},
+		stopErr:     errors.New("stopping container: context deadline exceeded"),
+	}
+	observer := &DockerObserver{logger: zap.NewNop(), controlClient: control}
+
+	result, err := observer.ApplyDesiredState(context.Background(), applyTestRequest(spec))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if control.findCalls != 2 {
+		t.Fatalf("managed container lookups = %d, want 2", control.findCalls)
+	}
+	if len(control.stopIDs) != 1 || control.stopIDs[0] != "old-container" {
+		t.Fatalf("stop IDs = %v, want [old-container]", control.stopIDs)
+	}
+	if len(control.removeIDs) != 1 || control.removeIDs[0] != "old-container" {
+		t.Fatalf("remove IDs = %v, want [old-container]", control.removeIDs)
+	}
+	if len(control.createNames) != 1 || len(control.startIDs) != 1 {
+		t.Fatalf("create/start calls = %v/%v, want one each", control.createNames, control.startIDs)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "continuing remove/create") {
+		t.Fatalf("warnings = %v, want stop recovery warning", result.Warnings)
 	}
 }
 
