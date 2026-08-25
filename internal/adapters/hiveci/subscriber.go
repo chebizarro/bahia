@@ -301,11 +301,20 @@ func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID stri
 		return
 	}
 	for _, result := range orphans {
-		if _, trusted := s.trusted[result.PublisherPubkey]; !trusted {
+		run, err := s.repo.GetRunByEventID(ctx, runEventID)
+		if err != nil {
+			s.logger.Warn("failed to load hiveci workflow run for orphaned result", zap.String("run_event_id", runEventID), zap.Error(err))
+			continue
+		}
+		if run == nil || result.PublisherPubkey != run.PublisherPubkey {
+			expected := ""
+			if run != nil {
+				expected = run.PublisherPubkey
+			}
 			s.logger.Warn("orphaned result publisher mismatch, rejecting",
 				zap.String("run_event_id", runEventID),
 				zap.String("result_event_id", result.ResultEventID),
-				zap.String("expected", "trusted CI publisher"),
+				zap.String("expected", expected),
 				zap.String("actual", result.PublisherPubkey))
 			_ = s.repo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
 			continue
@@ -338,10 +347,6 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		return
 	}
 	pubkey := nostrutil.EventPubKeyHex(ev)
-	if _, trusted := s.trusted[pubkey]; !trusted {
-		s.logger.Debug("ignoring untrusted hiveci workflow result", zap.String("event_id", eventID), zap.String("pubkey", pubkey))
-		return
-	}
 	runEventID, err := requiredTag(ev, "e")
 	if err != nil {
 		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
@@ -385,6 +390,15 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	run, err := s.repo.GetRunByEventID(ctx, runEventID)
 	if err != nil {
 		s.logger.Warn("failed to load hiveci workflow run for result", zap.String("run_event_id", runEventID), zap.Error(err))
+		return
+	}
+	if run != nil && pubkey != run.PublisherPubkey {
+		s.logger.Warn("hiveci workflow result publisher mismatch, rejecting",
+			zap.String("run_event_id", runEventID),
+			zap.String("result_event_id", eventID),
+			zap.String("expected", run.PublisherPubkey),
+			zap.String("actual", pubkey))
+		_ = s.repo.UpdateResultState(ctx, eventID, domain.HiveCIProcessingStateRejected)
 		return
 	}
 

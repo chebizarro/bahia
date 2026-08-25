@@ -25,6 +25,10 @@ type artifactRegistry interface {
 	CreateDeploymentIntent(context.Context, *domain.DeploymentIntent) error
 }
 
+type desiredStateBuilder interface {
+	BuildDesiredStateSnapshot(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *uuid.UUID) (*domain.DesiredServiceSpec, error)
+}
+
 // Bridge orchestrates trusted Hive-CI result -> Bahia build/artifact
 // registration. Automatic processing and the signer-first build-result action
 // share this implementation, so retries cannot create parallel artifacts.
@@ -38,8 +42,8 @@ type Bridge struct {
 	ociRegistry       repository.OCIRegistryRepository
 	registryInspector registryadapter.ImageInspector
 	registry          artifactRegistry
+	desiredState      desiredStateBuilder
 	logger            *zap.Logger
-	trustedCI         map[string]struct{}
 	autoRegister      bool
 }
 
@@ -57,13 +61,6 @@ func NewBridge(
 	autoRegister bool,
 	logger *zap.Logger,
 ) *Bridge {
-	trusted := make(map[string]struct{}, len(trustedCIPubkeys))
-	for _, pk := range trustedCIPubkeys {
-		pk = strings.TrimSpace(pk)
-		if pk != "" {
-			trusted[pk] = struct{}{}
-		}
-	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -72,7 +69,13 @@ func NewBridge(
 		artifactRepo: artifactRepo, intentRepo: intentRepo, envRepo: envRepo,
 		ociRegistry: ociRegistry, registryInspector: registryInspector,
 		registry: registry, logger: logger.Named("pipeline-bridge"),
-		trustedCI: trusted, autoRegister: autoRegister,
+		autoRegister: autoRegister,
+	}
+}
+
+func (b *Bridge) SetDesiredStateBuilder(builder desiredStateBuilder) {
+	if b != nil {
+		b.desiredState = builder
 	}
 }
 
@@ -136,13 +139,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 		)
 		return nil, nil
 	}
-	if _, ok := b.trustedCI[run.PublisherPubkey]; !ok {
+	if result.PublisherPubkey != run.PublisherPubkey {
 		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
-		return nil, fmt.Errorf("HiveCI run publisher is not trusted")
-	}
-	if _, ok := b.trustedCI[result.PublisherPubkey]; !ok {
-		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
-		return nil, fmt.Errorf("HiveCI result publisher is not trusted")
+		return nil, fmt.Errorf("HiveCI result publisher does not match run publisher")
 	}
 
 	build := expectedBuild
@@ -420,9 +419,27 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 		approval = domain.ApprovalStatusPending
 		status = domain.IntentStatusPending
 	}
+	var deploymentUnitID *uuid.UUID
+	var desiredState *domain.DesiredServiceSpec
+	var desiredHash string
+	if b.desiredState != nil {
+		snapshot, err := b.desiredState.BuildDesiredStateSnapshot(ctx, policy.ServiceID, env.ID, artifact.ID, nil)
+		if err != nil {
+			return fmt.Errorf("build staging desired state: %w", err)
+		}
+		if snapshot == nil {
+			return fmt.Errorf("build staging desired state: empty snapshot")
+		}
+		deploymentUnitID = snapshot.DeploymentUnitID
+		desiredState = snapshot
+		desiredHash = snapshot.DesiredHash
+	}
 	intent := &domain.DeploymentIntent{
 		ServiceID: policy.ServiceID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
-		RequestedBy: "hive-ci-bridge", SourceKind: domain.SourceKindEventTriggered,
+		DeploymentUnitID: deploymentUnitID,
+		DesiredState:     desiredState,
+		DesiredHash:      desiredHash,
+		RequestedBy:      "hive-ci-bridge", SourceKind: domain.SourceKindEventTriggered,
 		ApprovalStatus: approval, Status: status,
 		Metadata: map[string]any{"hive_ci_result_event_id": result.ResultEventID},
 	}
