@@ -543,7 +543,7 @@
             {#if editingSection === 'avatar'}
               <AvatarStudio bind:value={customizationDraft} showAdvanced={true} />
             {:else if editingSection === 'voice'}
-              <VoiceStudio bind:value={customizationDraft} assetRef={soul.assets?.voice_ref || ''} showAdvanced={true} />
+              <VoiceStudio bind:value={customizationDraft} assetRef={soul.assets?.voice_ref || ''} showAdvanced={true} {soul} />
             {:else if editingSection === 'memory'}
               <MemoryConfig bind:value={customizationDraft} showAdvanced={true} {soul} />
             {:else if editingSection === 'persona'}
@@ -628,6 +628,7 @@
         <!-- Permissions Section -->
         <section class="info-section wide">
           <h3><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Permissions</h3>
+          <p class="policy-warning"><strong>Runtime enforcement note:</strong> allowed event kinds are provisioned into Signet policy. Tool grants and approval policy are signed draft intent; the owned OpenClaw wrapper does not yet translate them into tools, MCP, or plugin enforcement.</p>
           
           <div class="permissions-grid">
             <div class="perm-group">
@@ -1113,6 +1114,17 @@
   }
   
   /* Permissions */
+  .policy-warning {
+    margin: 0 0 1rem;
+    padding: 0.75rem;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--warning);
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
   .permissions-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

@@ -232,6 +232,19 @@ Open **Settings → OpenClaw Fleet** at `/settings/fleet` to edit and publish th
 
 During provisioning, the reactor selects the newest valid event signed by a pubkey in `soul_factory.authorized_pubkeys`. The OpenClaw wrapper deep-merges fleet template → per-agent runtime/relay settings → wrapper-owned workspace, account binding, Nostr enablement, and file-backed secrets. The three `OPENCLAW_SOULFACTORY_DEFAULT_*` variables remain fallbacks when the fleet document omits their corresponding defaults. Replacing kind `31953` affects later provisions; it does not fan out changes to existing agents.
 
+## Per-agent runtime customization
+
+The new-soul Runtime panel accepts an optional agent LLM model. Leave it blank to inherit the model from the fleet snapshot pinned for that provisioning request, then from the wrapper environment fallback. Entering a value writes `runtime.model` into the signed draft and passes that override to OpenClaw's `agents add --model` flow.
+
+For dedicated OpenClaw agents, provision-time rendering deep-merges the draft's memory settings into `agents.defaults.memorySearch` and its voice mapping into the OpenClaw TTS section. Embedding provider/model, retrieval limits and threshold, auto-index/session behavior, and native reranking intent override overlapping fleet values. Retention days and the selected reranker model remain in Bahia's normalized runtime metadata when OpenClaw has no corresponding native key.
+
+The creation wizard is explicit about controls that do not have an interactive runtime path:
+
+- Browser-local avatar files cannot be attached because Bahia has no durable web Blossom-upload endpoint. Use a durable `blossom:` or HTTPS asset reference; the UI never saves `blob:` URLs.
+- Generate Avatar and Play Sample are disabled unless the page has a runtime dispatcher. Their configuration is still saved to the draft and applied during provisioning.
+- Reindex is available only on a deployed soul and completes only when runtime progress/result events confirm it.
+- Tool grants and approval policy are signed control-plane intent. The owned OpenClaw wrapper does not currently translate them into OpenClaw tools, MCP, or plugin enforcement.
+
 ## Nostr-First Provisioning Flow
 
 Soul creation is signer-first and event-driven:
@@ -331,7 +344,7 @@ Check `GET /ready` and find `signet-soulfactory`. Its `state`, `last_error`, `la
 
 ### Avatar Generation Fails
 
-Avatar is optional — a placeholder is used if generation fails. Check ComfyUI/Lemmy availability.
+Interactive generation requires a configured runtime avatar provider; check ComfyUI/Lemmy availability and the runtime's advertised methods. Browser file upload is intentionally disabled until a durable web Blossom upload endpoint is configured, so use a durable `blossom:` or HTTPS avatar reference instead.
 
 ### Soul Not Appearing
 

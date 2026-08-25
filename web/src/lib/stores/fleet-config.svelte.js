@@ -133,6 +133,12 @@ export function createFleetConfigStore({
       state.error = 'Sign in with a trusted fleet operator to load fleet configuration.';
       return () => {};
     }
+    const currentAuthor = String(state.event?.pubkey || '').trim().toLowerCase();
+    if (currentAuthor && currentAuthor !== author) {
+      state.event = null;
+      state.document = null;
+      state.publishResults = [];
+    }
     state.loading = true;
     state.error = '';
     const unsubscribe = client.subscribe([{

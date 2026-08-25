@@ -82,3 +82,40 @@ Notes:
 - The OpenClaw bridge now implements `soulfactory.config.reload` for supported managed-agent patches and resolved-spec syncs.
 - Runtime patching writes `agents.list` with `afterWrite: { mode: "auto" }`; OpenClaw's reload planner treats `agents.list` as a hot path rather than a gateway/session restart path.
 - Verification is unit-level for the OpenClaw bridge behavior; a full gateway reload integration test remains outside this slice.
+
+## Phase 3 runtime configuration evidence — 2026-08-24
+
+Beads issue: `bahia-ee84m`.
+
+The OpenClaw provisioner now deep-merges validated per-agent memory and voice draft settings after the fleet snapshot and before wrapper-owned runtime keys. Memory is emitted at `agents.defaults.memorySearch`, voice/TTS at `messages.tts`, and portable retention/reranker intent is retained in `bahia-runtime.json` without inventing unsupported OpenClaw keys. The creation wizard also supports an optional `runtime.model` override while leaving a blank value to inherit fleet/runtime defaults.
+
+Focused Go coverage:
+
+- `TestFleetConfigMergePrecedenceAndDefaults` verifies fleet → agent → wrapper precedence, preservation of unrelated fleet fields, memory/TTS placement, and portable-only retention/reranker metadata.
+- `TestProvisionRejectsInvalidDraftMemoryBeforeRuntimeMutation` verifies invalid customization input fails before runtime commands or orchestration begin.
+
+Honesty and durability coverage:
+
+- Browser-local avatar blob URLs and the unsupported file-upload control were removed; operators may enter an existing durable Blossom/HTTPS reference.
+- Pre-deployment avatar generation, voice playback, and memory reindex actions are gated with explicit availability hints.
+- Tool grants and approval policy are labeled as signed draft intent rather than claimed OpenClaw enforcement across create, detail, and edit views.
+- Fleet configuration state resets when the authenticated operator changes.
+
+Commands run from `/Users/bizarro/Documents/Projects/bahia`:
+
+```text
+go build ./...
+# passed
+
+go test ./internal/soulfactory/...
+ok  github.com/openagentsinc/bahia/internal/soulfactory
+ok  github.com/openagentsinc/bahia/internal/soulfactory/openclawcontrol
+ok  github.com/openagentsinc/bahia/internal/soulfactory/saga
+
+cd web && npm test
+Test Files  90 passed (90)
+Tests       687 passed (687)
+
+cd web && npm run lint
+svelte-check found 0 errors and 0 warnings
+```

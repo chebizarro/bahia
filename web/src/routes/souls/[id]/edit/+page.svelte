@@ -262,6 +262,7 @@
         <label>Allowed Nostr kinds<input bind:value={allowedKinds} /></label>
         <label>Tool grants<textarea rows="3" bind:value={toolGrants} placeholder="mcp-server: read, write"></textarea></label>
         <label>Approval policy<input bind:value={approvalPolicy} /></label>
+        <div class="warning"><strong>Saved to draft — runtime enforcement varies.</strong> Allowed kinds are provisioned into Signet policy. Tool grants and approval policy remain signed intent; the owned OpenClaw wrapper does not yet translate them into tools, MCP, or plugin enforcement.</div>
       </section>
 
       <section>

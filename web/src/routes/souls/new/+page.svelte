@@ -27,6 +27,7 @@
   } from '$lib/stores/souls.js';
   import { customizationPresets } from '$lib/data/customization-presets';
   import { authState, initializeAuth, login, refreshExtensionStatus } from '$lib/stores/auth.js';
+  import { fleetConfigStore } from '$lib/stores/fleet-config.svelte.js';
   import {
     capabilityLabel,
     capabilityRef,
@@ -66,6 +67,7 @@
   let selectedTemplate = $state(null);
   let selectedRepository = $state(null);
   let selectedCapabilityRef = $state('');
+  let runtimeModel = $state('');
   let selectedPresetId = $state('');
   let cloneSoulId = $state('');
 
@@ -112,6 +114,12 @@
   let userPubkey = $derived(authState.pubkey);
   let runtimeChoices = $derived(compatibleCapabilities(runtimeCapabilities, SOUL_RUNTIME_METHODS.PROVISION));
   let selectedCapability = $derived(runtimeChoices.find((capability) => capabilityMatchesRef(capability, selectedCapabilityRef)) || null);
+  let fleetDefaultModel = $derived(
+    String(fleetConfigStore.state.event?.pubkey || '').toLowerCase() === String(userPubkey || '').toLowerCase()
+      ? String(fleetConfigStore.state.document?.defaults?.model || '').trim()
+      : ''
+  );
+  let runtimeModelPlaceholder = $derived(fleetDefaultModel || 'Inherit fleet/runtime environment default');
   let showAdvanced = $derived(disclosureMode === 'advanced');
   let activeTabIndex = $derived(customizationTabs.findIndex((tab) => tab.id === activeTab));
   let previewDraftContent = $derived(buildDraftContent());
@@ -122,6 +130,13 @@
     if (runtimeChoices.length > 0 && (!selectedCapabilityRef || !selectedCapability)) {
       selectedCapabilityRef = capabilityRef(runtimeChoices[0]);
     }
+  });
+
+  $effect(() => {
+    const authenticated = authState.status === 'authenticated';
+    const operatorPubkey = String(authState.pubkey || '').trim();
+    if (!authenticated || !operatorPubkey) return;
+    return untrack(() => fleetConfigStore.subscribe());
   });
 
   $effect(() => {
@@ -191,6 +206,7 @@
     if (content.avatar) avatarSpec = createDefaultAvatarSpec(mergeSpec(avatarSpec, content.avatar));
     if (content.voice) voiceSpec = createDefaultVoiceSpec(mergeSpec(voiceSpec, content.voice));
     if (content.memory) memorySpec = createDefaultMemorySpec(mergeSpec(memorySpec, content.memory));
+    if (typeof content.runtime?.model === 'string') runtimeModel = content.runtime.model;
   }
 
   function handleTemplateSelect(template) {
@@ -261,6 +277,7 @@
     if (content.memory) memorySpec = createDefaultMemorySpec(content.memory);
 
     if (content.runtime?.capability_ref) selectedCapabilityRef = content.runtime.capability_ref;
+    runtimeModel = typeof content.runtime?.model === 'string' ? content.runtime.model : '';
 
     draftEventId = draft.id || '';
     draftSpecHash = draft.specHash || content.spec_hash || '';
@@ -308,7 +325,8 @@
       runtime: {
         target: selectedCapability?.runtime || '',
         runtime_pubkey: selectedCapability?.pubkey || '',
-        capability_ref: selectedCapability ? capabilityRef(selectedCapability) : ''
+        capability_ref: selectedCapability ? capabilityRef(selectedCapability) : '',
+        ...(runtimeModel.trim() ? { model: runtimeModel.trim() } : {})
       },
       permissions: {
         allowed_kinds: parseKindList(allowedKinds),
@@ -700,6 +718,10 @@
                   <span>capability: {capabilityRef(selectedCapability)}</span>
                 </div>
               {/if}
+              <label>Agent LLM model
+                <input id="runtimeModel" bind:value={runtimeModel} placeholder={runtimeModelPlaceholder} />
+                <small>Leave blank to inherit the fleet snapshot default, then the runtime environment default. An explicit value is saved as <code>runtime.model</code> and passed to <code>agents add --model</code>.</small>
+              </label>
             </div>
 
             <div class="form-section">
@@ -707,6 +729,10 @@
               <label>Allowed Nostr kinds<input bind:value={allowedKinds} placeholder="1, 3, 31951" /></label>
               <label>Tool grants<textarea rows="3" bind:value={toolGrants} placeholder="mcp-server: read, write"></textarea></label>
               <label>Approval policy<select bind:value={approvalPolicy}><option value="operator">Operator approval</option><option value="auto-safe">Auto-approve safe tools</option><option value="manual">Manual only</option></select></label>
+              <div class="warning-box draft-only-warning">
+                <p><strong>Saved to draft — runtime enforcement varies.</strong></p>
+                <p>Allowed kinds are applied to Signet policy during provisioning. Tool grants and approval policy remain signed control-plane intent; the owned OpenClaw wrapper does not yet translate them into OpenClaw tools, MCP, or plugin enforcement.</p>
+              </div>
             </div>
 
             {#if showAdvanced}
@@ -759,7 +785,7 @@
         <article><span>Voice</span><strong>{previewDraftContent.voice?.provider || 'unset'}</strong><p>{previewDraftContent.voice?.persona?.label || previewDraftContent.assets.voice_ref || 'No voice label'}</p></article>
         <article><span>Memory</span><strong>{previewDraftContent.memory?.strategy || 'unset'}</strong><p>{previewDraftContent.memory?.embedding_provider || 'No provider'} · top {previewDraftContent.memory?.search?.top_k || 0}</p></article>
         <article><span>Personality</span><strong>{previewDraftContent.persona?.style || 'unset'}</strong><p>{previewDraftContent.persona?.traits?.join(', ') || 'No traits'}</p></article>
-        <article><span>Runtime</span><strong>{previewDraftContent.runtime.target || 'No runtime'}</strong><p>{previewDraftContent.runtime.capability_ref || 'No capability selected'}</p></article>
+        <article><span>Runtime</span><strong>{previewDraftContent.runtime.target || 'No runtime'}</strong><p>{previewDraftContent.runtime.model || fleetDefaultModel || 'Fleet/runtime default model'} · {previewDraftContent.runtime.capability_ref || 'No capability selected'}</p></article>
       </div>
 
       <details class="draft-json" open>
@@ -845,6 +871,8 @@
   .warning-box p { margin: 0 0 0.5rem; color: inherit; }
   .warning-box p:last-of-type { margin-bottom: 0.75rem; }
   .warning-box button { margin-top: 0.25rem; }
+  .draft-only-warning { margin: 0; }
+  .draft-only-warning p:last-child { margin-bottom: 0; }
   .runtime-summary { display: grid; gap: 0.35rem; background: var(--bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; font-size: 0.82rem; color: var(--text-muted); }
   .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
   .preview-grid article { background: var(--bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 0.85rem; display: grid; gap: 0.25rem; min-width: 0; }

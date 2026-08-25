@@ -728,6 +728,22 @@ func TestFleetConfigMergePrecedenceAndDefaults(t *testing.T) {
 		"nip46_client": secretPath,
 	}
 	invocation.Params["relay_policy"].(map[string]interface{})["control"] = []interface{}{}
+	invocation.Params["memory"] = map[string]interface{}{
+		"embedding_provider": "openai",
+		"embedding_model":    "text-embedding-3-small",
+		"strategy":           "session-aware",
+		"auto_index":         true,
+		"retention_days":     45,
+		"search": map[string]interface{}{
+			"top_k": 8, "score_threshold": 0.77, "rerank": true, "rerank_model": "rerank-v3.5",
+		},
+	}
+	invocation.Params["voice"] = map[string]interface{}{
+		"provider": "openai-tts", "persona_id": "alloy", "auto_mode": "tagged",
+		"providers": map[string]interface{}{
+			"openai-tts": map[string]interface{}{"model": "gpt-4o-mini-tts", "voice": "alloy"},
+		},
+	}
 	invocation.Params["fleet_config"] = soulfactory.FleetConfigSnapshot{
 		Coordinate: "31953:operator:soulfactory-fleet-config/v1",
 		EventID:    "fleet-event", Author: "operator", CreatedAt: 1715600000,
@@ -743,7 +759,18 @@ func TestFleetConfigMergePrecedenceAndDefaults(t *testing.T) {
 					"model":          map[string]interface{}{"primary": "template/model"},
 					"workspace":      "/fleet/workspace",
 					"contextPruning": map[string]interface{}{"mode": "cache-ttl"},
+					"memorySearch": map[string]interface{}{
+						"provider": "voyage", "model": "fleet-embed", "fallback": "local",
+						"query": map[string]interface{}{"maxResults": 3, "customFleetField": true},
+					},
 				}},
+				"messages": map[string]interface{}{
+					"ackReaction": "✅",
+					"tts": map[string]interface{}{
+						"mode": "final", "provider": "elevenlabs",
+						"providers": map[string]interface{}{"elevenlabs": map[string]interface{}{"baseUrl": "https://voice.example"}},
+					},
+				},
 				"channels": map[string]interface{}{"nostr": map[string]interface{}{
 					"enabled": false, "defaultAccount": "fleet-account", "dmPolicy": "allowlist",
 					"relays": []interface{}{"wss://fleet.example"}, "privateKey": "${NOSTR_PRIVATE_KEY}",
@@ -794,6 +821,37 @@ func TestFleetConfigMergePrecedenceAndDefaults(t *testing.T) {
 		defaults["contextPruning"].(map[string]interface{})["mode"] != "cache-ttl" {
 		t.Fatalf("agent/default merge precedence = %#v", defaults)
 	}
+	memorySearch := defaults["memorySearch"].(map[string]interface{})
+	query := memorySearch["query"].(map[string]interface{})
+	if memorySearch["provider"] != "openai" || memorySearch["model"] != "text-embedding-3-small" ||
+		memorySearch["fallback"] != "local" || query["maxResults"].(float64) != 8 ||
+		query["minScore"].(float64) != 0.77 || query["customFleetField"] != true ||
+		query["hybrid"].(map[string]interface{})["mmr"].(map[string]interface{})["enabled"] != true {
+		t.Fatalf("memory merge precedence = %#v", memorySearch)
+	}
+	messages := config["messages"].(map[string]interface{})
+	tts := messages["tts"].(map[string]interface{})
+	if messages["ackReaction"] != "✅" || tts["mode"] != "final" || tts["provider"] != "openai-tts" ||
+		tts["auto"] != "tagged" || tts["persona"] != "alloy" {
+		t.Fatalf("TTS merge precedence = %#v", messages)
+	}
+	ttsProviders := tts["providers"].(map[string]interface{})
+	if ttsProviders["elevenlabs"].(map[string]interface{})["baseUrl"] != "https://voice.example" ||
+		ttsProviders["openai-tts"].(map[string]interface{})["model"] != "gpt-4o-mini-tts" {
+		t.Fatalf("TTS provider merge = %#v", ttsProviders)
+	}
+	if strings.Contains(string(data), "retention_days") || strings.Contains(string(data), "rerank_model") {
+		t.Fatalf("portable-only memory fields leaked into OpenClaw config: %s", data)
+	}
+	metadata, ok, err := readJSONFile[map[string]interface{}](paths.RuntimeMetadata)
+	if err != nil || !ok {
+		t.Fatalf("read runtime metadata: ok=%v err=%v", ok, err)
+	}
+	memoryMetadata := metadata["soulfactory"].(map[string]interface{})["memory_config"].(map[string]interface{})
+	if memoryMetadata["retention_days"].(float64) != 45 ||
+		memoryMetadata["search"].(map[string]interface{})["rerank_model"] != "rerank-v3.5" {
+		t.Fatalf("portable memory metadata = %#v", memoryMetadata)
+	}
 	nostrConfig := config["channels"].(map[string]interface{})["nostr"].(map[string]interface{})
 	if nostrConfig["enabled"] != true || nostrConfig["defaultAccount"] != "account-alice" ||
 		nostrConfig["dmPolicy"] != "contacts" || !reflect.DeepEqual(stringSlice(nostrConfig["relays"]), []string{"wss://fleet.example"}) {
@@ -826,6 +884,36 @@ func TestFleetConfigMergePrecedenceAndDefaults(t *testing.T) {
 	}
 	if entries["nostr"].(map[string]interface{})["enabled"] != true {
 		t.Fatalf("wrapper-required plugin was not enabled: %#v", entries)
+	}
+}
+
+func TestProvisionRejectsInvalidDraftMemoryBeforeRuntimeMutation(t *testing.T) {
+	root := t.TempDir()
+	runner := &recordingRunner{}
+	orchestrator := &recordingOrchestrator{}
+	executor, err := New(Config{
+		Root: root, OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		RequiredPlugins: []string{"nostr=npm:openclaw-nostr@1.0.0"},
+		Runner:          runner, Orchestrator: orchestrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := testProvisionInvocation("agent-invalid-memory", "sha256:invalid-memory")
+	invocation.Params["memory"] = map[string]interface{}{
+		"embedding_provider": "unsupported-provider",
+		"strategy":           "session-aware",
+		"search":             map[string]interface{}{"top_k": 101},
+	}
+
+	outcome := executor.Execute(t.Context(), invocation)
+	if outcome.Status != StatusFailed || outcome.Error == nil ||
+		!strings.Contains(outcome.Error.Message, "map draft memory config") {
+		t.Fatalf("invalid memory outcome = %+v", outcome)
+	}
+	if len(runner.calls) != 0 || len(orchestrator.reconciles) != 0 {
+		t.Fatalf("invalid memory mutated runtime: calls=%#v reconciles=%#v", runner.calls, orchestrator.reconciles)
 	}
 }
 

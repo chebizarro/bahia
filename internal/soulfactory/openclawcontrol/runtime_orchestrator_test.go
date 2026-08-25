@@ -110,7 +110,7 @@ func TestRuntimeNamesAndComposeAreDeterministicIsolatedAndSecretSafe(t *testing.
 			t.Fatal(err)
 		}
 	}
-	if err := executor.renderRuntimeFiles(invocation, spec, paths); err != nil {
+	if err := executor.renderRuntimeFiles(t.Context(), invocation, spec, paths); err != nil {
 		t.Fatalf("render runtime files: %v", err)
 	}
 	configBytes, err := os.ReadFile(paths.RuntimeConfig)

@@ -24,7 +24,6 @@
   let generationMessage = $state('');
   let generationError = $state('');
   let zoomPreview = $state(false);
-  let uploadName = $state('');
   let history = $state([]);
 
   const spec = $derived(value || defaultAvatarSpec());
@@ -42,7 +41,8 @@
     height: Number(generation.height || 512) < 128 ? 'Height must be at least 128px.' : ''
   });
   const hasValidationErrors = $derived(Object.values(validationErrors).some(Boolean));
-  const canGenerate = $derived(!disabled && !generating && !hasValidationErrors);
+  const hasInteractiveGenerator = $derived(typeof onGenerate === 'function');
+  const canGenerate = $derived(hasInteractiveGenerator && !disabled && !generating && !hasValidationErrors);
 
   function defaultAvatarSpec(overrides = {}) {
     return {
@@ -109,10 +109,7 @@
 
     try {
       const request = normalizedSpec({ current: 'generated' });
-      let result = null;
-      if (onGenerate) {
-        result = await onGenerate(request);
-      }
+      const result = await onGenerate(request);
 
       const generatedRef = result?.ref || result?.avatar_ref || result?.avatarRef || result?.generated_ref || '';
       if (generatedRef) {
@@ -120,9 +117,7 @@
         generationMessage = 'Generation result received.';
       } else {
         patch({ current: 'generated' });
-        generationMessage = onGenerate
-          ? 'Generation request sent. Waiting for runtime result events.'
-          : 'Avatar draft is ready. Save this draft to publish runtime control through SoulFactory.';
+        generationMessage = 'Generation request sent. Waiting for runtime result events.';
       }
     } catch (err) {
       generationError = err.message || 'Avatar generation request failed';
@@ -130,14 +125,6 @@
     } finally {
       generating = false;
     }
-  }
-
-  function handleUpload(event) {
-    const file = event.currentTarget.files?.[0];
-    if (!file) return;
-    const ref = URL.createObjectURL(file);
-    uploadName = file.name;
-    patch({ uploaded_ref: ref, current: 'uploaded' });
   }
 
   function selectHistory(ref) {
@@ -201,11 +188,12 @@
 
       <div class="action-row">
         <button type="button" class="btn-primary" disabled={!canGenerate} onclick={generateAvatar}>{#if generating}<span class="spinner" aria-hidden="true"></span>{/if}{generating ? 'Generating…' : 'Generate avatar'}</button>
-        <label class="upload-button">
-          Upload image
-          <input type="file" accept="image/*" disabled={disabled || generating} onchange={handleUpload} />
-        </label>
+        <button type="button" class="upload-button" disabled title="Durable browser uploads require a web Blossom upload endpoint">Upload image</button>
       </div>
+      {#if !hasInteractiveGenerator}
+        <small>Interactive generation is unavailable on this page. The prompt is saved to the draft and applied during provisioning when the runtime supports avatar generation.</small>
+      {/if}
+      <small>Local image upload is not yet supported because the web app has no durable Blossom upload endpoint. Paste a durable <code>blossom:</code> or HTTPS asset reference below instead.</small>
 
       {#if generationMessage}
         <div class="status-message">{generationMessage}</div>
@@ -218,8 +206,7 @@
         <label>Use ref<select value={currentMode} disabled={disabled || generating} onchange={(event) => patch({ current: event.currentTarget.value })}><option value="generated">Generated</option><option value="uploaded">Uploaded</option></select></label>
         <label>Generated ref<input value={spec.generated_ref || ''} disabled={disabled || generating} oninput={(event) => patch({ generated_ref: event.currentTarget.value })} placeholder="blossom:… or https://…" /></label>
       </div>
-      <label>Uploaded/blob ref<input value={spec.uploaded_ref || ''} disabled={disabled || generating} oninput={(event) => patch({ uploaded_ref: event.currentTarget.value })} placeholder="blob:, blossom:, https://…" /></label>
-      {#if uploadName}<small>Selected upload: {uploadName}</small>{/if}
+      <label>Uploaded asset ref<input value={spec.uploaded_ref || ''} disabled={disabled || generating} oninput={(event) => patch({ uploaded_ref: event.currentTarget.value })} placeholder="blossom:… or https://…" /></label>
 
       {#if showAdvanced}
         <div class="advanced-box">
@@ -289,7 +276,6 @@
   .mini-button, .btn-primary, .upload-button { border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; padding: 0.55rem 0.75rem; font: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
   .btn-primary { background: var(--primary); color: white; border-color: var(--primary); }
   .mini-button, .upload-button { background: transparent; color: var(--text-muted); }
-  .upload-button input { display: none; }
   .advanced-box, .preview-card { border: 1px dashed var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
   .preview-card { align-content: start; min-width: 0; }
   .preview-frame { aspect-ratio: 1; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg); display: grid; place-items: center; overflow: hidden; color: var(--text-muted); text-align: center; padding: 0.75rem; }
@@ -305,7 +291,7 @@
   .validation-error { color: #ef4444; }
   .spinner { width: 0.9rem; height: 0.9rem; border: 2px solid rgba(255,255,255,0.45); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  button:disabled, input:disabled, select:disabled, textarea:disabled, .upload-button:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
+  button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: 0.55; cursor: not-allowed; }
   @media (max-width: 1024px) { .studio-grid { grid-template-columns: minmax(0, 1fr) 240px; } }
   @media (max-width: 760px) { .studio-grid, .two-col, .preset-grid { grid-template-columns: 1fr; } .panel-header, .preview-header, .action-row, .error-message { flex-direction: column; align-items: stretch; } }
 </style>

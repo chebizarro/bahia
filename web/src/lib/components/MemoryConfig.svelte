@@ -46,6 +46,11 @@
   const hasValidationErrors = $derived(Object.values(validationErrors).some(Boolean));
   const canReindex = $derived(Boolean(soul) && !disabled && !reindexing && !hasValidationErrors);
 
+  $effect(() => () => {
+    stopTracking?.();
+    stopTracking = null;
+  });
+
   function patch(updates) {
     value = createDefaultMemorySpec({
       ...(value || {}),
@@ -269,7 +274,8 @@
       </div>
       {#if reindexMessage}<div class="status-message">{reindexMessage}</div>{/if}
       {#if reindexError}<div class="error-message"><span>{reindexError}</span><button type="button" disabled={!canReindex} onclick={triggerReindex}>Retry</button></div>{/if}
-      {#if !soul}<small>Save or open a deployed soul to trigger runtime reindexing.</small>{/if}
+      {#if !soul}<small>Reindex is available only for a deployed soul. These memory settings are saved to the draft and applied on provision.</small>{/if}
+      <small>Relay acceptance confirms publication only; native indexing starts only when the selected runtime reports progress/result events.</small>
     </div>
   </div>
 </section>

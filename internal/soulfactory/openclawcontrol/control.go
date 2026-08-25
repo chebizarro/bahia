@@ -561,6 +561,36 @@ func mergeObjects(base, patch map[string]interface{}) map[string]interface{} {
 	return base
 }
 
+func decodeDraftSection(params map[string]interface{}, name string, destination interface{}) (bool, error) {
+	raw, ok := params[name]
+	if !ok || raw == nil {
+		return false, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return false, fmt.Errorf("marshal draft %s config: %w", name, err)
+	}
+	if err := json.Unmarshal(data, destination); err != nil {
+		return false, fmt.Errorf("parse draft %s config: %w", name, err)
+	}
+	return true, nil
+}
+
+func jsonObject(value interface{}, description string) (map[string]interface{}, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", description, err)
+	}
+	var object map[string]interface{}
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", description, err)
+	}
+	if object == nil {
+		return nil, fmt.Errorf("%s must be an object", description)
+	}
+	return object, nil
+}
+
 func fleetConfigSnapshotFromParams(params map[string]interface{}) (*soulfactory.FleetConfigSnapshot, error) {
 	raw, ok := params["fleet_config"]
 	if !ok || raw == nil {
@@ -840,7 +870,7 @@ func (e *Executor) provision(ctx context.Context, invocation soulfactory.OpenCla
 	if err := e.renderProvisionWorkspace(invocation, paths); err != nil {
 		return failed(ErrorExecutionFailed, err.Error(), true, nil)
 	}
-	if err := e.renderRuntimeFiles(invocation, spec, paths); err != nil {
+	if err := e.renderRuntimeFiles(ctx, invocation, spec, paths); err != nil {
 		return failed(ErrorExecutionFailed, err.Error(), true, nil)
 	}
 	warnings := e.baseWarnings()
@@ -1067,7 +1097,7 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 	}, nil
 }
 
-func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvocation, spec RuntimeSpec, paths localPaths) error {
+func (e *Executor) renderRuntimeFiles(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, spec RuntimeSpec, paths localPaths) error {
 	fleetSnapshot, err := fleetConfigSnapshotFromParams(invocation.Params)
 	if err != nil {
 		return err
@@ -1108,6 +1138,45 @@ func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvo
 	if explicitModel := firstString(runtimeParams, "model"); explicitModel != "" {
 		runtimeConfig = mergeObjects(runtimeConfig, map[string]interface{}{
 			"agents": map[string]interface{}{"defaults": map[string]interface{}{"model": map[string]interface{}{"primary": explicitModel}}},
+		})
+	}
+
+	var normalizedMemoryConfig map[string]interface{}
+	var memorySpec domain.SoulMemorySpec
+	if present, err := decodeDraftSection(invocation.Params, "memory", &memorySpec); err != nil {
+		return err
+	} else if present {
+		mapping, err := soulfactory.MapSoulMemorySpec(memorySpec)
+		if err != nil {
+			return fmt.Errorf("map draft memory config: %w", err)
+		}
+		memorySearch, err := jsonObject(mapping.OpenClaw, "OpenClaw memorySearch config")
+		if err != nil {
+			return err
+		}
+		runtimeConfig = mergeObjects(runtimeConfig, map[string]interface{}{
+			"agents": map[string]interface{}{"defaults": map[string]interface{}{"memorySearch": memorySearch}},
+		})
+		normalizedMemoryConfig, err = jsonObject(mapping, "normalized memory config")
+		if err != nil {
+			return err
+		}
+	}
+
+	var voiceSpec domain.SoulVoiceSpec
+	if present, err := decodeDraftSection(invocation.Params, "voice", &voiceSpec); err != nil {
+		return err
+	} else if present {
+		mapping, err := soulfactory.MapSoulVoiceSpecToOpenClaw(ctx, voiceSpec)
+		if err != nil {
+			return fmt.Errorf("map draft voice config: %w", err)
+		}
+		tts, err := jsonObject(mapping.OpenClaw, "OpenClaw TTS config")
+		if err != nil {
+			return err
+		}
+		runtimeConfig = mergeObjects(runtimeConfig, map[string]interface{}{
+			"messages": map[string]interface{}{"tts": tts},
 		})
 	}
 
@@ -1179,6 +1248,11 @@ func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvo
 			"author":     fleetSnapshot.Author,
 			"createdAt":  fleetSnapshot.CreatedAt,
 			"schema":     fleetSnapshot.Document.Schema,
+		}
+	}
+	if normalizedMemoryConfig != nil {
+		runtimeMetadata["soulfactory"] = map[string]interface{}{
+			"memory_config": normalizedMemoryConfig,
 		}
 	}
 	if err := atomicWriteJSON(paths.RuntimeConfig, runtimeConfig, 0o600); err != nil {

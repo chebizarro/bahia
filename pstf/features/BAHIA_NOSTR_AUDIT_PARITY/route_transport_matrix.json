@@ -211,11 +211,11 @@
     },
     {
       "id": "souls-nostr-with-eose-caveats",
-      "surface": "`/souls/**` Soul Factory pages",
+      "surface": "`/souls/**` Soul Factory pages and `/settings/fleet` OpenClaw fleet configuration",
       "transport_class": "nostr_native",
-      "route_files": ["web/src/routes/souls/+page.svelte", "web/src/routes/souls/[id]/+page.svelte", "web/src/routes/souls/[id]/edit/+page.svelte", "web/src/routes/souls/new/+page.svelte"],
-      "control_files": ["web/src/lib/nostr/subscriptions.js", "web/src/lib/stores/souls.svelte.js"],
-      "evidence": ["Soul routes use Nostr client/store helpers and direct subscriptions.", "Partial EOSE fallback and progress subscription gaps are tracked separately."],
+      "route_files": ["web/src/routes/souls/+page.svelte", "web/src/routes/souls/[id]/+page.svelte", "web/src/routes/souls/[id]/edit/+page.svelte", "web/src/routes/souls/new/+page.svelte", "web/src/routes/settings/fleet/+page.svelte"],
+      "control_files": ["web/src/lib/nostr/subscriptions.js", "web/src/lib/stores/souls.svelte.js", "web/src/lib/stores/fleet-config.svelte.js"],
+      "evidence": ["Soul routes use Nostr client/store helpers and direct subscriptions.", "The fleet settings route subscribes to and publishes signed parameterized-replaceable kind 31953 events directly through the Nostr client.", "Partial EOSE fallback and progress subscription gaps are tracked separately."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
       "pstf_status": "current_audit_evidence",
       "follow_up_beads": ["bahia-zui7"]

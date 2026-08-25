@@ -52,7 +52,8 @@
     style_degree: selectedProvider === 'azure' && Number(providerSettings.style_degree || 1) < 0 ? 'Style degree cannot be negative.' : ''
   });
   const hasValidationErrors = $derived(Object.values(validationErrors).some(Boolean));
-  const canPlay = $derived(!disabled && !playing && !hasValidationErrors);
+  const hasSampleDispatcher = $derived(typeof onPlay === 'function' || Boolean(soul));
+  const canPlay = $derived(hasSampleDispatcher && !disabled && !playing && !hasValidationErrors);
 
   function patch(updates) {
     /** @type {SoulVoiceSpec} */
@@ -131,11 +132,6 @@
       if (onPlay) {
         await onPlay(payload);
         statusMessage = 'Voice sample request sent.';
-        return;
-      }
-
-      if (!soul) {
-        statusMessage = 'Voice draft updated. Save or publish the draft to send runtime voice control.';
         return;
       }
 
@@ -236,6 +232,9 @@
       <div class="action-row">
         <button type="button" class="btn-primary" disabled={!canPlay} onclick={playSample}>{#if playing}<span class="spinner" aria-hidden="true"></span>{/if}{playing ? 'Requesting…' : 'Play sample'}</button>
       </div>
+      {#if !hasSampleDispatcher}
+        <small>Sample playback is available after deployment or when this page provides a runtime sample dispatcher. Voice settings are saved to the draft and applied on provision.</small>
+      {/if}
 
       {#if statusMessage}<div class="status-message">{statusMessage}</div>{/if}
       {#if errorMessage}<div class="error-message"><span>{errorMessage}</span><button type="button" disabled={!canPlay} onclick={playSample}>Retry</button></div>{/if}

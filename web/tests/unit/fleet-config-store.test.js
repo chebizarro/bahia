@@ -84,6 +84,50 @@ describe('fleet config store', () => {
     }));
   });
 
+  it('clears stale state when the authenticated operator changes', () => {
+    const subscriptions = [];
+    const auth = { status: 'authenticated', pubkey: 'a'.repeat(64) };
+    const subscribe = vi.fn((filters, handlers) => {
+      subscriptions.push({ filters, handlers });
+      return vi.fn();
+    });
+    const store = createFleetConfigStore({
+      client: { subscribe, publish: vi.fn() },
+      auth,
+      sign: vi.fn()
+    });
+    const document = emptyFleetConfigDocument();
+    document.defaults.model = 'provider/operator-a';
+
+    store.subscribe();
+    subscriptions[0].handlers.onEvent({
+      id: 'z-event',
+      kind: 31953,
+      pubkey: auth.pubkey,
+      created_at: 200,
+      tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
+      content: JSON.stringify(document)
+    });
+    expect(store.state.document.defaults.model).toBe('provider/operator-a');
+
+    auth.pubkey = 'b'.repeat(64);
+    store.subscribe();
+    expect(store.state.event).toBeNull();
+    expect(store.state.document).toBeNull();
+
+    const nextDocument = emptyFleetConfigDocument();
+    nextDocument.defaults.model = 'provider/operator-b';
+    subscriptions[1].handlers.onEvent({
+      id: 'a-event',
+      kind: 31953,
+      pubkey: auth.pubkey,
+      created_at: 100,
+      tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
+      content: JSON.stringify(nextDocument)
+    });
+    expect(store.state.document.defaults.model).toBe('provider/operator-b');
+  });
+
   it('rejects unknown sections and literal secret values', () => {
     const document = emptyFleetConfigDocument();
     document.template.identity = {};
