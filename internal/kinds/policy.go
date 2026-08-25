@@ -86,7 +86,7 @@ func IsNIP34Kind(kind int) bool {
 // semantics.
 func IsSoulFactoryKind(kind int) bool {
 	switch kind {
-	case SoulFactoryTemplate, SoulFactoryAgentSoul, SoulFactoryDraft,
+	case SoulFactoryTemplate, SoulFactoryAgentSoul, SoulFactoryDraft, SoulFactoryFleetConfig,
 		SoulFactoryProvisioningRequest, SoulFactoryProvisioningStatus, SoulFactoryProvisioningResult,
 		SoulFactoryAction, SoulFactoryActionLegacyResult,
 		SoulFactoryRuntimeCapability, SoulFactoryRuntimeControl, SoulFactoryRuntimeResult:

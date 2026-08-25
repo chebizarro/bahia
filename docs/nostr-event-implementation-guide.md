@@ -21,6 +21,10 @@ First ask whether the semantic is one of these:
 
 If yes, use that mechanism. A new kind requires a written justification that its relay behavior, replaceability, retention, or indexing requirements differ from every existing mechanism.
 
+## SoulFactory fleet configuration exception
+
+Kind `31953` is the parameterized-replaceable SoulFactory interoperability document for fleet-wide OpenClaw configuration. It uses `d=soulfactory-fleet-config/v1`, a matching `schema` tag/content field, and a complete `template` snapshot. This allocation is intentionally adjacent to the staged `31950`–`31952` SoulFactory family: provisioning reactors and external runtimes must query and carry it without treating it as Bahia service-authored canonical state. Only configured `soul_factory.authorized_pubkeys` compete for the current document. A generic NIP-78 object would have different policy classification and would not provide this SoulFactory runtime interoperability boundary.
+
 ## Bahia's four Nostr layers
 
 | Layer | What it means | Bahia mechanism |
@@ -173,7 +177,7 @@ Bahia relay-purpose taxonomy:
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service relay boundary; not automatically public browser bootstrap. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing only; not service-strategy authorization. |
 | Repository/ngit | Repository maintainer or SoulFactory | `nostr.nip34_relays`, NIP-34 `30617` `relays` tags, and `30618` state | Repository announcement discovery queries advertised NIP-34 relays when configured; branch/state lookups query repository-specific `relays` tags before global Bahia read relays. Missing NIP-34 relays remain a degraded fallback, not generic control-plane policy. |
-| SoulFactory agent lifecycle | Operator, SoulFactory controller, runtime sidecar | ContextVM `25910` methods `soul-factory/provision` and `soul-factory/action`; canonical provisioning `30900`/`4903`; staged lifecycle kinds `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | New mutations enter through ContextVM and retain the request event id for correlation. Provisioning projects canonical state/audit; existing lifecycle events remain open interop while action and Soul read-model projection are completed. |
+| SoulFactory agent lifecycle | Operator, SoulFactory controller, runtime sidecar | ContextVM `25910` methods `soul-factory/provision` and `soul-factory/action`; canonical provisioning `30900`/`4903`; staged lifecycle kinds `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | New mutations enter through ContextVM and retain the request event id for correlation. Provisioning projects canonical state/audit; existing lifecycle events remain open interop while action and Soul read-model projection are completed. |
 | DM receive routing | Receiving identity | NIP-51 `10050` | Explicit DM-enabled features and identities only; public bootstrap and ContextVM relay readiness do not imply DM readiness. |
 | FIPS public adverts | FIPS/Bahia operator | Existing FIPS overlay advert contract plus explicit bridge relay config | Public advert boundary; safe only for information intentionally exposed as FIPS overlay metadata. |
 | FIPS/Bahia endpoint/control | Bahia service/operator | ContextVM relay sets or explicit bridge relay config | Sensitive endpoint/control boundary; sharing with public relays is an explicit exposure decision. |

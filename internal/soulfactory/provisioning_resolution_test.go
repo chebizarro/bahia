@@ -89,6 +89,10 @@ func TestProvisionRuntimeParamsCarrySanitizedSoulCheckpoint(t *testing.T) {
 		Tier:     domain.SoulTierStandard,
 		Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw},
 		SpecHash: "sha256:spec",
+		FleetConfig: &FleetConfigSnapshot{
+			Coordinate: "31953:operator:soulfactory-fleet-config/v1", EventID: "fleet-event", Author: "operator",
+			Document: FleetConfigDocument{Schema: SoulFactoryFleetConfigSchema, Template: map[string]interface{}{"logging": map[string]interface{}{"level": "info"}}},
+		},
 		SignetIdentity: &OpenClawSignetIdentityContract{
 			Schema: OpenClawSignetIdentityContractSchema, AgentID: "scout",
 			ManagedPubkey: strings.Repeat("a", 64), ClientPubkey: strings.Repeat("b", 64),
@@ -125,6 +129,10 @@ func TestProvisionRuntimeParamsCarrySanitizedSoulCheckpoint(t *testing.T) {
 	}
 	if checkpoint.BunkerURI != "" {
 		t.Fatalf("checkpoint bunker URI = %q, want empty", checkpoint.BunkerURI)
+	}
+	fleet, ok := params["fleet_config"].(*FleetConfigSnapshot)
+	if !ok || fleet.EventID != "fleet-event" || fleet.Document.Template["logging"] == nil {
+		t.Fatalf("runtime fleet config snapshot = %#v", params["fleet_config"])
 	}
 	contract, ok := bahia["signet_identity"].(*OpenClawSignetIdentityContract)
 	if !ok || contract.ClientKeyRef != "/run/openclaw/signet/scout.nip46-client" || contract.ManagedPubkey != soul.NostrPubkey {

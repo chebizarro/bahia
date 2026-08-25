@@ -31,8 +31,26 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 | `10002` | Relay preference | Advisory NIP-65 service relay read/write hints for wider Nostr routing. |
 | `10050` | DM relay list | Optional NIP-51 DM receive routing only for explicitly configured DM-enabled Bahia features and identities. |
 | `30617`, `30618` | Repository | NIP-34 repository announcements and state; repository relay hints are repository-specific routing inputs. |
-| `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | SoulFactory interop | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results. |
+| `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | SoulFactory interop | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results. |
 | `5` | Deletion | NIP-09 deletion event for relay-level deletion semantics. |
+
+## SoulFactory Fleet Configuration — Kind `31953`
+
+Kind `31953` is parameterized replaceable by `(author, d=soulfactory-fleet-config/v1)`. Required tags are `d`, `schema=soulfactory-fleet-config/v1`, and `t=soulfactory-fleet-config`. Content is a complete JSON object:
+
+```json
+{
+  "schema": "soulfactory-fleet-config/v1",
+  "template": { "agents": {}, "channels": {}, "plugins": {} },
+  "defaults": {
+    "model": "provider/model",
+    "bindings": ["channel:account"],
+    "required_plugins": ["nostr=npm:openclaw-nostr@1.0.0"]
+  }
+}
+```
+
+The template accepts only documented OpenClaw top-level sections. Secret-shaped strings use exact `${VAR}` placeholders. Provisioning selects the newest signed event from configured trusted operators and pins that snapshot into runtime-control params.
 
 ## ContextVM Intent Structure
 

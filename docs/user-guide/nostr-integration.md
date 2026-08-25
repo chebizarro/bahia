@@ -36,17 +36,18 @@ Complete-set deployment-unit changes use `environment/update` with both `deploym
 | **Canonical state** | `30900`, `30078` | Control-plane state projections and app-specific data |
 | **Canonical audit/status** | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
 | **Collections/relays** | `30002`, `30004` | NIP-51 relay sets, topology, and SBOM availability lists |
-| **SoulFactory interop** | `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | Direct Nostr agent lifecycle events accepted by the Bahia sidecar as open interop data |
+| **SoulFactory interop** | `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | Direct Nostr agent lifecycle events accepted by the Bahia sidecar as open interop data |
 | **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` excluding documented SoulFactory interop overlaps | Legacy custom kinds retained only for startup migration, historical conversion tests, and fail-closed fixtures |
 
 ### SoulFactory/OpenClaw provisioning
 
 SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle API. New mutation clients publish ContextVM `25910` requests using `soul-factory/provision` or `soul-factory/action`; Bahia retains the original request event id as the lifecycle correlation id.
 
-1. Operators publish signed `31952` Soul drafts.
-2. Operators publish signed `25910` `soul-factory/provision` requests whose params contain the existing provisioning schema. Bahia validates them with the SoulFactory parser and adapts them into the staged reactor without changing their correlation identity. Existing signed `5950` requests remain lifecycle interop during contraction.
-3. Bahia publishes correlated `6950` progress, sends scoped `38384` runtime-control events to trusted OpenClaw runtimes, validates `38386` results, publishes the final `31951` Soul read model, and publishes terminal `7950`.
-4. Clients subscribe to scoped `6950`, `7950`, and `31951` events for durable progress/completion. Relay `OK` verifies event acceptance, not runtime completion.
+1. Trusted operators may publish a signed `31953` fleet OpenClaw template; the reactor pins the latest trusted snapshot for subsequent provisions.
+2. Operators publish signed `31952` Soul drafts.
+3. Operators publish signed `25910` `soul-factory/provision` requests whose params contain the existing provisioning schema. Bahia validates them with the SoulFactory parser and adapts them into the staged reactor without changing their correlation identity. Existing signed `5950` requests remain lifecycle interop during contraction.
+4. Bahia publishes correlated `6950` progress, sends scoped `38384` runtime-control events to trusted OpenClaw runtimes, validates `38386` results, publishes the final `31951` Soul read model, and publishes terminal `7950`.
+5. Clients subscribe to scoped `6950`, `7950`, and `31951` events for durable progress/completion. Relay `OK` verifies event acceptance, not runtime completion.
 
 REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed ContextVM requests and scoped Nostr subscriptions instead of HTTP create/provision/suspend/resume calls. A ContextVM acknowledgment is not terminal completion; provisioning clients follow `30900` state at `soul-factory:provisioning:<request-event-id>` and matching `4903` audit facts, with existing correlated lifecycle events retained during contraction.
 

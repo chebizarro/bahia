@@ -39,28 +39,30 @@ var (
 )
 
 type RuntimeSpec struct {
-	DeploymentID   string
-	ContainerName  string
-	AgentID        string
-	SoulID         string
-	AccountID      string
-	Model          string
-	RequestID      string
-	RunID          string
-	SpecHash       string
-	ImageDigest    string
-	SourceCommit   string
-	ConfigRevision string
-	ComposePath    string
-	ConfigDir      string
-	Workspace      string
-	AgentDir       string
-	SecretFiles    map[string]string
-	PluginIDs      []string
-	CPUs           string
-	Memory         string
-	PIDsLimit      int
-	User           string
+	DeploymentID       string
+	ContainerName      string
+	AgentID            string
+	SoulID             string
+	AccountID          string
+	Model              string
+	RequestID          string
+	RunID              string
+	SpecHash           string
+	ImageDigest        string
+	SourceCommit       string
+	ConfigRevision     string
+	ComposePath        string
+	ConfigDir          string
+	Workspace          string
+	AgentDir           string
+	SecretFiles        map[string]string
+	PluginIDs          []string
+	PluginRequirements []string
+	DefaultBindings    []string
+	CPUs               string
+	Memory             string
+	PIDsLimit          int
+	User               string
 }
 
 type RuntimeLineage struct {

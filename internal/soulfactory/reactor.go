@@ -28,6 +28,7 @@ type Config struct {
 	AdditionalRelays              []string // Supplemental relays for drafts and provisioning events
 	SoulFactoryPubkey             string
 	AuthorizedPubkeys             []string
+	FleetConfigEnabled            bool
 	SignetBunkerURI               string
 	BlossomURL                    string
 	QdrantURL                     string
@@ -55,6 +56,7 @@ type Reactor struct {
 	getSoulFn                func(context.Context, string) (*domain.AgentSoul, error)
 	getDraftFn               func(context.Context, string, string) (*domain.SoulDraft, error)
 	getTemplateFn            func(context.Context, string) (*domain.SoulTemplate, error)
+	getFleetConfigFn         func(context.Context) (*FleetConfigSnapshot, error)
 	findLifecycleResultFn    func(context.Context, string) (*nostr.Event, error)
 	findProvisioningResultFn func(context.Context, string) (*nostr.Event, error)
 

@@ -208,6 +208,7 @@ var constantJustifications = map[string]KindJustification{
 	"SoulFactoryRuntimeControl":      omitted("SoulFactoryRuntimeControl", kinds.SoulFactoryRuntimeControl, "interop", "SoulFactory runtime control event consumed directly by runtimes, not a Bahia legacy kind to rewrite"),
 	"SoulFactoryRuntimeResult":       omitted("SoulFactoryRuntimeResult", kinds.SoulFactoryRuntimeResult, "interop", "SoulFactory runtime result consumed directly by SoulFactory, not a Bahia legacy kind to rewrite"),
 	"SoulFactoryTemplate":            omitted("SoulFactoryTemplate", kinds.SoulFactoryTemplate, "interop", "SoulFactory template event consumed directly by clients, not a Bahia legacy kind to rewrite"),
+	"SoulFactoryFleetConfig":         omitted("SoulFactoryFleetConfig", kinds.SoulFactoryFleetConfig, "interop", "SoulFactory fleet configuration consumed directly by provisioning and clients, not a Bahia legacy kind to rewrite"),
 	"SoulFactoryAgentSoul":           omitted("SoulFactoryAgentSoul", kinds.SoulFactoryAgentSoul, "interop", "SoulFactory agent soul event consumed directly by clients, not a Bahia legacy kind to rewrite"),
 	"SoulFactoryDraft":               omitted("SoulFactoryDraft", kinds.SoulFactoryDraft, "interop", "SoulFactory draft event consumed directly by clients, not a Bahia legacy kind to rewrite"),
 	"ContextVMMessage":               omitted("ContextVMMessage", kinds.ContextVMMessage, "canonical-transport", "canonical ContextVM request transport; legacy requests map to this kind and should not be re-migrated"),

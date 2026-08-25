@@ -702,6 +702,133 @@ func TestRuntimeModeDefaultsToDedicatedCompose(t *testing.T) {
 	}
 }
 
+func TestFleetConfigMergePrecedenceAndDefaults(t *testing.T) {
+	root := t.TempDir()
+	secretPath := filepath.Join(root, "nip46.secret")
+	if err := os.WriteFile(secretPath, []byte("file-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := New(Config{
+		Root: root, OpenClawBin: "openclaw-test", DockerBin: "docker-test",
+		RuntimeMode: RuntimeModePerAgentCompose, ImageDigest: testImageDigest, SourceCommit: testSourceCommit,
+		DefaultModel: "env/model", DefaultBindings: []string{"env:binding"},
+		RequiredPlugins: []string{"nostr=npm:env-nostr@1.0.0"},
+		DryRun:          true, Now: func() time.Time { return time.Unix(1715700005, 0).UTC() },
+		Runner: &recordingRunner{}, Orchestrator: &recordingOrchestrator{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := testProvisionInvocation("agent-alice", "sha256:fleet")
+	invocation.Params["runtime"].(map[string]interface{})["model"] = "agent/model"
+	invocation.Params["runtime"].(map[string]interface{})["nostr"] = map[string]interface{}{
+		"dmPolicy": "contacts",
+	}
+	invocation.Params["runtime"].(map[string]interface{})["secret_files"] = map[string]interface{}{
+		"nip46_client": secretPath,
+	}
+	invocation.Params["relay_policy"].(map[string]interface{})["control"] = []interface{}{}
+	invocation.Params["fleet_config"] = soulfactory.FleetConfigSnapshot{
+		Coordinate: "31953:operator:soulfactory-fleet-config/v1",
+		EventID:    "fleet-event", Author: "operator", CreatedAt: 1715600000,
+		Document: soulfactory.FleetConfigDocument{
+			Schema: soulfactory.SoulFactoryFleetConfigSchema,
+			Defaults: soulfactory.FleetConfigDefaults{
+				Model: "fleet/model", Bindings: []string{"fleet:binding"},
+				RequiredPlugins: []string{"nostr=npm:fleet-nostr@2.0.0"},
+			},
+			Template: map[string]interface{}{
+				"logging": map[string]interface{}{"level": "info"},
+				"agents": map[string]interface{}{"defaults": map[string]interface{}{
+					"model":          map[string]interface{}{"primary": "template/model"},
+					"workspace":      "/fleet/workspace",
+					"contextPruning": map[string]interface{}{"mode": "cache-ttl"},
+				}},
+				"channels": map[string]interface{}{"nostr": map[string]interface{}{
+					"enabled": false, "defaultAccount": "fleet-account", "dmPolicy": "allowlist",
+					"relays": []interface{}{"wss://fleet.example"}, "privateKey": "${NOSTR_PRIVATE_KEY}",
+					"nip46Secret": "${FLEET_NIP46_SECRET}",
+				}},
+				"gateway": map[string]interface{}{
+					"mode": "remote", "bind": "public", "port": 9999,
+					"auth": map[string]interface{}{"mode": "token", "token": "${GATEWAY_AUTH_TOKEN}"},
+				},
+				"bindings": []interface{}{map[string]interface{}{
+					"agentId": "main", "match": map[string]interface{}{"channel": "nostr"},
+				}},
+				"plugins": map[string]interface{}{
+					"allow":   []interface{}{"nostr", "fleet-tool"},
+					"entries": map[string]interface{}{"fleet-tool": map[string]interface{}{"enabled": false, "mode": "audit"}},
+				},
+			},
+		},
+	}
+
+	spec, err := executor.runtimeSpec(invocation, executor.paths("agent-alice"), nil)
+	if err != nil {
+		t.Fatalf("runtimeSpec() error = %v", err)
+	}
+	if spec.Model != "agent/model" || !reflect.DeepEqual(spec.DefaultBindings, []string{"fleet:binding"}) ||
+		!reflect.DeepEqual(spec.PluginRequirements, []string{"nostr=npm:fleet-nostr@2.0.0"}) {
+		t.Fatalf("fleet defaults = model %q bindings %#v plugins %#v", spec.Model, spec.DefaultBindings, spec.PluginRequirements)
+	}
+
+	outcome := executor.Execute(t.Context(), invocation)
+	assertSuccess(t, outcome, "running")
+	state := readStateForTest(t, root, "agent-alice")
+	paths := executor.pathsForState(state)
+	var config map[string]interface{}
+	data, err := os.ReadFile(paths.RuntimeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["logging"].(map[string]interface{})["level"] != "info" {
+		t.Fatalf("fleet logging was not preserved: %#v", config)
+	}
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	if defaults["workspace"] != containerWorkspace ||
+		defaults["model"].(map[string]interface{})["primary"] != "agent/model" ||
+		defaults["contextPruning"].(map[string]interface{})["mode"] != "cache-ttl" {
+		t.Fatalf("agent/default merge precedence = %#v", defaults)
+	}
+	nostrConfig := config["channels"].(map[string]interface{})["nostr"].(map[string]interface{})
+	if nostrConfig["enabled"] != true || nostrConfig["defaultAccount"] != "account-alice" ||
+		nostrConfig["dmPolicy"] != "contacts" || !reflect.DeepEqual(stringSlice(nostrConfig["relays"]), []string{"wss://fleet.example"}) {
+		t.Fatalf("nostr merge precedence = %#v", nostrConfig)
+	}
+	if _, exists := nostrConfig["privateKey"]; exists {
+		t.Fatalf("fleet private key survived wrapper secret ownership: %#v", nostrConfig)
+	}
+	secretRef := nostrConfig["nip46Secret"].(map[string]interface{})
+	if secretRef["source"] != "file" || secretRef["path"] != "/run/secrets/nip46_client" {
+		t.Fatalf("wrapper secret precedence = %#v", secretRef)
+	}
+	bindings := config["bindings"].([]interface{})
+	binding := bindings[0].(map[string]interface{})
+	match := binding["match"].(map[string]interface{})
+	if binding["agentId"] != "agent-alice" || match["accountId"] != "account-alice" {
+		t.Fatalf("wrapper binding precedence = %#v", binding)
+	}
+	gateway := config["gateway"].(map[string]interface{})
+	if gateway["mode"] != "local" || gateway["bind"] != "lan" || gateway["port"].(float64) != 18789 {
+		t.Fatalf("wrapper gateway settings did not win: %#v", gateway)
+	}
+	if _, exists := gateway["auth"]; exists {
+		t.Fatalf("fleet gateway secret survived without a wrapper secret file: %#v", gateway)
+	}
+	entries := config["plugins"].(map[string]interface{})["entries"].(map[string]interface{})
+	fleetTool := entries["fleet-tool"].(map[string]interface{})
+	if fleetTool["mode"] != "audit" || fleetTool["enabled"] != false {
+		t.Fatalf("fleet disabled plugin entry was not preserved: %#v", entries)
+	}
+	if entries["nostr"].(map[string]interface{})["enabled"] != true {
+		t.Fatalf("wrapper-required plugin was not enabled: %#v", entries)
+	}
+}
+
 func newTestExecutor(t *testing.T, root string, dryRun bool, runner CommandRunner) *Executor {
 	t.Helper()
 	orchestrator := &recordingOrchestrator{}

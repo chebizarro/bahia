@@ -40,6 +40,11 @@
       description: 'Manage persistent operator relay policy and local browser session relays.'
     },
     {
+      href: '/settings/fleet',
+      title: 'OpenClaw Fleet',
+      description: 'Edit and publish the trusted fleet-wide OpenClaw configuration template.'
+    },
+    {
       href: '/notifications',
       title: 'Notifications',
       description: 'Configure webhook and Nostr DM notification channels.'

@@ -37,6 +37,7 @@ type resolvedProvisioningSpec struct {
 	Workspace      domain.SoulWorkspaceSpec
 	Assets         domain.SoulAssetRefs
 	SignetIdentity *OpenClawSignetIdentityContract
+	FleetConfig    *FleetConfigSnapshot
 }
 
 func (p *FullProvisioner) resolveProvisioningSpec(ctx context.Context, req *domain.ProvisioningRequest) (*resolvedProvisioningSpec, error) {
@@ -44,6 +45,11 @@ func (p *FullProvisioner) resolveProvisioningSpec(ctx context.Context, req *doma
 		return nil, fmt.Errorf("nil provisioning request")
 	}
 	resolved := &resolvedProvisioningSpec{AgentID: strings.TrimSpace(req.AgentID)}
+	fleetConfig, err := p.reactor.getProvisioningFleetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resolved.FleetConfig = fleetConfig
 
 	if req.DraftRef != "" || req.DraftEventID != "" {
 		draft, err := p.reactor.getProvisioningDraft(ctx, req.DraftRef, req.DraftEventID)
@@ -240,7 +246,49 @@ func (s *resolvedProvisioningSpec) provisionRuntimeParams(soul *domain.AgentSoul
 	if s.SignetIdentity != nil {
 		params["bahia"].(map[string]interface{})["signet_identity"] = s.SignetIdentity
 	}
+	if s.FleetConfig != nil {
+		params["fleet_config"] = s.FleetConfig
+	}
 	return params
+}
+
+func (r *Reactor) getProvisioningFleetConfig(ctx context.Context) (*FleetConfigSnapshot, error) {
+	if r.getFleetConfigFn != nil {
+		return r.getFleetConfigFn(ctx)
+	}
+	if !r.config.FleetConfigEnabled || len(r.config.AuthorizedPubkeys) == 0 {
+		return nil, nil
+	}
+	bus := r.relayBus
+	if bus == nil {
+		return nil, nil
+	}
+	authors := make([]nostr.PubKey, 0, len(r.config.AuthorizedPubkeys))
+	for _, raw := range r.config.AuthorizedPubkeys {
+		author, err := nostr.PubKeyFromHex(strings.ToLower(strings.TrimSpace(raw)))
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted fleet config operator pubkey: %w", err)
+		}
+		authors = append(authors, author)
+	}
+	events, err := bus.Query(ctx, []nostr.Filter{{
+		Kinds:   []nostr.Kind{nostr.Kind(domain.KindSoulFleetConfig)},
+		Authors: authors,
+		Tags:    nostr.TagMap{tagParameterizedD: []string{SoulFactoryFleetConfigIdentifier}},
+		Limit:   len(authors),
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("query fleet config: %w", err)
+	}
+	latest := newestFleetConfigEvent(events)
+	if latest == nil {
+		return nil, nil
+	}
+	snapshot, err := ParseFleetConfigEvent(latest, r.config.AuthorizedPubkeys)
+	if err != nil {
+		return nil, fmt.Errorf("resolve fleet config: %w", err)
+	}
+	return snapshot, nil
 }
 
 func (r *Reactor) getProvisioningDraft(ctx context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {

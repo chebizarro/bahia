@@ -19,6 +19,7 @@ const (
 	KindSoulTemplate        = 31950
 	KindAgentSoul           = 31951
 	KindSoulDraft           = 31952
+	KindSoulFleetConfig     = 31953
 	KindProvisioningRequest = 5950
 	KindProvisioningStatus  = 6950
 	KindProvisioningResult  = 7950

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-jwqu2",
+  "tests": [
+    {"layer": "Go protocol", "command": "go test ./internal/kinds ./internal/soulfactory -run 'FleetConfig|ProvisionRuntimeParamsCarry'", "criteria": ["AC-001", "AC-002"]},
+    {"layer": "Go wrapper", "command": "go test ./internal/soulfactory/openclawcontrol -run FleetConfig", "criteria": ["AC-003"]},
+    {"layer": "Web", "command": "npm test -- --run tests/unit/fleet-config-store.test.js", "criteria": ["AC-004"]},
+    {"layer": "Web static", "command": "npm run lint", "criteria": ["AC-004"]},
+    {"layer": "Repository", "command": "go build ./... && go test ./internal/...", "criteria": ["AC-001", "AC-002", "AC-003"]}
+  ]
+}

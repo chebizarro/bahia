@@ -19,8 +19,10 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | Relay preferences | `10002` | outbound replaceable | Advisory NIP-65 service read/write hints; not Bahia bootstrap |
 | DM relay lists | `10050` | optional replaceable | NIP-51 DM receive routing only for explicitly configured DM-enabled features and identities |
 | Repository state | `30617`, `30618` | inbound/outbound by repository owner | NIP-34 repository announcements and state; repository relay hints are preferred for repository operations |
-| SoulFactory interop | `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | inbound/outbound by operators, SoulFactory controllers, and runtimes | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results |
+| SoulFactory interop | `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | inbound/outbound by operators, SoulFactory controllers, and runtimes | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results |
 | Deletions | `5` | outbound/inbound | NIP-09 delete events where relay-level deletion semantics apply |
+
+Kind `31953` is state, not a command: trusted operators replace the complete `soulfactory-fleet-config/v1` OpenClaw template, and provisioning reactors consume the latest trusted snapshot. Publishing clients must sign it and require at least one relay `OK accepted`.
 
 ## ContextVM Mutation Methods
 

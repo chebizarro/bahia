@@ -199,6 +199,7 @@ const (
 	SoulFactoryTemplate            = 31950
 	SoulFactoryAgentSoul           = 31951
 	SoulFactoryDraft               = 31952
+	SoulFactoryFleetConfig         = 31953
 )
 
 // =============================================================================

@@ -129,6 +129,7 @@ func TestIsOpenInteropKind(t *testing.T) {
 		{"SoulFactory template", SoulFactoryTemplate, true},
 		{"SoulFactory agent soul", SoulFactoryAgentSoul, true},
 		{"SoulFactory draft", SoulFactoryDraft, true},
+		{"SoulFactory fleet config", SoulFactoryFleetConfig, true},
 		{"SoulFactory provisioning request", SoulFactoryProvisioningRequest, true},
 		{"SoulFactory provisioning status", SoulFactoryProvisioningStatus, true},
 		{"SoulFactory provisioning result", SoulFactoryProvisioningResult, true},
@@ -185,6 +186,7 @@ func TestIsReadableKind(t *testing.T) {
 		{"SoulFactory template", SoulFactoryTemplate, true},
 		{"SoulFactory agent soul", SoulFactoryAgentSoul, true},
 		{"SoulFactory draft", SoulFactoryDraft, true},
+		{"SoulFactory fleet config", SoulFactoryFleetConfig, true},
 		{"SoulFactory runtime capability", SoulFactoryRuntimeCapability, true},
 		{"SoulFactory runtime result", SoulFactoryRuntimeResult, true},
 		// Legacy runtime kinds and requests are not readable after the migration boundary.

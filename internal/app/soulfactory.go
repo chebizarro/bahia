@@ -131,13 +131,14 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 	}
 
 	reactor := soulfactory.NewReactor(soulfactory.Config{
-		Relays:            sf.Relays,
-		AdditionalRelays:  sf.AdditionalRelays,
-		SoulFactoryPubkey: controllerPubkey,
-		AuthorizedPubkeys: sf.AuthorizedPubkeys,
-		SignetBunkerURI:   sf.SignetBunkerURI,
-		BlossomURL:        firstConfiguredBlossomServer(cfg.Blossom),
-		QdrantURL:         cfg.Qdrant.URL,
+		Relays:             sf.Relays,
+		AdditionalRelays:   sf.AdditionalRelays,
+		SoulFactoryPubkey:  controllerPubkey,
+		AuthorizedPubkeys:  sf.AuthorizedPubkeys,
+		FleetConfigEnabled: true,
+		SignetBunkerURI:    sf.SignetBunkerURI,
+		BlossomURL:         firstConfiguredBlossomServer(cfg.Blossom),
+		QdrantURL:          cfg.Qdrant.URL,
 	}, generator, signer, slogLogger)
 	provisioner := soulfactory.NewFullProvisioner(reactor, soulfactory.FullProvisionerConfig{
 		Blossom: blossom.Config{

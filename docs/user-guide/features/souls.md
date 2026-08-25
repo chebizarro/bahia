@@ -216,6 +216,7 @@ bahia souls templates get research-agent
 | 31950 | SoulTemplate | Template definitions |
 | 31951 | AgentSoul | Provisioned agent |
 | 31952 | SoulDraft | Work-in-progress soul |
+| 31953 | SoulFleetConfig | Trusted fleet-wide OpenClaw template (`d=soulfactory-fleet-config/v1`) |
 | 5950 | ProvisioningRequest | DVM provisioning request |
 | 6950 | ProvisioningStatus | Progress updates |
 | 7950 | ProvisioningResult | Final result |
@@ -224,6 +225,12 @@ bahia souls templates get research-agent
 | 30317 | RuntimeCapability | Runtime capability announcement |
 | 38384 | RuntimeControlRequest | Runtime-directed control request |
 | 38386 | RuntimeControlResult | Runtime-directed result |
+
+## Fleet-wide OpenClaw configuration
+
+Open **Settings → OpenClaw Fleet** at `/settings/fleet` to edit and publish the parameterized-replaceable kind `31953` document. The event content uses `soulfactory-fleet-config/v1` and contains an allowlisted OpenClaw `template` plus optional `defaults` for model, CLI bindings, and reproducible `plugin-id=install-source` requirements. Secret-shaped string fields must use `${VAR}` placeholders.
+
+During provisioning, the reactor selects the newest valid event signed by a pubkey in `soul_factory.authorized_pubkeys`. The OpenClaw wrapper deep-merges fleet template → per-agent runtime/relay settings → wrapper-owned workspace, account binding, Nostr enablement, and file-backed secrets. The three `OPENCLAW_SOULFACTORY_DEFAULT_*` variables remain fallbacks when the fleet document omits their corresponding defaults. Replacing kind `31953` affects later provisions; it does not fan out changes to existing agents.
 
 ## Nostr-First Provisioning Flow
 

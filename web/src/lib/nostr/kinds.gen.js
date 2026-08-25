@@ -127,6 +127,7 @@ export const SOUL_FACTORY_RUNTIME_RESULT = 38386;
 export const SOUL_FACTORY_TEMPLATE = 31950;
 export const SOUL_FACTORY_AGENT_SOUL = 31951;
 export const SOUL_FACTORY_DRAFT = 31952;
+export const SOUL_FACTORY_FLEET_CONFIG = 31953;
 export const CONTEXT_VM_MESSAGE = 25910;
 export const CONTEXT_VM_GIFT_WRAP = 1059;
 export const CONTEXT_VM_EPHEMERAL_GIFT_WRAP = 21059;
@@ -421,7 +422,8 @@ export function isOpenInteropKind(kind) {
     case SOUL_FACTORY_RUNTIME_RESULT:
     case SOUL_FACTORY_TEMPLATE:
     case SOUL_FACTORY_AGENT_SOUL:
-    case SOUL_FACTORY_DRAFT:
+      case SOUL_FACTORY_DRAFT:
+      case SOUL_FACTORY_FLEET_CONFIG:
       return true;
     default:
       return false;

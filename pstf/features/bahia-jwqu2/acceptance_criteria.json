@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-jwqu2",
+  "criteria": [
+    {"id": "AC-001", "statement": "Kind 31953 is parameterized replaceable, policy-readable, trusted-author checked, and validates its schema/top-level allowlist.", "tests": ["TestFleetConfigEventValidationAndTrustedAuthor", "TestFleetConfigValidationRejectsUnknownSectionsAndConcreteSecrets", "TestIsOpenInteropKind"]},
+    {"id": "AC-002", "statement": "Provisioning carries the pinned fleet snapshot to runtime params.", "tests": ["TestProvisionRuntimeParamsCarrySanitizedSoulCheckpoint"]},
+    {"id": "AC-003", "statement": "OpenClaw renders fleet template then agent overrides then wrapper-owned identity, Nostr, bindings, plugins, and file secret refs; fleet defaults override environment fallbacks.", "tests": ["TestFleetConfigMergePrecedenceAndDefaults"]},
+    {"id": "AC-004", "statement": "Web operators can edit, sign, publish, and observe relay acceptance for the fleet document.", "tests": ["web/tests/unit/fleet-config-store.test.js", "svelte-check"]}
+  ]
+}

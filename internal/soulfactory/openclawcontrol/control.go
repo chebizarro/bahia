@@ -192,7 +192,9 @@ func (e *Executor) Execute(ctx context.Context, invocation soulfactory.OpenClawC
 	if err := validateInvocationIdentity(invocation); err != nil {
 		return rejected(ErrorMissingRequired, err.Error(), false, nil)
 	}
-	if containsInlinePrivateSecret(invocation.Params) {
+	secretScanParams := cloneObject(invocation.Params)
+	delete(secretScanParams, "fleet_config")
+	if containsInlinePrivateSecret(secretScanParams) {
 		return rejected(ErrorMissingRequired, "resolved params must reference secrets without inline private key material", false, nil)
 	}
 
@@ -559,6 +561,156 @@ func mergeObjects(base, patch map[string]interface{}) map[string]interface{} {
 	return base
 }
 
+func fleetConfigSnapshotFromParams(params map[string]interface{}) (*soulfactory.FleetConfigSnapshot, error) {
+	raw, ok := params["fleet_config"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshal fleet config snapshot: %w", err)
+	}
+	var snapshot soulfactory.FleetConfigSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("parse fleet config snapshot: %w", err)
+	}
+	if strings.TrimSpace(snapshot.EventID) == "" || strings.TrimSpace(snapshot.Author) == "" {
+		return nil, fmt.Errorf("fleet config snapshot must pin event_id and author")
+	}
+	if err := soulfactory.ValidateFleetConfigDocument(snapshot.Document); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func fleetDefaultModel(template map[string]interface{}) string {
+	agents, _ := template["agents"].(map[string]interface{})
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	switch model := defaults["model"].(type) {
+	case string:
+		return strings.TrimSpace(model)
+	case map[string]interface{}:
+		return firstString(model, "primary")
+	default:
+		return ""
+	}
+}
+
+func objectAt(parent map[string]interface{}, key string) map[string]interface{} {
+	if child, ok := parent[key].(map[string]interface{}); ok {
+		return child
+	}
+	child := map[string]interface{}{}
+	parent[key] = child
+	return child
+}
+
+func stringSlice(value interface{}) []string {
+	var values []string
+	switch typed := value.(type) {
+	case []string:
+		values = append(values, typed...)
+	case []interface{}:
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				values = append(values, strings.TrimSpace(text))
+			}
+		}
+	}
+	return values
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func expandFleetTemplate(template map[string]interface{}, variables map[string]string) (map[string]interface{}, error) {
+	expanded, err := expandFleetValue(template, variables, "template")
+	if err != nil {
+		return nil, err
+	}
+	result, ok := expanded.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("template must be an object")
+	}
+	return result, nil
+}
+
+func expandFleetValue(value interface{}, variables map[string]string, path string) (interface{}, error) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(typed))
+		for key, nested := range typed {
+			expandedKey := expandFleetString(key, variables)
+			if _, exists := result[expandedKey]; exists {
+				return nil, fmt.Errorf("placeholder expansion collides at %s.%s", path, expandedKey)
+			}
+			expandedValue, err := expandFleetValue(nested, variables, path+"."+expandedKey)
+			if err != nil {
+				return nil, err
+			}
+			result[expandedKey] = expandedValue
+		}
+		return result, nil
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for index, nested := range typed {
+			expanded, err := expandFleetValue(nested, variables, fmt.Sprintf("%s[%d]", path, index))
+			if err != nil {
+				return nil, err
+			}
+			result[index] = expanded
+		}
+		return result, nil
+	case string:
+		return expandFleetString(typed, variables), nil
+	default:
+		return typed, nil
+	}
+}
+
+func expandFleetString(value string, variables map[string]string) string {
+	for name, replacement := range variables {
+		value = strings.ReplaceAll(value, "${"+name+"}", replacement)
+	}
+	return value
+}
+
+func wrapperOwnedBindings(value interface{}, agentID, accountID string) []interface{} {
+	bindings, _ := value.([]interface{})
+	result := make([]interface{}, 0, len(bindings)+1)
+	foundNostr := false
+	for _, item := range bindings {
+		binding, ok := item.(map[string]interface{})
+		if !ok {
+			result = append(result, cloneValue(item))
+			continue
+		}
+		binding = cloneObject(binding)
+		match, _ := binding["match"].(map[string]interface{})
+		match = cloneObject(match)
+		if firstString(match, "channel") == "nostr" {
+			binding["agentId"] = agentID
+			match["accountId"] = accountID
+			binding["match"] = match
+			foundNostr = true
+		}
+		result = append(result, binding)
+	}
+	if !foundNostr {
+		result = append(result, map[string]interface{}{
+			"agentId": agentID,
+			"match":   map[string]interface{}{"channel": "nostr", "accountId": accountID},
+		})
+	}
+	return result
+}
+
 func resolveConfig(config Config) (Config, error) {
 	if strings.TrimSpace(config.Root) == "" {
 		home, err := os.UserHomeDir()
@@ -779,7 +931,7 @@ func (e *Executor) bootstrapRuntimePlugins(ctx context.Context, spec RuntimeSpec
 	if err := json.Unmarshal(out, &inventory); err != nil {
 		return failed(ErrorExecutionFailed, "parse dedicated OpenClaw bootstrap plugin inventory: "+err.Error(), true, nil)
 	}
-	for _, requirement := range e.config.RequiredPlugins {
+	for _, requirement := range spec.PluginRequirements {
 		id, source, _ := parsePluginRequirement(requirement)
 		if pluginLoaded(inventory, id) {
 			continue
@@ -824,14 +976,42 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 			return RuntimeSpec{}, err
 		}
 	}
-	pluginIDs := make([]string, 0, len(e.config.RequiredPlugins))
-	for _, requirement := range e.config.RequiredPlugins {
+	fleetSnapshot, err := fleetConfigSnapshotFromParams(invocation.Params)
+	if err != nil {
+		return RuntimeSpec{}, err
+	}
+	pluginRequirements := append([]string{}, e.config.RequiredPlugins...)
+	defaultBindings := append([]string{}, e.config.DefaultBindings...)
+	model := firstString(runtimeParams, "model")
+	if fleetSnapshot != nil {
+		// Fleet defaults replace environment defaults when explicitly supplied.
+		if len(fleetSnapshot.Document.Defaults.RequiredPlugins) > 0 {
+			pluginRequirements = append([]string{}, fleetSnapshot.Document.Defaults.RequiredPlugins...)
+		}
+		if len(fleetSnapshot.Document.Defaults.Bindings) > 0 {
+			defaultBindings = append([]string{}, fleetSnapshot.Document.Defaults.Bindings...)
+		}
+		if model == "" {
+			model = strings.TrimSpace(firstNonEmpty(
+				fleetSnapshot.Document.Defaults.Model,
+				fleetDefaultModel(fleetSnapshot.Document.Template),
+			))
+		}
+	}
+	if model == "" {
+		model = e.config.DefaultModel
+	}
+	pluginIDs := make([]string, 0, len(pluginRequirements))
+	for _, requirement := range pluginRequirements {
 		id, _, err := parsePluginRequirement(requirement)
 		if err != nil {
 			return RuntimeSpec{}, err
 		}
 		pluginIDs = append(pluginIDs, id)
 	}
+	pluginIDs = uniqueStrings(pluginIDs)
+	pluginRequirements = uniqueStrings(pluginRequirements)
+	defaultBindings = uniqueStrings(defaultBindings)
 	if !e.config.DryRun {
 		if !immutableImagePattern.MatchString(e.config.ImageDigest) {
 			return RuntimeSpec{}, fmt.Errorf("OPENCLAW_SOULFACTORY_IMAGE must use an immutable OCI digest")
@@ -839,24 +1019,16 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 		if !sourceCommitPattern.MatchString(e.config.SourceCommit) {
 			return RuntimeSpec{}, fmt.Errorf("OPENCLAW_SOULFACTORY_SOURCE_COMMIT must be a pinned lowercase hexadecimal commit")
 		}
-		foundNostr := false
-		for _, id := range pluginIDs {
-			foundNostr = foundNostr || id == "nostr"
+		if !containsString(pluginIDs, "nostr") {
+			return RuntimeSpec{}, fmt.Errorf("fleet config or OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS must allowlist the nostr plugin")
 		}
-		if !foundNostr {
-			return RuntimeSpec{}, fmt.Errorf("OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS must explicitly install and allowlist the nostr plugin")
-		}
-	}
-	model := firstString(runtimeParams, "model")
-	if model == "" {
-		model = e.config.DefaultModel
 	}
 	if !e.config.DryRun && model == "" {
-		return RuntimeSpec{}, fmt.Errorf("runtime.model or OPENCLAW_SOULFACTORY_DEFAULT_MODEL is required")
+		return RuntimeSpec{}, fmt.Errorf("runtime.model, fleet config default model, or OPENCLAW_SOULFACTORY_DEFAULT_MODEL is required")
 	}
 	revisionInput, err := json.Marshal(map[string]interface{}{
 		"invocation": invocation, "image": e.config.ImageDigest, "source_commit": e.config.SourceCommit,
-		"plugins": e.config.RequiredPlugins, "cpus": e.config.CPUs, "memory": e.config.Memory,
+		"plugins": pluginRequirements, "bindings": defaultBindings, "cpus": e.config.CPUs, "memory": e.config.Memory,
 		"pids_limit": e.config.PIDsLimit, "runtime_user": fmt.Sprintf("%d:%d", os.Geteuid(), os.Getegid()), "model": model, "secret_files": secrets,
 	})
 	if err != nil {
@@ -868,46 +1040,90 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 		containerName = strings.TrimSpace(e.config.Container)
 	}
 	return RuntimeSpec{
-		DeploymentID:   deploymentID,
-		ContainerName:  containerName,
-		AgentID:        invocation.AgentID,
-		SoulID:         invocation.SoulID,
-		AccountID:      accountID,
-		Model:          model,
-		RequestID:      requestID,
-		RunID:          runID,
-		SpecHash:       invocation.SpecHash,
-		ImageDigest:    e.config.ImageDigest,
-		SourceCommit:   e.config.SourceCommit,
-		ConfigRevision: runtimeConfigRevision(revisionInput),
-		ComposePath:    paths.ComposePath,
-		ConfigDir:      paths.ConfigDir,
-		Workspace:      paths.Workspace,
-		AgentDir:       paths.AgentDir,
-		SecretFiles:    secrets,
-		PluginIDs:      uniqueStrings(pluginIDs),
-		CPUs:           e.config.CPUs,
-		Memory:         e.config.Memory,
-		PIDsLimit:      e.config.PIDsLimit,
-		User:           fmt.Sprintf("%d:%d", os.Geteuid(), os.Getegid()),
+		DeploymentID:       deploymentID,
+		ContainerName:      containerName,
+		AgentID:            invocation.AgentID,
+		SoulID:             invocation.SoulID,
+		AccountID:          accountID,
+		Model:              model,
+		RequestID:          requestID,
+		RunID:              runID,
+		SpecHash:           invocation.SpecHash,
+		ImageDigest:        e.config.ImageDigest,
+		SourceCommit:       e.config.SourceCommit,
+		ConfigRevision:     runtimeConfigRevision(revisionInput),
+		ComposePath:        paths.ComposePath,
+		ConfigDir:          paths.ConfigDir,
+		Workspace:          paths.Workspace,
+		AgentDir:           paths.AgentDir,
+		SecretFiles:        secrets,
+		PluginIDs:          pluginIDs,
+		PluginRequirements: pluginRequirements,
+		DefaultBindings:    defaultBindings,
+		CPUs:               e.config.CPUs,
+		Memory:             e.config.Memory,
+		PIDsLimit:          e.config.PIDsLimit,
+		User:               fmt.Sprintf("%d:%d", os.Geteuid(), os.Getegid()),
 	}, nil
 }
 
 func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvocation, spec RuntimeSpec, paths localPaths) error {
-	pluginEntries := make(map[string]interface{}, len(spec.PluginIDs))
-	for _, id := range spec.PluginIDs {
-		pluginEntries[id] = map[string]interface{}{"enabled": true}
+	fleetSnapshot, err := fleetConfigSnapshotFromParams(invocation.Params)
+	if err != nil {
+		return err
 	}
+	runtimeConfig := map[string]interface{}{}
+	if fleetSnapshot != nil {
+		identity, _ := invocation.Params["identity"].(map[string]interface{})
+		expanded, err := expandFleetTemplate(fleetSnapshot.Document.Template, map[string]string{
+			"AGENT_ID":           invocation.AgentID,
+			"AGENT_NAME":         invocation.AgentID,
+			"AGENT_DISPLAY_NAME": firstString(identity, "name"),
+			"AGENT_ABOUT":        firstString(identity, "purpose"),
+			"AGENT_WORKSPACE":    containerWorkspace,
+			"NOSTR_PUBKEY":       spec.AccountID,
+			"NOSTR_ACCOUNT_ID":   spec.AccountID,
+		})
+		if err != nil {
+			return fmt.Errorf("expand fleet OpenClaw template: %w", err)
+		}
+		runtimeConfig = expanded
+	}
+
+	// Per-agent Soul Factory settings override fleet defaults.
 	runtimeParams, _ := invocation.Params["runtime"].(map[string]interface{})
-	nostrConfig, _ := runtimeParams["nostr"].(map[string]interface{})
-	nostrConfig = cloneObject(nostrConfig)
-	nostrConfig["enabled"] = true
-	nostrConfig["defaultAccount"] = spec.AccountID
-	if _, ok := nostrConfig["relays"]; !ok {
-		if relayPolicy, ok := invocation.Params["relay_policy"].(map[string]interface{}); ok {
-			nostrConfig["relays"] = relayPolicy["control"]
+	nostrOverrides, _ := runtimeParams["nostr"].(map[string]interface{})
+	perAgentNostr := map[string]interface{}{}
+	if relayPolicy, ok := invocation.Params["relay_policy"].(map[string]interface{}); ok {
+		if controlRelays := uniqueStrings(stringSlice(relayPolicy["control"])); len(controlRelays) > 0 {
+			perAgentNostr["relays"] = controlRelays
 		}
 	}
+	perAgentNostr = mergeObjects(perAgentNostr, cloneObject(nostrOverrides))
+	if len(perAgentNostr) > 0 {
+		runtimeConfig = mergeObjects(runtimeConfig, map[string]interface{}{
+			"channels": map[string]interface{}{"nostr": perAgentNostr},
+		})
+	}
+	if explicitModel := firstString(runtimeParams, "model"); explicitModel != "" {
+		runtimeConfig = mergeObjects(runtimeConfig, map[string]interface{}{
+			"agents": map[string]interface{}{"defaults": map[string]interface{}{"model": map[string]interface{}{"primary": explicitModel}}},
+		})
+	}
+
+	// Wrapper-owned operational identity, gateway, and secret paths are applied last.
+	channels := objectAt(runtimeConfig, "channels")
+	nostrConfig := objectAt(channels, "nostr")
+	removeInlineSecretFields(nostrConfig)
+	nostrConfig["enabled"] = true
+	nostrConfig["defaultAccount"] = spec.AccountID
+
+	gateway := objectAt(runtimeConfig, "gateway")
+	gateway["mode"] = "local"
+	gateway["bind"] = "lan"
+	gateway["port"] = 18789
+	delete(gateway, "auth")
+
 	secretRefs := make(map[string]interface{}, len(spec.SecretFiles))
 	for name := range spec.SecretFiles {
 		ref := map[string]interface{}{"source": "file", "path": "/run/secrets/" + name}
@@ -917,15 +1133,34 @@ func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvo
 			nostrConfig["nip46Secret"] = ref
 		case "nip46_connect", "nip46ConnectSecret":
 			nostrConfig["nip46ConnectSecret"] = ref
+		case "gateway_auth", "gatewayAuthToken":
+			gateway["auth"] = map[string]interface{}{"mode": "token", "token": ref}
 		}
 	}
-	runtimeConfig := map[string]interface{}{
-		"plugins": map[string]interface{}{
-			"allow":   spec.PluginIDs,
-			"entries": pluginEntries,
-		},
-		"channels": map[string]interface{}{"nostr": nostrConfig},
+
+	plugins := objectAt(runtimeConfig, "plugins")
+	pluginEntries := objectAt(plugins, "entries")
+	pluginAllow := stringSlice(plugins["allow"])
+	for _, id := range spec.PluginIDs {
+		pluginAllow = append(pluginAllow, id)
+		entry, _ := pluginEntries[id].(map[string]interface{})
+		entry = cloneObject(entry)
+		entry["enabled"] = true
+		pluginEntries[id] = entry
 	}
+	plugins["allow"] = uniqueStrings(pluginAllow)
+
+	agents := objectAt(runtimeConfig, "agents")
+	defaults := objectAt(agents, "defaults")
+	defaults["workspace"] = containerWorkspace
+	if spec.Model != "" {
+		defaults["model"] = map[string]interface{}{"primary": spec.Model}
+	}
+	runtimeConfig["bindings"] = wrapperOwnedBindings(runtimeConfig["bindings"], invocation.AgentID, spec.AccountID)
+	if err := validateMergedRuntimeConfig(runtimeConfig, invocation.AgentID, spec); err != nil {
+		return err
+	}
+
 	runtimeMetadata := map[string]interface{}{
 		"schema": "bahia-openclaw-runtime/v1",
 		"ownership": map[string]interface{}{
@@ -936,6 +1171,15 @@ func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvo
 			"configRevision": spec.ConfigRevision,
 			"secretFiles":    secretRefs,
 		},
+	}
+	if fleetSnapshot != nil {
+		runtimeMetadata["fleetConfig"] = map[string]interface{}{
+			"coordinate": fleetSnapshot.Coordinate,
+			"eventId":    fleetSnapshot.EventID,
+			"author":     fleetSnapshot.Author,
+			"createdAt":  fleetSnapshot.CreatedAt,
+			"schema":     fleetSnapshot.Document.Schema,
+		}
 	}
 	if err := atomicWriteJSON(paths.RuntimeConfig, runtimeConfig, 0o600); err != nil {
 		return fmt.Errorf("write dedicated OpenClaw config: %w", err)
@@ -1066,7 +1310,7 @@ func removeRuntimeData(paths localPaths) error {
 // ensureRuntimePlugins installs requirements only inside the owned dedicated
 // gateway and verifies them after a controlled restart.
 func (e *Executor) ensureRuntimePlugins(ctx context.Context, spec RuntimeSpec) *soulfactory.OpenClawControlOutcome {
-	if len(e.config.RequiredPlugins) == 0 {
+	if len(spec.PluginRequirements) == 0 {
 		return nil
 	}
 	out, outcome := e.runOpenClawOutput(ctx, e.containerArgsFor(spec.ContainerName, "plugins", "list", "--json")...)
@@ -1077,7 +1321,7 @@ func (e *Executor) ensureRuntimePlugins(ctx context.Context, spec RuntimeSpec) *
 	if err := json.Unmarshal(out, &inventory); err != nil {
 		return failed(ErrorExecutionFailed, "parse OpenClaw plugin inventory: "+err.Error(), true, nil)
 	}
-	for _, requirement := range e.config.RequiredPlugins {
+	for _, requirement := range spec.PluginRequirements {
 		id, source, _ := parsePluginRequirement(requirement)
 		if pluginLoaded(inventory, id) {
 			continue
@@ -1205,7 +1449,7 @@ func (e *Executor) runProvisionCommands(ctx context.Context, invocation soulfact
 	if outcome := e.runOpenClaw(ctx, e.containerArgsFor(spec.ContainerName, "agents", "set-identity", "--agent", invocation.AgentID, "--identity-file", containerWorkspace+"/IDENTITY.md", "--json")...); outcome != nil {
 		return outcome
 	}
-	bindings := append([]string{"nostr:" + spec.AccountID}, e.config.DefaultBindings...)
+	bindings := append([]string{"nostr:" + spec.AccountID}, spec.DefaultBindings...)
 	for _, binding := range uniqueStrings(bindings) {
 		if outcome := e.runOpenClaw(ctx, e.containerArgsFor(spec.ContainerName, "agents", "bind", "--agent", invocation.AgentID, "--bind", binding, "--json")...); outcome != nil {
 			return outcome
@@ -1676,6 +1920,125 @@ func appendWarning(warnings []string, warning string) []string {
 		}
 	}
 	return append(warnings, warning)
+}
+
+func removeInlineSecretFields(value interface{}) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, nested := range typed {
+			normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+			if isInlinePrivateSecretKey(normalized) {
+				delete(typed, key)
+				continue
+			}
+			removeInlineSecretFields(nested)
+		}
+	case []interface{}:
+		for _, nested := range typed {
+			removeInlineSecretFields(nested)
+		}
+	}
+}
+
+func validateMergedRuntimeConfig(config map[string]interface{}, agentID string, spec RuntimeSpec) error {
+	if containsUnsafeMergedSecret(config) {
+		return fmt.Errorf("merged OpenClaw config contains inline private secret material")
+	}
+	channels, ok := config["channels"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("merged OpenClaw config channels must be an object")
+	}
+	nostrConfig, ok := channels["nostr"].(map[string]interface{})
+	if !ok || nostrConfig["enabled"] != true || firstString(nostrConfig, "defaultAccount") != spec.AccountID {
+		return fmt.Errorf("merged OpenClaw config does not preserve wrapper-owned Nostr identity")
+	}
+	gateway, ok := config["gateway"].(map[string]interface{})
+	if !ok || gateway["mode"] != "local" || gateway["bind"] != "lan" || gateway["port"] != 18789 {
+		return fmt.Errorf("merged OpenClaw config does not preserve wrapper-owned gateway settings")
+	}
+	agents, _ := config["agents"].(map[string]interface{})
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	model, _ := defaults["model"].(map[string]interface{})
+	if spec.Model != "" && firstString(model, "primary") != spec.Model {
+		return fmt.Errorf("merged OpenClaw config model does not match wrapper runtime model")
+	}
+	bindings, _ := config["bindings"].([]interface{})
+	foundBinding := false
+	for _, raw := range bindings {
+		binding, _ := raw.(map[string]interface{})
+		match, _ := binding["match"].(map[string]interface{})
+		if firstString(match, "channel") == "nostr" && firstString(binding, "agentId") == agentID &&
+			firstString(match, "accountId") == spec.AccountID {
+			foundBinding = true
+			break
+		}
+	}
+	if !foundBinding {
+		return fmt.Errorf("merged OpenClaw config lacks the wrapper-owned Nostr binding")
+	}
+	plugins, _ := config["plugins"].(map[string]interface{})
+	allow := stringSlice(plugins["allow"])
+	entries, _ := plugins["entries"].(map[string]interface{})
+	for _, id := range spec.PluginIDs {
+		entry, _ := entries[id].(map[string]interface{})
+		if !containsString(allow, id) || entry["enabled"] != true {
+			return fmt.Errorf("merged OpenClaw config does not enable required plugin %q", id)
+		}
+	}
+	return nil
+}
+
+func containsUnsafeMergedSecret(value interface{}) bool {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, nested := range typed {
+			normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+			if isInlinePrivateSecretKey(normalized) {
+				if text, ok := nested.(string); ok && isEnvironmentPlaceholder(text) {
+					continue
+				}
+				if isFileSecretReference(nested) {
+					continue
+				}
+				return true
+			}
+			if containsUnsafeMergedSecret(nested) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, nested := range typed {
+			if containsUnsafeMergedSecret(nested) {
+				return true
+			}
+		}
+	case string:
+		return looksLikeInlinePrivateSecretValue(typed)
+	}
+	return false
+}
+
+func isEnvironmentPlaceholder(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 4 || !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
+		return false
+	}
+	name := value[2 : len(value)-1]
+	for index, char := range name {
+		if !(char == '_' || char >= 'A' && char <= 'Z' || index > 0 && char >= '0' && char <= '9') {
+			return false
+		}
+	}
+	return name != ""
+}
+
+func isFileSecretReference(value interface{}) bool {
+	ref, ok := value.(map[string]interface{})
+	if !ok || firstString(ref, "source") != "file" {
+		return false
+	}
+	path := firstString(ref, "path")
+	return strings.HasPrefix(path, "/run/secrets/") && filepath.Clean(path) == path
 }
 
 func containsInlinePrivateSecret(value interface{}) bool {

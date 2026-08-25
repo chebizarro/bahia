@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-jwqu2",
+  "title": "Fleet-wide OpenClaw config control plane",
+  "intent": "Allow trusted operators to publish one replaceable OpenClaw template that is applied deterministically to later Soul Factory provisions and managed from web settings.",
+  "scope": ["kind 31953 document and policy", "trusted reactor resolution", "runtime snapshot propagation", "OpenClaw deep merge", "settings editor and signer-backed publish"],
+  "out_of_scope": ["fan-out reconciliation of existing agents", "souls edit/detail routes", "LiveUpdate"]
+}
