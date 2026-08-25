@@ -113,3 +113,65 @@ export function compatibleCapabilities(capabilities = [], method = '') {
     .filter((capability) => capability?.compatible)
     .filter((capability) => !method || capability.methods?.includes(method));
 }
+
+function cloneJson(value, fallback = {}) {
+  if (value === undefined || value === null) return fallback;
+  return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * Build a complete v2 replacement draft from the current kind 31952 content.
+ * The edit form only owns a subset of fields, so untouched customization and
+ * extension fields must be copied forward rather than silently deleted.
+ */
+export function buildEditDraftContent(currentContent = {}, updates = {}) {
+  const current = cloneJson(currentContent);
+  const identity = {
+    ...(current.identity || {}),
+    ...(updates.identity || {})
+  };
+
+  const result = {
+    ...current,
+    schema: 'soulfactory-draft/v2',
+    brief: updates.brief ?? current.brief ?? identity.purpose ?? '',
+    template_ref: updates.template_ref ?? current.template_ref ?? current.templateRef ?? '',
+    identity: {
+      ...identity,
+      theme: identity.theme ?? '',
+      emoji: identity.emoji ?? ''
+    },
+    persona: cloneJson(updates.persona ?? current.persona),
+    avatar: cloneJson(updates.avatar ?? current.avatar),
+    voice: cloneJson(updates.voice ?? current.voice),
+    memory: cloneJson(updates.memory ?? current.memory),
+    runtime: {
+      ...(current.runtime || {}),
+      ...(updates.runtime || {})
+    },
+    permissions: {
+      ...(current.permissions || {}),
+      ...(updates.permissions || {})
+    },
+    relay_policy: {
+      ...(current.relay_policy || current.relayPolicy || {}),
+      ...(updates.relay_policy || {})
+    },
+    workspace: {
+      ...(current.workspace || {}),
+      ...(updates.workspace || {})
+    },
+    assets: {
+      ...(current.assets || {}),
+      ...(updates.assets || {})
+    }
+  };
+
+  // Hashes and lineage describe an event, not its desired-state content. The
+  // publisher computes the new hash first and adds previousSpecHash afterward.
+  delete result.spec_hash;
+  delete result.specHash;
+  delete result.previous_spec_hash;
+  delete result.previousSpecHash;
+  return result;
+}

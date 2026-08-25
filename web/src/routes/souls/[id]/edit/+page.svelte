@@ -1,7 +1,8 @@
 <script>
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { KINDS, SOUL_RUNTIME_METHODS, parseSoulDraftEvent, parseSoulEvent } from '$lib/nostr/client.js';
+  import LiveUpdate from '$lib/components/LiveUpdate.svelte';
+  import { KINDS, SOUL_RUNTIME_METHODS } from '$lib/nostr/client.js';
   import {
     subscribeToSoulFactoryUpdates,
     drafts,
@@ -11,6 +12,7 @@
     runtimeCapabilities
   } from '$lib/stores/souls.js';
   import {
+    buildEditDraftContent,
     capabilityLabel,
     capabilityRef,
     compatibleCapabilities,
@@ -27,6 +29,7 @@
   let success = $state('');
   let soul = $state(null);
   let existingDraft = $state(null);
+  let submittedDraft = $state(null);
   let selectedCapabilityRef = $state('');
   let templateRef = $state('');
 
@@ -87,6 +90,14 @@
     templateRef = content.template_ref || content.templateRef || parsedDraft?.templateRef || parsedSoul.templateRef || '';
   }
 
+  function findReferencedDraft(parsedSoul) {
+    if (!parsedSoul) return null;
+    const coordinateParts = (parsedSoul.draftRef || '').match(/^31952:([^:]+):(.+)$/);
+    const draftAgentId = coordinateParts?.[2] || parsedSoul.agentId;
+    const draftAuthor = coordinateParts?.[1] || undefined;
+    return drafts.find((draft) => draft.agentId === draftAgentId && (!draftAuthor || draft.pubkey === draftAuthor)) || null;
+  }
+
   async function loadSoulForEdit(id = agentId) {
     loading = true;
     error = '';
@@ -98,12 +109,8 @@
       if (!found) throw new Error('Soul not found');
 
       soul = found;
-      const draftCoordinate = soul.draftRef || '';
-      const coordinateParts = draftCoordinate.match(/^31952:([^:]+):(.+)$/);
-      const draftAgentId = coordinateParts?.[2] || soul.agentId;
-      const draftAuthor = coordinateParts?.[1] || undefined;
-      const draftEntry = drafts.find((d) => d.agentId === draftAgentId && (!draftAuthor || d.pubkey === draftAuthor));
-      existingDraft = draftEntry || null;
+      existingDraft = findReferencedDraft(soul);
+      submittedDraft = null;
       hydrateForm(soul, existingDraft);
     } catch (err) {
       error = err.message || 'Failed to load soul';
@@ -113,8 +120,8 @@
   }
 
   function buildDraftContent() {
-    return {
-      schema: 'soulfactory-draft/v1',
+    const currentContent = existingDraft?.content || {};
+    return buildEditDraftContent(currentContent, {
       brief: purpose,
       template_ref: templateRef,
       identity: {
@@ -124,9 +131,9 @@
         nip05
       },
       runtime: {
-        target: selectedCapability?.runtime || soul?.runtime?.target || '',
-        runtime_pubkey: selectedCapability?.pubkey || soul?.runtime?.runtime_pubkey || '',
-        capability_ref: selectedCapability ? capabilityRef(selectedCapability) : soul?.capabilityRef || ''
+        target: selectedCapability?.runtime || currentContent.runtime?.target || soul?.runtime?.target || '',
+        runtime_pubkey: selectedCapability?.pubkey || currentContent.runtime?.runtime_pubkey || soul?.runtime?.runtime_pubkey || '',
+        capability_ref: selectedCapability ? capabilityRef(selectedCapability) : currentContent.runtime?.capability_ref || soul?.capabilityRef || ''
       },
       permissions: {
         allowed_kinds: parseKindList(allowedKinds),
@@ -140,9 +147,8 @@
         nip65_discovery: nip65Discovery
       },
       workspace: { repo, branch, environment },
-      assets: { avatar_ref: avatarRef, voice_ref: voiceRef },
-      previous_spec_hash: soul?.specHash || ''
-    };
+      assets: { avatar_ref: avatarRef, voice_ref: voiceRef }
+    });
   }
 
   async function saveChanges() {
@@ -153,6 +159,9 @@
     success = '';
 
     try {
+      if (!existingDraft) {
+        throw new Error('The current 31952 draft has not loaded; replacement updates are disabled to protect existing customization.');
+      }
       if (updateCapabilities.length === 0) {
         throw new Error('No compatible runtime capability has been discovered for soulfactory.update');
       }
@@ -165,6 +174,13 @@
         previousSpecHash: soul.specHash || ''
       });
       const draftCoordinate = `${KINDS.SOUL_DRAFT}:${draft.event.pubkey}:${id}`;
+      submittedDraft = {
+        id: draft.event.id,
+        event: draft.event,
+        content: draftContent,
+        specHash: draft.specHash,
+        coordinate: draftCoordinate
+      };
 
       await publishSoulUpdateAction({
         soul,
@@ -183,6 +199,14 @@
       saving = false;
     }
   }
+
+  $effect(() => {
+    if (!soul || existingDraft) return;
+    const draftEntry = findReferencedDraft(soul);
+    if (!draftEntry) return;
+    existingDraft = draftEntry;
+    hydrateForm(soul, draftEntry);
+  });
 
   $effect(() => {
     const id = agentId;
@@ -211,6 +235,9 @@
     {#if success}<p class="success">{success}</p>{/if}
 
     <form class="form" onsubmit={(event) => { event.preventDefault(); saveChanges(); }}>
+      {#if !existingDraft}
+        <div class="warning">The current kind 31952 draft is not available yet. Replacement saving is disabled so existing persona, avatar, voice, and memory settings cannot be lost.</div>
+      {/if}
       <section>
         <h2>Identity</h2>
         <label>Name<input type="text" bind:value={name} /></label>
@@ -256,11 +283,24 @@
 
       <div class="actions">
         <button type="button" class="btn-secondary" onclick={() => goto(`/souls/${agentId}`)}>Cancel</button>
-        <button type="submit" class="btn-primary" disabled={saving || updateCapabilities.length === 0}>
+        <button type="submit" class="btn-primary" disabled={saving || !existingDraft || updateCapabilities.length === 0}>
           {saving ? 'Saving draft…' : 'Save Draft & Submit Update'}
         </button>
       </div>
     </form>
+
+    <section class="live-update-shell">
+      <LiveUpdate
+        {soul}
+        currentConfig={existingDraft?.content || {}}
+        pendingConfig={submittedDraft?.content || existingDraft?.content || {}}
+        draft={submittedDraft}
+        disabled={!submittedDraft || saving}
+      />
+      {#if !submittedDraft}
+        <p class="muted live-update-hint">Save the replacement draft before requesting section hot-reload or config reload.</p>
+      {/if}
+    </section>
   {/if}
 </div>
 
@@ -270,6 +310,8 @@
   .back-link { color: var(--text-muted); text-decoration: none; font-size: 0.875rem; }
   .back-link:hover { color: var(--primary); }
   .form { display: grid; gap: 1rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; }
+  .live-update-shell { margin-top: 1rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; }
+  .live-update-hint { margin: 0.75rem 0 0; }
   section { display: grid; gap: 0.8rem; }
   h2 { font-size: 1rem; margin: 0; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-color); }
   label { display: grid; gap: 0.4rem; font-size: 0.85rem; }
