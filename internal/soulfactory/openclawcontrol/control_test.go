@@ -385,6 +385,89 @@ func TestUpdateRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestConfigReloadMergesAllowlistedSectionsAndRerendersRuntimeFiles(t *testing.T) {
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, true, nil)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-reload", "sha256:old")), "running")
+
+	reload := testInvocation(soulfactory.RuntimeMethodConfigReload, "agent-reload", "sha256:new", map[string]interface{}{
+		"schema":             soulfactory.SoulFactoryConfigReloadSchema,
+		"target_fields":      []interface{}{"identity", "relay_policy", "plugins"},
+		"previous_spec_hash": "sha256:old",
+		"new_spec_hash":      "sha256:new",
+		"patch": map[string]interface{}{
+			"identity":     map[string]interface{}{"name": "Reloaded Alice"},
+			"relay_policy": map[string]interface{}{"control": []interface{}{"wss://reload.example"}},
+			"plugins":      map[string]interface{}{"allow": []interface{}{"untrusted"}},
+		},
+	})
+	outcome := executor.Execute(t.Context(), reload)
+	assertSuccess(t, outcome, "running")
+	if outcome.Result["restart"] != false || !reflect.DeepEqual(outcome.Result["reloaded"], []string{"identity", "relay_policy"}) {
+		t.Fatalf("reload result = %+v", outcome.Result)
+	}
+	state := readStateForTest(t, root, "agent-reload")
+	if state.SpecHash != "sha256:new" || state.LastMethod != soulfactory.RuntimeMethodConfigReload {
+		t.Fatalf("reloaded state = %+v", state)
+	}
+	identity, err := os.ReadFile(filepath.Join(state.Workspace, "IDENTITY.md"))
+	if err != nil || !strings.Contains(string(identity), "Reloaded Alice") {
+		t.Fatalf("reloaded identity = %q, err=%v", identity, err)
+	}
+	paths := executor.pathsForState(state)
+	runtimeConfig, ok, err := readJSONFile[map[string]interface{}](paths.RuntimeConfig)
+	if err != nil || !ok {
+		t.Fatalf("read runtime config: ok=%v err=%v", ok, err)
+	}
+	plugins, _ := runtimeConfig["plugins"].(map[string]interface{})
+	if !reflect.DeepEqual(plugins["allow"], []interface{}{"nostr"}) {
+		t.Fatalf("reload changed wrapper-owned plugins: %+v", plugins)
+	}
+	channels, _ := runtimeConfig["channels"].(map[string]interface{})
+	nostrConfig, _ := channels["nostr"].(map[string]interface{})
+	if !reflect.DeepEqual(nostrConfig["relays"], []interface{}{"wss://reload.example"}) {
+		t.Fatalf("reload relays = %#v", nostrConfig["relays"])
+	}
+	runtimeMetadata, ok, err := readJSONFile[map[string]interface{}](paths.RuntimeMetadata)
+	if err != nil || !ok {
+		t.Fatalf("read runtime metadata: ok=%v err=%v", ok, err)
+	}
+	reloadedSections, _ := runtimeMetadata["soulfactory"].(map[string]interface{})
+	if _, exists := reloadedSections["plugins"]; exists {
+		t.Fatalf("runtime metadata included non-allowlisted plugins: %+v", reloadedSections)
+	}
+	if _, exists := reloadedSections["identity"]; !exists {
+		t.Fatalf("runtime metadata omitted reloaded identity: %+v", reloadedSections)
+	}
+}
+
+func TestMemoryReindexReturnsActionableStructuredResult(t *testing.T) {
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, true, nil)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-reindex", "sha256:spec")), "running")
+	params, err := soulfactory.BuildMemoryReindexRuntimeParams(
+		domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small"},
+		soulfactory.MemoryReindexModeFull,
+		"operator requested",
+		"sha256:spec",
+		"sha256:spec",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := executor.Execute(t.Context(), testInvocation(soulfactory.RuntimeMethodMemoryReindex, "agent-reindex", "sha256:spec", params))
+	assertSuccess(t, outcome, "running")
+	action, ok := outcome.Result["action_required"].(map[string]interface{})
+	if outcome.Result["accepted"] != true || outcome.Result["started"] != false || outcome.Result["mode"] != soulfactory.MemoryReindexModeFull || !ok {
+		t.Fatalf("memory reindex result = %+v", outcome.Result)
+	}
+	if action["type"] != "runtime-native-memory-reindex" || action["agent_id"] != "agent-reindex" {
+		t.Fatalf("memory reindex action = %+v", action)
+	}
+}
+
 func TestUnsupportedMethodRejected(t *testing.T) {
 	executor := newTestExecutor(t, t.TempDir(), true, nil)
 	outcome := executor.Execute(t.Context(), testInvocation("soulfactory.unsupported", "agent-alice", "sha256:spec", map[string]interface{}{}))

@@ -203,6 +203,10 @@ func (e *Executor) Execute(ctx context.Context, invocation soulfactory.OpenClawC
 		return e.update(ctx, invocation)
 	case soulfactory.RuntimeMethodPersonaUpdate:
 		return e.personaUpdate(invocation)
+	case soulfactory.RuntimeMethodConfigReload:
+		return e.configReload(invocation)
+	case soulfactory.RuntimeMethodMemoryReindex:
+		return e.memoryReindex(invocation)
 	case soulfactory.RuntimeMethodRevoke:
 		return e.revoke(ctx, invocation)
 	default:
@@ -308,6 +312,194 @@ func (e *Executor) update(ctx context.Context, invocation soulfactory.OpenClawCo
 	return outcome
 }
 
+func (e *Executor) configReload(invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {
+	paths := e.paths(invocation.AgentID)
+	state, ok, err := readJSONFile[State](paths.State)
+	if err != nil {
+		return failed(ErrorExecutionFailed, "read OpenClaw agent state: "+err.Error(), true, nil)
+	}
+	if !ok || state.State == "revoked" {
+		return rejected(ErrorMissingRequired, "config reload requires existing non-revoked OpenClaw agent state", false, nil)
+	}
+	paths = e.pathsForState(state)
+	if replay, replayed := e.replayOutcome(invocation, paths, state); replayed {
+		return replay
+	}
+	req, err := soulfactory.ParseConfigReloadRequest(invocation.Params)
+	if err != nil {
+		return rejected(ErrorMissingRequired, err.Error(), false, nil)
+	}
+	if req.PreviousSpecHash != "" && req.PreviousSpecHash != state.SpecHash {
+		return rejected(ErrorSpecHashMismatch, "config reload previous_spec_hash does not match local state", false, map[string]interface{}{
+			"existing_spec_hash": state.SpecHash,
+			"previous_spec_hash": req.PreviousSpecHash,
+		})
+	}
+	newSpecHash := strings.TrimSpace(req.NewSpecHash)
+	if newSpecHash == "" {
+		if invocation.SpecHash != state.SpecHash {
+			return rejected(ErrorSpecHashMismatch, "config reload spec_hash does not match local state", false, map[string]interface{}{
+				"existing_spec_hash":  state.SpecHash,
+				"requested_spec_hash": invocation.SpecHash,
+			})
+		}
+		newSpecHash = state.SpecHash
+	} else if invocation.SpecHash != newSpecHash {
+		return rejected(ErrorSpecHashMismatch, "config reload new_spec_hash does not match the requested soul spec_hash", false, map[string]interface{}{
+			"requested_spec_hash": invocation.SpecHash,
+			"new_spec_hash":       newSpecHash,
+		})
+	}
+
+	provenance, _, err := readJSONFile[map[string]interface{}](paths.Provenance)
+	if err != nil {
+		return failed(ErrorExecutionFailed, "read provenance: "+err.Error(), true, nil)
+	}
+	if provenance == nil {
+		provenance = map[string]interface{}{}
+	}
+	canonical, _ := provenance["params"].(map[string]interface{})
+	canonical = cloneObject(canonical)
+	resolved := map[string]interface{}{}
+	if req.ResolvedSpec != nil {
+		data, marshalErr := json.Marshal(req.ResolvedSpec)
+		if marshalErr != nil {
+			return failed(ErrorExecutionFailed, "marshal resolved reload spec: "+marshalErr.Error(), false, nil)
+		}
+		if unmarshalErr := json.Unmarshal(data, &resolved); unmarshalErr != nil {
+			return failed(ErrorExecutionFailed, "decode resolved reload spec: "+unmarshalErr.Error(), false, nil)
+		}
+	}
+	for _, section := range req.TargetFields {
+		if value, exists := resolved[section]; exists {
+			canonical[section] = cloneValue(value)
+		}
+		if value, exists := req.Patch[section]; exists {
+			if patch, patchOK := value.(map[string]interface{}); patchOK {
+				if base, baseOK := canonical[section].(map[string]interface{}); baseOK {
+					canonical[section] = mergeObjects(cloneObject(base), patch)
+				} else {
+					canonical[section] = cloneObject(patch)
+				}
+			} else {
+				canonical[section] = value
+			}
+		}
+	}
+
+	updatedInvocation := invocation
+	updatedInvocation.SpecHash = newSpecHash
+	updatedInvocation.Params = canonical
+	identity, _ := canonical["identity"].(map[string]interface{})
+	persona, hasPersona := canonical["persona"]
+	if err := atomicWriteFile(paths.IdentityFile, []byte(renderIdentity(updatedInvocation, identity)), 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write reloaded IDENTITY.md: "+err.Error(), true, nil)
+	}
+	if err := atomicWriteFile(paths.SoulFile, []byte(renderSoul(updatedInvocation, identity, persona, hasPersona)), 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write reloaded SOUL.md: "+err.Error(), true, nil)
+	}
+	if err := atomicWriteFile(paths.AgentsFile, []byte(renderAgents(updatedInvocation, "")), 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write reloaded AGENTS.md: "+err.Error(), true, nil)
+	}
+	if err := e.renderReloadRuntimeFiles(updatedInvocation, state, paths, req.TargetFields); err != nil {
+		return failed(ErrorExecutionFailed, err.Error(), true, nil)
+	}
+	provenance["spec_hash"] = newSpecHash
+	provenance["params"] = canonical
+	provenance["last_config_reload"] = map[string]interface{}{
+		"target_fields":      req.TargetFields,
+		"previous_spec_hash": req.PreviousSpecHash,
+		"new_spec_hash":      newSpecHash,
+		"draft_ref":          req.DraftRef,
+		"draft_event_id":     req.DraftEventID,
+	}
+	if err := atomicWriteJSON(paths.Provenance, provenance, 0o600); err != nil {
+		return failed(ErrorExecutionFailed, "write reload provenance: "+err.Error(), true, nil)
+	}
+	state.SpecHash = newSpecHash
+	state.State = "running"
+	state.UpdatedAt = e.config.Now().Unix()
+	state.LastMethod = invocation.Method
+	state.LastReason = ""
+	result := e.resultFromState(state, state.UpdatedAt)
+	result["reloaded"] = append([]string{}, req.TargetFields...)
+	result["restart"] = false
+	outcome := success(result)
+	if err := e.persistInvocationOutcome(invocation, outcome, state, paths); err != nil {
+		return failed(ErrorExecutionFailed, err.Error(), true, nil)
+	}
+	return outcome
+}
+
+func (e *Executor) memoryReindex(invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {
+	paths := e.paths(invocation.AgentID)
+	state, ok, err := readJSONFile[State](paths.State)
+	if err != nil {
+		return failed(ErrorExecutionFailed, "read OpenClaw agent state: "+err.Error(), true, nil)
+	}
+	if !ok || state.State == "revoked" {
+		return rejected(ErrorMissingRequired, "memory reindex requires existing non-revoked OpenClaw agent state", false, nil)
+	}
+	paths = e.pathsForState(state)
+	if replay, replayed := e.replayOutcome(invocation, paths, state); replayed {
+		return replay
+	}
+	data, err := json.Marshal(invocation.Params)
+	if err != nil {
+		return rejected(ErrorMissingRequired, "marshal memory reindex request: "+err.Error(), false, nil)
+	}
+	var req soulfactory.MemoryReindexRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return rejected(ErrorMissingRequired, "parse memory reindex request: "+err.Error(), false, nil)
+	}
+	if req.Schema != soulfactory.SoulFactoryMemoryReindexSchema {
+		return rejected(ErrorMissingRequired, "memory reindex requires soulfactory-memory-reindex/v1 schema", false, nil)
+	}
+	if req.Mode != soulfactory.MemoryReindexModeIncremental && req.Mode != soulfactory.MemoryReindexModeFull {
+		return rejected(ErrorMissingRequired, "memory reindex mode must be incremental or full", false, nil)
+	}
+	if _, ok := invocation.Params["memory_config"].(map[string]interface{}); !ok {
+		return rejected(ErrorMissingRequired, "memory reindex requires memory_config object", false, nil)
+	}
+	if req.PreviousSpecHash != "" && req.PreviousSpecHash != state.SpecHash {
+		return rejected(ErrorSpecHashMismatch, "memory reindex previous_spec_hash does not match local state", false, map[string]interface{}{
+			"existing_spec_hash": state.SpecHash,
+			"previous_spec_hash": req.PreviousSpecHash,
+		})
+	}
+	if req.NewSpecHash != "" && invocation.SpecHash != req.NewSpecHash {
+		return rejected(ErrorSpecHashMismatch, "memory reindex new_spec_hash does not match the requested soul spec_hash", false, map[string]interface{}{
+			"requested_spec_hash": invocation.SpecHash,
+			"new_spec_hash":       req.NewSpecHash,
+		})
+	}
+	if req.NewSpecHash == "" && invocation.SpecHash != state.SpecHash {
+		return rejected(ErrorSpecHashMismatch, "memory reindex spec_hash does not match local state", false, map[string]interface{}{
+			"existing_spec_hash":  state.SpecHash,
+			"requested_spec_hash": invocation.SpecHash,
+		})
+	}
+
+	state.UpdatedAt = e.config.Now().Unix()
+	state.LastMethod = invocation.Method
+	state.LastReason = ""
+	result := e.resultFromState(state, state.UpdatedAt)
+	result["operation"] = "memory.reindex"
+	result["mode"] = req.Mode
+	result["accepted"] = true
+	result["started"] = false
+	result["action_required"] = map[string]interface{}{
+		"type":     "runtime-native-memory-reindex",
+		"agent_id": invocation.AgentID,
+		"message":  "Trigger memory indexing through the deployed OpenClaw runtime's native memory surface; this wrapper has no stable reindex CLI command.",
+	}
+	outcome := success(result)
+	if err := e.persistInvocationOutcome(invocation, outcome, state, paths); err != nil {
+		return failed(ErrorExecutionFailed, err.Error(), true, nil)
+	}
+	return outcome
+}
+
 func resolveUpdateSpec(params map[string]interface{}, updateMode string, provenance map[string]interface{}) (map[string]interface{}, *soulfactory.OpenClawControlOutcome) {
 	if updateMode == "replace" {
 		resolvedSpec, ok := params["resolved_spec"].(map[string]interface{})
@@ -330,13 +522,24 @@ func resolveUpdateSpec(params map[string]interface{}, updateMode string, provena
 func cloneObject(value map[string]interface{}) map[string]interface{} {
 	cloned := make(map[string]interface{}, len(value))
 	for key, item := range value {
-		if child, ok := item.(map[string]interface{}); ok {
-			cloned[key] = cloneObject(child)
-			continue
-		}
-		cloned[key] = item
+		cloned[key] = cloneValue(item)
 	}
 	return cloned
+}
+
+func cloneValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneObject(typed)
+	case []interface{}:
+		cloned := make([]interface{}, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 func mergeObjects(base, patch map[string]interface{}) map[string]interface{} {
@@ -742,6 +945,76 @@ func (e *Executor) renderRuntimeFiles(invocation soulfactory.OpenClawControlInvo
 	}
 	if err := atomicWriteFile(paths.ComposePath, renderCompose(spec), 0o600); err != nil {
 		return fmt.Errorf("write dedicated OpenClaw compose specification: %w", err)
+	}
+	return nil
+}
+
+func (e *Executor) renderReloadRuntimeFiles(invocation soulfactory.OpenClawControlInvocation, state State, paths localPaths, targets []string) error {
+	runtimeConfig, _, err := readJSONFile[map[string]interface{}](paths.RuntimeConfig)
+	if err != nil {
+		return fmt.Errorf("read dedicated OpenClaw config: %w", err)
+	}
+	if runtimeConfig == nil {
+		runtimeConfig = map[string]interface{}{}
+	}
+	targeted := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		targeted[target] = struct{}{}
+	}
+	if _, reloadRuntime := targeted["runtime"]; reloadRuntime {
+		channels, _ := runtimeConfig["channels"].(map[string]interface{})
+		channels = cloneObject(channels)
+		nostrConfig, _ := channels["nostr"].(map[string]interface{})
+		nostrConfig = cloneObject(nostrConfig)
+		runtimeParams, _ := invocation.Params["runtime"].(map[string]interface{})
+		if nostrPatch, ok := runtimeParams["nostr"].(map[string]interface{}); ok {
+			nostrConfig = mergeObjects(nostrConfig, nostrPatch)
+		}
+		nostrConfig["enabled"] = true
+		nostrConfig["defaultAccount"] = state.AccountID
+		channels["nostr"] = nostrConfig
+		runtimeConfig["channels"] = channels
+	}
+	if _, reloadRelays := targeted["relay_policy"]; reloadRelays {
+		channels, _ := runtimeConfig["channels"].(map[string]interface{})
+		channels = cloneObject(channels)
+		nostrConfig, _ := channels["nostr"].(map[string]interface{})
+		nostrConfig = cloneObject(nostrConfig)
+		if relayPolicy, ok := invocation.Params["relay_policy"].(map[string]interface{}); ok {
+			if control, exists := relayPolicy["control"]; exists {
+				nostrConfig["relays"] = cloneValue(control)
+			}
+		}
+		nostrConfig["enabled"] = true
+		nostrConfig["defaultAccount"] = state.AccountID
+		channels["nostr"] = nostrConfig
+		runtimeConfig["channels"] = channels
+	}
+	if err := atomicWriteJSON(paths.RuntimeConfig, runtimeConfig, 0o600); err != nil {
+		return fmt.Errorf("write reloaded OpenClaw config: %w", err)
+	}
+
+	runtimeMetadata, _, err := readJSONFile[map[string]interface{}](paths.RuntimeMetadata)
+	if err != nil {
+		return fmt.Errorf("read dedicated OpenClaw runtime metadata: %w", err)
+	}
+	if runtimeMetadata == nil {
+		runtimeMetadata = map[string]interface{}{"schema": "bahia-openclaw-runtime/v1"}
+	}
+	soulFactoryConfig, _ := runtimeMetadata["soulfactory"].(map[string]interface{})
+	soulFactoryConfig = cloneObject(soulFactoryConfig)
+	for _, target := range targets {
+		if value, exists := invocation.Params[target]; exists {
+			soulFactoryConfig[target] = cloneValue(value)
+		}
+	}
+	runtimeMetadata["soulfactory"] = soulFactoryConfig
+	runtimeMetadata["lastConfigReload"] = map[string]interface{}{
+		"specHash":     invocation.SpecHash,
+		"targetFields": append([]string{}, targets...),
+	}
+	if err := atomicWriteJSON(paths.RuntimeMetadata, runtimeMetadata, 0o600); err != nil {
+		return fmt.Errorf("write reloaded OpenClaw runtime metadata: %w", err)
 	}
 	return nil
 }

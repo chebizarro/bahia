@@ -160,7 +160,7 @@ func TestOpenClawSidecarRecordsUnexpectedSubscriptionClosure(t *testing.T) {
 
 func TestOpenClawCommandDriverDefaultsToWrapperSupportedMethods(t *testing.T) {
 	got := OpenClawCommandDriver{Command: "openclaw-soulfactory-control"}.Methods()
-	want := []string{RuntimeMethodProvision, RuntimeMethodUpdate, RuntimeMethodPersonaUpdate, RuntimeMethodRevoke}
+	want := []string{RuntimeMethodProvision, RuntimeMethodUpdate, RuntimeMethodPersonaUpdate, RuntimeMethodConfigReload, RuntimeMethodMemoryReindex, RuntimeMethodRevoke}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("default command-driver methods = %#v, want %#v", got, want)
 	}

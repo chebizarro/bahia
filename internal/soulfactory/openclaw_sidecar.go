@@ -49,6 +49,8 @@ var openClawCommandDriverDefaultMethods = []string{
 	RuntimeMethodProvision,
 	RuntimeMethodUpdate,
 	RuntimeMethodPersonaUpdate,
+	RuntimeMethodConfigReload,
+	RuntimeMethodMemoryReindex,
 	RuntimeMethodRevoke,
 }
 
