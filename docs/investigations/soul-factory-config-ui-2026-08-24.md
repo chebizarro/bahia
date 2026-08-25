@@ -1,7 +1,7 @@
 # Investigation: Soul Factory — Agent Config Updating, Fleet-wide Settings, Web UI Feature Completeness
 
 ## Summary
-(pending)
+Soul Factory has a rich desired-state schema and a real Nostr-native provisioning spine, but (a) ordinary web edits never reach the running agent (`handleUpdate` updates read-model lineage only), (b) there is no fleet-wide OpenClaw config control plane via either Nostr or the web UI (the wrapper generates only `plugins` + `channels.nostr` per agent), and (c) many new/edit UI controls are draft-only, adapter-dependent, or display-only. Field-by-field wiring audit and a remediation plan are below.
 
 ## Questions
 1. Does the current implementation allow quick/easy updating of agent config (incl. `SOUL.md`) through the web UI?
@@ -154,7 +154,48 @@ Creation connects all three, but the owned OpenClaw wrapper consumes only a narr
 ## Investigation Log
 
 ## Root Cause / Answers
-(pending)
+
+**Q1 — Quick/easy agent config + SOUL.md updates via web UI: NO.**
+- Create is end-to-end but heavyweight: an 8-stage provisioning saga + Docker Compose (120s health ceiling), not a live config write (`internal/soulfactory/provisioner_full.go:180-509`).
+- There is no raw `SOUL.md` editor anywhere in the UI; `SOUL.md` is generated from structured persona at provision time (`internal/soulfactory/openclawcontrol/control.go:1357-1380`).
+- The edit page publishes kind `31952` + `1950 update`, but `handleUpdate` explicitly "records additive lifecycle customization refs without invoking runtime adapters" — verified at `internal/soulfactory/lifecycle_handler.go:862-887`. Edits change Nostr read-model lineage only; the running agent is untouched.
+- A hot-reload path (`1950 hot-reload` → section-diff → `38384` calls) exists but is unmounted in the UI (`LiveUpdate.svelte` is never imported) and the default sidecar driver doesn't advertise config reload (`internal/soulfactory/openclaw_sidecar.go:48-55`).
+
+**Q2 — Fleet-wide settings à la `openclaw.json` via Nostr AND web UI: NO (neither).**
+- All Soul Factory kinds (`1950/5950/6950/7950/30317/31950-31952/38384/38386`) are agent/soul-scoped; there is no fleet/global config kind or REST endpoint (only read-only `GET /soulfactory/runtimes`).
+- The wrapper renders a fresh minimal config containing only `plugins` and `channels.nostr` — verified at `internal/soulfactory/openclawcontrol/control.go:693-739`. It never reads or merges a base template. Model, bindings, and required plugins come from sidecar env vars (`OPENCLAW_SOULFACTORY_DEFAULT_MODEL/BINDINGS/REQUIRED_PLUGINS`), which are operator-host settings, not Nostr/UI-settable.
+- Unsupported vs. the fleet template: logging, auth.profiles, models.providers, agents.defaults, top-level bindings, messages, commands, session, hooks, full channels.nostr (dmPolicy/profile/NIP-29 groups/communikeys), gateway, mcp.servers, skills, plugin entries, tools.profile, diagnostics.
+
+**Q3 — Are all UI features wired? NO.** See the wiring table above. Summary:
+- Wired E2E (create only): identity core fields, template ref, runtime capability/target, allowed kinds (Signet policy), draft save, provision.
+- Partial (persisted but not applied by the owned OpenClaw wrapper): avatar provider/style/dimensions, all voice config, memory tuning fields, tool grants, approval policy, read/write/NIP-65 relays, branch, environment, NIP-05.
+- Display/local-only: avatar upload (blob: URL, not durable), generate-avatar & play-voice-sample & reindex buttons on the new page, personality export/preview, edit-page Save (w.r.t. runtime effect).
+- Edit page additionally regresses the draft to a reduced v1 schema that would drop persona/avatar/voice/memory if replace-mode application were ever connected.
+
+**Root cause:** three layers — (1) rich desired-state schema/UI, (2) Nostr lifecycle/read-model orchestration, (3) runtime application via `38384` — are only fully connected for creation, and even then the owned wrapper consumes a narrow subset. Edit stops at layer 2; fleet-wide config has no layer at all.
 
 ## Recommendations (Remediation/Upgrade Plan)
-(pending)
+
+### Phase 1 — Make edit real (highest value, smallest scope)
+1. **Wire `handleUpdate` to the runtime adapter** (`internal/soulfactory/lifecycle_handler.go:862-887`): resolve the referenced `31952`, diff vs. current spec, and dispatch the already-implemented `soulfactory.update` / `soulfactory.persona.update` wrapper methods (`openclawcontrol/control.go:245-303,973-1024`) instead of only recording spec-hash lineage. (Tracked as bahia-a1so.3 per the code comment.)
+2. **Fix the edit page draft schema** (`web/src/routes/souls/[id]/edit/+page.svelte:90-179`): emit v2 with full persona/avatar/voice/memory sections (load from the current `31952`) so replace-mode updates don't silently drop customization.
+3. **Mount the hot-reload UI**: integrate `LiveUpdate.svelte` into the soul detail/edit pages and add `config.reload` to the default sidecar driver method set (`internal/soulfactory/openclaw_sidecar.go:48-55`); implement the not-implemented `config.reload`/`memory.reindex` bridge methods flagged in `pstf/features/OPENCLAW_SOULFACTORY_CUSTOMIZATION/verification_report.md`.
+4. **Add a raw `SOUL.md`/AGENTS.md editor** (advanced tab) that round-trips through `soulfactory.persona.update`, and surface the generated files read-only today.
+
+### Phase 2 — Fleet-wide agent settings control plane
+5. **Introduce a fleet config document**: a parameterized-replaceable Nostr kind (e.g. `31953 soulfactory-fleet-config/v1`) carrying an OpenClaw config template (the `openclaw.json` shape, with `${VAR}` placeholders), signed by trusted operators; validated against an allowlist schema.
+6. **Template merge in the wrapper**: change `renderRuntimeFiles` (`openclawcontrol/control.go:693-739`) to deep-merge fleet template → per-agent Soul Factory sections → generated secrets/identity, instead of emitting only `plugins`+`channels.nostr`. Migrate env-var defaults (model/bindings/required plugins) into the fleet document.
+7. **Web UI for fleet settings**: a settings route to view/edit/publish the fleet config event with section-level forms (models/providers, agents.defaults, channels incl. NIP-29 groups, mcp.servers, skills, plugins) plus raw-JSON escape hatch and diff preview.
+8. **Reconciliation**: on fleet-config change, reactor fans out `1950 hot-reload` (or staged redeploy) to affected souls, with per-soul `6950/7950` progress and rollback.
+
+### Phase 3 — Close per-field wiring gaps
+9. Apply memory tuning (embedding provider/model, top-K, rerank, retention) and voice/TTS config into generated `openclaw.json` (`memorySearch`, TTS sections) per `SOUL_FACTORY_AGENT_CUSTOMIZATION` acceptance criteria.
+10. Map tool grants/approval policy to OpenClaw `tools`/plugin/MCP policy or explicitly gate them in the UI as "control-plane only".
+11. Fix avatar upload durability (upload to Blossom/asset store instead of `blob:` URL); wire `onGenerate`/voice-sample/reindex callbacks on the new page or hide the buttons pre-deploy.
+12. Add an agent LLM model selector (feeding `runtime.model` → `agents add --model`), currently entirely absent from the UI.
+13. **Honesty pass**: gate every not-yet-wired control behind an explicit "saved to draft, applied on next provision" or disabled state (extends bahia-2ju3 "Replace Soul Factory mock/no-op surfaces").
+
+## Preventive Measures
+- PSTF acceptance criteria should include an end-to-end "UI field → running-agent config" assertion per control; the customization criteria exist but weren't enforced against the edit path.
+- Add an integration test that provisions, edits via the web flow, and asserts the runtime container's `SOUL.md`/`openclaw.json` changed.
+- Keep a single source-of-truth wiring table (this doc's audit) in docs/user-guide and update it per feature.
