@@ -201,6 +201,89 @@ loom:
 	}
 }
 
+func TestLoadMutableSidecarPolicyFileWinsOverEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`dev_mode: true
+nostr:
+  contextvm_relays: ["wss://config.example"]
+  sidecar:
+    enabled: true
+    public_url: "wss://public.config.example/relay"
+    backend_url: "wss://backend.config.example/relay"
+    max_query_limit: 321
+reconcile:
+  enabled: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "false")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__PUBLIC_URL", "wss://env.example/relay")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__BACKEND_URL", "wss://env-backend.example/relay")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT", "999")
+	t.Setenv("BAHIA_NOSTR__CONTEXTVM_RELAYS", "wss://env-context.example")
+	t.Setenv("BAHIA_RECONCILE__ENABLED", "true")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Nostr.Sidecar.Enabled || cfg.Nostr.Sidecar.PublicURL != "wss://public.config.example/relay" || cfg.Nostr.Sidecar.BackendURL != "wss://backend.config.example/relay" {
+		t.Fatalf("sidecar config did not win: %#v", cfg.Nostr.Sidecar)
+	}
+	if cfg.Nostr.Sidecar.MaxQueryLimit != 321 {
+		t.Fatalf("max query limit = %d, want 321", cfg.Nostr.Sidecar.MaxQueryLimit)
+	}
+	if got := cfg.Nostr.ContextVMRelays; len(got) != 1 || got[0] != "wss://config.example" {
+		t.Fatalf("contextvm relays = %#v", got)
+	}
+	if cfg.Reconcile.Enabled {
+		t.Fatal("reconcile.enabled environment value overrode mounted config")
+	}
+}
+
+func TestLoadMutableSidecarEnvironmentSeedsOnceAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("dev_mode: true\n"), 0o640); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "true")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__PUBLIC_URL", "ws://127.0.0.1:3334/relay")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__BACKEND_URL", "ws://127.0.0.1:4334/relay")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT", "456")
+	t.Setenv("BAHIA_NOSTR__CONTEXTVM_RELAYS", "wss://one.example,wss://two.example")
+	t.Setenv("BAHIA_RECONCILE__ENABLED", "false")
+
+	first, err := Load(path)
+	if err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	if !first.Nostr.Sidecar.Enabled || first.Nostr.Sidecar.MaxQueryLimit != 456 || first.Reconcile.Enabled {
+		t.Fatalf("bootstrap values not applied: sidecar=%#v reconcile=%#v", first.Nostr.Sidecar, first.Reconcile)
+	}
+	if got := first.Nostr.ContextVMRelays; len(got) != 2 || got[0] != "wss://one.example" || got[1] != "wss://two.example" {
+		t.Fatalf("contextvm bootstrap relays = %#v", got)
+	}
+
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "false")
+	t.Setenv("BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT", "999")
+	t.Setenv("BAHIA_NOSTR__CONTEXTVM_RELAYS", "wss://changed.example")
+	t.Setenv("BAHIA_RECONCILE__ENABLED", "true")
+	second, err := Load(path)
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if !second.Nostr.Sidecar.Enabled || second.Nostr.Sidecar.MaxQueryLimit != 456 || second.Reconcile.Enabled {
+		t.Fatalf("persisted bootstrap did not win: sidecar=%#v reconcile=%#v", second.Nostr.Sidecar, second.Reconcile)
+	}
+	if got := second.Nostr.ContextVMRelays; len(got) != 2 || got[0] != "wss://one.example" || got[1] != "wss://two.example" {
+		t.Fatalf("persisted contextvm relays = %#v", got)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("config mode changed: info=%v err=%v", info, err)
+	}
+}
+
 func TestValidateLoomCanonicalProjectionRawKeyGate(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -1046,6 +1046,10 @@ func Defaults() *Config {
 func Load(configPath string) (*Config, error) {
 	k := koanf.New(".")
 	cfg := Defaults()
+	protectedMutableEnv, err := seedMutablePolicy(configPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Load from YAML file if provided.
 	if configPath != "" {
@@ -1061,6 +1065,9 @@ func Load(configPath string) (*Config, error) {
 	// Field names may contain underscores (e.g., read_timeout, max_open_conns).
 	// Double-underscore (__) is also accepted as an explicit level separator.
 	if err := k.Load(env.Provider("BAHIA_", ".", func(s string) string {
+		if _, protected := protectedMutableEnv[s]; protected {
+			return "bootstrap_ignored." + strings.ToLower(strings.TrimPrefix(s, "BAHIA_"))
+		}
 		key := strings.ToLower(strings.TrimPrefix(s, "BAHIA_"))
 		// First, honour explicit double-underscore separators.
 		key = strings.ReplaceAll(key, "__", ".")

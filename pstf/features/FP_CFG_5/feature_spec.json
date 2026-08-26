@@ -1,0 +1,6 @@
+{
+  "feature_id": "FP_CFG_5",
+  "title": "Mounted Bahia sidecar policy with live reload",
+  "intent": "Make mounted YAML the durable source for mutable sidecar, ContextVM relay, and reconcile policy while retaining legacy environment values only as one-time seeds.",
+  "source_task": "fp-cfg.5"
+}

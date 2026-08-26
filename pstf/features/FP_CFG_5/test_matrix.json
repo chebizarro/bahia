@@ -1,0 +1,9 @@
+{
+  "feature_id": "FP_CFG_5",
+  "tests": [
+    {"criteria": ["AC1"], "test": "TestLoadMutableSidecarPolicyFileWinsOverEnvironment"},
+    {"criteria": ["AC2"], "test": "TestLoadMutableSidecarEnvironmentSeedsOnceAndPersists"},
+    {"criteria": ["AC3"], "command": "go test ./cmd/server ./cmd/relay ./internal/app ./internal/relaysidecar"},
+    {"criteria": ["AC4"], "command": "docker compose config"}
+  ]
+}

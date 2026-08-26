@@ -26,8 +26,10 @@ services:
         VERSION: ${VERSION:-}
     ports:
       - "8080:8080"
+    command: ["--config", "/etc/bahia/config.yaml"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./config.compose.yaml:/etc/bahia/config.yaml:ro
     environment:
       BAHIA_DB_HOST: postgres
       BAHIA_DB_PORT: "5432"
@@ -39,12 +41,6 @@ services:
       BAHIA_SERVER_PORT: "8080"
       BAHIA_LOG_LEVEL: info
       BAHIA_LOG_FORMAT: json
-      BAHIA_RECONCILE_ENABLED: "true"
-      BAHIA_RECONCILE_INTERVAL: "60s"
-      BAHIA_NOSTR__SIDECAR__ENABLED: "true"
-      BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
-      BAHIA_NOSTR__SIDECAR__BACKEND_URL: "ws://relay:3334/relay"
-      BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
       BAHIA_NOSTR_PRIVATE_KEY: ${BAHIA_NOSTR_PRIVATE_KEY:?BAHIA_NOSTR_PRIVATE_KEY is required}
       BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
     depends_on:
@@ -72,19 +68,15 @@ services:
         GIT_COMMIT: ${GIT_COMMIT:-dev}
         VERSION: ${VERSION:-}
     entrypoint: ["bahia-relay"]
+    command: ["--config", "/etc/bahia/config.yaml"]
     ports:
       - "3334:3334"
     volumes:
       - relaydata:/var/lib/bahia/relay-sidecar
+      - ./config.compose.yaml:/etc/bahia/config.yaml:ro
     environment:
       BAHIA_LOG_LEVEL: info
       BAHIA_LOG_FORMAT: json
-      BAHIA_NOSTR__SIDECAR__ENABLED: "true"
-      BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
-      BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
-      BAHIA_NOSTR__SIDECAR__BACKEND_URL: "ws://relay:3334/relay"
-      BAHIA_NOSTR__SIDECAR__DATA_DIR: "/var/lib/bahia/relay-sidecar"
-      BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT: "2000"
       BAHIA_NOSTR_PRIVATE_KEY: ${BAHIA_NOSTR_PRIVATE_KEY:?BAHIA_NOSTR_PRIVATE_KEY is required}
       BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
     restart: unless-stopped

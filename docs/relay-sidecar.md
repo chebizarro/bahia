@@ -35,6 +35,7 @@ nostr:
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
 - `request_retention` applies to stored ContextVM request/response transport kind `1059`; `event_retention` applies to every other stored kind. Ephemeral kinds (`20000`–`29999`), including `25910` and `21059`, are broadcast-only, are never stored by the sidecar, and are unaffected by retention settings. The sidecar sweeps expired events by their Nostr `created_at` timestamp at startup and every 15 minutes while running.
 - `max_query_limit` caps events yielded by one replay query after honoring a lower client `limit`. The default/current checked-in value is `2000`. `EOSE` completes only that bounded query; clients that may reach the cap must narrow resource tags and `since`/`until` windows, overlap windows, and deduplicate by event id.
+- The mounted YAML file is authoritative for `sidecar.enabled`, `public_url`, `backend_url`, `max_query_limit`, `nostr.contextvm_relays`, and `reconcile.enabled`. Their legacy environment variables seed missing YAML keys once through an atomic write and never override keys already present. Send `SIGHUP` to `bahia-server` or `bahia-relay` to validate the mounted file and rebuild the affected in-process runtime without recreating the container.
 - When sidecar mode is enabled, Bahia's own ContextVM transport and canonical observable projectors use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps ContextVM `25910`, CEP-4/NIP-59 wrappers (`1059`/`21059`), canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`), and relevant interop traffic sidecar-first.
 - During the compatibility window, non-browser interop subscribers may still use `nostr.relays` as the upstream interop source unless `mirror_external=true`; service publish/backfill should prefer `service_relays`, browser bootstrap uses `browser_relays`, and ContextVM request/reply uses `contextvm_relays`. With mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private, Loom, repository/ngit, DM, and relay-administration relays stay direct and separate unless a deployment explicitly routes those purposes through the sidecar.
 
@@ -45,6 +46,8 @@ nostr:
 - `relay`: the Khatru sidecar (`cmd/relay`) on `:3334` (serves both `/` and `/relay` for backward compatibility)
 - `bahia`: backend publishing/subscribing to `nostr.sidecar.backend_url`
 - `web`: nginx proxy exposing `/relay` to the browser
+
+Both Go services mount `config.compose.yaml` at `/etc/bahia/config.yaml`; mutable sidecar routing and query policy is intentionally absent from their environment blocks.
 
 Browser flow:
 

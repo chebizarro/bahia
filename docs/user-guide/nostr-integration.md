@@ -118,7 +118,7 @@ A cleanup execution projection is kind `30900` with tags such as `schema=bahia.s
 
 ### Sidecar
 
-The **relay sidecar** is the primary control-plane relay surface. It is a standalone Khatru Nostr relay HTTP/WebSocket server, not a REST CRUD endpoint: `cmd/relay/main.go` starts it, `internal/relaysidecar/server.go` serves NIP-11 relay metadata over HTTP and Nostr WebSocket traffic on `/` plus the configured `nostr.sidecar.public_url` path such as `/relay`, and operators expose it with `nostr.sidecar.listen_addr` / `BAHIA_NOSTR__SIDECAR__LISTEN_ADDR` plus any web proxy mapping.
+The **relay sidecar** is the primary control-plane relay surface. It is a standalone Khatru Nostr relay HTTP/WebSocket server, not a REST CRUD endpoint: `cmd/relay/main.go` starts it, `internal/relaysidecar/server.go` serves NIP-11 relay metadata over HTTP and Nostr WebSocket traffic on `/` plus the configured `nostr.sidecar.public_url` path such as `/relay`, and operators expose it with `nostr.sidecar.listen_addr` plus any web proxy mapping. The mounted YAML is authoritative for mutable sidecar policy. Legacy sidecar, ContextVM-relay, and reconcile environment values only seed missing keys once; send `SIGHUP` to apply a validated file change without recreating the container.
 
 ```yaml
 nostr:

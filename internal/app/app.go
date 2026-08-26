@@ -2069,10 +2069,15 @@ func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, pol
 }
 
 func (a *App) Run() error {
-	// Graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	return a.RunContext(ctx)
+}
 
+// RunContext runs the application until ctx is cancelled. Command supervisors
+// use it to apply a validated mounted-config reload without recreating the
+// container; Run retains the standalone signal-driven behavior.
+func (a *App) RunContext(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		a.Logger.Info("HTTP server starting", zap.String("addr", a.HTTPServer.Addr))

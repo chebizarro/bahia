@@ -1,0 +1,9 @@
+{
+  "feature_id": "FP_CFG_5",
+  "criteria": [
+    {"id": "AC1", "statement": "Mounted YAML values override legacy mutable-policy environment variables."},
+    {"id": "AC2", "statement": "Environment values seed absent mutable-policy keys once through an atomic YAML write."},
+    {"id": "AC3", "statement": "SIGHUP validates and applies mounted-config changes without container recreation."},
+    {"id": "AC4", "statement": "Compose supplies mutable sidecar policy through /etc/bahia/config.yaml rather than environment variables."}
+  ]
+}
