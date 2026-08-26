@@ -29,7 +29,7 @@ Pass this file through:
 -private-key-file /etc/bahia/soulfactory/sidecar.key
 ```
 
-Alternatively, `OPENCLAW_SOULFACTORY_PRIVATE_KEY` remains supported. Do not configure both the file and environment source. `SOULFACTORY_SIDECAR_NSEC` is not a recognized variable.
+`OPENCLAW_SOULFACTORY_PRIVATE_KEY` is rejected as deprecated; the error points to `OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE`. `SOULFACTORY_SIDECAR_NSEC` is not a recognized variable.
 
 ## 3. Configure the control wrapper
 
@@ -52,16 +52,17 @@ Use the Bahia SoulFactory controller pubkey (resolved from the controller's Sign
   -private-key-file /etc/bahia/soulfactory/sidecar.key \
   -command /opt/bahia/soulfactory/openclaw-soulfactory-control \
   -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke \
-  -trusted-controller-pubkeys '<soulfactory-controller-pubkey>' \
+  -controller-policy-file /var/lib/bahia/openclaw-soulfactory-controller-policy.json \
+  -trusted-controller-pubkeys '<one-time-bootstrap-controller-pubkey>' \
   -relays wss://relay.example.com \
   -control-relays wss://relay.example.com \
   -health-addr 127.0.0.1:8081 \
   -idempotency-store /var/lib/bahia/openclaw-soulfactory-sidecar-idempotency.json
 ```
 
-Deploy it as a supervised service. Persist both the key file and idempotency store with restrictive permissions. The JSON store lets exact `38384` replay after restart republish the cached `38386` without repeating local side effects.
+Deploy it as a supervised service. Persist the key file, controller policy file, and idempotency store with restrictive permissions. The controller seed flag/environment value is read only when the policy file is absent; remove it after the first successful start if desired, because it can never override persisted state. The JSON store lets exact `38384` replay after restart republish the cached `38386` without repeating local side effects.
 
-The relay bus handles stored-event backfill then remains live, reconnects with backoff, and retries a subscription after NIP-42 auth when a relay sends `auth-required:`.
+The relay bus handles stored-event backfill then remains live, reconnects with backoff, and retries a subscription after NIP-42 auth when a relay sends `auth-required:`. Trusted controllers mutate the set with signed kind-`25910` `soulfactory.controller.grant`/`soulfactory.controller.revoke` requests addressed to the runtime pubkey. The sidecar rejects stale event timestamps, writes the policy atomically before swapping authorization, republishes kind `30317`, and publishes a correlated signed `25910` response. SIGHUP reloads the persisted file without restarting the process.
 
 The sidecar exposes `GET /health` for process liveness and `GET /ready` for functional readiness on `-health-addr` (default `127.0.0.1:8081`). Readiness returns HTTP 200 only after the kind-`30317` capability was accepted by a relay and the control subscription reached EOSE. Before both conditions it returns HTTP 503 with `capability_published`, `subscription_eose`, and `last_error` fields. Supervised-service healthchecks must use `/ready`, not a PID-only check; use `/health` only as a separate liveness probe.
 

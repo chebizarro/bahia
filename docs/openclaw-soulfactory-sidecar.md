@@ -64,9 +64,11 @@ The command receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACT
 
 ## Key and store configuration
 
-Use `-private-key-file`/`OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE` for a file containing the sidecar nsec or hex key, or `OPENCLAW_SOULFACTORY_PRIVATE_KEY` for the environment source. Configure exactly one.
+Use `-private-key-file`/`OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE` for a mounted file containing the sidecar nsec or hex key. `OPENCLAW_SOULFACTORY_PRIVATE_KEY` is rejected without reading or logging its value.
 
-The default idempotency store is under the user cache directory. Production services should supply a persistent `-idempotency-store` path.
+The default idempotency store is under the user cache directory. Production services should supply a persistent `-idempotency-store` path under mounted `/data`.
+
+Controller authorization is persisted in `-controller-policy-file`/`OPENCLAW_SOULFACTORY_CONTROLLER_POLICY_FILE` (by default, `openclaw-soulfactory-controller-policy.json` beside the idempotency store). `SOULFACTORY_CONTROLLER_PUBKEYS` and `-trusted-controller-pubkeys` seed the file only when it is absent and never override it afterward. A trusted controller grants or revokes another controller with signed ContextVM kind-`25910` methods `soulfactory.controller.grant` and `soulfactory.controller.revoke`; the sidecar persists the event id, timestamp, and complete normalized set before activating it, republishes capability state, and returns a correlated signed `25910` response. Send SIGHUP to re-read an operator-edited persisted file and republish capability state.
 
 ## Example
 
@@ -74,6 +76,7 @@ The default idempotency store is under the user cache directory. Production serv
 openclaw-soulfactory-sidecar \
   -relays wss://relay.example \
   -private-key-file /etc/bahia/soulfactory/sidecar.key \
+  -controller-policy-file /data/openclaw-soulfactory-controller-policy.json \
   -trusted-controller-pubkeys "$SOULFACTORY_CONTROLLER_PUBKEYS" \
   -control-relays wss://relay.example \
   -idempotency-store /var/lib/bahia/openclaw-soulfactory-sidecar-idempotency.json \

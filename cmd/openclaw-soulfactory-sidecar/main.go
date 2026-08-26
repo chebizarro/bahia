@@ -47,8 +47,9 @@ func (s cliSigner) Sign(_ context.Context, event *nostr.Event) error {
 func main() {
 	var args repeatedFlag
 	relays := flag.String("relays", env("SOULFACTORY_RELAYS", ""), "comma-separated OpenClaw runtime/control relays for capability, request, and result events; not ngit repository publication relays")
-	privateKeyFile := flag.String("private-key-file", env("OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE", ""), "file containing the OpenClaw sidecar Nostr private key (env OPENCLAW_SOULFACTORY_PRIVATE_KEY remains supported)")
-	trustedControllers := flag.String("trusted-controller-pubkeys", env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "comma-separated trusted SoulFactory controller pubkeys")
+	privateKeyFile := flag.String("private-key-file", env("OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE", ""), "file containing the OpenClaw sidecar Nostr private key")
+	trustedControllers := flag.String("trusted-controller-pubkeys", env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "legacy comma-separated one-time seed used only when persisted controller policy is absent")
+	controllerPolicyPath := flag.String("controller-policy-file", env("OPENCLAW_SOULFACTORY_CONTROLLER_POLICY_FILE", ""), "persisted SoulFactory controller policy file; defaults beside the idempotency store")
 	identifier := flag.String("identifier", env("OPENCLAW_SOULFACTORY_IDENTIFIER", "openclaw-soulfactory-sidecar"), "kind:30317 d-tag identifier")
 	command := flag.String("command", env("OPENCLAW_SOULFACTORY_COMMAND", ""), "local OpenClaw control command; receives invocation JSON on stdin and returns outcome JSON on stdout")
 	methods := flag.String("methods", env("OPENCLAW_SOULFACTORY_METHODS", ""), "comma-separated SoulFactory runtime-control methods advertised and accepted by the command driver; defaults to the wrapper-supported method set")
@@ -67,7 +68,7 @@ func main() {
 	if strings.TrimSpace(*command) == "" {
 		fatalf("-command or OPENCLAW_SOULFACTORY_COMMAND is required so the owned sidecar can drive a local OpenClaw control surface")
 	}
-	privateKey, err := loadPrivateKey(*privateKeyFile, env("OPENCLAW_SOULFACTORY_PRIVATE_KEY", ""))
+	privateKey, err := loadPrivateKey(*privateKeyFile)
 	if err != nil {
 		fatalf("load private key: %v", err)
 	}
@@ -84,9 +85,16 @@ func main() {
 	if len(relayList) == 0 {
 		fatalf("at least one relay is required")
 	}
-	controllers := splitCSV(*trustedControllers)
-	if len(controllers) == 0 {
-		fatalf("at least one trusted controller pubkey is required")
+	if strings.TrimSpace(*controllerPolicyPath) == "" {
+		*controllerPolicyPath = filepath.Join(filepath.Dir(*storePath), "openclaw-soulfactory-controller-policy.json")
+	}
+	controllerPolicy, seeded, err := soulfactory.NewFileOpenClawControllerPolicy(
+		*controllerPolicyPath, splitCSV(*trustedControllers))
+	if err != nil {
+		fatalf("open controller policy: %v", err)
+	}
+	if seeded {
+		slog.Info("seeded persisted SoulFactory controller policy from legacy configuration")
 	}
 	store, err := soulfactory.NewFileOpenClawIdempotencyStore(*storePath)
 	if err != nil {
@@ -94,11 +102,11 @@ func main() {
 	}
 
 	sidecar, err := soulfactory.NewOpenClawSidecar(soulfactory.OpenClawSidecarConfig{
-		RuntimePubkey:            runtimePubkey,
-		Signer:                   cliSigner{privateKey: normalizedKey},
-		TrustedControllerPubkeys: controllers,
-		Identifier:               *identifier,
-		Relays:                   relayList,
+		RuntimePubkey:    runtimePubkey,
+		Signer:           cliSigner{privateKey: normalizedKey},
+		ControllerPolicy: controllerPolicy,
+		Identifier:       *identifier,
+		Relays:           relayList,
 		RelayHints: domain.SoulRelayPolicySpec{
 			Read:    splitCSV(*readRelays),
 			Write:   splitCSV(*writeRelays),
@@ -120,6 +128,25 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if err := sidecar.ReloadControllerPolicy(); err != nil {
+					slog.Error("reload SoulFactory controller policy", "error", err)
+					continue
+				}
+				if err := sidecar.PublishCapability(ctx); err != nil {
+					slog.Error("publish capability after controller policy reload", "error", err)
+				}
+			}
+		}
+	}()
 	healthServer := newHealthServer(*healthAddr, sidecar)
 	healthErr := make(chan error, 1)
 	go func() {
@@ -163,14 +190,13 @@ func newHealthServer(addr string, sidecar readinessProvider) *http.Server {
 
 const maxPrivateKeyFileBytes = 4096
 
-func loadPrivateKey(path, environmentValue string) (string, error) {
+func loadPrivateKey(path string) (string, error) {
 	path = strings.TrimSpace(path)
-	environmentValue = strings.TrimSpace(environmentValue)
-	if path != "" && environmentValue != "" {
-		return "", fmt.Errorf("configure only one of -private-key-file or OPENCLAW_SOULFACTORY_PRIVATE_KEY")
+	if strings.TrimSpace(os.Getenv("OPENCLAW_SOULFACTORY_PRIVATE_KEY")) != "" {
+		return "", fmt.Errorf("OPENCLAW_SOULFACTORY_PRIVATE_KEY is no longer accepted; mount the secret and set OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE")
 	}
 	if path == "" {
-		return environmentValue, nil
+		return "", fmt.Errorf("-private-key-file or OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE is required")
 	}
 	file, err := os.Open(path)
 	if err != nil {

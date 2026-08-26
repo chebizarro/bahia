@@ -1,0 +1,1 @@
+{"feature_id":"FP_CFG_3","title":"Persist Soul Factory controller policy","intent":"Mounted state is the effective ACL; environment seeds absent state only; signed mutations and SIGHUP reload live state; private keys are file-backed."}

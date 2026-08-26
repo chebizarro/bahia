@@ -17,16 +17,13 @@ type staticReadiness struct {
 
 func (s staticReadiness) Readiness() soulfactory.OpenClawSidecarReadiness { return s.state }
 
-func TestLoadPrivateKeyUsesEnvironmentOrFile(t *testing.T) {
-	if got, err := loadPrivateKey("", "  env-secret  "); err != nil || got != "env-secret" {
-		t.Fatalf("environment key = %q, err = %v", got, err)
-	}
-
+func TestLoadPrivateKeyUsesFile(t *testing.T) {
+	t.Setenv("OPENCLAW_SOULFACTORY_PRIVATE_KEY", "")
 	path := filepath.Join(t.TempDir(), "nostr.key")
 	if err := os.WriteFile(path, []byte("  file-secret\n"), 0o600); err != nil {
 		t.Fatalf("write key file: %v", err)
 	}
-	if got, err := loadPrivateKey(path, ""); err != nil || got != "file-secret" {
+	if got, err := loadPrivateKey(path); err != nil || got != "file-secret" {
 		t.Fatalf("file key = %q, err = %v", got, err)
 	}
 }
@@ -54,12 +51,13 @@ func TestHealthServerReadinessRequiresCapabilityAndEOSE(t *testing.T) {
 	}
 }
 
-func TestLoadPrivateKeyRejectsAmbiguousSources(t *testing.T) {
+func TestLoadPrivateKeyRejectsLegacyEnvironmentSource(t *testing.T) {
+	t.Setenv("OPENCLAW_SOULFACTORY_PRIVATE_KEY", "legacy-secret")
 	path := filepath.Join(t.TempDir(), "nostr.key")
 	if err := os.WriteFile(path, []byte("file-secret"), 0o600); err != nil {
 		t.Fatalf("write key file: %v", err)
 	}
-	if _, err := loadPrivateKey(path, "env-secret"); err == nil {
-		t.Fatal("expected ambiguous private-key source error")
+	if _, err := loadPrivateKey(path); err == nil {
+		t.Fatal("expected deprecated private-key environment source error")
 	}
 }

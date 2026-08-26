@@ -129,6 +129,7 @@ type OpenClawSidecarConfig struct {
 	RuntimePubkey            string
 	Signer                   soulClientSigner
 	TrustedControllerPubkeys []string
+	ControllerPolicy         OpenClawControllerPolicy
 	Identifier               string
 	Relays                   []string
 	RelayHints               domain.SoulRelayPolicySpec
@@ -143,8 +144,7 @@ type OpenClawSidecarConfig struct {
 type OpenClawSidecar struct {
 	runtimePubkey       string
 	signer              soulClientSigner
-	trusted             map[string]struct{}
-	trustedList         []string
+	controllerPolicy    OpenClawControllerPolicy
 	identifier          string
 	relays              []string
 	relayHints          domain.SoulRelayPolicySpec
@@ -178,11 +178,15 @@ func NewOpenClawSidecar(config OpenClawSidecarConfig) (*OpenClawSidecar, error) 
 	if config.Driver == nil {
 		return nil, fmt.Errorf("OpenClaw sidecar control driver is required")
 	}
-	trusted := map[string]struct{}{}
-	for _, pubkey := range uniqueStrings(config.TrustedControllerPubkeys) {
-		trusted[pubkey] = struct{}{}
+	controllerPolicy := config.ControllerPolicy
+	if controllerPolicy == nil {
+		var err error
+		controllerPolicy, err = newMemoryOpenClawControllerPolicy(config.TrustedControllerPubkeys)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if len(trusted) == 0 {
+	if len(controllerPolicy.Controllers()) == 0 {
 		return nil, fmt.Errorf("at least one trusted SoulFactory controller pubkey is required")
 	}
 	logger := config.Logger
@@ -215,20 +219,19 @@ func NewOpenClawSidecar(config OpenClawSidecarConfig) (*OpenClawSidecar, error) 
 		transport = bus
 	}
 	return &OpenClawSidecar{
-		runtimePubkey:  strings.TrimSpace(config.RuntimePubkey),
-		signer:         config.Signer,
-		trusted:        trusted,
-		trustedList:    sortedMapKeys(trusted),
-		identifier:     identifier,
-		relays:         normalizeSoulRelays(config.Relays),
-		relayHints:     config.RelayHints,
-		transport:      transport,
-		driver:         config.Driver,
-		store:          store,
-		logger:         logger.With("component", "openclaw-soulfactory-sidecar"),
-		now:            firstNowFunc(config.Now),
-		methods:        methods,
-		capabilityTags: append(nostr.Tags{}, config.CapabilityAdditionalTags...),
+		runtimePubkey:    strings.TrimSpace(config.RuntimePubkey),
+		signer:           config.Signer,
+		controllerPolicy: controllerPolicy,
+		identifier:       identifier,
+		relays:           normalizeSoulRelays(config.Relays),
+		relayHints:       config.RelayHints,
+		transport:        transport,
+		driver:           config.Driver,
+		store:            store,
+		logger:           logger.With("component", "openclaw-soulfactory-sidecar"),
+		now:              firstNowFunc(config.Now),
+		methods:          methods,
+		capabilityTags:   append(nostr.Tags{}, config.CapabilityAdditionalTags...),
 	}, nil
 }
 
@@ -238,6 +241,91 @@ func (s *OpenClawSidecar) Close() {
 	}
 }
 
+func (s *OpenClawSidecar) isTrustedController(pubkey string) bool {
+	for _, trusted := range s.controllerPolicy.Controllers() {
+		if trusted == strings.ToLower(strings.TrimSpace(pubkey)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *OpenClawSidecar) ReloadControllerPolicy() error {
+	if s == nil || s.controllerPolicy == nil {
+		return fmt.Errorf("controller policy is not configured")
+	}
+	return s.controllerPolicy.Reload()
+}
+
+type controllerPolicyIntent struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  struct {
+		Pubkey string `json:"pubkey"`
+	} `json:"params"`
+}
+
+func (s *OpenClawSidecar) HandleControllerPolicyIntent(ctx context.Context, event *nostr.Event) error {
+	if event == nil || event.Kind != nostr.Kind(25910) || !validSignedEvent(event) {
+		return fmt.Errorf("invalid signed controller policy intent")
+	}
+	if tagValue(event.Tags, tagPubkey) != s.runtimePubkey {
+		return fmt.Errorf("controller policy intent is not addressed to this runtime")
+	}
+	if !s.isTrustedController(event.PubKey.Hex()) {
+		return fmt.Errorf("controller policy intent signer is not trusted")
+	}
+	var intent controllerPolicyIntent
+	if err := json.Unmarshal([]byte(event.Content), &intent); err != nil {
+		return fmt.Errorf("parse controller policy intent: %w", err)
+	}
+	if intent.JSONRPC != "2.0" || len(intent.ID) == 0 ||
+		(intent.Method != OpenClawControllerGrantMethod &&
+			intent.Method != OpenClawControllerRevokeMethod) ||
+		tagValue(event.Tags, tagMethod) != intent.Method {
+		return fmt.Errorf("invalid controller policy ContextVM method")
+	}
+	if err := s.controllerPolicy.Apply(
+		intent.Method, intent.Params.Pubkey, event.ID.Hex(), int64(event.CreatedAt)); err != nil {
+		return err
+	}
+	capabilityPublished := s.PublishCapability(ctx) == nil
+	response, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      intent.ID,
+		"result": map[string]interface{}{
+			"applied":              true,
+			"capability_published": capabilityPublished,
+			"controller_count":     len(s.controllerPolicy.Controllers()),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	reply := nostr.Event{
+		Kind:      nostr.Kind(25910),
+		CreatedAt: nostr.Timestamp(s.now().Unix()),
+		Tags: nostr.Tags{
+			{tagPubkey, event.PubKey.Hex()},
+			{tagEvent, event.ID.Hex()},
+			{tagMethod, intent.Method},
+		},
+		Content: string(response),
+	}
+	if err := signGoNostrEvent(ctx, s.signer, &reply); err != nil {
+		return fmt.Errorf("sign controller policy response: %w", err)
+	}
+	accepted, err := s.transport.Publish(ctx, reply)
+	if err != nil {
+		return fmt.Errorf("publish controller policy response: %w", err)
+	}
+	if accepted == 0 {
+		return fmt.Errorf("controller policy response was not accepted by any relay")
+	}
+	return nil
+}
+
 func (s *OpenClawSidecar) Run(ctx context.Context) error {
 	s.resetReadiness()
 	defer s.clearSubscriptionReadiness()
@@ -245,23 +333,29 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 		s.setReadinessError(err)
 		return err
 	}
-	authors := make([]nostr.PubKey, 0, len(s.trustedList))
-	for _, trustedPubkey := range s.trustedList {
-		parsed, err := nostr.PubKeyFromHex(trustedPubkey)
-		if err != nil {
-			return fmt.Errorf("invalid trusted OpenClaw controller pubkey: %w", err)
-		}
-		authors = append(authors, parsed)
-	}
-	filters := []nostr.Filter{{
-		Kinds:   []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
-		Authors: authors,
-		Tags: nostr.TagMap{
-			tagPubkey: []string{s.runtimePubkey},
-			tagSchema: []string{domain.SoulFactoryRuntimeControlSchema},
-			tagMethod: s.methods,
+	// Authors are intentionally not fixed in the relay filter: persisted grants
+	// must take effect without rebuilding the subscription. Every event remains
+	// narrowly addressed and is signature-checked against the live policy.
+	filters := []nostr.Filter{
+		{
+			Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
+			Tags: nostr.TagMap{
+				tagPubkey: []string{s.runtimePubkey},
+				tagSchema: []string{domain.SoulFactoryRuntimeControlSchema},
+				tagMethod: s.methods,
+			},
 		},
-	}}
+		{
+			Kinds: []nostr.Kind{nostr.Kind(25910)},
+			Tags: nostr.TagMap{
+				tagPubkey: []string{s.runtimePubkey},
+				tagMethod: []string{
+					OpenClawControllerGrantMethod,
+					OpenClawControllerRevokeMethod,
+				},
+			},
+		},
+	}
 	sub, err := s.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		s.setReadinessError(err)
@@ -283,7 +377,13 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 				s.setReadinessError(err)
 				return err
 			}
-			if _, err := s.HandleControlEvent(ctx, event); err != nil {
+			var err error
+			if event.Kind == nostr.Kind(25910) {
+				err = s.HandleControllerPolicyIntent(ctx, event)
+			} else {
+				_, err = s.HandleControlEvent(ctx, event)
+			}
+			if err != nil {
 				s.logger.Warn("OpenClaw SoulFactory request rejected or failed", "event", event.ID, "error", err)
 			}
 		}
@@ -357,12 +457,13 @@ func (s *OpenClawSidecar) clearSubscriptionReadiness() {
 }
 
 func (s *OpenClawSidecar) BuildCapabilityEvent(ctx context.Context) (*nostr.Event, error) {
+	controllers := s.controllerPolicy.Controllers()
 	content, err := json.Marshal(map[string]interface{}{
 		"schema":             domain.SoulFactoryRuntimeCapabilitySchema,
 		"runtime":            string(domain.RuntimeTargetOpenClaw),
 		"methods":            s.methods,
 		"control_schema":     domain.SoulFactoryRuntimeControlSchema,
-		"controller_pubkeys": s.trustedList,
+		"controller_pubkeys": controllers,
 		"relay_hints": map[string]interface{}{
 			"read":    s.relayHints.Read,
 			"write":   s.relayHints.Write,
@@ -381,7 +482,7 @@ func (s *OpenClawSidecar) BuildCapabilityEvent(ctx context.Context) (*nostr.Even
 	for _, method := range s.methods {
 		tags = append(tags, nostr.Tag{tagMethod, method})
 	}
-	for _, controller := range s.trustedList {
+	for _, controller := range controllers {
 		tags = append(tags, nostr.Tag{"controller", controller})
 	}
 	appendRelayTags := func(scope string, relays []string) {
@@ -506,7 +607,7 @@ func (s *OpenClawSidecar) ValidateControlEvent(event *nostr.Event) (*OpenClawVal
 	if tagValue(event.Tags, "controller") != envelope.Controller.Pubkey || envelope.Controller.Pubkey != event.PubKey.Hex() {
 		return request, controlError("unauthorized_controller", "controller tag/content must match the signing pubkey", false)
 	}
-	if _, ok := s.trusted[event.PubKey.Hex()]; !ok {
+	if !s.isTrustedController(event.PubKey.Hex()) {
 		return request, controlError("unauthorized_controller", "controller pubkey is not trusted by this OpenClaw sidecar", false)
 	}
 	if !stringInSlice(envelope.Method, s.methods) || tagValue(event.Tags, tagMethod) != envelope.Method {
