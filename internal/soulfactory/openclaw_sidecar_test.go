@@ -116,6 +116,78 @@ func (s *cancellationCheckingSigner) Sign(ctx context.Context, _ *nostr.Event) e
 	return ctx.Err()
 }
 
+func TestOpenClawConsumesSignedNIP51ControllerTrustListPersistBeforeApply(t *testing.T) {
+	runtime := newFakeSigner(t)
+	trusted := newFakeSigner(t)
+	added := newFakeSigner(t)
+	path := filepath.Join(t.TempDir(), "controller-policy.json")
+	policy, _, err := NewFileOpenClawControllerPolicy(path, []string{trusted.pubkey})
+	if err != nil {
+		t.Fatalf("open controller policy: %v", err)
+	}
+	transport := &fakeOpenClawSidecarTransport{}
+	sidecar, err := NewOpenClawSidecar(OpenClawSidecarConfig{
+		RuntimePubkey:    runtime.pubkey,
+		Signer:           runtime,
+		ControllerPolicy: policy,
+		Identifier:       "openclaw-test",
+		Relays:           []string{"wss://relay.example"},
+		Transport:        transport,
+		Driver:           &fakeOpenClawDriver{},
+	})
+	if err != nil {
+		t.Fatalf("configure sidecar: %v", err)
+	}
+	content := `{"service_id":"openclaw-soulfactory-sidecar","scope":"prod","version":2,"schema":"cascadia.config.membership.v1"}`
+	event := &nostr.Event{
+		Kind:      OpenClawControllerListKind,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", OpenClawControllerListDTag},
+			{"service", OpenClawControllerServiceID},
+			{"scope", "prod"},
+			{"version", "2"},
+			{"schema", OpenClawControllerListSchema},
+			{"p", trusted.pubkey},
+			{"p", added.pubkey},
+		},
+		Content: content,
+	}
+	if err := signGoNostrEvent(t.Context(), trusted, event); err != nil {
+		t.Fatalf("sign trust list: %v", err)
+	}
+	if err := sidecar.HandleControllerTrustList(t.Context(), event); err != nil {
+		t.Fatalf("apply trust list: %v", err)
+	}
+	reopened, _, err := NewFileOpenClawControllerPolicy(path, nil)
+	if err != nil {
+		t.Fatalf("reopen controller policy: %v", err)
+	}
+	got := reopened.Controllers()
+	if len(got) != 2 || !stringInSlice(trusted.pubkey, got) || !stringInSlice(added.pubkey, got) {
+		t.Fatalf("persisted controllers = %#v", got)
+	}
+	if !sidecar.isTrustedController(added.pubkey) {
+		t.Fatal("new controller was not hot-applied")
+	}
+	if err := sidecar.HandleControllerTrustList(t.Context(), event); err == nil {
+		t.Fatal("replayed non-advancing trust list was accepted")
+	}
+
+	untrusted := newFakeSigner(t)
+	rejected := *event
+	rejected.CreatedAt = nostr.Now()
+	if err := signGoNostrEvent(t.Context(), untrusted, &rejected); err != nil {
+		t.Fatalf("sign untrusted list: %v", err)
+	}
+	if err := sidecar.HandleControllerTrustList(t.Context(), &rejected); err == nil {
+		t.Fatal("untrusted trust-list author was accepted")
+	}
+	if !sidecar.isTrustedController(added.pubkey) {
+		t.Fatal("rejected trust list changed live controller policy")
+	}
+}
+
 func TestOpenClawCapabilitySigningUsesCallerContext(t *testing.T) {
 	runtime := newFakeSigner(t)
 	controller := newFakeSigner(t)

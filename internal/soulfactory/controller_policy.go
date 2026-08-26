@@ -22,14 +22,16 @@ type OpenClawControllerPolicy interface {
 	Controllers() []string
 	Reload() error
 	Apply(method, pubkey, eventID string, createdAt int64) error
+	ApplyList(controllers []string, author, eventID string, version int, createdAt int64) error
 }
 
 type openClawControllerPolicyState struct {
-	Version       int      `json:"version"`
-	Initialized   bool     `json:"initialized"`
-	Controllers   []string `json:"controllers"`
-	LastEventID   string   `json:"last_event_id,omitempty"`
-	LastCreatedAt int64    `json:"last_created_at,omitempty"`
+	Version          int            `json:"version"`
+	Initialized      bool           `json:"initialized"`
+	Controllers      []string       `json:"controllers"`
+	LastEventID      string         `json:"last_event_id,omitempty"`
+	LastCreatedAt    int64          `json:"last_created_at,omitempty"`
+	AcceptedVersions map[string]int `json:"accepted_versions,omitempty"`
 }
 
 type memoryOpenClawControllerPolicy struct {
@@ -54,6 +56,22 @@ func (p *memoryOpenClawControllerPolicy) Controllers() []string {
 }
 
 func (p *memoryOpenClawControllerPolicy) Reload() error { return nil }
+
+func (p *memoryOpenClawControllerPolicy) ApplyList(controllers []string, author, eventID string, version int, createdAt int64) error {
+	normalized, err := normalizeControllerPubkeys(controllers)
+	if err != nil || len(normalized) == 0 || strings.TrimSpace(author) == "" || strings.TrimSpace(eventID) == "" || version < 1 {
+		return fmt.Errorf("invalid controller trust list")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if staleControllerPolicyEvent(eventID, createdAt, p.lastEvent, p.lastCreated) {
+		return fmt.Errorf("stale controller trust list")
+	}
+	p.controllers = normalized
+	p.lastEvent = eventID
+	p.lastCreated = createdAt
+	return nil
+}
 
 func (p *memoryOpenClawControllerPolicy) Apply(method, pubkey, eventID string, createdAt int64) error {
 	normalized, err := normalizeControllerPubkeys([]string{pubkey})
@@ -147,6 +165,38 @@ func (s *fileOpenClawControllerPolicy) Reload() error {
 	s.mu.Lock()
 	s.state = state
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *fileOpenClawControllerPolicy) ApplyList(controllers []string, author, eventID string, version int, createdAt int64) error {
+	normalized, err := normalizeControllerPubkeys(controllers)
+	author = strings.ToLower(strings.TrimSpace(author))
+	eventID = strings.TrimSpace(eventID)
+	if err != nil || len(normalized) == 0 || author == "" || eventID == "" || version < 1 {
+		return fmt.Errorf("invalid controller trust list")
+	}
+	if _, err := nostr.PubKeyFromHex(author); err != nil {
+		return fmt.Errorf("invalid controller trust-list author")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	currentVersion := s.state.AcceptedVersions[author]
+	if version <= currentVersion {
+		return fmt.Errorf("controller trust-list version %d does not advance accepted version %d", version, currentVersion)
+	}
+	next := s.state
+	next.Controllers = normalized
+	next.LastEventID = eventID
+	next.LastCreatedAt = createdAt
+	next.AcceptedVersions = make(map[string]int, len(s.state.AcceptedVersions)+1)
+	for key, value := range s.state.AcceptedVersions {
+		next.AcceptedVersions[key] = value
+	}
+	next.AcceptedVersions[author] = version
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.state = next
 	return nil
 }
 

@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
+	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
@@ -46,6 +50,96 @@ func validPolicyRequest(version int) ConfigPublishRequest {
 		Kind: ConfigFabricPolicyKind, ServiceID: "khatru-relay", PolicyName: "rate-limits",
 		Scope: "prod", Version: version, Schema: "cascadia.config.rate-limits.v1",
 		Policy: map[string]any{"query": map[string]any{"max_limit": 500.0}},
+	}
+}
+
+type configStatusRepoPublisher struct {
+	repo   repository.NostrEventRepository
+	events []nostr.Event
+}
+
+func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Event) (int, error) {
+	if !event.CheckID() || !event.VerifySignature() {
+		return 0, fmt.Errorf("status event is not validly signed")
+	}
+	tags, err := json.Marshal(event.Tags)
+	if err != nil {
+		return 0, err
+	}
+	_, err = p.repo.Record(ctx, &repository.NostrEventRecord{
+		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
+		Content: event.Content, Tags: tags, Sig: hex.EncodeToString(event.Sig[:]),
+		CreatedAt: event.CreatedAt.Time(), ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	p.events = append(p.events, event)
+	return 1, nil
+}
+
+func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
+	repo := repository.NewInMemoryNostrEventRepository()
+	desiredPublisher := &configTestPublisher{}
+	operator := newConfigTestSigner(t)
+	console := NewConfigFabricService(repo, desiredPublisher, operator)
+	console.now = func() time.Time { return time.Unix(1787625660, 0) }
+	managedPubkey := strings.Repeat("a", 64)
+	request := ConfigPublishRequest{
+		Kind:       ConfigFabricPolicyKind,
+		ServiceID:  "bahia-relay-sidecar",
+		PolicyName: "relay-sidecar",
+		Scope:      "prod",
+		Version:    1,
+		Schema:     "cascadia.config.relay-sidecar.v1",
+		Policy: map[string]any{
+			"allowed_pubkeys": []any{managedPubkey},
+			"banned_pubkeys":  []any{},
+			"name":            "Fleet Bahia Relay",
+		},
+	}
+	receipt, err := console.Publish(t.Context(), request)
+	if err != nil {
+		t.Fatalf("console publish desired config: %v", err)
+	}
+	drift, err := console.ListDrift(t.Context())
+	if err != nil || len(drift) != 1 || !drift[0].Drift {
+		t.Fatalf("drift before apply = %#v err=%v", drift, err)
+	}
+
+	statusPublisher := &configStatusRepoPublisher{repo: repo}
+	applied := relaysidecar.ConfigProjection{}
+	consumer, err := relaysidecar.NewConfigConsumer(relaysidecar.ConfigConsumerConfig{
+		ServiceID:      "bahia-relay-sidecar",
+		Scope:          "prod",
+		ProjectionPath: filepath.Join(t.TempDir(), "projection.json"),
+		TrustedAuthors: []string{desiredPublisher.events[0].PubKey.Hex()},
+		Signer:         operator,
+		Publisher:      statusPublisher,
+		Now:            func() time.Time { return time.Unix(1787625661, 0) },
+		Apply: func(projection relaysidecar.ConfigProjection) error {
+			applied = projection
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("configure consumer: %v", err)
+	}
+	if err := consumer.Handle(t.Context(), desiredPublisher.events[0]); err != nil {
+		t.Fatalf("consumer apply desired config: %v", err)
+	}
+	if applied.EventID != receipt.EventID || len(applied.AllowedPubkeys) != 1 || applied.AllowedPubkeys[0] != managedPubkey {
+		t.Fatalf("applied projection = %#v", applied)
+	}
+	if len(statusPublisher.events) != 1 {
+		t.Fatalf("status events = %d, want 1", len(statusPublisher.events))
+	}
+	drift, err = console.ListDrift(t.Context())
+	if err != nil {
+		t.Fatalf("console drift after status: %v", err)
+	}
+	if len(drift) != 1 || drift[0].Drift || drift[0].AppliedEventID != receipt.EventID {
+		t.Fatalf("drift after apply status = %#v", drift)
 	}
 }
 

@@ -12,11 +12,21 @@ import (
 )
 
 type policy struct {
-	now func() nostr.Timestamp
+	now           func() nostr.Timestamp
+	admin         *adminPolicy
+	servicePubkey string
 }
 
-func newPolicy(config.NostrConfig) (*policy, error) {
-	return &policy{now: nostr.Now}, nil
+func newPolicy(cfg config.NostrConfig) (*policy, error) {
+	servicePubkey, ok, err := deriveFiatjafPubkey(cfg.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	value := ""
+	if ok {
+		value = servicePubkey.Hex()
+	}
+	return &policy{now: nostr.Now, servicePubkey: value}, nil
 }
 
 func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, string) {
@@ -32,6 +42,9 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	if p.now()-event.CreatedAt > nostr.Timestamp((365 * 24 * time.Hour).Seconds()) {
 		return true, "invalid: created_at too far in the past"
 	}
+	if p.admin != nil && event.PubKey.Hex() != p.servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
+		return true, "blocked: pubkey is not admitted by the persisted relay policy"
+	}
 
 	return false, ""
 }
@@ -43,28 +56,36 @@ func (p *policy) acceptFilter(ctx context.Context, filter nostr.Filter) (bool, s
 	return false, ""
 }
 
-func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
+func parseFiatjafSecret(raw string) (nostr.SecretKey, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nostr.ZeroPK, false, nil
+		return nostr.SecretKey{}, false, nil
 	}
 	if strings.HasPrefix(raw, "nsec") {
 		prefix, value, err := nip19.Decode(raw)
 		if err != nil {
-			return nostr.ZeroPK, false, fmt.Errorf("decode nostr.private_key nsec: %w", err)
+			return nostr.SecretKey{}, false, fmt.Errorf("decode nostr.private_key nsec: %w", err)
 		}
 		if prefix != "nsec" {
-			return nostr.ZeroPK, false, fmt.Errorf("nostr.private_key bech32 prefix %q is not nsec", prefix)
+			return nostr.SecretKey{}, false, fmt.Errorf("nostr.private_key bech32 prefix %q is not nsec", prefix)
 		}
 		sk, ok := value.(nostr.SecretKey)
 		if !ok {
-			return nostr.ZeroPK, false, fmt.Errorf("decode nostr.private_key nsec: unexpected value type %T", value)
+			return nostr.SecretKey{}, false, fmt.Errorf("decode nostr.private_key nsec: unexpected value type %T", value)
 		}
-		return sk.Public(), true, nil
+		return sk, true, nil
 	}
 	sk, err := nostr.SecretKeyFromHex(raw)
 	if err != nil {
-		return nostr.ZeroPK, false, fmt.Errorf("decode nostr.private_key hex: %w", err)
+		return nostr.SecretKey{}, false, fmt.Errorf("decode nostr.private_key hex: %w", err)
+	}
+	return sk, true, nil
+}
+
+func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
+	sk, ok, err := parseFiatjafSecret(raw)
+	if err != nil || !ok {
+		return nostr.ZeroPK, ok, err
 	}
 	return sk.Public(), true, nil
 }

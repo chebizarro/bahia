@@ -25,7 +25,7 @@ The browser/server request shape remains:
 - `31951`: authoritative soul read model;
 - `38384`/`38386`: runtime truth.
 
-Generated workspace config uses operator-supplied relays, controllers, model, and secret references. It must not embed placeholder relays, inline keys, fake MCP URLs, or Signet bunker URIs. Agent bunker secrets are private handoff data and are removed from public SoulFactory artifacts before the sidecar sees the durable checkpoint.
+Generated workspace config uses operator-supplied relays, controllers, model, and secret references. It must not embed synthetic relays, inline keys, fake MCP URLs, or Signet bunker URIs. Agent bunker secrets are private handoff data and are removed from public SoulFactory artifacts before the sidecar sees the durable checkpoint.
 
 ## Local control surface
 
@@ -68,7 +68,9 @@ Use `-private-key-file`/`OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE` for a mounted fi
 
 The default idempotency store is under the user cache directory. Production services should supply a persistent `-idempotency-store` path under mounted `/data`.
 
-Controller authorization is persisted in `-controller-policy-file`/`OPENCLAW_SOULFACTORY_CONTROLLER_POLICY_FILE` (by default, `openclaw-soulfactory-controller-policy.json` beside the idempotency store). `SOULFACTORY_CONTROLLER_PUBKEYS` and `-trusted-controller-pubkeys` seed the file only when it is absent and never override it afterward. A trusted controller grants or revokes another controller with signed ContextVM kind-`25910` methods `soulfactory.controller.grant` and `soulfactory.controller.revoke`; the sidecar persists the event id, timestamp, and complete normalized set before activating it, republishes capability state, and returns a correlated signed `25910` response. Send SIGHUP to re-read an operator-edited persisted file and republish capability state.
+Controller authorization is persisted in `-controller-policy-file`/`OPENCLAW_SOULFACTORY_CONTROLLER_POLICY_FILE` (by default, `openclaw-soulfactory-controller-policy.json` beside the idempotency store). `SOULFACTORY_CONTROLLER_PUBKEYS` and `-trusted-controller-pubkeys` seed the file only when it is absent and never override it afterward. The sidecar directly subscribes to signed NIP-51 kind-`30000` lists at `d=service:openclaw-soulfactory-sidecar:controllers`. A currently trusted author must sign the list; `service=openclaw-soulfactory-sidecar`, scope, positive monotonic version, `schema=cascadia.config.membership.v1`, content/tag equality, signature, and every `p` item are validated. The complete set and per-author accepted version are persisted before hot application and capability republication. Invalid, stale, replayed, and untrusted lists leave the prior policy active.
+
+A trusted controller may also grant or revoke another controller with signed ContextVM kind-`25910` methods `soulfactory.controller.grant` and `soulfactory.controller.revoke`; the sidecar persists the event id, timestamp, and complete normalized set before activating it, republishes capability state, and returns a correlated signed `25910` response. Send SIGHUP to re-read an operator-edited persisted file and republish capability state.
 
 ## Example
 

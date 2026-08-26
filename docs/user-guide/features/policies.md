@@ -68,6 +68,16 @@ Bahia retains config desired-state and `cascadia.config.status.v1` events in its
 
 For a NIP-51 named people list, use kind `30000`, schema `cascadia.config.membership.v1`, and `items` such as `{"tag":"p","value":"<64-hex-pubkey>"}`. Policy content that looks like a private key, token, password, or other raw secret is rejected. Use schema-defined `secret_refs` with `signet`, `file`, or `service` providers.
 
+### Reconcile managed relay configuration
+
+Authenticated ContextVM kind-`25910` handlers expose:
+
+- `config/reconcile` — compare the persisted desired coordinate with drift state and revalidate/reload the managed relay projection;
+- `config/status` — return the managed target, discovered callable NIP-86 methods, effective schema/version, last applied event, health, reload time, rejection, and drift;
+- `config/reload` — revalidate and activate only the already-persisted projection.
+
+Each request requires `target_ref`, `service_id`, `scope`, and `policy_coordinate` such as `service:bahia-relay-sidecar:relay-sidecar`. Mutable policy values are not accepted in `config/reload`.
+
 ### View drift
 
 `GET /api/v1/config-fabric/drift` returns the latest desired and applied event IDs and versions for each service, policy, and scope, plus `drift` and the latest safe rejection reason.

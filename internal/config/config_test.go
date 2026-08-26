@@ -284,6 +284,29 @@ func TestLoadMutableSidecarEnvironmentSeedsOnceAndPersists(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsReadOnlyMutablePolicySeedWithActionableGuidance(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("dev_mode: true\n"), 0o444); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("make config mount read-only: %v", err)
+	}
+	defer os.Chmod(dir, 0o755) //nolint:errcheck
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "true")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want read-only seed rejection")
+	}
+	for _, guidance := range []string{"mounted YAML is not writable", "mount it read-write", "writable state path", "unset the legacy"} {
+		if !strings.Contains(err.Error(), guidance) {
+			t.Fatalf("Load() error = %q, want actionable guidance %q", err, guidance)
+		}
+	}
+}
+
 func TestValidateLoomCanonicalProjectionRawKeyGate(t *testing.T) {
 	tests := []struct {
 		name    string

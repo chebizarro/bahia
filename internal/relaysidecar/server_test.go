@@ -1,9 +1,18 @@
 package relaysidecar
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +27,118 @@ func sidecarTestConfig(t *testing.T) config.NostrConfig {
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.DataDir = t.TempDir()
 	return cfg
+}
+
+func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
+	adminKey := nostr.Generate()
+	managedKey := nostr.Generate()
+	cfg := sidecarTestConfig(t)
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
+	cfg.Sidecar.AdminPolicyPath = cfg.Sidecar.DataDir + "/relay-admin-policy.json"
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	defer server.Close()
+
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	call := func(body string, header string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, httpServer.URL, bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", nip86ContentType)
+		req.Header.Set("Authorization", header)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST NIP-86: %v", err)
+		}
+		return resp
+	}
+
+	supportedBody := `{"method":"supportedmethods","params":[]}`
+	supportedAuth := testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(supportedBody), time.Now())
+	resp := call(supportedBody, supportedAuth)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("supportedmethods status=%d body=%s", resp.StatusCode, raw)
+	}
+	for _, method := range sidecarNIP86Methods {
+		if !strings.Contains(string(raw), method) {
+			t.Fatalf("supportedmethods response %s omits %s", raw, method)
+		}
+	}
+
+	allowBody := fmt.Sprintf(`{"method":"allowpubkey","params":["%s","managed"]}`, managedKey.Public().Hex())
+	allowAuth := testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(allowBody), time.Now())
+	resp = call(allowBody, allowAuth)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("allowpubkey status=%d", resp.StatusCode)
+	}
+	persisted, err := os.ReadFile(cfg.Sidecar.AdminPolicyPath)
+	if err != nil {
+		t.Fatalf("read persisted policy: %v", err)
+	}
+	if !bytes.Contains(persisted, []byte(managedKey.Public().Hex())) {
+		t.Fatalf("persisted policy does not contain allowed pubkey: %s", persisted)
+	}
+	event := nostr.Event{CreatedAt: nostr.Now(), Kind: 1, Content: "admitted"}
+	if err := event.Sign(managedKey); err != nil {
+		t.Fatalf("sign admitted event: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(t.Context(), event); err != nil {
+		t.Fatalf("hot-applied allow policy rejected managed pubkey: %v", err)
+	}
+
+	resp = call(allowBody, allowAuth)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replayed NIP-98 status=%d, want 401", resp.StatusCode)
+	}
+
+	nameBody := `{"method":"changerelayname","params":["Managed Bahia Relay"]}`
+	resp = call(nameBody, testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(nameBody), time.Now()))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || server.Relay().Info.Name != "Managed Bahia Relay" {
+		t.Fatalf("metadata mutation was not persisted and hot-applied: status=%d name=%q", resp.StatusCode, server.Relay().Info.Name)
+	}
+
+	banBody := fmt.Sprintf(`{"method":"banpubkey","params":["%s","revoked"]}`, managedKey.Public().Hex())
+	resp = call(banBody, testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(banBody), time.Now()))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("banpubkey status=%d", resp.StatusCode)
+	}
+	event = nostr.Event{CreatedAt: nostr.Now(), Kind: 1, Content: "blocked"}
+	if err := event.Sign(managedKey); err != nil {
+		t.Fatalf("sign blocked event: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(t.Context(), event); err == nil {
+		t.Fatal("hot-applied banned policy accepted event")
+	}
+}
+
+func testNIP98Header(t *testing.T, secret nostr.SecretKey, canonicalURL string, body []byte, now time.Time) string {
+	t.Helper()
+	sum := sha256.Sum256(body)
+	event := nostr.Event{
+		Kind: nip98Kind, CreatedAt: nostr.Timestamp(now.Unix()),
+		Tags:    nostr.Tags{{"u", canonicalURL}, {"method", http.MethodPost}, {"payload", hex.EncodeToString(sum[:])}},
+		Content: "",
+	}
+	if err := event.Sign(secret); err != nil {
+		t.Fatalf("sign NIP-98 event: %v", err)
+	}
+	raw, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal NIP-98 event: %v", err)
+	}
+	return "Nostr " + base64.StdEncoding.EncodeToString(raw)
 }
 
 func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {

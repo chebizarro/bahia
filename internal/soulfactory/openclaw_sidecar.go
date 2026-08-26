@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,13 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+)
+
+const (
+	OpenClawControllerListKind   = nostr.Kind(30000)
+	OpenClawControllerListDTag   = "service:openclaw-soulfactory-sidecar:controllers"
+	OpenClawControllerServiceID  = "openclaw-soulfactory-sidecar"
+	OpenClawControllerListSchema = "cascadia.config.membership.v1"
 )
 
 var openClawSoulFactoryMethods = []string{
@@ -266,6 +274,87 @@ type controllerPolicyIntent struct {
 	} `json:"params"`
 }
 
+func (s *OpenClawSidecar) HandleControllerTrustList(ctx context.Context, event *nostr.Event) error {
+	if event == nil || event.Kind != OpenClawControllerListKind || !validSignedEvent(event) {
+		return fmt.Errorf("invalid signed NIP-51 controller trust list")
+	}
+	if !s.isTrustedController(event.PubKey.Hex()) {
+		return fmt.Errorf("controller trust-list author is not currently trusted")
+	}
+	dTag, err := requiredSingleTag(event.Tags, "d")
+	if err != nil || dTag != OpenClawControllerListDTag {
+		return fmt.Errorf("invalid controller trust-list d tag")
+	}
+	serviceID, err := requiredSingleTag(event.Tags, "service")
+	if err != nil || serviceID != OpenClawControllerServiceID {
+		return fmt.Errorf("invalid controller trust-list service tag")
+	}
+	scope, err := requiredSingleTag(event.Tags, "scope")
+	if err != nil || !validControllerConfigScope(scope) {
+		return fmt.Errorf("invalid controller trust-list scope")
+	}
+	schema, err := requiredSingleTag(event.Tags, "schema")
+	if err != nil || schema != OpenClawControllerListSchema {
+		return fmt.Errorf("unsupported controller trust-list schema")
+	}
+	versionTag, err := requiredSingleTag(event.Tags, "version")
+	if err != nil {
+		return err
+	}
+	version, err := strconv.Atoi(versionTag)
+	if err != nil || version < 1 {
+		return fmt.Errorf("controller trust-list version must be a positive integer")
+	}
+	var content struct {
+		ServiceID string `json:"service_id"`
+		Scope     string `json:"scope"`
+		Version   int    `json:"version"`
+		Schema    string `json:"schema"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+		return fmt.Errorf("parse controller trust-list content: %w", err)
+	}
+	if content.ServiceID != serviceID || content.Scope != scope || content.Version != version || content.Schema != schema {
+		return fmt.Errorf("controller trust-list tag/content mismatch")
+	}
+	controllers := make([]string, 0)
+	for _, tag := range event.Tags {
+		if len(tag) == 2 && tag[0] == "p" {
+			controllers = append(controllers, tag[1])
+		}
+	}
+	if len(controllers) == 0 {
+		return fmt.Errorf("controller trust list requires at least one p tag")
+	}
+	if err := s.controllerPolicy.ApplyList(controllers, event.PubKey.Hex(), event.ID.Hex(), version, int64(event.CreatedAt)); err != nil {
+		return err
+	}
+	if err := s.PublishCapability(ctx); err != nil {
+		return fmt.Errorf("publish capability after controller trust-list apply: %w", err)
+	}
+	return nil
+}
+
+func requiredSingleTag(tags nostr.Tags, name string) (string, error) {
+	value := ""
+	count := 0
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == name {
+			count++
+			value = strings.TrimSpace(tag[1])
+		}
+	}
+	if count != 1 || value == "" {
+		return "", fmt.Errorf("controller trust list requires exactly one %s tag", name)
+	}
+	return value, nil
+}
+
+func validControllerConfigScope(scope string) bool {
+	return scope == "prod" || scope == "staging" || scope == "fleet" ||
+		(strings.HasPrefix(scope, "host:") && len(strings.TrimPrefix(scope, "host:")) > 0)
+}
+
 func (s *OpenClawSidecar) HandleControllerPolicyIntent(ctx context.Context, event *nostr.Event) error {
 	if event == nil || event.Kind != nostr.Kind(25910) || !validSignedEvent(event) {
 		return fmt.Errorf("invalid signed controller policy intent")
@@ -346,6 +435,12 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			},
 		},
 		{
+			Kinds: []nostr.Kind{OpenClawControllerListKind},
+			Tags: nostr.TagMap{
+				"d": []string{OpenClawControllerListDTag},
+			},
+		},
+		{
 			Kinds: []nostr.Kind{nostr.Kind(25910)},
 			Tags: nostr.TagMap{
 				tagPubkey: []string{s.runtimePubkey},
@@ -378,7 +473,9 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 				return err
 			}
 			var err error
-			if event.Kind == nostr.Kind(25910) {
+			if event.Kind == OpenClawControllerListKind {
+				err = s.HandleControllerTrustList(ctx, event)
+			} else if event.Kind == nostr.Kind(25910) {
 				err = s.HandleControllerPolicyIntent(ctx, event)
 			} else {
 				_, err = s.HandleControlEvent(ctx, event)

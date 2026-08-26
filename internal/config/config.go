@@ -542,16 +542,22 @@ type RelayQuorumConfig struct {
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
 type RelaySidecarConfig struct {
-	Enabled          bool          `koanf:"enabled"`
-	ListenAddr       string        `koanf:"listen_addr"`
-	PublicURL        string        `koanf:"public_url"`
-	BackendURL       string        `koanf:"backend_url"`
-	DataDir          string        `koanf:"data_dir"`
-	MirrorExternal   bool          `koanf:"mirror_external"`
-	EventRetention   time.Duration `koanf:"event_retention"`
-	RequestRetention time.Duration `koanf:"request_retention"`
-	AuthPrivateKey   string        `koanf:"auth_private_key"`
-	MaxQueryLimit    int           `koanf:"max_query_limit"`
+	Enabled              bool          `koanf:"enabled"`
+	ListenAddr           string        `koanf:"listen_addr"`
+	PublicURL            string        `koanf:"public_url"`
+	BackendURL           string        `koanf:"backend_url"`
+	DataDir              string        `koanf:"data_dir"`
+	MirrorExternal       bool          `koanf:"mirror_external"`
+	EventRetention       time.Duration `koanf:"event_retention"`
+	RequestRetention     time.Duration `koanf:"request_retention"`
+	AuthPrivateKey       string        `koanf:"auth_private_key"`
+	AdministratorPubkeys []string      `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys"`
+	ConfigTrustedPubkeys []string      `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys"`
+	AdminPolicyPath      string        `koanf:"admin_policy_path" yaml:"admin_policy_path"`
+	ConfigProjectionPath string        `koanf:"config_projection_path" yaml:"config_projection_path"`
+	ServiceID            string        `koanf:"service_id" yaml:"service_id"`
+	Scope                string        `koanf:"scope" yaml:"scope"`
+	MaxQueryLimit        int           `koanf:"max_query_limit"`
 }
 
 // RelayAdministrationAuthorization values declare why a NIP-86 target is in
@@ -894,6 +900,8 @@ func Defaults() *Config {
 				MirrorExternal:   false,
 				EventRetention:   7 * 24 * time.Hour,
 				RequestRetention: 24 * time.Hour,
+				ServiceID:        "bahia-relay-sidecar",
+				Scope:            "prod",
 				MaxQueryLimit:    2000,
 			},
 		},
@@ -2760,7 +2768,7 @@ func validateSidecarWebsocketURL(raw string, allowInsecureDev bool) error {
 }
 
 func (c *Config) validateRelaySidecar() error {
-	sidecar := c.Nostr.Sidecar
+	sidecar := &c.Nostr.Sidecar
 	if !sidecar.Enabled {
 		return nil
 	}
@@ -2800,6 +2808,31 @@ func (c *Config) validateRelaySidecar() error {
 	}
 	if sidecar.MaxQueryLimit <= 0 {
 		return fmt.Errorf("config validation failed: nostr.sidecar.max_query_limit must be > 0 when sidecar is enabled")
+	}
+	administrators, err := normalizePubkeyList(sidecar.AdministratorPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: nostr.sidecar.administrator_pubkeys: %w", err)
+	}
+	sidecar.AdministratorPubkeys = administrators
+	trusted, err := normalizePubkeyList(sidecar.ConfigTrustedPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: nostr.sidecar.config_trusted_pubkeys: %w", err)
+	}
+	if len(trusted) == 0 {
+		trusted = append([]string(nil), administrators...)
+	}
+	sidecar.ConfigTrustedPubkeys = trusted
+	if strings.TrimSpace(sidecar.AdminPolicyPath) == "" {
+		sidecar.AdminPolicyPath = filepath.Join(sidecar.DataDir, "relay-admin-policy.json")
+	}
+	if strings.TrimSpace(sidecar.ConfigProjectionPath) == "" {
+		sidecar.ConfigProjectionPath = filepath.Join(sidecar.DataDir, "config-fabric-projection.json")
+	}
+	if !agentRuntimeIDPattern.MatchString(sidecar.ServiceID) {
+		return fmt.Errorf("config validation failed: nostr.sidecar.service_id is invalid")
+	}
+	if sidecar.Scope != "prod" && sidecar.Scope != "staging" && sidecar.Scope != "fleet" && !strings.HasPrefix(sidecar.Scope, "host:") {
+		return fmt.Errorf("config validation failed: nostr.sidecar.scope is invalid")
 	}
 	return nil
 }

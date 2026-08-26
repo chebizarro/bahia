@@ -16,6 +16,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -23,6 +24,9 @@ const (
 	ContextVMMethodRelayPolicyGet   = "settings/relay-policy.get"
 	ContextVMMethodRelayPolicyApply = "settings/relay-policy.apply"
 	ContextVMMethodRelayAdminCall   = "settings/relay-admin.call"
+	ContextVMMethodConfigReconcile  = "config/reconcile"
+	ContextVMMethodConfigStatus     = "config/status"
+	ContextVMMethodConfigReload     = "config/reload"
 
 	RelaySettingsSchema = "bahia.relay-settings.v1"
 	RelaySettingsDomain = "relay-settings"
@@ -44,6 +48,7 @@ type RelaySettingsHandlerConfig struct {
 	Logger          *zap.Logger
 	Now             func() time.Time
 	FreshnessWindow time.Duration
+	ConfigFabric    *service.ConfigFabricService
 }
 
 type RelaySettingsHandlers struct {
@@ -56,6 +61,7 @@ type RelaySettingsHandlers struct {
 	logger          *zap.Logger
 	now             func() time.Time
 	freshnessWindow time.Duration
+	configFabric    *service.ConfigFabricService
 }
 
 // RelayPolicyState is the canonical signed policy payload. It is not the
@@ -134,6 +140,13 @@ type RelayPolicyAdminTarget struct {
 	AdministratorPubkeys []string `json:"administrator_pubkeys"`
 }
 
+type relayConfigOperationPayload struct {
+	TargetRef        string `json:"target_ref"`
+	ServiceID        string `json:"service_id"`
+	Scope            string `json:"scope"`
+	PolicyCoordinate string `json:"policy_coordinate"`
+}
+
 type relayAdminCallPayload struct {
 	TargetRef string `json:"target_ref"`
 	Method    string `json:"method"`
@@ -161,6 +174,7 @@ func NewRelaySettingsHandlers(cfg RelaySettingsHandlerConfig) *RelaySettingsHand
 		logger:          logger.Named("relay-settings-contextvm"),
 		now:             now,
 		freshnessWindow: freshnessWindow,
+		configFabric:    cfg.ConfigFabric,
 	}
 }
 
@@ -180,6 +194,9 @@ func (h *RelaySettingsHandlers) Register(transport *EncryptedRequestTransport) {
 	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyGet, h.GetPolicy)
 	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyApply, h.ApplyPolicy)
 	transport.RegisterContextVMHandler(ContextVMMethodRelayAdminCall, h.CallRelayAdmin)
+	transport.RegisterContextVMHandler(ContextVMMethodConfigReconcile, h.ConfigReconcile)
+	transport.RegisterContextVMHandler(ContextVMMethodConfigStatus, h.ConfigStatus)
+	transport.RegisterContextVMHandler(ContextVMMethodConfigReload, h.ConfigReload)
 }
 
 func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequest) (any, error) {
@@ -345,6 +362,108 @@ func (h *RelaySettingsHandlers) CallRelayAdmin(ctx context.Context, req ContextV
 		return nil, err
 	}
 	return map[string]any{"status": "ok", "target_ref": payload.TargetRef, "method": payload.Method, "result": json.RawMessage(resp.Result)}, nil
+}
+
+func (h *RelaySettingsHandlers) decodeConfigOperation(req ContextVMRequest) (relayConfigOperationPayload, error) {
+	var payload relayConfigOperationPayload
+	if err := json.Unmarshal(req.RPC.Params, &payload); err != nil {
+		return payload, fmt.Errorf("decode relay config operation: %w", err)
+	}
+	payload.TargetRef = strings.TrimSpace(payload.TargetRef)
+	payload.ServiceID = strings.TrimSpace(payload.ServiceID)
+	payload.Scope = strings.TrimSpace(payload.Scope)
+	payload.PolicyCoordinate = strings.TrimSpace(payload.PolicyCoordinate)
+	if payload.TargetRef == "" || payload.ServiceID == "" || payload.Scope == "" || payload.PolicyCoordinate == "" {
+		return payload, fmt.Errorf("target_ref, service_id, scope, and policy_coordinate are required")
+	}
+	if !relayAdministrationTargetConfigured(h.cfg, payload.TargetRef) {
+		return payload, fmt.Errorf("nip-86 target %q is not configured as Bahia-owned or Bahia-authorized", payload.TargetRef)
+	}
+	expectedPrefix := "service:" + payload.ServiceID + ":"
+	if !strings.HasPrefix(payload.PolicyCoordinate, expectedPrefix) || strings.TrimPrefix(payload.PolicyCoordinate, expectedPrefix) == "" {
+		return payload, fmt.Errorf("policy_coordinate must be service:<service_id>:<policy-name>")
+	}
+	if h.admin == nil {
+		return payload, fmt.Errorf("nip-86 relay administration client is not configured")
+	}
+	return payload, nil
+}
+
+func (h *RelaySettingsHandlers) ConfigStatus(ctx context.Context, req ContextVMRequest) (any, error) {
+	payload, err := h.decodeConfigOperation(req)
+	if err != nil {
+		return nil, err
+	}
+	methods, err := h.admin.SupportedMethods(ctx, payload.TargetRef)
+	if err != nil {
+		return nil, err
+	}
+	response, err := h.admin.Call(ctx, payload.TargetRef, relayadmin.MethodConfigStatus, nil)
+	if err != nil {
+		return nil, err
+	}
+	var effective map[string]any
+	if err := json.Unmarshal(response.Result, &effective); err != nil {
+		return nil, fmt.Errorf("decode relay config status: %w", err)
+	}
+	effective["target_ref"] = payload.TargetRef
+	effective["service_id"] = payload.ServiceID
+	effective["scope"] = payload.Scope
+	effective["policy_coordinate"] = payload.PolicyCoordinate
+	effective["supported_nip86_methods"] = methods
+	return effective, nil
+}
+
+func (h *RelaySettingsHandlers) ConfigReload(ctx context.Context, req ContextVMRequest) (any, error) {
+	payload, err := h.decodeConfigOperation(req)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := h.admin.Call(ctx, payload.TargetRef, relayadmin.MethodReload, nil); err != nil {
+		return nil, err
+	}
+	return h.ConfigStatus(ctx, req)
+}
+
+func (h *RelaySettingsHandlers) ConfigReconcile(ctx context.Context, req ContextVMRequest) (any, error) {
+	payload, err := h.decodeConfigOperation(req)
+	if err != nil {
+		return nil, err
+	}
+	if h.configFabric == nil {
+		return nil, fmt.Errorf("config-fabric desired-state service is not configured")
+	}
+	policyName := strings.TrimPrefix(payload.PolicyCoordinate, "service:"+payload.ServiceID+":")
+	drifts, err := h.configFabric.ListDrift(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var desired *service.ConfigDrift
+	for i := range drifts {
+		item := &drifts[i]
+		if item.ServiceID == payload.ServiceID && item.PolicyName == policyName && item.Scope == payload.Scope {
+			desired = item
+			break
+		}
+	}
+	if desired == nil {
+		return nil, fmt.Errorf("no persisted desired event exists for the requested policy coordinate")
+	}
+	if desired.Drift {
+		if _, err := h.admin.Call(ctx, payload.TargetRef, relayadmin.MethodReload, nil); err != nil {
+			return nil, fmt.Errorf("reload persisted relay projection during reconcile: %w", err)
+		}
+	}
+	status, err := h.ConfigStatus(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	result := status.(map[string]any)
+	result["desired_event_id"] = desired.DesiredEventID
+	result["desired_version"] = desired.DesiredVersion
+	result["reconciled"] = true
+	result["drift_before_reconcile"] = desired.Drift
+	return result, nil
 }
 
 func (h *RelaySettingsHandlers) currentState(pubkey string) RelayPolicyState {

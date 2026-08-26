@@ -1,0 +1,10 @@
+{
+  "mappings": [
+    {"criterion":"AC1","tests":["TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay"]},
+    {"criterion":"AC2","tests":["TestRelayConfigContextVMStatusAndReloadUseManagedNIP86Target","TestRelayConfigContextVMReconcileUsesPersistedDesiredCoordinate"]},
+    {"criterion":"AC3","tests":["TestReloadInitializationFailureKeepsActiveRuntimeServing"]},
+    {"criterion":"AC4","tests":["TestLoadRejectsReadOnlyMutablePolicySeedWithActionableGuidance"]},
+    {"criterion":"AC5","tests":["TestOpenClawConsumesSignedNIP51ControllerTrustListPersistBeforeApply"]},
+    {"criterion":"AC6","tests":["TestConfigFabricPublishApplyStatusClearsDriftEndToEnd"]}
+  ]
+}

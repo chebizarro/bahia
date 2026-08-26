@@ -42,6 +42,8 @@ const (
 	MethodBlockIP                     = "blockip"
 	MethodUnblockIP                   = "unblockip"
 	MethodListBlockedIPs              = "listblockedips"
+	MethodConfigStatus                = "configstatus"
+	MethodReload                      = "reload"
 )
 
 var (
@@ -74,6 +76,8 @@ var allowedMethods = map[string]struct{}{
 	MethodBlockIP:                     {},
 	MethodUnblockIP:                   {},
 	MethodListBlockedIPs:              {},
+	MethodConfigStatus:                {},
+	MethodReload:                      {},
 }
 
 // Config constructs an opt-in NIP-86 relay administration client. PrivateKeyHex

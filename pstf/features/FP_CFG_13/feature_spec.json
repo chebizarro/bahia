@@ -1,0 +1,5 @@
+{
+  "feature_id": "FP_CFG_13",
+  "title": "Bahia relay configuration conformance",
+  "intent": "Ship durable authenticated relay administration, direct desired-state consumption, ContextVM reconciliation, safe reload, and signed Soul Factory controller trust updates."
+}

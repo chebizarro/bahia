@@ -24,6 +24,78 @@ func main() {
 	}
 }
 
+type sidecarRuntime interface {
+	Run(context.Context) error
+	Close() error
+}
+
+type sidecarFactory func(config.NostrConfig, *zap.Logger) (sidecarRuntime, error)
+
+type activeRuntime struct {
+	runtime sidecarRuntime
+	cancel  context.CancelFunc
+	done    <-chan error
+}
+
+type runtimeSupervisor struct {
+	rootCtx context.Context
+	logger  *zap.Logger
+	factory sidecarFactory
+	active  *activeRuntime
+}
+
+func (s *runtimeSupervisor) prepare(cfg *config.Config) (sidecarRuntime, error) {
+	if !cfg.Nostr.Sidecar.Enabled {
+		return nil, nil
+	}
+	return s.factory(cfg.Nostr, s.logger)
+}
+
+func (s *runtimeSupervisor) start(runtime sidecarRuntime) {
+	if runtime == nil {
+		s.active = nil
+		s.logger.Info("relay sidecar disabled; waiting for config reload")
+		return
+	}
+	runCtx, cancel := context.WithCancel(s.rootCtx)
+	done := make(chan error, 1)
+	s.active = &activeRuntime{runtime: runtime, cancel: cancel, done: done}
+	go func() { done <- runtime.Run(runCtx) }()
+}
+
+func (s *runtimeSupervisor) stop() error {
+	if s.active == nil {
+		return nil
+	}
+	active := s.active
+	active.cancel()
+	err := <-active.done
+	s.active = nil
+	return err
+}
+
+func (s *runtimeSupervisor) replace(cfg *config.Config) error {
+	replacement, err := s.prepare(cfg)
+	if err != nil {
+		return err
+	}
+	if err := s.stop(); err != nil {
+		if replacement != nil {
+			_ = replacement.Close()
+		}
+		return err
+	}
+	s.start(replacement)
+	return nil
+}
+
+func (s *runtimeSupervisor) done() <-chan error {
+	if s.active == nil {
+		return nil
+	}
+	return s.active.done
+}
+
 func run(configPath string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -41,42 +113,24 @@ func run(configPath string) error {
 	signal.Notify(reload, syscall.SIGHUP)
 	defer signal.Stop(reload)
 
-	var cancel context.CancelFunc
-	var done <-chan error
-	start := func() error {
-		if !cfg.Nostr.Sidecar.Enabled {
-			logger.Info("relay sidecar disabled; waiting for config reload")
-			cancel = nil
-			done = nil
-			return nil
-		}
-		server, newErr := relaysidecar.New(cfg.Nostr, logger)
-		if newErr != nil {
-			return newErr
-		}
-		var runCtx context.Context
-		runCtx, cancel = context.WithCancel(rootCtx)
-		runDone := make(chan error, 1)
-		done = runDone
-		go func() { runDone <- server.Run(runCtx) }()
-		return nil
+	supervisor := &runtimeSupervisor{
+		rootCtx: rootCtx,
+		logger:  logger,
+		factory: func(cfg config.NostrConfig, logger *zap.Logger) (sidecarRuntime, error) {
+			return relaysidecar.New(cfg, logger)
+		},
 	}
-	stopCurrent := func() error {
-		if cancel == nil {
-			return nil
-		}
-		cancel()
-		return <-done
-	}
-	if err := start(); err != nil {
+	initial, err := supervisor.prepare(cfg)
+	if err != nil {
 		return fmt.Errorf("initialize relay sidecar: %w", err)
 	}
+	supervisor.start(initial)
 
 	for {
 		select {
 		case <-rootCtx.Done():
-			return stopCurrent()
-		case runErr := <-done:
+			return supervisor.stop()
+		case runErr := <-supervisor.done():
 			return runErr
 		case <-reload:
 			candidate, loadErr := config.Load(configPath)
@@ -84,13 +138,11 @@ func run(configPath string) error {
 				logger.Warn("config reload rejected; keeping current sidecar", zap.Error(loadErr))
 				continue
 			}
-			if stopErr := stopCurrent(); stopErr != nil {
-				return stopErr
+			if replaceErr := supervisor.replace(candidate); replaceErr != nil {
+				logger.Warn("config reload initialization failed; keeping current sidecar", zap.Error(replaceErr))
+				continue
 			}
 			cfg = candidate
-			if startErr := start(); startErr != nil {
-				return fmt.Errorf("apply config reload: %w", startErr)
-			}
 			logger.Info("config reload applied", zap.String("path", configPath))
 		}
 	}

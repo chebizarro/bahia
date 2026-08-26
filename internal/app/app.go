@@ -1351,6 +1351,7 @@ func New(cfg *config.Config) (*App, error) {
 			ProjectionStore: relayPolicyProjectionRepo,
 			ServicePubkey:   servicePubkey,
 			Logger:          logger,
+			ConfigFabric:    configFabricSvc,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{

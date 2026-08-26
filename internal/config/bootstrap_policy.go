@@ -81,7 +81,7 @@ func seedMutablePolicy(configPath string) (map[string]struct{}, error) {
 			return nil, fmt.Errorf("encoding bootstrapped config: %w", err)
 		}
 		if err := writeConfigAtomic(configPath, encoded); err != nil {
-			return nil, fmt.Errorf("persisting mutable policy bootstrap: %w", err)
+			return nil, fmt.Errorf("persisting mutable policy bootstrap to %s failed: %w; the mounted YAML is not writable—mount it read-write, copy it to a writable state path, or unset the legacy mutable-policy environment seeds", configPath, err)
 		}
 	}
 	return protected, nil

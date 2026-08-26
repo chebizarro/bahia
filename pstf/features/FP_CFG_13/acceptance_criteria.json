@@ -1,0 +1,10 @@
+{
+  "criteria": [
+    {"id":"AC1","text":"NIP-86 pubkey and metadata methods require fully bound, fresh, single-use NIP-98 authorization from a persisted administrator."},
+    {"id":"AC2","text":"ContextVM config/reconcile, config/status, and config/reload operate on managed relay targets."},
+    {"id":"AC3","text":"A replacement relay runtime initializes before the active runtime stops, and initialization failure preserves service."},
+    {"id":"AC4","text":"Legacy YAML seeding rejects read-only mounts with actionable guidance."},
+    {"id":"AC5","text":"Signed trusted NIP-51 controller lists persist before hot application."},
+    {"id":"AC6","text":"Desired config publication reaches durable application, signed status publication, and a cleared console drift view."}
+  ]
+}

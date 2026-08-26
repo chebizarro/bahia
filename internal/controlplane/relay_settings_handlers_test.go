@@ -12,8 +12,25 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
+
+type relayConfigFabricTestSigner struct{ secret nostr.SecretKey }
+
+func (s relayConfigFabricTestSigner) GetPublicKey(context.Context) (string, error) {
+	return s.secret.Public().Hex(), nil
+}
+func (s relayConfigFabricTestSigner) Sign(_ context.Context, event *nostr.Event) error {
+	return event.Sign(s.secret)
+}
+
+type relayConfigFabricTestPublisher struct{}
+
+func (relayConfigFabricTestPublisher) Publish(context.Context, nostr.Event) (int, error) {
+	return 1, nil
+}
 
 type failingRelayPolicyPublisher struct{}
 
@@ -31,7 +48,84 @@ func (f *fakeRelayAdminClient) SupportedMethods(context.Context, string) ([]stri
 
 func (f *fakeRelayAdminClient) Call(_ context.Context, targetRef, method string, params []any) (*relayadmin.Response, error) {
 	f.calls = append(f.calls, relayAdminCallPayload{TargetRef: targetRef, Method: method, Params: params})
+	if method == relayadmin.MethodConfigStatus {
+		return &relayadmin.Response{Result: json.RawMessage(`{"health":"ok"}`)}, nil
+	}
 	return &relayadmin.Response{Result: json.RawMessage(`{"ok":true}`)}, nil
+}
+
+func TestRelayConfigContextVMStatusAndReloadUseManagedNIP86Target(t *testing.T) {
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	admin := &fakeRelayAdminClient{}
+	cfg := &config.Config{Nostr: config.NostrConfig{RelayAdministration: config.RelayAdministrationConfig{
+		Enabled: true,
+		Targets: []config.RelayAdministrationTarget{{
+			Ref: "sidecar", RelayURL: "wss://sidecar.example",
+			Authorization:        config.RelayAdministrationBahiaAuthorized,
+			AdministratorPubkeys: []string{requesterPubkey},
+		}},
+	}}}
+	handler := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, AdminClient: admin, Logger: zap.NewNop()})
+	params := json.RawMessage(`{"target_ref":"sidecar","service_id":"bahia-relay-sidecar","scope":"prod","policy_coordinate":"service:bahia-relay-sidecar:relay-sidecar"}`)
+	request := ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: params}}
+
+	status, err := handler.ConfigStatus(t.Context(), request)
+	if err != nil {
+		t.Fatalf("config/status: %v", err)
+	}
+	if status.(map[string]any)["health"] != "ok" {
+		t.Fatalf("config/status result = %#v", status)
+	}
+	if _, err := handler.ConfigReload(t.Context(), request); err != nil {
+		t.Fatalf("config/reload: %v", err)
+	}
+	if len(admin.calls) != 3 || admin.calls[0].Method != relayadmin.MethodConfigStatus ||
+		admin.calls[1].Method != relayadmin.MethodReload || admin.calls[2].Method != relayadmin.MethodConfigStatus {
+		t.Fatalf("NIP-86 calls = %#v", admin.calls)
+	}
+
+	bad := request
+	bad.RPC.Params = json.RawMessage(`{"target_ref":"sidecar","service_id":"bahia-relay-sidecar","scope":"prod","policy_coordinate":"wrong"}`)
+	if _, err := handler.ConfigReload(t.Context(), bad); err == nil {
+		t.Fatal("config/reload accepted invalid policy coordinate")
+	}
+}
+
+func TestRelayConfigContextVMReconcileUsesPersistedDesiredCoordinate(t *testing.T) {
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	admin := &fakeRelayAdminClient{}
+	cfg := &config.Config{Nostr: config.NostrConfig{RelayAdministration: config.RelayAdministrationConfig{
+		Enabled: true,
+		Targets: []config.RelayAdministrationTarget{{
+			Ref: "sidecar", RelayURL: "wss://sidecar.example",
+			Authorization:        config.RelayAdministrationBahiaAuthorized,
+			AdministratorPubkeys: []string{requesterPubkey},
+		}},
+	}}}
+	repo := repository.NewInMemoryNostrEventRepository()
+	fabric := service.NewConfigFabricService(repo, relayConfigFabricTestPublisher{}, relayConfigFabricTestSigner{secret: nostr.Generate()})
+	receipt, err := fabric.Publish(t.Context(), service.ConfigPublishRequest{
+		Kind:      service.ConfigFabricPolicyKind,
+		ServiceID: "bahia-relay-sidecar", PolicyName: "relay-sidecar", Scope: "prod", Version: 1,
+		Schema: "cascadia.config.relay-sidecar.v1", Policy: map[string]any{"allowed_pubkeys": []any{}},
+	})
+	if err != nil {
+		t.Fatalf("publish desired event: %v", err)
+	}
+	handler := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: cfg, AdminClient: admin, ConfigFabric: fabric, Logger: zap.NewNop()})
+	params := json.RawMessage(`{"target_ref":"sidecar","service_id":"bahia-relay-sidecar","scope":"prod","policy_coordinate":"service:bahia-relay-sidecar:relay-sidecar"}`)
+	request := ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}, RPC: ContextVMJSONRPCRequest{Params: params}}
+	result, err := handler.ConfigReconcile(t.Context(), request)
+	if err != nil {
+		t.Fatalf("config/reconcile: %v", err)
+	}
+	view := result.(map[string]any)
+	if view["desired_event_id"] != receipt.EventID || view["reconciled"] != true {
+		t.Fatalf("config/reconcile result = %#v", view)
+	}
+	if len(admin.calls) != 2 || admin.calls[0].Method != relayadmin.MethodReload || admin.calls[1].Method != relayadmin.MethodConfigStatus {
+		t.Fatalf("config/reconcile NIP-86 calls = %#v", admin.calls)
+	}
 }
 
 func TestRelaySettingsApplyPublishesCanonicalStateAndAudit(t *testing.T) {
