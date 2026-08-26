@@ -79,6 +79,7 @@ func newRootCommand() *cobra.Command {
 		workersCommands(),
 		logsCommands(),
 		policiesCommands(),
+		configCommands(),
 		secretsCommands(),
 		orgsCommands(),
 		packageCommands(),

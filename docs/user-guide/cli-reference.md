@@ -183,6 +183,19 @@ bahia policies create \
   --idempotency-key policy-create-require-sbom
 ```
 
+### Config fabric
+
+```bash
+# Publish a validated desired-state request; Bahia signs through operator Signet
+bahia config publish --file config-request.json
+
+# Compare desired events with applied/rejected status
+bahia config drift
+
+# Republish a prior desired event at the next version
+bahia config rollback <desired-event-id>
+```
+
 ### Secrets
 
 ```bash

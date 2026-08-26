@@ -46,6 +46,36 @@ violations: []
 evaluated_at: "2024-01-15T10:00:00Z"
 ```
 
+## Config fabric operator API
+
+Bahia retains config desired-state and `cascadia.config.status.v1` events in its Nostr event store, so drift remains available after restart or while relays are unavailable.
+
+### Publish desired state
+
+`POST /api/v1/config-fabric/events` requires policy write permission. The server signs with the configured operator Signet/NIP-46 identity; it does not accept a raw signing key in the request.
+
+```json
+{
+  "kind": 30078,
+  "service_id": "khatru-relay",
+  "policy_name": "rate-limits",
+  "scope": "prod",
+  "version": 42,
+  "schema": "cascadia.config.rate-limits.v1",
+  "policy": {"query": {"max_limit": 500}}
+}
+```
+
+For a NIP-51 named people list, use kind `30000`, schema `cascadia.config.membership.v1`, and `items` such as `{"tag":"p","value":"<64-hex-pubkey>"}`. Policy content that looks like a private key, token, password, or other raw secret is rejected. Use schema-defined `secret_refs` with `signet`, `file`, or `service` providers.
+
+### View drift
+
+`GET /api/v1/config-fabric/drift` returns the latest desired and applied event IDs and versions for each service, policy, and scope, plus `drift` and the latest safe rejection reason.
+
+### Roll back
+
+`POST /api/v1/config-fabric/rollback` with `{"event_id":"<prior-desired-event-id>"}` republishes that validated content and list membership at the next version. Bahia preserves every prior event for audit; rollback never deletes history.
+
 ## Creating Policies
 
 ### Web UI

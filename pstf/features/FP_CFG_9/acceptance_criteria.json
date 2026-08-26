@@ -1,0 +1,9 @@
+{
+  "feature_id": "FP_CFG_9",
+  "criteria": [
+    {"id": "AC1", "statement": "Bahia publishes operator-Signet-signed NIP-51 or NIP-78 config events with the required coordinate tags."},
+    {"id": "AC2", "statement": "Publisher validation rejects malformed list items, non-advancing versions, and secret-looking policy content."},
+    {"id": "AC3", "statement": "Bahia subscribes to desired and config-status kinds and derives a persisted desired-versus-applied drift view with the last rejection."},
+    {"id": "AC4", "statement": "Rollback republishes a prior valid desired event's policy or list at the next version without deleting history."}
+  ]
+}

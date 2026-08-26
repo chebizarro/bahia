@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -141,6 +142,8 @@ func (r *memoryNostrEventRepo) latestCreatedAt(kinds []int, authors []string) *t
 
 func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.T) {
 	expected := []int{
+		kinds.ConfigACLList,
+		kinds.ConfigPolicy,
 		KindCASControlState,
 		KindCASAudit,
 		KindNIP38Status,
@@ -247,6 +250,23 @@ func TestSubscriberBuildSubscriptionFiltersUsesSeparateScopedCursors(t *testing.
 	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, filters[0].Kinds)
 	require.Empty(t, filters[0].Authors)
 	require.Equal(t, int64(199), int64(filters[0].Since), "legacy command rows must not create runtime cursors")
+}
+
+func TestSubscriberBuildSubscriptionFiltersScopesConfigDesiredAuthors(t *testing.T) {
+	repo := newMemoryNostrEventRepo()
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithKinds([]int{kinds.ConfigACLList, kinds.ConfigPolicy, kinds.CASControlState}),
+		WithAuthorizedAuthors([]string{strings.Repeat("a", 64)}),
+		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
+	)
+
+	filters, err := sub.buildSubscriptionFilters(context.Background())
+	require.NoError(t, err)
+	require.Len(t, filters, 2)
+	require.ElementsMatch(t, []gonostr.Kind{canonicalKind(kinds.CASControlState)}, filters[0].Kinds)
+	require.Empty(t, filters[0].Authors)
+	require.ElementsMatch(t, []gonostr.Kind{canonicalKind(kinds.ConfigACLList), canonicalKind(kinds.ConfigPolicy)}, filters[1].Kinds)
+	require.Len(t, filters[1].Authors, 1)
 }
 
 func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testing.T) {

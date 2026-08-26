@@ -180,6 +180,8 @@ var constantJustifications = map[string]KindJustification{
 	"HeartbeatObservation":           omitted("HeartbeatObservation", kinds.HeartbeatObservation, "canonical-alias", "semantic alias for NIP-38 status kind 30315; continuity heartbeats are identified by #domain=continuity and heartbeat schema/d/worker tags"),
 	"AssistantTranscript":            omitted("AssistantTranscript", kinds.AssistantTranscript, "canonical-alias", "semantic alias for CAS agent heartbeat kind 30316 used by assistant transcript sidecar reads; not a Bahia legacy migration input"),
 	"CASControlState":                omitted("CASControlState", kinds.CASControlState, "canonical-target", "canonical CAS control-plane state output; legacy read models map to this kind"),
+	"ConfigACLList":                  omitted("ConfigACLList", kinds.ConfigACLList, "config-fabric", "canonical NIP-51 config desired state consumed directly, not a Bahia legacy migration input"),
+	"ConfigPolicy":                   omitted("ConfigPolicy", kinds.ConfigPolicy, "config-fabric", "canonical NIP-78 config desired state consumed directly; schema tags distinguish it from other app-data documents"),
 	"LoomWorkerAdvertisement":        omitted("LoomWorkerAdvertisement", kinds.LoomWorkerAdvertisement, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
 	"LoomJobRequest":                 omitted("LoomJobRequest", kinds.LoomJobRequest, "interop", "open Loom protocol request consumed directly, not a Bahia legacy kind to rewrite"),
 	"LoomJobStatusUpdate":            omitted("LoomJobStatusUpdate", kinds.LoomJobStatusUpdate, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),

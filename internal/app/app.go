@@ -1057,8 +1057,10 @@ func New(cfg *config.Config) (*App, error) {
 
 	var assistantOrchestrator *service.AssistantOrchestrator
 	var assistantIdentity service.AssistantIdentity
+	var configFabricSigner service.ConfigFabricSigner
 	if cfg.Assistant.Enabled {
-		identity, assistantSignetManager, assistantBootstrapRunner := bootstrapOperatorAssistant(cfg, controlPlaneRelays, logger)
+		identity, assistantSignetManager, assistantBootstrapRunner, operatorSigner := bootstrapOperatorAssistant(cfg, controlPlaneRelays, logger)
+		configFabricSigner = operatorSigner
 		if assistantSignetManager != nil {
 			bgManager.RegisterWithOptions(assistantSignetManager, RunnerTier(Tier1), RunnerRequired(false))
 			registerSignetHealthCheck(healthProvider, assistantSignetManager, Tier1)
@@ -1197,6 +1199,8 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, AgentLoop: assistantAgentLoop, Logger: slog.Default()}), RunnerTier(Tier3), RunnerRequired(false))
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.Bool("agentic_enabled", cfg.Assistant.Agentic.Enabled))
 	}
+
+	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, controlPlanePool, configFabricSigner)
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
@@ -1484,6 +1488,7 @@ func New(cfg *config.Config) (*App, error) {
 			MLRegistry:       mlRegistry,
 			MLCommands:       mlCommandPublisher,
 			LLMRegistry:      llmRegistry,
+			ConfigFabric:     configFabricSvc,
 
 			HealthProvider: healthProvider,
 			ModePolicy:     policy,
@@ -3237,7 +3242,7 @@ func (r *operatorAssistantBootstrapRunner) Run(ctx context.Context) error {
 	}
 }
 
-func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap.Logger) (service.AssistantIdentity, *signetAdapter.ConnectionManager, BackgroundRunner) {
+func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap.Logger) (service.AssistantIdentity, *signetAdapter.ConnectionManager, BackgroundRunner, service.ConfigFabricSigner) {
 	identity := service.AssistantIdentity{AgentID: soulfactory.OperatorAssistantAgentID}
 	if cfg != nil && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 		if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
@@ -3245,19 +3250,19 @@ func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap
 		}
 	}
 	if cfg == nil || (!cfg.DevMode && !cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
-		return identity, nil, nil
+		return identity, nil, nil, nil
 	}
 	slogLogger := slog.Default()
 	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock}, slogLogger)
 	if err != nil {
 		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
-		return identity, nil, nil
+		return identity, nil, nil, nil
 	}
 	soulReactor := soulfactory.NewReactor(soulfactory.Config{Relays: relays, AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys}, nil, signetClient, slogLogger)
 	manager := signetAdapter.NewConnectionManager(signetClient, signetAdapter.ConnectionManagerConfig{
 		Name: "operator-assistant", AttemptTimeout: cfg.Assistant.SignetConnectTimeout, Logger: slogLogger,
 	})
-	return identity, manager, &operatorAssistantBootstrapRunner{signer: signetClient, reactor: soulReactor, logger: logger}
+	return identity, manager, &operatorAssistantBootstrapRunner{signer: signetClient, reactor: soulReactor, logger: logger}, signetClient
 }
 
 func loadAssistantSessions(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger) []domain.AssistantSession {

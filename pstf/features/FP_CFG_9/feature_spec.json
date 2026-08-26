@@ -1,0 +1,6 @@
+{
+  "feature_id": "FP_CFG_9",
+  "title": "Bahia config-fabric operator console",
+  "intent": "Publish signed desired config, retain desired and status events durably, expose drift, and roll back by publishing a higher version without putting secrets in events.",
+  "source_task": "fp-cfg.9"
+}

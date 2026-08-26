@@ -69,6 +69,7 @@ type RouterDeps struct {
 	LLMRegistry      *service.LLMRegistryService
 	MLRegistry       *service.MLRegistryService
 	MLCommands       handlers.MLCommandPublisher
+	ConfigFabric     *service.ConfigFabricService
 	HealthProvider   any
 	ModePolicy       any
 }
@@ -293,6 +294,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier2Gate).Get("/payments/history", payH.GetPaymentHistory)
 			}
 
+			// Config fabric desired/applied drift (read)
+			if deps.ConfigFabric != nil {
+				configFabricH := handlers.NewConfigFabricHandler(deps.ConfigFabric)
+				r.With(tier3Gate).Get("/config-fabric/drift", configFabricH.ListDrift)
+			}
+
 			// Policies (read)
 			if deps.Policies != nil {
 				polH := handlers.NewPolicyHandler(deps.Policies)
@@ -382,6 +389,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Builds (write)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
+
+			// Config fabric desired-state publisher and rollback
+			if deps.ConfigFabric != nil {
+				configFabricH := handlers.NewConfigFabricHandler(deps.ConfigFabric)
+				r.With(tier3Gate).Post("/config-fabric/events", configFabricH.Publish)
+				r.With(tier3Gate).Post("/config-fabric/rollback", configFabricH.Rollback)
+			}
 
 			// ML control plane (write compatibility actions publish Nostr commands)
 			if mlH != nil {

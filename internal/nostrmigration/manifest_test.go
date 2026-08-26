@@ -315,6 +315,7 @@ func parseKindsGoConstants(t *testing.T) map[string]int {
 		"NIP59_GIFT_WRAP":                       cascadia.NIP59_GIFT_WRAP,
 		"NIP59_EPHEMERAL_GIFT_WRAP":             cascadia.NIP59_EPHEMERAL_GIFT_WRAP,
 		"NIP38_USER_STATUS":                     cascadia.NIP38_USER_STATUS,
+		"NIP51_TASK_COLLECTION":                 cascadia.NIP51_TASK_COLLECTION,
 		"CTXVM_SERVER_ANNOUNCEMENT":             cascadia.CTXVM_SERVER_ANNOUNCEMENT,
 		"CTXVM_TOOLS_ANNOUNCEMENT":              cascadia.CTXVM_TOOLS_ANNOUNCEMENT,
 		"CTXVM_RESOURCES_ANNOUNCEMENT":          cascadia.CTXVM_RESOURCES_ANNOUNCEMENT,

@@ -22,7 +22,9 @@ import (
 //   - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
 //     not part of this subscriber contract.
 var DefaultInboundKinds = []int{
-	// Canonical Bahia observables.
+	// Canonical Bahia observables and config-fabric desired state.
+	kinds.ConfigACLList,
+	kinds.ConfigPolicy,
 	KindCASControlState,
 	KindCASAudit,
 	KindNIP38Status,
@@ -517,7 +519,7 @@ func isCanonicalControlPlaneRequest(kind int) bool {
 }
 
 func isDefaultAuthorScopedInboundKind(kind int) bool {
-	return false
+	return kind == kinds.ConfigACLList || kind == kinds.ConfigPolicy
 }
 
 func isDirectRuntimeScopedInboundKind(kind int) bool {

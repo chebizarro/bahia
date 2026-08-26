@@ -1,0 +1,9 @@
+{
+  "feature_id": "FP_CFG_9",
+  "tests": [
+    {"criteria": ["AC1", "AC2"], "test": "TestComposeConfigEventRequiredTagShape, TestConfigFabricPublisherRejectsNonMonotonicVersion, TestConfigFabricPublisherRejectsSecretContent, TestConfigFabricListValidatesStandardItemTags"},
+    {"criteria": ["AC3"], "test": "TestConfigFabricDriftAppliedAndRejectedProjection, TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams"},
+    {"criteria": ["AC4"], "test": "TestConfigFabricRollbackRepublishesPriorContentAtHigherVersion"},
+    {"criteria": ["AC1", "AC2", "AC3", "AC4"], "command": "go build ./... && go vet ./... && go test ./..."}
+  ]
+}

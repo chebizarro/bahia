@@ -613,6 +613,67 @@ func (c *Client) StreamLiveLogs(ctx context.Context, serviceID, envID string, ta
 	return scanner.Err()
 }
 
+type ConfigListItem struct {
+	Tag   string `json:"tag"`
+	Value string `json:"value"`
+}
+
+type ConfigPublishRequest struct {
+	Kind       int              `json:"kind"`
+	ServiceID  string           `json:"service_id"`
+	PolicyName string           `json:"policy_name"`
+	Scope      string           `json:"scope"`
+	Version    int              `json:"version"`
+	Schema     string           `json:"schema"`
+	Policy     map[string]any   `json:"policy,omitempty"`
+	SecretRefs map[string]any   `json:"secret_refs,omitempty"`
+	Items      []ConfigListItem `json:"items,omitempty"`
+}
+
+type ConfigPublishReceipt struct {
+	EventID string `json:"event_id"`
+	PubKey  string `json:"pubkey"`
+	Kind    int    `json:"kind"`
+	Version int    `json:"version"`
+	DTag    string `json:"d_tag"`
+}
+
+type ConfigDrift struct {
+	ServiceID           string `json:"service_id"`
+	PolicyName          string `json:"policy_name"`
+	Scope               string `json:"scope"`
+	DesiredEventID      string `json:"desired_event_id"`
+	DesiredVersion      int    `json:"desired_version"`
+	AppliedEventID      string `json:"applied_event_id,omitempty"`
+	AppliedVersion      int    `json:"applied_version,omitempty"`
+	Drift               bool   `json:"drift"`
+	LastRejectionReason string `json:"last_rejection_reason,omitempty"`
+}
+
+func (c *Client) PublishConfig(ctx context.Context, request ConfigPublishRequest) (*ConfigPublishReceipt, error) {
+	var receipt ConfigPublishReceipt
+	if err := c.do(ctx, http.MethodPost, "/api/v1/config-fabric/events", request, &receipt); err != nil {
+		return nil, err
+	}
+	return &receipt, nil
+}
+
+func (c *Client) ListConfigDrift(ctx context.Context) ([]ConfigDrift, error) {
+	var drift []ConfigDrift
+	if err := c.do(ctx, http.MethodGet, "/api/v1/config-fabric/drift", nil, &drift); err != nil {
+		return nil, err
+	}
+	return drift, nil
+}
+
+func (c *Client) RollbackConfig(ctx context.Context, eventID string) (*ConfigPublishReceipt, error) {
+	var receipt ConfigPublishReceipt
+	if err := c.do(ctx, http.MethodPost, "/api/v1/config-fabric/rollback", map[string]string{"event_id": eventID}, &receipt); err != nil {
+		return nil, err
+	}
+	return &receipt, nil
+}
+
 // --- Policies ---
 
 // ListPolicies returns all deployment policies.
