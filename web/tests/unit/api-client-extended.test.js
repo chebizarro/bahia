@@ -98,7 +98,10 @@ describe('BahiaClient HTTP-native interop contract', () => {
       'getSBOMPackages',
       'ingestSBOM',
       'listBlossomBlobs',
+      'listConfigFabricDrift',
+      'publishConfigFabricEvent',
       'query',
+      'rollbackConfigFabricEvent',
       'searchSBOMPackages',
       'setAuthProvider'
     ].sort());

@@ -59,7 +59,8 @@ describe('nav model helpers', () => {
       expect.objectContaining({ href: '/ml', label: 'Inference', docTopic: 'features-ml-models' }),
       expect.objectContaining({ href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' }),
       expect.objectContaining({ href: '/payments', label: 'Payments', docTopic: 'features-payments' }),
-      expect.objectContaining({ href: '/policies', label: 'Policies', docTopic: 'features-policies' })
+      expect.objectContaining({ href: '/policies', label: 'Policies', docTopic: 'features-policies' }),
+      expect.objectContaining({ href: '/config-fabric', label: 'Config Fabric', docTopic: 'features-policies' })
     ]));
     expect(PRIMARY_NAV_LINKS).toBe(NAV_LINKS);
     const pendingApprovals = NAV_LINKS.find((link) => link.href === '/deployments/pending');

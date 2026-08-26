@@ -75,16 +75,44 @@ type ConfigRollbackRequest struct {
 	EventID string `json:"event_id"`
 }
 
+type ConfigFabricVersion struct {
+	EventID    string           `json:"event_id"`
+	PubKey     string           `json:"pubkey"`
+	Kind       int              `json:"kind"`
+	Version    int              `json:"version"`
+	Schema     string           `json:"schema"`
+	CreatedAt  time.Time        `json:"created_at"`
+	Policy     map[string]any   `json:"policy,omitempty"`
+	SecretRefs map[string]any   `json:"secret_refs,omitempty"`
+	Items      []ConfigListItem `json:"items,omitempty"`
+}
+
+type ConfigFabricStatus struct {
+	EventID            string    `json:"event_id"`
+	PubKey             string    `json:"pubkey"`
+	ConfigEventID      string    `json:"config_event_id"`
+	Version            int       `json:"version"`
+	Status             string    `json:"status"`
+	EffectiveVersion   int       `json:"effective_version,omitempty"`
+	LastAppliedEventID string    `json:"last_applied_event_id,omitempty"`
+	Reason             string    `json:"reason,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
 type ConfigDrift struct {
-	ServiceID           string `json:"service_id"`
-	PolicyName          string `json:"policy_name"`
-	Scope               string `json:"scope"`
-	DesiredEventID      string `json:"desired_event_id"`
-	DesiredVersion      int    `json:"desired_version"`
-	AppliedEventID      string `json:"applied_event_id,omitempty"`
-	AppliedVersion      int    `json:"applied_version,omitempty"`
-	Drift               bool   `json:"drift"`
-	LastRejectionReason string `json:"last_rejection_reason,omitempty"`
+	ServiceID           string                `json:"service_id"`
+	PolicyName          string                `json:"policy_name"`
+	Scope               string                `json:"scope"`
+	DesiredEventID      string                `json:"desired_event_id"`
+	DesiredVersion      int                   `json:"desired_version"`
+	AppliedEventID      string                `json:"applied_event_id,omitempty"`
+	AppliedVersion      int                   `json:"applied_version,omitempty"`
+	Drift               bool                  `json:"drift"`
+	LastRejectionReason string                `json:"last_rejection_reason,omitempty"`
+	Desired             *ConfigFabricVersion  `json:"desired,omitempty"`
+	Effective           *ConfigFabricVersion  `json:"effective,omitempty"`
+	Versions            []ConfigFabricVersion `json:"versions"`
+	StatusHistory       []ConfigFabricStatus  `json:"status_history"`
 }
 
 type ConfigFabricService struct {
@@ -439,6 +467,8 @@ type statusConfig struct {
 	LastAppliedEventID string `json:"last_applied_event_id,omitempty"`
 	Reason             string `json:"reason,omitempty"`
 	PolicyName         string
+	EventID            string
+	PubKey             string
 	CreatedAt          time.Time
 }
 
@@ -455,6 +485,7 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 		records = append(records, kindRecords...)
 	}
 	desired := map[string]desiredConfig{}
+	desiredHistory := map[string][]desiredConfig{}
 	statuses := map[string][]statusConfig{}
 	for _, record := range records {
 		switch record.Kind {
@@ -464,6 +495,7 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 				continue
 			}
 			key := configCoordinate(item.ServiceID, item.PolicyName, item.Scope)
+			desiredHistory[key] = append(desiredHistory[key], item)
 			current, ok := desired[key]
 			if !ok || item.Version > current.Version || (item.Version == current.Version && item.CreatedAt.After(current.CreatedAt)) {
 				desired[key] = item
@@ -479,15 +511,49 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 	}
 	result := make([]ConfigDrift, 0, len(desired))
 	for key, wanted := range desired {
-		view := ConfigDrift{ServiceID: wanted.ServiceID, PolicyName: wanted.PolicyName, Scope: wanted.Scope, DesiredEventID: wanted.EventID, DesiredVersion: wanted.Version, Drift: true}
+		view := ConfigDrift{
+			ServiceID: wanted.ServiceID, PolicyName: wanted.PolicyName, Scope: wanted.Scope,
+			DesiredEventID: wanted.EventID, DesiredVersion: wanted.Version, Drift: true,
+			Versions:      make([]ConfigFabricVersion, 0, len(desiredHistory[key])),
+			StatusHistory: make([]ConfigFabricStatus, 0, len(statuses[key])),
+		}
+		sort.Slice(desiredHistory[key], func(i, j int) bool {
+			if desiredHistory[key][i].Version != desiredHistory[key][j].Version {
+				return desiredHistory[key][i].Version > desiredHistory[key][j].Version
+			}
+			return desiredHistory[key][i].CreatedAt.After(desiredHistory[key][j].CreatedAt)
+		})
+		for _, item := range desiredHistory[key] {
+			version, err := configVersionFromDesired(item)
+			if err != nil {
+				continue
+			}
+			view.Versions = append(view.Versions, version)
+			if item.EventID == wanted.EventID {
+				copy := version
+				view.Desired = &copy
+			}
+		}
 		sort.Slice(statuses[key], func(i, j int) bool { return statuses[key][i].CreatedAt.After(statuses[key][j].CreatedAt) })
 		for _, status := range statuses[key] {
+			view.StatusHistory = append(view.StatusHistory, ConfigFabricStatus{
+				EventID: status.EventID, PubKey: status.PubKey, ConfigEventID: status.ConfigEventID,
+				Version: status.Version, Status: status.Status, EffectiveVersion: status.EffectiveVersion,
+				LastAppliedEventID: status.LastAppliedEventID, Reason: status.Reason, CreatedAt: status.CreatedAt,
+			})
 			if view.AppliedEventID == "" && status.Status == "applied" {
 				view.AppliedEventID = status.LastAppliedEventID
 				view.AppliedVersion = status.EffectiveVersion
 			}
 			if view.LastRejectionReason == "" && status.Status == "rejected" {
 				view.LastRejectionReason = status.Reason
+			}
+		}
+		for i := range view.Versions {
+			if view.Versions[i].EventID == view.AppliedEventID {
+				copy := view.Versions[i]
+				view.Effective = &copy
+				break
 			}
 		}
 		view.Drift = view.AppliedEventID != view.DesiredEventID || view.AppliedVersion != view.DesiredVersion
@@ -616,8 +682,22 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	} else {
 		return status, fmt.Errorf("invalid status")
 	}
+	status.EventID = record.ID
+	status.PubKey = record.PubKey
 	status.CreatedAt = record.CreatedAt
 	return status, nil
+}
+
+func configVersionFromDesired(desired desiredConfig) (ConfigFabricVersion, error) {
+	request, err := publishRequestFromRecord(desired.Record)
+	if err != nil {
+		return ConfigFabricVersion{}, err
+	}
+	return ConfigFabricVersion{
+		EventID: desired.EventID, PubKey: desired.Record.PubKey, Kind: desired.Record.Kind,
+		Version: desired.Version, Schema: desired.Schema, CreatedAt: desired.CreatedAt,
+		Policy: request.Policy, SecretRefs: request.SecretRefs, Items: request.Items,
+	}, nil
 }
 
 func publishRequestFromRecord(record repository.NostrEventRecord) (ConfigPublishRequest, error) {

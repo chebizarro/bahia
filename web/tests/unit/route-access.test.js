@@ -15,6 +15,7 @@ describe('route access', () => {
     expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
     expect(routeAccessConfig.protectedPrefixes).toContain('/fleet-health');
+    expect(routeAccessConfig.protectedPrefixes).toContain('/config-fabric');
     expect(routeAccessConfig.protectedPrefixes).toContain('/settings');
     expect(routeAccessConfig.compatibilityRequirements).toMatchObject({ '/orgs': true });
     expect(Object.keys(routeAccessConfig.roleRequirements).sort()).toEqual(

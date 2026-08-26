@@ -3,7 +3,7 @@
   "source_beads": ["bahia-a84g"],
   "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk", "bahia-eqku"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
-  "updated_at": "2026-06-30",
+  "updated_at": "2026-08-26",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
@@ -12,6 +12,18 @@
       "permitted_transport_classes": ["http_native"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "Blossom server health/list/blob HTTP surfaces only; registry artifacts remain Nostr read-model backed."
+    },
+    {
+      "file": "web/src/routes/config-fabric/+page.svelte",
+      "permitted_transport_classes": ["rest_to_nostr_bridge"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Config Fabric API retains validated desired/status Nostr events and server-signs desired-state publication with the operator Signet identity."
+    },
+    {
+      "file": "web/src/routes/config-fabric/[coordinate]/+page.svelte",
+      "permitted_transport_classes": ["rest_to_nostr_bridge"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Config Fabric detail reads retained Nostr audit state and invokes the server Signet-backed publish/rollback bridge."
     }
   ],
   "entries": [
@@ -125,6 +137,17 @@
       "evidence": ["Policy routes import Nostr stores and public-controlplane policy commands.", "REST policy routes remain mounted as compatibility surfaces."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
       "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "config-fabric-operator-console",
+      "surface": "`/config-fabric/**` desired/effective configuration, audit, publish, and rollback",
+      "transport_class": "rest_to_nostr_bridge",
+      "route_files": ["web/src/routes/config-fabric/+page.svelte", "web/src/routes/config-fabric/[coordinate]/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/config_fabric.go", "internal/service/config_fabric.go"],
+      "evidence": ["The browser consumes retained desired and config-status Nostr events through the Config Fabric drift API.", "Publish and rollback requests are validated, signed by the configured operator Signet identity, persisted as desired events, and require relay acceptance.", "The browser never receives or submits a raw signing key and rejects secret-looking policy content before publication."],
+      "rest_import_policy": "allowed_only_for_operator_signet_nostr_bridge",
+      "pstf_status": "verified_by_FP_CFG_9",
+      "resolved_by_beads": ["bahia-231ck"]
     },
     {
       "id": "workers-read-models-and-controls",

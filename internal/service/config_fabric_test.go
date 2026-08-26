@@ -241,6 +241,18 @@ func TestConfigFabricDriftAppliedAndRejectedProjection(t *testing.T) {
 	if view[0].LastRejectionReason != "limit exceeds service maximum" {
 		t.Fatalf("rejection reason = %q", view[0].LastRejectionReason)
 	}
+	if view[0].Desired == nil || view[0].Desired.EventID != receipt.EventID || len(view[0].Versions) != 1 {
+		t.Fatalf("desired version history = %#v", view[0])
+	}
+	if view[0].Effective == nil || view[0].Effective.EventID != receipt.EventID {
+		t.Fatalf("effective config = %#v", view[0].Effective)
+	}
+	if got := view[0].Desired.Policy["query"].(map[string]any)["max_limit"]; got != float64(500) {
+		t.Fatalf("desired policy max_limit = %#v", got)
+	}
+	if len(view[0].StatusHistory) != 2 || view[0].StatusHistory[0].Status != "rejected" || view[0].StatusHistory[1].Status != "applied" {
+		t.Fatalf("status history = %#v", view[0].StatusHistory)
+	}
 }
 
 func TestConfigFabricRollbackRepublishesPriorContentAtHigherVersion(t *testing.T) {

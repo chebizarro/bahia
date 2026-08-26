@@ -86,6 +86,24 @@ export class BahiaClient {
     return data.data;
   }
 
+  listConfigFabricDrift() {
+    return this.fetch('/config-fabric/drift').then((result) => result ?? []);
+  }
+
+  publishConfigFabricEvent(payload) {
+    return this.fetch('/config-fabric/events', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  rollbackConfigFabricEvent(eventId) {
+    return this.fetch('/config-fabric/rollback', {
+      method: 'POST',
+      body: JSON.stringify({ event_id: eventId })
+    });
+  }
+
   getSBOM(artifactId) {
     return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`);
   }

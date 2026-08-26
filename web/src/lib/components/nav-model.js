@@ -33,6 +33,7 @@ const INTELLIGENCE_LINKS = [
 const ADMIN_LINKS = [
   { href: '/payments', label: 'Payments', docTopic: 'features-payments' },
   { href: '/policies', label: 'Policies', docTopic: 'features-policies' },
+  { href: '/config-fabric', label: 'Config Fabric', docTopic: 'features-policies' },
   { href: '/settings', label: 'Settings' }
 ];
 

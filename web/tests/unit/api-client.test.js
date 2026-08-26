@@ -45,6 +45,37 @@ describe('BahiaClient', () => {
     }));
   });
 
+  it('consumes Config Fabric drift, publish, and rollback endpoints', async () => {
+    const payload = {
+      kind: 30078,
+      service_id: 'khatru-relay',
+      policy_name: 'rate-limits',
+      scope: 'prod',
+      version: 8,
+      schema: 'cascadia.config.rate-limits.v1',
+      policy: { query: { max_limit: 500 } }
+    };
+    const eventId = 'a'.repeat(64);
+    global.fetch
+      .mockResolvedValueOnce(json([{ service_id: 'khatru-relay', desired_version: 7 }]))
+      .mockResolvedValueOnce(json({ event_id: eventId, version: 8 }))
+      .mockResolvedValueOnce(json({ event_id: 'b'.repeat(64), version: 9 }));
+
+    await expect(client.listConfigFabricDrift()).resolves.toHaveLength(1);
+    await expect(client.publishConfigFabricEvent(payload)).resolves.toMatchObject({ version: 8 });
+    await expect(client.rollbackConfigFabricEvent(eventId)).resolves.toMatchObject({ version: 9 });
+
+    expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/v1/config-fabric/drift', expect.objectContaining({ method: 'GET' }));
+    expect(global.fetch).toHaveBeenNthCalledWith(2, '/api/v1/config-fabric/events', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }));
+    expect(global.fetch).toHaveBeenNthCalledWith(3, '/api/v1/config-fabric/rollback', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ event_id: eventId })
+    }));
+  });
+
   it('throws backend error envelopes', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: false,

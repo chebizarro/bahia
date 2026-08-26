@@ -46,9 +46,33 @@ violations: []
 evaluated_at: "2024-01-15T10:00:00Z"
 ```
 
-## Config fabric operator API
+## Config Fabric operator console
 
 Bahia retains config desired-state and `cascadia.config.status.v1` events in its Nostr event store, so drift remains available after restart or while relays are unavailable.
+
+Open **Config Fabric** in the **Admin** navigation section. The console lists every managed service, policy, and scope with:
+
+- latest desired event ID and version;
+- latest applied event ID and effective version;
+- in-sync or drifted status;
+- the latest safe rejection reason.
+
+Select a service policy to open its detail view. The detail view shows the retained desired policy or list and the policy represented by the latest applied event, status/audit history, and all retained desired versions. Event IDs and versions identify the exact signed records used for each view.
+
+To publish a change:
+
+1. Select **Publish Config** from the list, or **Publish New Version** from a policy detail.
+2. Choose NIP-78 structured policy or NIP-51 membership list.
+3. Enter the service, policy, scope, next positive version, and matching `cascadia.config.<policy-name>.v1` schema.
+4. Enter a JSON policy object, or NIP-51 `p`, `a`, and `r` list items.
+5. If credentials are required, enter only schema-defined references using the `signet`, `file`, or `service` provider.
+6. Select **Publish Config**. The console checks field shape, schema/coordinate agreement, monotonic versioning against the current drift view, list item format, secret reference shape, and secret-looking policy content before calling the API.
+
+Raw passwords, tokens, private keys, and credentials must never be entered. The editor rejects secret-bearing field names and recognizable secret values; use references instead.
+
+To roll back, open a policy detail, select **Rollback** beside a prior version, and approve the confirmation dialog. Bahia republishes the selected retained payload as a new monotonically higher version; the historical event is not modified or deleted.
+
+## Config Fabric operator API
 
 ### Publish desired state
 

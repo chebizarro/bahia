@@ -2,8 +2,9 @@
   "feature_id": "FP_CFG_9",
   "tests": [
     {"criteria": ["AC1", "AC2"], "test": "TestComposeConfigEventRequiredTagShape, TestConfigFabricPublisherRejectsNonMonotonicVersion, TestConfigFabricPublisherRejectsSecretContent, TestConfigFabricListValidatesStandardItemTags"},
-    {"criteria": ["AC3"], "test": "TestConfigFabricDriftAppliedAndRejectedProjection, TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams"},
-    {"criteria": ["AC4"], "test": "TestConfigFabricRollbackRepublishesPriorContentAtHigherVersion"},
-    {"criteria": ["AC1", "AC2", "AC3", "AC4"], "command": "go build ./... && go vet ./... && go test ./..."}
+    {"criteria": ["AC3", "AC6"], "test": "TestConfigFabricDriftAppliedAndRejectedProjection, TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams"},
+    {"criteria": ["AC4", "AC6"], "test": "TestConfigFabricRollbackRepublishesPriorContentAtHigherVersion"},
+    {"criteria": ["AC5", "AC7"], "test": "web/tests/unit/config-fabric.test.ts, web/tests/unit/nav.test.js, web/tests/unit/route-access.test.js"},
+    {"criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7"], "command": "cd web && npm run lint && npm run test:unit && npm run build; go build ./...; go vet ./...; go test ./..."}
   ]
 }
