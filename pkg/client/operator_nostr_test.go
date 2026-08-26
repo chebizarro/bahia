@@ -246,6 +246,59 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 	}
 }
 
+func TestOperatorRollbackUsesIdempotencyTagOnly(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{
+			"status":         "submitted",
+			"intent_id":      "rollback-intent",
+			"service_id":     "svc-1",
+			"environment_id": "env-1",
+			"artifact_id":    "artifact-good",
+		})
+		return 1, nil
+	}
+
+	result, err := client.RollbackDeploymentNostr(context.Background(), RollbackDeploymentNostrRequest{
+		ServiceID:          "svc-1",
+		EnvironmentID:      "env-1",
+		DeploymentUnitID:   "unit-1",
+		TargetArtifactID:   "artifact-good",
+		SupersedesIntentID: "intent-bad",
+		IdempotencyKey:     "rollback:test",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RollbackDeploymentNostr() error = %v", err)
+	}
+	if result.IntentID != "rollback-intent" || result.ArtifactID != "artifact-good" {
+		t.Fatalf("unexpected rollback result: %#v", result)
+	}
+	published := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.Method != "service/rollback" {
+		t.Fatalf("method = %q, want service/rollback", rpc.Method)
+	}
+	if _, exists := rpc.Params["idempotency_key"]; exists {
+		t.Fatalf("idempotency_key leaked into strict ContextVM params: %#v", rpc.Params)
+	}
+	for key, want := range map[string]string{
+		"service_id":           "svc-1",
+		"environment_id":       "env-1",
+		"deployment_unit_id":   "unit-1",
+		"target_artifact_id":   "artifact-good",
+		"supersedes_intent_id": "intent-bad",
+	} {
+		if got, _ := rpc.Params[key].(string); got != want {
+			t.Fatalf("params[%s] = %q, want %q (params=%#v)", key, got, want, rpc.Params)
+		}
+	}
+	assertTagValue(t, published.Tags, "d", "rollback:test")
+	assertTagValue(t, published.Tags, "deployment_unit", "unit-1")
+}
+
 func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()

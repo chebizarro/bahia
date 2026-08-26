@@ -439,11 +439,85 @@ func TestOperatorStatusCallbackWritesOnlyInTableModeToStderr(t *testing.T) {
 	}
 }
 
+func TestDeploymentsApproveCommandPublishesSignerFirstApproval(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+
+	var captured client.DeploymentApprovalNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{deploymentApproval: func(req client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error) {
+			captured = req
+			return &client.DeploymentCommandResult{Status: "submitted", IntentID: req.IntentID}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(deployCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	root.SetArgs([]string{"deployments", "approve", "--intent", "11111111-1111-1111-1111-111111111111", "--idempotency-key", "approval:test"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute deployments approve: %v", err)
+	}
+	if captured.IntentID != "11111111-1111-1111-1111-111111111111" || captured.Decision != "approve" || captured.IdempotencyKey != "approval:test" {
+		t.Fatalf("captured approval = %#v", captured)
+	}
+}
+
+func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+
+	var captured client.DeploymentIntentNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{deploymentIntent: func(req client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error) {
+			captured = req
+			return &client.DeploymentCommandResult{
+				Status:        "submitted",
+				ServiceID:     req.ServiceID,
+				EnvironmentID: req.EnvironmentID,
+				ArtifactID:    req.ArtifactID,
+			}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(deployCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	root.SetArgs([]string{
+		"deployments", "deploy",
+		"--service", "11111111-1111-1111-1111-111111111111",
+		"--environment", "22222222-2222-2222-2222-222222222222",
+		"--artifact", "33333333-3333-3333-3333-333333333333",
+		"--requested-by", "ignored-by-server",
+		"--idempotency-key", "deploy:test",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute deployments deploy: %v", err)
+	}
+	if captured.ServiceID != "11111111-1111-1111-1111-111111111111" ||
+		captured.EnvironmentID != "22222222-2222-2222-2222-222222222222" ||
+		captured.ArtifactID != "33333333-3333-3333-3333-333333333333" ||
+		captured.RequestedBy != "ignored-by-server" ||
+		captured.IdempotencyKey != "deploy:test" {
+		t.Fatalf("captured deployment intent = %#v", captured)
+	}
+}
+
 type fakeCLIOperatorClient struct {
-	restartErr        error
-	policyCreate      func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-	environmentCreate func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
-	environmentUpdate func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
+	restartErr         error
+	policyCreate       func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
+	environmentCreate  func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
+	environmentUpdate  func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
+	deploymentIntent   func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
+	deploymentApproval func(client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error)
 }
 
 func (f fakeCLIOperatorClient) Close() {}
@@ -465,7 +539,19 @@ func (f fakeCLIOperatorClient) DeployServiceRuntimeNostr(context.Context, string
 func (f fakeCLIOperatorClient) CreateDeploymentIntentNostr(context.Context, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (f fakeCLIOperatorClient) CreateDeploymentIntentWithRequestNostr(_ context.Context, req client.DeploymentIntentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
+	if f.deploymentIntent != nil {
+		return f.deploymentIntent(req)
+	}
+	return nil, errors.New("not implemented")
+}
 func (f fakeCLIOperatorClient) RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) ApproveDeploymentNostr(_ context.Context, req client.DeploymentApprovalNostrRequest, _ func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
+	if f.deploymentApproval != nil {
+		return f.deploymentApproval(req)
+	}
 	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
