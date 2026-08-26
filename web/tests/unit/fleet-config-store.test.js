@@ -47,6 +47,25 @@ describe('fleet config store', () => {
     expect(store.state.document.template.logging.level).toBe('info');
   });
 
+  it('bumps the timestamp when republishing so retry creates a new fleet revision', async () => {
+    const sign = vi.fn(async (event) => ({ ...event, id: `revision-${event.created_at}` }));
+    const store = createFleetConfigStore({
+      client: {
+        publish: vi.fn(async () => [{ relay: 'wss://one.example', accepted: true, message: 'saved' }]),
+        subscribe: vi.fn()
+      },
+      auth: { status: 'authenticated', pubkey: 'd'.repeat(64) },
+      sign,
+      now: () => 1715700000
+    });
+
+    await store.publish(emptyFleetConfigDocument());
+    await store.publish(emptyFleetConfigDocument());
+
+    expect(sign.mock.calls.map(([event]) => event.created_at)).toEqual([1715700000, 1715700001]);
+    expect(store.state.event.id).toBe('revision-1715700001');
+  });
+
   it('rejects publishing when every relay returns OK false', async () => {
     const store = createFleetConfigStore({
       client: {

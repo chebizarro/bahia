@@ -174,9 +174,10 @@ export function createFleetConfigStore({
       error.validation = validation;
       throw error;
     }
+    const createdAt = Math.max(now(), Number(state.event?.created_at || 0) + 1);
     const unsignedEvent = {
       kind: KINDS.SOUL_FLEET_CONFIG,
-      created_at: now(),
+      created_at: createdAt,
       pubkey: auth.pubkey,
       tags: [
         ['d', SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER],

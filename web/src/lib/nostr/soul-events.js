@@ -25,6 +25,7 @@ export function parseSoulEvent(event) {
     draftRef: '',
     specHash: '',
     previousSpecHash: '',
+    appliedFleetRevision: '',
     runtime: {},
     relayPolicy: {},
     permissions: {},
@@ -55,6 +56,7 @@ export function parseSoulEvent(event) {
       case 'draft': soul.draftRef = tag[1]; break;
       case 'spec-hash': soul.specHash = tag[1]; break;
       case 'previous-spec-hash': soul.previousSpecHash = tag[1]; break;
+      case 'fleet-revision': soul.appliedFleetRevision = tag[1]; break;
       case 'runtime': soul.runtime.target = tag[1]; break;
       case 'runtime-pubkey': soul.runtime.runtime_pubkey = tag[1]; break;
       case 'runtime-binding': soul.runtime.runtime_binding = tag[1]; break;
