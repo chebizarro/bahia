@@ -29,6 +29,7 @@ type Config struct {
 	SoulFactoryPubkey             string
 	AuthorizedPubkeys             []string
 	FleetConfigEnabled            bool
+	FleetReconcileConcurrency     int
 	SignetBunkerURI               string
 	BlossomURL                    string
 	QdrantURL                     string
@@ -50,6 +51,7 @@ type Reactor struct {
 	signer                   Signer
 	provisioner              ProvisioningEngine
 	lifecycleHandler         *LifecycleHandler
+	fleetConfigReconciler    *FleetConfigReconciler
 	logger                   *slog.Logger
 	relayBus                 *SoulFactoryRelayBus
 	publishFn                func(context.Context, *nostr.Event, []string) error
@@ -57,6 +59,8 @@ type Reactor struct {
 	getDraftFn               func(context.Context, string, string) (*domain.SoulDraft, error)
 	getTemplateFn            func(context.Context, string) (*domain.SoulTemplate, error)
 	getFleetConfigFn         func(context.Context) (*FleetConfigSnapshot, error)
+	getFleetConfigRevisionFn func(context.Context, string) (*FleetConfigSnapshot, error)
+	listSoulsFn              func(context.Context) ([]*domain.AgentSoul, error)
 	findLifecycleResultFn    func(context.Context, string) (*nostr.Event, error)
 	findProvisioningResultFn func(context.Context, string) (*nostr.Event, error)
 
@@ -163,6 +167,15 @@ func (r *Reactor) lifecycle() *LifecycleHandler {
 	return r.lifecycleHandler
 }
 
+func (r *Reactor) fleetReconciler() *FleetConfigReconciler {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fleetConfigReconciler == nil {
+		r.fleetConfigReconciler = NewFleetConfigReconciler(r, r.config.FleetReconcileConcurrency)
+	}
+	return r.fleetConfigReconciler
+}
+
 // Run starts the reactor and blocks until context is cancelled.
 func (r *Reactor) Run(ctx context.Context) error {
 	r.logger.Info("starting soul factory reactor",
@@ -186,6 +199,24 @@ func (r *Reactor) Run(ctx context.Context) error {
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},
 			Limit: 100,
 		},
+	}
+	if r.config.FleetConfigEnabled {
+		authors := make([]nostr.PubKey, 0, len(r.config.AuthorizedPubkeys))
+		for _, raw := range r.config.AuthorizedPubkeys {
+			author, err := nostr.PubKeyFromHex(strings.TrimSpace(raw))
+			if err != nil {
+				return fmt.Errorf("invalid trusted fleet config operator pubkey: %w", err)
+			}
+			authors = append(authors, author)
+		}
+		if len(authors) > 0 {
+			filters = append(filters, nostr.Filter{
+				Kinds:   []nostr.Kind{nostr.Kind(domain.KindSoulFleetConfig)},
+				Authors: authors,
+				Tags:    nostr.TagMap{tagParameterizedD: []string{SoulFactoryFleetConfigIdentifier}},
+				Limit:   len(authors),
+			})
+		}
 	}
 
 	bus := r.relayBus
@@ -272,6 +303,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		r.handleSoulAction(ctx, event)
 	case nostr.Kind(domain.KindRuntimeControlResult):
 		r.handleLateRuntimeResult(ctx, event)
+	case nostr.Kind(domain.KindSoulFleetConfig):
+		r.handleFleetConfigUpdate(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -280,6 +313,9 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 func (r *Reactor) handlerShard(event *nostr.Event) *sync.Mutex {
 	key := ""
 	if event != nil {
+		if event.Kind == nostr.Kind(domain.KindSoulFleetConfig) {
+			return &r.handlerShards[0]
+		}
 		key = tagValue(event.Tags, tagAgentID)
 		if key == "" {
 			key = tagValue(event.Tags, tagSoul)
@@ -536,6 +572,31 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		logger.Error("failed to publish provisioning result", "error", err)
 		run.Status = domain.ProvisioningStatusFailed
 		run.Error = fmt.Sprintf("publish provisioning result: %v", err)
+	}
+}
+
+// handleFleetConfigUpdate validates one trusted kind:31953 revision and
+// reconciles only when it is still the authoritative latest fleet document.
+func (r *Reactor) handleFleetConfigUpdate(ctx context.Context, event *nostr.Event) {
+	if !r.config.FleetConfigEnabled {
+		return
+	}
+	snapshot, err := ParseFleetConfigEvent(event, r.config.AuthorizedPubkeys)
+	if err != nil {
+		r.logger.Warn("rejected fleet config update", "event_id", event.ID, "error", err)
+		return
+	}
+	latest, err := r.getProvisioningFleetConfig(ctx)
+	if err != nil {
+		r.logger.Error("resolve authoritative fleet config", "event_id", event.ID, "error", err)
+		return
+	}
+	if latest != nil && latest.EventID != snapshot.EventID {
+		r.logger.Info("ignoring superseded fleet config revision", "event_id", event.ID, "latest_event_id", latest.EventID)
+		return
+	}
+	if err := r.fleetReconciler().Reconcile(ctx, snapshot); err != nil {
+		r.logger.Error("fleet config reconciliation completed with failures", "event_id", event.ID, "error", err)
 	}
 }
 

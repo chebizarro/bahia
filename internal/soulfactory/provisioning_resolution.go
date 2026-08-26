@@ -205,6 +205,9 @@ func (s *resolvedProvisioningSpec) applyToSoul(soul *domain.AgentSoul) {
 	soul.Workspace = s.Workspace
 	soul.Assets = s.Assets
 	soul.CapabilityRef = firstNonEmpty(soul.CapabilityRef, s.Runtime.CapabilityRef)
+	if s.FleetConfig != nil {
+		soul.AppliedFleetConfigRevision = s.FleetConfig.EventID
+	}
 	if s.Workspace.Repo != "" && soul.WorkspaceRepoURL == "" {
 		soul.WorkspaceRepoURL = s.Workspace.Repo
 	}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-77j93",
+  "criteria": [
+    {"id": "AC-001", "statement": "The reactor subscribes narrowly to trusted kind 31953 revisions and serializes revision handling.", "tests": ["TestReactorSubscribesToTrustedFleetConfigRevisions"]},
+    {"id": "AC-002", "statement": "A new fleet revision fans out config.reload to every active OpenClaw soul and emits soul/revision/status observability.", "tests": ["TestFleetConfigReconcilerFansOutToAffectedOpenClawSouls"]},
+    {"id": "AC-003", "statement": "A soul whose kind 31951 read model already records the revision is skipped without runtime or rollout events.", "tests": ["TestFleetConfigReconcilerSkipsAlreadyAppliedRevision"]},
+    {"id": "AC-004", "statement": "A runtime application failure triggers a per-soul rollback and an error terminal event without advancing kind 31951.", "tests": ["TestFleetConfigReconcilerRollsBackFailedSoul"]},
+    {"id": "AC-005", "statement": "The OpenClaw config.reload target applies the fleet template using normal merge precedence without changing Compose or restarting.", "tests": ["TestConfigReloadAppliesFleetTemplateWithoutChangingCompose"]}
+  ]
+}

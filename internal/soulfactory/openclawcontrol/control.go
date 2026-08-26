@@ -206,7 +206,7 @@ func (e *Executor) Execute(ctx context.Context, invocation soulfactory.OpenClawC
 	case soulfactory.RuntimeMethodPersonaUpdate:
 		return e.personaUpdate(invocation)
 	case soulfactory.RuntimeMethodConfigReload:
-		return e.configReload(invocation)
+		return e.configReload(ctx, invocation)
 	case soulfactory.RuntimeMethodMemoryReindex:
 		return e.memoryReindex(invocation)
 	case soulfactory.RuntimeMethodRevoke:
@@ -314,7 +314,7 @@ func (e *Executor) update(ctx context.Context, invocation soulfactory.OpenClawCo
 	return outcome
 }
 
-func (e *Executor) configReload(invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {
+func (e *Executor) configReload(ctx context.Context, invocation soulfactory.OpenClawControlInvocation) *soulfactory.OpenClawControlOutcome {
 	paths := e.paths(invocation.AgentID)
 	state, ok, err := readJSONFile[State](paths.State)
 	if err != nil {
@@ -330,6 +330,9 @@ func (e *Executor) configReload(invocation soulfactory.OpenClawControlInvocation
 	req, err := soulfactory.ParseConfigReloadRequest(invocation.Params)
 	if err != nil {
 		return rejected(ErrorMissingRequired, err.Error(), false, nil)
+	}
+	if containsString(req.TargetFields, "fleet_config") && len(req.TargetFields) != 1 {
+		return rejected(ErrorMissingRequired, "fleet_config reload cannot be mixed with agent-scoped targets", false, nil)
 	}
 	if req.PreviousSpecHash != "" && req.PreviousSpecHash != state.SpecHash {
 		return rejected(ErrorSpecHashMismatch, "config reload previous_spec_hash does not match local state", false, map[string]interface{}{
@@ -403,7 +406,7 @@ func (e *Executor) configReload(invocation soulfactory.OpenClawControlInvocation
 	if err := atomicWriteFile(paths.AgentsFile, []byte(renderAgents(updatedInvocation, "")), 0o600); err != nil {
 		return failed(ErrorExecutionFailed, "write reloaded AGENTS.md: "+err.Error(), true, nil)
 	}
-	if err := e.renderReloadRuntimeFiles(updatedInvocation, state, paths, req.TargetFields); err != nil {
+	if err := e.renderReloadRuntimeFiles(ctx, updatedInvocation, state, paths, req.TargetFields); err != nil {
 		return failed(ErrorExecutionFailed, err.Error(), true, nil)
 	}
 	provenance["spec_hash"] = newSpecHash
@@ -1015,10 +1018,10 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 	model := firstString(runtimeParams, "model")
 	if fleetSnapshot != nil {
 		// Fleet defaults replace environment defaults when explicitly supplied.
-		if len(fleetSnapshot.Document.Defaults.RequiredPlugins) > 0 {
+		if fleetSnapshot.Document.Defaults.RequiredPlugins != nil {
 			pluginRequirements = append([]string{}, fleetSnapshot.Document.Defaults.RequiredPlugins...)
 		}
-		if len(fleetSnapshot.Document.Defaults.Bindings) > 0 {
+		if fleetSnapshot.Document.Defaults.Bindings != nil {
 			defaultBindings = append([]string{}, fleetSnapshot.Document.Defaults.Bindings...)
 		}
 		if model == "" {
@@ -1098,6 +1101,10 @@ func (e *Executor) runtimeSpec(invocation soulfactory.OpenClawControlInvocation,
 }
 
 func (e *Executor) renderRuntimeFiles(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, spec RuntimeSpec, paths localPaths) error {
+	return e.renderRuntimeFilesWithOptions(ctx, invocation, spec, paths, true)
+}
+
+func (e *Executor) renderRuntimeFilesWithOptions(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, spec RuntimeSpec, paths localPaths, writeCompose bool) error {
 	fleetSnapshot, err := fleetConfigSnapshotFromParams(invocation.Params)
 	if err != nil {
 		return err
@@ -1261,13 +1268,15 @@ func (e *Executor) renderRuntimeFiles(ctx context.Context, invocation soulfactor
 	if err := atomicWriteJSON(paths.RuntimeMetadata, runtimeMetadata, 0o600); err != nil {
 		return fmt.Errorf("write dedicated OpenClaw runtime metadata: %w", err)
 	}
-	if err := atomicWriteFile(paths.ComposePath, renderCompose(spec), 0o600); err != nil {
-		return fmt.Errorf("write dedicated OpenClaw compose specification: %w", err)
+	if writeCompose {
+		if err := atomicWriteFile(paths.ComposePath, renderCompose(spec), 0o600); err != nil {
+			return fmt.Errorf("write dedicated OpenClaw compose specification: %w", err)
+		}
 	}
 	return nil
 }
 
-func (e *Executor) renderReloadRuntimeFiles(invocation soulfactory.OpenClawControlInvocation, state State, paths localPaths, targets []string) error {
+func (e *Executor) renderReloadRuntimeFiles(ctx context.Context, invocation soulfactory.OpenClawControlInvocation, state State, paths localPaths, targets []string) error {
 	runtimeConfig, _, err := readJSONFile[map[string]interface{}](paths.RuntimeConfig)
 	if err != nil {
 		return fmt.Errorf("read dedicated OpenClaw config: %w", err)
@@ -1278,6 +1287,12 @@ func (e *Executor) renderReloadRuntimeFiles(invocation soulfactory.OpenClawContr
 	targeted := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
 		targeted[target] = struct{}{}
+	}
+	if _, reloadFleet := targeted["fleet_config"]; reloadFleet {
+		if len(targeted) != 1 {
+			return fmt.Errorf("fleet_config reload cannot be mixed with agent-scoped targets")
+		}
+		return e.renderFleetReloadRuntimeFiles(ctx, invocation, state, paths)
 	}
 	if _, reloadRuntime := targeted["runtime"]; reloadRuntime {
 		channels, _ := runtimeConfig["channels"].(map[string]interface{})
@@ -1335,6 +1350,97 @@ func (e *Executor) renderReloadRuntimeFiles(invocation soulfactory.OpenClawContr
 		return fmt.Errorf("write reloaded OpenClaw runtime metadata: %w", err)
 	}
 	return nil
+}
+
+func (e *Executor) renderFleetReloadRuntimeFiles(
+	ctx context.Context,
+	invocation soulfactory.OpenClawControlInvocation,
+	state State,
+	paths localPaths,
+) error {
+	spec, err := e.fleetReloadRuntimeSpec(invocation, state, paths)
+	if err != nil {
+		return err
+	}
+	return e.renderRuntimeFilesWithOptions(ctx, invocation, spec, paths, false)
+}
+
+func (e *Executor) fleetReloadRuntimeSpec(
+	invocation soulfactory.OpenClawControlInvocation,
+	state State,
+	paths localPaths,
+) (RuntimeSpec, error) {
+	spec := e.runtimeSpecFromState(state, paths)
+	spec.SpecHash = invocation.SpecHash
+
+	fleetSnapshot, err := fleetConfigSnapshotFromParams(invocation.Params)
+	if err != nil {
+		return RuntimeSpec{}, err
+	}
+	runtimeParams, _ := invocation.Params["runtime"].(map[string]interface{})
+	model := firstString(runtimeParams, "model")
+	pluginRequirements := append([]string{}, e.config.RequiredPlugins...)
+	defaultBindings := append([]string{}, e.config.DefaultBindings...)
+	if fleetSnapshot != nil {
+		if fleetSnapshot.Document.Defaults.RequiredPlugins != nil {
+			pluginRequirements = append([]string{}, fleetSnapshot.Document.Defaults.RequiredPlugins...)
+		}
+		if fleetSnapshot.Document.Defaults.Bindings != nil {
+			defaultBindings = append([]string{}, fleetSnapshot.Document.Defaults.Bindings...)
+		}
+		if model == "" {
+			model = strings.TrimSpace(firstNonEmpty(
+				fleetSnapshot.Document.Defaults.Model,
+				fleetDefaultModel(fleetSnapshot.Document.Template),
+			))
+		}
+	}
+	if model == "" {
+		model = firstNonEmpty(e.config.DefaultModel, state.Model)
+	}
+	spec.Model = model
+	spec.PluginRequirements = uniqueStrings(pluginRequirements)
+	spec.DefaultBindings = uniqueStrings(defaultBindings)
+	for _, requirement := range spec.PluginRequirements {
+		id, _, err := parsePluginRequirement(requirement)
+		if err != nil {
+			return RuntimeSpec{}, err
+		}
+		spec.PluginIDs = append(spec.PluginIDs, id)
+	}
+	spec.PluginIDs = uniqueStrings(spec.PluginIDs)
+	if !e.config.DryRun && !containsString(spec.PluginIDs, "nostr") {
+		return RuntimeSpec{}, fmt.Errorf("fleet config or OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS must allowlist the nostr plugin")
+	}
+	if !e.config.DryRun && spec.Model == "" {
+		return RuntimeSpec{}, fmt.Errorf("runtime.model, fleet config default model, or OPENCLAW_SOULFACTORY_DEFAULT_MODEL is required")
+	}
+
+	runtimeMetadata, _, err := readJSONFile[map[string]interface{}](paths.RuntimeMetadata)
+	if err != nil {
+		return RuntimeSpec{}, fmt.Errorf("read dedicated OpenClaw runtime metadata: %w", err)
+	}
+	spec.SecretFiles = map[string]string{}
+	if ownership, ok := runtimeMetadata["ownership"].(map[string]interface{}); ok {
+		if secretRefs, ok := ownership["secretFiles"].(map[string]interface{}); ok {
+			for name := range secretRefs {
+				spec.SecretFiles[name] = "preserved-by-hot-reload"
+			}
+		}
+	}
+	revisionInput, err := json.Marshal(map[string]interface{}{
+		"fleet_config": fleetSnapshot,
+		"agent_id":     invocation.AgentID,
+		"spec_hash":    invocation.SpecHash,
+		"model":        spec.Model,
+		"plugins":      spec.PluginRequirements,
+		"bindings":     spec.DefaultBindings,
+	})
+	if err != nil {
+		return RuntimeSpec{}, fmt.Errorf("marshal fleet reload revision input: %w", err)
+	}
+	spec.ConfigRevision = runtimeConfigRevision(revisionInput)
+	return spec, nil
 }
 
 func applyLineage(state *State, lineage RuntimeLineage) {

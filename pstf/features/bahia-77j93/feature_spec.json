@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-77j93",
+  "title": "Fleet-config reconciliation fan-out",
+  "intent": "Automatically reconcile active OpenClaw souls when a trusted operator publishes a new kind 31953 fleet configuration revision.",
+  "scope": ["trusted kind 31953 reactor subscription", "active OpenClaw kind 31951 discovery", "bounded config.reload fan-out", "per-soul progress and terminal events", "applied revision replay guard", "per-soul runtime rollback"],
+  "out_of_scope": ["fleet rollout web UI", "non-OpenClaw runtimes", "fleet-atomic rollback"]
+}

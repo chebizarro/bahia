@@ -230,7 +230,9 @@ bahia souls templates get research-agent
 
 Open **Settings → OpenClaw Fleet** at `/settings/fleet` to edit and publish the parameterized-replaceable kind `31953` document. The event content uses `soulfactory-fleet-config/v1` and contains an allowlisted OpenClaw `template` plus optional `defaults` for model, CLI bindings, and reproducible `plugin-id=install-source` requirements. Secret-shaped string fields must use `${VAR}` placeholders.
 
-During provisioning, the reactor selects the newest valid event signed by a pubkey in `soul_factory.authorized_pubkeys`. The OpenClaw wrapper deep-merges fleet template → per-agent runtime/relay settings → wrapper-owned workspace, account binding, Nostr enablement, and file-backed secrets. The three `OPENCLAW_SOULFACTORY_DEFAULT_*` variables remain fallbacks when the fleet document omits their corresponding defaults. Replacing kind `31953` affects later provisions; it does not fan out changes to existing agents.
+During provisioning, the reactor selects the newest valid event signed by a pubkey in `soul_factory.authorized_pubkeys`. The OpenClaw wrapper deep-merges fleet template → per-agent runtime/relay settings → wrapper-owned workspace, account binding, Nostr enablement, and file-backed secrets. The three `OPENCLAW_SOULFACTORY_DEFAULT_*` variables remain fallbacks when the fleet document omits their corresponding defaults.
+
+Replacing kind `31953` also reconciles active OpenClaw souls automatically. The reactor skips souls whose kind `31951` read model already records the new fleet revision, applies the new template with bounded per-soul `soulfactory.config.reload` calls, publishes soul-scoped kind `6950` progress and kind `7950` terminal events, and rolls an individual runtime back to its recorded prior fleet revision on failure. Successful kind `31951` events carry a `fleet-revision` tag with the applied kind `31953` event ID.
 
 ## Per-agent runtime customization
 

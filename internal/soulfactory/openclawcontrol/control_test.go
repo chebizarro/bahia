@@ -441,6 +441,73 @@ func TestConfigReloadMergesAllowlistedSectionsAndRerendersRuntimeFiles(t *testin
 	}
 }
 
+func TestConfigReloadAppliesFleetTemplateWithoutChangingCompose(t *testing.T) {
+	root := t.TempDir()
+	executor := newTestExecutor(t, root, true, nil)
+	assertSuccess(t, executor.Execute(t.Context(), testProvisionInvocation("agent-fleet-reload", "sha256:spec")), "running")
+	state := readStateForTest(t, root, "agent-fleet-reload")
+	paths := executor.pathsForState(state)
+	composeBefore, err := os.ReadFile(paths.ComposePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := soulfactory.FleetConfigSnapshot{
+		Coordinate: "31953:operator:soulfactory-fleet-config/v1",
+		EventID:    "fleet-revision-new",
+		Author:     "operator",
+		CreatedAt:  1715600000,
+		Document: soulfactory.FleetConfigDocument{
+			Schema: soulfactory.SoulFactoryFleetConfigSchema,
+			Template: map[string]interface{}{
+				"logging": map[string]interface{}{"level": "debug"},
+				"agents":  map[string]interface{}{"defaults": map[string]interface{}{"model": map[string]interface{}{"primary": "fleet/model"}}},
+			},
+		},
+	}
+	reload := testInvocation(soulfactory.RuntimeMethodConfigReload, "agent-fleet-reload", "sha256:spec", map[string]interface{}{
+		"schema":             soulfactory.SoulFactoryConfigReloadSchema,
+		"target_fields":      []interface{}{"fleet_config"},
+		"previous_spec_hash": "sha256:spec",
+		"new_spec_hash":      "sha256:spec",
+		"patch":              map[string]interface{}{"fleet_config": snapshot},
+	})
+	outcome := executor.Execute(t.Context(), reload)
+	assertSuccess(t, outcome, "running")
+	if outcome.Result["restart"] != false || !reflect.DeepEqual(outcome.Result["reloaded"], []string{"fleet_config"}) {
+		t.Fatalf("fleet reload result = %+v", outcome.Result)
+	}
+
+	runtimeConfig, ok, err := readJSONFile[map[string]interface{}](paths.RuntimeConfig)
+	if err != nil || !ok {
+		t.Fatalf("read runtime config: ok=%v err=%v", ok, err)
+	}
+	logging, _ := runtimeConfig["logging"].(map[string]interface{})
+	if logging["level"] != "debug" {
+		t.Fatalf("fleet logging config = %#v", logging)
+	}
+	channels, _ := runtimeConfig["channels"].(map[string]interface{})
+	nostrConfig, _ := channels["nostr"].(map[string]interface{})
+	if nostrConfig["enabled"] != true || nostrConfig["defaultAccount"] != state.AccountID {
+		t.Fatalf("wrapper-owned Nostr config = %#v", nostrConfig)
+	}
+	metadata, ok, err := readJSONFile[map[string]interface{}](paths.RuntimeMetadata)
+	if err != nil || !ok {
+		t.Fatalf("read runtime metadata: ok=%v err=%v", ok, err)
+	}
+	fleetMetadata, _ := metadata["fleetConfig"].(map[string]interface{})
+	if fleetMetadata["eventId"] != snapshot.EventID {
+		t.Fatalf("fleet metadata = %#v", fleetMetadata)
+	}
+	composeAfter, err := os.ReadFile(paths.ComposePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(composeAfter, composeBefore) {
+		t.Fatal("fleet hot reload changed the compose specification")
+	}
+}
+
 func TestMemoryReindexReturnsActionableStructuredResult(t *testing.T) {
 	root := t.TempDir()
 	executor := newTestExecutor(t, root, true, nil)

@@ -20,6 +20,8 @@ const (
 	tagAgentID            = "agent-id"
 	tagAgentPubkey        = "agent-pubkey"
 	tagAllowedKind        = "allowed-kind"
+	tagFleetConfig        = "fleet-config"
+	tagFleetRevision      = "fleet-revision"
 	tagApprovalPolicy     = "approval-policy"
 	tagAvatar             = "avatar"
 	tagAvatarRef          = "avatar-ref"
@@ -298,6 +300,8 @@ func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 			soul.SpecHash = value
 		case tagPreviousSpecHash:
 			soul.PreviousSpecHash = value
+		case tagFleetRevision:
+			soul.AppliedFleetConfigRevision = value
 		case tagRuntime:
 			soul.Runtime.Target = domain.RuntimeTarget(value)
 		case tagRuntimePubkey:
@@ -844,6 +848,7 @@ func BuildAgentSoulEvent(soul *domain.AgentSoul) *nostr.Event {
 		tags = append(tags, tag)
 	}
 	appendResultContextTags(&tags, soul)
+	appendTag(&tags, tagFleetRevision, soul.AppliedFleetConfigRevision)
 	return &nostr.Event{Kind: domain.KindAgentSoul, CreatedAt: nostr.Now(), Tags: tags, Content: soul.SoulMD}
 }
 

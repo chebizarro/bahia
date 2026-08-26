@@ -22,6 +22,7 @@ var configReloadSections = map[string]struct{}{
 	"relay_policy": {},
 	"workspace":    {},
 	"assets":       {},
+	"fleet_config": {},
 }
 
 // ConfigReloadRequest is the params contract for kind:38384

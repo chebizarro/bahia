@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-77j93",
+  "tests": [
+    {"layer": "Go reactor/reconciler", "command": "go test ./internal/soulfactory -run TestFleetConfigReconciler", "criteria": ["AC-001", "AC-002", "AC-003", "AC-004"]},
+    {"layer": "Go OpenClaw wrapper", "command": "go test ./internal/soulfactory/openclawcontrol -run TestConfigReloadAppliesFleetTemplateWithoutChangingCompose", "criteria": ["AC-005"]},
+    {"layer": "Repository", "command": "go build ./... && go test ./internal/soulfactory/...", "criteria": ["AC-001", "AC-002", "AC-003", "AC-004", "AC-005"]}
+  ]
+}
