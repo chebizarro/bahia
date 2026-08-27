@@ -47,6 +47,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          for node_bin in \
+            "$RUNNER_ROOT/externals/node24/bin" \
+            "$RUNNER_ROOT/externals/node20/bin" \
+            "/actions-runner/externals/node24/bin" \
+            "/actions-runner/externals/node20/bin" \
+            "/runner/externals/node24/bin" \
+            "/runner/externals/node20/bin"
+          do
+            if [[ -x "$node_bin/node" && -x "$node_bin/npm" ]]; then
+              export PATH="$node_bin:$PATH"
+              echo "$node_bin" >> "$GITHUB_PATH"
+              break
+            fi
+          done
+
           command -v node >/dev/null
           command -v npm >/dev/null
           npm ci --include=dev --ignore-scripts
