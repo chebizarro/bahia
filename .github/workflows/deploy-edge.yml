@@ -48,8 +48,8 @@ jobs:
           set -euo pipefail
 
           for node_bin in \
-            "$RUNNER_ROOT/externals/node24/bin" \
-            "$RUNNER_ROOT/externals/node20/bin" \
+            "${RUNNER_ROOT:-}/externals/node24/bin" \
+            "${RUNNER_ROOT:-}/externals/node20/bin" \
             "/actions-runner/externals/node24/bin" \
             "/actions-runner/externals/node20/bin" \
             "/runner/externals/node24/bin" \
