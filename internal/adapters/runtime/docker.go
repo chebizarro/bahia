@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -242,7 +243,7 @@ func normalizeDockerHTTPHost(dockerHost string, tlsEnabled bool) string {
 
 // Observe queries Docker for containers matching the given service name or runtime target name.
 func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
-	containers, err := o.listContainers(ctx, serviceName)
+	containers, err := o.listContainersForObservation(ctx, serviceID, envID, serviceName)
 	if err != nil {
 		return nil, fmt.Errorf("querying docker: %w", err)
 	}
@@ -284,6 +285,26 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		Source:              "docker",
 		ObservedAt:          time.Now().UTC(),
 	}, nil
+}
+
+func (o *DockerObserver) listContainersForObservation(ctx context.Context, serviceID, envID uuid.UUID, targetName string) ([]DockerContainer, error) {
+	if serviceID != uuid.Nil && envID != uuid.Nil {
+		containers, err := listContainersByBahiaLabels(ctx, o, serviceID.String(), envID.String())
+		if err != nil {
+			return nil, err
+		}
+		if len(containers) > 0 {
+			preferRunningContainers(containers)
+			return containers, nil
+		}
+	}
+	return o.listContainers(ctx, targetName)
+}
+
+func preferRunningContainers(containers []DockerContainer) {
+	sort.SliceStable(containers, func(i, j int) bool {
+		return strings.EqualFold(containers[i].State, "running") && !strings.EqualFold(containers[j].State, "running")
+	})
 }
 
 func firstNonEmptyString(values ...string) string {

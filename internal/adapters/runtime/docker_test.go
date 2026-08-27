@@ -235,6 +235,55 @@ func TestDockerObserveUsesAllContainersNameFallbackAndRepoDigest(t *testing.T) {
 	}
 }
 
+func TestDockerObservePrefersRunningBahiaManagedContainerOverLegacyServiceLabel(t *testing.T) {
+	t.Parallel()
+
+	serviceID := uuid.New()
+	envID := uuid.New()
+	handlerErrors := newDockerHandlerErrors()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
+			filters := r.URL.Query().Get("filters")
+			if !strings.Contains(filters, "bahia.service_id="+serviceID.String()) || !strings.Contains(filters, "bahia.environment_id="+envID.String()) {
+				handlerErrors.add(fmt.Sprintf("unexpected container filters: %s", filters))
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"Id":"rollback-container","Names":["/bahia-env-harbormaster-watch-rollback"],"Image":"registry.example/harbormaster-watch:old","ImageID":"sha256:rollbackdigest","State":"exited","Labels":{"bahia.service":"harbormaster-watch"}},
+				{"Id":"current-container","Names":["/bahia-env-harbormaster-watch"],"Image":"registry.example/harbormaster-watch:current","ImageID":"sha256:currentdigest","State":"running","Labels":{"bahia.managed":"true"}}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:currentdigest/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:currentdigest","RepoDigests":["registry.example/harbormaster-watch@sha256:currentrepo"]}`))
+		default:
+			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{httpClient: server.Client(), host: server.URL, logger: zap.NewNop()}
+	obs, err := observer.Observe(context.Background(), serviceID, envID, "harbormaster-watch")
+	if err != nil {
+		t.Fatalf("Observe returned error: %v; handler errors: %v", err, handlerErrors.all())
+	}
+	if errors := handlerErrors.all(); len(errors) > 0 {
+		t.Fatalf("handler errors: %v", errors)
+	}
+	if obs.ObservedContainerID != "current-container" {
+		t.Fatalf("expected running current container, got %q", obs.ObservedContainerID)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy {
+		t.Fatalf("expected healthy running container, got %s", obs.HealthStatus)
+	}
+	if obs.ObservedImageDigest != "sha256:currentrepo" {
+		t.Fatalf("expected current repo digest, got %q", obs.ObservedImageDigest)
+	}
+}
+
 func TestDockerObservePrefersConfiguredRepoDigestWhenImageIDHasMultipleRepos(t *testing.T) {
 	t.Parallel()
 
