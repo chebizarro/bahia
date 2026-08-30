@@ -51,6 +51,23 @@ func TestDockerObserverObserveInstanceInspectsExactContainerAndStats(t *testing.
 	}
 }
 
+func TestDockerObserverRejectsMismatchedSingleContainer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.44/containers/json" {
+			_, _ = fmt.Fprint(w, `[{"Id":"decoy-id","Names":["/decoy"],"State":"running","Labels":{"bahia.service":"decoy"}}]`)
+			return
+		}
+		t.Fatalf("mismatched container was inspected or controlled: %s", r.URL.Path)
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{httpClient: server.Client(), host: server.URL, logger: zap.NewNop()}
+	_, err := observer.ObserveInstance(context.Background(), domain.ManagedInstanceKey{RuntimeTargetName: "api"})
+	if err == nil {
+		t.Fatal("ObserveInstance() accepted a mismatched single container")
+	}
+}
+
 func TestDockerObserverObserveInstanceMapsOOMKilledAndRestarting(t *testing.T) {
 	tests := []struct {
 		name       string

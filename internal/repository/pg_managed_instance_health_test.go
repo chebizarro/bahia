@@ -21,6 +21,7 @@ func TestPgManagedInstanceHealthRepositoryUpsertSanitizesStoredSummary(t *testin
 		ManagedInstanceKey: domain.ManagedInstanceKey{
 			ServiceID: uuid.New(), EnvironmentID: uuid.New(), DeploymentUnitID: uuid.New(), RuntimeTargetName: "api",
 		},
+		Host:           "https://host-user:host-password@example.test",
 		SupervisorType: domain.InstanceSupervisorDocker,
 		Status:         domain.InstanceHealthStatusUnhealthy,
 		FailureReason:  "token=do-not-store",
@@ -28,12 +29,32 @@ func TestPgManagedInstanceHealthRepositoryUpsertSanitizesStoredSummary(t *testin
 			CorrelationID: "attempt-1", Evidence: "bunker://secret?relay=wss://relay.example",
 		},
 	}
-	args := managedInstanceAnyArgs(16)
+	args := managedInstanceAnyArgs(17)
+	args[4] = "https://[REDACTED]@example.test"
 	args[7] = "[REDACTED]"
 	mock.ExpectExec("INSERT INTO managed_instance_health").WithArgs(args...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	require.NoError(t, repo.UpsertHealth(context.Background(), health))
 	require.Equal(t, "[REDACTED]", health.FailureReason)
+	require.Equal(t, "https://[REDACTED]@example.test", health.Host)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgManagedInstanceHealthRepositoryPersistsImplicitUnitObservation(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	health := &domain.ManagedInstanceHealth{
+		ManagedInstanceKey: domain.ManagedInstanceKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), RuntimeTargetName: "api"},
+		SupervisorType:     domain.InstanceSupervisorDocker,
+		Status:             domain.InstanceHealthStatusHealthy,
+	}
+	args := managedInstanceAnyArgs(17)
+	args[2] = nil
+	mock.ExpectExec("INSERT INTO managed_instance_health").WithArgs(args...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	require.NoError(t, repo.UpsertHealth(context.Background(), health))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -49,9 +70,9 @@ func TestPgManagedInstanceHealthRepositoryGetHealthScansRecoverySummary(t *testi
 	require.NoError(t, err)
 	rows := pgxmock.NewRows([]string{
 		"service_id", "environment_id", "deployment_unit_id", "runtime_target_name", "host", "supervisor_type", "status", "failure_reason",
-		"last_observed_at", "restart_count", "consecutive_restart_count", "memory_current_bytes", "memory_peak_bytes", "memory_limit_bytes", "last_recovery_attempt", "updated_at",
-	}).AddRow(key.ServiceID, key.EnvironmentID, key.DeploymentUnitID, key.RuntimeTargetName, "host-a", domain.InstanceSupervisorDocker,
-		domain.InstanceHealthStatusHealthy, "", now, 2, 0, int64(10), int64(20), int64(100), attemptJSON, now)
+		"last_observed_at", "failure_generation_at", "restart_count", "consecutive_restart_count", "memory_current_bytes", "memory_peak_bytes", "memory_limit_bytes", "last_recovery_attempt", "updated_at",
+	}).AddRow(key.ServiceID, key.EnvironmentID, key.DeploymentUnitID.String(), key.RuntimeTargetName, "host-a", domain.InstanceSupervisorDocker,
+		domain.InstanceHealthStatusHealthy, "", now, nil, 2, 0, int64(10), int64(20), int64(100), attemptJSON, now)
 	mock.ExpectQuery("SELECT .* FROM managed_instance_health").WithArgs(key.ServiceID, key.EnvironmentID, key.DeploymentUnitID, key.RuntimeTargetName).WillReturnRows(rows)
 
 	got, err := repo.GetHealth(context.Background(), key)
@@ -121,6 +142,28 @@ func TestPgManagedInstanceHealthRepositoryRecentReadsAreBounded(t *testing.T) {
 	events, err := repo.ListRecentHealthEvents(context.Background(), key, 5000)
 	require.NoError(t, err)
 	require.Empty(t, events)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgManagedInstanceHealthRepositorySanitizesMaintenanceActorAndReason(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	override := &domain.MaintenanceOverride{
+		ManagedInstanceKey: domain.ManagedInstanceKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), RuntimeTargetName: "api"},
+		Actor:              "https://actor:password@example.test",
+		Reason:             "eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.c2lnbmF0dXJl",
+	}
+	args := managedInstanceAnyArgs(9)
+	args[3] = nil
+	args[5] = "https://[REDACTED]@example.test"
+	args[6] = "[REDACTED]"
+	mock.ExpectExec("INSERT INTO managed_instance_overrides").WithArgs(args...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	require.NoError(t, repo.CreateMaintenanceOverride(context.Background(), override))
+	require.Equal(t, "https://[REDACTED]@example.test", override.Actor)
+	require.Equal(t, "[REDACTED]", override.Reason)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

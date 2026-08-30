@@ -72,7 +72,7 @@ func TestSystemdObserverParsesDetailedState(t *testing.T) {
 			if strings.Contains(observation.Detail, "secret-value") {
 				t.Fatalf("journal detail was not sanitized: %q", observation.Detail)
 			}
-			if !strings.Contains(executor.calls[0], "systemctl --user show bahia-api.service") {
+			if !strings.Contains(executor.calls[0], "systemctl --user show --property=ActiveState,SubState,Result,NRestarts,ExecMainStatus,MemoryCurrent,MemoryPeak,MemoryMax,ActiveEnterTimestamp,InactiveEnterTimestamp --no-pager -- bahia-api.service") {
 				t.Fatalf("show call = %q", executor.calls[0])
 			}
 		})
@@ -88,11 +88,14 @@ func TestSystemdObserverControlsValidatedUnit(t *testing.T) {
 	if err := observer.Restart(context.Background(), "bahia-api.service"); err != nil {
 		t.Fatalf("Restart() error = %v", err)
 	}
-	if got := executor.calls[0]; got != "systemctl restart bahia-api.service" {
+	if got := executor.calls[0]; got != "systemctl restart -- bahia-api.service" {
 		t.Fatalf("call = %q", got)
 	}
 	if err := observer.Stop(context.Background(), "bad;unit.service"); err == nil {
 		t.Fatal("Stop() accepted unsafe unit name")
+	}
+	if err := observer.Stop(context.Background(), "-evil.service"); err == nil {
+		t.Fatal("Stop() accepted option-shaped unit name")
 	}
 	if len(executor.calls) != 1 {
 		t.Fatalf("unsafe unit executed a command: %v", executor.calls)

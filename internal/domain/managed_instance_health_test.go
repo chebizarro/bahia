@@ -129,6 +129,9 @@ func TestSanitizeEvidence(t *testing.T) {
 		{name: "private key", input: "SIGNING_PRIVATE_KEY=private-value"},
 		{name: "docker socket path", input: "dial /var/run/docker.sock failed"},
 		{name: "docker host", input: "DOCKER_HOST=tcp://private-host:2376"},
+		{name: "pem private key", input: "-----BEGIN PRIVATE KEY-----\nprivate-key-material\n-----END PRIVATE KEY-----"},
+		{name: "jwt", input: "received eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.c2lnbmF0dXJl"},
+		{name: "url userinfo", input: "connect https://db-user:db-password@example.test/database"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,6 +145,10 @@ func TestSanitizeEvidence(t *testing.T) {
 			require.NotContains(t, got, "abc123")
 			require.NotContains(t, got, "aws-private-value")
 			require.NotContains(t, got, "private-value")
+			require.NotContains(t, got, "private-key-material")
+			require.NotContains(t, got, "eyJhbGci")
+			require.NotContains(t, got, "db-user")
+			require.NotContains(t, got, "db-password")
 		})
 	}
 }

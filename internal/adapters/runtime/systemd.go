@@ -61,7 +61,7 @@ func (o *SystemdObserver) ObserveInstance(ctx context.Context, key domain.Manage
 		return nil, err
 	}
 	properties := "ActiveState,SubState,Result,NRestarts,ExecMainStatus,MemoryCurrent,MemoryPeak,MemoryMax,ActiveEnterTimestamp,InactiveEnterTimestamp"
-	args := o.systemctlArgs("show", unit, "--property="+properties, "--no-pager")
+	args := o.systemctlArgs("show", "--property="+properties, "--no-pager", "--", unit)
 	stdout, stderr, err := o.executor.Run(ctx, "systemctl", args...)
 	if err != nil {
 		return nil, fmt.Errorf("systemctl show %s: %w: %s", unit, err, domain.SanitizeEvidence(stderr))
@@ -115,7 +115,7 @@ func (o *SystemdObserver) control(ctx context.Context, action, rawUnit string) e
 	if err != nil {
 		return err
 	}
-	_, stderr, err := o.executor.Run(ctx, "systemctl", o.systemctlArgs(action, unit)...)
+	_, stderr, err := o.executor.Run(ctx, "systemctl", o.systemctlArgs(action, "--", unit)...)
 	if err != nil {
 		return fmt.Errorf("systemctl %s %s: %w: %s", action, unit, err, domain.SanitizeEvidence(stderr))
 	}
@@ -139,7 +139,7 @@ func (o *SystemdObserver) journalctlArgs(unit string) []string {
 
 func validateSystemdUnit(unit string) (string, error) {
 	unit = strings.TrimSpace(unit)
-	if unit == "" || !systemdUnitPattern.MatchString(unit) {
+	if unit == "" || strings.HasPrefix(unit, "-") || !systemdUnitPattern.MatchString(unit) {
 		return "", fmt.Errorf("invalid systemd unit name %q", unit)
 	}
 	return unit, nil

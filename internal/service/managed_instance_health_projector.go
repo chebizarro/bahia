@@ -113,6 +113,7 @@ func (p *ManagedInstanceHealthProjector) projectMaintenance(ctx context.Context,
 		action = "maintenance_enabled"
 	}
 	o := payload.Override
+	o.Actor = domain.SanitizeEvidence(o.Actor)
 	o.Reason = domain.SanitizeEvidence(o.Reason)
 	content := map[string]any{"schema": managedHealthAuditSchema, "event_id": payload.EventID, "type": action, "active": payload.Active, "override": o, "occurred_at": payload.OccurredAt}
 	status := newManagedEvent(kinds.NIP38Status, payload.OccurredAt.Unix(), append(managedInstanceTags(h, managedHealthStatusSchema), gonostr.Tag{"status", action}), content)
@@ -159,9 +160,11 @@ func managedInstanceResourceTags(h domain.ManagedInstanceHealth) gonostr.Tags {
 	return gonostr.Tags{{"service", h.ServiceID.String()}, {"environment", h.EnvironmentID.String()}, {"deployment_unit", h.DeploymentUnitID.String()}, {"target", strings.TrimSpace(h.RuntimeTargetName)}, {"supervisor", string(h.SupervisorType)}}
 }
 func managedInstanceDTag(k domain.ManagedInstanceKey) string {
-	return fmt.Sprintf("runtime:instance:%s:%s:%s", k.ServiceID, k.EnvironmentID, k.DeploymentUnitID)
+	target := sha256.Sum256([]byte(strings.TrimSpace(k.RuntimeTargetName)))
+	return fmt.Sprintf("runtime:instance:%s:%s:%s:%s", k.ServiceID, k.EnvironmentID, k.DeploymentUnitID, hex.EncodeToString(target[:]))
 }
 func sanitizeProjectedHealth(h domain.ManagedInstanceHealth) domain.ManagedInstanceHealth {
+	h.Host = domain.SanitizeEvidence(h.Host)
 	h.FailureReason = domain.SanitizeEvidence(h.FailureReason)
 	if h.LastRecoveryAttempt != nil {
 		a := sanitizeAttempt(*h.LastRecoveryAttempt)

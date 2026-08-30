@@ -32,7 +32,7 @@ func TestManagedInstanceHealthProjectorShapes(t *testing.T) {
 	key := testKey()
 	rec := &managedNostrRecorder{}
 	p := NewManagedInstanceHealthProjector(nil, rec, zap.NewNop())
-	payload := ManagedInstanceHealthChanged{EventID: "evt-1", Health: domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusUnhealthy, FailureReason: "password=secret", LastObservedAt: now}, PreviousStatus: domain.InstanceHealthStatusRunning, Severity: domain.AlertSeverityError, Alert: true, OccurredAt: now}
+	payload := ManagedInstanceHealthChanged{EventID: "evt-1", Health: domain.ManagedInstanceHealth{ManagedInstanceKey: key, Host: "https://host-user:host-password@example.test", SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusUnhealthy, FailureReason: "password=secret", LastObservedAt: now}, PreviousStatus: domain.InstanceHealthStatusRunning, Severity: domain.AlertSeverityError, Alert: true, OccurredAt: now}
 	require.NoError(t, p.handle(context.Background(), events.Event{Type: events.EventRuntimeInstanceHealthChanged, Data: payload}))
 	require.Len(t, rec.events, 3)
 	require.Equal(t, gonostr.Kind(kinds.NIP38Status), rec.events[0].Kind)
@@ -42,6 +42,7 @@ func TestManagedInstanceHealthProjectorShapes(t *testing.T) {
 	require.Equal(t, managedHealthStatusSchema, managedTagValue(rec.events[0].Tags, "schema"))
 	require.Empty(t, managedTagValue(rec.events[2].Tags, "d"))
 	require.Contains(t, rec.events[1].Content, "[REDACTED]")
+	require.NotContains(t, rec.events[1].Content, "host-password")
 	var state map[string]any
 	require.NoError(t, json.Unmarshal([]byte(rec.events[1].Content), &state))
 	require.NotNil(t, state["health"])
@@ -61,10 +62,19 @@ func TestManagedInstanceProjectorRecoveryAndMaintenanceFacts(t *testing.T) {
 	require.Len(t, rec.events, 2)
 	require.Equal(t, "corr", managedTagValue(rec.events[1].Tags, "correlation"))
 	require.Contains(t, rec.events[1].Content, "[REDACTED]")
-	o := domain.MaintenanceOverride{ManagedInstanceKey: key, Actor: "operator", Reason: "maintenance", CreatedAt: now}
+	o := domain.MaintenanceOverride{ManagedInstanceKey: key, Actor: "https://actor:password@example.test", Reason: "eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.c2lnbmF0dXJl", CreatedAt: now}
 	require.NoError(t, p.handle(context.Background(), events.Event{Type: events.EventRuntimeMaintenanceChanged, Data: ManagedInstanceMaintenanceEvent{EventID: "override", Health: &h, Override: o, Active: true, OccurredAt: now}}))
 	require.Len(t, rec.events, 5)
 	require.Equal(t, gonostr.Kind(kinds.CASAudit), rec.events[4].Kind)
+	require.NotContains(t, rec.events[4].Content, "actor:password")
+	require.NotContains(t, rec.events[4].Content, "eyJhbGci")
+}
+
+func TestManagedInstanceDTagIncludesRuntimeTarget(t *testing.T) {
+	key := testKey()
+	other := key
+	other.RuntimeTargetName = "worker"
+	require.NotEqual(t, managedInstanceDTag(key), managedInstanceDTag(other))
 }
 
 func managedTagValue(tags gonostr.Tags, key string) string {

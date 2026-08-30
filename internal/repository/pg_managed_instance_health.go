@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -25,7 +26,7 @@ func newPgManagedInstanceHealthRepositoryWithDB(db pgQueryer) *PgManagedInstance
 	return &PgManagedInstanceHealthRepository{pool: db}
 }
 
-const managedHealthColumns = `service_id, environment_id, deployment_unit_id, runtime_target_name, host, supervisor_type, status, failure_reason, last_observed_at, restart_count, consecutive_restart_count, memory_current_bytes, memory_peak_bytes, memory_limit_bytes, last_recovery_attempt, updated_at`
+const managedHealthColumns = `service_id, environment_id, deployment_unit_id, runtime_target_name, host, supervisor_type, status, failure_reason, last_observed_at, failure_generation_at, restart_count, consecutive_restart_count, memory_current_bytes, memory_peak_bytes, memory_limit_bytes, last_recovery_attempt, updated_at`
 const managedHealthEventColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, previous_status, status, reason, evidence, observed_at`
 const recoveryAttemptColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, correlation_id, requested_at, result, evidence`
 const maintenanceOverrideColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, actor, reason, created_at, expires_at`
@@ -38,6 +39,7 @@ func (r *PgManagedInstanceHealthRepository) UpsertHealth(ctx context.Context, he
 		health.LastObservedAt = time.Now().UTC()
 	}
 	health.UpdatedAt = time.Now().UTC()
+	health.Host = domain.SanitizeEvidence(health.Host)
 	health.FailureReason = domain.SanitizeEvidence(health.FailureReason)
 
 	var lastAttempt any
@@ -53,13 +55,14 @@ func (r *PgManagedInstanceHealthRepository) UpsertHealth(ctx context.Context, he
 
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO managed_instance_health (`+managedHealthColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (service_id, environment_id, deployment_unit_id, runtime_target_name) DO UPDATE SET
 			host = EXCLUDED.host,
 			supervisor_type = EXCLUDED.supervisor_type,
 			status = EXCLUDED.status,
 			failure_reason = EXCLUDED.failure_reason,
 			last_observed_at = EXCLUDED.last_observed_at,
+			failure_generation_at = EXCLUDED.failure_generation_at,
 			restart_count = EXCLUDED.restart_count,
 			consecutive_restart_count = EXCLUDED.consecutive_restart_count,
 			memory_current_bytes = EXCLUDED.memory_current_bytes,
@@ -68,8 +71,8 @@ func (r *PgManagedInstanceHealthRepository) UpsertHealth(ctx context.Context, he
 			last_recovery_attempt = EXCLUDED.last_recovery_attempt,
 			updated_at = EXCLUDED.updated_at
 		WHERE EXCLUDED.last_observed_at >= managed_instance_health.last_observed_at
-	`, health.ServiceID, health.EnvironmentID, health.DeploymentUnitID, health.RuntimeTargetName,
-		health.Host, health.SupervisorType, health.Status, health.FailureReason, health.LastObservedAt,
+	`, health.ServiceID, health.EnvironmentID, nullableDeploymentUnitID(health.DeploymentUnitID), health.RuntimeTargetName,
+		health.Host, health.SupervisorType, health.Status, health.FailureReason, health.LastObservedAt, nullableTime(health.FailureGenerationAt),
 		health.RestartCount, health.ConsecutiveRestartCount, health.MemoryCurrentBytes, health.MemoryPeakBytes,
 		health.MemoryLimitBytes, lastAttempt, health.UpdatedAt)
 	if err != nil {
@@ -85,11 +88,19 @@ type rowScanner interface {
 func scanManagedHealth(row rowScanner) (*domain.ManagedInstanceHealth, error) {
 	health := &domain.ManagedInstanceHealth{}
 	var lastAttemptJSON []byte
-	if err := row.Scan(&health.ServiceID, &health.EnvironmentID, &health.DeploymentUnitID, &health.RuntimeTargetName,
-		&health.Host, &health.SupervisorType, &health.Status, &health.FailureReason, &health.LastObservedAt,
+	var deploymentUnitID pgtype.UUID
+	var failureGenerationAt pgtype.Timestamptz
+	if err := row.Scan(&health.ServiceID, &health.EnvironmentID, &deploymentUnitID, &health.RuntimeTargetName,
+		&health.Host, &health.SupervisorType, &health.Status, &health.FailureReason, &health.LastObservedAt, &failureGenerationAt,
 		&health.RestartCount, &health.ConsecutiveRestartCount, &health.MemoryCurrentBytes, &health.MemoryPeakBytes,
 		&health.MemoryLimitBytes, &lastAttemptJSON, &health.UpdatedAt); err != nil {
 		return nil, err
+	}
+	if deploymentUnitID.Valid {
+		health.DeploymentUnitID = uuid.UUID(deploymentUnitID.Bytes)
+	}
+	if failureGenerationAt.Valid {
+		health.FailureGenerationAt = failureGenerationAt.Time
 	}
 	if len(lastAttemptJSON) > 0 && string(lastAttemptJSON) != "null" {
 		health.LastRecoveryAttempt = &domain.RecoveryAttempt{}
@@ -102,8 +113,8 @@ func scanManagedHealth(row rowScanner) (*domain.ManagedInstanceHealth, error) {
 
 func (r *PgManagedInstanceHealthRepository) GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
 	row := r.pool.QueryRow(ctx, `SELECT `+managedHealthColumns+` FROM managed_instance_health
-		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id = $3 AND runtime_target_name = $4`,
-		key.ServiceID, key.EnvironmentID, key.DeploymentUnitID, key.RuntimeTargetName)
+		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id IS NOT DISTINCT FROM $3 AND runtime_target_name = $4`,
+		key.ServiceID, key.EnvironmentID, nullableDeploymentUnitID(key.DeploymentUnitID), key.RuntimeTargetName)
 	health, err := scanManagedHealth(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -181,7 +192,7 @@ func (r *PgManagedInstanceHealthRepository) AppendHealthEvent(ctx context.Contex
 	event.Evidence = domain.SanitizeEvidence(event.Evidence)
 	_, err := r.pool.Exec(ctx, `INSERT INTO managed_instance_health_events (`+managedHealthEventColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, event.ID, event.ServiceID,
-		event.EnvironmentID, event.DeploymentUnitID, event.RuntimeTargetName, event.PreviousStatus, event.Status,
+		event.EnvironmentID, nullableDeploymentUnitID(event.DeploymentUnitID), event.RuntimeTargetName, event.PreviousStatus, event.Status,
 		event.Reason, event.Evidence, event.ObservedAt)
 	if err != nil {
 		return fmt.Errorf("appending managed instance health event: %w", err)
@@ -191,8 +202,8 @@ func (r *PgManagedInstanceHealthRepository) AppendHealthEvent(ctx context.Contex
 
 func (r *PgManagedInstanceHealthRepository) ListRecentHealthEvents(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.ManagedInstanceHealthEvent, error) {
 	rows, err := r.pool.Query(ctx, `SELECT `+managedHealthEventColumns+` FROM managed_instance_health_events
-		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id = $3 AND runtime_target_name = $4
-		ORDER BY observed_at DESC LIMIT $5`, key.ServiceID, key.EnvironmentID, key.DeploymentUnitID, key.RuntimeTargetName, boundedHistoryLimit(limit))
+		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id IS NOT DISTINCT FROM $3 AND runtime_target_name = $4
+		ORDER BY observed_at DESC LIMIT $5`, key.ServiceID, key.EnvironmentID, nullableDeploymentUnitID(key.DeploymentUnitID), key.RuntimeTargetName, boundedHistoryLimit(limit))
 	if err != nil {
 		return nil, fmt.Errorf("listing recent managed instance health events: %w", err)
 	}
@@ -200,10 +211,14 @@ func (r *PgManagedInstanceHealthRepository) ListRecentHealthEvents(ctx context.C
 	var result []domain.ManagedInstanceHealthEvent
 	for rows.Next() {
 		var event domain.ManagedInstanceHealthEvent
-		if err := rows.Scan(&event.ID, &event.ServiceID, &event.EnvironmentID, &event.DeploymentUnitID,
+		var deploymentUnitID pgtype.UUID
+		if err := rows.Scan(&event.ID, &event.ServiceID, &event.EnvironmentID, &deploymentUnitID,
 			&event.RuntimeTargetName, &event.PreviousStatus, &event.Status, &event.Reason, &event.Evidence,
 			&event.ObservedAt); err != nil {
 			return nil, fmt.Errorf("scanning managed instance health event: %w", err)
+		}
+		if deploymentUnitID.Valid {
+			event.DeploymentUnitID = uuid.UUID(deploymentUnitID.Bytes)
 		}
 		result = append(result, event)
 	}
@@ -227,7 +242,7 @@ func (r *PgManagedInstanceHealthRepository) RecordRecoveryAttempt(ctx context.Co
 	command, err := r.pool.Exec(ctx, `INSERT INTO managed_instance_recovery_attempts (`+recoveryAttemptColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (correlation_id) DO NOTHING`, attempt.ID, attempt.ServiceID, attempt.EnvironmentID,
-		attempt.DeploymentUnitID, attempt.RuntimeTargetName, attempt.CorrelationID, attempt.RequestedAt,
+		nullableDeploymentUnitID(attempt.DeploymentUnitID), attempt.RuntimeTargetName, attempt.CorrelationID, attempt.RequestedAt,
 		attempt.Result, attempt.Evidence)
 	if err != nil {
 		return false, fmt.Errorf("recording managed instance recovery attempt: %w", err)
@@ -251,8 +266,8 @@ func (r *PgManagedInstanceHealthRepository) CompleteRecoveryAttempt(ctx context.
 
 func (r *PgManagedInstanceHealthRepository) ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error) {
 	rows, err := r.pool.Query(ctx, `SELECT `+recoveryAttemptColumns+` FROM managed_instance_recovery_attempts
-		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id = $3 AND runtime_target_name = $4
-		ORDER BY requested_at DESC LIMIT $5`, key.ServiceID, key.EnvironmentID, key.DeploymentUnitID, key.RuntimeTargetName, boundedHistoryLimit(limit))
+		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id IS NOT DISTINCT FROM $3 AND runtime_target_name = $4
+		ORDER BY requested_at DESC LIMIT $5`, key.ServiceID, key.EnvironmentID, nullableDeploymentUnitID(key.DeploymentUnitID), key.RuntimeTargetName, boundedHistoryLimit(limit))
 	if err != nil {
 		return nil, fmt.Errorf("listing recent managed instance recovery attempts: %w", err)
 	}
@@ -260,10 +275,14 @@ func (r *PgManagedInstanceHealthRepository) ListRecentRecoveryAttempts(ctx conte
 	var result []domain.RecoveryAttempt
 	for rows.Next() {
 		var attempt domain.RecoveryAttempt
-		if err := rows.Scan(&attempt.ID, &attempt.ServiceID, &attempt.EnvironmentID, &attempt.DeploymentUnitID,
+		var deploymentUnitID pgtype.UUID
+		if err := rows.Scan(&attempt.ID, &attempt.ServiceID, &attempt.EnvironmentID, &deploymentUnitID,
 			&attempt.RuntimeTargetName, &attempt.CorrelationID, &attempt.RequestedAt, &attempt.Result,
 			&attempt.Evidence); err != nil {
 			return nil, fmt.Errorf("scanning managed instance recovery attempt: %w", err)
+		}
+		if deploymentUnitID.Valid {
+			attempt.DeploymentUnitID = uuid.UUID(deploymentUnitID.Bytes)
 		}
 		result = append(result, attempt)
 	}
@@ -283,13 +302,14 @@ func (r *PgManagedInstanceHealthRepository) CreateMaintenanceOverride(ctx contex
 	if override.CreatedAt.IsZero() {
 		override.CreatedAt = time.Now().UTC()
 	}
+	override.Actor = domain.SanitizeEvidence(override.Actor)
 	override.Reason = domain.SanitizeEvidence(override.Reason)
 	_, err := r.pool.Exec(ctx, `INSERT INTO managed_instance_overrides (`+maintenanceOverrideColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (service_id, environment_id, deployment_unit_id, runtime_target_name) DO UPDATE SET
 			id = EXCLUDED.id, actor = EXCLUDED.actor, reason = EXCLUDED.reason,
 			created_at = EXCLUDED.created_at, expires_at = EXCLUDED.expires_at`, override.ID, override.ServiceID,
-		override.EnvironmentID, override.DeploymentUnitID, override.RuntimeTargetName, override.Actor,
+		override.EnvironmentID, nullableDeploymentUnitID(override.DeploymentUnitID), override.RuntimeTargetName, override.Actor,
 		override.Reason, override.CreatedAt, override.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("creating managed instance maintenance override: %w", err)
@@ -299,8 +319,8 @@ func (r *PgManagedInstanceHealthRepository) CreateMaintenanceOverride(ctx contex
 
 func (r *PgManagedInstanceHealthRepository) ClearMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM managed_instance_overrides
-		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id = $3 AND runtime_target_name = $4`,
-		key.ServiceID, key.EnvironmentID, key.DeploymentUnitID, key.RuntimeTargetName)
+		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id IS NOT DISTINCT FROM $3 AND runtime_target_name = $4`,
+		key.ServiceID, key.EnvironmentID, nullableDeploymentUnitID(key.DeploymentUnitID), key.RuntimeTargetName)
 	if err != nil {
 		return fmt.Errorf("clearing managed instance maintenance override: %w", err)
 	}
@@ -309,18 +329,36 @@ func (r *PgManagedInstanceHealthRepository) ClearMaintenanceOverride(ctx context
 
 func (r *PgManagedInstanceHealthRepository) GetActiveMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey, at time.Time) (*domain.MaintenanceOverride, error) {
 	row := r.pool.QueryRow(ctx, `SELECT `+maintenanceOverrideColumns+` FROM managed_instance_overrides
-		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id = $3 AND runtime_target_name = $4
+		WHERE service_id = $1 AND environment_id = $2 AND deployment_unit_id IS NOT DISTINCT FROM $3 AND runtime_target_name = $4
 		AND created_at <= $5 AND (expires_at IS NULL OR expires_at > $5)`, key.ServiceID, key.EnvironmentID,
-		key.DeploymentUnitID, key.RuntimeTargetName, at)
+		nullableDeploymentUnitID(key.DeploymentUnitID), key.RuntimeTargetName, at)
 	var override domain.MaintenanceOverride
-	if err := row.Scan(&override.ID, &override.ServiceID, &override.EnvironmentID, &override.DeploymentUnitID,
+	var deploymentUnitID pgtype.UUID
+	if err := row.Scan(&override.ID, &override.ServiceID, &override.EnvironmentID, &deploymentUnitID,
 		&override.RuntimeTargetName, &override.Actor, &override.Reason, &override.CreatedAt, &override.ExpiresAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("querying active managed instance maintenance override: %w", err)
 	}
+	if deploymentUnitID.Valid {
+		override.DeploymentUnitID = uuid.UUID(deploymentUnitID.Bytes)
+	}
 	return &override, nil
+}
+
+func nullableDeploymentUnitID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
 }
 
 func boundedHistoryLimit(limit int) int {

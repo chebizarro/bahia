@@ -13,7 +13,7 @@ import (
 
 func TestComposeRuntimeObserveInstanceUsesConcreteContainerID(t *testing.T) {
 	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
-printf '%s' '{"ID":"compose-container","Image":"example/api:latest","State":"running","Status":"Up"}'
+printf '%s' '{"ID":"compose-container","Service":"api","Image":"example/api:latest","State":"running","Status":"Up"}'
 `)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -37,5 +37,40 @@ printf '%s' '{"ID":"compose-container","Image":"example/api:latest","State":"run
 	}
 	if observation.MemoryCurrentBytes != 100 || observation.MemoryPeakBytes != 200 || observation.MemoryLimitBytes != 300 {
 		t.Fatalf("memory observation = %+v", observation)
+	}
+}
+
+func TestComposeRuntimeUsesArgumentSeparatorForPsAndRestart(t *testing.T) {
+	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
+case "$*" in
+	"ps --format json -- api") printf '%s' '{"ID":"compose-container","Service":"api","State":"running","Status":"Up"}' ;;
+	"restart -- api") exit 0 ;;
+	"stop -- api") exit 0 ;;
+	*) echo "unexpected args: $*" >&2; exit 64 ;;
+esac
+`)
+	runtime := &ComposeRuntime{binary: composeBin, logger: zap.NewNop()}
+	key := domain.ManagedInstanceKey{RuntimeTargetName: "api"}
+	if err := runtime.RestartInstance(context.Background(), key); err != nil {
+		t.Fatalf("RestartInstance() error = %v", err)
+	}
+	if err := runtime.StopInstance(context.Background(), key); err != nil {
+		t.Fatalf("StopInstance() error = %v", err)
+	}
+}
+
+func TestComposeRuntimeRejectsMismatchedAndOptionShapedTargets(t *testing.T) {
+	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s' '{"ID":"decoy-container","Service":"decoy","State":"running","Status":"Up"}'
+`)
+	runtime := &ComposeRuntime{binary: composeBin, logger: zap.NewNop()}
+
+	_, err := runtime.ObserveInstance(context.Background(), domain.ManagedInstanceKey{RuntimeTargetName: "api"})
+	if err == nil {
+		t.Fatal("ObserveInstance() accepted a compose decoy")
+	}
+	_, err = runtime.ObserveInstance(context.Background(), domain.ManagedInstanceKey{RuntimeTargetName: "--all"})
+	if err == nil {
+		t.Fatal("ObserveInstance() accepted an option-shaped service name")
 	}
 }

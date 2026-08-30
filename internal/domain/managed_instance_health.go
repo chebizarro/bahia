@@ -51,6 +51,7 @@ type ManagedInstanceHealth struct {
 	Status                  InstanceHealthStatus   `json:"status"`
 	FailureReason           string                 `json:"failure_reason,omitempty"`
 	LastObservedAt          time.Time              `json:"last_observed_at"`
+	FailureGenerationAt     time.Time              `json:"failure_generation_at,omitempty"`
 	RestartCount            int                    `json:"restart_count"`
 	ConsecutiveRestartCount int                    `json:"consecutive_restart_count"`
 	MemoryCurrentBytes      int64                  `json:"memory_current_bytes"`
@@ -276,11 +277,17 @@ var (
 	dockerSocketPattern          = regexp.MustCompile(`(?i)(?:unix://)?(?:/[^\s:=]+)*/docker\.sock|DOCKER_HOST\s*[:=]\s*[^\s,;]+`)
 	authorizationEvidencePattern = regexp.MustCompile(`(?i)\bauthorization\s*:\s*[^\r\n,;]+|\bbearer\s+[^\s,;]+`)
 	credentialEvidencePattern    = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+[_-])*(?:api[_-]?key|access[_-]?key|access[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret|token)\b\s*[:=]\s*[^\s,;]+`)
+	pemPrivateKeyPattern         = regexp.MustCompile(`(?is)-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----.*?-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----`)
+	jwtEvidencePattern           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+	urlUserinfoPattern           = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@:]+(?::[^\s/@]*)?@`)
 )
 
 // SanitizeEvidence removes common secrets and runtime control endpoints and caps stored evidence length.
 func SanitizeEvidence(evidence string) string {
-	sanitized := nsecEvidencePattern.ReplaceAllString(evidence, "[REDACTED]")
+	sanitized := pemPrivateKeyPattern.ReplaceAllString(evidence, "[REDACTED]")
+	sanitized = jwtEvidencePattern.ReplaceAllString(sanitized, "[REDACTED]")
+	sanitized = urlUserinfoPattern.ReplaceAllString(sanitized, `${1}[REDACTED]@`)
+	sanitized = nsecEvidencePattern.ReplaceAllString(sanitized, "[REDACTED]")
 	sanitized = bunkerEvidencePattern.ReplaceAllString(sanitized, "[REDACTED]")
 	sanitized = dockerSocketPattern.ReplaceAllString(sanitized, "[REDACTED]")
 	sanitized = authorizationEvidencePattern.ReplaceAllString(sanitized, "[REDACTED]")

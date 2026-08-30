@@ -130,7 +130,11 @@ func (r *ComposeRuntime) Type() domain.RuntimeType {
 
 // Observe uses "docker compose ps" to query service state.
 func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
-	args := r.composeArgs("ps", "--format", "json", serviceName)
+	serviceName, err := validateComposeServiceName(serviceName)
+	if err != nil {
+		return nil, err
+	}
+	args := r.composeArgs("ps", "--format", "json", "--", serviceName)
 	output, stderr, err := r.runCommandStdout(ctx, nil, args...)
 	if err != nil {
 		if strings.TrimSpace(stderr) != "" {
@@ -203,40 +207,52 @@ func (r *ComposeRuntime) ObserveInstance(ctx context.Context, key domain.Managed
 	return observer.observeContainerByID(ctx, key, containerID)
 }
 
-// RestartInstance restarts exactly the container ID resolved by compose ps.
+// RestartInstance restarts exactly the service resolved by compose ps.
 func (r *ComposeRuntime) RestartInstance(ctx context.Context, key domain.ManagedInstanceKey) error {
-	containerID, err := r.composeContainerID(ctx, key.RuntimeTargetName)
+	serviceName, err := validateComposeServiceName(key.RuntimeTargetName)
+	if err != nil {
+		return err
+	}
+	containerID, err := r.composeContainerID(ctx, serviceName)
 	if err != nil {
 		return err
 	}
 	if containerID == "" {
-		return fmt.Errorf("no compose container found for target %s", key.RuntimeTargetName)
+		return fmt.Errorf("no compose container found for target %s", serviceName)
 	}
-	observer, err := r.dockerHealthObserver()
+	_, stderr, err := r.runCommandStdout(ctx, nil, r.composeArgs("restart", "--", serviceName)...)
 	if err != nil {
-		return err
+		return fmt.Errorf("compose restart: %w: %s", err, domain.SanitizeEvidence(stderr))
 	}
-	return observer.containerActionByID(ctx, containerID, "restart", "?t=10")
+	return nil
 }
 
-// StopInstance stops exactly the container ID resolved by compose ps.
+// StopInstance stops exactly the service resolved by compose ps.
 func (r *ComposeRuntime) StopInstance(ctx context.Context, key domain.ManagedInstanceKey) error {
-	containerID, err := r.composeContainerID(ctx, key.RuntimeTargetName)
+	serviceName, err := validateComposeServiceName(key.RuntimeTargetName)
+	if err != nil {
+		return err
+	}
+	containerID, err := r.composeContainerID(ctx, serviceName)
 	if err != nil {
 		return err
 	}
 	if containerID == "" {
-		return fmt.Errorf("no compose container found for target %s", key.RuntimeTargetName)
+		return fmt.Errorf("no compose container found for target %s", serviceName)
 	}
-	observer, err := r.dockerHealthObserver()
+	_, stderr, err := r.runCommandStdout(ctx, nil, r.composeArgs("stop", "--", serviceName)...)
 	if err != nil {
-		return err
+		return fmt.Errorf("compose stop: %w: %s", err, domain.SanitizeEvidence(stderr))
 	}
-	return observer.containerActionByID(ctx, containerID, "stop", "?t=10")
+	return nil
 }
 
 func (r *ComposeRuntime) composeContainerID(ctx context.Context, serviceName string) (string, error) {
-	args := r.composeArgs("ps", "--format", "json", serviceName)
+	serviceName, err := validateComposeServiceName(serviceName)
+	if err != nil {
+		return "", err
+	}
+	args := r.composeArgs("ps", "--format", "json", "--", serviceName)
 	stdout, stderr, err := r.runCommandStdout(ctx, nil, args...)
 	if err != nil {
 		return "", fmt.Errorf("compose ps: %w: %s", err, domain.SanitizeEvidence(stderr))
@@ -248,12 +264,29 @@ func (r *ComposeRuntime) composeContainerID(ctx context.Context, serviceName str
 	if len(entries) == 0 {
 		return "", nil
 	}
+	matching := make([]composePSEntry, 0, len(entries))
 	for _, entry := range entries {
+		if entry.Service == serviceName {
+			matching = append(matching, entry)
+		}
+	}
+	if len(matching) == 0 {
+		return "", fmt.Errorf("compose target %q did not exactly match any returned service", serviceName)
+	}
+	for _, entry := range matching {
 		if strings.EqualFold(entry.State, "running") {
 			return strings.TrimSpace(entry.ID), nil
 		}
 	}
-	return strings.TrimSpace(entries[0].ID), nil
+	return strings.TrimSpace(matching[0].ID), nil
+}
+
+func validateComposeServiceName(serviceName string) (string, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" || strings.HasPrefix(serviceName, "-") {
+		return "", fmt.Errorf("invalid compose service name %q", serviceName)
+	}
+	return serviceName, nil
 }
 
 func (r *ComposeRuntime) dockerHealthObserver() (*DockerObserver, error) {
@@ -619,10 +652,11 @@ func upsertEnv(env []string, entry string) []string {
 }
 
 type composePSEntry struct {
-	ID     string `json:"ID"`
-	Image  string `json:"Image"`
-	State  string `json:"State"`
-	Status string `json:"Status"`
+	ID      string `json:"ID"`
+	Service string `json:"Service"`
+	Image   string `json:"Image"`
+	State   string `json:"State"`
+	Status  string `json:"Status"`
 }
 
 func parseComposePSOutput(output string) ([]composePSEntry, error) {

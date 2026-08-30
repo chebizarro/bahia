@@ -202,6 +202,7 @@ func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *Supervis
 	health := domain.ManagedInstanceHealth{ManagedInstanceKey: spec.Key, Host: strings.TrimSpace(spec.Host), SupervisorType: spec.SupervisorType, Status: domain.InstanceHealthStatusUnknown, LastObservedAt: now, UpdatedAt: now}
 	if previous != nil {
 		health.LastRecoveryAttempt = previous.LastRecoveryAttempt
+		health.FailureGenerationAt = previous.FailureGenerationAt
 	}
 	if observeErr != nil {
 		health.FailureReason = domain.SanitizeEvidence(observeErr.Error())
@@ -243,7 +244,7 @@ func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *Supervis
 			health.ConsecutiveRestartCount = previous.ConsecutiveRestartCount
 		}
 	} else {
-		health.ConsecutiveRestartCount = max(0, health.RestartCount)
+		health.ConsecutiveRestartCount = 0
 	}
 	threshold := spec.RestartLoopThreshold
 	if threshold <= 0 {
@@ -264,6 +265,18 @@ func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *Supervis
 			health.Status = domain.InstanceHealthStatusDegraded
 		}
 		health.FailureReason = domain.SanitizeEvidence(firstManagedEvidence(health.FailureReason, "sustained high memory usage"))
+	}
+	if recoveryFailureStatus(health.Status) {
+		switch {
+		case previous == nil || !recoveryFailureStatus(previous.Status):
+			health.FailureGenerationAt = health.LastObservedAt
+		case !previous.FailureGenerationAt.IsZero():
+			health.FailureGenerationAt = previous.FailureGenerationAt
+		default:
+			health.FailureGenerationAt = previous.LastObservedAt
+		}
+	} else {
+		health.FailureGenerationAt = time.Time{}
 	}
 	return health
 }
@@ -289,6 +302,11 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	for _, attempt := range attempts {
 		if attempt.Result != domain.RecoveryAttemptBudgetExhausted && attempt.Result != domain.RecoveryAttemptSkippedOverride {
 			budget.AttemptedAt = append(budget.AttemptedAt, attempt.RequestedAt)
+		}
+	}
+	for i := range attempts {
+		if attempts[i].Result == domain.RecoveryAttemptPending {
+			return s.reconcilePendingAttempt(ctx, health, attempts[i])
 		}
 	}
 	sort.Slice(budget.AttemptedAt, func(i, j int) bool { return budget.AttemptedAt[i].Before(budget.AttemptedAt[j]) })
@@ -377,15 +395,61 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	return nil
 }
 
+func (s *ManagedInstanceSupervisor) reconcilePendingAttempt(ctx context.Context, health *domain.ManagedInstanceHealth, attempt domain.RecoveryAttempt) error {
+	attempt.Result = recoveryResultForObservedStatus(health.Status)
+	attempt.Evidence = domain.SanitizeEvidence(health.FailureReason)
+	completed, err := s.repo.CompleteRecoveryAttempt(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence)
+	if err != nil || !completed {
+		return err
+	}
+	health.LastRecoveryAttempt = &attempt
+	if err := s.repo.UpsertHealth(ctx, health); err != nil {
+		return err
+	}
+	eventType := events.EventRuntimeRecoveryCompleted
+	severity := domain.AlertSeverityInfo
+	if attempt.Result == domain.RecoveryAttemptFailed {
+		eventType, severity = events.EventRuntimeRecoveryFailed, domain.AlertSeverityError
+	} else if attempt.Result == domain.RecoveryAttemptDegraded {
+		severity = domain.AlertSeverityWarning
+	}
+	s.publish(ctx, eventType, attempt.CorrelationID, ManagedInstanceRecoveryEvent{EventID: attempt.ID.String(), Health: *health, Attempt: attempt, Severity: severity, OccurredAt: health.LastObservedAt})
+	return nil
+}
+
+func recoveryResultForObservedStatus(status domain.InstanceHealthStatus) domain.RecoveryAttemptResult {
+	switch status {
+	case domain.InstanceHealthStatusHealthy, domain.InstanceHealthStatusRunning:
+		return domain.RecoveryAttemptSuccess
+	case domain.InstanceHealthStatusDegraded, domain.InstanceHealthStatusUnknown:
+		return domain.RecoveryAttemptDegraded
+	default:
+		return domain.RecoveryAttemptFailed
+	}
+}
+
+func recoveryFailureStatus(status domain.InstanceHealthStatus) bool {
+	switch status {
+	case domain.InstanceHealthStatusStopped, domain.InstanceHealthStatusUnhealthy, domain.InstanceHealthStatusOOMKilled, domain.InstanceHealthStatusRestartLoop:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *ManagedInstanceSupervisor) newAttempt(key domain.ManagedInstanceKey, health domain.ManagedInstanceHealth, decision domain.RecoveryDecision, result domain.RecoveryAttemptResult) domain.RecoveryAttempt {
-	seed := fmt.Sprintf("%s|%d|%s|%d", instanceKeyString(key), health.LastObservedAt.UnixNano(), health.Status, health.RestartCount)
+	generation := health.FailureGenerationAt
+	if generation.IsZero() {
+		generation = health.LastObservedAt
+	}
+	seed := fmt.Sprintf("%s|%d", instanceKeyString(key), generation.UnixNano())
 	sum := sha256.Sum256([]byte(seed))
-	return domain.RecoveryAttempt{ID: uuid.NewSHA1(uuid.NameSpaceOID, sum[:]), ManagedInstanceKey: key, CorrelationID: hex.EncodeToString(sum[:]), RequestedAt: health.LastObservedAt, Result: result, Evidence: domain.SanitizeEvidence(decision.Reason)}
+	return domain.RecoveryAttempt{ID: uuid.NewSHA1(uuid.NameSpaceOID, sum[:]), ManagedInstanceKey: key, CorrelationID: hex.EncodeToString(sum[:]), RequestedAt: generation, Result: result, Evidence: domain.SanitizeEvidence(decision.Reason)}
 }
 
 // SetMaintenanceOverride creates an active override for stage-4 API/UI callers.
 func (s *ManagedInstanceSupervisor) SetMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey, actor, reason string, expiresAt *time.Time) (*domain.MaintenanceOverride, error) {
-	actor, reason = strings.TrimSpace(actor), domain.SanitizeEvidence(reason)
+	actor, reason = domain.SanitizeEvidence(actor), domain.SanitizeEvidence(reason)
 	if key.ServiceID == uuid.Nil || key.EnvironmentID == uuid.Nil || strings.TrimSpace(key.RuntimeTargetName) == "" || actor == "" || reason == "" {
 		return nil, fmt.Errorf("service, environment, runtime target, actor, and reason are required")
 	}
@@ -416,7 +480,7 @@ func (s *ManagedInstanceSupervisor) ClearMaintenanceOverride(ctx context.Context
 		return err
 	}
 	health, _ := s.repo.GetHealth(ctx, key)
-	existing.Actor = strings.TrimSpace(actor)
+	existing.Actor = domain.SanitizeEvidence(actor)
 	s.publish(ctx, events.EventRuntimeMaintenanceChanged, existing.ID.String(), ManagedInstanceMaintenanceEvent{EventID: existing.ID.String(), Health: health, Override: *existing, Active: false, OccurredAt: now})
 	return nil
 }

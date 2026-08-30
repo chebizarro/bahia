@@ -334,15 +334,36 @@ func (o *DockerObserver) resolveManagedContainer(ctx context.Context, key domain
 	}
 	if target := strings.TrimSpace(key.RuntimeTargetName); target != "" {
 		for i := range containers {
-			if dockerContainerNameMatches(containers[i].Names, target) || containers[i].ID == target {
+			if dockerContainerMatchesManagedKey(containers[i], key, target) {
 				return &containers[i], nil
 			}
 		}
-		if len(containers) > 1 {
-			return nil, fmt.Errorf("managed docker target %q did not uniquely match %d Bahia-labeled containers", target, len(containers))
-		}
+		return nil, fmt.Errorf("managed docker target %q did not exactly match any of %d discovered containers", target, len(containers))
 	}
 	return &containers[0], nil
+}
+
+func dockerContainerMatchesManagedKey(container DockerContainer, key domain.ManagedInstanceKey, target string) bool {
+	targetMatches := container.ID == target || dockerContainerNameMatches(container.Names, target) ||
+		strings.EqualFold(strings.TrimSpace(container.Labels["bahia.service"]), target) ||
+		strings.EqualFold(strings.TrimSpace(container.Labels["com.docker.compose.service"]), target)
+	if !targetMatches {
+		return false
+	}
+	for label, expected := range map[string]string{
+		"bahia.service_id":     key.ServiceID.String(),
+		"bahia.environment_id": key.EnvironmentID.String(),
+	} {
+		if actual := strings.TrimSpace(container.Labels[label]); expected != uuid.Nil.String() && actual != "" && actual != expected {
+			return false
+		}
+	}
+	if key.DeploymentUnitID != uuid.Nil {
+		if actual := strings.TrimSpace(container.Labels["bahia.deployment_unit_id"]); actual != "" && actual != key.DeploymentUnitID.String() {
+			return false
+		}
+	}
+	return true
 }
 
 func (o *DockerObserver) observeContainerByID(ctx context.Context, key domain.ManagedInstanceKey, containerID string) (*InstanceObservation, error) {

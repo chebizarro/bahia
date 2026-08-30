@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -54,7 +56,7 @@ func (s *RepositorySupervisionSpecSource) SupervisionSpecs(ctx context.Context) 
 		if err != nil {
 			return nil, err
 		}
-		if unit == nil || unit.ID == uuid.Nil || unit.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		if unit == nil || unit.OwnershipMode != domain.OwnershipModeBahiaManaged || (!unit.Implicit && unit.ID == uuid.Nil) {
 			continue
 		}
 		var adapter runtime.Runtime
@@ -71,11 +73,7 @@ func (s *RepositorySupervisionSpecSource) SupervisionSpecs(ctx context.Context) 
 		if !observerOK || !controllerOK {
 			continue
 		}
-		unitID := uuid.Nil
-		if !unit.Implicit {
-			unitID = unit.ID
-		}
-		key := domain.ManagedInstanceKey{ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: unitID, RuntimeTargetName: svc.RuntimeTargetName()}
+		key := domain.ManagedInstanceKey{ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: unit.ID, RuntimeTargetName: svc.RuntimeTargetName()}
 		if _, exists := seen[instanceKeyString(key)]; exists {
 			continue
 		}
@@ -83,10 +81,18 @@ func (s *RepositorySupervisionSpecSource) SupervisionSpecs(ctx context.Context) 
 		if !ok {
 			continue
 		}
-		result = append(result, SupervisionSpec{Key: key, Host: firstManagedEvidence(unit.EndpointRef, env.Name), SupervisorType: supervisor, RecoveryPolicy: s.Policy, DesiredRunning: true, Observer: observer, Controller: controller, MemoryThresholdRatio: s.MemoryThreshold})
+		result = append(result, SupervisionSpec{Key: key, Host: strings.TrimSpace(env.Name), SupervisorType: supervisor, RecoveryPolicy: s.Policy, DesiredRunning: desiredRuntimeStateRunning(state), Observer: observer, Controller: controller, MemoryThresholdRatio: s.MemoryThreshold})
 		seen[instanceKeyString(key)] = struct{}{}
 	}
 	return result, nil
+}
+
+func desiredRuntimeStateRunning(state domain.EnvironmentServiceState) bool {
+	desired := state.DesiredRuntimeState
+	if desired == nil || desired.ServiceID == uuid.Nil || desired.EnvironmentID == uuid.Nil || desired.ArtifactID == uuid.Nil || strings.TrimSpace(desired.StableServiceKey) == "" {
+		return false
+	}
+	return desired.ServiceID == state.ServiceID && desired.EnvironmentID == state.EnvironmentID
 }
 
 func supervisorForRuntime(runtimeType domain.RuntimeType) (domain.InstanceSupervisorType, bool) {

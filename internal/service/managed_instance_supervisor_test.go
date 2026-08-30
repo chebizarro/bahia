@@ -166,6 +166,8 @@ func TestManagedInstanceClassification(t *testing.T) {
 		{"stopped", runtime.InstanceObservation{Status: domain.InstanceHealthStatusStopped, ObservedAt: now}, nil, domain.InstanceHealthStatusStopped},
 		{"unhealthy", runtime.InstanceObservation{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now}, nil, domain.InstanceHealthStatusUnhealthy},
 		{"oom", runtime.InstanceObservation{Status: domain.InstanceHealthStatusStopped, OOMKilled: true, ObservedAt: now}, nil, domain.InstanceHealthStatusOOMKilled},
+		{"initial lifetime restarts are baseline only", runtime.InstanceObservation{Status: domain.InstanceHealthStatusHealthy, RestartCount: 5, ObservedAt: now}, nil, domain.InstanceHealthStatusHealthy},
+		{"restart count increases across observations", runtime.InstanceObservation{Status: domain.InstanceHealthStatusRunning, RestartCount: 8, ObservedAt: now}, &domain.ManagedInstanceHealth{ManagedInstanceKey: key, Status: domain.InstanceHealthStatusHealthy, RestartCount: 5}, domain.InstanceHealthStatusRestartLoop},
 		{"restart loop", runtime.InstanceObservation{Status: domain.InstanceHealthStatusRunning, RestartCount: 4, ObservedAt: now}, &domain.ManagedInstanceHealth{ManagedInstanceKey: key, Status: domain.InstanceHealthStatusRunning, RestartCount: 1, ConsecutiveRestartCount: 1}, domain.InstanceHealthStatusRestartLoop},
 		{"degraded probe", runtime.InstanceObservation{Status: domain.InstanceHealthStatusRunning, ProbeResult: &runtime.ProbeResult{Successful: false, Error: "not ready"}, ObservedAt: now}, nil, domain.InstanceHealthStatusDegraded},
 	}
@@ -267,6 +269,45 @@ func TestManagedInstanceBudgetLockAndIdempotency(t *testing.T) {
 		require.Equal(t, 1, rt.restarts)
 		require.Equal(t, key, rt.keys[0])
 	})
+}
+
+func TestManagedInstancePendingRecoveryIsReconciledWithoutSecondRestart(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		status     domain.InstanceHealthStatus
+		wantResult domain.RecoveryAttemptResult
+	}{
+		{name: "crash before restart", status: domain.InstanceHealthStatusUnhealthy, wantResult: domain.RecoveryAttemptFailed},
+		{name: "crash after restart before completion", status: domain.InstanceHealthStatusRunning, wantResult: domain.RecoveryAttemptSuccess},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := testKey()
+			generation := now.Add(-time.Minute)
+			pending := domain.RecoveryAttempt{ID: uuid.New(), ManagedInstanceKey: key, CorrelationID: "stable", RequestedAt: generation, Result: domain.RecoveryAttemptPending}
+			repo := &supervisorRepoFake{
+				health:   &domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusUnhealthy, LastObservedAt: generation, FailureGenerationAt: generation},
+				attempts: []domain.RecoveryAttempt{pending},
+			}
+			rt := &sequenceRuntime{observations: []*runtime.InstanceObservation{{Status: tc.status, ObservedAt: now}}}
+			spec := SupervisionSpec{Key: key, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: rt, Controller: rt, RecoveryPolicy: testPolicy(false)}
+			s, _ := NewManagedInstanceSupervisor(StaticSupervisionSpecSource{spec}, repo, lockFake{acquired: true}, nil, time.Second, zap.NewNop())
+
+			require.NoError(t, s.EvaluateOnce(context.Background()))
+			require.Zero(t, rt.restarts)
+			require.Len(t, repo.attempts, 1)
+			require.Equal(t, tc.wantResult, repo.attempts[0].Result)
+		})
+	}
+}
+
+func TestManagedInstanceRecoveryCorrelationUsesFailureGeneration(t *testing.T) {
+	key := testKey()
+	generation := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	s := &ManagedInstanceSupervisor{}
+	first := s.newAttempt(key, domain.ManagedInstanceHealth{ManagedInstanceKey: key, Status: domain.InstanceHealthStatusUnhealthy, LastObservedAt: generation, FailureGenerationAt: generation}, domain.RecoveryDecision{Reason: "recover"}, domain.RecoveryAttemptPending)
+	second := s.newAttempt(key, domain.ManagedInstanceHealth{ManagedInstanceKey: key, Status: domain.InstanceHealthStatusUnhealthy, LastObservedAt: generation.Add(time.Minute), FailureGenerationAt: generation}, domain.RecoveryDecision{Reason: "recover"}, domain.RecoveryAttemptPending)
+	require.Equal(t, first.CorrelationID, second.CorrelationID)
 }
 
 func TestManagedInstanceMaintenanceMethods(t *testing.T) {
