@@ -31,20 +31,18 @@ export const createServiceAPI: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
-      steps.push(step('Create service', 'passed', Date.now() - createStart));
-      
       if (!result.data?.id) {
         throw new Error('Service creation did not return an ID');
       }
+      steps.push(step('Create service', 'passed', Date.now() - createStart));
       
       // Step 2: Verify service exists by fetching it
       const getStart = Date.now();
       const fetchedService = await drivers.api.getService(result.data.id);
-      steps.push(step('Fetch created service', 'passed', Date.now() - getStart));
-      
       if (fetchedService.data?.name !== serviceName) {
         throw new Error(`Service name mismatch: expected ${serviceName}, got ${fetchedService.data?.name}`);
       }
+      steps.push(step('Fetch created service', 'passed', Date.now() - getStart));
       
       return {
         name: this.name,
@@ -81,18 +79,19 @@ export const listServices: Scenario = {
     try {
       // Step 1: Create a test service first
       const createStart = Date.now();
-      await drivers.api.createService({
+      const created = await drivers.api.createService({
         name: `list-test-${Date.now()}`,
         artifact_repo: 'registry.example.com/test/list',
         runtime_type: 'docker',
       });
+      if (!created.data?.id) {
+        throw new Error('Test service creation did not return an ID');
+      }
       steps.push(step('Create test service', 'passed', Date.now() - createStart));
       
       // Step 2: List services
       const listStart = Date.now();
       const result = await drivers.api.listServices();
-      steps.push(step('List services', 'passed', Date.now() - listStart));
-      
       if (!Array.isArray(result.data)) {
         throw new Error('List services did not return an array');
       }
@@ -100,6 +99,7 @@ export const listServices: Scenario = {
       if (result.data.length === 0) {
         throw new Error('No services found after creating one');
       }
+      steps.push(step('List services', 'passed', Date.now() - listStart));
       
       return {
         name: this.name,
@@ -141,9 +141,12 @@ export const updateService: Scenario = {
         artifact_repo: 'registry.example.com/test/original',
         runtime_type: 'docker',
       });
+      if (!result.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create service', 'passed', Date.now() - createStart));
       
-      const serviceId = result.data!.id;
+      const serviceId = result.data.id;
       
       // Step 2: Update the service
       const updateStart = Date.now();
@@ -151,16 +154,15 @@ export const updateService: Scenario = {
       await drivers.api.updateService(serviceId, {
         artifact_repo: newRepo,
       });
-      steps.push(step('Update service', 'passed', Date.now() - updateStart));
       
       // Step 3: Verify update
       const verifyStart = Date.now();
       const updated = await drivers.api.getService(serviceId);
-      steps.push(step('Verify update', 'passed', Date.now() - verifyStart));
-      
       if (updated.data?.artifact_repo !== newRepo) {
         throw new Error(`Update failed: expected ${newRepo}, got ${updated.data?.artifact_repo}`);
       }
+      steps.push(step('Update service', 'passed', Date.now() - updateStart));
+      steps.push(step('Verify update', 'passed', Date.now() - verifyStart));
       
       return {
         name: this.name,
@@ -202,14 +204,16 @@ export const deleteService: Scenario = {
         artifact_repo: 'registry.example.com/test/delete',
         runtime_type: 'docker',
       });
+      if (!result.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create service', 'passed', Date.now() - createStart));
       
-      const serviceId = result.data!.id;
+      const serviceId = result.data.id;
       
       // Step 2: Delete the service
       const deleteStart = Date.now();
       await drivers.api.deleteService(serviceId);
-      steps.push(step('Delete service', 'passed', Date.now() - deleteStart));
       
       // Step 3: Verify deletion (should fail to fetch)
       const verifyStart = Date.now();
@@ -219,6 +223,7 @@ export const deleteService: Scenario = {
       } catch (error) {
         // Expected to fail
         if (String(error).includes('404') || String(error).includes('not found')) {
+          steps.push(step('Delete service', 'passed', Date.now() - deleteStart));
           steps.push(step('Verify deletion', 'passed', Date.now() - verifyStart));
         } else {
           throw error;
@@ -267,16 +272,19 @@ export const fullServiceCRUD: Scenario = {
         artifact_repo: 'registry.example.com/test/lifecycle',
         runtime_type: 'docker',
       });
+      if (!created.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create', 'passed', Date.now() - createStart));
-      const serviceId = created.data!.id;
+      const serviceId = created.data.id;
       
       // Read
       const readStart = Date.now();
       const fetched = await drivers.api.getService(serviceId);
-      steps.push(step('Read', 'passed', Date.now() - readStart));
       if (fetched.data?.name !== serviceName) {
         throw new Error('Read verification failed');
       }
+      steps.push(step('Read', 'passed', Date.now() - readStart));
       
       // Update
       const updateStart = Date.now();
@@ -284,15 +292,14 @@ export const fullServiceCRUD: Scenario = {
         artifact_repo: 'registry.example.com/test/updated',
       });
       const updated = await drivers.api.getService(serviceId);
-      steps.push(step('Update', 'passed', Date.now() - updateStart));
       if (updated.data?.artifact_repo !== 'registry.example.com/test/updated') {
         throw new Error('Update verification failed');
       }
+      steps.push(step('Update', 'passed', Date.now() - updateStart));
       
       // Delete
       const deleteStart = Date.now();
       await drivers.api.deleteService(serviceId);
-      steps.push(step('Delete', 'passed', Date.now() - deleteStart));
       
       // Verify deletion
       try {
@@ -303,6 +310,7 @@ export const fullServiceCRUD: Scenario = {
           throw error;
         }
       }
+      steps.push(step('Delete', 'passed', Date.now() - deleteStart));
       
       return {
         name: this.name,

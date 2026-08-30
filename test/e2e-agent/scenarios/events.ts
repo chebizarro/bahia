@@ -24,14 +24,13 @@ export const sidecarRelayDiscovery: Scenario = {
       const discoverStart = Date.now();
       const relays = splitList(process.env.BAHIA_BOOTSTRAP_RELAYS || process.env.BAHIA_NOSTR_RELAYS);
       const servicePubkeys = splitList(process.env.BAHIA_SERVICE_PUBKEYS || process.env.BAHIA_SERVICE_PUBKEY);
-      steps.push(step('Read explicit Nostr bootstrap seed', 'passed', Date.now() - discoverStart));
-
       if (relays.length === 0) {
         throw new Error('no explicit Nostr bootstrap relays configured; set BAHIA_BOOTSTRAP_RELAYS or BAHIA_NOSTR_RELAYS');
       }
       if (servicePubkeys.length === 0) {
         throw new Error('no trusted Bahia service pubkey configured; set BAHIA_SERVICE_PUBKEYS or BAHIA_SERVICE_PUBKEY');
       }
+      steps.push(step('Read explicit Nostr bootstrap seed', 'passed', Date.now() - discoverStart));
       steps.push(step('Validate explicit relay and service-pubkey requirements', 'passed', Date.now() - discoverStart));
 
       return {

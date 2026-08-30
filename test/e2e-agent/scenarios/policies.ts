@@ -75,11 +75,10 @@ export const createPolicy: Scenario = {
           enabled: true,
         }),
       });
-      steps.push(step('Create policy', 'passed', Date.now() - policyStart));
-      
       if (!policy.data) {
         throw new Error('Policy creation did not return data');
       }
+      steps.push(step('Create policy', 'passed', Date.now() - policyStart));
       
       return {
         name: this.name,
@@ -134,8 +133,6 @@ export const listPolicies: Scenario = {
       // Step 2: List policies
       const listStart = Date.now();
       const result = await policyRequest<any[]>(apiUrl, '/api/v1/policies');
-      steps.push(step('List policies', 'passed', Date.now() - listStart));
-      
       if (!Array.isArray(result.data)) {
         throw new Error('List policies did not return an array');
       }
@@ -143,6 +140,7 @@ export const listPolicies: Scenario = {
       if (result.data.length === 0) {
         throw new Error('No policies found after creating one');
       }
+      steps.push(step('List policies', 'passed', Date.now() - listStart));
       
       return {
         name: this.name,
@@ -189,9 +187,11 @@ export const updatePolicy: Scenario = {
           enabled: true,
         }),
       });
+      const policyId = (created.data as any)?.id;
+      if (!policyId) {
+        throw new Error('Policy creation did not return an ID');
+      }
       steps.push(step('Create policy', 'passed', Date.now() - createStart));
-      
-      const policyId = (created.data as any).id;
       
       // Step 2: Update policy
       const updateStart = Date.now();
@@ -202,12 +202,10 @@ export const updatePolicy: Scenario = {
           enabled: false,
         }),
       });
-      steps.push(step('Update policy', 'passed', Date.now() - updateStart));
       
       // Step 3: Verify update
       const verifyStart = Date.now();
       const updated = await policyRequest(apiUrl, `/api/v1/policies/${policyId}`);
-      steps.push(step('Verify update', 'passed', Date.now() - verifyStart));
       
       if ((updated.data as any).enforcement !== 'block') {
         throw new Error('Enforcement not updated');
@@ -216,6 +214,8 @@ export const updatePolicy: Scenario = {
       if ((updated.data as any).enabled !== false) {
         throw new Error('Enabled flag not updated');
       }
+      steps.push(step('Update policy', 'passed', Date.now() - updateStart));
+      steps.push(step('Verify update', 'passed', Date.now() - verifyStart));
       
       return {
         name: this.name,
@@ -262,16 +262,17 @@ export const deletePolicy: Scenario = {
           enabled: true,
         }),
       });
+      const policyId = (created.data as any)?.id;
+      if (!policyId) {
+        throw new Error('Policy creation did not return an ID');
+      }
       steps.push(step('Create policy', 'passed', Date.now() - createStart));
-      
-      const policyId = (created.data as any).id;
       
       // Step 2: Delete policy
       const deleteStart = Date.now();
       await policyRequest(apiUrl, `/api/v1/policies/${policyId}`, {
         method: 'DELETE',
       });
-      steps.push(step('Delete policy', 'passed', Date.now() - deleteStart));
       
       // Step 3: Verify deletion
       const verifyStart = Date.now();
@@ -280,6 +281,7 @@ export const deletePolicy: Scenario = {
         throw new Error('Policy still exists after deletion');
       } catch (error) {
         if (String(error).includes('404') || String(error).includes('not found')) {
+          steps.push(step('Delete policy', 'passed', Date.now() - deleteStart));
           steps.push(step('Verify deletion', 'passed', Date.now() - verifyStart));
         } else {
           throw error;
@@ -344,18 +346,20 @@ export const policyWithMultipleRules: Scenario = {
           enabled: true,
         }),
       });
+      const policyId = (policy.data as any)?.id;
+      if (!policyId) {
+        throw new Error('Policy creation did not return an ID');
+      }
       steps.push(step('Create multi-rule policy', 'passed', Date.now() - createStart));
       
       // Step 2: Verify rules
       const verifyStart = Date.now();
-      const policyId = (policy.data as any).id;
       const fetched = await policyRequest(apiUrl, `/api/v1/policies/${policyId}`);
-      steps.push(step('Verify policy rules', 'passed', Date.now() - verifyStart));
-      
       const rules = (fetched.data as any).rules;
       if (!Array.isArray(rules) || rules.length !== 3) {
         throw new Error(`Expected 3 rules, got ${rules?.length || 0}`);
       }
+      steps.push(step('Verify policy rules', 'passed', Date.now() - verifyStart));
       
       return {
         name: this.name,
