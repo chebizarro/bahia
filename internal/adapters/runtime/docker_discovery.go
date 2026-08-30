@@ -207,6 +207,7 @@ type dockerContainerInspect struct {
 	ID              string                       `json:"Id"`
 	Name            string                       `json:"Name"`
 	Image           string                       `json:"Image"`
+	RestartCount    int                          `json:"RestartCount"`
 	Config          dockerContainerConfig        `json:"Config"`
 	State           dockerContainerState         `json:"State"`
 	HostConfig      dockerContainerHostConfig    `json:"HostConfig"`
@@ -224,8 +225,15 @@ type dockerContainerConfig struct {
 }
 
 type dockerContainerState struct {
-	Status string                     `json:"Status"`
-	Health *dockerContainerHealthInfo `json:"Health"`
+	Status     string                     `json:"Status"`
+	OOMKilled  bool                       `json:"OOMKilled"`
+	Restarting bool                       `json:"Restarting"`
+	Dead       bool                       `json:"Dead"`
+	ExitCode   int                        `json:"ExitCode"`
+	Error      string                     `json:"Error"`
+	StartedAt  string                     `json:"StartedAt"`
+	FinishedAt string                     `json:"FinishedAt"`
+	Health     *dockerContainerHealthInfo `json:"Health"`
 }
 
 type dockerContainerHealthInfo struct {

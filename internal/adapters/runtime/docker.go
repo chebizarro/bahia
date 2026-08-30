@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -285,6 +286,216 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		Source:              "docker",
 		ObservedAt:          time.Now().UTC(),
 	}, nil
+}
+
+// ObserveInstance resolves a Bahia-managed container, then inspects that exact container.
+func (o *DockerObserver) ObserveInstance(ctx context.Context, key domain.ManagedInstanceKey) (*InstanceObservation, error) {
+	container, err := o.resolveManagedContainer(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if container == nil {
+		return &InstanceObservation{Key: key, Status: domain.InstanceHealthStatusStopped, ObservedAt: time.Now().UTC()}, nil
+	}
+	return o.observeContainerByID(ctx, key, container.ID)
+}
+
+// RestartInstance restarts exactly the container resolved for the managed key.
+func (o *DockerObserver) RestartInstance(ctx context.Context, key domain.ManagedInstanceKey) error {
+	container, err := o.resolveManagedContainer(ctx, key)
+	if err != nil {
+		return err
+	}
+	if container == nil {
+		return fmt.Errorf("no container found for managed target %s", key.RuntimeTargetName)
+	}
+	return o.containerActionByID(ctx, container.ID, "restart", "?t=10")
+}
+
+// StopInstance stops exactly the container resolved for the managed key.
+func (o *DockerObserver) StopInstance(ctx context.Context, key domain.ManagedInstanceKey) error {
+	container, err := o.resolveManagedContainer(ctx, key)
+	if err != nil {
+		return err
+	}
+	if container == nil {
+		return fmt.Errorf("no container found for managed target %s", key.RuntimeTargetName)
+	}
+	return o.containerActionByID(ctx, container.ID, "stop", "?t=10")
+}
+
+func (o *DockerObserver) resolveManagedContainer(ctx context.Context, key domain.ManagedInstanceKey) (*DockerContainer, error) {
+	containers, err := o.listContainersForObservation(ctx, key.ServiceID, key.EnvironmentID, key.RuntimeTargetName)
+	if err != nil {
+		return nil, fmt.Errorf("resolving managed docker container: %w", err)
+	}
+	if len(containers) == 0 {
+		return nil, nil
+	}
+	if target := strings.TrimSpace(key.RuntimeTargetName); target != "" {
+		for i := range containers {
+			if dockerContainerNameMatches(containers[i].Names, target) || containers[i].ID == target {
+				return &containers[i], nil
+			}
+		}
+		if len(containers) > 1 {
+			return nil, fmt.Errorf("managed docker target %q did not uniquely match %d Bahia-labeled containers", target, len(containers))
+		}
+	}
+	return &containers[0], nil
+}
+
+func (o *DockerObserver) observeContainerByID(ctx context.Context, key domain.ManagedInstanceKey, containerID string) (*InstanceObservation, error) {
+	inspected, err := o.inspectContainerByID(ctx, containerID)
+	if err != nil {
+		return nil, fmt.Errorf("inspecting managed docker container %s: %w", containerID, err)
+	}
+	observation := &InstanceObservation{
+		Key:          key,
+		Status:       mapDockerInstanceStatus(inspected.State),
+		RawStatus:    inspected.State.Status,
+		OOMKilled:    inspected.State.OOMKilled,
+		ExitCode:     inspected.State.ExitCode,
+		RestartCount: inspected.RestartCount,
+		StartedAt:    parseDockerTimestamp(inspected.State.StartedAt),
+		FinishedAt:   parseDockerTimestamp(inspected.State.FinishedAt),
+		Detail:       domain.SanitizeEvidence(inspected.State.Error),
+		ObservedAt:   time.Now().UTC(),
+	}
+	if inspected.State.Health != nil {
+		observation.HealthStatus = inspected.State.Health.Status
+	}
+	if stats, statsErr := o.containerMemoryStats(ctx, containerID); statsErr == nil {
+		observation.MemoryCurrentBytes = uint64ToInt64(stats.MemoryStats.Usage)
+		observation.MemoryLimitBytes = uint64ToInt64(stats.MemoryStats.Limit)
+		peak := stats.MemoryStats.MaxUsage
+		for _, key := range []string{"total_max_usage", "max_usage", "peak"} {
+			if stats.MemoryStats.Stats[key] > peak {
+				peak = stats.MemoryStats.Stats[key]
+			}
+		}
+		observation.MemoryPeakBytes = uint64ToInt64(peak)
+	} else {
+		o.logger.Debug("docker memory stats unavailable", zap.String("container_id", containerID), zap.Error(statsErr))
+	}
+	return observation, nil
+}
+
+func (o *DockerObserver) inspectContainerByID(ctx context.Context, containerID string) (*dockerContainerInspect, error) {
+	requestURL := fmt.Sprintf("%s/v1.44/containers/%s/json", o.host, url.PathEscape(containerID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker container inspect returned %d", resp.StatusCode)
+	}
+	var inspected dockerContainerInspect
+	if err := json.NewDecoder(resp.Body).Decode(&inspected); err != nil {
+		return nil, err
+	}
+	return &inspected, nil
+}
+
+type dockerContainerStats struct {
+	MemoryStats struct {
+		Usage    uint64            `json:"usage"`
+		MaxUsage uint64            `json:"max_usage"`
+		Limit    uint64            `json:"limit"`
+		Stats    map[string]uint64 `json:"stats"`
+	} `json:"memory_stats"`
+}
+
+func (o *DockerObserver) containerMemoryStats(ctx context.Context, containerID string) (*dockerContainerStats, error) {
+	requestURL := fmt.Sprintf("%s/v1.44/containers/%s/stats?stream=false", o.host, url.PathEscape(containerID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker container stats returned %d", resp.StatusCode)
+	}
+	var stats dockerContainerStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return nil, err
+	}
+	return &stats, nil
+}
+
+func (o *DockerObserver) containerActionByID(ctx context.Context, containerID, action, query string) error {
+	requestURL := fmt.Sprintf("%s/v1.44/containers/%s/%s%s", o.host, url.PathEscape(containerID), action, query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && !(action == "stop" && resp.StatusCode == http.StatusNotModified) {
+		return fmt.Errorf("docker %s returned %d", action, resp.StatusCode)
+	}
+	return nil
+}
+
+func parseDockerTimestamp(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "0001-01-01") {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil
+	}
+	parsed = parsed.UTC()
+	return &parsed
+}
+
+func mapDockerInstanceStatus(state dockerContainerState) domain.InstanceHealthStatus {
+	if state.OOMKilled {
+		return domain.InstanceHealthStatusOOMKilled
+	}
+	if state.Restarting || strings.EqualFold(state.Status, "restarting") {
+		return domain.InstanceHealthStatusRestartLoop
+	}
+	if strings.EqualFold(state.Status, "running") {
+		if state.Health != nil {
+			switch strings.ToLower(state.Health.Status) {
+			case "healthy":
+				return domain.InstanceHealthStatusHealthy
+			case "unhealthy":
+				return domain.InstanceHealthStatusUnhealthy
+			case "starting":
+				return domain.InstanceHealthStatusDegraded
+			}
+		}
+		return domain.InstanceHealthStatusRunning
+	}
+	if state.Dead || strings.EqualFold(state.Status, "dead") || strings.EqualFold(state.Status, "exited") || strings.EqualFold(state.Status, "created") {
+		return domain.InstanceHealthStatusStopped
+	}
+	if strings.EqualFold(state.Status, "paused") {
+		return domain.InstanceHealthStatusUnhealthy
+	}
+	return domain.InstanceHealthStatusUnknown
+}
+
+func uint64ToInt64(value uint64) int64 {
+	if value > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(value)
 }
 
 func (o *DockerObserver) listContainersForObservation(ctx context.Context, serviceID, envID uuid.UUID, targetName string) ([]DockerContainer, error) {
@@ -849,9 +1060,11 @@ func splitRepoDigest(repoDigest string) (string, string) {
 
 // Compile-time interface checks.
 var (
-	_ Observer         = (*DockerObserver)(nil)
-	_ Runtime          = (*DockerObserver)(nil)
-	_ LifecycleRuntime = (*DockerObserver)(nil)
+	_ Observer                  = (*DockerObserver)(nil)
+	_ Runtime                   = (*DockerObserver)(nil)
+	_ LifecycleRuntime          = (*DockerObserver)(nil)
+	_ HealthObserver            = (*DockerObserver)(nil)
+	_ ManagedInstanceController = (*DockerObserver)(nil)
 )
 
 func extractDigest(imageID string) string {

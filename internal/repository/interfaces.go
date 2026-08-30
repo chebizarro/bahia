@@ -91,6 +91,25 @@ type RuntimeObservationRepository interface {
 	ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit int) ([]domain.RuntimeObservation, error)
 }
 
+// ManagedInstanceHealthRepository manages current health, append-only observations,
+// correlated recovery attempts, and maintenance overrides for managed runtime targets.
+type ManagedInstanceHealthRepository interface {
+	UpsertHealth(ctx context.Context, health *domain.ManagedInstanceHealth) error
+	GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
+	ListHealthByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
+	ListHealthByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
+	ListUnhealthy(ctx context.Context) ([]domain.ManagedInstanceHealth, error)
+
+	AppendHealthEvent(ctx context.Context, event *domain.ManagedInstanceHealthEvent) error
+	ListRecentHealthEvents(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.ManagedInstanceHealthEvent, error)
+	RecordRecoveryAttempt(ctx context.Context, attempt *domain.RecoveryAttempt) (bool, error)
+	ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error)
+
+	CreateMaintenanceOverride(ctx context.Context, override *domain.MaintenanceOverride) error
+	ClearMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey) error
+	GetActiveMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey, at time.Time) (*domain.MaintenanceOverride, error)
+}
+
 // DeploymentPolicyRepository manages deployment policy records.
 type DeploymentPolicyRepository interface {
 	Create(ctx context.Context, p *domain.DeploymentPolicy) error

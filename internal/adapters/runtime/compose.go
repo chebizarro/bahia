@@ -187,6 +187,86 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	}, nil
 }
 
+// ObserveInstance resolves the concrete container ID with compose ps and reuses Docker's exact-container inspect path.
+func (r *ComposeRuntime) ObserveInstance(ctx context.Context, key domain.ManagedInstanceKey) (*InstanceObservation, error) {
+	containerID, err := r.composeContainerID(ctx, key.RuntimeTargetName)
+	if err != nil {
+		return nil, err
+	}
+	if containerID == "" {
+		return &InstanceObservation{Key: key, Status: domain.InstanceHealthStatusStopped, ObservedAt: time.Now().UTC()}, nil
+	}
+	observer, err := r.dockerHealthObserver()
+	if err != nil {
+		return nil, err
+	}
+	return observer.observeContainerByID(ctx, key, containerID)
+}
+
+// RestartInstance restarts exactly the container ID resolved by compose ps.
+func (r *ComposeRuntime) RestartInstance(ctx context.Context, key domain.ManagedInstanceKey) error {
+	containerID, err := r.composeContainerID(ctx, key.RuntimeTargetName)
+	if err != nil {
+		return err
+	}
+	if containerID == "" {
+		return fmt.Errorf("no compose container found for target %s", key.RuntimeTargetName)
+	}
+	observer, err := r.dockerHealthObserver()
+	if err != nil {
+		return err
+	}
+	return observer.containerActionByID(ctx, containerID, "restart", "?t=10")
+}
+
+// StopInstance stops exactly the container ID resolved by compose ps.
+func (r *ComposeRuntime) StopInstance(ctx context.Context, key domain.ManagedInstanceKey) error {
+	containerID, err := r.composeContainerID(ctx, key.RuntimeTargetName)
+	if err != nil {
+		return err
+	}
+	if containerID == "" {
+		return fmt.Errorf("no compose container found for target %s", key.RuntimeTargetName)
+	}
+	observer, err := r.dockerHealthObserver()
+	if err != nil {
+		return err
+	}
+	return observer.containerActionByID(ctx, containerID, "stop", "?t=10")
+}
+
+func (r *ComposeRuntime) composeContainerID(ctx context.Context, serviceName string) (string, error) {
+	args := r.composeArgs("ps", "--format", "json", serviceName)
+	stdout, stderr, err := r.runCommandStdout(ctx, nil, args...)
+	if err != nil {
+		return "", fmt.Errorf("compose ps: %w: %s", err, domain.SanitizeEvidence(stderr))
+	}
+	entries, err := parseComposePSOutput(stdout)
+	if err != nil {
+		return "", fmt.Errorf("parse compose ps output: %w", err)
+	}
+	if len(entries) == 0 {
+		return "", nil
+	}
+	for _, entry := range entries {
+		if strings.EqualFold(entry.State, "running") {
+			return strings.TrimSpace(entry.ID), nil
+		}
+	}
+	return strings.TrimSpace(entries[0].ID), nil
+}
+
+func (r *ComposeRuntime) dockerHealthObserver() (*DockerObserver, error) {
+	logger := r.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	if !r.endpoint.Empty() {
+		return NewDockerObserverWithEndpoint(r.endpoint, logger)
+	}
+	return NewDockerObserver(r.dockerHost, logger), nil
+}
+
 // ValidateOwnership checks whether this Compose runtime's project directory
 // is Bahia-owned and safe for authoritative writes. It returns nil if owned,
 // or a *ComposeOwnershipError with a machine-readable reason code if not.
@@ -584,5 +664,9 @@ func composeImageEnvKey(serviceName string) string {
 	return b.String()
 }
 
-// Compile-time interface check.
-var _ Runtime = (*ComposeRuntime)(nil)
+// Compile-time interface checks.
+var (
+	_ Runtime                   = (*ComposeRuntime)(nil)
+	_ HealthObserver            = (*ComposeRuntime)(nil)
+	_ ManagedInstanceController = (*ComposeRuntime)(nil)
+)
