@@ -19,11 +19,11 @@ const OPERATIONS_LINKS = [
   { href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' },
   { href: '/instance-health', label: 'Instance Health' },
   { href: '/backup', label: 'Backup', docTopic: 'features-backup' },
-  { href: '/continuity', label: 'Continuity' },
+  { href: '/continuity', label: 'Continuity', docTopic: 'features-continuity' },
   { href: '/dns', label: 'DNS', docTopic: 'features-dns' },
   { href: '/security', label: 'Security', docTopic: 'features-security' },
   { href: '/notifications', label: 'Notifications', docTopic: 'features-notifications' },
-  { href: '/events', label: 'Events' }
+  { href: '/events', label: 'Events', docTopic: 'features-events' }
 ];
 
 const INTELLIGENCE_LINKS = [
