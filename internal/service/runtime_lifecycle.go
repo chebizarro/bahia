@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -428,13 +430,13 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 
 	svc, env, rt, err := s.resolveForDeploymentUnit(ctx, serviceID, envID, unit)
 	if err != nil {
-		s.logRuntimeAction("deploy", nil, nil, serviceID, envID, artifactID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", nil, nil, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
 	}
 
 	artifact, err := s.resolveDeployArtifact(ctx, serviceID, envID, artifactID)
 	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, artifactID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
 	}
 
@@ -443,19 +445,19 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 
 	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
 	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 
 	builder := NewDesiredStateBuilder()
 	targetSpec, err := desiredStateForDeployment(builder, svc, env, artifact, unit, secrets, canonicalDesiredState)
 	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("building desired state: %w", err)
 	}
 	secretAccesses, err := s.mergeEffectiveSecrets(ctx, secrets, &opts, targetSpec, svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil)
 	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 	plan, err := NewEnvironmentPlanAssembler(EnvironmentPlanAssemblerDeps{
@@ -468,7 +470,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		Builder:     builder,
 	}).Assemble(ctx, envID, serviceID, targetSpec)
 	if err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("assembling desired environment plan: %w", err)
 	}
 
@@ -510,7 +512,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 				failureData["ownership_reason_code"] = ownershipTyped.ReasonCode
 			}
 			s.publishFailure(ctx, svc, env, bestEffortObs, failureData)
-			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", ownershipErr)
+			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", ownershipErr)
 			return nil, fmt.Errorf("compose ownership validation failed: %w", ownershipErr)
 		}
 	}
@@ -521,7 +523,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	if s.applyLock != nil {
 		unlock, lockErr := s.acquireApplyLock(ctx, envID, waitForLock)
 		if lockErr != nil {
-			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
+			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
 			return nil, fmt.Errorf("acquiring environment apply lock: %w", lockErr)
 		}
 		defer unlock()
@@ -545,19 +547,19 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		})
 		if err != nil {
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
-			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("applying desired state for runtime target %q: %w", targetName, err)
 		}
 	} else {
 		if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose {
 			err := fmt.Errorf("%w: resolved compose deployment unit %q", runtime.ErrDesiredStateNotSupported, unit.Key)
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
-			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, err
 		}
 		if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
-			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
 		}
 	}
@@ -569,7 +571,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	waitForHealthy := unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose
 	obs, observeErr := s.observeDeploymentHealth(ctx, rt, serviceID, envID, targetName, waitForHealthy, targetSpec.DesiredHash)
 	if obs == nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
 		return nil, observeErr
 	}
 	if obs.ObservedAt.IsZero() {
@@ -584,11 +586,11 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	notify(DeployStepProjecting, "Persisting deployment outcome")
 
 	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID, targetSpec); err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("recording deploy observation: %w", err)
 	}
 	if observeErr != nil {
@@ -600,7 +602,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 			"artifact_id":    artifact.ID,
 			"failure_reason": failureCode,
 		})
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
+		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
 		return obs, observeErr
 	}
 	actionData := map[string]any{"artifact_id": artifact.ID, "desired_hash": targetSpec.DesiredHash, "environment_revision": plan.RevisionHash}
@@ -611,7 +613,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		actionData["warnings"] = applyResult.Warnings
 	}
 	s.publishAction(ctx, runtimeActionDeployEvent, svc, env, obs, actionData)
-	s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
+	s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
 	return obs, nil
 }
 
@@ -698,31 +700,31 @@ func (s *RuntimeLifecycleService) Restart(ctx context.Context, serviceID, envID 
 	start := time.Now()
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
-		s.logRuntimeAction("restart", nil, nil, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "restart", nil, nil, serviceID, envID, nil, start, "failed", err)
 		return nil, err
 	}
 	lifecycle, ok := rt.(runtime.LifecycleRuntime)
 	if !ok {
 		err := fmt.Errorf("runtime %s does not support restart", rt.Type())
-		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, err
 	}
 	targetName := svc.RuntimeTargetName()
 	if err := lifecycle.Restart(ctx, targetName); err != nil {
-		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("restarting runtime target %q: %w", targetName, err)
 	}
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
-		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after restart: %w", targetName, err)
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
-		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("recording restart observation: %w", err)
 	}
 	s.publishAction(ctx, runtimeActionRestartEvent, svc, env, obs, nil)
-	s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "success", nil)
+	s.logRuntimeAction(ctx, "restart", svc, env, serviceID, envID, nil, start, "success", nil)
 	return obs, nil
 }
 
@@ -731,31 +733,31 @@ func (s *RuntimeLifecycleService) Stop(ctx context.Context, serviceID, envID uui
 	start := time.Now()
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
-		s.logRuntimeAction("stop", nil, nil, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "stop", nil, nil, serviceID, envID, nil, start, "failed", err)
 		return nil, err
 	}
 	lifecycle, ok := rt.(runtime.LifecycleRuntime)
 	if !ok {
 		err := fmt.Errorf("runtime %s does not support stop", rt.Type())
-		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, err
 	}
 	targetName := svc.RuntimeTargetName()
 	if err := lifecycle.Stop(ctx, targetName); err != nil {
-		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("stopping runtime target %q: %w", targetName, err)
 	}
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
-		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after stop: %w", targetName, err)
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
-		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
+		s.logRuntimeAction(ctx, "stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("recording stop observation: %w", err)
 	}
 	s.publishAction(ctx, runtimeActionStopEvent, svc, env, obs, nil)
-	s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "success", nil)
+	s.logRuntimeAction(ctx, "stop", svc, env, serviceID, envID, nil, start, "success", nil)
 	return obs, nil
 }
 
@@ -1213,7 +1215,7 @@ func (s *RuntimeLifecycleService) publishAction(ctx context.Context, eventType e
 	s.publisher.Publish(ctx, events.Event{Type: eventType, EntityID: svc.ID.String(), Data: data})
 }
 
-func (s *RuntimeLifecycleService) logRuntimeAction(action string, svc *domain.Service, env *domain.Environment, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result string, err error) {
+func (s *RuntimeLifecycleService) logRuntimeAction(ctx context.Context, action string, svc *domain.Service, env *domain.Environment, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result string, err error) {
 	fields := []zap.Field{
 		zap.String("action", action),
 		zap.String("service_id", serviceID.String()),
@@ -1242,9 +1244,55 @@ func (s *RuntimeLifecycleService) logRuntimeAction(action string, svc *domain.Se
 		}
 	}
 	if err != nil {
-		fields = append(fields, zap.String("error", err.Error()))
+		fields = append(fields, zap.String("error", s.scrubRuntimeActionError(ctx, serviceID, envID, err)))
 	}
 	s.logger.Info("direct runtime action completed", fields...)
+}
+
+const runtimeActionErrorDetailsWithheld = "runtime action error details withheld"
+
+func (s *RuntimeLifecycleService) scrubRuntimeActionError(ctx context.Context, serviceID, envID uuid.UUID, actionErr error) string {
+	if actionErr == nil {
+		return ""
+	}
+	if s.secrets == nil {
+		return runtimeActionErrorDetailsWithheld
+	}
+	effective, err := s.secrets.ListEffective(ctx, serviceID, envID)
+	if err != nil {
+		return runtimeActionErrorDetailsWithheld
+	}
+	if len(effective) == 0 {
+		return actionErr.Error()
+	}
+	if s.secretEncryptor == nil {
+		return runtimeActionErrorDetailsWithheld
+	}
+	values := make([]string, 0, len(effective))
+	for _, secret := range effective {
+		version, err := s.secrets.GetCurrentVersion(ctx, secret.ID)
+		if err != nil || version == nil {
+			return runtimeActionErrorDetailsWithheld
+		}
+		value, err := s.secretEncryptor.Decrypt(version.EncryptedValue, version.EncryptionMethod)
+		if err != nil {
+			return runtimeActionErrorDetailsWithheld
+		}
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	redacted := actionErr.Error()
+	for _, value := range values {
+		redacted = strings.ReplaceAll(redacted, value, "[REDACTED]")
+		encoded, err := json.Marshal(value)
+		if err != nil || len(encoded) < 2 {
+			return runtimeActionErrorDetailsWithheld
+		}
+		redacted = strings.ReplaceAll(redacted, string(encoded[1:len(encoded)-1]), "[REDACTED]")
+	}
+	return redacted
 }
 
 func deployOptionsFromServiceRuntimeConfig(svc *domain.Service) runtime.DeployOptions {

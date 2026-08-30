@@ -243,25 +243,6 @@ func (p *Processor) handleIntentReject(ctx context.Context, ev *gonostr.Event) e
 	return p.registry.RejectDeploymentIntent(ctx, cmd.IntentID)
 }
 
-func (p *Processor) handleRollback(ctx context.Context, ev *gonostr.Event) error {
-	var cmd struct {
-		ServiceID     uuid.UUID `json:"service_id"`
-		EnvironmentID uuid.UUID `json:"environment_id"`
-		RequestedBy   string    `json:"requested_by"`
-	}
-	if err := json.Unmarshal([]byte(ev.Content), &cmd); err != nil {
-		return fmt.Errorf("parsing rollback.request content: %w", err)
-	}
-
-	requestedBy := cmd.RequestedBy
-	if eventPubKeyHex(ev) != "" {
-		requestedBy = eventPubKeyHex(ev)
-	}
-
-	_, err := p.registry.Rollback(ctx, cmd.ServiceID, cmd.EnvironmentID, requestedBy)
-	return err
-}
-
 // ---------------------------------------------------------------------------
 // Loom protocol handlers
 // ---------------------------------------------------------------------------

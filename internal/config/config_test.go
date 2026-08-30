@@ -928,6 +928,7 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
   workspace_gitea_url: "https://git.example/"
   workspace_private_key_ref: "secret://souls/openclaw/nostr-private-key"
   workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory-mcp-url"
+  agent_memory_task_id_file: " /var/lib/bahia/agent-memory/task-ids.json "
   workspace_gateway_port: 18781
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
@@ -987,6 +988,9 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	}
 	if cfg.SoulFactory.WorkspaceAgentMemoryMCPURLRef != "config://souls/agent-memory-mcp-url" {
 		t.Fatalf("SoulFactory workspace_agent_memory_mcp_url_ref = %q", cfg.SoulFactory.WorkspaceAgentMemoryMCPURLRef)
+	}
+	if cfg.SoulFactory.AgentMemoryTaskIDFile != "/var/lib/bahia/agent-memory/task-ids.json" {
+		t.Fatalf("SoulFactory agent_memory_task_id_file = %q", cfg.SoulFactory.AgentMemoryTaskIDFile)
 	}
 	if cfg.SoulFactory.WorkspaceGatewayPort != 18781 {
 		t.Fatalf("SoulFactory workspace_gateway_port = %d", cfg.SoulFactory.WorkspaceGatewayPort)

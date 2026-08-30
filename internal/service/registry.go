@@ -182,12 +182,76 @@ func (s *RegistryService) UpdateService(ctx context.Context, svc *domain.Service
 	if err := s.services.Update(ctx, svc); err != nil {
 		return err
 	}
+	s.publishServiceUpdated(ctx, svc)
+	return nil
+}
+
+// UpdateServiceWithExpectedRevision atomically updates a service only when its
+// persisted updated_at revision still matches expectedUpdatedAt.
+func (s *RegistryService) UpdateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time) error {
+	return s.updateServiceWithExpectedRevision(ctx, svc, expectedUpdatedAt, nil)
+}
+
+func (s *RegistryService) updateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time, beforeWrite func() error) error {
+	if svc == nil {
+		return fmt.Errorf("service is nil")
+	}
+	if expectedUpdatedAt.IsZero() {
+		return fmt.Errorf("%w: expected_updated_at is required", domain.ErrInvalidValue)
+	}
+	if s.txExecutor == nil {
+		return fmt.Errorf("service revision transaction handling is not configured")
+	}
+	normalizeServiceRepositoryForWrite(svc)
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Services == nil {
+			return fmt.Errorf("service transaction repository is not configured")
+		}
+		locker, ok := repos.Services.(serviceForUpdateRepository)
+		if !ok {
+			return fmt.Errorf("service transactional revision locking is not configured")
+		}
+		current, err := locker.GetByIDForUpdate(ctx, svc.ID)
+		if err != nil {
+			return fmt.Errorf("locking service for update: %w", err)
+		}
+		if current == nil {
+			return fmt.Errorf("service %s: %w", svc.ID, repository.ErrNotFound)
+		}
+		if !current.UpdatedAt.Equal(expectedUpdatedAt) {
+			return fmt.Errorf(
+				"service %s revision conflict (expected %s, actual %s): %w: %w",
+				svc.ID,
+				expectedUpdatedAt.UTC().Format(time.RFC3339Nano),
+				current.UpdatedAt.UTC().Format(time.RFC3339Nano),
+				repository.ErrConflict,
+				repository.ErrStaleRevision,
+			)
+		}
+		svc.CreatedAt = current.CreatedAt
+		if beforeWrite != nil {
+			if err := beforeWrite(); err != nil {
+				return err
+			}
+		}
+		return repos.Services.Update(ctx, svc)
+	}); err != nil {
+		return err
+	}
+	s.publishServiceUpdated(ctx, svc)
+	return nil
+}
+
+type serviceForUpdateRepository interface {
+	GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Service, error)
+}
+
+func (s *RegistryService) publishServiceUpdated(ctx context.Context, svc *domain.Service) {
 	s.publisher.Publish(ctx, events.Event{
 		Type:     events.EventServiceUpdated,
 		EntityID: svc.ID.String(),
 		Data:     events.ResourceData{ServiceID: svc.ID.String()},
 	})
-	return nil
 }
 
 // DeleteService deletes a service after checking for dependent resources.
@@ -985,18 +1049,15 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		return fmt.Errorf("artifact %s does not belong to service %s", di.ArtifactID, di.ServiceID)
 	}
 
-	// Auto-set approval for non-protected environments.
-	if !env.Protected {
-		di.ApprovalStatus = domain.ApprovalStatusNotRequired
-	} else if di.ApprovalStatus == "" {
+	// Creation never accepts caller-supplied approval for protected environments;
+	// approval must be recorded through ApproveDeploymentIntent after the intent exists.
+	if env.Protected {
 		di.ApprovalStatus = domain.ApprovalStatusPending
-	}
-
-	if di.Status == "" {
-		if di.ApprovalStatus == domain.ApprovalStatusNotRequired || di.ApprovalStatus == domain.ApprovalStatusApproved {
+		di.Status = domain.IntentStatusPending
+	} else {
+		di.ApprovalStatus = domain.ApprovalStatusNotRequired
+		if di.Status == "" {
 			di.Status = domain.IntentStatusApproved
-		} else {
-			di.Status = domain.IntentStatusPending
 		}
 	}
 
@@ -1458,98 +1519,6 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 		Data:     events.ResourceData{IntentID: dr.DeploymentIntentID.String(), RunID: id.String()},
 	})
 	return nil
-}
-
-// --- Rollback ---
-
-// Rollback creates a new deployment intent that reverts to the previous successfully deployed artifact.
-// It traces back from the current desired intent to find the prior successful deployment's artifact.
-func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UUID, requestedBy string) (*domain.DeploymentIntent, error) {
-	// Get current state to find what's currently deployed.
-	currentState, err := s.state.Get(ctx, serviceID, envID)
-	if err != nil {
-		return nil, fmt.Errorf("getting current state: %w", err)
-	}
-	if currentState == nil {
-		return nil, fmt.Errorf("no deployment state exists for this service/environment")
-	}
-
-	// We need to find the artifact from the PREVIOUS successful deployment.
-	// Walk the deployment intent history to find two distinct successfully-deployed artifacts.
-	// The first is the current one, the second is the rollback target.
-	intents, err := s.intents.ListByServiceEnv(ctx, serviceID, envID, 50, 0)
-	if err != nil {
-		return nil, fmt.Errorf("listing deployment intents: %w", err)
-	}
-
-	var currentArtifactID *uuid.UUID
-	if currentState.DesiredArtifactID != nil {
-		currentArtifactID = currentState.DesiredArtifactID
-	}
-
-	// Find the most recent successfully-deployed intent whose artifact differs
-	// from the current desired artifact.
-	var rollbackTargetArtifactID *uuid.UUID
-	var rollbackTargetDesiredState *domain.DesiredServiceSpec
-	var rollbackTargetDesiredHash string
-	var supersedesIntentID *uuid.UUID
-
-	for i := range intents {
-		intent := &intents[i]
-		// Only consider intents that were successfully deployed.
-		if intent.Status != domain.IntentStatusDeployed {
-			continue
-		}
-
-		// Skip the intent that matches the current desired artifact.
-		if currentArtifactID != nil && intent.ArtifactID == *currentArtifactID {
-			if supersedesIntentID == nil {
-				supersedesIntentID = &intent.ID
-			}
-			continue
-		}
-
-		// This is a previously successful deployment with a different artifact.
-		rollbackTargetArtifactID = &intent.ArtifactID
-		rollbackTargetDesiredState = intent.DesiredState
-		rollbackTargetDesiredHash = intent.DesiredHash
-		if supersedesIntentID == nil {
-			supersedesIntentID = &intent.ID
-		}
-		break
-	}
-
-	if rollbackTargetArtifactID == nil {
-		return nil, fmt.Errorf("no previous successfully deployed artifact to roll back to")
-	}
-
-	// Verify the rollback target artifact still exists.
-	artifact, err := s.artifacts.GetByID(ctx, *rollbackTargetArtifactID)
-	if err != nil {
-		return nil, fmt.Errorf("looking up rollback target artifact: %w", err)
-	}
-	if artifact == nil {
-		return nil, fmt.Errorf("rollback target artifact %s no longer exists", *rollbackTargetArtifactID)
-	}
-
-	rollbackIntent := &domain.DeploymentIntent{
-		ServiceID:          serviceID,
-		EnvironmentID:      envID,
-		ArtifactID:         *rollbackTargetArtifactID,
-		RequestedBy:        requestedBy,
-		SourceKind:         domain.SourceKindRollback,
-		ApprovalStatus:     domain.ApprovalStatusNotRequired,
-		Status:             domain.IntentStatusApproved,
-		SupersedesIntentID: supersedesIntentID,
-		DesiredState:       rollbackTargetDesiredState,
-		DesiredHash:        rollbackTargetDesiredHash,
-	}
-
-	if err := s.CreateDeploymentIntent(ctx, rollbackIntent); err != nil {
-		return nil, fmt.Errorf("creating rollback intent: %w", err)
-	}
-
-	return rollbackIntent, nil
 }
 
 // --- Runtime Observation ---

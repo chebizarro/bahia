@@ -225,6 +225,7 @@ type SoulFactoryConfig struct {
 	WorkspaceTemplateDir            string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
 	WorkspacePrivateKeyRef          string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
 	WorkspaceAgentMemoryMCPURLRef   string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
+	AgentMemoryTaskIDFile           string                 `koanf:"agent_memory_task_id_file" yaml:"agent_memory_task_id_file"`
 	WorkspaceGatewayPort            int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
 	OpenClawSignetEnabled           bool                   `koanf:"openclaw_signet_enabled" yaml:"openclaw_signet_enabled"`
 	OpenClawSignetStateDir          string                 `koanf:"openclaw_signet_state_dir" yaml:"openclaw_signet_state_dir"`
@@ -2477,6 +2478,7 @@ func (c *Config) validateSoulFactory() error {
 	sf.WorkspaceTemplateDir = strings.TrimSpace(sf.WorkspaceTemplateDir)
 	sf.WorkspacePrivateKeyRef = strings.TrimSpace(sf.WorkspacePrivateKeyRef)
 	sf.WorkspaceAgentMemoryMCPURLRef = strings.TrimSpace(sf.WorkspaceAgentMemoryMCPURLRef)
+	sf.AgentMemoryTaskIDFile = strings.TrimSpace(sf.AgentMemoryTaskIDFile)
 	sf.OpenClawSignetStateDir = strings.TrimSpace(sf.OpenClawSignetStateDir)
 	sf.OpenClawSignetClientKeyDir = strings.TrimSpace(sf.OpenClawSignetClientKeyDir)
 	sf.OpenClawSignetContainer = strings.TrimSpace(sf.OpenClawSignetContainer)

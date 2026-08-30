@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +35,9 @@ func (m *mockServiceRepo) Create(_ context.Context, svc *domain.Service) error {
 }
 func (m *mockServiceRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Service, error) {
 	return m.services[id], nil
+}
+func (m *mockServiceRepo) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
+	return m.GetByID(ctx, id)
 }
 func (m *mockServiceRepo) GetByName(_ context.Context, name string) (*domain.Service, error) {
 	for _, s := range m.services {
@@ -64,6 +69,21 @@ func (m *mockServiceRepo) Update(_ context.Context, svc *domain.Service) error {
 }
 func (m *mockServiceRepo) Delete(_ context.Context, id uuid.UUID) error {
 	delete(m.services, id)
+	return nil
+}
+
+type serviceMutationTxExecutor struct{ services *mockServiceRepo }
+
+func (e *serviceMutationTxExecutor) WithinTx(ctx context.Context, fn func(repos repository.TxRepos) error) error {
+	txServices := newMockServiceRepo()
+	for id, svc := range e.services.services {
+		copy := *svc
+		txServices.services[id] = &copy
+	}
+	if err := fn(repository.TxRepos{Services: txServices}); err != nil {
+		return err
+	}
+	e.services.services = txServices.services
 	return nil
 }
 
@@ -1017,130 +1037,48 @@ func uuidPointer(id uuid.UUID) *uuid.UUID {
 	return &id
 }
 
-func TestRollback_FindsPreviousSuccessfulArtifact(t *testing.T) {
-	registry, _, _, _, _, intentRepo, _ := newTestRegistry()
-	ctx := context.Background()
+func TestUpdateServiceWithExpectedRevisionRejectsStaleRevisionWithoutMutation(t *testing.T) {
+	registry, services, _, _, _, _, _ := newTestRegistry()
+	registry.txExecutor = &serviceMutationTxExecutor{services: services}
+	currentRevision := time.Now().UTC()
+	serviceID := uuid.New()
+	services.services[serviceID] = &domain.Service{ID: serviceID, Name: "current", CreatedAt: currentRevision.Add(-time.Hour), UpdatedAt: currentRevision}
+	updated := *services.services[serviceID]
+	updated.Name = "stale-overwrite"
 
-	svc, env := seedServiceAndEnv(t, registry)
-	artifactV1 := seedArtifact(t, registry, svc, "sha256:v1digest")
-	artifactV2 := seedArtifact(t, registry, svc, "sha256:v2digest")
-
-	// Create first deployment (v1) - mark as deployed.
-	di1 := &domain.DeploymentIntent{
-		ServiceID:      svc.ID,
-		EnvironmentID:  env.ID,
-		ArtifactID:     artifactV1.ID,
-		RequestedBy:    "test",
-		SourceKind:     domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired,
-		Status:         domain.IntentStatusApproved,
+	err := registry.UpdateServiceWithExpectedRevision(context.Background(), &updated, currentRevision.Add(-time.Second))
+	if !errors.Is(err, repository.ErrConflict) || !errors.Is(err, repository.ErrStaleRevision) {
+		t.Fatalf("error = %v, want revision conflict", err)
 	}
-	if err := registry.CreateDeploymentIntent(ctx, di1); err != nil {
-		t.Fatalf("failed to create intent 1: %v", err)
-	}
-	intentRepo.intents[di1.ID].Status = domain.IntentStatusDeployed
-
-	intentRepo.intents[di1.ID].CreatedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-
-	// Create second deployment (v2) - mark as deployed.
-	di2 := &domain.DeploymentIntent{
-		ServiceID:      svc.ID,
-		EnvironmentID:  env.ID,
-		ArtifactID:     artifactV2.ID,
-		RequestedBy:    "test",
-		SourceKind:     domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired,
-		Status:         domain.IntentStatusApproved,
-	}
-	if err := registry.CreateDeploymentIntent(ctx, di2); err != nil {
-		t.Fatalf("failed to create intent 2: %v", err)
-	}
-	intentRepo.intents[di2.ID].Status = domain.IntentStatusDeployed
-	intentRepo.intents[di2.ID].CreatedAt = time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
-
-	// Rollback should target v1's artifact, not v2's.
-	rollback, err := registry.Rollback(ctx, svc.ID, env.ID, "operator")
-	if err != nil {
-		t.Fatalf("rollback failed: %v", err)
-	}
-
-	if rollback.ArtifactID != artifactV1.ID {
-		t.Errorf("expected rollback to artifact %s (v1), got %s", artifactV1.ID, rollback.ArtifactID)
-	}
-	if rollback.SourceKind != domain.SourceKindRollback {
-		t.Errorf("expected source kind rollback, got %s", rollback.SourceKind)
+	if got := services.services[serviceID]; got.Name != "current" || !got.UpdatedAt.Equal(currentRevision) {
+		t.Fatalf("stale update mutated service: %#v", got)
 	}
 }
 
-func TestRollback_SkipsFailedIntents(t *testing.T) {
+func TestCreateDeploymentIntentProtectedRollbackCannotBypassApproval(t *testing.T) {
 	registry, _, _, _, _, intentRepo, _ := newTestRegistry()
 	ctx := context.Background()
-
 	svc, env := seedServiceAndEnv(t, registry)
-	artifactV1 := seedArtifact(t, registry, svc, "sha256:v1good")
-	artifactV2 := seedArtifact(t, registry, svc, "sha256:v2good")
-	artifactV3 := seedArtifact(t, registry, svc, "sha256:v3bad")
-
-	// v1: deployed successfully
-	di1 := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifactV1.ID,
-		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+	env.Protected = true
+	if err := registry.UpdateEnvironment(ctx, env); err != nil {
+		t.Fatalf("protect environment: %v", err)
+	}
+	artifact := seedArtifact(t, registry, svc, "sha256:rollback")
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		RequestedBy: "operator", SourceKind: domain.SourceKindRollback,
 		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
 	}
-	if err := registry.CreateDeploymentIntent(ctx, di1); err != nil {
-		t.Fatal(err)
-	}
-	intentRepo.intents[di1.ID].Status = domain.IntentStatusDeployed
-	intentRepo.intents[di1.ID].CreatedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	// v2: deployed successfully
-	di2 := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifactV2.ID,
-		RequestedBy: "test", SourceKind: domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatalf("CreateDeploymentIntent: %v", err)
 	}
-	if err := registry.CreateDeploymentIntent(ctx, di2); err != nil {
-		t.Fatal(err)
+	if intent.ApprovalStatus != domain.ApprovalStatusPending || intent.Status != domain.IntentStatusPending {
+		t.Fatalf("protected rollback bypassed approval: approval=%q status=%q", intent.ApprovalStatus, intent.Status)
 	}
-	intentRepo.intents[di2.ID].Status = domain.IntentStatusDeployed
-	intentRepo.intents[di2.ID].CreatedAt = time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
-
-	// v3: FAILED - should be skipped by rollback
-	di3 := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifactV3.ID,
-		RequestedBy: "test", SourceKind: domain.SourceKindManual,
-		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
-	}
-	if err := registry.CreateDeploymentIntent(ctx, di3); err != nil {
-		t.Fatal(err)
-	}
-	intentRepo.intents[di3.ID].Status = domain.IntentStatusFailed
-	intentRepo.intents[di3.ID].CreatedAt = time.Date(2026, 1, 1, 12, 2, 0, 0, time.UTC)
-
-	// Rollback from current state (desired = v3's artifact).
-	// Should skip v3 (failed) and current desired, and target v2's artifact.
-	rollback, err := registry.Rollback(ctx, svc.ID, env.ID, "operator")
-	if err != nil {
-		t.Fatalf("rollback failed: %v", err)
-	}
-
-	// The rollback should target v2 (the last successfully deployed that differs from current desired).
-	if rollback.ArtifactID != artifactV2.ID {
-		// v2 is the most recent successfully deployed. The current desired is v3's artifact.
-		// v2 is deployed and differs from v3, so it should be the target.
-		t.Errorf("expected rollback to artifact %s (v2), got %s", artifactV2.ID, rollback.ArtifactID)
-	}
-}
-
-func TestRollback_NoHistory(t *testing.T) {
-	registry, _, _, _, _, _, _ := newTestRegistry()
-	ctx := context.Background()
-
-	svc, env := seedServiceAndEnv(t, registry)
-
-	_, err := registry.Rollback(ctx, svc.ID, env.ID, "operator")
-	if err == nil {
-		t.Fatal("expected error when no deployment state exists")
+	persisted := intentRepo.intents[intent.ID]
+	if persisted == nil || persisted.ApprovalStatus != domain.ApprovalStatusPending || persisted.Status != domain.IntentStatusPending {
+		t.Fatalf("persisted protected rollback bypassed approval: %#v", persisted)
 	}
 }
 

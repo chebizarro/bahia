@@ -107,6 +107,10 @@ sbom:
     enabled: false
     binary_path: "cdxgen"
 
+soul_factory:
+  # Durable local identity mapping used by the agent-memory adapter across restarts.
+  agent_memory_task_id_file: "/var/lib/bahia/agent-memory/task-ids.json"
+
 assistant:
   # The assistant uses the multi-step agentic loop by default in audited permission mode.
   # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.

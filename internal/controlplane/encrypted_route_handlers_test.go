@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -206,6 +207,14 @@ func (r *fakeEncryptedRegistryMutations) UpdateService(_ context.Context, svc *d
 		}
 	}
 	return repository.ErrNotFound
+}
+func (r *fakeEncryptedRegistryMutations) UpdateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time) error {
+	for _, existing := range r.createdServices {
+		if existing.ID == svc.ID && !existing.UpdatedAt.Equal(expectedUpdatedAt) {
+			return fmt.Errorf("service revision conflict: %w: %w", repository.ErrConflict, repository.ErrStaleRevision)
+		}
+	}
+	return r.UpdateService(ctx, svc)
 }
 func (r *fakeEncryptedRegistryMutations) DeleteService(_ context.Context, id uuid.UUID, _ bool) error {
 	for index, existing := range r.createdServices {
@@ -483,7 +492,7 @@ func TestEncryptedRouteHandlers_UpdateServiceRefreshesOnlyAdoptedPublicEnvironme
 	orgID := uuid.New()
 	serviceID := uuid.New()
 	serviceRecord := &domain.Service{
-		ID: serviceID, OrgID: orgID, Name: "web", RuntimeType: domain.RuntimeTypeDocker,
+		ID: serviceID, OrgID: orgID, Name: "web", RuntimeType: domain.RuntimeTypeDocker, UpdatedAt: time.Now().UTC(),
 		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
 			TargetName: "bahia-web", HostAlias: "local", EndpointRef: "edge-01-docker",
 			Environment: map[string]string{"PATH": "/usr/bin"},
@@ -495,7 +504,7 @@ func TestEncryptedRouteHandlers_UpdateServiceRefreshesOnlyAdoptedPublicEnvironme
 	transport, _ := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceUpdate, map[string]any{
-		"id": serviceID.String(), "adopted_public_environment": map[string]string{
+		"id": serviceID.String(), "expected_updated_at": serviceRecord.UpdatedAt, "adopted_public_environment": map[string]string{
 			"PUBLIC_BAHIA_BOOTSTRAP_RELAYS": "wss://bahia.example/relay",
 			"PUBLIC_BAHIA_SERVICE_PUBKEYS":  "abc123",
 		},
@@ -507,6 +516,34 @@ func TestEncryptedRouteHandlers_UpdateServiceRefreshesOnlyAdoptedPublicEnvironme
 	}
 	if updated.Environment["PATH"] != "/usr/bin" || updated.Environment["PUBLIC_BAHIA_BOOTSTRAP_RELAYS"] != "wss://bahia.example/relay" || updated.Environment["PUBLIC_BAHIA_SERVICE_PUBKEYS"] != "abc123" {
 		t.Fatalf("unexpected adopted environment: %#v", updated.Environment)
+	}
+}
+
+func TestEncryptedRouteHandlers_UpdateServiceRejectsStaleRevisionWithoutMutation(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	staleRevision := time.Now().UTC().Add(-time.Minute)
+	currentRevision := staleRevision.Add(time.Second)
+	loaded := &domain.Service{ID: serviceID, OrgID: orgID, Name: "current", RuntimeType: domain.RuntimeTypeDocker, UpdatedAt: currentRevision}
+	persisted := *loaded
+	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: loaded}}
+	registry := &fakeEncryptedRegistryMutations{createdServices: []*domain.Service{&persisted}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Services: services, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceUpdate, map[string]any{
+		"id": serviceID.String(), "expected_updated_at": staleRevision, "name": "stale-overwrite",
+	}))
+
+	if got := registry.createdServices[0]; got.Name != "current" || !got.UpdatedAt.Equal(currentRevision) {
+		t.Fatalf("stale update mutated service: %#v", got)
+	}
+	var response ContextVMJSONRPCResponse
+	if err := json.Unmarshal([]byte(publisher.events[len(publisher.events)-1].Content), &response); err != nil {
+		t.Fatalf("decode stale update response: %v", err)
+	}
+	if response.Error == nil || response.Error.Code != ContextVMEnvironmentConflictErrorCode {
+		t.Fatalf("stale update error = %#v, want conflict code %d", response.Error, ContextVMEnvironmentConflictErrorCode)
 	}
 }
 
@@ -522,6 +559,7 @@ func TestEncryptedRouteHandlers_UpdateAndDeleteServiceContextVMMethodsMutateRegi
 		ArtifactRepo:  "ghcr.io/example/payments",
 		DefaultBranch: "main",
 		RuntimeType:   domain.RuntimeTypeDocker,
+		UpdatedAt:     time.Now().UTC(),
 	}
 	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: serviceRecord}}
 	registry := &fakeEncryptedRegistryMutations{createdServices: []*domain.Service{serviceRecord}}
@@ -534,7 +572,7 @@ func TestEncryptedRouteHandlers_UpdateAndDeleteServiceContextVMMethodsMutateRegi
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceUpdate, map[string]any{
-		"id": serviceID.String(), "name": "payments-web", "repo_url": "https://github.com/example/payments-web", "runtime_type": "compose",
+		"id": serviceID.String(), "expected_updated_at": serviceRecord.UpdatedAt, "name": "payments-web", "repo_url": "https://github.com/example/payments-web", "runtime_type": "compose",
 	}))
 	if len(registry.createdServices) != 1 || registry.createdServices[0].Name != "payments-web" || registry.createdServices[0].RuntimeType != domain.RuntimeTypeCompose {
 		t.Fatalf("unexpected updated services: %#v", registry.createdServices)

@@ -97,6 +97,20 @@ func (r *RelayFirstRegistry) UpdateService(ctx context.Context, svc *domain.Serv
 	return r.delegate.UpdateService(ctx, svc)
 }
 
+// UpdateServiceWithExpectedRevision checks the persisted revision under lock
+// before publishing and committing the signed service update.
+func (r *RelayFirstRegistry) UpdateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time) error {
+	if r.delegate == nil {
+		return fmt.Errorf("registry delegate is not configured")
+	}
+	if svc == nil {
+		return fmt.Errorf("service is nil")
+	}
+	return r.delegate.updateServiceWithExpectedRevision(ctx, svc, expectedUpdatedAt, func() error {
+		return r.publishServiceRegistry(ctx, svc, false)
+	})
+}
+
 func (r *RelayFirstRegistry) DeleteService(ctx context.Context, id uuid.UUID, force bool) error {
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
@@ -379,9 +393,6 @@ func (r *RelayFirstRegistry) ListDeploymentRuns(ctx context.Context, intentID uu
 }
 func (r *RelayFirstRegistry) CompleteDeploymentRun(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {
 	return r.delegate.CompleteDeploymentRun(ctx, id, status, exitCode)
-}
-func (r *RelayFirstRegistry) Rollback(ctx context.Context, serviceID, envID uuid.UUID, requestedBy string) (*domain.DeploymentIntent, error) {
-	return r.delegate.Rollback(ctx, serviceID, envID, requestedBy)
 }
 func (r *RelayFirstRegistry) RecordObservation(ctx context.Context, obs *domain.RuntimeObservation) error {
 	return r.delegate.RecordObservation(ctx, obs)

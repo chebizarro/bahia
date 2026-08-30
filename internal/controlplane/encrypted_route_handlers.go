@@ -66,6 +66,7 @@ type secretVersionHistoryLister interface {
 type RegistryMutationBackend interface {
 	CreateService(ctx context.Context, svc *domain.Service) error
 	UpdateService(ctx context.Context, svc *domain.Service) error
+	UpdateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time) error
 	DeleteService(ctx context.Context, id uuid.UUID, force bool) error
 	CreateEnvironment(ctx context.Context, env *domain.Environment) error
 	CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
@@ -373,7 +374,10 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 			svc.RuntimeConfig.Adopted.Environment[key] = value
 		}
 	}
-	if err := h.registry.UpdateService(ctx, svc); err != nil {
+	if payload.ExpectedUpdatedAt == nil || payload.ExpectedUpdatedAt.IsZero() {
+		return nil, fmt.Errorf("expected_updated_at is required")
+	}
+	if err := h.registry.UpdateServiceWithExpectedRevision(ctx, svc, *payload.ExpectedUpdatedAt); err != nil {
 		return nil, fmt.Errorf("failed to update service: %w", err)
 	}
 	return map[string]any{"status": "updated", "service": svc, "service_id": svc.ID.String(), "idempotency_key": effectiveIdempotencyKey(request, payload.IdempotencyKey)}, nil
