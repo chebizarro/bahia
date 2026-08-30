@@ -113,6 +113,24 @@ func TestResolveDesiredStateApplier_KubernetesResolves(t *testing.T) {
 	}
 }
 
+func TestResolveDesiredStateApplier_UnsupportedRuntimeReturnsExplicitError(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{Type: "mock"},
+	}, zap.NewNop(), nil)
+	svc := resolverTestService(domain.RuntimeType("mock"))
+	env := resolverTestEnv("production", nil)
+	target, _, err := resolver.resolveTarget(env)
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	resolver.cache[runtimeCacheKey(target)] = &mockRuntimeNoDesiredState{}
+
+	_, err = resolver.ResolveDesiredStateApplier(svc, env)
+	if !errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatalf("ResolveDesiredStateApplier() error = %v, want ErrDesiredStateNotSupported", err)
+	}
+}
+
 func TestResolveDesiredStateApplier_InvalidEndpoint(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{Type: "docker"},
@@ -196,15 +214,6 @@ func TestResolveDesiredStateApplier_UsesFullResolutionPath(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Kubernetes desired-state resolver — forward-compatible test
-// (t.Skip guard until Agent 2's SupportsDesiredState() flip lands)
-// ---------------------------------------------------------------------------
-
-// TestResolveDesiredStateApplier_KubernetesSupported will pass once the
-// Kubernetes desired-state adapter is implemented (bahia-amqy Agent 2). Until
-// then it skips automatically on ErrDesiredStateNotSupported so it does not
-// block the pre-merge test suite.
 func TestResolveDesiredStateApplier_KubernetesSupported(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{
@@ -218,9 +227,6 @@ func TestResolveDesiredStateApplier_KubernetesSupported(t *testing.T) {
 
 	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
 	if err != nil {
-		if errors.Is(err, ErrDesiredStateNotSupported) {
-			t.Skip("Kubernetes desired-state not yet implemented")
-		}
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if applier == nil {

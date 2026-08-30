@@ -158,7 +158,14 @@ const (
 	NIP38Status         = cascadia.NIP38_USER_STATUS
 	AssistantTranscript = cascadia.CAS_AGENT_HEARTBEAT
 	CASControlState     = cascadia.CAS_CP_STATE
-	ConfigACLList       = cascadia.NIP51_TASK_COLLECTION
+
+	// CASControlStateTag* are the shared tag keys for canonical control-state
+	// projection producers and their relay subscription consumers.
+	CASControlStateTagD      = "d"
+	CASControlStateTagDomain = "domain"
+	CASControlStateTagSchema = "schema"
+
+	ConfigACLList = cascadia.NIP51_TASK_COLLECTION
 	// ConfigPolicy mirrors cascadia-nips/generated/go.NIP78_APP_DATA; cascadia-go v1.2.1 predates that generated symbol.
 	ConfigPolicy = 30078
 )

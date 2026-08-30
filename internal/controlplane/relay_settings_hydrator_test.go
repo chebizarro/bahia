@@ -96,11 +96,16 @@ func TestRelaySettingsHydratorFilterIsScopedToCanonicalState(t *testing.T) {
 		t.Fatalf("unexpected filter authors: %#v", filter.Authors)
 	}
 	for tag, want := range map[string]string{
-		"d": RelaySettingsDTag, "domain": RelaySettingsDomain, "schema": RelaySettingsSchema,
+		kinds.CASControlStateTagD: RelaySettingsDTag, kinds.CASControlStateTagDomain: RelaySettingsDomain, kinds.CASControlStateTagSchema: RelaySettingsSchema,
 	} {
 		if got := filter.Tags[tag]; len(got) != 1 || got[0] != want {
 			t.Fatalf("unexpected %s tag filter: %#v", tag, got)
 		}
+	}
+
+	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0).UTC(), RelayPolicyState{Schema: RelaySettingsSchema})
+	if !filter.Matches(*event) {
+		t.Fatalf("relay settings projection did not match hydrator filter: tags=%v", event.Tags)
 	}
 }
 
@@ -621,7 +626,7 @@ func signedRelaySettingsRawEvent(t *testing.T, privateKey string, createdAt time
 	}
 	event := &nostr.Event{
 		Kind: kinds.CASControlState, CreatedAt: nostr.Timestamp(createdAt.Unix()),
-		Tags:    nostr.Tags{{"d", RelaySettingsDTag}, {"domain", RelaySettingsDomain}, {"schema", schemaTag}},
+		Tags:    nostr.Tags{{kinds.CASControlStateTagD, RelaySettingsDTag}, {kinds.CASControlStateTagDomain, RelaySettingsDomain}, {kinds.CASControlStateTagSchema, schemaTag}},
 		Content: content,
 	}
 	if err := SignGoNostrEvent(context.Background(), signer, event); err != nil {

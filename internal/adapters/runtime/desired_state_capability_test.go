@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -145,21 +144,6 @@ func TestDesiredStateApplyResultConstruction(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Unsupported runtime error tests
-// ---------------------------------------------------------------------------
-
-// TestUnsupportedRuntimesReturnExplicitError guards the explicit-error contract
-// for any runtimes that have not yet been migrated to desired-state convergence.
-// All current runtimes (Docker, Compose, Podman, Kubernetes) support it, so
-// this test is intentionally empty. Add entries here when new stub runtimes are
-// introduced.
-func TestUnsupportedRuntimesReturnExplicitError(t *testing.T) {
-	// No stub runtimes remain — all known runtimes support desired-state convergence.
-	// This test is kept as a placeholder so the guard pattern is not lost.
-	_ = context.Background()
-}
-
 func TestSupportedRuntimesReportCapability(t *testing.T) {
 	// All runtimes now support desired-state convergence.
 	docker := NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())
@@ -229,24 +213,14 @@ func (m *mockRuntimeNoDesiredState) StreamLogs(_ context.Context, _ string, _ Lo
 	return nil, nil
 }
 
-// ---------------------------------------------------------------------------
-// Kubernetes desired-state capability — forward-compatible test
-// (t.Skip guards until Agent 2's SupportsDesiredState() flip lands)
-// ---------------------------------------------------------------------------
-
-// TestKubernetesDesiredStateApplierSupported will pass once the Kubernetes
-// desired-state adapter is implemented (bahia-amqy Agent 2). Until then it
-// skips automatically so it does not block the pre-merge test suite.
 func TestKubernetesDesiredStateApplierSupported(t *testing.T) {
 	k8s := NewKubernetesRuntime("", "default", "", zap.NewNop())
 	if !k8s.SupportsDesiredState() {
-		t.Skip("Kubernetes desired-state not yet implemented — will pass after Agent 2 merges")
+		t.Fatal("Kubernetes should support desired state")
 	}
-	// Verify basic request handling (will fail for infrastructure reasons, not capability).
-	ctx := context.Background()
-	_, err := k8s.ApplyDesiredState(ctx, DesiredStateApplyRequest{})
-	// Should fail because of nil target service, NOT because of ErrDesiredStateNotSupported.
-	if errors.Is(err, ErrDesiredStateNotSupported) {
-		t.Error("should not return ErrDesiredStateNotSupported when SupportsDesiredState() is true")
+
+	_, err := k8s.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{})
+	if err == nil || err.Error() != "kubernetes apply: target service spec is nil" {
+		t.Fatalf("ApplyDesiredState() error = %v, want %q", err, "kubernetes apply: target service spec is nil")
 	}
 }

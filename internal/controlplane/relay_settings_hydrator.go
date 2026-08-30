@@ -303,9 +303,9 @@ func (h *RelaySettingsHydrator) filter() gonostr.Filter {
 	filter := gonostr.Filter{
 		Kinds: []gonostr.Kind{kinds.CASControlState},
 		Tags: gonostr.TagMap{
-			"d":      []string{RelaySettingsDTag},
-			"domain": []string{RelaySettingsDomain},
-			"schema": []string{RelaySettingsSchema},
+			kinds.CASControlStateTagD:      []string{RelaySettingsDTag},
+			kinds.CASControlStateTagDomain: []string{RelaySettingsDomain},
+			kinds.CASControlStateTagSchema: []string{RelaySettingsSchema},
 		},
 		Limit: 10,
 	}
@@ -485,13 +485,13 @@ func relayPolicyStateFromCanonicalEvent(ev *gonostr.Event, servicePubkey string)
 	if expected := strings.ToLower(strings.TrimSpace(servicePubkey)); expected != "" && strings.ToLower(ev.PubKey.Hex()) != expected {
 		return nil, fmt.Errorf("event pubkey %q does not match trusted service pubkey", ev.PubKey.Hex())
 	}
-	if tagValueNostr(ev.Tags, "d") != RelaySettingsDTag {
+	if tagValueNostr(ev.Tags, kinds.CASControlStateTagD) != RelaySettingsDTag {
 		return nil, fmt.Errorf("missing relay settings d tag %q", RelaySettingsDTag)
 	}
-	if tagValueNostr(ev.Tags, "domain") != RelaySettingsDomain {
+	if tagValueNostr(ev.Tags, kinds.CASControlStateTagDomain) != RelaySettingsDomain {
 		return nil, fmt.Errorf("missing relay settings domain tag %q", RelaySettingsDomain)
 	}
-	if tagValueNostr(ev.Tags, "schema") != RelaySettingsSchema {
+	if tagValueNostr(ev.Tags, kinds.CASControlStateTagSchema) != RelaySettingsSchema {
 		return nil, fmt.Errorf("missing relay settings schema tag %q", RelaySettingsSchema)
 	}
 	var state RelayPolicyState
