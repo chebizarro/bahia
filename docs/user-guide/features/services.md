@@ -282,3 +282,7 @@ Historical `31961`/`31962` read models are startup migration inputs only.
 - [Deployments](deployments.md) — Deploying services
 - [Artifacts](artifacts.md) — Container images
 - [Policies](policies.md) — Approval rules
+
+## Managed-instance health and recovery
+
+When supervision is enabled, Bahia observes configured targets and Bahia-managed deployment units without rebuilding images or changing configuration. Automatic recovery restarts only the exact unhealthy target, obeys desired-stopped intent, maintenance overrides, restart budgets, exponential backoff, and the shared runtime apply lock. Operators can set or clear a maintenance override through the supervisor service; these changes and recovery attempts are durable audit facts.

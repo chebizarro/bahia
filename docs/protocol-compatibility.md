@@ -188,3 +188,7 @@ Clients and agents should:
 6. Treat ContextVM responses as acknowledgments, not durable long-running completion.
 7. Avoid REST polling and legacy-kind subscriptions for runtime truth, including legacy SBOM kind `30079`.
 8. Treat desired-state metadata as optional and sanitized; never expect public relay events to expose secret plaintext, generated Compose env-file contents, or raw Docker endpoint credentials.
+
+### Managed-instance health projection
+
+Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.

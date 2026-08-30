@@ -96,6 +96,18 @@ func TestPgManagedInstanceHealthRepositoryRecordAttemptIsIdempotentAndSanitized(
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgManagedInstanceHealthRepositoryCompletePendingAttempt(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	mock.ExpectExec("UPDATE managed_instance_recovery_attempts").WithArgs("corr", domain.RecoveryAttemptSuccess, "[REDACTED]", domain.RecoveryAttemptPending).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	completed, err := repo.CompleteRecoveryAttempt(context.Background(), "corr", domain.RecoveryAttemptSuccess, "token=secret")
+	require.NoError(t, err)
+	require.True(t, completed)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgManagedInstanceHealthRepositoryRecentReadsAreBounded(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)

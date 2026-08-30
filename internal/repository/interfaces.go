@@ -103,6 +103,7 @@ type ManagedInstanceHealthRepository interface {
 	AppendHealthEvent(ctx context.Context, event *domain.ManagedInstanceHealthEvent) error
 	ListRecentHealthEvents(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.ManagedInstanceHealthEvent, error)
 	RecordRecoveryAttempt(ctx context.Context, attempt *domain.RecoveryAttempt) (bool, error)
+	CompleteRecoveryAttempt(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string) (bool, error)
 	ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error)
 
 	CreateMaintenanceOverride(ctx context.Context, override *domain.MaintenanceOverride) error

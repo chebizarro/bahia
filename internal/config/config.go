@@ -30,6 +30,7 @@ type Config struct {
 	Loom           LoomConfig                `koanf:"loom"`
 	Nostr          NostrConfig               `koanf:"nostr"`
 	Reconcile      ReconcileConfig           `koanf:"reconcile"`
+	Supervision    SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
 	Runtime        RuntimeConfig             `koanf:"runtime"`
 	Log            LogConfig                 `koanf:"log"`
 	Auth           AuthConfig                `koanf:"auth"`
@@ -851,6 +852,35 @@ func defaultWorkerPressureConfig() WorkerPressureConfig {
 	}
 }
 
+// SupervisionConfig controls local managed-instance health checks and recovery.
+type SupervisionConfig struct {
+	Enabled         bool                        `koanf:"enabled" yaml:"enabled"`
+	ObserveOnly     bool                        `koanf:"observe_only" yaml:"observe_only"`
+	Interval        time.Duration               `koanf:"interval" yaml:"interval"`
+	MemoryThreshold float64                     `koanf:"memory_threshold" yaml:"memory_threshold"`
+	Instances       []SupervisionInstanceConfig `koanf:"instances" yaml:"instances"`
+}
+
+// SupervisionInstanceConfig identifies one explicitly configured managed instance.
+type SupervisionInstanceConfig struct {
+	ServiceID          string        `koanf:"service_id" yaml:"service_id"`
+	EnvironmentID      string        `koanf:"environment_id" yaml:"environment_id"`
+	DeploymentUnitID   string        `koanf:"deployment_unit_id" yaml:"deployment_unit_id"`
+	RuntimeTargetName  string        `koanf:"runtime_target_name" yaml:"runtime_target_name"`
+	Host               string        `koanf:"host" yaml:"host"`
+	SupervisorType     string        `koanf:"supervisor_type" yaml:"supervisor_type"`
+	DesiredRunning     bool          `koanf:"desired_running" yaml:"desired_running"`
+	DockerHost         string        `koanf:"docker_host" yaml:"docker_host"`
+	ComposeDir         string        `koanf:"compose_dir" yaml:"compose_dir"`
+	ProbeURL           string        `koanf:"probe_url" yaml:"probe_url"`
+	ProbeTimeout       time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
+	RestartMaxAttempts int           `koanf:"restart_max_attempts" yaml:"restart_max_attempts"`
+	RestartWindow      time.Duration `koanf:"restart_window" yaml:"restart_window"`
+	BackoffBase        time.Duration `koanf:"backoff_base" yaml:"backoff_base"`
+	BackoffCap         time.Duration `koanf:"backoff_cap" yaml:"backoff_cap"`
+	WarningMinInterval time.Duration `koanf:"warning_min_interval" yaml:"warning_min_interval"`
+}
+
 // Defaults returns a Config with sensible default values.
 func Defaults() *Config {
 	return &Config{
@@ -908,6 +938,13 @@ func Defaults() *Config {
 		Reconcile: ReconcileConfig{
 			Interval: 60 * time.Second,
 			Enabled:  true,
+		},
+		Supervision: SupervisionConfig{
+			Enabled:         false,
+			ObserveOnly:     true,
+			Interval:        30 * time.Second,
+			MemoryThreshold: 0.90,
+			Instances:       []SupervisionInstanceConfig{},
 		},
 		Runtime: RuntimeConfig{
 			Type:         "docker",
@@ -1181,6 +1218,9 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 }
 
 func (c *Config) validate() error {
+	if err := c.validateSupervision(); err != nil {
+		return err
+	}
 	mode := strings.ToLower(strings.TrimSpace(c.Mode))
 	switch mode {
 	case "full", "degraded", "emergency":
@@ -1317,6 +1357,45 @@ func (c *Config) validate() error {
 }
 
 const bundledOCIServiceAccountHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
+func (c *Config) validateSupervision() error {
+	if !c.Supervision.Enabled {
+		return nil
+	}
+	if c.Supervision.Interval <= 0 {
+		return fmt.Errorf("config validation failed: supervision.interval must be > 0")
+	}
+	if c.Supervision.MemoryThreshold <= 0 || c.Supervision.MemoryThreshold > 1 {
+		return fmt.Errorf("config validation failed: supervision.memory_threshold must be > 0 and <= 1")
+	}
+	for i := range c.Supervision.Instances {
+		spec := &c.Supervision.Instances[i]
+		if _, err := uuid.Parse(strings.TrimSpace(spec.ServiceID)); err != nil {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].service_id must be a UUID", i)
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(spec.EnvironmentID)); err != nil {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].environment_id must be a UUID", i)
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(spec.DeploymentUnitID)); err != nil {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].deployment_unit_id must be a UUID", i)
+		}
+		if strings.TrimSpace(spec.RuntimeTargetName) == "" {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].runtime_target_name is required", i)
+		}
+		switch domain.InstanceSupervisorType(strings.TrimSpace(spec.SupervisorType)) {
+		case domain.InstanceSupervisorDocker, domain.InstanceSupervisorCompose, domain.InstanceSupervisorSystemd, domain.InstanceSupervisorUserSystemd:
+		default:
+			return fmt.Errorf("config validation failed: supervision.instances[%d].supervisor_type is invalid", i)
+		}
+		if spec.RestartMaxAttempts <= 0 || spec.RestartMaxAttempts > 500 || spec.RestartWindow <= 0 || spec.BackoffBase <= 0 || spec.BackoffCap < spec.BackoffBase {
+			return fmt.Errorf("config validation failed: supervision.instances[%d] recovery budget/backoff is invalid", i)
+		}
+		if spec.ProbeURL != "" && spec.ProbeTimeout <= 0 {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].probe_timeout must be > 0", i)
+		}
+	}
+	return nil
+}
 
 func (c *Config) validateProductionSecurity() error {
 	c.Server.Host = strings.TrimSpace(c.Server.Host)

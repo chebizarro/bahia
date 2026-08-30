@@ -1,0 +1,8 @@
+{
+  "criteria": [
+    {"id":"AC-1","statement":"Classify managed instance health and persist newest material transitions.","tests":["TestManagedInstanceClassification","TestManagedInstanceHighMemorySustainedAndWarningRateLimit"]},
+    {"id":"AC-2","statement":"Respect operator intent, maintenance, budget, backoff, idempotency, and apply-lock contention.","tests":["TestManagedInstanceRecoverySuppressions","TestManagedInstanceBudgetLockAndIdempotency"]},
+    {"id":"AC-3","statement":"Project sanitized canonical 30315, 30900, and 4903 observables from subscriptions.","tests":["TestManagedInstanceHealthProjectorShapes","TestManagedInstanceProjectorRecoveryAndMaintenanceFacts"]},
+    {"id":"AC-4","statement":"Default to disabled observe-only-safe configuration and validate enabled configuration.","tests":["TestSupervisionDefaultsAndValidation"]}
+  ]
+}

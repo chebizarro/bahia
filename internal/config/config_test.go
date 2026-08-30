@@ -8,8 +8,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+func TestSupervisionDefaultsAndValidation(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Supervision.Enabled || !cfg.Supervision.ObserveOnly || cfg.Supervision.Interval != 30*time.Second || cfg.Supervision.MemoryThreshold != 0.9 {
+		t.Fatalf("unexpected safe supervision defaults: %+v", cfg.Supervision)
+	}
+	cfg.Supervision.Enabled = true
+	cfg.Supervision.Instances = []SupervisionInstanceConfig{{ServiceID: uuid.NewString(), EnvironmentID: uuid.NewString(), DeploymentUnitID: uuid.NewString(), RuntimeTargetName: "api", SupervisorType: "docker", DesiredRunning: true, RestartMaxAttempts: 3, RestartWindow: time.Hour, BackoffBase: time.Minute, BackoffCap: 10 * time.Minute}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid supervision config: %v", err)
+	}
+	cfg.Supervision.Interval = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid interval")
+	}
+}
 
 func TestDefaults(t *testing.T) {
 	cfg := Defaults()

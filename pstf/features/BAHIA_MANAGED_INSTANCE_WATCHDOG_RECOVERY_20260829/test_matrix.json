@@ -1,0 +1,1 @@
+{"quality_gates":["go build ./...","go test ./internal/service/... ./internal/app/... ./internal/config/... ./internal/notifications/..."],"deterministic":true}

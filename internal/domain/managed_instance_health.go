@@ -116,6 +116,7 @@ func (o *MaintenanceOverride) ActiveAt(at time.Time) bool {
 type RecoveryAttemptResult string
 
 const (
+	RecoveryAttemptPending         RecoveryAttemptResult = "pending"
 	RecoveryAttemptSuccess         RecoveryAttemptResult = "success"
 	RecoveryAttemptDegraded        RecoveryAttemptResult = "degraded"
 	RecoveryAttemptFailed          RecoveryAttemptResult = "failed"

@@ -54,12 +54,21 @@ func (d *Dispatcher) SetupSubscriptions(pub events.Publisher) {
 		events.EventToolProvisionCompleted,
 		events.EventToolProvisionFailed,
 		events.EventSecurityPolicyBreached,
+		events.EventRuntimeInstanceHealthChanged,
+		events.EventRuntimeRecoveryRequested,
+		events.EventRuntimeRecoveryCompleted,
+		events.EventRuntimeRecoveryFailed,
+		events.EventRuntimeRecoveryBudgetExhausted,
+		events.EventRuntimeMaintenanceChanged,
 	}
 
 	errorSubscriber, supportsErrors := pub.(events.ErrorSubscriber)
 	for _, et := range eventTypes {
 		et := et // capture
 		handler := func(ctx context.Context, e events.Event) error {
+			if alert, ok := e.Data.(interface{ ShouldNotify() bool }); ok && !alert.ShouldNotify() {
+				return nil
+			}
 			return d.dispatch(ctx, string(et), map[string]any{
 				"event_type": string(et),
 				"entity_id":  e.EntityID,

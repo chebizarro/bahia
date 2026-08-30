@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -222,6 +223,20 @@ func (r *PgManagedInstanceHealthRepository) RecordRecoveryAttempt(ctx context.Co
 		attempt.Result, attempt.Evidence)
 	if err != nil {
 		return false, fmt.Errorf("recording managed instance recovery attempt: %w", err)
+	}
+	return command.RowsAffected() == 1, nil
+}
+
+// CompleteRecoveryAttempt atomically replaces a pending claim with its terminal result.
+func (r *PgManagedInstanceHealthRepository) CompleteRecoveryAttempt(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string) (bool, error) {
+	switch result {
+	case domain.RecoveryAttemptSuccess, domain.RecoveryAttemptDegraded, domain.RecoveryAttemptFailed:
+	default:
+		return false, fmt.Errorf("invalid terminal recovery result %q", result)
+	}
+	command, err := r.pool.Exec(ctx, `UPDATE managed_instance_recovery_attempts SET result = $2, evidence = $3 WHERE correlation_id = $1 AND result = $4`, strings.TrimSpace(correlationID), result, domain.SanitizeEvidence(evidence), domain.RecoveryAttemptPending)
+	if err != nil {
+		return false, fmt.Errorf("completing managed instance recovery attempt: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
 }
