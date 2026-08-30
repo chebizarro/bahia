@@ -74,8 +74,9 @@ const (
 	KindWorkloadPinRequest       = nostrpool.KindControlPlaneWorkloadPinRequest       // Pin workload placement to a worker
 	KindWorkerCleanupRequest     = nostrpool.KindControlPlaneWorkerCleanupRequest     // Request worker cleanup
 
-	// Generic AI/ML command/result kinds (38390-38399). These intentionally
-	// avoid NIP-90's 5000-7000 DVM range.
+	// Generic AI/ML command/result kinds (38390-38399). Their separation from the
+	// retired legacy DVM allocation is historical; fleet-local Loom, Hive-CI, and
+	// SoulFactory kinds within 5000-7000 are explicit independent protocols.
 	KindMLRecipeRunRequest            = nostrpool.KindMLRecipeRunRequest            // Request a generic ML recipe run
 	KindMLInferenceDeployRequest      = nostrpool.KindMLInferenceDeployRequest      // Request inference endpoint deployment
 	KindMLInferenceDeploymentApproval = nostrpool.KindMLInferenceDeploymentApproval // Approve or reject an inference deployment

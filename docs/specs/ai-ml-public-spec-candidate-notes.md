@@ -18,7 +18,7 @@ Bahia's generic AI/ML event family is a public-spec candidate track, not a block
 - `38390-38399`: phase-1 addressable AI/ML command and terminal result events.
 - `31980-31989`: phase-1 replaceable AI/ML registry, state, provenance, and capability read models.
 
-These ranges intentionally avoid NIP-90's `5000-7000` Data Vending Machine request/result/feedback ranges. They are suitable as a Bahia public-spec candidate because they isolate generic AI/ML semantics from the stable LLM compatibility namespace and give implementations room to prove field names before any later NIP/BUD proposal.
+Historical rationale (superseded 2026-08-01): these ranges were originally selected outside NIP-90's then-active `5000-7000` Data Vending Machine allocation to isolate generic AI/ML semantics from the stable LLM compatibility namespace. NIP-90 is now retired, so that range avoidance is not a current constraint; `38390-38399` and `31980-31989` remain legacy compatibility inventory, while production transport uses ContextVM `25910` and canonical observables. Fleet-local Loom, Hive-CI, and SoulFactory kinds within `5000-7000` are independent protocols.
 
 Standardization is non-blocking: the Hugging Face -> vLLM and recipe-coordinator slices should implement against this documented contract, collect compatibility evidence, and only then prepare a public proposal.
 

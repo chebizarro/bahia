@@ -2,7 +2,7 @@
 
 ## Status
 
-Bead `bahia-1qe9.9` verified completed SBOM epics `bahia-1qe9.1` through `bahia-1qe9.8` against `docs/designs/sbom-real-support.md`, AGENTS.md Nostr rules, PSTF artifacts, deterministic tests, and production-readiness constraints.
+Bead `bahia-1qe9.9` verified the production SBOM core and deterministic mocked-relay browser coverage for SBOM epics `bahia-1qe9.1` through `bahia-1qe9.8` against `docs/designs/sbom-real-support.md`, AGENTS.md Nostr rules, PSTF artifacts, and deterministic tests. This report does not establish a live relay/Blossom/backend round trip; true E2E evidence must be tracked separately.
 
 ## Verification summary by epic
 
@@ -13,7 +13,7 @@ Bead `bahia-1qe9.9` verified completed SBOM epics `bahia-1qe9.1` through `bahia-
 - `bahia-1qe9.5` — Verified. Event builders produce required `30078` reference and `30004` availability-list tags; publishing requires relay OK results and rejects auth/closed/OK false outcomes. Exact payload hash verification is performed in the orchestration/storage path before reference publication.
 - `bahia-1qe9.6` — Verified. The orchestrator enforces Blossom storage, verifies payload hash and attestation digests, publishes status/audit/reference/list observables with OK verification, serializes per-subject work, and avoids `30079`. Package/repository subject locator ambiguity is resolved by `bahia-wqj5`; ContextVM ack-vs-completion semantics are resolved by `bahia-ilio`.
 - `bahia-1qe9.7` — Verified after fix. REST `POST /artifacts/{id}/sbom` delegates to the import service and no longer bypasses Blossom/Nostr. Verification fixed oversized payload handling so bodies over 10 MiB return `413` instead of being truncated and imported.
-- `bahia-1qe9.8` — Verified. PSTF acceptance criteria, test matrix, defects, and user docs cover the real SBOM flow. Browser E2E for signer-first generate/import UI/control flows remains tracked as `bahia-wf2k`.
+- `bahia-1qe9.8` — Verified for PSTF acceptance criteria, test matrix, defects, user docs, and deterministic injected-relay browser coverage. `bahia-wf2k` is closed with that generate/import UI and injected-relay coverage; it does not constitute live relay/Blossom/backend E2E evidence.
 
 ## Verification fixes made in `bahia-1qe9.9`
 
@@ -42,13 +42,13 @@ GOCACHE=/tmp/bahia-go-cache go test ./internal/...
 
 Result: PASS on 2026-06-13.
 
-Existing targeted UI evidence from prior SBOM PSTF work remains applicable:
+Existing deterministic mocked-relay browser evidence from prior SBOM PSTF work remains applicable:
 
 ```bash
 cd web && pnpm test:e2e --reporter=line tests/e2e/environments-crud-smoke.spec.js tests/e2e/sbom-workflow.spec.js
 ```
 
-## Web artifact generate/regenerate slice — 2026-06-13
+## Web artifact generate/regenerate mocked-relay browser slice — 2026-06-13
 
 - `web/src/lib/stores/public-controlplane.svelte.js` now builds encrypted ContextVM `sbom/generate` requests for artifact subjects with immutable digest, explicit OCI image source locator, SPDX/CycloneDX formats, Syft generator, Blossom storage, scoped tags, and deterministic idempotency keys. It rejects display-name-only artifacts instead of treating names such as `nostrodomo` as Docker Hub image repositories.
 - `web/src/routes/artifacts/[id]/+page.svelte` now exposes **Generate SBOM** and **Regenerate SBOM** from the artifact detail header and SBOM tab, publishes through the Nostr ContextVM helper, does not call REST generation endpoints, and tells users that durable completion is reflected by SBOM reference and availability-list events.
@@ -136,7 +136,7 @@ GOCACHE=/tmp/bahia-go-cache go test ./internal/...
 
 Result: PASS on 2026-06-30.
 
-## bahia-wf2k artifact SBOM import browser workflow — 2026-06-30
+## bahia-wf2k artifact SBOM import mocked-relay browser workflow — 2026-06-30
 
 - `web/src/lib/stores/public-controlplane.svelte.js` now exposes `importArtifactSBOM(...)` for signer-backed ContextVM `sbom/import` intents. It uses `publishCommandOnly`, tags the artifact subject/format/generator, sends the backend `sbomImportParams` payload shape (`idempotencyKey`, `subject`, `format`, inline `payloadBase64` or `location`, `storage`, `generator`), and rejects inline payloads over the 512 KiB ContextVM limit before publishing.
 - `web/src/routes/artifacts/[id]/+page.svelte` now exposes an **Import SBOM** control on the SBOM tab with JSON file picker, SPDX/CycloneDX format selection/detection, client-side 512 KiB validation, base64 inline import, and operation-specific errors/status. Import reuses the same artifact-scoped `30078`/`30004` subscription and refresh path as generate; the ContextVM ACK remains pending-only and terminal UI success comes from canonical observable events.
@@ -181,6 +181,7 @@ Result: PASS on 2026-07-03 — 12 passed. Playwright required unsandboxed browse
 ## Remaining tracked work
 
 - `bahia-ndmr`: Relay-backed merge of existing canonical 30004 availability-list entries across Bahia instances remains tracked.
+- A true live relay/Blossom/backend end-to-end run is outside the evidence in this report and must be tracked separately if required; do not treat closed `bahia-wf2k` as that evidence.
 
 
 ## Nostr/PSTF notes
