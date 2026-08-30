@@ -17,6 +17,7 @@ const OPERATIONS_LINKS = [
   { href: '/environments', label: 'Environments', docTopic: 'features-environments' },
   { href: '/workers', label: 'Workers', docTopic: 'features-workers' },
   { href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' },
+  { href: '/instance-health', label: 'Instance Health' },
   { href: '/backup', label: 'Backup', docTopic: 'features-backup' },
   { href: '/continuity', label: 'Continuity' },
   { href: '/dns', label: 'DNS', docTopic: 'features-dns' },

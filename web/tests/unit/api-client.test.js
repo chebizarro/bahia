@@ -76,6 +76,32 @@ describe('BahiaClient', () => {
     }));
   });
 
+  it('uses scoped managed instance health and maintenance endpoints', async () => {
+    const key = { service_id: 'service/a', environment_id: 'environment/b', deployment_unit_id: 'unit/c', runtime_target_name: 'edge agent' };
+    global.fetch
+      .mockResolvedValueOnce(json([]))
+      .mockResolvedValueOnce(json({ health: { status: 'healthy' } }))
+      .mockResolvedValueOnce(json([]))
+      .mockResolvedValueOnce(json([]))
+      .mockResolvedValueOnce(json({ reason: 'planned' }))
+      .mockResolvedValueOnce(json({ cleared: true }));
+
+    await client.listInstanceHealth({ unhealthy: true });
+    await client.getInstanceHealth(key);
+    await client.listInstanceHealthEvents(key, 25);
+    await client.listInstanceRecoveryAttempts(key, 10);
+    await client.setInstanceMaintenance(key, { reason: 'planned' });
+    await client.clearInstanceMaintenance(key);
+
+    const base = `/api/v1/services/${encodeURIComponent(key.service_id)}/environments/${encodeURIComponent(key.environment_id)}/managed-instances/${encodeURIComponent(key.deployment_unit_id)}`;
+    expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/v1/instance-health?unhealthy=true', expect.objectContaining({ method: 'GET' }));
+    expect(global.fetch).toHaveBeenNthCalledWith(2, `${base}/health?runtime_target_name=edge%20agent`, expect.objectContaining({ method: 'GET' }));
+    expect(global.fetch).toHaveBeenNthCalledWith(3, `${base}/health/events?runtime_target_name=edge%20agent&limit=25`, expect.objectContaining({ method: 'GET' }));
+    expect(global.fetch).toHaveBeenNthCalledWith(4, `${base}/health/recovery-attempts?runtime_target_name=edge%20agent&limit=10`, expect.objectContaining({ method: 'GET' }));
+    expect(global.fetch).toHaveBeenNthCalledWith(5, `${base}/maintenance?runtime_target_name=edge%20agent`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: 'planned' }) }));
+    expect(global.fetch).toHaveBeenNthCalledWith(6, `${base}/maintenance?runtime_target_name=edge%20agent`, expect.objectContaining({ method: 'DELETE' }));
+  });
+
   it('throws backend error envelopes', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: false,

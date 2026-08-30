@@ -43,6 +43,8 @@ type RouterDeps struct {
 	Environments     repository.EnvironmentRepository
 	DeploymentUnits  repository.DeploymentUnitRepository
 	EnvStates        repository.EnvironmentServiceStateRepository
+	InstanceHealth   repository.ManagedInstanceHealthRepository
+	InstanceOperator handlers.InstanceMaintenanceOperator
 	RuntimeResolver  runtimeadapter.RuntimeResolver
 	Payments         *service.PaymentService
 	SBOMs            repository.SBOMRepository
@@ -156,6 +158,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry, deps.Services, deps.Environments)
+	var instanceHealthH *handlers.InstanceHealthHandler
+	if deps.InstanceHealth != nil && deps.Services != nil && deps.Environments != nil {
+		instanceHealthH = handlers.NewInstanceHealthHandler(deps.InstanceHealth, deps.Services, deps.Environments, deps.InstanceOperator)
+	}
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
@@ -246,6 +252,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state/drifted", stateH.ListDrifted)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "envId"), true)).Get("/environments/{envId}/state", stateH.ListByEnvironment)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
+
+			// Managed instance health (read)
+			if instanceHealthH != nil {
+				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/instance-health", instanceHealthH.List)
+				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health", instanceHealthH.Get)
+				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/events", instanceHealthH.ListEvents)
+				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/recovery-attempts", instanceHealthH.ListRecoveryAttempts)
+			}
 
 			// Repository CI lookup (read)
 			r.With(tier3Gate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
@@ -384,6 +399,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Delete("/orgs/{id}/members/{pubkey}", tenantH.RemoveMember)
 				r.Post("/orgs/{id}/invites", tenantH.CreateInvite)
 				r.Delete("/orgs/{id}/invites/{inviteId}", tenantH.RevokeInvite)
+			}
+
+			// Managed instance maintenance (write)
+			if instanceHealthH != nil {
+				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
+				r.With(tier2Gate, instanceRBAC).Post("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance", instanceHealthH.SetMaintenance)
+				r.With(tier2Gate, instanceRBAC).Delete("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance", instanceHealthH.ClearMaintenance)
 			}
 
 			// Builds (write)

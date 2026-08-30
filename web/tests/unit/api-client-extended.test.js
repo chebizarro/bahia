@@ -88,10 +88,12 @@ describe('BahiaClient HTTP-native interop contract', () => {
     const methods = Object.getOwnPropertyNames(BahiaClient.prototype).filter((name) => name !== 'constructor').sort();
     expect(methods).toEqual([
       'checkBlossomHealth',
+      'clearInstanceMaintenance',
       'fetch',
       'fetchBlossomBlob',
       'getBlossomServers',
       'getBlossomStats',
+      'getInstanceHealth',
       'getSBOM',
       'getSBOMAttestation',
       'getSBOMNTIACompliance',
@@ -99,11 +101,15 @@ describe('BahiaClient HTTP-native interop contract', () => {
       'ingestSBOM',
       'listBlossomBlobs',
       'listConfigFabricDrift',
+      'listInstanceHealth',
+      'listInstanceHealthEvents',
+      'listInstanceRecoveryAttempts',
       'publishConfigFabricEvent',
       'query',
       'rollbackConfigFabricEvent',
       'searchSBOMPackages',
-      'setAuthProvider'
+      'setAuthProvider',
+      'setInstanceMaintenance'
     ].sort());
   });
 

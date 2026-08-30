@@ -56,6 +56,8 @@ Bahia exposes JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`. Tool respons
 ### 5. REST API compatibility surface
 REST remains for narrowed CRUD, query, logs, registry, and operational compatibility routes. It is no longer the best single description of overall product behavior.
 
+Managed runtime observation and policy-bounded exact-target recovery are operated according to the [managed-instance supervision runbook](runbooks/managed-instance-supervision.md).
+
 ---
 
 ## Major components

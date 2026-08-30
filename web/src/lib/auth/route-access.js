@@ -4,6 +4,7 @@ const PROTECTED_PREFIXES = [
   '/deployments',
   '/policies',
   '/config-fabric',
+  '/instance-health',
   '/environments',
   '/workers',
   '/fleet-health',

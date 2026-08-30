@@ -135,6 +135,14 @@ func (r *PgManagedInstanceHealthRepository) listHealth(ctx context.Context, quer
 	return result, nil
 }
 
+func (r *PgManagedInstanceHealthRepository) ListAllHealth(ctx context.Context) ([]domain.ManagedInstanceHealth, error) {
+	result, err := r.listHealth(ctx, `SELECT `+managedHealthColumns+` FROM managed_instance_health ORDER BY last_observed_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing managed instance health: %w", err)
+	}
+	return result, nil
+}
+
 func (r *PgManagedInstanceHealthRepository) ListHealthByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.ManagedInstanceHealth, error) {
 	result, err := r.listHealth(ctx, `SELECT `+managedHealthColumns+` FROM managed_instance_health WHERE environment_id = $1 ORDER BY last_observed_at DESC`, environmentID)
 	if err != nil {

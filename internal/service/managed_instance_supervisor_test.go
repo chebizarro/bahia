@@ -33,6 +33,9 @@ func (r *supervisorRepoFake) GetHealth(context.Context, domain.ManagedInstanceKe
 	copy := *r.health
 	return &copy, nil
 }
+func (r *supervisorRepoFake) ListAllHealth(context.Context) ([]domain.ManagedInstanceHealth, error) {
+	return nil, nil
+}
 func (r *supervisorRepoFake) ListHealthByEnvironment(context.Context, uuid.UUID) ([]domain.ManagedInstanceHealth, error) {
 	return nil, nil
 }

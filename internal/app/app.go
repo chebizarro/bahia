@@ -1492,6 +1492,8 @@ func New(cfg *config.Config) (*App, error) {
 			Environments:     envRepo,
 			DeploymentUnits:  deploymentUnitRepo,
 			EnvStates:        stateRepo,
+			InstanceHealth:   managedInstanceHealthRepo,
+			InstanceOperator: managedInstanceSupervisor,
 			RuntimeResolver:  runtimeResolver,
 			Payments:         paymentSvc,
 			SBOMs:            sbomRepo,

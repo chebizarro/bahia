@@ -96,6 +96,7 @@ type RuntimeObservationRepository interface {
 type ManagedInstanceHealthRepository interface {
 	UpsertHealth(ctx context.Context, health *domain.ManagedInstanceHealth) error
 	GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
+	ListAllHealth(ctx context.Context) ([]domain.ManagedInstanceHealth, error)
 	ListHealthByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
 	ListHealthByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
 	ListUnhealthy(ctx context.Context) ([]domain.ManagedInstanceHealth, error)

@@ -3,6 +3,9 @@
     {"id":"AC-1","statement":"Classify managed instance health and persist newest material transitions.","tests":["TestManagedInstanceClassification","TestManagedInstanceHighMemorySustainedAndWarningRateLimit"]},
     {"id":"AC-2","statement":"Respect operator intent, maintenance, budget, backoff, idempotency, and apply-lock contention.","tests":["TestManagedInstanceRecoverySuppressions","TestManagedInstanceBudgetLockAndIdempotency"]},
     {"id":"AC-3","statement":"Project sanitized canonical 30315, 30900, and 4903 observables from subscriptions.","tests":["TestManagedInstanceHealthProjectorShapes","TestManagedInstanceProjectorRecoveryAndMaintenanceFacts"]},
-    {"id":"AC-4","statement":"Default to disabled observe-only-safe configuration and validate enabled configuration.","tests":["TestSupervisionDefaultsAndValidation"]}
+    {"id":"AC-4","statement":"Default to disabled observe-only-safe configuration and validate enabled configuration.","tests":["TestSupervisionDefaultsAndValidation"]},
+    {"id":"AC-5","statement":"Expose bounded, sanitized, tenant-scoped health and history reads plus authenticated maintenance changes.","tests":["TestInstanceHealthHandlerListFiltersOrganizationAndSanitizes","TestInstanceHealthHandlerGetIncludesActiveOverride","TestInstanceHealthHandlerHistoryLimitIsBoundedAndSanitized","TestInstanceHealthHandlerMaintenanceForwardsAuthenticatedActorAndKey","TestInstanceHealthCollectionRouteIsMountedAndTier2Gated"]},
+    {"id":"AC-6","statement":"Present managed instance status, resource, recovery, event, and maintenance state in the operator UI.","tests":["instance-health-page-model.test.js","api-client.test.js"]},
+    {"id":"AC-7","statement":"Classify disposable Docker failures, restart only the exact target, and suppress restart during maintenance.","tests":["TestManagedInstanceSupervisionDocker"]}
   ]
 }
