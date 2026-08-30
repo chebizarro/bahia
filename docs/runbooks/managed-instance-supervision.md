@@ -24,6 +24,7 @@ supervision:
   enabled: false
   observe_only: true
   interval: 30s
+  observation_timeout: 30s
   memory_threshold: 0.90
   instances: []
 ```
@@ -35,6 +36,7 @@ supervision:
   enabled: true
   observe_only: true
   interval: 30s
+  observation_timeout: 30s
   memory_threshold: 0.90
   instances:
     - service_id: "<service UUID>"
@@ -59,6 +61,7 @@ For Compose use `supervisor_type: compose` and set `compose_dir`. For system ser
 - `restart_max_attempts` and `restart_window` cap restarts for one target.
 - `backoff_base` and `backoff_cap` prevent rapid retry loops.
 - `warning_min_interval` rate-limits warning notifications; error and critical recovery events remain immediate according to the built-in supervision alert policy.
+- `observation_timeout` bounds every runtime observation, readiness probe, and restart command so one blocked target cannot indefinitely stall the supervision pass.
 - `memory_threshold` marks sustained memory pressure as degraded after consecutive observations.
 - A maintenance override suppresses recovery for only its full service/environment/deployment-unit/runtime-target key. Observation and alerting remain active.
 

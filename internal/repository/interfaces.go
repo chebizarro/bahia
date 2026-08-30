@@ -95,6 +95,7 @@ type RuntimeObservationRepository interface {
 // correlated recovery attempts, and maintenance overrides for managed runtime targets.
 type ManagedInstanceHealthRepository interface {
 	UpsertHealth(ctx context.Context, health *domain.ManagedInstanceHealth) error
+	UpsertHealthWithEvent(ctx context.Context, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) error
 	GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
 	ListAllHealth(ctx context.Context) ([]domain.ManagedInstanceHealth, error)
 	ListHealthByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
@@ -105,6 +106,7 @@ type ManagedInstanceHealthRepository interface {
 	ListRecentHealthEvents(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.ManagedInstanceHealthEvent, error)
 	RecordRecoveryAttempt(ctx context.Context, attempt *domain.RecoveryAttempt) (bool, error)
 	CompleteRecoveryAttempt(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string) (bool, error)
+	CompleteRecoveryAttemptWithHealthEvent(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) (bool, error)
 	ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error)
 
 	CreateMaintenanceOverride(ctx context.Context, override *domain.MaintenanceOverride) error

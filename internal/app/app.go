@@ -427,7 +427,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		policy := defaultSupervisionPolicy(cfg.Supervision.ObserveOnly)
 		source := &service.RepositorySupervisionSpecSource{Configured: configuredSpecs, States: stateRepo, Services: serviceRepo, Environments: envRepo, Units: deploymentUnitRepo, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
-		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, managedInstanceHealthRepo, runtimeApplyLock, publisher, cfg.Supervision.Interval, logger)
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, managedInstanceHealthRepo, runtimeApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
 		}

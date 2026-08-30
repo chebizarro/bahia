@@ -19,7 +19,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultRestartLoopThreshold = 3
+const (
+	defaultRestartLoopThreshold = 3
+	defaultObservationTimeout   = 30 * time.Second
+)
 
 // ManagedInstanceTryLocker is the non-blocking subset of the runtime apply lock.
 type ManagedInstanceTryLocker interface {
@@ -99,30 +102,39 @@ func (ManagedInstanceMaintenanceEvent) ShouldNotify() bool { return false }
 
 // ManagedInstanceSupervisor observes local managed instances and performs narrowly scoped recovery.
 type ManagedInstanceSupervisor struct {
-	source    SupervisionSpecSource
-	repo      repository.ManagedInstanceHealthRepository
-	lock      ManagedInstanceTryLocker
-	publisher events.Publisher
-	interval  time.Duration
-	logger    *zap.Logger
-	now       func() time.Time
+	source             SupervisionSpecSource
+	repo               repository.ManagedInstanceHealthRepository
+	lock               ManagedInstanceTryLocker
+	publisher          events.Publisher
+	interval           time.Duration
+	observationTimeout time.Duration
+	logger             *zap.Logger
+	now                func() time.Time
 
 	mu             sync.Mutex
 	highMemoryRuns map[string]int
 	lastAlerts     map[string]time.Time
+	instanceLocks  map[string]*sync.Mutex
 }
 
-func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo repository.ManagedInstanceHealthRepository, lock ManagedInstanceTryLocker, publisher events.Publisher, interval time.Duration, logger *zap.Logger) (*ManagedInstanceSupervisor, error) {
+func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo repository.ManagedInstanceHealthRepository, lock ManagedInstanceTryLocker, publisher events.Publisher, interval time.Duration, logger *zap.Logger, observationTimeout ...time.Duration) (*ManagedInstanceSupervisor, error) {
 	if source == nil || repo == nil {
 		return nil, fmt.Errorf("managed instance supervisor requires spec source and health repository")
 	}
 	if interval <= 0 {
 		return nil, fmt.Errorf("managed instance supervisor interval must be positive")
 	}
+	timeout := defaultObservationTimeout
+	if len(observationTimeout) > 0 {
+		timeout = observationTimeout[0]
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("managed instance supervisor observation timeout must be positive")
+	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &ManagedInstanceSupervisor{source: source, repo: repo, lock: lock, publisher: publisher, interval: interval, logger: logger.Named("managed-instance-supervisor"), now: func() time.Time { return time.Now().UTC() }, highMemoryRuns: map[string]int{}, lastAlerts: map[string]time.Time{}}, nil
+	return &ManagedInstanceSupervisor{source: source, repo: repo, lock: lock, publisher: publisher, interval: interval, observationTimeout: timeout, logger: logger.Named("managed-instance-supervisor"), now: func() time.Time { return time.Now().UTC() }, highMemoryRuns: map[string]int{}, lastAlerts: map[string]time.Time{}, instanceLocks: map[string]*sync.Mutex{}}, nil
 }
 
 func (s *ManagedInstanceSupervisor) Name() string { return "managed-instance-supervisor" }
@@ -146,8 +158,6 @@ func (s *ManagedInstanceSupervisor) Run(ctx context.Context) error {
 }
 
 func (s *ManagedInstanceSupervisor) EvaluateOnce(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	specs, err := s.source.SupervisionSpecs(ctx)
 	if err != nil {
 		return fmt.Errorf("enumerate supervision specs: %w", err)
@@ -158,7 +168,11 @@ func (s *ManagedInstanceSupervisor) EvaluateOnce(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return errors.Join(append(errs, ctx.Err())...)
 		}
-		if err := s.evaluateSpec(ctx, &specs[i]); err != nil {
+		instanceLock := s.instanceLock(specs[i].Key)
+		instanceLock.Lock()
+		err := s.evaluateSpec(ctx, &specs[i])
+		instanceLock.Unlock()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("supervise %s: %w", instanceKeyString(specs[i].Key), err))
 		}
 	}
@@ -173,28 +187,31 @@ func (s *ManagedInstanceSupervisor) evaluateSpec(ctx context.Context, spec *Supe
 	if err != nil {
 		return err
 	}
-	obs, observeErr := spec.Observer.ObserveInstance(ctx, spec.Key)
+	observeCtx, cancelObserve := s.observationContext(ctx)
+	obs, observeErr := spec.Observer.ObserveInstance(observeCtx, spec.Key)
+	cancelObserve()
 	health := s.classify(ctx, spec, previous, obs, observeErr)
 	if previous != nil && health.LastObservedAt.Before(previous.LastObservedAt) {
 		return nil
 	}
 	material := previous == nil || health.Status != previous.Status || health.FailureReason != previous.FailureReason || health.RestartCount != previous.RestartCount || health.MemoryCurrentBytes != previous.MemoryCurrentBytes || health.MemoryPeakBytes != previous.MemoryPeakBytes || health.MemoryLimitBytes != previous.MemoryLimitBytes
 	if material {
-		if err := s.repo.UpsertHealth(ctx, &health); err != nil {
-			return err
-		}
 		e := domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: spec.Key, Status: health.Status, Reason: health.FailureReason, Evidence: health.FailureReason, ObservedAt: health.LastObservedAt}
 		if previous != nil {
 			e.PreviousStatus = previous.Status
 		}
-		if err := s.repo.AppendHealthEvent(ctx, &e); err != nil {
+		if err := s.repo.UpsertHealthWithEvent(ctx, &health, &e); err != nil {
 			return err
 		}
-		severity := healthSeverity(health.Status, s.highMemoryRuns[instanceKeyString(spec.Key)] >= sustainCount(spec))
+		severity := healthSeverity(health.Status, s.highMemoryCount(spec.Key) >= sustainCount(spec))
 		alert := s.shouldAlert(spec, severity, health.LastObservedAt)
 		s.publish(ctx, events.EventRuntimeInstanceHealthChanged, instanceKeyString(spec.Key), ManagedInstanceHealthChanged{EventID: e.ID.String(), Health: health, PreviousStatus: e.PreviousStatus, Severity: severity, Alert: alert, Reason: health.FailureReason, OccurredAt: health.LastObservedAt})
 	}
-	return s.recover(ctx, spec, &health)
+	recoverErr := s.recover(ctx, spec, &health)
+	if observeErr != nil {
+		return errors.Join(fmt.Errorf("observe instance: %w", observeErr), recoverErr)
+	}
+	return recoverErr
 }
 
 func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *SupervisionSpec, previous *domain.ManagedInstanceHealth, obs *runtime.InstanceObservation, observeErr error) domain.ManagedInstanceHealth {
@@ -226,7 +243,9 @@ func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *Supervis
 		health.FailureReason = domain.SanitizeEvidence(firstManagedEvidence(obs.ProbeResult.Error, obs.ProbeResult.Detail, "readiness probe failed"))
 	}
 	if spec.ProbeConfig != nil && spec.Prober != nil {
-		result := spec.Prober.Probe(ctx, *spec.ProbeConfig)
+		probeCtx, cancelProbe := s.observationContext(ctx)
+		result := spec.Prober.Probe(probeCtx, *spec.ProbeConfig)
+		cancelProbe()
 		if !result.Successful && (health.Status == domain.InstanceHealthStatusHealthy || health.Status == domain.InstanceHealthStatusRunning) {
 			health.Status = domain.InstanceHealthStatusDegraded
 			health.FailureReason = domain.SanitizeEvidence(firstManagedEvidence(result.Error, result.Detail, "readiness probe failed"))
@@ -255,12 +274,15 @@ func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *Supervis
 		health.FailureReason = "restart count increased repeatedly"
 	}
 	key := instanceKeyString(spec.Key)
+	s.mu.Lock()
 	if spec.MemoryThresholdRatio > 0 && health.MemoryLimitBytes > 0 && float64(health.MemoryCurrentBytes)/float64(health.MemoryLimitBytes) >= spec.MemoryThresholdRatio {
 		s.highMemoryRuns[key]++
 	} else {
 		s.highMemoryRuns[key] = 0
 	}
-	if s.highMemoryRuns[key] >= sustainCount(spec) {
+	highMemoryRuns := s.highMemoryRuns[key]
+	s.mu.Unlock()
+	if highMemoryRuns >= sustainCount(spec) {
 		if health.Status == domain.InstanceHealthStatusHealthy || health.Status == domain.InstanceHealthStatusRunning {
 			health.Status = domain.InstanceHealthStatusDegraded
 		}
@@ -312,7 +334,7 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	sort.Slice(budget.AttemptedAt, func(i, j int) bool { return budget.AttemptedAt[i].Before(budget.AttemptedAt[j]) })
 	decision := domain.EvaluateRecovery(spec.DesiredRunning, *health, spec.RecoveryPolicy, budget, override)
 	if decision.Action == domain.RecoveryDecisionBudgetExhausted {
-		attempt := s.newAttempt(spec.Key, *health, decision, domain.RecoveryAttemptBudgetExhausted)
+		attempt := s.newBudgetExhaustionAttempt(spec.Key, *health, decision, budget)
 		inserted, err := s.repo.RecordRecoveryAttempt(ctx, &attempt)
 		if err != nil {
 			return err
@@ -348,9 +370,13 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	}
 	s.publish(ctx, events.EventRuntimeRecoveryRequested, attempt.CorrelationID, ManagedInstanceRecoveryEvent{EventID: attempt.ID.String(), Health: *health, Decision: decision, Attempt: attempt, Severity: domain.AlertSeverityError, OccurredAt: attempt.RequestedAt})
 	beforeRestart := *health
-	restartErr := spec.Controller.RestartInstance(ctx, spec.Key)
+	restartCtx, cancelRestart := s.observationContext(ctx)
+	restartErr := spec.Controller.RestartInstance(restartCtx, spec.Key)
+	cancelRestart()
 	if restartErr == nil {
-		post, obsErr := spec.Observer.ObserveInstance(ctx, spec.Key)
+		postObserveCtx, cancelPostObserve := s.observationContext(ctx)
+		post, obsErr := spec.Observer.ObserveInstance(postObserveCtx, spec.Key)
+		cancelPostObserve()
 		postHealth := s.classify(ctx, spec, health, post, obsErr)
 		switch postHealth.Status {
 		case domain.InstanceHealthStatusHealthy, domain.InstanceHealthStatusRunning:
@@ -366,22 +392,19 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 		attempt.Result = domain.RecoveryAttemptFailed
 		attempt.Evidence = domain.SanitizeEvidence(restartErr.Error())
 	}
-	completed, err := s.repo.CompleteRecoveryAttempt(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence)
+	health.LastRecoveryAttempt = &attempt
+	var transition *domain.ManagedInstanceHealthEvent
+	if beforeRestart.Status != health.Status {
+		transition = &domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: spec.Key, PreviousStatus: beforeRestart.Status, Status: health.Status, Reason: health.FailureReason, Evidence: health.FailureReason, ObservedAt: health.LastObservedAt}
+	}
+	completed, err := s.repo.CompleteRecoveryAttemptWithHealthEvent(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence, health, transition)
 	if err != nil {
 		return err
 	}
 	if !completed {
 		return nil
 	}
-	health.LastRecoveryAttempt = &attempt
-	if err := s.repo.UpsertHealth(ctx, health); err != nil {
-		return err
-	}
-	if beforeRestart.Status != health.Status {
-		transition := domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: spec.Key, PreviousStatus: beforeRestart.Status, Status: health.Status, Reason: health.FailureReason, Evidence: health.FailureReason, ObservedAt: health.LastObservedAt}
-		if err := s.repo.AppendHealthEvent(ctx, &transition); err != nil {
-			return err
-		}
+	if transition != nil {
 		s.publish(ctx, events.EventRuntimeInstanceHealthChanged, instanceKeyString(spec.Key), ManagedInstanceHealthChanged{EventID: transition.ID.String(), Health: *health, PreviousStatus: beforeRestart.Status, Severity: healthSeverity(health.Status, false), Alert: false, Reason: health.FailureReason, OccurredAt: health.LastObservedAt})
 	}
 	eventType := events.EventRuntimeRecoveryCompleted
@@ -398,12 +421,9 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 func (s *ManagedInstanceSupervisor) reconcilePendingAttempt(ctx context.Context, health *domain.ManagedInstanceHealth, attempt domain.RecoveryAttempt) error {
 	attempt.Result = recoveryResultForObservedStatus(health.Status)
 	attempt.Evidence = domain.SanitizeEvidence(health.FailureReason)
-	completed, err := s.repo.CompleteRecoveryAttempt(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence)
-	if err != nil || !completed {
-		return err
-	}
 	health.LastRecoveryAttempt = &attempt
-	if err := s.repo.UpsertHealth(ctx, health); err != nil {
+	completed, err := s.repo.CompleteRecoveryAttemptWithHealthEvent(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence, health, nil)
+	if err != nil || !completed {
 		return err
 	}
 	eventType := events.EventRuntimeRecoveryCompleted
@@ -443,8 +463,30 @@ func (s *ManagedInstanceSupervisor) newAttempt(key domain.ManagedInstanceKey, he
 		generation = health.LastObservedAt
 	}
 	seed := fmt.Sprintf("%s|%d", instanceKeyString(key), generation.UnixNano())
+	return newCorrelatedRecoveryAttempt(key, generation, seed, decision, result)
+}
+
+func (s *ManagedInstanceSupervisor) newBudgetExhaustionAttempt(key domain.ManagedInstanceKey, health domain.ManagedInstanceHealth, decision domain.RecoveryDecision, budget domain.RestartBudget) domain.RecoveryAttempt {
+	generation := health.FailureGenerationAt
+	if generation.IsZero() {
+		generation = health.LastObservedAt
+	}
+	attempts := append([]time.Time(nil), budget.AttemptedAt...)
+	sort.Slice(attempts, func(i, j int) bool { return attempts[i].Before(attempts[j]) })
+	if budget.MaxAttempts > 0 && len(attempts) > budget.MaxAttempts {
+		attempts = attempts[len(attempts)-budget.MaxAttempts:]
+	}
+	var window strings.Builder
+	for _, attemptedAt := range attempts {
+		fmt.Fprintf(&window, "|%d", attemptedAt.UnixNano())
+	}
+	seed := fmt.Sprintf("%s|budget|%d|%d|%d%s", instanceKeyString(key), generation.UnixNano(), budget.MaxAttempts, budget.Window.Nanoseconds(), window.String())
+	return newCorrelatedRecoveryAttempt(key, generation, seed, decision, domain.RecoveryAttemptBudgetExhausted)
+}
+
+func newCorrelatedRecoveryAttempt(key domain.ManagedInstanceKey, requestedAt time.Time, seed string, decision domain.RecoveryDecision, result domain.RecoveryAttemptResult) domain.RecoveryAttempt {
 	sum := sha256.Sum256([]byte(seed))
-	return domain.RecoveryAttempt{ID: uuid.NewSHA1(uuid.NameSpaceOID, sum[:]), ManagedInstanceKey: key, CorrelationID: hex.EncodeToString(sum[:]), RequestedAt: generation, Result: result, Evidence: domain.SanitizeEvidence(decision.Reason)}
+	return domain.RecoveryAttempt{ID: uuid.NewSHA1(uuid.NameSpaceOID, sum[:]), ManagedInstanceKey: key, CorrelationID: hex.EncodeToString(sum[:]), RequestedAt: requestedAt, Result: result, Evidence: domain.SanitizeEvidence(decision.Reason)}
 }
 
 // SetMaintenanceOverride creates an active override for stage-4 API/UI callers.
@@ -485,6 +527,28 @@ func (s *ManagedInstanceSupervisor) ClearMaintenanceOverride(ctx context.Context
 	return nil
 }
 
+func (s *ManagedInstanceSupervisor) observationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, s.observationTimeout)
+}
+
+func (s *ManagedInstanceSupervisor) instanceLock(key domain.ManagedInstanceKey) *sync.Mutex {
+	mapKey := instanceKeyString(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock := s.instanceLocks[mapKey]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.instanceLocks[mapKey] = lock
+	}
+	return lock
+}
+
+func (s *ManagedInstanceSupervisor) highMemoryCount(key domain.ManagedInstanceKey) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.highMemoryRuns[instanceKeyString(key)]
+}
+
 func (s *ManagedInstanceSupervisor) shouldAlert(spec *SupervisionSpec, severity domain.AlertSeverity, at time.Time) bool {
 	immediate := severity == domain.AlertSeverityError || severity == domain.AlertSeverityCritical
 	for _, allowed := range spec.RecoveryPolicy.AlertPolicy.ImmediateSeverities {
@@ -499,6 +563,8 @@ func (s *ManagedInstanceSupervisor) shouldAlert(spec *SupervisionSpec, severity 
 		return false
 	}
 	key := instanceKeyString(spec.Key) + "|warning"
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	last := s.lastAlerts[key]
 	if interval := spec.RecoveryPolicy.AlertPolicy.WarningMinInterval; interval > 0 && at.Sub(last) < interval {
 		return false

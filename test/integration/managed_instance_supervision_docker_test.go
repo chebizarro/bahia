@@ -199,6 +199,13 @@ func (r *dockerHealthRepo) UpsertHealth(_ context.Context, health *domain.Manage
 	r.health[dockerKey(health.ManagedInstanceKey)] = *health
 	return nil
 }
+func (r *dockerHealthRepo) UpsertHealthWithEvent(_ context.Context, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.health[dockerKey(health.ManagedInstanceKey)] = *health
+	r.events = append(r.events, *event)
+	return nil
+}
 func (r *dockerHealthRepo) GetHealth(_ context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -248,6 +255,21 @@ func (r *dockerHealthRepo) CompleteRecoveryAttempt(_ context.Context, correlatio
 	for i := range r.attempts {
 		if r.attempts[i].CorrelationID == correlationID && r.attempts[i].Result == domain.RecoveryAttemptPending {
 			r.attempts[i].Result, r.attempts[i].Evidence = result, evidence
+			return true, nil
+		}
+	}
+	return false, nil
+}
+func (r *dockerHealthRepo) CompleteRecoveryAttemptWithHealthEvent(_ context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.attempts {
+		if r.attempts[i].CorrelationID == correlationID && r.attempts[i].Result == domain.RecoveryAttemptPending {
+			r.attempts[i].Result, r.attempts[i].Evidence = result, evidence
+			r.health[dockerKey(health.ManagedInstanceKey)] = *health
+			if event != nil {
+				r.events = append(r.events, *event)
+			}
 			return true, nil
 		}
 	}

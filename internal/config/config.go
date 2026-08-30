@@ -854,11 +854,12 @@ func defaultWorkerPressureConfig() WorkerPressureConfig {
 
 // SupervisionConfig controls local managed-instance health checks and recovery.
 type SupervisionConfig struct {
-	Enabled         bool                        `koanf:"enabled" yaml:"enabled"`
-	ObserveOnly     bool                        `koanf:"observe_only" yaml:"observe_only"`
-	Interval        time.Duration               `koanf:"interval" yaml:"interval"`
-	MemoryThreshold float64                     `koanf:"memory_threshold" yaml:"memory_threshold"`
-	Instances       []SupervisionInstanceConfig `koanf:"instances" yaml:"instances"`
+	Enabled            bool                        `koanf:"enabled" yaml:"enabled"`
+	ObserveOnly        bool                        `koanf:"observe_only" yaml:"observe_only"`
+	Interval           time.Duration               `koanf:"interval" yaml:"interval"`
+	ObservationTimeout time.Duration               `koanf:"observation_timeout" yaml:"observation_timeout"`
+	MemoryThreshold    float64                     `koanf:"memory_threshold" yaml:"memory_threshold"`
+	Instances          []SupervisionInstanceConfig `koanf:"instances" yaml:"instances"`
 }
 
 // SupervisionInstanceConfig identifies one explicitly configured managed instance.
@@ -940,11 +941,12 @@ func Defaults() *Config {
 			Enabled:  true,
 		},
 		Supervision: SupervisionConfig{
-			Enabled:         false,
-			ObserveOnly:     true,
-			Interval:        30 * time.Second,
-			MemoryThreshold: 0.90,
-			Instances:       []SupervisionInstanceConfig{},
+			Enabled:            false,
+			ObserveOnly:        true,
+			Interval:           30 * time.Second,
+			ObservationTimeout: 30 * time.Second,
+			MemoryThreshold:    0.90,
+			Instances:          []SupervisionInstanceConfig{},
 		},
 		Runtime: RuntimeConfig{
 			Type:         "docker",
@@ -1364,6 +1366,9 @@ func (c *Config) validateSupervision() error {
 	}
 	if c.Supervision.Interval <= 0 {
 		return fmt.Errorf("config validation failed: supervision.interval must be > 0")
+	}
+	if c.Supervision.ObservationTimeout <= 0 {
+		return fmt.Errorf("config validation failed: supervision.observation_timeout must be > 0")
 	}
 	if c.Supervision.MemoryThreshold <= 0 || c.Supervision.MemoryThreshold > 1 {
 		return fmt.Errorf("config validation failed: supervision.memory_threshold must be > 0 and <= 1")

@@ -31,6 +31,19 @@ const managedHealthEventColumns = `id, service_id, environment_id, deployment_un
 const recoveryAttemptColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, correlation_id, requested_at, result, evidence`
 const maintenanceOverrideColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, actor, reason, created_at, expires_at`
 
+// UpsertHealthWithEvent atomically persists the current health snapshot and its durable transition.
+func (r *PgManagedInstanceHealthRepository) UpsertHealthWithEvent(ctx context.Context, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) error {
+	if event == nil {
+		return fmt.Errorf("managed instance health event is required")
+	}
+	return r.withinTx(ctx, func(txRepo *PgManagedInstanceHealthRepository) error {
+		if err := txRepo.UpsertHealth(ctx, health); err != nil {
+			return err
+		}
+		return txRepo.AppendHealthEvent(ctx, event)
+	})
+}
+
 func (r *PgManagedInstanceHealthRepository) UpsertHealth(ctx context.Context, health *domain.ManagedInstanceHealth) error {
 	if health == nil {
 		return fmt.Errorf("managed instance health is required")
@@ -262,6 +275,59 @@ func (r *PgManagedInstanceHealthRepository) CompleteRecoveryAttempt(ctx context.
 		return false, fmt.Errorf("completing managed instance recovery attempt: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
+}
+
+// CompleteRecoveryAttemptWithHealthEvent atomically completes a pending recovery and persists its resulting health snapshot and optional transition.
+func (r *PgManagedInstanceHealthRepository) CompleteRecoveryAttemptWithHealthEvent(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) (bool, error) {
+	if health == nil {
+		return false, fmt.Errorf("managed instance health is required")
+	}
+	completed := false
+	err := r.withinTx(ctx, func(txRepo *PgManagedInstanceHealthRepository) error {
+		var err error
+		completed, err = txRepo.CompleteRecoveryAttempt(ctx, correlationID, result, evidence)
+		if err != nil || !completed {
+			return err
+		}
+		if err := txRepo.UpsertHealth(ctx, health); err != nil {
+			return err
+		}
+		if event != nil {
+			return txRepo.AppendHealthEvent(ctx, event)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return completed, nil
+}
+
+func (r *PgManagedInstanceHealthRepository) withinTx(ctx context.Context, fn func(*PgManagedInstanceHealthRepository) error) error {
+	beginner, ok := r.pool.(interface {
+		Begin(context.Context) (pgx.Tx, error)
+	})
+	if !ok {
+		return fmt.Errorf("managed instance health repository does not support transactions")
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin managed instance health transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	if err := fn(newPgManagedInstanceHealthRepositoryWithDB(tx)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit managed instance health transaction: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (r *PgManagedInstanceHealthRepository) ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error) {

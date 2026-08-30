@@ -14,7 +14,7 @@ import (
 
 func TestSupervisionDefaultsAndValidation(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Supervision.Enabled || !cfg.Supervision.ObserveOnly || cfg.Supervision.Interval != 30*time.Second || cfg.Supervision.MemoryThreshold != 0.9 {
+	if cfg.Supervision.Enabled || !cfg.Supervision.ObserveOnly || cfg.Supervision.Interval != 30*time.Second || cfg.Supervision.ObservationTimeout != 30*time.Second || cfg.Supervision.MemoryThreshold != 0.9 {
 		t.Fatalf("unexpected safe supervision defaults: %+v", cfg.Supervision)
 	}
 	cfg.Supervision.Enabled = true
@@ -25,6 +25,11 @@ func TestSupervisionDefaultsAndValidation(t *testing.T) {
 	cfg.Supervision.Interval = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid interval")
+	}
+	cfg.Supervision.Interval = 30 * time.Second
+	cfg.Supervision.ObservationTimeout = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid observation timeout")
 	}
 }
 

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -124,6 +125,66 @@ func TestPgManagedInstanceHealthRepositoryCompletePendingAttempt(t *testing.T) {
 	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
 	mock.ExpectExec("UPDATE managed_instance_recovery_attempts").WithArgs("corr", domain.RecoveryAttemptSuccess, "[REDACTED]", domain.RecoveryAttemptPending).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	completed, err := repo.CompleteRecoveryAttempt(context.Background(), "corr", domain.RecoveryAttemptSuccess, "token=secret")
+	require.NoError(t, err)
+	require.True(t, completed)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgManagedInstanceHealthRepositoryUpsertHealthWithEventCommitsTogether(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	key := domain.ManagedInstanceKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), DeploymentUnitID: uuid.New(), RuntimeTargetName: "api"}
+	health := &domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusUnhealthy, LastObservedAt: now}
+	event := &domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: key, Status: health.Status, ObservedAt: now}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO managed_instance_health").WithArgs(managedInstanceAnyArgs(17)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO managed_instance_health_events").WithArgs(managedInstanceAnyArgs(10)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.UpsertHealthWithEvent(context.Background(), health, event))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgManagedInstanceHealthRepositoryUpsertHealthWithEventRollsBackTogether(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	key := domain.ManagedInstanceKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), DeploymentUnitID: uuid.New(), RuntimeTargetName: "api"}
+	health := &domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusUnhealthy, LastObservedAt: now}
+	event := &domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: key, Status: health.Status, ObservedAt: now}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO managed_instance_health").WithArgs(managedInstanceAnyArgs(17)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO managed_instance_health_events").WithArgs(managedInstanceAnyArgs(10)...).WillReturnError(errors.New("event write failed"))
+	mock.ExpectRollback()
+
+	require.ErrorContains(t, repo.UpsertHealthWithEvent(context.Background(), health, event), "event write failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgManagedInstanceHealthRepositoryCompleteRecoveryWithHealthEventCommitsTogether(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	key := domain.ManagedInstanceKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), DeploymentUnitID: uuid.New(), RuntimeTargetName: "api"}
+	health := &domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusHealthy, LastObservedAt: now}
+	event := &domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: key, PreviousStatus: domain.InstanceHealthStatusUnhealthy, Status: health.Status, ObservedAt: now}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE managed_instance_recovery_attempts").WithArgs("corr", domain.RecoveryAttemptSuccess, "recovered", domain.RecoveryAttemptPending).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("INSERT INTO managed_instance_health").WithArgs(managedInstanceAnyArgs(17)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO managed_instance_health_events").WithArgs(managedInstanceAnyArgs(10)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	completed, err := repo.CompleteRecoveryAttemptWithHealthEvent(context.Background(), "corr", domain.RecoveryAttemptSuccess, "recovered", health, event)
 	require.NoError(t, err)
 	require.True(t, completed)
 	require.NoError(t, mock.ExpectationsWereMet())

@@ -15,10 +15,12 @@ import (
 )
 
 type supervisorRepoFake struct {
-	health   *domain.ManagedInstanceHealth
-	events   []domain.ManagedInstanceHealthEvent
-	attempts []domain.RecoveryAttempt
-	override *domain.MaintenanceOverride
+	health                 *domain.ManagedInstanceHealth
+	events                 []domain.ManagedInstanceHealthEvent
+	attempts               []domain.RecoveryAttempt
+	override               *domain.MaintenanceOverride
+	upsertHealthEventErr   error
+	completeHealthEventErr error
 }
 
 func (r *supervisorRepoFake) UpsertHealth(_ context.Context, h *domain.ManagedInstanceHealth) error {
@@ -26,8 +28,17 @@ func (r *supervisorRepoFake) UpsertHealth(_ context.Context, h *domain.ManagedIn
 	r.health = &copy
 	return nil
 }
-func (r *supervisorRepoFake) GetHealth(context.Context, domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
-	if r.health == nil {
+func (r *supervisorRepoFake) UpsertHealthWithEvent(ctx context.Context, h *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) error {
+	if r.upsertHealthEventErr != nil {
+		return r.upsertHealthEventErr
+	}
+	copy := *h
+	r.health = &copy
+	r.events = append(r.events, *event)
+	return nil
+}
+func (r *supervisorRepoFake) GetHealth(_ context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
+	if r.health == nil || r.health.ManagedInstanceKey != key {
 		return nil, nil
 	}
 	copy := *r.health
@@ -70,6 +81,21 @@ func (r *supervisorRepoFake) CompleteRecoveryAttempt(_ context.Context, correlat
 		}
 	}
 	return false, nil
+}
+func (r *supervisorRepoFake) CompleteRecoveryAttemptWithHealthEvent(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) (bool, error) {
+	if r.completeHealthEventErr != nil {
+		return false, r.completeHealthEventErr
+	}
+	completed, err := r.CompleteRecoveryAttempt(ctx, correlationID, result, evidence)
+	if err != nil || !completed {
+		return completed, err
+	}
+	copy := *health
+	r.health = &copy
+	if event != nil {
+		r.events = append(r.events, *event)
+	}
+	return true, nil
 }
 func (r *supervisorRepoFake) ListRecentRecoveryAttempts(context.Context, domain.ManagedInstanceKey, int) ([]domain.RecoveryAttempt, error) {
 	return append([]domain.RecoveryAttempt(nil), r.attempts...), nil
@@ -119,6 +145,23 @@ func (r *sequenceRuntime) RestartInstance(_ context.Context, k domain.ManagedIns
 	return r.restartErr
 }
 func (r *sequenceRuntime) StopInstance(context.Context, domain.ManagedInstanceKey) error { return nil }
+
+type blockingObserver struct{}
+
+func (blockingObserver) ObserveInstance(ctx context.Context, _ domain.ManagedInstanceKey) (*runtime.InstanceObservation, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type recordingObserver struct {
+	calls int
+	now   time.Time
+}
+
+func (o *recordingObserver) ObserveInstance(context.Context, domain.ManagedInstanceKey) (*runtime.InstanceObservation, error) {
+	o.calls++
+	return &runtime.InstanceObservation{Status: domain.InstanceHealthStatusHealthy, ObservedAt: o.now}, nil
+}
 
 type lockFake struct{ acquired bool }
 
@@ -268,6 +311,105 @@ func TestManagedInstanceBudgetLockAndIdempotency(t *testing.T) {
 		require.NoError(t, s.EvaluateOnce(context.Background()))
 		require.Equal(t, 1, rt.restarts)
 		require.Equal(t, key, rt.keys[0])
+	})
+}
+
+func TestManagedInstanceBudgetExhaustionAlertsOncePerFailureGeneration(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	key := testKey()
+	repo := &supervisorRepoFake{attempts: []domain.RecoveryAttempt{
+		{ManagedInstanceKey: key, CorrelationID: "a", RequestedAt: now.Add(-20 * time.Minute), Result: domain.RecoveryAttemptFailed},
+		{ManagedInstanceKey: key, CorrelationID: "b", RequestedAt: now.Add(-10 * time.Minute), Result: domain.RecoveryAttemptFailed},
+		{ManagedInstanceKey: key, CorrelationID: "c", RequestedAt: now.Add(-5 * time.Minute), Result: domain.RecoveryAttemptFailed},
+	}}
+	rt := &sequenceRuntime{observations: []*runtime.InstanceObservation{
+		{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now},
+		{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now.Add(time.Minute)},
+		{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now.Add(2 * time.Minute)},
+		{Status: domain.InstanceHealthStatusHealthy, ObservedAt: now.Add(3 * time.Minute)},
+		{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now.Add(4 * time.Minute)},
+	}}
+	bus := &eventBusFake{}
+	spec := SupervisionSpec{Key: key, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: rt, Controller: rt, RecoveryPolicy: testPolicy(false)}
+	s, err := NewManagedInstanceSupervisor(StaticSupervisionSpecSource{spec}, repo, lockFake{acquired: true}, bus, time.Second, zap.NewNop())
+	require.NoError(t, err)
+
+	for range 3 {
+		require.NoError(t, s.EvaluateOnce(context.Background()))
+	}
+	require.Equal(t, 1, publishedEventCount(bus.published, events.EventRuntimeRecoveryBudgetExhausted))
+
+	require.NoError(t, s.EvaluateOnce(context.Background()))
+	require.NoError(t, s.EvaluateOnce(context.Background()))
+	require.Equal(t, 2, publishedEventCount(bus.published, events.EventRuntimeRecoveryBudgetExhausted))
+}
+
+func publishedEventCount(published []events.Event, eventType events.EventType) int {
+	count := 0
+	for _, event := range published {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+func TestManagedInstanceObservationTimeoutDoesNotStopRemainingTargets(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	environmentID := uuid.New()
+	firstKey := domain.ManagedInstanceKey{ServiceID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), EnvironmentID: environmentID, RuntimeTargetName: "blocked"}
+	secondKey := domain.ManagedInstanceKey{ServiceID: uuid.MustParse("00000000-0000-0000-0000-000000000002"), EnvironmentID: environmentID, RuntimeTargetName: "healthy"}
+	fast := &recordingObserver{now: now}
+	repo := &supervisorRepoFake{}
+	specs := StaticSupervisionSpecSource{
+		{Key: firstKey, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: blockingObserver{}, RecoveryPolicy: testPolicy(true)},
+		{Key: secondKey, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: fast, RecoveryPolicy: testPolicy(true)},
+	}
+	s, err := NewManagedInstanceSupervisor(specs, repo, lockFake{}, nil, time.Second, zap.NewNop(), 20*time.Millisecond)
+	require.NoError(t, err)
+
+	err = s.EvaluateOnce(context.Background())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, fast.calls, "remaining target must be evaluated after the blocked target times out")
+	require.NotNil(t, repo.health)
+	require.Equal(t, secondKey, repo.health.ManagedInstanceKey)
+	require.Equal(t, domain.InstanceHealthStatusHealthy, repo.health.Status)
+}
+
+func TestManagedInstanceSupervisorUsesAtomicRepositoryWrites(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	t.Run("observation transition failure leaves no partial health", func(t *testing.T) {
+		key := testKey()
+		repo := &supervisorRepoFake{upsertHealthEventErr: errors.New("atomic observation failed")}
+		rt := &sequenceRuntime{observations: []*runtime.InstanceObservation{{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now}}}
+		bus := &eventBusFake{}
+		spec := SupervisionSpec{Key: key, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: rt, RecoveryPolicy: testPolicy(true)}
+		s, err := NewManagedInstanceSupervisor(StaticSupervisionSpecSource{spec}, repo, lockFake{}, bus, time.Second, zap.NewNop())
+		require.NoError(t, err)
+
+		require.ErrorContains(t, s.EvaluateOnce(context.Background()), "atomic observation failed")
+		require.Nil(t, repo.health)
+		require.Empty(t, repo.events)
+		require.Empty(t, bus.published)
+	})
+
+	t.Run("recovery completion failure leaves pending attempt", func(t *testing.T) {
+		key := testKey()
+		generation := now.Add(-time.Minute)
+		pending := domain.RecoveryAttempt{ID: uuid.New(), ManagedInstanceKey: key, CorrelationID: "stable", RequestedAt: generation, Result: domain.RecoveryAttemptPending}
+		repo := &supervisorRepoFake{
+			health:                 &domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusUnhealthy, LastObservedAt: generation, FailureGenerationAt: generation},
+			attempts:               []domain.RecoveryAttempt{pending},
+			completeHealthEventErr: errors.New("atomic completion failed"),
+		}
+		rt := &sequenceRuntime{observations: []*runtime.InstanceObservation{{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now}}}
+		spec := SupervisionSpec{Key: key, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: rt, Controller: rt, RecoveryPolicy: testPolicy(false)}
+		s, err := NewManagedInstanceSupervisor(StaticSupervisionSpecSource{spec}, repo, lockFake{acquired: true}, nil, time.Second, zap.NewNop())
+		require.NoError(t, err)
+
+		require.ErrorContains(t, s.EvaluateOnce(context.Background()), "atomic completion failed")
+		require.Equal(t, domain.RecoveryAttemptPending, repo.attempts[0].Result)
+		require.Nil(t, repo.health.LastRecoveryAttempt)
 	})
 }
 
