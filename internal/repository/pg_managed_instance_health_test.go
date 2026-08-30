@@ -85,6 +85,39 @@ func TestPgManagedInstanceHealthRepositoryGetHealthScansRecoverySummary(t *testi
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgManagedInstanceHealthRepositoryListHealthScopesBoundsAndLoadsOverride(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgManagedInstanceHealthRepositoryWithDB(mock)
+	orgID := uuid.New()
+	key := domain.ManagedInstanceKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), DeploymentUnitID: uuid.New(), RuntimeTargetName: "api"}
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	overrideID := uuid.New()
+	rows := pgxmock.NewRows([]string{
+		"service_id", "environment_id", "deployment_unit_id", "runtime_target_name", "host", "supervisor_type", "status", "failure_reason",
+		"last_observed_at", "failure_generation_at", "restart_count", "consecutive_restart_count", "memory_current_bytes", "memory_peak_bytes", "memory_limit_bytes", "last_recovery_attempt", "updated_at",
+		"override_id", "override_actor", "override_reason", "override_created_at", "override_expires_at",
+	}).AddRow(key.ServiceID, key.EnvironmentID, key.DeploymentUnitID.String(), key.RuntimeTargetName, "host-a", domain.InstanceSupervisorDocker,
+		domain.InstanceHealthStatusUnhealthy, "failed", now, nil, 2, 1, int64(10), int64(20), int64(100), nil, now,
+		overrideID.String(), "npub1operator", "planned", now, nil)
+	mock.ExpectQuery("JOIN services s ON.*JOIN environments e ON.*LEFT JOIN managed_instance_overrides o.*s.org_id = \\$1 AND e.org_id = \\$1").
+		WithArgs(orgID, key.ServiceID, key.EnvironmentID, true, now, 500, 0).
+		WillReturnRows(rows)
+
+	items, err := repo.ListHealth(context.Background(), ManagedInstanceHealthListOptions{
+		OrgID: orgID, ServiceID: key.ServiceID, EnvironmentID: key.EnvironmentID, UnhealthyOnly: true,
+		ActiveAt: now, Limit: 5000, Offset: -3,
+	})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, key, items[0].Health.ManagedInstanceKey)
+	require.NotNil(t, items[0].MaintenanceOverride)
+	require.Equal(t, overrideID, items[0].MaintenanceOverride.ID)
+	require.Equal(t, key, items[0].MaintenanceOverride.ManagedInstanceKey)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgManagedInstanceHealthRepositoryRecordAttemptIsIdempotentAndSanitized(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)

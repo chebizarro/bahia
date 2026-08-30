@@ -16,6 +16,7 @@ import (
 	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -214,6 +215,9 @@ func (r *dockerHealthRepo) GetHealth(_ context.Context, key domain.ManagedInstan
 		return nil, nil
 	}
 	return &health, nil
+}
+func (r *dockerHealthRepo) ListHealth(context.Context, repository.ManagedInstanceHealthListOptions) ([]repository.ManagedInstanceHealthListItem, error) {
+	return nil, nil
 }
 func (r *dockerHealthRepo) ListAllHealth(context.Context) ([]domain.ManagedInstanceHealth, error) {
 	return nil, nil

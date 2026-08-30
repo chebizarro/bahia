@@ -1,7 +1,7 @@
 {
   "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
   "source_beads": ["bahia-a84g"],
-  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk", "bahia-eqku"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3", "bahia-giw6", "bahia-gkg7", "bahia-76ls", "bahia-wbgi", "bahia-1ywi", "bahia-dfc2", "bahia-4rwk", "bahia-eqku", "bahia-l9fmb"],
   "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
   "updated_at": "2026-08-26",
   "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
@@ -24,6 +24,12 @@
       "permitted_transport_classes": ["rest_to_nostr_bridge"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "Config Fabric detail reads retained Nostr audit state and invokes the server Signet-backed publish/rollback bridge."
+    },
+    {
+      "file": "web/src/routes/instance-health/+page.svelte",
+      "permitted_transport_classes": ["rest_compatibility"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Managed-instance supervision is an explicitly non-signer-first REST compatibility surface: the browser reads the server-owned watchdog projection and authenticated maintenance controls invoke the local supervisor rather than claiming browser-signed Nostr command ingress."
     }
   ],
   "entries": [
@@ -168,6 +174,17 @@
       "evidence": ["Fleet Health reads worker, assignment, telemetry, and cleanup execution projections from shared Nostr-backed stores.", "Cleanup actions are delegated to the worker cleanup request dialog rather than a route-level REST mutation."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
       "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "instance-health-rest-compatibility",
+      "surface": "`/instance-health` managed-runtime watchdog status, history, recovery attempts, and maintenance controls",
+      "transport_class": "rest_compatibility",
+      "route_files": ["web/src/routes/instance-health/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/instance_health.go", "internal/repository/pg_managed_instance_health.go"],
+      "evidence": ["The Instance Health page imports $lib/api/client.js for bounded Tier 2 health, event, recovery-attempt, and maintenance API calls.", "Collection reads are organization-scoped in PostgreSQL through service and environment ownership joins, while maintenance mutations require an authenticated service operator and invoke the local managed-instance supervisor.", "This is intentionally classified as REST compatibility rather than signer-first Nostr command ingress; the page does not claim to publish browser-signed Nostr supervision commands."],
+      "rest_import_policy": "allowed_for_explicit_non_signer_first_supervision_compatibility_surface",
+      "pstf_status": "verified_by_BAHIA_MANAGED_INSTANCE_WATCHDOG_RECOVERY_20260829",
+      "resolved_by_beads": ["bahia-l9fmb"]
     },
     {
       "id": "ml-nostr-controlplane",

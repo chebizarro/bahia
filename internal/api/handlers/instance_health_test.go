@@ -19,25 +19,21 @@ import (
 
 type instanceHealthRepoFake struct {
 	repository.ManagedInstanceHealthRepository
-	rows       []domain.ManagedInstanceHealth
-	health     *domain.ManagedInstanceHealth
-	override   *domain.MaintenanceOverride
-	events     []domain.ManagedInstanceHealthEvent
-	attempts   []domain.RecoveryAttempt
-	eventLimit int
+	items        []repository.ManagedInstanceHealthListItem
+	health       *domain.ManagedInstanceHealth
+	override     *domain.MaintenanceOverride
+	events       []domain.ManagedInstanceHealthEvent
+	attempts     []domain.RecoveryAttempt
+	listOptions  repository.ManagedInstanceHealthListOptions
+	listCalls    int
+	eventLimit   int
+	attemptLimit int
 }
 
-func (f *instanceHealthRepoFake) ListAllHealth(context.Context) ([]domain.ManagedInstanceHealth, error) {
-	return append([]domain.ManagedInstanceHealth(nil), f.rows...), nil
-}
-func (f *instanceHealthRepoFake) ListHealthByService(context.Context, uuid.UUID) ([]domain.ManagedInstanceHealth, error) {
-	return append([]domain.ManagedInstanceHealth(nil), f.rows...), nil
-}
-func (f *instanceHealthRepoFake) ListHealthByEnvironment(context.Context, uuid.UUID) ([]domain.ManagedInstanceHealth, error) {
-	return append([]domain.ManagedInstanceHealth(nil), f.rows...), nil
-}
-func (f *instanceHealthRepoFake) ListUnhealthy(context.Context) ([]domain.ManagedInstanceHealth, error) {
-	return append([]domain.ManagedInstanceHealth(nil), f.rows...), nil
+func (f *instanceHealthRepoFake) ListHealth(_ context.Context, options repository.ManagedInstanceHealthListOptions) ([]repository.ManagedInstanceHealthListItem, error) {
+	f.listOptions = options
+	f.listCalls++
+	return append([]repository.ManagedInstanceHealthListItem(nil), f.items...), nil
 }
 func (f *instanceHealthRepoFake) GetHealth(context.Context, domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
 	return f.health, nil
@@ -49,7 +45,8 @@ func (f *instanceHealthRepoFake) ListRecentHealthEvents(_ context.Context, _ dom
 	f.eventLimit = limit
 	return append([]domain.ManagedInstanceHealthEvent(nil), f.events...), nil
 }
-func (f *instanceHealthRepoFake) ListRecentRecoveryAttempts(context.Context, domain.ManagedInstanceKey, int) ([]domain.RecoveryAttempt, error) {
+func (f *instanceHealthRepoFake) ListRecentRecoveryAttempts(_ context.Context, _ domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error) {
+	f.attemptLimit = limit
 	return append([]domain.RecoveryAttempt(nil), f.attempts...), nil
 }
 
@@ -89,18 +86,20 @@ func (f *instanceOperatorFake) ClearMaintenanceOverride(_ context.Context, key d
 	return nil
 }
 
-func TestInstanceHealthHandlerListFiltersOrganizationAndSanitizes(t *testing.T) {
-	orgID, otherOrg := uuid.New(), uuid.New()
-	serviceID, otherServiceID := uuid.New(), uuid.New()
-	environmentID, otherEnvironmentID := uuid.New(), uuid.New()
-	repo := &instanceHealthRepoFake{rows: []domain.ManagedInstanceHealth{
-		{ManagedInstanceKey: domain.ManagedInstanceKey{ServiceID: serviceID, EnvironmentID: environmentID}, Status: domain.InstanceHealthStatusUnhealthy, FailureReason: "token=secret"},
-		{ManagedInstanceKey: domain.ManagedInstanceKey{ServiceID: otherServiceID, EnvironmentID: otherEnvironmentID}, Status: domain.InstanceHealthStatusHealthy},
-	}}
-	h := NewInstanceHealthHandler(repo,
-		&instanceServiceRepoFake{byID: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, OrgID: orgID}, otherServiceID: {ID: otherServiceID, OrgID: otherOrg}}},
-		&instanceEnvironmentRepoFake{byID: map[uuid.UUID]*domain.Environment{environmentID: {ID: environmentID, OrgID: orgID}, otherEnvironmentID: {ID: otherEnvironmentID, OrgID: otherOrg}}}, nil)
-	req := httptest.NewRequest(http.MethodGet, "/instance-health?unhealthy=true", nil)
+func TestInstanceHealthHandlerListPassesOrganizationFiltersAndCapsPagination(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	repo := &instanceHealthRepoFake{items: []repository.ManagedInstanceHealthListItem{{
+		Health: domain.ManagedInstanceHealth{
+			ManagedInstanceKey: domain.ManagedInstanceKey{ServiceID: serviceID, EnvironmentID: environmentID},
+			Status:             domain.InstanceHealthStatusUnhealthy,
+			FailureReason:      "token=secret",
+		},
+		MaintenanceOverride: &domain.MaintenanceOverride{Actor: "token=secret", Reason: "password=secret"},
+	}}}
+	h := NewInstanceHealthHandler(repo, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/instance-health?service_id="+serviceID.String()+"&environment_id="+environmentID.String()+"&unhealthy=true&limit=9999&offset=7", nil)
 	req = req.WithContext(apimiddleware.ContextWithAuthz(req.Context(), &auth.AuthzContext{OrgID: orgID, Member: &domain.OrgMember{OrgID: orgID, Role: domain.RoleViewer}}))
 	w := httptest.NewRecorder()
 
@@ -109,17 +108,38 @@ func TestInstanceHealthHandlerListFiltersOrganizationAndSanitizes(t *testing.T) 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
+	if repo.listCalls != 1 || repo.listOptions.OrgID != orgID || repo.listOptions.ServiceID != serviceID || repo.listOptions.EnvironmentID != environmentID || !repo.listOptions.UnhealthyOnly {
+		t.Fatalf("unexpected scoped repository call: calls=%d options=%+v", repo.listCalls, repo.listOptions)
+	}
+	if repo.listOptions.Limit != maxInstanceHealthListLimit || repo.listOptions.Offset != 7 {
+		t.Fatalf("unexpected pagination options: %+v", repo.listOptions)
+	}
 	var response struct {
-		Data []domain.ManagedInstanceHealth `json:"data"`
+		Data   []domain.ManagedInstanceHealth `json:"data"`
+		Limit  int                            `json:"limit"`
+		Offset int                            `json:"offset"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Data) != 1 || response.Data[0].ServiceID != serviceID {
-		t.Fatalf("unexpected scoped rows: %#v", response.Data)
+	if len(response.Data) != 1 || response.Data[0].ServiceID != serviceID || response.Limit != maxInstanceHealthListLimit || response.Offset != 7 {
+		t.Fatalf("unexpected scoped response: %#v", response)
 	}
-	if strings.Contains(response.Data[0].FailureReason, "secret") {
-		t.Fatalf("failure reason was not sanitized: %q", response.Data[0].FailureReason)
+	if strings.Contains(w.Body.String(), "secret") {
+		t.Fatalf("collection response was not sanitized: %s", w.Body.String())
+	}
+}
+
+func TestInstanceHealthHandlerListUsesDefaultLimitAndNonNegativeOffset(t *testing.T) {
+	repo := &instanceHealthRepoFake{}
+	h := NewInstanceHealthHandler(repo, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/instance-health?offset=-10", nil)
+	w := httptest.NewRecorder()
+
+	h.List(w, req)
+
+	if w.Code != http.StatusOK || repo.listOptions.Limit != defaultInstanceHealthListLimit || repo.listOptions.Offset != 0 {
+		t.Fatalf("status=%d options=%+v body=%s", w.Code, repo.listOptions, w.Body.String())
 	}
 }
 
@@ -151,6 +171,20 @@ func TestInstanceHealthHandlerHistoryLimitIsBoundedAndSanitized(t *testing.T) {
 
 	if w.Code != http.StatusOK || repo.eventLimit != maxInstanceHealthHistoryLimit || strings.Contains(w.Body.String(), "secret") {
 		t.Fatalf("status=%d limit=%d body=%s", w.Code, repo.eventLimit, w.Body.String())
+	}
+}
+
+func TestInstanceHealthHandlerRecoveryAttemptLimitIsBounded(t *testing.T) {
+	key := testInstanceKey()
+	repo := &instanceHealthRepoFake{}
+	h := NewInstanceHealthHandler(repo, nil, nil, nil)
+	req := instanceRouteRequest(http.MethodGet, key, "/recovery-attempts?limit=9999", nil)
+	w := httptest.NewRecorder()
+
+	h.ListRecoveryAttempts(w, req)
+
+	if w.Code != http.StatusOK || repo.attemptLimit != maxInstanceHealthHistoryLimit {
+		t.Fatalf("status=%d limit=%d body=%s", w.Code, repo.attemptLimit, w.Body.String())
 	}
 }
 

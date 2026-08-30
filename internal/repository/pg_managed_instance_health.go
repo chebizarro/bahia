@@ -27,6 +27,7 @@ func newPgManagedInstanceHealthRepositoryWithDB(db pgQueryer) *PgManagedInstance
 }
 
 const managedHealthColumns = `service_id, environment_id, deployment_unit_id, runtime_target_name, host, supervisor_type, status, failure_reason, last_observed_at, failure_generation_at, restart_count, consecutive_restart_count, memory_current_bytes, memory_peak_bytes, memory_limit_bytes, last_recovery_attempt, updated_at`
+const managedHealthListColumns = `h.service_id, h.environment_id, h.deployment_unit_id, h.runtime_target_name, h.host, h.supervisor_type, h.status, h.failure_reason, h.last_observed_at, h.failure_generation_at, h.restart_count, h.consecutive_restart_count, h.memory_current_bytes, h.memory_peak_bytes, h.memory_limit_bytes, h.last_recovery_attempt, h.updated_at`
 const managedHealthEventColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, previous_status, status, reason, evidence, observed_at`
 const recoveryAttemptColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, correlation_id, requested_at, result, evidence`
 const maintenanceOverrideColumns = `id, service_id, environment_id, deployment_unit_id, runtime_target_name, actor, reason, created_at, expires_at`
@@ -157,6 +158,93 @@ func (r *PgManagedInstanceHealthRepository) listHealth(ctx context.Context, quer
 		return nil, fmt.Errorf("iterating managed instance health: %w", err)
 	}
 	return result, nil
+}
+
+func (r *PgManagedInstanceHealthRepository) ListHealth(ctx context.Context, options ManagedInstanceHealthListOptions) ([]ManagedInstanceHealthListItem, error) {
+	activeAt := options.ActiveAt
+	if activeAt.IsZero() {
+		activeAt = time.Now().UTC()
+	}
+	rows, err := r.pool.Query(ctx, `SELECT `+managedHealthListColumns+`,
+		o.id, o.actor, o.reason, o.created_at, o.expires_at
+		FROM managed_instance_health h
+		JOIN services s ON s.id = h.service_id
+		JOIN environments e ON e.id = h.environment_id
+		LEFT JOIN managed_instance_overrides o
+			ON o.service_id = h.service_id
+			AND o.environment_id = h.environment_id
+			AND o.deployment_unit_id IS NOT DISTINCT FROM h.deployment_unit_id
+			AND o.runtime_target_name = h.runtime_target_name
+			AND o.created_at <= $5
+			AND (o.expires_at IS NULL OR o.expires_at > $5)
+		WHERE ($1::uuid IS NULL OR (s.org_id = $1 AND e.org_id = $1))
+			AND ($2::uuid IS NULL OR h.service_id = $2)
+			AND ($3::uuid IS NULL OR h.environment_id = $3)
+			AND (NOT $4 OR h.status NOT IN ('healthy', 'running'))
+		ORDER BY h.last_observed_at DESC, h.service_id, h.environment_id, h.deployment_unit_id, h.runtime_target_name
+		LIMIT $6 OFFSET $7`, nullableUUID(options.OrgID), nullableUUID(options.ServiceID), nullableUUID(options.EnvironmentID),
+		options.UnhealthyOnly, activeAt, boundedHealthListLimit(options.Limit), nonNegativeOffset(options.Offset))
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped managed instance health: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]ManagedInstanceHealthListItem, 0)
+	for rows.Next() {
+		item, err := scanManagedHealthListItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning scoped managed instance health: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating scoped managed instance health: %w", err)
+	}
+	return result, nil
+}
+
+func scanManagedHealthListItem(row rowScanner) (ManagedInstanceHealthListItem, error) {
+	var item ManagedInstanceHealthListItem
+	var deploymentUnitID pgtype.UUID
+	var failureGenerationAt pgtype.Timestamptz
+	var lastAttemptJSON []byte
+	var overrideID pgtype.UUID
+	var overrideActor, overrideReason pgtype.Text
+	var overrideCreatedAt, overrideExpiresAt pgtype.Timestamptz
+	if err := row.Scan(&item.Health.ServiceID, &item.Health.EnvironmentID, &deploymentUnitID, &item.Health.RuntimeTargetName,
+		&item.Health.Host, &item.Health.SupervisorType, &item.Health.Status, &item.Health.FailureReason, &item.Health.LastObservedAt, &failureGenerationAt,
+		&item.Health.RestartCount, &item.Health.ConsecutiveRestartCount, &item.Health.MemoryCurrentBytes, &item.Health.MemoryPeakBytes,
+		&item.Health.MemoryLimitBytes, &lastAttemptJSON, &item.Health.UpdatedAt, &overrideID, &overrideActor, &overrideReason,
+		&overrideCreatedAt, &overrideExpiresAt); err != nil {
+		return ManagedInstanceHealthListItem{}, err
+	}
+	if deploymentUnitID.Valid {
+		item.Health.DeploymentUnitID = uuid.UUID(deploymentUnitID.Bytes)
+	}
+	if failureGenerationAt.Valid {
+		item.Health.FailureGenerationAt = failureGenerationAt.Time
+	}
+	if len(lastAttemptJSON) > 0 && string(lastAttemptJSON) != "null" {
+		item.Health.LastRecoveryAttempt = &domain.RecoveryAttempt{}
+		if err := unmarshalJSON(lastAttemptJSON, item.Health.LastRecoveryAttempt, "last recovery attempt"); err != nil {
+			return ManagedInstanceHealthListItem{}, err
+		}
+	}
+	if overrideID.Valid {
+		override := &domain.MaintenanceOverride{
+			ID:                 uuid.UUID(overrideID.Bytes),
+			ManagedInstanceKey: item.Health.ManagedInstanceKey,
+			Actor:              overrideActor.String,
+			Reason:             overrideReason.String,
+			CreatedAt:          overrideCreatedAt.Time,
+		}
+		if overrideExpiresAt.Valid {
+			expiresAt := overrideExpiresAt.Time
+			override.ExpiresAt = &expiresAt
+		}
+		item.MaintenanceOverride = override
+	}
+	return item, nil
 }
 
 func (r *PgManagedInstanceHealthRepository) ListAllHealth(ctx context.Context) ([]domain.ManagedInstanceHealth, error) {
@@ -425,6 +513,34 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return value
+}
+
+func nullableUUID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
+}
+
+func boundedHealthListLimit(limit int) int {
+	const (
+		defaultLimit = 50
+		maxLimit     = 500
+	)
+	if limit <= 0 {
+		return defaultLimit
+	}
+	if limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func nonNegativeOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func boundedHistoryLimit(limit int) int {

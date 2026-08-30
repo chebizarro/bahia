@@ -19,8 +19,8 @@ type routeInstanceHealthRepo struct {
 	repository.ManagedInstanceHealthRepository
 }
 
-func (routeInstanceHealthRepo) ListAllHealth(context.Context) ([]domain.ManagedInstanceHealth, error) {
-	return []domain.ManagedInstanceHealth{}, nil
+func (routeInstanceHealthRepo) ListHealth(context.Context, repository.ManagedInstanceHealthListOptions) ([]repository.ManagedInstanceHealthListItem, error) {
+	return []repository.ManagedInstanceHealthListItem{}, nil
 }
 
 type routeInstanceServiceRepo struct{ repository.ServiceRepository }

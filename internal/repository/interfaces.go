@@ -91,12 +91,30 @@ type RuntimeObservationRepository interface {
 	ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit int) ([]domain.RuntimeObservation, error)
 }
 
+// ManagedInstanceHealthListOptions bounds and scopes managed-instance health collection reads.
+type ManagedInstanceHealthListOptions struct {
+	OrgID         uuid.UUID
+	ServiceID     uuid.UUID
+	EnvironmentID uuid.UUID
+	UnhealthyOnly bool
+	ActiveAt      time.Time
+	Limit         int
+	Offset        int
+}
+
+// ManagedInstanceHealthListItem combines a health snapshot with its active maintenance override.
+type ManagedInstanceHealthListItem struct {
+	Health              domain.ManagedInstanceHealth
+	MaintenanceOverride *domain.MaintenanceOverride
+}
+
 // ManagedInstanceHealthRepository manages current health, append-only observations,
 // correlated recovery attempts, and maintenance overrides for managed runtime targets.
 type ManagedInstanceHealthRepository interface {
 	UpsertHealth(ctx context.Context, health *domain.ManagedInstanceHealth) error
 	UpsertHealthWithEvent(ctx context.Context, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) error
 	GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
+	ListHealth(ctx context.Context, options ManagedInstanceHealthListOptions) ([]ManagedInstanceHealthListItem, error)
 	ListAllHealth(ctx context.Context) ([]domain.ManagedInstanceHealth, error)
 	ListHealthByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
 	ListHealthByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ManagedInstanceHealth, error)

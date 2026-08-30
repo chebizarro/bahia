@@ -10,6 +10,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -43,6 +44,9 @@ func (r *supervisorRepoFake) GetHealth(_ context.Context, key domain.ManagedInst
 	}
 	copy := *r.health
 	return &copy, nil
+}
+func (r *supervisorRepoFake) ListHealth(context.Context, repository.ManagedInstanceHealthListOptions) ([]repository.ManagedInstanceHealthListItem, error) {
+	return nil, nil
 }
 func (r *supervisorRepoFake) ListAllHealth(context.Context) ([]domain.ManagedInstanceHealth, error) {
 	return nil, nil

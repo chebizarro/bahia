@@ -2,18 +2,20 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 const (
+	defaultInstanceHealthListLimit    = 50
+	maxInstanceHealthListLimit        = 500
 	defaultInstanceHealthHistoryLimit = 50
 	maxInstanceHealthHistoryLimit     = 500
 )
@@ -26,15 +28,13 @@ type InstanceMaintenanceOperator interface {
 
 // InstanceHealthHandler serves tenant-scoped managed-instance health and maintenance APIs.
 type InstanceHealthHandler struct {
-	health       repository.ManagedInstanceHealthRepository
-	services     repository.ServiceRepository
-	environments repository.EnvironmentRepository
-	operator     InstanceMaintenanceOperator
-	now          func() time.Time
+	health   repository.ManagedInstanceHealthRepository
+	operator InstanceMaintenanceOperator
+	now      func() time.Time
 }
 
-func NewInstanceHealthHandler(health repository.ManagedInstanceHealthRepository, services repository.ServiceRepository, environments repository.EnvironmentRepository, operator InstanceMaintenanceOperator) *InstanceHealthHandler {
-	return &InstanceHealthHandler{health: health, services: services, environments: environments, operator: operator, now: func() time.Time { return time.Now().UTC() }}
+func NewInstanceHealthHandler(health repository.ManagedInstanceHealthRepository, _ repository.ServiceRepository, _ repository.EnvironmentRepository, operator InstanceMaintenanceOperator) *InstanceHealthHandler {
+	return &InstanceHealthHandler{health: health, operator: operator, now: func() time.Time { return time.Now().UTC() }}
 }
 
 type instanceHealthSummary struct {
@@ -75,37 +75,34 @@ func (h *InstanceHealthHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var rows []domain.ManagedInstanceHealth
-	switch {
-	case serviceID != uuid.Nil:
-		rows, err = h.health.ListHealthByService(r.Context(), serviceID)
-	case environmentID != uuid.Nil:
-		rows, err = h.health.ListHealthByEnvironment(r.Context(), environmentID)
-	case unhealthy:
-		rows, err = h.health.ListUnhealthy(r.Context())
-	default:
-		rows, err = h.health.ListAllHealth(r.Context())
+	limit := instanceHealthListLimit(r)
+	offset := queryInt(r, "offset", 0)
+	if offset < 0 {
+		offset = 0
 	}
-	if err == nil {
-		rows = filterInstanceHealth(rows, serviceID, environmentID, unhealthy)
-		rows, err = h.filterToAuthzOrg(r, rows)
-	}
+	items, err := h.health.ListHealth(r.Context(), repository.ManagedInstanceHealthListOptions{
+		OrgID:         authzOrgID(r),
+		ServiceID:     serviceID,
+		EnvironmentID: environmentID,
+		UnhealthyOnly: unhealthy,
+		ActiveAt:      h.now(),
+		Limit:         limit,
+		Offset:        offset,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	summaries := make([]instanceHealthSummary, 0, len(rows))
-	for i := range rows {
-		sanitizeHealth(&rows[i])
-		override, overrideErr := h.health.GetActiveMaintenanceOverride(r.Context(), rows[i].ManagedInstanceKey, h.now())
-		if overrideErr != nil {
-			writeError(w, http.StatusInternalServerError, overrideErr.Error())
-			return
-		}
-		sanitizeOverride(override)
-		summaries = append(summaries, instanceHealthSummary{ManagedInstanceHealth: rows[i], MaintenanceOverride: override})
+	summaries := make([]instanceHealthSummary, 0, len(items))
+	for i := range items {
+		sanitizeHealth(&items[i].Health)
+		sanitizeOverride(items[i].MaintenanceOverride)
+		summaries = append(summaries, instanceHealthSummary{
+			ManagedInstanceHealth: items[i].Health,
+			MaintenanceOverride:   items[i].MaintenanceOverride,
+		})
 	}
-	writeData(w, http.StatusOK, summaries)
+	writeJSON(w, http.StatusOK, dto.ListResponse{Data: summaries, Limit: limit, Offset: offset})
 }
 
 func (h *InstanceHealthHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -238,31 +235,6 @@ func (h *InstanceHealthHandler) ClearMaintenance(w http.ResponseWriter, r *http.
 	writeData(w, http.StatusOK, map[string]bool{"cleared": true})
 }
 
-func (h *InstanceHealthHandler) filterToAuthzOrg(r *http.Request, rows []domain.ManagedInstanceHealth) ([]domain.ManagedInstanceHealth, error) {
-	orgID := authzOrgID(r)
-	if orgID == uuid.Nil {
-		return rows, nil
-	}
-	if h.services == nil || h.environments == nil {
-		return nil, fmt.Errorf("service and environment repositories are required for tenant-scoped instance health reads")
-	}
-	result := make([]domain.ManagedInstanceHealth, 0, len(rows))
-	for _, row := range rows {
-		svc, err := h.services.GetByID(r.Context(), row.ServiceID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve instance service ownership: %w", err)
-		}
-		env, err := h.environments.GetByID(r.Context(), row.EnvironmentID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve instance environment ownership: %w", err)
-		}
-		if svc != nil && env != nil && svc.OrgID == orgID && env.OrgID == orgID {
-			result = append(result, row)
-		}
-	}
-	return result, nil
-}
-
 func instanceKeyFromRoute(w http.ResponseWriter, r *http.Request) (domain.ManagedInstanceKey, bool) {
 	serviceID, err := uuidParam(r, "serviceId")
 	if err != nil {
@@ -295,6 +267,17 @@ func optionalUUIDQuery(r *http.Request, name string) (uuid.UUID, error) {
 	return uuid.Parse(value)
 }
 
+func instanceHealthListLimit(r *http.Request) int {
+	limit := queryInt(r, "limit", defaultInstanceHealthListLimit)
+	if limit < 1 {
+		return 1
+	}
+	if limit > maxInstanceHealthListLimit {
+		return maxInstanceHealthListLimit
+	}
+	return limit
+}
+
 func historyLimit(r *http.Request) int {
 	limit := queryInt(r, "limit", defaultInstanceHealthHistoryLimit)
 	if limit < 1 {
@@ -304,23 +287,6 @@ func historyLimit(r *http.Request) int {
 		return maxInstanceHealthHistoryLimit
 	}
 	return limit
-}
-
-func filterInstanceHealth(rows []domain.ManagedInstanceHealth, serviceID, environmentID uuid.UUID, unhealthy bool) []domain.ManagedInstanceHealth {
-	result := make([]domain.ManagedInstanceHealth, 0, len(rows))
-	for _, row := range rows {
-		if serviceID != uuid.Nil && row.ServiceID != serviceID {
-			continue
-		}
-		if environmentID != uuid.Nil && row.EnvironmentID != environmentID {
-			continue
-		}
-		if unhealthy && (row.Status == domain.InstanceHealthStatusHealthy || row.Status == domain.InstanceHealthStatusRunning) {
-			continue
-		}
-		result = append(result, row)
-	}
-	return result
 }
 
 func sanitizeHealth(health *domain.ManagedInstanceHealth) {
