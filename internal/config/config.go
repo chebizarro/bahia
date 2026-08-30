@@ -789,6 +789,29 @@ type HiveCIPolicyConfig struct {
 	Metadata        map[string]any `koanf:"metadata" yaml:"metadata"`
 }
 
+// HiveCIInitiatorConfig configures the fleet Gitea private-mirror and
+// Hive-CI build initiation adapter. When Enabled, all fields except
+// RepoAnnouncementAddr and RelayHint are required; the GitHub credential is
+// never configured here — it is resolved per request from an opaque
+// server-side secret reference.
+type HiveCIInitiatorConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// GiteaBaseURL is the fleet Gitea API base URL, e.g. https://git.fleet.internal
+	GiteaBaseURL string `koanf:"gitea_base_url"`
+	// GiteaToken is the fleet Gitea admin token used for mirror provisioning.
+	GiteaToken string `koanf:"gitea_token"`
+	// MirrorOwner is the Gitea org/user that owns private mirrors.
+	MirrorOwner string `koanf:"mirror_owner"`
+	// WorkflowPath is the Hive-CI workflow file invoked for builds.
+	WorkflowPath string `koanf:"workflow_path"`
+	// SourceCloneURL optionally overrides the upstream clone URL.
+	SourceCloneURL string `koanf:"source_clone_url"`
+	// RepoAnnouncementAddr optionally carries the NIP-34 30617 address of the mirror.
+	RepoAnnouncementAddr string `koanf:"repo_announcement_addr"`
+	// RelayHint is attached to published run-request/evidence events.
+	RelayHint string `koanf:"relay_hint"`
+}
+
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
 	Enabled                         bool                 `koanf:"enabled"`
@@ -798,7 +821,8 @@ type HiveCIConfig struct {
 	AutoDeployStagingEnvironment    string               `koanf:"auto_deploy_staging_environment"`
 	RetryInterval                   time.Duration        `koanf:"retry_interval"`
 	MaxRetries                      int                  `koanf:"max_retries"`
-	Policies                        []HiveCIPolicyConfig `koanf:"policies" yaml:"policies"`
+	Policies                        []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
+	Initiator                       HiveCIInitiatorConfig `koanf:"initiator" yaml:"initiator"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -1290,6 +1314,20 @@ func (c *Config) validate() error {
 	}
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
+	}
+	if c.HiveCI.Initiator.Enabled {
+		if strings.TrimSpace(c.HiveCI.Initiator.GiteaBaseURL) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.gitea_base_url is required when hiveci.initiator.enabled=true")
+		}
+		if strings.TrimSpace(c.HiveCI.Initiator.GiteaToken) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.gitea_token is required when hiveci.initiator.enabled=true")
+		}
+		if strings.TrimSpace(c.HiveCI.Initiator.MirrorOwner) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.mirror_owner is required when hiveci.initiator.enabled=true")
+		}
+		if strings.TrimSpace(c.HiveCI.Initiator.WorkflowPath) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.workflow_path is required when hiveci.initiator.enabled=true")
+		}
 	}
 	if c.Cashu.Enabled {
 		return fmt.Errorf("config validation failed: cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")

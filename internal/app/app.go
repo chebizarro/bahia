@@ -26,6 +26,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	dnsAdapter "github.com/openagentsinc/bahia/internal/adapters/dns"
+	giteaAdapter "github.com/openagentsinc/bahia/internal/adapters/gitea"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
 	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
@@ -1348,7 +1349,31 @@ func New(cfg *config.Config) (*App, error) {
 		// The build request contract is registered even while the fleet Gitea
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
+		var hiveCIBuildStarter controlplane.HiveCIBuildStarter
+		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil {
+			hiveCIBuildStarter = giteaAdapter.NewInitiator(
+				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
+				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
+				controlPlanePool,
+				controlPlaneSigner,
+				giteaAdapter.NewMemoryInitiationStore(),
+				giteaAdapter.InitiatorConfig{
+					MirrorOwner:          cfg.HiveCI.Initiator.MirrorOwner,
+					WorkflowPath:         cfg.HiveCI.Initiator.WorkflowPath,
+					SourceCloneURL:       cfg.HiveCI.Initiator.SourceCloneURL,
+					RepoAnnouncementAddr: cfg.HiveCI.Initiator.RepoAnnouncementAddr,
+					RelayHint:            cfg.HiveCI.Initiator.RelayHint,
+				},
+				logger,
+			)
+			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
+				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
+				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
+				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),
+			)
+		}
 		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
+			Starter:           hiveCIBuildStarter,
 			Registry:          registry,
 			Builds:            buildRepo,
 			ArtifactRegistrar: buildResultRegistrar,
