@@ -580,8 +580,8 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 
 // handleEvent audits and tracks canonical runtime replay events. Legacy
 // Bahia command/status/result/read-model kind-number flows are rejected after
-// the startup migration boundary; command dispatch is handled by the ContextVM
-// transport instead of this production reactor subscription.
+// the startup migration boundary; service/deploy is still dispatched here until
+// the ContextVM transport owns the full deploy lifecycle.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
@@ -601,15 +601,35 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	}
 	r.dedup.MarkSeen(eventID)
 	r.trackLastSeen(event)
+	eventKind := int(event.Kind)
 
 	switch {
 	case isHeartbeatObservationEvent(event):
 		go r.handleHeartbeatObservation(ctx, event)
+	case isContextVMMethod(event, ContextVMMethodServiceDeploy):
+		go r.handleDeployRequest(ctx, event)
 	case isCanonicalRuntimeReplayKind(eventKind):
 		return
 	default:
 		r.logger.Warn("unexpected event kind", "kind", eventKind)
 	}
+}
+
+func isContextVMMethod(event *nostr.Event, method string) bool {
+	if event == nil || event.Kind != KindContextVMMessage {
+		return false
+	}
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return false
+	}
+	if tagValueNostr(event.Tags, "method") == method {
+		return true
+	}
+	var rpc struct {
+		Method string `json:"method"`
+	}
+	return json.Unmarshal([]byte(event.Content), &rpc) == nil && strings.TrimSpace(rpc.Method) == method
 }
 
 // handleDeployRequest processes a legacy deployment request in direct tests.
@@ -2289,6 +2309,20 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 	}
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		return nil, fmt.Errorf("invalid JSON content: %w", err)
+	}
+	if strings.TrimSpace(content.ServiceID) == "" && strings.TrimSpace(content.EnvironmentID) == "" && strings.TrimSpace(content.ArtifactID) == "" {
+		var rpc struct {
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(event.Content), &rpc); err != nil {
+			return nil, fmt.Errorf("invalid JSON-RPC deploy content: %w", err)
+		}
+		if len(rpc.Params) == 0 {
+			return nil, fmt.Errorf("missing JSON-RPC deploy params")
+		}
+		if err := json.Unmarshal(rpc.Params, &content); err != nil {
+			return nil, fmt.Errorf("invalid JSON-RPC deploy params: %w", err)
+		}
 	}
 
 	var err error
