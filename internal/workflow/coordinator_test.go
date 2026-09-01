@@ -1096,6 +1096,72 @@ func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *tes
 		}
 	}
 }
+
+func TestExecuteDeployment_LoomDispatchUnitUsesRuntimeCommandConfig(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           "max-firecracker",
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{
+			"dispatch_mode":         "loom",
+			"command":               []any{"/bin/sh", "-c", "echo $BAHIA_DEPLOY_SERVICE"},
+			"env":                   map[string]any{"CANARY": "true"},
+			"required_software":     []any{"bash"},
+			"required_architecture": "linux/amd64",
+			"timeout":               "45s",
+		},
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnits(unitRepo),
+	)
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(ctx, di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	coord.Shutdown(time.Second)
+	if stubLoom.lastJobReq.Cmd != "/bin/sh" {
+		t.Fatalf("cmd = %q, want /bin/sh", stubLoom.lastJobReq.Cmd)
+	}
+	if got := fmt.Sprint(stubLoom.lastJobReq.Args); got != "[-c echo $BAHIA_DEPLOY_SERVICE]" {
+		t.Fatalf("args = %s", got)
+	}
+	if stubLoom.lastJobReq.Env["CANARY"] != "true" {
+		t.Fatalf("env = %#v", stubLoom.lastJobReq.Env)
+	}
+	if got := fmt.Sprint(stubLoom.lastJobReq.RequiredSoftware); got != "[bash]" {
+		t.Fatalf("required software = %s", got)
+	}
+	if stubLoom.lastJobReq.RequiredArchitecture != "linux/amd64" {
+		t.Fatalf("required architecture = %q", stubLoom.lastJobReq.RequiredArchitecture)
+	}
+	if stubLoom.lastJobReq.Timeout != 45*time.Second {
+		t.Fatalf("timeout = %s", stubLoom.lastJobReq.Timeout)
+	}
+}
+
 func TestConcurrentShutdownAndPoll(t *testing.T) {
 	// Verify that concurrent Shutdown calls and goroutine completions don't race.
 	logger := zap.NewNop()

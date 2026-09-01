@@ -193,6 +193,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		Service:      svc.Name,
 		WorkerPubkey: workerPubkey,
 	}
+	applyLoomDeploymentUnitRuntimeConfig(&jobReq, unit)
 
 	jobEventID, err := c.loom.SubmitJob(ctx, jobReq)
 	if err != nil {
@@ -248,6 +249,37 @@ func deploymentUnitDispatchesViaLoom(unit *domain.DeploymentUnit) bool {
 	return ok && strings.EqualFold(strings.TrimSpace(mode), "loom")
 }
 
+func applyLoomDeploymentUnitRuntimeConfig(job *loom.JobRequest, unit *domain.DeploymentUnit) {
+	if job == nil || unit == nil || unit.RuntimeConfig == nil || !deploymentUnitDispatchesViaLoom(unit) {
+		return
+	}
+	config := unit.RuntimeConfig
+	if command := stringSliceFromRuntimeConfig(config, "command"); len(command) > 0 {
+		job.Cmd = command[0]
+		if len(command) > 1 {
+			job.Args = append([]string(nil), command[1:]...)
+		}
+	}
+	if cmd := stringValueFromRuntimeConfig(config, "cmd"); cmd != "" {
+		job.Cmd = cmd
+	}
+	if args := stringSliceFromRuntimeConfig(config, "args"); len(args) > 0 {
+		job.Args = args
+	}
+	if env := stringMapFromRuntimeConfig(config, "env"); len(env) > 0 {
+		job.Env = env
+	}
+	if required := stringSliceFromRuntimeConfig(config, "required_software"); len(required) > 0 {
+		job.RequiredSoftware = required
+	}
+	if arch := stringValueFromRuntimeConfig(config, "required_architecture"); arch != "" {
+		job.RequiredArchitecture = arch
+	}
+	if timeout := durationFromRuntimeConfig(config, "timeout"); timeout > 0 {
+		job.Timeout = timeout
+	}
+}
+
 func (c *Coordinator) resolveDeploymentUnit(
 	ctx context.Context,
 	intent *domain.DeploymentIntent,
@@ -273,6 +305,93 @@ func (c *Coordinator) resolveDeploymentUnit(
 		return nil, fmt.Errorf("deployment unit %q belongs to environment %s, not %s", unit.Key, unit.EnvironmentID, env.ID)
 	}
 	return unit, nil
+}
+
+func stringValueFromRuntimeConfig(config map[string]any, key string) string {
+	if config == nil {
+		return ""
+	}
+	value, ok := config[key]
+	if !ok {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func stringSliceFromRuntimeConfig(config map[string]any, key string) []string {
+	if config == nil {
+		return nil
+	}
+	value, ok := config[key]
+	if !ok {
+		return nil
+	}
+	var raw []any
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if s := strings.TrimSpace(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		raw = typed
+	default:
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
+}
+
+func stringMapFromRuntimeConfig(config map[string]any, key string) map[string]string {
+	if config == nil {
+		return nil
+	}
+	value, ok := config[key]
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	switch typed := value.(type) {
+	case map[string]string:
+		for k, v := range typed {
+			if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+	case map[string]any:
+		for k, v := range typed {
+			if s, ok := v.(string); ok && strings.TrimSpace(k) != "" && strings.TrimSpace(s) != "" {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(s)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func durationFromRuntimeConfig(config map[string]any, key string) time.Duration {
+	value := stringValueFromRuntimeConfig(config, key)
+	if value == "" {
+		return 0
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0
+	}
+	return timeout
 }
 
 func (c *Coordinator) failDeploymentRunForDispatchAdmission(ctx context.Context, intentID uuid.UUID, workerPubkey string, decision service.WorkerAdmissionDecision) error {
