@@ -48,6 +48,10 @@ type ControlPlaneRequestError struct {
 	Phase           string
 	RequestAccepted bool
 	PublishedRelays int
+	RequestEventID  string
+	RequestDTag     string
+	RequestMethod   string
+	PublishResults  []OperatorPublishResult
 	Cause           error
 }
 
@@ -62,7 +66,12 @@ func (e *ControlPlaneRequestError) Error() string {
 	if e.Cause == nil {
 		return phase
 	}
-	return fmt.Sprintf("%s: %v", phase, e.Cause)
+	message := fmt.Sprintf("%s: %v", phase, e.Cause)
+	details := e.diagnosticDetails()
+	if details == "" {
+		return message
+	}
+	return message + " (" + details + ")"
 }
 
 func (e *ControlPlaneRequestError) Unwrap() error {
@@ -72,6 +81,26 @@ func (e *ControlPlaneRequestError) Unwrap() error {
 	return e.Cause
 }
 
+func (e *ControlPlaneRequestError) diagnosticDetails() string {
+	if e == nil {
+		return ""
+	}
+	parts := []string{}
+	if e.RequestMethod != "" {
+		parts = append(parts, "method="+e.RequestMethod)
+	}
+	if e.RequestEventID != "" {
+		parts = append(parts, "request_event_id="+e.RequestEventID)
+	}
+	if e.RequestDTag != "" {
+		parts = append(parts, "d="+e.RequestDTag)
+	}
+	if len(e.PublishResults) > 0 {
+		parts = append(parts, "publish_results="+formatOperatorPublishResults(e.PublishResults))
+	}
+	return strings.Join(parts, " ")
+}
+
 // ErrEnvironmentRevisionConflict marks a retryable expected_updated_at mismatch.
 var ErrEnvironmentRevisionConflict = errors.New("environment revision conflict")
 
@@ -79,6 +108,16 @@ var ErrEnvironmentRevisionConflict = errors.New("environment revision conflict")
 type ContextVMRemoteError struct {
 	Code    int
 	Message string
+}
+
+// OperatorPublishResult is a redacted per-relay publish outcome suitable for
+// CLI diagnostics and task evidence.
+type OperatorPublishResult struct {
+	RelayURL  string
+	Accepted  bool
+	Duplicate bool
+	Reason    string
+	Error     string
 }
 
 func (e *ContextVMRemoteError) Error() string {
@@ -725,12 +764,24 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 		return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: err}
 	}
 
-	published, err := c.publishOperatorEvent(ctx, *event)
+	published, publishResults, err := c.publishOperatorEvent(ctx, *event)
+	requestError := func(phase string, accepted bool, cause error) *ControlPlaneRequestError {
+		return &ControlPlaneRequestError{
+			Phase:           phase,
+			RequestAccepted: accepted,
+			PublishedRelays: published,
+			RequestEventID:  event.ID.Hex(),
+			RequestDTag:     requestID,
+			RequestMethod:   method,
+			PublishResults:  publishResults,
+			Cause:           cause,
+		}
+	}
 	if published == 0 {
 		if err == nil {
 			err = fmt.Errorf("request was not accepted by any relay")
 		}
-		return nil, &ControlPlaneRequestError{Phase: "publish operator ContextVM request", RequestAccepted: false, PublishedRelays: published, Cause: err}
+		return nil, requestError("publish operator ContextVM request", false, err)
 	}
 
 	seen := map[string]struct{}{}
@@ -742,7 +793,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: ctx.Err()}
+			return nil, requestError("await operator ContextVM result", true, ctx.Err())
 		case <-eose:
 			eose = nil
 		case relayClosed, ok := <-closed:
@@ -755,7 +806,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				reason = "subscription closed"
 			}
 			if relayClosed.RelayURL == "" {
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result: %s", reason)}
+				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before terminal result: %s", reason))
 			}
 			if nostrpool.IsAuthRequiredReason(reason) {
 				if _, attempted := authAttempted[relayClosed.RelayURL]; !attempted {
@@ -764,7 +815,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 						sub.Close()
 						resub, subErr := c.transport.SubscribeAllWithEOSE(ctx, filters)
 						if subErr != nil {
-							return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr)}
+							return nil, requestError("await operator ContextVM result", true, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr))
 						}
 						sub = resub
 						eose = sub.EndOfStoredEvents
@@ -778,11 +829,11 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			closedRelays[relayClosed.RelayURL] = reason
 			pendingRelays = removeRelayURL(pendingRelays, relayClosed.RelayURL)
 			if len(pendingRelays) == 0 {
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays))}
+				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays)))
 			}
 		case reply, ok := <-sub.Events:
 			if !ok {
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result")}
+				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before terminal result"))
 			}
 			if reply == nil || reply.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !validSignedEvent(reply) || !correlatesTo(reply, event.ID.Hex(), c.pubkey) {
 				continue
@@ -804,12 +855,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
 				}
-				return nil, &ControlPlaneRequestError{
-					Phase:           "await operator ContextVM result",
-					RequestAccepted: true,
-					PublishedRelays: published,
-					Cause:           &ContextVMRemoteError{Code: rpc.Error.Code, Message: message},
-				}
+				return nil, requestError("await operator ContextVM result", true, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message})
 			}
 			if rpc.Result == nil {
 				continue
@@ -828,10 +874,11 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	}
 }
 
-func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, error) {
+func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, []OperatorPublishResult, error) {
 	results, err := c.transport.PublishWithResults(ctx, event)
+	diagnostics := operatorPublishDiagnostics(results)
 	if len(results) == 0 {
-		return 0, err
+		return 0, diagnostics, err
 	}
 	published := 0
 	for _, result := range results {
@@ -839,7 +886,54 @@ func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, e
 			published++
 		}
 	}
-	return published, err
+	return published, diagnostics, err
+}
+
+func operatorPublishDiagnostics(results []nostrpool.PublishResult) []OperatorPublishResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]OperatorPublishResult, 0, len(results))
+	for _, result := range results {
+		item := OperatorPublishResult{
+			RelayURL:  result.RelayURL,
+			Accepted:  result.Accepted,
+			Duplicate: result.IsDuplicate(),
+			Reason:    strings.TrimSpace(result.Reason),
+		}
+		if result.Error != nil {
+			item.Error = result.Error.Error()
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func formatOperatorPublishResults(results []OperatorPublishResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(results))
+	for _, result := range results {
+		status := "rejected"
+		if result.Accepted {
+			status = "accepted"
+		} else if result.Duplicate {
+			status = "duplicate"
+		}
+		detail := strings.TrimSpace(result.Reason)
+		if detail == "" {
+			detail = strings.TrimSpace(result.Error)
+		}
+		if detail != "" {
+			status += ":" + detail
+		}
+		if result.RelayURL != "" {
+			status = result.RelayURL + "=" + status
+		}
+		parts = append(parts, status)
+	}
+	return strings.Join(parts, ",")
 }
 
 func removeRelayURL(relays []string, relayURL string) []string {

@@ -508,6 +508,22 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 	if !errors.Is(reqErr, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled cause", reqErr)
 	}
+	published := transport.onlyPublished(t)
+	if reqErr.RequestEventID != published.ID.Hex() ||
+		reqErr.RequestDTag == "" ||
+		reqErr.RequestMethod != "service/action" {
+		t.Fatalf("diagnostics = event %q d %q method %q, want published request metadata", reqErr.RequestEventID, reqErr.RequestDTag, reqErr.RequestMethod)
+	}
+	if len(reqErr.PublishResults) != 1 ||
+		reqErr.PublishResults[0].RelayURL != "wss://relay.example" ||
+		!reqErr.PublishResults[0].Accepted {
+		t.Fatalf("publish diagnostics = %#v, want accepted relay result", reqErr.PublishResults)
+	}
+	for _, want := range []string{"request_event_id=" + published.ID.Hex(), "d=" + reqErr.RequestDTag, "publish_results=wss://relay.example=accepted"} {
+		if !strings.Contains(reqErr.Error(), want) {
+			t.Fatalf("error = %q, want diagnostic %q", reqErr.Error(), want)
+		}
+	}
 }
 
 func TestOperatorReplySubscriptionClosedAfterPublishIsPostAcceptanceFailure(t *testing.T) {
