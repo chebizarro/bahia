@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -512,6 +513,9 @@ func TestClient_Close(t *testing.T) {
 }
 
 func TestParseBunkerURI(t *testing.T) {
+	npubHostPK := nostr.Generate().Public()
+	npubHostPubkey := npubHostPK.Hex()
+	npubHost := nip19.EncodeNpub(npubHostPK)
 	tests := []struct {
 		name       string
 		uri        string
@@ -524,6 +528,14 @@ func TestParseBunkerURI(t *testing.T) {
 			name:       "valid with relay and secret",
 			uri:        "bunker://3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d?relay=wss://relay.example.com&secret=mysecret",
 			wantPubkey: "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+			wantRelays: []string{"wss://relay.example.com"},
+			wantSecret: "mysecret",
+			wantErr:    false,
+		},
+		{
+			name:       "valid with npub host",
+			uri:        "bunker://" + npubHost + "?relay=wss://relay.example.com&secret=mysecret",
+			wantPubkey: npubHostPubkey,
 			wantRelays: []string{"wss://relay.example.com"},
 			wantSecret: "mysecret",
 			wantErr:    false,

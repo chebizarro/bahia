@@ -164,7 +164,11 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	bunkerPubkey, relayHosts := bunkerLogDetails(c.bunkerURI)
+	bunkerURI, err := normalizeBunkerURI(c.bunkerURI)
+	if err != nil {
+		return fmt.Errorf("normalize Signet bunker URI: %w", err)
+	}
+	bunkerPubkey, relayHosts := bunkerLogDetails(bunkerURI)
 	c.logger.Info("connecting to Signet bunker", "bunker_pubkey", bunkerPubkey, "relay_hosts", relayHosts)
 
 	// Connect using the canonical NIP-46 implementation.
@@ -179,7 +183,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	bunker, err := nip46.ConnectBunker(
 		connectCtx,
 		clientSecret,
-		c.bunkerURI,
+		bunkerURI,
 		c.pool,
 		func(authURL string) {
 			c.logger.Info("bunker auth required", "url", authURL)
@@ -1101,9 +1105,9 @@ func ParseBunkerURI(uri string) (pubkey string, relays []string, secret string, 
 		return "", nil, "", fmt.Errorf("parse bunker URI: %w", err)
 	}
 
-	pubkey = u.Host
-	if len(pubkey) != 64 {
-		return "", nil, "", fmt.Errorf("invalid pubkey in bunker URI: expected 64 hex chars")
+	pubkey, err = normalizeBunkerPubkey(u.Host)
+	if err != nil {
+		return "", nil, "", err
 	}
 
 	// Extract relays and secret from query params
@@ -1119,6 +1123,50 @@ func ParseBunkerURI(uri string) (pubkey string, relays []string, secret string, 
 	}
 
 	return pubkey, relays, secret, nil
+}
+
+func normalizeBunkerURI(rawURI string) (string, error) {
+	u, err := url.Parse(rawURI)
+	if err != nil {
+		return "", fmt.Errorf("parse bunker URI: %w", err)
+	}
+	if u.Scheme != "bunker" {
+		return "", fmt.Errorf("invalid bunker URI: must start with bunker://")
+	}
+	pubkey, err := normalizeBunkerPubkey(u.Host)
+	if err != nil {
+		return "", err
+	}
+	u.Host = pubkey
+	return u.String(), nil
+}
+
+func normalizeBunkerPubkey(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "npub1") {
+		prefix, decoded, err := nip19.Decode(value)
+		if err != nil {
+			return "", fmt.Errorf("decode npub in bunker URI: %w", err)
+		}
+		if prefix != "npub" {
+			return "", fmt.Errorf("invalid npub in bunker URI: expected npub")
+		}
+		switch pubkey := decoded.(type) {
+		case string:
+			if len(pubkey) != 64 {
+				return "", fmt.Errorf("invalid npub in bunker URI: decoded pubkey should be 64-char hex")
+			}
+			return strings.ToLower(pubkey), nil
+		case nostr.PubKey:
+			return strings.ToLower(pubkey.Hex()), nil
+		default:
+			return "", fmt.Errorf("invalid npub in bunker URI: decoded pubkey should be 64-char hex")
+		}
+	}
+	if len(value) != 64 {
+		return "", fmt.Errorf("invalid pubkey in bunker URI: expected 64 hex chars")
+	}
+	return strings.ToLower(value), nil
 }
 
 func signEventWithKey(event *nostr.Event, secretKey string) error {
