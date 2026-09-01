@@ -246,6 +246,51 @@ func TestHandleEventContextVMServiceDeployWithDeploymentUnitCreatesIntentForWork
 	}
 }
 
+func TestHandleEventDispatchesArtifactRegisterRequest(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	buildID := uuid.New()
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: uuid.New(), Name: "prod"}}
+	buildRepo := &testBuildRepo{build: &domain.Build{ID: buildID, ServiceID: serviceID}}
+	artifactRepo := &testArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}}
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		buildRepo,
+		artifactRepo,
+		&testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}},
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}},
+		&testObservationRepo{},
+		&testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}},
+		&service.NoopImageVerifier{},
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, nil)
+
+	event := &nostr.Event{
+		Kind:      KindArtifactRegister,
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{{"service", serviceID.String()}, {"build", buildID.String()}, {"digest", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		Content:   fmt.Sprintf(`{"build_id":"%s","service_id":"%s","image_repo":"docker.io/library/busybox","image_tag":"latest","image_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scan_status":"clean"}`, buildID, serviceID),
+	}
+	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
+		t.Fatalf("sign artifact register event: %v", err)
+	}
+
+	reactor.handleEvent(ctx, event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(artifactRepo.artifacts) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := len(artifactRepo.artifacts); got != 1 {
+		t.Fatalf("artifacts created = %d, want 1", got)
+	}
+}
+
 func TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath(t *testing.T) {
 	ctx := context.Background()
 	serviceID := uuid.New()
@@ -857,10 +902,16 @@ func (r *testEnvironmentRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.En
 func (r *testEnvironmentRepo) Update(context.Context, *domain.Environment) error { return nil }
 func (r *testEnvironmentRepo) Delete(context.Context, uuid.UUID) error           { return nil }
 
-type testBuildRepo struct{}
+type testBuildRepo struct {
+	build *domain.Build
+}
 
 func (r *testBuildRepo) Create(context.Context, *domain.Build) error { return nil }
-func (r *testBuildRepo) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
+func (r *testBuildRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Build, error) {
+	if r.build != nil && r.build.ID == id {
+		cp := *r.build
+		return &cp, nil
+	}
 	return nil, nil
 }
 func (r *testBuildRepo) GetByCISystemRunID(context.Context, string, string) (*domain.Build, error) {

@@ -608,6 +608,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleHeartbeatObservation(ctx, event)
 	case isContextVMMethod(event, ContextVMMethodServiceDeploy):
 		go r.handleDeployRequest(ctx, event)
+	case eventKind == KindArtifactRegister:
+		go r.handleArtifactRegister(ctx, event)
 	case isCanonicalRuntimeReplayKind(eventKind):
 		return
 	default:
