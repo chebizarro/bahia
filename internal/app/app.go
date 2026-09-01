@@ -470,7 +470,7 @@ func New(cfg *config.Config) (*App, error) {
 			statusProjector: bahiaStatusProjector,
 			catalogVersion:  catalog.Version,
 		},
-	}}, RunnerTier(Tier0))
+	}}, RunnerTier(Tier0), RunnerRequired(false))
 
 	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
 		continuityHeartbeatMonitor,
@@ -1090,7 +1090,7 @@ func New(cfg *config.Config) (*App, error) {
 			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
 		}
 		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, docsPub, docsQuerier, logger)
-		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3), RunnerRequired(false))
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
