@@ -260,6 +260,33 @@ func (m *stubStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 	return nil, nil
 }
 
+type stubDeploymentUnitRepo struct {
+	units map[uuid.UUID]*domain.DeploymentUnit
+}
+
+func (m *stubDeploymentUnitRepo) Create(_ context.Context, unit *domain.DeploymentUnit) error {
+	if unit.ID == uuid.Nil {
+		unit.ID = uuid.New()
+	}
+	if m.units == nil {
+		m.units = make(map[uuid.UUID]*domain.DeploymentUnit)
+	}
+	m.units[unit.ID] = unit
+	return nil
+}
+func (m *stubDeploymentUnitRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentUnit, error) {
+	return m.units[id], nil
+}
+func (m *stubDeploymentUnitRepo) GetByEnvironmentKey(_ context.Context, _ uuid.UUID, _ string) (*domain.DeploymentUnit, error) {
+	return nil, nil
+}
+func (m *stubDeploymentUnitRepo) ListByEnvironment(_ context.Context, _ uuid.UUID) ([]domain.DeploymentUnit, error) {
+	return nil, nil
+}
+func (m *stubDeploymentUnitRepo) ResolveDefault(_ context.Context, _ *domain.Environment) (*domain.DeploymentUnit, error) {
+	return nil, nil
+}
+
 // --- Mock Loom Client ---
 
 type stubRuntime struct {
@@ -778,10 +805,20 @@ func TestExecuteDeployment_CopiesDeploymentUnitOntoLoomRun(t *testing.T) {
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
 	deploymentUnitID := uuid.New()
+	unit := &domain.DeploymentUnit{
+		ID:            deploymentUnitID,
+		EnvironmentID: env.ID,
+		Key:           "max-firecracker",
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"dispatch_mode": "loom"},
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
 
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
 	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnits(unitRepo))
 	coord.loom = stubLoom
 
 	di := &domain.DeploymentIntent{
@@ -952,6 +989,113 @@ func TestExecuteDeployment_DirectRuntimeFailureMarksRunFailed(t *testing.T) {
 	}
 }
 
+func TestExecuteDeployment_DockerUnitUsesDirectRuntimeWithoutLoom(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	svc.RuntimeType = domain.RuntimeTypeCompose
+	art.ImageRepo = "local/gitea"
+	art.ImageTag = "migration"
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "edge-docker",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "edge-01-docker",
+		ReconcileMode: domain.ReconcileModeObserveOnly, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	stubRT := &stubRuntime{runtimeType: domain.RuntimeTypeCompose}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeResolver(&stubRuntimeResolver{rt: stubRT}),
+		WithDeploymentUnits(unitRepo),
+	)
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(ctx, di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	if stubLoom.submitCalls != 0 {
+		t.Fatalf("Docker deployment unit must not dispatch to a compute worker, got %d Loom submissions", stubLoom.submitCalls)
+	}
+	if stubRT.deployCalls != 1 {
+		t.Fatalf("Docker deployment unit was not applied through direct runtime, got %d deploys", stubRT.deployCalls)
+	}
+	for _, run := range runRepo.runs {
+		if run.LoomJobID != "runtime:direct" || run.Status != domain.RunStatusSucceeded {
+			t.Fatalf("unexpected direct Docker run: %#v", run)
+		}
+	}
+}
+
+func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           "max-firecracker",
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"dispatch_mode": "loom"},
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnits(unitRepo),
+	)
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(ctx, di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	coord.Shutdown(time.Second)
+	if stubLoom.submitCalls != 1 {
+		t.Fatalf("expected Loom dispatch unit to submit one job, got %d", stubLoom.submitCalls)
+	}
+	if stubLoom.lastJobReq.Service != svc.Name || stubLoom.lastJobReq.Environment != env.Name {
+		t.Fatalf("unexpected Loom job request: %#v", stubLoom.lastJobReq)
+	}
+	if len(runRepo.runs) != 1 {
+		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
+	}
+	for _, run := range runRepo.runs {
+		if run.LoomJobID == "runtime:direct" || run.LoomJobID == "" {
+			t.Fatalf("expected real Loom job id, got run %#v", run)
+		}
+		if run.DeploymentUnitID == nil || *run.DeploymentUnitID != unit.ID {
+			t.Fatalf("expected run to preserve deployment unit identity, got %#v", run.DeploymentUnitID)
+		}
+	}
+}
 func TestConcurrentShutdownAndPoll(t *testing.T) {
 	// Verify that concurrent Shutdown calls and goroutine completions don't race.
 	logger := zap.NewNop()

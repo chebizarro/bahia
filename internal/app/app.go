@@ -318,6 +318,7 @@ func New(cfg *config.Config) (*App, error) {
 	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger,
 		workflow.WithWorkerPolicy(workerPolicySvc),
 		workflow.WithRuntimeResolver(runtimeResolver),
+		workflow.WithDeploymentUnits(deploymentUnitRepo),
 	)
 	coord.SetupEventHandlers(publisher)
 

@@ -14,6 +14,7 @@ import (
 	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -29,12 +30,15 @@ type Coordinator struct {
 	loom            deploymentLoomClient
 	workerPolicy    *service.WorkerPolicyService
 	runtimeResolver runtimeadapter.RuntimeResolver
+	deploymentUnits repository.DeploymentUnitRepository
 	publisher       events.Publisher
 	logger          *zap.Logger
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	executionMu      sync.Mutex
+	activeExecutions map[uuid.UUID]struct{}
 }
 
 // NewCoordinator creates a new workflow Coordinator.
@@ -51,12 +55,13 @@ func NewCoordinator(
 		loomAdapter = loomClient
 	}
 	c := &Coordinator{
-		registry:  registry,
-		loom:      loomAdapter,
-		publisher: publisher,
-		logger:    logger,
-		ctx:       ctx,
-		cancel:    cancel,
+		registry:         registry,
+		loom:             loomAdapter,
+		publisher:        publisher,
+		logger:           logger,
+		ctx:              ctx,
+		cancel:           cancel,
+		activeExecutions: make(map[uuid.UUID]struct{}),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -75,6 +80,11 @@ func WithWorkerPolicy(wp *service.WorkerPolicyService) CoordinatorOption {
 // WithRuntimeResolver enables direct runtime deployments for resolvable targets.
 func WithRuntimeResolver(resolver runtimeadapter.RuntimeResolver) CoordinatorOption {
 	return func(c *Coordinator) { c.runtimeResolver = resolver }
+}
+
+// WithDeploymentUnits enables explicit deployment-unit routing for deploy intents.
+func WithDeploymentUnits(units repository.DeploymentUnitRepository) CoordinatorOption {
+	return func(c *Coordinator) { c.deploymentUnits = units }
 }
 
 // Shutdown cancels all in-flight poll goroutines and waits for them to finish.
@@ -134,8 +144,18 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		resolvedImage = resolvedImage + ":" + tag
 	}
 
-	if c.shouldUseDirectRuntimeDeployment(svc, artifact) {
+	unit, err := c.resolveDeploymentUnit(ctx, intent, env)
+	if err != nil {
+		return fmt.Errorf("resolving deployment unit: %w", err)
+	}
+	if unit != nil && !deploymentUnitDispatchesViaLoom(unit) {
 		return c.executeDirectRuntimeDeployment(ctx, intentID, intent.DeploymentUnitID, svc, env, resolvedImage)
+	}
+	if unit == nil && c.shouldUseDirectRuntimeDeployment(svc, artifact) {
+		return c.executeDirectRuntimeDeployment(ctx, intentID, intent.DeploymentUnitID, svc, env, resolvedImage)
+	}
+	if c.loom == nil {
+		return fmt.Errorf("loom client is not configured")
 	}
 
 	// Select a worker using the environment's worker policy (if configured).
@@ -211,6 +231,48 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}()
 
 	return nil
+}
+
+func deploymentUnitDispatchesViaLoom(unit *domain.DeploymentUnit) bool {
+	if unit == nil || unit.RuntimeConfig == nil {
+		return false
+	}
+	raw, ok := unit.RuntimeConfig["dispatch_mode"]
+	if !ok {
+		raw, ok = unit.RuntimeConfig["execution_backend"]
+	}
+	if !ok {
+		return false
+	}
+	mode, ok := raw.(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), "loom")
+}
+
+func (c *Coordinator) resolveDeploymentUnit(
+	ctx context.Context,
+	intent *domain.DeploymentIntent,
+	env *domain.Environment,
+) (*domain.DeploymentUnit, error) {
+	if intent == nil || env == nil {
+		return nil, fmt.Errorf("deployment intent and environment are required")
+	}
+	if intent.DeploymentUnitID == nil || *intent.DeploymentUnitID == uuid.Nil {
+		return nil, nil
+	}
+	if c.deploymentUnits == nil {
+		return nil, fmt.Errorf("deployment unit repository is required for explicit unit %s", *intent.DeploymentUnitID)
+	}
+	unit, err := c.deploymentUnits.GetByID(ctx, *intent.DeploymentUnitID)
+	if err != nil {
+		return nil, err
+	}
+	if unit == nil {
+		return nil, fmt.Errorf("deployment unit %s not found", *intent.DeploymentUnitID)
+	}
+	if unit.EnvironmentID != env.ID {
+		return nil, fmt.Errorf("deployment unit %q belongs to environment %s, not %s", unit.Key, unit.EnvironmentID, env.ID)
+	}
+	return unit, nil
 }
 
 func (c *Coordinator) failDeploymentRunForDispatchAdmission(ctx context.Context, intentID uuid.UUID, workerPubkey string, decision service.WorkerAdmissionDecision) error {
@@ -401,6 +463,10 @@ func (c *Coordinator) SetupEventHandlers(pub events.Publisher) {
 		if err != nil {
 			return
 		}
+		if !c.markExecutionActive(id) {
+			return
+		}
+		defer c.clearExecutionActive(id)
 
 		intent, err := c.registry.GetDeploymentIntent(ctx, id)
 		if err != nil {
@@ -423,8 +489,23 @@ func (c *Coordinator) SetupEventHandlers(pub events.Publisher) {
 		}
 	}
 
-	// Auto-execute explicitly approved intents and intents that are born approved
-	// (for example, non-protected environments).
-	pub.Subscribe(events.EventDeploymentIntentCreated, autoExecute)
+	// CreateDeploymentIntent publishes an approved event for born-approved intents,
+	// so the approval event is the single auto-execute trigger.
 	pub.Subscribe(events.EventDeploymentIntentApproved, autoExecute)
+}
+
+func (c *Coordinator) markExecutionActive(intentID uuid.UUID) bool {
+	c.executionMu.Lock()
+	defer c.executionMu.Unlock()
+	if _, ok := c.activeExecutions[intentID]; ok {
+		return false
+	}
+	c.activeExecutions[intentID] = struct{}{}
+	return true
+}
+
+func (c *Coordinator) clearExecutionActive(intentID uuid.UUID) {
+	c.executionMu.Lock()
+	defer c.executionMu.Unlock()
+	delete(c.activeExecutions, intentID)
 }
