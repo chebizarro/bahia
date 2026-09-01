@@ -102,6 +102,59 @@ func TestBootstrapperTimeoutFallsBackToLowerTier(t *testing.T) {
 	require.Equal(t, 4, cache.count())
 }
 
+func TestBootstrapperLiveCatchupCompletesAfterFirstRelayEOSE(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	cache := &bootstrapApplyRecorder{}
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
+		require.Len(t, filters, 1)
+		require.Len(t, filters[0].Kinds, 1)
+		kind := int(filters[0].Kinds[0])
+		if kind != testKindTier1Live {
+			return scriptedMergedSubscription(ctx, scriptedBootstrapSubscription{
+				events: []*gonostr.Event{signedBootstrapEvent(t, kind, "snapshot")},
+				eose:   true,
+			}), nil
+		}
+
+		subCtx, cancel := context.WithCancel(ctx)
+		events := make(chan *gonostr.Event, 1)
+		relayEOSE := make(chan RelayEOSE, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			events <- signedBootstrapEvent(t, testKindTier1Live, "live")
+			relayEOSE <- RelayEOSE{RelayURL: "wss://fast.example"}
+			<-subCtx.Done()
+		}()
+		t.Cleanup(func() { <-done })
+		return &MergedSubscription{
+			Events:            events,
+			EndOfStoredEvents: make(chan struct{}),
+			RelayEOSE:         relayEOSE,
+			Closed:            make(chan RelayClosed),
+			closeFn:           cancel,
+		}, nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
+		RequestedTier:   1,
+		SnapshotTimeout: 50 * time.Millisecond,
+		CatchupTimeout:  50 * time.Millisecond,
+	})
+
+	err := bootstrapper.Run(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	require.Equal(t, 1, bootstrapper.ReadyTier())
+	progress := bootstrapper.Progress()
+	require.Equal(t, BootstrapPhaseReady, progress.Phase)
+	require.Equal(t, 3, progress.GroupsComplete)
+	require.Equal(t, 3, cache.count())
+}
+
 func TestBootstrapperNoRelayDataFails(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{

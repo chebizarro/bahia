@@ -191,7 +191,7 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 			b.logger.Warn("bootstrap snapshot filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
 			continue
 		}
-		ok, applied, err := b.runGroup(ctx, group, filters, b.config.SnapshotTimeout)
+		ok, applied, err := b.runGroup(ctx, group, filters, b.config.SnapshotTimeout, true)
 		decodedEvents += applied
 		if err != nil {
 			b.logger.Warn("bootstrap snapshot group failed", zap.String("group", group.Name), zap.Error(err))
@@ -212,7 +212,7 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 			b.logger.Warn("bootstrap live filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
 			continue
 		}
-		ok, applied, err := b.runGroup(ctx, group, filters, b.config.CatchupTimeout)
+		ok, applied, err := b.runGroup(ctx, group, filters, b.config.CatchupTimeout, false)
 		decodedEvents += applied
 		if err != nil {
 			b.logger.Warn("bootstrap live catch-up group failed", zap.String("group", group.Name), zap.Error(err))
@@ -263,7 +263,7 @@ func (b *Bootstrapper) requiredGroupsAtOrBelowRequestedTier() []ReplayGroup {
 	return b.catalog.RequiredGroupsForTier(b.config.RequestedTier)
 }
 
-func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters []gonostr.Filter, timeout time.Duration) (bool, int, error) {
+func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters []gonostr.Filter, timeout time.Duration, waitForAllRelays bool) (bool, int, error) {
 	if err := ctx.Err(); err != nil {
 		return false, 0, err
 	}
@@ -285,6 +285,10 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 			return false, applied, fmt.Errorf("bootstrap group %q timed out waiting for EOSE", group.Name)
 		case <-subscription.EndOfStoredEvents:
 			return true, applied, nil
+		case _, ok := <-subscription.RelayEOSE:
+			if ok && !waitForAllRelays {
+				return true, applied, nil
+			}
 		case closed, ok := <-subscription.Closed:
 			if ok {
 				return false, applied, fmt.Errorf("relay closed bootstrap group %q subscription %q: %s", group.Name, closed.SubscriptionID, closed.Reason)
