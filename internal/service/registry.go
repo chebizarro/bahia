@@ -559,6 +559,7 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 	state := &domain.EnvironmentServiceState{
 		ServiceID:           di.ServiceID,
 		EnvironmentID:       di.EnvironmentID,
+		DeploymentUnitID:    di.DeploymentUnitID,
 		DesiredArtifactID:   &di.ArtifactID,
 		DesiredIntentID:     &di.ID,
 		DesiredRuntimeState: di.DesiredState,

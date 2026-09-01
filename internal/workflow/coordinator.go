@@ -135,7 +135,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}
 
 	if c.shouldUseDirectRuntimeDeployment(svc, artifact) {
-		return c.executeDirectRuntimeDeployment(ctx, intentID, svc, env, resolvedImage)
+		return c.executeDirectRuntimeDeployment(ctx, intentID, intent.DeploymentUnitID, svc, env, resolvedImage)
 	}
 
 	// Select a worker using the environment's worker policy (if configured).
@@ -183,6 +183,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	now := time.Now().UTC()
 	run := &domain.DeploymentRun{
 		DeploymentIntentID: intentID,
+		DeploymentUnitID:   intent.DeploymentUnitID,
 		LoomJobID:          jobEventID,
 		WorkerPubkey:       workerPubkey,
 		Status:             domain.RunStatusQueued,
@@ -257,7 +258,7 @@ func (c *Coordinator) shouldUseDirectRuntimeDeployment(svc *domain.Service, arti
 	return isLocalImageRepo(artifact.ImageRepo)
 }
 
-func (c *Coordinator) executeDirectRuntimeDeployment(ctx context.Context, intentID uuid.UUID, svc *domain.Service, env *domain.Environment, image string) error {
+func (c *Coordinator) executeDirectRuntimeDeployment(ctx context.Context, intentID uuid.UUID, deploymentUnitID *uuid.UUID, svc *domain.Service, env *domain.Environment, image string) error {
 	rt, err := c.runtimeResolver.Resolve(svc, env)
 	if err != nil {
 		return fmt.Errorf("resolving runtime for direct deployment: %w", err)
@@ -266,6 +267,7 @@ func (c *Coordinator) executeDirectRuntimeDeployment(ctx context.Context, intent
 	now := time.Now().UTC()
 	run := &domain.DeploymentRun{
 		DeploymentIntentID: intentID,
+		DeploymentUnitID:   deploymentUnitID,
 		LoomJobID:          "runtime:direct",
 		Status:             domain.RunStatusQueued,
 		StartedAt:          &now,

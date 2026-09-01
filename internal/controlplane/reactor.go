@@ -699,6 +699,9 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	}
 
 	logger = logger.With("service_id", req.ServiceID, "environment_id", req.EnvironmentID)
+	if req.DeploymentUnitID != nil {
+		logger = logger.With("deployment_unit_id", req.DeploymentUnitID.String())
+	}
 	logger.Info("creating deployment intent")
 
 	// Validate that service, environment, and artifact exist
@@ -736,12 +739,6 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
-	if r.runtimeLifecycle == nil {
-		logger.Error("runtime lifecycle service is not configured")
-		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
-		return
-	}
-
 	// Create run tracker
 	run := &DeploymentRun{
 		ID:              uuid.New(),
@@ -761,6 +758,42 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 
 	// Publish status update
 	r.publishStatus(ctx, event, "creating_intent", "Creating deployment intent")
+
+	if req.DeploymentUnitID != nil {
+		intent := &domain.DeploymentIntent{
+			ID:               uuid.New(),
+			ServiceID:        req.ServiceID,
+			EnvironmentID:    req.EnvironmentID,
+			DeploymentUnitID: req.DeploymentUnitID,
+			ArtifactID:       req.ArtifactID,
+			RequestedBy:      event.PubKey.Hex(),
+			SourceKind:       domain.SourceKindEventTriggered,
+			Metadata:         map[string]any{"nostr_event_id": event.ID.Hex()},
+		}
+		if err := r.registry.CreateDeploymentIntent(ctx, intent); err != nil {
+			logger.Error("failed to create deployment intent", "error", err)
+			run.Status = "failed"
+			run.Error = err.Error()
+			now := time.Now()
+			run.CompletedAt = &now
+			r.publishError(ctx, event, "intent_error", err.Error())
+			return
+		}
+		run.IntentID = &intent.ID
+		run.CurrentStep = "intent_created"
+		run.Status = "completed"
+		now := time.Now()
+		run.CompletedAt = &now
+		logger.Info("deployment intent created", "intent_id", intent.ID)
+		r.publishDeploymentResult(ctx, event, intent)
+		return
+	}
+
+	if r.runtimeLifecycle == nil {
+		logger.Error("runtime lifecycle service is not configured")
+		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
+		return
+	}
 
 	// Create deployment intent
 	desiredState, err := r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID)
@@ -2303,9 +2336,10 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 
 	// Parse from content JSON
 	var content struct {
-		ServiceID     string `json:"service_id"`
-		EnvironmentID string `json:"environment_id"`
-		ArtifactID    string `json:"artifact_id"`
+		ServiceID        string `json:"service_id"`
+		EnvironmentID    string `json:"environment_id"`
+		ArtifactID       string `json:"artifact_id"`
+		DeploymentUnitID string `json:"deployment_unit_id"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		return nil, fmt.Errorf("invalid JSON content: %w", err)
@@ -2341,13 +2375,28 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 		return nil, fmt.Errorf("invalid artifact_id: %w", err)
 	}
 
+	if strings.TrimSpace(content.DeploymentUnitID) != "" {
+		deploymentUnitID, err := uuid.Parse(content.DeploymentUnitID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid deployment_unit_id: %w", err)
+		}
+		req.DeploymentUnitID = &deploymentUnitID
+	} else if tagValue := strings.TrimSpace(tagValueNostr(event.Tags, "deployment_unit")); tagValue != "" {
+		deploymentUnitID, err := uuid.Parse(tagValue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid deployment_unit tag: %w", err)
+		}
+		req.DeploymentUnitID = &deploymentUnitID
+	}
+
 	return &req, nil
 }
 
 type deployRequest struct {
-	ServiceID     uuid.UUID
-	EnvironmentID uuid.UUID
-	ArtifactID    uuid.UUID
+	ServiceID        uuid.UUID
+	EnvironmentID    uuid.UUID
+	ArtifactID       uuid.UUID
+	DeploymentUnitID *uuid.UUID
 }
 
 // --- Event Publishing ---

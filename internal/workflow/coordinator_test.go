@@ -774,6 +774,44 @@ func TestExecuteDeployment_UsesDirectRuntimeForLocalComposeArtifact(t *testing.T
 	}
 }
 
+func TestExecuteDeployment_CopiesDeploymentUnitOntoLoomRun(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	deploymentUnitID := uuid.New()
+
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &deploymentUnitID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(context.Background(), di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(context.Background(), di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	if stubLoom.submitCalls != 1 {
+		t.Fatalf("expected one Loom submit, got %d", stubLoom.submitCalls)
+	}
+	if len(runRepo.runs) != 1 {
+		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
+	}
+	for _, run := range runRepo.runs {
+		if run.DeploymentUnitID == nil || *run.DeploymentUnitID != deploymentUnitID {
+			t.Fatalf("run deployment unit = %v, want %s", run.DeploymentUnitID, deploymentUnitID)
+		}
+	}
+}
+
 func TestExecuteDeployment_DispatchAdmissionRejectsLatestWorkerPressure(t *testing.T) {
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
