@@ -460,7 +460,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	migrationRunner := nostrmigration.NewRunner(migrationEventRepo, migrationRelayPublisher{pool: relayPool}, relayPool, nostrmigration.Config{
 		PrivateKey:    cfg.Nostr.PrivateKey,
-		RelayBackfill: len(relayURLs) > 0 && strings.TrimSpace(cfg.Nostr.PrivateKey) != "",
+		RelayBackfill: false,
 	}, logger)
 	bgManager.RegisterWithOptions(&orderedStartupRunner{runners: []BackgroundRunner{
 		migrationRunner,
