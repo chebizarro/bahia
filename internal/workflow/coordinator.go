@@ -289,7 +289,14 @@ func (c *Coordinator) resolveDeploymentUnit(
 		return nil, fmt.Errorf("deployment intent and environment are required")
 	}
 	if intent.DeploymentUnitID == nil || *intent.DeploymentUnitID == uuid.Nil {
-		return nil, nil
+		unit, err := domain.NewImplicitDefaultDeploymentUnit(env)
+		if err != nil {
+			return nil, err
+		}
+		if !deploymentUnitDispatchesViaLoom(unit) {
+			return nil, nil
+		}
+		return unit, nil
 	}
 	if c.deploymentUnits == nil {
 		return nil, fmt.Errorf("deployment unit repository is required for explicit unit %s", *intent.DeploymentUnitID)
