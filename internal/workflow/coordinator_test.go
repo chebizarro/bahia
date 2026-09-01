@@ -1540,6 +1540,67 @@ func TestExecuteDeployment_DockerUnitUsesManagedEndpointWithoutLoom(t *testing.T
 	}
 }
 
+func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID:            uuid.New(),
+		EnvironmentID: env.ID,
+		Key:           "max-firecracker",
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"dispatch_mode": "loom"},
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(unitRepo, lifecycle),
+	)
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(ctx, di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	coord.Shutdown(time.Second)
+	if lifecycle.unit != nil {
+		t.Fatalf("Loom dispatch unit must not use direct runtime lifecycle: %#v", lifecycle.unit)
+	}
+	if stubLoom.submitCalls != 1 {
+		t.Fatalf("expected Loom dispatch unit to submit one job, got %d", stubLoom.submitCalls)
+	}
+	if stubLoom.lastJobReq.Service != svc.Name || stubLoom.lastJobReq.Environment != env.Name {
+		t.Fatalf("unexpected Loom job request: %#v", stubLoom.lastJobReq)
+	}
+	if len(runRepo.runs) != 1 {
+		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
+	}
+	for _, run := range runRepo.runs {
+		if run.LoomJobID == "runtime:direct" || run.LoomJobID == "" {
+			t.Fatalf("expected real Loom job id, got run %#v", run)
+		}
+		if run.DeploymentUnitID == nil || *run.DeploymentUnitID != unit.ID {
+			t.Fatalf("expected run to preserve deployment unit identity, got %#v", run.DeploymentUnitID)
+		}
+	}
+}
+
 func TestExecuteDeployment_PublicRouteFailureRestoresPreviousApplication(t *testing.T) {
 	ctx := context.Background()
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()

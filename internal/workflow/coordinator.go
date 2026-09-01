@@ -213,11 +213,14 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	if err != nil {
 		return fmt.Errorf("resolving deployment unit: %w", err)
 	}
-	if unit != nil {
+	if unit != nil && !deploymentUnitDispatchesViaLoom(unit) {
 		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
 	}
 	if intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
 		return fmt.Errorf("signed public routes require a Bahia-managed Compose deployment unit")
+	}
+	if c.loom == nil {
+		return fmt.Errorf("loom client is not configured")
 	}
 
 	// Select a worker using the environment's worker policy (if configured).
@@ -294,6 +297,21 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	c.startCompletionAwait(run)
 
 	return nil
+}
+
+func deploymentUnitDispatchesViaLoom(unit *domain.DeploymentUnit) bool {
+	if unit == nil || unit.RuntimeConfig == nil {
+		return false
+	}
+	raw, ok := unit.RuntimeConfig["dispatch_mode"]
+	if !ok {
+		raw, ok = unit.RuntimeConfig["execution_backend"]
+	}
+	if !ok {
+		return false
+	}
+	mode, ok := raw.(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), "loom")
 }
 
 func (c *Coordinator) failDeploymentRunForDispatchAdmission(ctx context.Context, intentID uuid.UUID, workerPubkey string, decision service.WorkerAdmissionDecision) error {
