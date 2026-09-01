@@ -171,6 +171,7 @@ func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID,
 type fakeEncryptedRegistryMutations struct {
 	createdServices []*domain.Service
 	environments    map[uuid.UUID]*domain.Environment
+	artifacts       []*domain.Artifact
 }
 
 func (r *fakeEncryptedRegistryMutations) CreateService(_ context.Context, svc *domain.Service) error {
@@ -206,6 +207,11 @@ func (r *fakeEncryptedRegistryMutations) DeleteEnvironment(_ context.Context, id
 		return repository.ErrNotFound
 	}
 	delete(r.environments, id)
+	return nil
+}
+func (r *fakeEncryptedRegistryMutations) RegisterArtifact(_ context.Context, artifact *domain.Artifact) error {
+	copy := *artifact
+	r.artifacts = append(r.artifacts, &copy)
 	return nil
 }
 
@@ -442,6 +448,37 @@ func TestEncryptedRouteHandlers_DeleteEnvironmentContextVMMethodDeletesRegistryE
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["environment_id"] != envID.String() || payload["status"] != "deleted" {
 		t.Fatalf("unexpected delete response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_RegisterArtifactContextVMMethodRegistersArtifact(t *testing.T) {
+	buildID := uuid.New()
+	serviceID := uuid.New()
+	sizeBytes := int64(12345)
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodArtifactRegister, map[string]any{
+		"build_id": buildID.String(), "service_id": serviceID.String(), "image_repo": "registry.example/payments", "image_tag": "v1",
+		"image_digest": "sha256:abc123", "manifest_media_type": "application/vnd.oci.image.manifest.v1+json", "size_bytes": sizeBytes,
+		"sbom_url": "https://example.test/sbom.json", "signature_ref": "cosign://sig", "scan_status": "clean",
+		"metadata": map[string]any{"source": "test"},
+	}))
+
+	if len(registry.artifacts) != 1 {
+		t.Fatalf("registered artifacts = %d, want 1", len(registry.artifacts))
+	}
+	artifact := registry.artifacts[0]
+	if artifact.BuildID != buildID || artifact.ServiceID != serviceID || artifact.ImageRepo != "registry.example/payments" || artifact.ScanStatus != domain.ScanStatusClean {
+		t.Fatalf("unexpected registered artifact: %#v", artifact)
+	}
+	if artifact.SizeBytes == nil || *artifact.SizeBytes != sizeBytes {
+		t.Fatalf("unexpected size_bytes: %#v", artifact.SizeBytes)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["artifact_id"] == "" || payload["status"] != "registered" {
+		t.Fatalf("unexpected register response: %#v", payload)
 	}
 }
 

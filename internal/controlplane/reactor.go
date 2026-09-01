@@ -712,7 +712,8 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		r.publishError(ctx, event, "validation_error", fmt.Sprintf("service not found: %v", err))
 		return
 	}
-	if _, err := r.registry.GetEnvironment(ctx, req.EnvironmentID); err != nil {
+	env, err := r.registry.GetEnvironment(ctx, req.EnvironmentID)
+	if err != nil {
 		logger.Error("environment not found", "error", err)
 		r.publishError(ctx, event, "validation_error", fmt.Sprintf("environment not found: %v", err))
 		return
@@ -761,7 +762,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	// Publish status update
 	r.publishStatus(ctx, event, "creating_intent", "Creating deployment intent")
 
-	if req.DeploymentUnitID != nil {
+	if req.DeploymentUnitID != nil || environmentDispatchesViaLoom(env) {
 		intent := &domain.DeploymentIntent{
 			ID:               uuid.New(),
 			ServiceID:        req.ServiceID,
@@ -2400,6 +2401,21 @@ type deployRequest struct {
 	EnvironmentID    uuid.UUID
 	ArtifactID       uuid.UUID
 	DeploymentUnitID *uuid.UUID
+}
+
+func environmentDispatchesViaLoom(env *domain.Environment) bool {
+	if env == nil || env.RuntimeConfig == nil {
+		return false
+	}
+	raw, ok := env.RuntimeConfig["dispatch_mode"]
+	if !ok {
+		raw, ok = env.RuntimeConfig["execution_backend"]
+	}
+	if !ok {
+		return false
+	}
+	mode, ok := raw.(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), "loom")
 }
 
 // --- Event Publishing ---

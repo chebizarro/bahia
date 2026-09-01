@@ -151,6 +151,33 @@ func TestPollJobStatusFromWorker_ValidTerminalResultCompletes(t *testing.T) {
 	assertAuthor(t, pool.filters[1].Authors, workerPK, "result filter")
 }
 
+func TestPollJobStatusFromWorker_AcceptsFractionalDurationResult(t *testing.T) {
+	clientSK, _ := generatedKeyPair(t)
+	workerSK, workerPK := generatedKeyPair(t)
+	jobID := strings.Repeat("a", 64)
+
+	events := make(chan *nostr.Event, 1)
+	sub := testSubscription(events, nil, nil, nil)
+	client, _, clientPK := testClient(t, sub, clientSK)
+	events <- signLoomEvent(t, workerSK, KindJobResult, time.Now().UTC(), nostr.Tags{
+		{"e", jobID},
+		{"p", clientPK},
+		{"success", "true"},
+		{"exit_code", "0"},
+		{"duration", "5.727310148"},
+		{"stdout", "https://blossom.example/stdout"},
+		{"stderr", "https://blossom.example/stderr"},
+	}, "")
+
+	status, err := client.PollJobStatusFromWorker(context.Background(), jobID, workerPK)
+	if err != nil {
+		t.Fatalf("PollJobStatusFromWorker() error = %v", err)
+	}
+	if status.Duration == nil || *status.Duration != 6 {
+		t.Fatalf("duration = %v, want 6", status.Duration)
+	}
+}
+
 func TestPollJobStatusFromWorker_DropsInvalidEventsBeforeResult(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	workerSK, workerPK := generatedKeyPair(t)

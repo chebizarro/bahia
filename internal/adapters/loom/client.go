@@ -14,6 +14,7 @@ package loom
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -618,7 +619,7 @@ func (c *Client) validateJobEvent(ev *nostr.Event, jobEventID string, expectedWo
 		if _, err := strconv.Atoi(getTagValue(ev.Tags, "exit_code")); err != nil {
 			return fmt.Errorf("invalid exit_code tag: %w", err)
 		}
-		if _, err := strconv.Atoi(getTagValue(ev.Tags, "duration")); err != nil {
+		if _, err := parseDurationSecondsTag(getTagValue(ev.Tags, "duration")); err != nil {
 			return fmt.Errorf("invalid duration tag: %w", err)
 		}
 	}
@@ -830,7 +831,7 @@ func parseJobResult(ev *nostr.Event, jobEventID string) *JobStatus {
 		}
 	}
 	if s := getTagValue(ev.Tags, "duration"); s != "" {
-		if dur, err := strconv.Atoi(s); err == nil {
+		if dur, err := parseDurationSecondsTag(s); err == nil {
 			result.Duration = &dur
 		}
 	}
@@ -840,6 +841,24 @@ func parseJobResult(ev *nostr.Event, jobEventID string) *JobStatus {
 	result.Error = getTagValue(ev.Tags, "error")
 
 	return result
+}
+
+func parseDurationSecondsTag(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return seconds, nil
+	}
+	seconds, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, err
+	}
+	if seconds < 0 {
+		return 0, fmt.Errorf("negative duration")
+	}
+	return int(math.Ceil(seconds)), nil
 }
 
 // getTagValue returns the first value for the given tag key, or "".

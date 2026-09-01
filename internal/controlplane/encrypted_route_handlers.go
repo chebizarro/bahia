@@ -58,6 +58,7 @@ type RegistryMutationBackend interface {
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
 	DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error
+	RegisterArtifact(ctx context.Context, artifact *domain.Artifact) error
 }
 
 type EncryptedRouteHandlersConfig struct {
@@ -129,6 +130,7 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentCreate, h.CreateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
+	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegister, h.RegisterArtifact)
 }
 
 type encryptedRouteHandler = EncryptedRequestHandler
@@ -174,6 +176,20 @@ type encryptedEnvironmentUpdatePayload struct {
 type encryptedEnvironmentDeletePayload struct {
 	ID    string `json:"id"`
 	Force bool   `json:"force,omitempty"`
+}
+
+type encryptedArtifactRegisterPayload struct {
+	BuildID           string         `json:"build_id"`
+	ServiceID         string         `json:"service_id"`
+	ImageRepo         string         `json:"image_repo"`
+	ImageTag          string         `json:"image_tag"`
+	ImageDigest       string         `json:"image_digest"`
+	ManifestMediaType string         `json:"manifest_media_type,omitempty"`
+	SizeBytes         *int64         `json:"size_bytes,omitempty"`
+	SBOMURL           string         `json:"sbom_url,omitempty"`
+	SignatureRef      string         `json:"signature_ref,omitempty"`
+	ScanStatus        string         `json:"scan_status,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
 func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -322,6 +338,48 @@ func (h *EncryptedRouteHandlers) DeleteEnvironment(ctx context.Context, request 
 		return nil, fmt.Errorf("failed to delete environment: %w", err)
 	}
 	return map[string]any{"status": "deleted", "environment_id": id.String()}, nil
+}
+
+func (h *EncryptedRouteHandlers) RegisterArtifact(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("artifact registry mutation handling is not configured")
+	}
+	var payload encryptedArtifactRegisterPayload
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	buildID, err := parseEncryptedUUID(payload.BuildID, "build ID")
+	if err != nil {
+		return nil, err
+	}
+	serviceID, err := parseEncryptedUUID(payload.ServiceID, "service ID")
+	if err != nil {
+		return nil, err
+	}
+	scanStatus := domain.ScanStatus(strings.TrimSpace(payload.ScanStatus))
+	if scanStatus == "" {
+		scanStatus = domain.ScanStatusUnknown
+	}
+	if err := domain.ValidateScanStatus(scanStatus); err != nil {
+		return nil, fmt.Errorf("invalid scan_status: %w", err)
+	}
+	artifact := &domain.Artifact{
+		BuildID:           buildID,
+		ServiceID:         serviceID,
+		ImageRepo:         strings.TrimSpace(payload.ImageRepo),
+		ImageTag:          strings.TrimSpace(payload.ImageTag),
+		ImageDigest:       strings.TrimSpace(payload.ImageDigest),
+		ManifestMediaType: strings.TrimSpace(payload.ManifestMediaType),
+		SizeBytes:         payload.SizeBytes,
+		SBOMURL:           strings.TrimSpace(payload.SBOMURL),
+		SignatureRef:      strings.TrimSpace(payload.SignatureRef),
+		ScanStatus:        scanStatus,
+		Metadata:          payload.Metadata,
+	}
+	if err := h.registry.RegisterArtifact(ctx, artifact); err != nil {
+		return nil, fmt.Errorf("failed to register artifact: %w", err)
+	}
+	return map[string]any{"status": "registered", "artifact": artifact, "artifact_id": artifact.ID.String()}, nil
 }
 
 func parseLoomWorkerSelector(raw json.RawMessage) (map[string]any, error) {
