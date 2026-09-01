@@ -452,6 +452,12 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 	if !reqErr.RequestAccepted || reqErr.PublishedRelays != 1 {
 		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want accepted abort", reqErr.RequestAccepted, reqErr.PublishedRelays)
 	}
+	if reqErr.RequestEventID == "" || reqErr.DTag == "" || reqErr.Method != "service/action" {
+		t.Fatalf("missing post-publish diagnostics: event=%q d=%q method=%q", reqErr.RequestEventID, reqErr.DTag, reqErr.Method)
+	}
+	if !strings.Contains(reqErr.Error(), "request_event_id="+reqErr.RequestEventID) || !strings.Contains(reqErr.Error(), "d="+reqErr.DTag) {
+		t.Fatalf("error = %v, want request diagnostics", reqErr)
+	}
 	if !errors.Is(reqErr, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled cause", reqErr)
 	}

@@ -48,6 +48,9 @@ type ControlPlaneRequestError struct {
 	Phase           string
 	RequestAccepted bool
 	PublishedRelays int
+	RequestEventID  string
+	DTag            string
+	Method          string
 	Cause           error
 }
 
@@ -62,7 +65,23 @@ func (e *ControlPlaneRequestError) Error() string {
 	if e.Cause == nil {
 		return phase
 	}
-	return fmt.Sprintf("%s: %v", phase, e.Cause)
+	details := make([]string, 0, 3)
+	if e.Method != "" {
+		details = append(details, "method="+e.Method)
+	}
+	if e.RequestEventID != "" {
+		details = append(details, "request_event_id="+e.RequestEventID)
+	}
+	if e.DTag != "" {
+		details = append(details, "d="+e.DTag)
+	}
+	if e.PublishedRelays > 0 {
+		details = append(details, fmt.Sprintf("published_relays=%d", e.PublishedRelays))
+	}
+	if len(details) == 0 {
+		return fmt.Sprintf("%s: %v", phase, e.Cause)
+	}
+	return fmt.Sprintf("%s: %v (%s)", phase, e.Cause, strings.Join(details, " "))
 }
 
 func (e *ControlPlaneRequestError) Unwrap() error {
@@ -661,7 +680,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: ctx.Err()}
+			return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, ctx.Err())
 		case <-eose:
 			eose = nil
 		case relayClosed, ok := <-closed:
@@ -674,7 +693,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				reason = "subscription closed"
 			}
 			if relayClosed.RelayURL == "" {
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result: %s", reason)}
+				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("reply subscription closed before terminal result: %s", reason))
 			}
 			if nostrpool.IsAuthRequiredReason(reason) {
 				if _, attempted := authAttempted[relayClosed.RelayURL]; !attempted {
@@ -683,7 +702,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 						sub.Close()
 						resub, subErr := c.transport.SubscribeAllWithEOSE(ctx, filters)
 						if subErr != nil {
-							return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr)}
+							return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr))
 						}
 						sub = resub
 						eose = sub.EndOfStoredEvents
@@ -697,11 +716,11 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			closedRelays[relayClosed.RelayURL] = reason
 			pendingRelays = removeRelayURL(pendingRelays, relayClosed.RelayURL)
 			if len(pendingRelays) == 0 {
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays))}
+				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays)))
 			}
 		case reply, ok := <-sub.Events:
 			if !ok {
-				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result")}
+				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("reply subscription closed before terminal result"))
 			}
 			if reply == nil || reply.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !validSignedEvent(reply) || !correlatesTo(reply, event.ID.Hex(), c.pubkey) {
 				continue
@@ -723,12 +742,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
 				}
-				return nil, &ControlPlaneRequestError{
-					Phase:           "await operator ContextVM result",
-					RequestAccepted: true,
-					PublishedRelays: published,
-					Cause:           &ContextVMRemoteError{Code: rpc.Error.Code, Message: message},
-				}
+				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message})
 			}
 			if rpc.Result == nil {
 				continue
@@ -744,6 +758,18 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			unwrapSuccessfulContextVMResult(&synthetic)
 			return &synthetic, nil
 		}
+	}
+}
+
+func (c *OperatorControlPlaneClient) acceptedRequestError(phase, method, requestEventID, dTag string, published int, cause error) *ControlPlaneRequestError {
+	return &ControlPlaneRequestError{
+		Phase:           phase,
+		RequestAccepted: true,
+		PublishedRelays: published,
+		RequestEventID:  requestEventID,
+		DTag:            dTag,
+		Method:          method,
+		Cause:           cause,
 	}
 }
 
