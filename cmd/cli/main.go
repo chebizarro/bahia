@@ -313,8 +313,9 @@ func deployCommands() *cobra.Command {
 			envID, _ := cmd.Flags().GetString("environment")
 			artifactID, _ := cmd.Flags().GetString("artifact")
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runDeploymentIntentNostr(cmd, serviceID, envID, artifactID, requestedBy)
+			result, err := runDeploymentIntentNostr(cmd, serviceID, envID, artifactID, requestedBy, idempotencyKey)
 			if err != nil {
 				return err
 			}
@@ -333,6 +334,7 @@ func deployCommands() *cobra.Command {
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
 	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
+	deployCmd.Flags().String("idempotency-key", "", "Optional Nostr d tag for idempotency/correlation")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 	_ = deployCmd.MarkFlagRequired("artifact")

@@ -134,6 +134,39 @@ func TestOperatorEnvironmentMutationsValidateRequiredFieldsBeforePublish(t *test
 	}
 }
 
+func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"intent_id": "intent-1", "status": "submitted"})
+		return 1, nil
+	}
+
+	result, err := client.CreateDeploymentIntentNostr(context.Background(), "svc-1", "env-1", "artifact-1", "ignored", "deploy-retry-1", nil)
+	if err != nil {
+		t.Fatalf("CreateDeploymentIntentNostr() error = %v", err)
+	}
+	if result.IntentID != "intent-1" || result.Status != "submitted" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	published := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.Method != controlplane.ContextVMMethodServiceDeploy {
+		t.Fatalf("method = %q, want %q", rpc.Method, controlplane.ContextVMMethodServiceDeploy)
+	}
+	if got := firstTagValue(published.Tags, "d"); got != "deploy-retry-1" {
+		t.Fatalf("d tag = %q, want deploy-retry-1", got)
+	}
+	if got, _ := rpc.Params["idempotency_key"].(string); got != "deploy-retry-1" {
+		t.Fatalf("idempotency_key = %q, want deploy-retry-1", got)
+	}
+	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != "deploy-retry-1" {
+		t.Fatalf("progress token = %#v, want deploy-retry-1", rpc.Params["_meta"])
+	}
+}
+
 func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesContextVMProgressResultDedup(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()

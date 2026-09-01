@@ -400,10 +400,11 @@ func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Conte
 }
 
 // CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
-func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, artifactID, requestedBy string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, artifactID, requestedBy, idempotencyKey string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
 	serviceID = strings.TrimSpace(serviceID)
 	envID = strings.TrimSpace(envID)
 	artifactID = strings.TrimSpace(artifactID)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if serviceID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
 	}
@@ -418,7 +419,12 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 	// but never serialize caller-provided attribution.
 	_ = requestedBy
 	payload := map[string]any{"service_id": serviceID, "environment_id": envID, "artifact_id": artifactID}
-	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeploy, Tags: nostr.Tags{{"service", serviceID}, {"environment", envID}, {"artifact", artifactID}}, Payload: payload}, onStatus)
+	tags := nostr.Tags{{"service", serviceID}, {"environment", envID}, {"artifact", artifactID}}
+	if idempotencyKey != "" {
+		payload["idempotency_key"] = idempotencyKey
+		tags = append(nostr.Tags{{"d", idempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeploy, Tags: tags, Payload: payload}, onStatus)
 	if err != nil {
 		return nil, err
 	}
