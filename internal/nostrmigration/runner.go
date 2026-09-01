@@ -199,7 +199,8 @@ func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *
 				continue
 			}
 			if err := validateRelayBackfillEvent(ev, time.Now().UTC(), r.config.BackfillSince, until); err != nil {
-				return count, oldest, fmt.Errorf("validate relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
+				r.logger.Warn("skipping invalid relay legacy event during migration backfill", zap.String("event_id", nostrutil.EventIDHex(ev)), zap.Error(err))
+				continue
 			}
 			count++
 			createdAt := ev.CreatedAt.Time().UTC()

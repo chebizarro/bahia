@@ -271,6 +271,9 @@ func hasLegacyWorkerEvidence(kind int, tagsJSON []byte, content string) bool {
 func buildManifest() map[int]Disposition {
 	m := map[int]Disposition{}
 	addIntent := func(kind int, domain, op string) {
+		if kind == kinds.ContextVMMessage {
+			return
+		}
 		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalContextVMMessage, Layer: LayerIntent, Domain: domain, Operation: op, Method: domain + "/" + op, Schema: "bahia.intent." + domain + "." + op + ".v1", DTagPrefix: domain}
 	}
 	addEncryptedIntent := func(kind int, domain, op string) {
@@ -278,6 +281,9 @@ func buildManifest() map[int]Disposition {
 		m[kind] = d
 	}
 	addDelete := func(kind int, domain, op string) {
+		if kind == kinds.ContextVMMessage {
+			return
+		}
 		m[kind] = Disposition{LegacyKind: kind, CanonicalKind: CanonicalNIP09Delete, Layer: LayerIntent, Domain: domain, Operation: op, Schema: "bahia.delete." + domain + ".v1", DTagPrefix: domain, Delete: true}
 	}
 	addStatus := func(kind int, domain string) {
