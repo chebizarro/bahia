@@ -2214,6 +2214,7 @@ func canonicalReactorSubscriptionKinds() []int {
 		kinds.ContextVMMessage,
 		kinds.ContextVMGiftWrap,
 		kinds.ContextVMEphemeralGiftWrap,
+		kinds.ArtifactRegister,
 	}
 }
 
