@@ -21,7 +21,7 @@ type cliOperatorClient interface {
 	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
-	CreateDeploymentIntentNostr(context.Context, string, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
+	CreateDeploymentIntentNostr(context.Context, string, string, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	StopServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
@@ -100,13 +100,13 @@ func runEnvironmentUpdateNostr(cmd *cobra.Command, req client.UpdateEnvironmentN
 	return op.UpdateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment update"))
 }
 
-func runDeploymentIntentNostr(cmd *cobra.Command, serviceID, envID, artifactID, requestedBy, idempotencyKey string) (*client.DeploymentCommandResult, error) {
+func runDeploymentIntentNostr(cmd *cobra.Command, serviceID, envID, deploymentUnitID, artifactID, requestedBy, idempotencyKey string) (*client.DeploymentCommandResult, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
 		return nil, err
 	}
 	defer op.Close()
-	return op.CreateDeploymentIntentNostr(cmd.Context(), serviceID, envID, artifactID, requestedBy, idempotencyKey, operatorStatusCallback(cmd, "deploy"))
+	return op.CreateDeploymentIntentNostr(cmd.Context(), serviceID, envID, deploymentUnitID, artifactID, requestedBy, idempotencyKey, operatorStatusCallback(cmd, "deploy"))
 }
 
 func runRollbackIntentNostr(cmd *cobra.Command, req client.RollbackDeploymentNostrRequest) (*client.DeploymentCommandResult, error) {

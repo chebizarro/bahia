@@ -314,12 +314,13 @@ type RollbackDeploymentNostrRequest struct {
 
 // DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
 type DeploymentCommandResult struct {
-	Status        string `json:"status,omitempty"`
-	IntentID      string `json:"intent_id,omitempty"`
-	ServiceID     string `json:"service_id,omitempty"`
-	EnvironmentID string `json:"environment_id,omitempty"`
-	ArtifactID    string `json:"artifact_id,omitempty"`
-	Message       string `json:"message,omitempty"`
+	Status           string `json:"status,omitempty"`
+	IntentID         string `json:"intent_id,omitempty"`
+	ServiceID        string `json:"service_id,omitempty"`
+	EnvironmentID    string `json:"environment_id,omitempty"`
+	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
+	ArtifactID       string `json:"artifact_id,omitempty"`
+	Message          string `json:"message,omitempty"`
 }
 
 // PublishPolicyCreateNostr publishes a signed public PolicyCreate request and returns relay/follow correlation metadata.
@@ -400,9 +401,10 @@ func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Conte
 }
 
 // CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
-func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, artifactID, requestedBy, idempotencyKey string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, deploymentUnitID, artifactID, requestedBy, idempotencyKey string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
 	serviceID = strings.TrimSpace(serviceID)
 	envID = strings.TrimSpace(envID)
+	deploymentUnitID = strings.TrimSpace(deploymentUnitID)
 	artifactID = strings.TrimSpace(artifactID)
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if serviceID == "" {
@@ -420,6 +422,10 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 	_ = requestedBy
 	payload := map[string]any{"service_id": serviceID, "environment_id": envID, "artifact_id": artifactID}
 	tags := nostr.Tags{{"service", serviceID}, {"environment", envID}, {"artifact", artifactID}}
+	if deploymentUnitID != "" {
+		payload["deployment_unit_id"] = deploymentUnitID
+		tags = append(tags, nostr.Tag{"deployment-unit", deploymentUnitID})
+	}
 	if idempotencyKey != "" {
 		payload["idempotency_key"] = idempotencyKey
 		tags = append(nostr.Tags{{"d", idempotencyKey}}, tags...)
@@ -440,6 +446,9 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 	}
 	if result.EnvironmentID == "" {
 		result.EnvironmentID = envID
+	}
+	if result.DeploymentUnitID == "" {
+		result.DeploymentUnitID = deploymentUnitID
 	}
 	if result.ArtifactID == "" {
 		result.ArtifactID = artifactID

@@ -311,11 +311,12 @@ func deployCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
+			deploymentUnitID, _ := cmd.Flags().GetString("deployment-unit")
 			artifactID, _ := cmd.Flags().GetString("artifact")
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runDeploymentIntentNostr(cmd, serviceID, envID, artifactID, requestedBy, idempotencyKey)
+			result, err := runDeploymentIntentNostr(cmd, serviceID, envID, deploymentUnitID, artifactID, requestedBy, idempotencyKey)
 			if err != nil {
 				return err
 			}
@@ -332,6 +333,7 @@ func deployCommands() *cobra.Command {
 	}
 	deployCmd.Flags().String("service", "", "Service ID")
 	deployCmd.Flags().String("environment", "", "Environment ID")
+	deployCmd.Flags().String("deployment-unit", "", "Deployment unit ID for explicit-unit deployments")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
 	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
 	deployCmd.Flags().String("idempotency-key", "", "Optional Nostr d tag for idempotency/correlation")

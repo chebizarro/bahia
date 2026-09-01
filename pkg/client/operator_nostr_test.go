@@ -144,11 +144,11 @@ func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
 		return 1, nil
 	}
 
-	result, err := client.CreateDeploymentIntentNostr(context.Background(), "svc-1", "env-1", "artifact-1", "ignored", "deploy-retry-1", nil)
+	result, err := client.CreateDeploymentIntentNostr(context.Background(), "svc-1", "env-1", "unit-1", "artifact-1", "ignored", "deploy-retry-1", nil)
 	if err != nil {
 		t.Fatalf("CreateDeploymentIntentNostr() error = %v", err)
 	}
-	if result.IntentID != "intent-1" || result.Status != "submitted" {
+	if result.IntentID != "intent-1" || result.Status != "submitted" || result.DeploymentUnitID != "unit-1" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	published := transport.onlyPublished(t)
@@ -161,6 +161,12 @@ func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
 	}
 	if got, _ := rpc.Params["idempotency_key"].(string); got != "deploy-retry-1" {
 		t.Fatalf("idempotency_key = %q, want deploy-retry-1", got)
+	}
+	if got, _ := rpc.Params["deployment_unit_id"].(string); got != "unit-1" {
+		t.Fatalf("deployment_unit_id = %q, want unit-1", got)
+	}
+	if got := firstTagValue(published.Tags, "deployment-unit"); got != "unit-1" {
+		t.Fatalf("deployment-unit tag = %q, want unit-1", got)
 	}
 	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != "deploy-retry-1" {
 		t.Fatalf("progress token = %#v, want deploy-retry-1", rpc.Params["_meta"])
