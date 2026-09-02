@@ -19,6 +19,7 @@ import (
 // Loom protocol kind constants are package-local aliases to the canonical catalog.
 const (
 	kindLoomWorkerAd  = KindLoomWorkerAdvertisement
+	kindLoomJobStatus = KindLoomJobStatusUpdate
 	kindLoomJobResult = KindLoomJobResult
 )
 
@@ -77,6 +78,8 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 	// --- Loom protocol kinds ---
 	case kindLoomWorkerAd:
 		err = p.handleWorkerAdvertisement(ctx, ev)
+	case kindLoomJobStatus:
+		err = p.handleLoomStatusUpdate(ctx, ev)
 	case kindLoomJobResult:
 		err = p.handleLoomResult(ctx, ev)
 
@@ -408,7 +411,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 }
 
 func (p *Processor) handleLoomStatusUpdate(ctx context.Context, ev *gonostr.Event) error {
-	// External Loom status updates are informational and logged by its boundary adapter.
+	// Kind 30100 status updates are informational — logged by subscriber.
 	// The workflow coordinator's PollJobStatus already handles these via
 	// direct subscription. This handler is a fallback for events received
 	// through the general subscriber.

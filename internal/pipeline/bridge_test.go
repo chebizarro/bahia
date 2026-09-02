@@ -366,6 +366,25 @@ func (m *mockCanonicalRegistry) CreateDeploymentIntent(ctx context.Context, inte
 	return m.intents.Create(ctx, intent)
 }
 
+type mockDesiredStateBuilder struct {
+	unitID uuid.UUID
+	hash   string
+	calls  int
+}
+
+func (m *mockDesiredStateBuilder) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID, _ *uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	m.calls++
+	return &domain.DesiredServiceSpec{
+		SchemaVersion:     "4",
+		ServiceID:         serviceID,
+		EnvironmentID:     envID,
+		ArtifactID:        artifactID,
+		DeploymentUnitID:  &m.unitID,
+		DeploymentUnitKey: "default",
+		DesiredHash:       m.hash,
+	}, nil
+}
+
 func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i *mockIntentRepo, e *mockEnvRepo, o *mockOCIRepo) *Bridge {
 	serviceID := uuid.Nil
 	imageRepo := ""
@@ -405,7 +424,7 @@ func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {
 	}
 }
 
-func TestBridge_TrustsDistinctRunAndResultPublishers(t *testing.T) {
+func TestBridge_RejectsResultPublisherMismatch(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-trigger", "trusted-worker")
 	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
@@ -419,11 +438,14 @@ func TestBridge_TrustsDistinctRunAndResultPublishers(t *testing.T) {
 	registry := &mockCanonicalRegistry{builds: b, artifacts: a}
 	bridge := NewBridge(h, services, b, a, newMockIntentRepo(), newMockEnvRepo(), o, nil, registry, []string{"trusted-trigger", "trusted-worker"}, true, nil)
 
-	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
-		t.Fatalf("ProcessResult error: %v", err)
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err == nil {
+		t.Fatal("expected publisher mismatch rejection")
 	}
-	if a.created != 1 {
-		t.Fatalf("expected one artifact created, got %d", a.created)
+	if a.created != 0 {
+		t.Fatalf("expected no artifact created, got %d", a.created)
+	}
+	if h.updated["res-1"] != domain.HiveCIProcessingStateRejected {
+		t.Fatalf("expected result state rejected, got %q", h.updated["res-1"])
 	}
 }
 
@@ -561,6 +583,9 @@ func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
 	e := newMockEnvRepo()
 	e.byName["edge-01-staging"] = &domain.Environment{ID: envID, Name: "edge-01-staging", Protected: false}
 	bridge := newBridgeForTest(h, b, a, i, e, o)
+	unitID := uuid.New()
+	desired := &mockDesiredStateBuilder{unitID: unitID, hash: "sha256:desired"}
+	bridge.SetDesiredStateBuilder(desired)
 
 	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
 		t.Fatalf("ProcessResult error: %v", err)
@@ -583,6 +608,18 @@ func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
 	}
 	if intent.RequestedBy != "hive-ci-bridge" {
 		t.Fatalf("expected requested_by hive-ci-bridge, got %q", intent.RequestedBy)
+	}
+	if desired.calls != 1 {
+		t.Fatalf("expected desired state builder call, got %d", desired.calls)
+	}
+	if intent.DeploymentUnitID == nil || *intent.DeploymentUnitID != unitID {
+		t.Fatalf("expected deployment unit %s, got %v", unitID, intent.DeploymentUnitID)
+	}
+	if intent.DesiredState == nil {
+		t.Fatalf("expected desired state snapshot")
+	}
+	if intent.DesiredHash != "sha256:desired" {
+		t.Fatalf("expected desired hash from snapshot, got %q", intent.DesiredHash)
 	}
 }
 

@@ -829,6 +829,9 @@ func New(cfg *config.Config) (*App, error) {
 				cfg.HiveCI.TrustedCIPubkeys, cfg.HiveCI.AutoRegisterBuilds, logger,
 			)
 		}
+		if runtimeLifecycleSvc != nil {
+			bridge.SetDesiredStateBuilder(runtimeLifecycleSvc)
+		}
 		buildResultRegistrar = bridge
 		// Wrap bridge.ProcessResult to match the ResultConsumer signature (no error return).
 		onResult := func(ctx context.Context, resultEventID string) {

@@ -79,7 +79,6 @@ func newRootCommand() *cobra.Command {
 		workersCommands(),
 		logsCommands(),
 		policiesCommands(),
-		configCommands(),
 		secretsCommands(),
 		orgsCommands(),
 		packageCommands(),
@@ -316,7 +315,14 @@ func deployCommands() *cobra.Command {
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runDeploymentIntentNostr(cmd, serviceID, envID, deploymentUnitID, artifactID, requestedBy, idempotencyKey)
+			result, err := runDeploymentIntentNostr(cmd, client.DeploymentIntentNostrRequest{
+				ServiceID:        serviceID,
+				EnvironmentID:    envID,
+				DeploymentUnitID: deploymentUnitID,
+				ArtifactID:       artifactID,
+				RequestedBy:      requestedBy,
+				IdempotencyKey:   idempotencyKey,
+			})
 			if err != nil {
 				return err
 			}
@@ -336,7 +342,7 @@ func deployCommands() *cobra.Command {
 	deployCmd.Flags().String("deployment-unit", "", "Deployment unit ID for explicit-unit deployments")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
 	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
-	deployCmd.Flags().String("idempotency-key", "", "Optional Nostr d tag for idempotency/correlation")
+	deployCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 	_ = deployCmd.MarkFlagRequired("artifact")
@@ -385,6 +391,39 @@ func deployCommands() *cobra.Command {
 	_ = rollbackCmd.MarkFlagRequired("target-artifact")
 	_ = rollbackCmd.MarkFlagRequired("supersedes-intent")
 
+	approvalCommand := func(name, decision, short string) *cobra.Command {
+		cmd := &cobra.Command{
+			Use:   name,
+			Short: short,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				intentID, _ := cmd.Flags().GetString("intent")
+				idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+
+				result, err := runDeploymentApprovalNostr(cmd, client.DeploymentApprovalNostrRequest{
+					IntentID:       intentID,
+					Decision:       decision,
+					IdempotencyKey: idempotencyKey,
+				})
+				if err != nil {
+					return err
+				}
+				if outputFormat != "table" {
+					return outputSingle(result)
+				}
+				if result.IntentID != "" {
+					fmt.Printf("✓ Deployment intent %s submitted: %s (status: %s)\n", decision, result.IntentID, firstNonEmpty(result.Status, "submitted"))
+				} else {
+					fmt.Printf("✓ Deployment intent %s submitted (status: %s)\n", decision, firstNonEmpty(result.Status, "submitted"))
+				}
+				return nil
+			},
+		}
+		cmd.Flags().String("intent", "", "Deployment intent ID")
+		cmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+		_ = cmd.MarkFlagRequired("intent")
+		return cmd
+	}
+
 	deploymentsCmd := &cobra.Command{
 		Use:   "deployments",
 		Short: "Deployment commands",
@@ -392,7 +431,12 @@ func deployCommands() *cobra.Command {
 			cmd.Help()
 		},
 	}
-	deploymentsCmd.AddCommand(deployCmd, rollbackCmd)
+	deploymentsCmd.AddCommand(
+		deployCmd,
+		rollbackCmd,
+		approvalCommand("approve", "approve", "Approve a pending deployment intent"),
+		approvalCommand("reject", "reject", "Reject a pending deployment intent"),
+	)
 	return deploymentsCmd
 }
 
@@ -792,7 +836,7 @@ func policiesCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Publish a signed PolicyCreate request (kind retired-kind)",
+		Short: "Publish a signed PolicyCreate request (kind 5986)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, _ := cmd.Flags().GetString("name")
 			envIDRaw, _ := cmd.Flags().GetString("environment")

@@ -144,7 +144,10 @@ func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
 		return 1, nil
 	}
 
-	result, err := client.CreateDeploymentIntentNostr(context.Background(), "svc-1", "env-1", "unit-1", "artifact-1", "ignored", "deploy-retry-1", nil)
+	result, err := client.CreateDeploymentIntentWithRequestNostr(context.Background(), DeploymentIntentNostrRequest{
+		ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentUnitID: "unit-1", ArtifactID: "artifact-1",
+		RequestedBy: "ignored", IdempotencyKey: "deploy-retry-1",
+	}, nil)
 	if err != nil {
 		t.Fatalf("CreateDeploymentIntentNostr() error = %v", err)
 	}
@@ -283,6 +286,59 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOperatorRollbackUsesIdempotencyTagOnly(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{
+			"status":         "submitted",
+			"intent_id":      "rollback-intent",
+			"service_id":     "svc-1",
+			"environment_id": "env-1",
+			"artifact_id":    "artifact-good",
+		})
+		return 1, nil
+	}
+
+	result, err := client.RollbackDeploymentNostr(context.Background(), RollbackDeploymentNostrRequest{
+		ServiceID:          "svc-1",
+		EnvironmentID:      "env-1",
+		DeploymentUnitID:   "unit-1",
+		TargetArtifactID:   "artifact-good",
+		SupersedesIntentID: "intent-bad",
+		IdempotencyKey:     "rollback:test",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RollbackDeploymentNostr() error = %v", err)
+	}
+	if result.IntentID != "rollback-intent" || result.ArtifactID != "artifact-good" {
+		t.Fatalf("unexpected rollback result: %#v", result)
+	}
+	published := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.Method != "service/rollback" {
+		t.Fatalf("method = %q, want service/rollback", rpc.Method)
+	}
+	if _, exists := rpc.Params["idempotency_key"]; exists {
+		t.Fatalf("idempotency_key leaked into strict ContextVM params: %#v", rpc.Params)
+	}
+	for key, want := range map[string]string{
+		"service_id":           "svc-1",
+		"environment_id":       "env-1",
+		"deployment_unit_id":   "unit-1",
+		"target_artifact_id":   "artifact-good",
+		"supersedes_intent_id": "intent-bad",
+	} {
+		if got, _ := rpc.Params[key].(string); got != want {
+			t.Fatalf("params[%s] = %q, want %q (params=%#v)", key, got, want, rpc.Params)
+		}
+	}
+	assertTagValue(t, published.Tags, "d", "rollback:test")
+	assertTagValue(t, published.Tags, "deployment_unit", "unit-1")
 }
 
 func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
@@ -491,14 +547,30 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 	if !reqErr.RequestAccepted || reqErr.PublishedRelays != 1 {
 		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want accepted abort", reqErr.RequestAccepted, reqErr.PublishedRelays)
 	}
-	if reqErr.RequestEventID == "" || reqErr.DTag == "" || reqErr.Method != "service/action" {
-		t.Fatalf("missing post-publish diagnostics: event=%q d=%q method=%q", reqErr.RequestEventID, reqErr.DTag, reqErr.Method)
+	if reqErr.RequestEventID == "" || reqErr.RequestDTag == "" || reqErr.RequestMethod != "service/action" {
+		t.Fatalf("missing post-publish diagnostics: event=%q d=%q method=%q", reqErr.RequestEventID, reqErr.RequestDTag, reqErr.RequestMethod)
 	}
-	if !strings.Contains(reqErr.Error(), "request_event_id="+reqErr.RequestEventID) || !strings.Contains(reqErr.Error(), "d="+reqErr.DTag) {
+	if !strings.Contains(reqErr.Error(), "request_event_id="+reqErr.RequestEventID) || !strings.Contains(reqErr.Error(), "d="+reqErr.RequestDTag) {
 		t.Fatalf("error = %v, want request diagnostics", reqErr)
 	}
 	if !errors.Is(reqErr, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled cause", reqErr)
+	}
+	published := transport.onlyPublished(t)
+	if reqErr.RequestEventID != published.ID.Hex() ||
+		reqErr.RequestDTag == "" ||
+		reqErr.RequestMethod != "service/action" {
+		t.Fatalf("diagnostics = event %q d %q method %q, want published request metadata", reqErr.RequestEventID, reqErr.RequestDTag, reqErr.RequestMethod)
+	}
+	if len(reqErr.PublishResults) != 1 ||
+		reqErr.PublishResults[0].RelayURL != "wss://relay.example" ||
+		!reqErr.PublishResults[0].Accepted {
+		t.Fatalf("publish diagnostics = %#v, want accepted relay result", reqErr.PublishResults)
+	}
+	for _, want := range []string{"request_event_id=" + published.ID.Hex(), "d=" + reqErr.RequestDTag, "publish_results=wss://relay.example=accepted"} {
+		if !strings.Contains(reqErr.Error(), want) {
+			t.Fatalf("error = %q, want diagnostic %q", reqErr.Error(), want)
+		}
 	}
 }
 

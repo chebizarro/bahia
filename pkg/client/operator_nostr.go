@@ -49,8 +49,9 @@ type ControlPlaneRequestError struct {
 	RequestAccepted bool
 	PublishedRelays int
 	RequestEventID  string
-	DTag            string
-	Method          string
+	RequestDTag     string
+	RequestMethod   string
+	PublishResults  []OperatorPublishResult
 	Cause           error
 }
 
@@ -65,23 +66,12 @@ func (e *ControlPlaneRequestError) Error() string {
 	if e.Cause == nil {
 		return phase
 	}
-	details := make([]string, 0, 3)
-	if e.Method != "" {
-		details = append(details, "method="+e.Method)
+	message := fmt.Sprintf("%s: %v", phase, e.Cause)
+	details := e.diagnosticDetails()
+	if details == "" {
+		return message
 	}
-	if e.RequestEventID != "" {
-		details = append(details, "request_event_id="+e.RequestEventID)
-	}
-	if e.DTag != "" {
-		details = append(details, "d="+e.DTag)
-	}
-	if e.PublishedRelays > 0 {
-		details = append(details, fmt.Sprintf("published_relays=%d", e.PublishedRelays))
-	}
-	if len(details) == 0 {
-		return fmt.Sprintf("%s: %v", phase, e.Cause)
-	}
-	return fmt.Sprintf("%s: %v (%s)", phase, e.Cause, strings.Join(details, " "))
+	return message + " (" + details + ")"
 }
 
 func (e *ControlPlaneRequestError) Unwrap() error {
@@ -91,6 +81,26 @@ func (e *ControlPlaneRequestError) Unwrap() error {
 	return e.Cause
 }
 
+func (e *ControlPlaneRequestError) diagnosticDetails() string {
+	if e == nil {
+		return ""
+	}
+	parts := []string{}
+	if e.RequestMethod != "" {
+		parts = append(parts, "method="+e.RequestMethod)
+	}
+	if e.RequestEventID != "" {
+		parts = append(parts, "request_event_id="+e.RequestEventID)
+	}
+	if e.RequestDTag != "" {
+		parts = append(parts, "d="+e.RequestDTag)
+	}
+	if len(e.PublishResults) > 0 {
+		parts = append(parts, "publish_results="+formatOperatorPublishResults(e.PublishResults))
+	}
+	return strings.Join(parts, " ")
+}
+
 // ErrEnvironmentRevisionConflict marks a retryable expected_updated_at mismatch.
 var ErrEnvironmentRevisionConflict = errors.New("environment revision conflict")
 
@@ -98,6 +108,16 @@ var ErrEnvironmentRevisionConflict = errors.New("environment revision conflict")
 type ContextVMRemoteError struct {
 	Code    int
 	Message string
+}
+
+// OperatorPublishResult is a redacted per-relay publish outcome suitable for
+// CLI diagnostics and task evidence.
+type OperatorPublishResult struct {
+	RelayURL  string
+	Accepted  bool
+	Duplicate bool
+	Reason    string
+	Error     string
 }
 
 func (e *ContextVMRemoteError) Error() string {
@@ -312,6 +332,24 @@ type RollbackDeploymentNostrRequest struct {
 	IdempotencyKey     string `json:"idempotency_key,omitempty"`
 }
 
+// DeploymentIntentNostrRequest is the signer-first deployment intent target.
+// Requester attribution is derived from the signed event, never caller payload.
+type DeploymentIntentNostrRequest struct {
+	ServiceID        string `json:"service_id"`
+	EnvironmentID    string `json:"environment_id"`
+	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
+	ArtifactID       string `json:"artifact_id"`
+	RequestedBy      string `json:"-"`
+	IdempotencyKey   string `json:"idempotency_key,omitempty"`
+}
+
+// DeploymentApprovalNostrRequest is the signer-first approval/rejection target.
+type DeploymentApprovalNostrRequest struct {
+	IntentID       string `json:"intent_id"`
+	Decision       string `json:"decision"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+}
+
 // DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
 type DeploymentCommandResult struct {
 	Status           string `json:"status,omitempty"`
@@ -401,34 +439,44 @@ func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Conte
 }
 
 // CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
-func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, deploymentUnitID, artifactID, requestedBy, idempotencyKey string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
-	serviceID = strings.TrimSpace(serviceID)
-	envID = strings.TrimSpace(envID)
-	deploymentUnitID = strings.TrimSpace(deploymentUnitID)
-	artifactID = strings.TrimSpace(artifactID)
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
-	if serviceID == "" {
+func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, artifactID, requestedBy string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	return c.CreateDeploymentIntentWithRequestNostr(ctx, DeploymentIntentNostrRequest{
+		ServiceID:     serviceID,
+		EnvironmentID: envID,
+		ArtifactID:    artifactID,
+		RequestedBy:   requestedBy,
+	}, onStatus)
+}
+
+// CreateDeploymentIntentWithRequestNostr publishes a signer-first service/deploy intent with explicit correlation options.
+func (c *OperatorControlPlaneClient) CreateDeploymentIntentWithRequestNostr(ctx context.Context, req DeploymentIntentNostrRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
+	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
+	req.ArtifactID = strings.TrimSpace(req.ArtifactID)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.ServiceID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
 	}
-	if envID == "" {
+	if req.EnvironmentID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
 	}
-	if artifactID == "" {
+	if req.ArtifactID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is required")}
 	}
 	// Attribution is signer-first: the server derives requested_by from the
 	// verified ContextVM event pubkey. Keep the parameter for API compatibility,
 	// but never serialize caller-provided attribution.
-	_ = requestedBy
-	payload := map[string]any{"service_id": serviceID, "environment_id": envID, "artifact_id": artifactID}
-	tags := nostr.Tags{{"service", serviceID}, {"environment", envID}, {"artifact", artifactID}}
-	if deploymentUnitID != "" {
-		payload["deployment_unit_id"] = deploymentUnitID
-		tags = append(tags, nostr.Tag{"deployment-unit", deploymentUnitID})
+	_ = req.RequestedBy
+	payload := map[string]any{"service_id": req.ServiceID, "environment_id": req.EnvironmentID, "artifact_id": req.ArtifactID}
+	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.ArtifactID}}
+	if req.DeploymentUnitID != "" {
+		payload["deployment_unit_id"] = req.DeploymentUnitID
+		tags = append(tags, nostr.Tag{"deployment-unit", req.DeploymentUnitID})
 	}
-	if idempotencyKey != "" {
-		payload["idempotency_key"] = idempotencyKey
-		tags = append(nostr.Tags{{"d", idempotencyKey}}, tags...)
+	if req.IdempotencyKey != "" {
+		payload["idempotency_key"] = req.IdempotencyKey
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
 	}
 	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeploy, Tags: tags, Payload: payload}, onStatus)
 	if err != nil {
@@ -442,16 +490,16 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 		result.Status = "submitted"
 	}
 	if result.ServiceID == "" {
-		result.ServiceID = serviceID
+		result.ServiceID = req.ServiceID
 	}
 	if result.EnvironmentID == "" {
-		result.EnvironmentID = envID
+		result.EnvironmentID = req.EnvironmentID
 	}
 	if result.DeploymentUnitID == "" {
-		result.DeploymentUnitID = deploymentUnitID
+		result.DeploymentUnitID = req.DeploymentUnitID
 	}
 	if result.ArtifactID == "" {
-		result.ArtifactID = artifactID
+		result.ArtifactID = req.ArtifactID
 	}
 	return &result, nil
 }
@@ -476,9 +524,21 @@ func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context
 	}
 	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.TargetArtifactID}, {"supersedes", req.SupersedesIntentID}}
 	if req.DeploymentUnitID != "" {
-		tags = append(tags, nostr.Tag{"deployment-unit", req.DeploymentUnitID})
+		tags = append(tags, nostr.Tag{"deployment_unit", req.DeploymentUnitID})
 	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{Method: "service/rollback", Tags: tags, Payload: req}, onStatus)
+	payload := map[string]any{
+		"service_id":           req.ServiceID,
+		"environment_id":       req.EnvironmentID,
+		"target_artifact_id":   req.TargetArtifactID,
+		"supersedes_intent_id": req.SupersedesIntentID,
+	}
+	if req.DeploymentUnitID != "" {
+		payload["deployment_unit_id"] = req.DeploymentUnitID
+	}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: "service/rollback", Tags: tags, Payload: payload}, onStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -495,8 +555,48 @@ func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context
 	if result.EnvironmentID == "" {
 		result.EnvironmentID = req.EnvironmentID
 	}
+	if result.DeploymentUnitID == "" {
+		result.DeploymentUnitID = req.DeploymentUnitID
+	}
 	if result.ArtifactID == "" {
 		result.ArtifactID = req.TargetArtifactID
+	}
+	return &result, nil
+}
+
+// ApproveDeploymentNostr publishes a signer-first approval or rejection for a pending deployment intent.
+func (c *OperatorControlPlaneClient) ApproveDeploymentNostr(ctx context.Context, req DeploymentApprovalNostrRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	req.IntentID = strings.TrimSpace(req.IntentID)
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.IntentID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment approval request", RequestAccepted: false, Cause: fmt.Errorf("intent_id is required")}
+	}
+	if req.Decision != "approve" && req.Decision != "reject" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment approval request", RequestAccepted: false, Cause: fmt.Errorf("decision must be approve or reject")}
+	}
+	method := controlplane.ContextVMMethodApprovalApprove
+	if req.Decision == "reject" {
+		method = controlplane.ContextVMMethodApprovalReject
+	}
+	payload := map[string]any{"intent_id": req.IntentID, "decision": req.Decision}
+	tags := nostr.Tags{{"intent", req.IntentID}, {"decision", req.Decision}}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: method, Tags: tags, Payload: payload}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result DeploymentCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode deployment approval result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "submitted"
+	}
+	if result.IntentID == "" {
+		result.IntentID = req.IntentID
 	}
 	return &result, nil
 }
@@ -678,12 +778,24 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 		return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: err}
 	}
 
-	published, err := c.publishOperatorEvent(ctx, *event)
+	published, publishResults, err := c.publishOperatorEvent(ctx, *event)
+	requestError := func(phase string, accepted bool, cause error) *ControlPlaneRequestError {
+		return &ControlPlaneRequestError{
+			Phase:           phase,
+			RequestAccepted: accepted,
+			PublishedRelays: published,
+			RequestEventID:  event.ID.Hex(),
+			RequestDTag:     requestID,
+			RequestMethod:   method,
+			PublishResults:  publishResults,
+			Cause:           cause,
+		}
+	}
 	if published == 0 {
 		if err == nil {
 			err = fmt.Errorf("request was not accepted by any relay")
 		}
-		return nil, &ControlPlaneRequestError{Phase: "publish operator ContextVM request", RequestAccepted: false, PublishedRelays: published, Cause: err}
+		return nil, requestError("publish operator ContextVM request", false, err)
 	}
 
 	seen := map[string]struct{}{}
@@ -695,7 +807,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, ctx.Err())
+			return nil, requestError("await operator ContextVM result", true, ctx.Err())
 		case <-eose:
 			eose = nil
 		case relayClosed, ok := <-closed:
@@ -708,7 +820,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				reason = "subscription closed"
 			}
 			if relayClosed.RelayURL == "" {
-				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("reply subscription closed before terminal result: %s", reason))
+				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before terminal result: %s", reason))
 			}
 			if nostrpool.IsAuthRequiredReason(reason) {
 				if _, attempted := authAttempted[relayClosed.RelayURL]; !attempted {
@@ -717,7 +829,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 						sub.Close()
 						resub, subErr := c.transport.SubscribeAllWithEOSE(ctx, filters)
 						if subErr != nil {
-							return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr))
+							return nil, requestError("await operator ContextVM result", true, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr))
 						}
 						sub = resub
 						eose = sub.EndOfStoredEvents
@@ -731,11 +843,11 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			closedRelays[relayClosed.RelayURL] = reason
 			pendingRelays = removeRelayURL(pendingRelays, relayClosed.RelayURL)
 			if len(pendingRelays) == 0 {
-				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays)))
+				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays)))
 			}
 		case reply, ok := <-sub.Events:
 			if !ok {
-				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, fmt.Errorf("reply subscription closed before terminal result"))
+				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before terminal result"))
 			}
 			if reply == nil || reply.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !validSignedEvent(reply) || !correlatesTo(reply, event.ID.Hex(), c.pubkey) {
 				continue
@@ -757,7 +869,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
 				}
-				return nil, c.acceptedRequestError("await operator ContextVM result", method, event.ID.Hex(), requestID, published, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message})
+				return nil, requestError("await operator ContextVM result", true, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message})
 			}
 			if rpc.Result == nil {
 				continue
@@ -776,22 +888,11 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	}
 }
 
-func (c *OperatorControlPlaneClient) acceptedRequestError(phase, method, requestEventID, dTag string, published int, cause error) *ControlPlaneRequestError {
-	return &ControlPlaneRequestError{
-		Phase:           phase,
-		RequestAccepted: true,
-		PublishedRelays: published,
-		RequestEventID:  requestEventID,
-		DTag:            dTag,
-		Method:          method,
-		Cause:           cause,
-	}
-}
-
-func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, error) {
+func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, []OperatorPublishResult, error) {
 	results, err := c.transport.PublishWithResults(ctx, event)
+	diagnostics := operatorPublishDiagnostics(results)
 	if len(results) == 0 {
-		return 0, err
+		return 0, diagnostics, err
 	}
 	published := 0
 	for _, result := range results {
@@ -799,7 +900,54 @@ func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, e
 			published++
 		}
 	}
-	return published, err
+	return published, diagnostics, err
+}
+
+func operatorPublishDiagnostics(results []nostrpool.PublishResult) []OperatorPublishResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]OperatorPublishResult, 0, len(results))
+	for _, result := range results {
+		item := OperatorPublishResult{
+			RelayURL:  result.RelayURL,
+			Accepted:  result.Accepted,
+			Duplicate: result.IsDuplicate(),
+			Reason:    strings.TrimSpace(result.Reason),
+		}
+		if result.Error != nil {
+			item.Error = result.Error.Error()
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func formatOperatorPublishResults(results []OperatorPublishResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(results))
+	for _, result := range results {
+		status := "rejected"
+		if result.Accepted {
+			status = "accepted"
+		} else if result.Duplicate {
+			status = "duplicate"
+		}
+		detail := strings.TrimSpace(result.Reason)
+		if detail == "" {
+			detail = strings.TrimSpace(result.Error)
+		}
+		if detail != "" {
+			status += ":" + detail
+		}
+		if result.RelayURL != "" {
+			status = result.RelayURL + "=" + status
+		}
+		parts = append(parts, status)
+	}
+	return strings.Join(parts, ",")
 }
 
 func removeRelayURL(relays []string, relayURL string) []string {
