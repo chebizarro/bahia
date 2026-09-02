@@ -428,12 +428,90 @@ func TestRelayPoolReconfigureRelayURLsUpdatesOrderForSameSet(t *testing.T) {
 	require.True(t, pool.relays["wss://relay-two.example"].connected)
 }
 
+func TestRelayPoolReconfigureRelayURLsMigratesAddedRelayIntoActiveSubscription(t *testing.T) {
+	const (
+		oldURL = "wss://old.example"
+		newURL = "wss://new.example"
+	)
+	pool := newRelayPoolWithManagedRelays(oldURL)
+	markRelayConnectedForSubscribeTest(pool, oldURL)
+
+	subs := make(map[string]*gonostr.Subscription)
+	setSubscribeOnRelayForTest(t, func(relay *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		sub := newTestSubscription()
+		subs[relay.URL] = sub
+		return sub, nil
+	})
+	setConnectRelayForTest(t, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
+	require.NoError(t, err)
+	require.Contains(t, subs, oldURL)
+
+	result := pool.ReconfigureRelayURLs([]string{oldURL, newURL})
+	require.Empty(t, result.MigrationErrors)
+	require.Equal(t, 1, result.ActiveSubscriptions)
+	require.Equal(t, 1, result.MigratedSubscriptions)
+	require.Contains(t, subs, newURL)
+	require.Equal(t, []string{newURL, oldURL}, merged.RelayURLs())
+	require.True(t, pool.relays[newURL].connected)
+
+	event := gonostr.Event{ID: gonostr.ID{31: 0x51}, Kind: canonicalKind(1)}
+	subs[newURL].Events <- event
+	require.Equal(t, event.ID, (<-merged.Events).ID)
+	require.Equal(t, newURL, merged.EventSource(event.ID.Hex()))
+	merged.Close()
+}
+
+func TestRelayPoolReconfigureRelayURLsAddRemoveDeduplicatesReplay(t *testing.T) {
+	const (
+		oldURL = "wss://old.example"
+		newURL = "wss://new.example"
+	)
+	pool := newRelayPoolWithManagedRelays(oldURL)
+	markRelayConnectedForSubscribeTest(pool, oldURL)
+	oldRelay := pool.relays[oldURL].relay
+
+	subs := make(map[string]*gonostr.Subscription)
+	setSubscribeOnRelayForTest(t, func(relay *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		sub := newTestSubscription()
+		subs[relay.URL] = sub
+		return sub, nil
+	})
+	setConnectRelayForTest(t, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
+	require.NoError(t, err)
+	duplicate := gonostr.Event{ID: gonostr.ID{31: 0x61}, Kind: canonicalKind(1)}
+	subs[oldURL].Events <- duplicate
+	require.Equal(t, duplicate.ID, (<-merged.Events).ID)
+
+	result := pool.ReconfigureRelayURLs([]string{newURL})
+	require.Empty(t, result.MigrationErrors)
+	require.Equal(t, 1, result.MigratedSubscriptions)
+	require.Equal(t, []string{newURL}, merged.RelayURLs())
+	require.Error(t, oldRelay.Context().Err())
+
+	unique := gonostr.Event{ID: gonostr.ID{31: 0x62}, Kind: canonicalKind(1)}
+	subs[newURL].Events <- duplicate
+	subs[newURL].Events <- unique
+	require.Equal(t, unique.ID, (<-merged.Events).ID, "replayed event ID must be suppressed across relay migration")
+	merged.Close()
+}
+
 func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
 	pool := newRelayPoolWithManagedRelays("wss://old.example", "wss://keep.example")
 	keepRelay := pool.relays["wss://keep.example"]
 	markRelayConnectedForSubscribeTest(pool, "wss://old.example")
 	markRelayConnectedForSubscribeTest(pool, "wss://keep.example")
 	oldRelay := pool.relays["wss://old.example"].relay
+	setConnectRelayForTest(t, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
+	})
 
 	result := pool.ReconfigureRelayURLs([]string{
 		"https://KEEP.example/",
@@ -452,7 +530,7 @@ func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
 	require.Same(t, keepRelay, pool.relays["wss://keep.example"])
 	require.True(t, pool.relays["wss://keep.example"].connected)
 	require.NotNil(t, pool.relays["wss://new.example"])
-	require.False(t, pool.relays["wss://new.example"].connected)
+	require.True(t, pool.relays["wss://new.example"].connected)
 
 	snapshot := pool.HealthSnapshot()
 	require.Equal(t, 2, snapshot.Total)
@@ -484,4 +562,11 @@ func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Co
 	original := subscribeOnRelay
 	subscribeOnRelay = fn
 	t.Cleanup(func() { subscribeOnRelay = original })
+}
+
+func setConnectRelayForTest(t *testing.T, fn func(context.Context, string, gonostr.RelayOptions) (*gonostr.Relay, error)) {
+	t.Helper()
+	original := connectRelay
+	connectRelay = fn
+	t.Cleanup(func() { connectRelay = original })
 }

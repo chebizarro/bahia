@@ -1247,7 +1247,8 @@ func New(cfg *config.Config) (*App, error) {
 				if err := relayTopologyCoordinator.ApplySnapshot(applyCtx, state); err != nil {
 					return err
 				}
-				relayPolicyHydrationPool.ReconfigureRelayURLs(
+				relayPolicyHydrationPool.ReconfigureRelayURLsContext(
+					applyCtx,
 					relayPolicyHydrationRelayURLsForState(relayPolicyHydrationRelays, state),
 				)
 				return nil

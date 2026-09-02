@@ -19,16 +19,20 @@ import (
 // RelayPool manages persistent connections to a set of Nostr relays.
 // It provides automatic reconnection and shared access across publishers and clients.
 type RelayPool struct {
-	mu             sync.RWMutex
-	relays         map[string]*managedRelay
-	relayInfoCache map[string]*nip11.RelayInformationDocument // NIP-11 info cache
-	health         *RelayHealthTracker
-	urls           []string
-	logger         *zap.Logger
-	ctx            context.Context
-	cancel         context.CancelFunc
-	privateKey     string // hex-encoded private key for NIP-42 AUTH (optional)
-	authSigner     nostr.Signer
+	mu                  sync.RWMutex
+	reconfigureMu       sync.Mutex
+	relays              map[string]*managedRelay
+	retiredRelays       map[string]*managedRelay
+	activeSubscriptions map[uint64]*activeMergedSubscription
+	nextSubscriptionID  uint64
+	relayInfoCache      map[string]*nip11.RelayInformationDocument // NIP-11 info cache
+	health              *RelayHealthTracker
+	urls                []string
+	logger              *zap.Logger
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
+	authSigner          nostr.Signer
 }
 
 type managedRelay struct {
@@ -37,6 +41,10 @@ type managedRelay struct {
 	connected bool
 	lastErr   error
 	mu        sync.Mutex
+}
+
+var connectRelay = func(ctx context.Context, url string, opts nostr.RelayOptions) (*nostr.Relay, error) {
+	return nostr.RelayConnect(ctx, url, opts)
 }
 
 // RelayPoolOption configures a RelayPool.
@@ -57,11 +65,14 @@ func WithAuthSigner(signer nostr.Signer) RelayPoolOption {
 
 // RelayPoolReconfigureResult describes an in-place relay topology update.
 type RelayPoolReconfigureResult struct {
-	Changed      bool
-	PreviousURLs []string
-	CurrentURLs  []string
-	AddedURLs    []string
-	RemovedURLs  []string
+	Changed               bool
+	PreviousURLs          []string
+	CurrentURLs           []string
+	AddedURLs             []string
+	RemovedURLs           []string
+	ActiveSubscriptions   int
+	MigratedSubscriptions int
+	MigrationErrors       []string
 }
 
 // NewRelayPool creates a relay pool for the given URLs.
@@ -70,13 +81,15 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 	normalizedURLs := normalizeRelayURLs(urls)
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &RelayPool{
-		relays:         make(map[string]*managedRelay),
-		relayInfoCache: make(map[string]*nip11.RelayInformationDocument),
-		health:         NewRelayHealthTracker(),
-		urls:           normalizedURLs,
-		logger:         logger,
-		ctx:            ctx,
-		cancel:         cancel,
+		relays:              make(map[string]*managedRelay),
+		retiredRelays:       make(map[string]*managedRelay),
+		activeSubscriptions: make(map[uint64]*activeMergedSubscription),
+		relayInfoCache:      make(map[string]*nip11.RelayInformationDocument),
+		health:              NewRelayHealthTracker(),
+		urls:                normalizedURLs,
+		logger:              logger,
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
@@ -87,28 +100,33 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 	return p
 }
 
-// ReconfigureRelayURLs atomically replaces the pool's configured relay topology in place.
-// Existing RelayPool pointers remain valid. URLs are normalized and deduplicated with
-// the same rules as NewRelayPool. If the normalized URL list is unchanged, the call is a
-// no-op and existing relay connections are preserved. If the set is unchanged but order
-// differs, only the configured order is updated and existing relay entries are retained.
-// When the set changes, retained relay entries keep their connection state, removed relay
-// entries are closed and marked disconnected, and added relay entries are created
-// disconnected for the existing publish/subscribe paths to connect on use or on the next
-// Connect call.
+// ReconfigureRelayURLs replaces the configured relay topology and migrates active
+// logical subscriptions. Added relays are connected and subscribed before removed relay
+// subscriptions are retired, so callers keep one continuous event stream during handoff.
 func (p *RelayPool) ReconfigureRelayURLs(urls []string) RelayPoolReconfigureResult {
+	return p.ReconfigureRelayURLsContext(p.ctx, urls)
+}
+
+// ReconfigureRelayURLsContext is ReconfigureRelayURLs with a caller-controlled context
+// for the connect and subscription work performed during the topology transition.
+func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []string) RelayPoolReconfigureResult {
+	if ctx == nil {
+		ctx = p.ctx
+	}
+	p.reconfigureMu.Lock()
+	defer p.reconfigureMu.Unlock()
+
 	nextURLs := normalizeRelayURLs(urls)
-
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	previousURLs := cloneRelayURLs(p.urls)
 	if sameRelayURLOrder(previousURLs, nextURLs) {
-		return RelayPoolReconfigureResult{
+		result := RelayPoolReconfigureResult{
 			Changed:      false,
 			PreviousURLs: previousURLs,
 			CurrentURLs:  cloneRelayURLs(p.urls),
 		}
+		p.mu.Unlock()
+		return result
 	}
 
 	previousSet := relayURLSet(previousURLs)
@@ -127,36 +145,86 @@ func (p *RelayPool) ReconfigureRelayURLs(urls []string) RelayPoolReconfigureResu
 	}
 
 	for _, url := range removedURLs {
-		mr, exists := p.relays[url]
-		if !exists {
-			continue
+		if mr, exists := p.relays[url]; exists {
+			p.retiredRelays[url] = mr
+			delete(p.relays, url)
 		}
-		mr.mu.Lock()
-		if mr.relay != nil {
-			mr.relay.Close()
-		}
-		mr.connected = false
-		mr.lastErr = nil
-		p.recordRelayConnectionState(mr.url, false)
-		mr.mu.Unlock()
-		delete(p.relays, url)
 	}
-
 	for _, url := range nextURLs {
 		p.health.GetOrCreate(url)
-		if _, exists := p.relays[url]; !exists {
-			p.relays[url] = &managedRelay{url: url}
+		if _, exists := p.relays[url]; exists {
+			continue
 		}
+		if retired, exists := p.retiredRelays[url]; exists {
+			p.relays[url] = retired
+			delete(p.retiredRelays, url)
+			continue
+		}
+		p.relays[url] = &managedRelay{url: url}
 	}
 	p.urls = nextURLs
 
-	return RelayPoolReconfigureResult{
-		Changed:      true,
-		PreviousURLs: previousURLs,
-		CurrentURLs:  cloneRelayURLs(p.urls),
-		AddedURLs:    addedURLs,
-		RemovedURLs:  removedURLs,
+	active := make([]*activeMergedSubscription, 0, len(p.activeSubscriptions))
+	for _, subscription := range p.activeSubscriptions {
+		active = append(active, subscription)
 	}
+	addedRelays := make(map[string]*managedRelay, len(addedURLs))
+	for _, url := range addedURLs {
+		addedRelays[url] = p.relays[url]
+	}
+	p.mu.Unlock()
+
+	result := RelayPoolReconfigureResult{
+		Changed:             true,
+		PreviousURLs:        previousURLs,
+		CurrentURLs:         cloneRelayURLs(nextURLs),
+		AddedURLs:           addedURLs,
+		RemovedURLs:         removedURLs,
+		ActiveSubscriptions: len(active),
+	}
+
+	ready := make(map[string]bool, len(addedRelays))
+	for _, url := range addedURLs {
+		mr := addedRelays[url]
+		p.connectOne(ctx, mr)
+		ready[url] = managedRelayConnected(mr)
+		if !ready[url] {
+			result.MigrationErrors = append(result.MigrationErrors, fmt.Sprintf("connect %s", url))
+		}
+	}
+
+	for _, subscription := range active {
+		migrated := true
+		for _, url := range addedURLs {
+			if !ready[url] {
+				migrated = false
+				continue
+			}
+			if err := subscription.addRelay(ctx, addedRelays[url]); err != nil {
+				migrated = false
+				result.MigrationErrors = append(result.MigrationErrors, fmt.Sprintf("subscribe %s: %v", url, err))
+			}
+		}
+		if !migrated {
+			continue
+		}
+		for _, url := range removedURLs {
+			subscription.removeRelay(url)
+		}
+		result.MigratedSubscriptions++
+	}
+
+	p.pruneRetiredRelays()
+	return result
+}
+
+func managedRelayConnected(mr *managedRelay) bool {
+	if mr == nil {
+		return false
+	}
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	return mr.connected && mr.relay != nil
 }
 
 func normalizeRelayURLs(urls []string) []string {
@@ -236,7 +304,7 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 	// Build relay options with AUTH handler if private key is configured.
 	opts := p.buildRelayOptions(mr.url)
 
-	relay, err := nostr.RelayConnect(connectCtx, mr.url, opts)
+	relay, err := connectRelay(connectCtx, mr.url, opts)
 	if err != nil {
 		mr.connected = false
 		mr.lastErr = err
@@ -378,7 +446,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		opts := p.buildRelayOptions(mr.url)
-		relay, err := nostr.RelayConnect(connectCtx, mr.url, opts)
+		relay, err := connectRelay(connectCtx, mr.url, opts)
 		if err != nil {
 			mr.connected = false
 			mr.lastErr = err
@@ -592,7 +660,7 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 			p.recordRelayReconnect(mr.url)
 			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			opts := p.buildRelayOptions(mr.url)
-			relay, err := nostr.RelayConnect(connectCtx, mr.url, opts)
+			relay, err := connectRelay(connectCtx, mr.url, opts)
 			cancel()
 			if err != nil {
 				mr.connected = false
@@ -661,6 +729,7 @@ type MergedSubscription struct {
 	closeFn      func()
 	relayURLs    []string
 	eventSources *sync.Map
+	active       *activeMergedSubscription
 }
 
 // Close cancels all relay subscriptions represented by the merged subscription.
@@ -676,6 +745,9 @@ func (m *MergedSubscription) Close() {
 func (m *MergedSubscription) RelayURLs() []string {
 	if m == nil {
 		return nil
+	}
+	if m.active != nil {
+		return m.active.relayURLsSnapshot()
 	}
 	return append([]string(nil), m.relayURLs...)
 }
@@ -705,6 +777,7 @@ func (m *MergedSubscription) recordEventSource(eventID, relayURL string) {
 type relaySubscription struct {
 	relayURL string
 	sub      *nostr.Subscription
+	cancel   context.CancelFunc
 }
 
 // SubscribeAll creates subscriptions on all connected relays and merges events into a single channel.
@@ -725,74 +798,19 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 	}
 
 	p.mu.RLock()
-	defer p.mu.RUnlock()
+	relays := p.orderedRelaysLocked()
+	p.mu.RUnlock()
 
 	subCtx, cancel := context.WithCancel(ctx)
-	subs := make([]relaySubscription, 0, len(p.relays))
+	subs := make([]relaySubscription, 0, len(relays))
 
-	for _, mr := range p.relays {
-		mr.mu.Lock()
-		if !mr.connected || mr.relay == nil {
-			p.recordRelayReconnect(mr.url)
-			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			opts := p.buildRelayOptions(mr.url)
-			relay, err := nostr.RelayConnect(connectCtx, mr.url, opts)
-			cancel()
-			if err != nil {
-				mr.connected = false
-				mr.lastErr = err
-				p.recordRelayConnectionState(mr.url, false)
-				p.recordRelayError(mr.url, err.Error())
-				mr.mu.Unlock()
-				continue
-			}
-			mr.relay = relay
-			mr.connected = true
-			mr.lastErr = nil
-			p.recordRelayConnectionState(mr.url, true)
-		}
-
-		relaySubs := make([]*nostr.Subscription, 0, len(filters))
-		var lastErr error
-		relayComplete := true
-		for _, filter := range filters {
-			sub, err := subscribeOnRelay(mr.relay, subCtx, filter)
-			recordedAuthUnavailable := false
-			if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
-				if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-					sub, err = subscribeOnRelay(mr.relay, subCtx, filter)
-				} else {
-					p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
-					recordedAuthUnavailable = true
-				}
-			}
-			if err != nil {
-				lastErr = err
-				relayComplete = false
-				if !recordedAuthUnavailable {
-					p.recordRelayError(mr.url, err.Error())
-				}
-				break
-			}
-			relaySubs = append(relaySubs, sub)
-		}
-		mr.mu.Unlock()
-		if !relayComplete || len(relaySubs) != len(filters) {
-			for _, sub := range relaySubs {
-				if sub != nil {
-					sub.Unsub()
-				}
-			}
-			if lastErr != nil {
-				p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(lastErr))
-			}
+	for _, mr := range relays {
+		relaySubs, err := p.subscribeInitialManagedRelay(ctx, subCtx, mr, filters)
+		if err != nil {
+			p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(err))
 			continue
 		}
-		p.recordRelayConnectionState(mr.url, true)
-
-		for _, sub := range relaySubs {
-			subs = append(subs, relaySubscription{relayURL: mr.url, sub: sub})
-		}
+		subs = append(subs, relaySubs...)
 	}
 
 	if len(subs) == 0 {
@@ -800,9 +818,390 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 		return nil, fmt.Errorf("no relays available for subscription")
 	}
 
-	merged := mergeRelaySubscriptions(ctx, subs, 64)
-	merged.closeFn = cancel
-	return merged, nil
+	return p.newActiveMergedSubscription(subCtx, cancel, filters, subs), nil
+}
+
+type activeRelayGroup struct {
+	cancel    context.CancelFunc
+	remaining int
+}
+
+type activeMergedSubscription struct {
+	pool         *RelayPool
+	id           uint64
+	ctx          context.Context
+	cancel       context.CancelFunc
+	filters      []nostr.Filter
+	events       chan *nostr.Event
+	eose         chan struct{}
+	relayEOSE    chan RelayEOSE
+	closed       chan RelayClosed
+	eventSources *sync.Map
+	dedup        *EventDeduplicator
+
+	mu               sync.Mutex
+	groups           map[string]*activeRelayGroup
+	initialRemaining int
+	eoseOnce         sync.Once
+	workers          sync.WaitGroup
+	closeOnce        sync.Once
+}
+
+func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel context.CancelFunc, filters []nostr.Filter, subs []relaySubscription) *MergedSubscription {
+	state := &activeMergedSubscription{
+		pool:             p,
+		ctx:              ctx,
+		cancel:           cancel,
+		filters:          append([]nostr.Filter(nil), filters...),
+		events:           make(chan *nostr.Event, 64),
+		eose:             make(chan struct{}),
+		relayEOSE:        make(chan RelayEOSE, 64),
+		closed:           make(chan RelayClosed, 64),
+		eventSources:     &sync.Map{},
+		dedup:            NewEventDeduplicator(10000),
+		groups:           make(map[string]*activeRelayGroup),
+		initialRemaining: len(subs),
+	}
+
+	p.mu.Lock()
+	p.nextSubscriptionID++
+	state.id = p.nextSubscriptionID
+	p.activeSubscriptions[state.id] = state
+	p.mu.Unlock()
+
+	state.mu.Lock()
+	for _, relaySub := range subs {
+		group := state.groups[relaySub.relayURL]
+		if group == nil {
+			group = &activeRelayGroup{cancel: relaySub.cancel}
+			state.groups[relaySub.relayURL] = group
+		}
+		group.remaining++
+		state.startWorkerLocked(relaySub, group, true)
+	}
+	state.mu.Unlock()
+
+	merged := &MergedSubscription{
+		Events:            state.events,
+		EndOfStoredEvents: state.eose,
+		RelayEOSE:         state.relayEOSE,
+		Closed:            state.closed,
+		closeFn:           state.close,
+		eventSources:      state.eventSources,
+		active:            state,
+	}
+	go state.finish()
+	return merged
+}
+
+func (s *activeMergedSubscription) startWorkerLocked(relaySub relaySubscription, group *activeRelayGroup, initial bool) {
+	s.workers.Add(1)
+	go s.runRelaySubscription(relaySub, group, initial)
+}
+
+func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscription, group *activeRelayGroup, initial bool) {
+	defer s.workers.Done()
+	defer s.workerDone(relaySub.relayURL, group)
+
+	sub := relaySub.sub
+	var eoseCh <-chan struct{}
+	var eventsCh <-chan nostr.Event
+	var closedCh <-chan string
+	if sub != nil {
+		eoseCh = sub.EndOfStoredEvents
+		eventsCh = sub.Events
+		closedCh = sub.ClosedReason
+	}
+	eoseSent := false
+	markEOSE := func() {
+		if eoseSent {
+			return
+		}
+		eoseSent = true
+		info := RelayEOSE{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub)}
+		select {
+		case s.relayEOSE <- info:
+		case <-s.ctx.Done():
+			return
+		}
+		if initial {
+			s.markInitialEOSE()
+		}
+	}
+	defer markEOSE()
+
+	for eoseCh != nil || eventsCh != nil || closedCh != nil {
+		select {
+		case <-s.ctx.Done():
+			return
+		case _, ok := <-eoseCh:
+			if ok || eoseCh != nil {
+				markEOSE()
+			}
+			eoseCh = nil
+		case reason, ok := <-closedCh:
+			if ok {
+				emitRelayClosed(s.ctx, s.closed, RelayClosed{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub), Reason: reason})
+			}
+			closedCh = nil
+		case ev, ok := <-eventsCh:
+			if !ok {
+				if closedCh != nil {
+					select {
+					case reason, ok := <-closedCh:
+						if ok {
+							emitRelayClosed(s.ctx, s.closed, RelayClosed{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub), Reason: reason})
+						}
+					default:
+					}
+				}
+				return
+			}
+			event := ev
+			eventID := event.ID.Hex()
+			if eventID != "" && s.dedup.IsDuplicate(eventID) {
+				continue
+			}
+			s.eventSources.LoadOrStore(eventID, relaySub.relayURL)
+			select {
+			case s.events <- &event:
+			case <-s.ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (s *activeMergedSubscription) markInitialEOSE() {
+	s.mu.Lock()
+	if s.initialRemaining > 0 {
+		s.initialRemaining--
+	}
+	complete := s.initialRemaining == 0
+	s.mu.Unlock()
+	if complete {
+		s.eoseOnce.Do(func() { close(s.eose) })
+	}
+}
+
+func (s *activeMergedSubscription) workerDone(relayURL string, group *activeRelayGroup) {
+	s.mu.Lock()
+	current := s.groups[relayURL]
+	if current != group {
+		s.mu.Unlock()
+		return
+	}
+	group.remaining--
+	if group.remaining > 0 {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.groups, relayURL)
+	empty := len(s.groups) == 0
+	s.mu.Unlock()
+	if empty {
+		s.cancel()
+	}
+}
+
+func (s *activeMergedSubscription) addRelay(ctx context.Context, relay *managedRelay) error {
+	if relay == nil {
+		return fmt.Errorf("relay is nil")
+	}
+	s.mu.Lock()
+	if _, exists := s.groups[relay.url]; exists {
+		s.mu.Unlock()
+		return nil
+	}
+	select {
+	case <-s.ctx.Done():
+		s.mu.Unlock()
+		return s.ctx.Err()
+	default:
+	}
+	filters := append([]nostr.Filter(nil), s.filters...)
+	s.mu.Unlock()
+
+	relayCtx, relayCancel := context.WithCancel(s.ctx)
+	subs, err := s.pool.subscribeConnectedRelay(ctx, relayCtx, relay, filters)
+	if err != nil {
+		relayCancel()
+		return err
+	}
+
+	s.mu.Lock()
+	if _, exists := s.groups[relay.url]; exists {
+		s.mu.Unlock()
+		relayCancel()
+		return nil
+	}
+	select {
+	case <-s.ctx.Done():
+		s.mu.Unlock()
+		relayCancel()
+		return s.ctx.Err()
+	default:
+	}
+	group := &activeRelayGroup{cancel: relayCancel, remaining: len(subs)}
+	s.groups[relay.url] = group
+	for _, sub := range subs {
+		sub.cancel = relayCancel
+		s.startWorkerLocked(sub, group, false)
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *activeMergedSubscription) removeRelay(relayURL string) {
+	s.mu.Lock()
+	group := s.groups[relayURL]
+	if group != nil {
+		delete(s.groups, relayURL)
+	}
+	empty := len(s.groups) == 0
+	s.mu.Unlock()
+	if group != nil && group.cancel != nil {
+		group.cancel()
+	}
+	if empty {
+		s.cancel()
+	}
+}
+
+func (s *activeMergedSubscription) hasRelay(relayURL string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, exists := s.groups[relayURL]
+	return exists
+}
+
+func (s *activeMergedSubscription) relayURLsSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	urls := make([]string, 0, len(s.groups))
+	for url := range s.groups {
+		urls = append(urls, url)
+	}
+	sort.Strings(urls)
+	return urls
+}
+
+func (s *activeMergedSubscription) close() {
+	if s == nil {
+		return
+	}
+	s.closeOnce.Do(func() {
+		s.pool.unregisterActiveSubscription(s.id)
+		s.cancel()
+	})
+}
+
+func (s *activeMergedSubscription) finish() {
+	<-s.ctx.Done()
+	s.workers.Wait()
+	s.pool.unregisterActiveSubscription(s.id)
+	s.eoseOnce.Do(func() { close(s.eose) })
+	close(s.events)
+	close(s.relayEOSE)
+	close(s.closed)
+}
+
+func (p *RelayPool) subscribeInitialManagedRelay(authCtx, parentCtx context.Context, mr *managedRelay, filters []nostr.Filter) ([]relaySubscription, error) {
+	relayCtx, relayCancel := context.WithCancel(parentCtx)
+	keepContext := false
+	defer func() {
+		if !keepContext {
+			relayCancel()
+		}
+	}()
+
+	if !managedRelayConnected(mr) {
+		p.recordRelayReconnect(mr.url)
+		p.connectOne(authCtx, mr)
+	}
+	subs, err := p.subscribeConnectedRelay(authCtx, relayCtx, mr, filters)
+	if err != nil {
+		return nil, err
+	}
+	for i := range subs {
+		subs[i].cancel = relayCancel
+	}
+	keepContext = true
+	return subs, nil
+}
+
+func (p *RelayPool) subscribeConnectedRelay(authCtx, subscriptionCtx context.Context, mr *managedRelay, filters []nostr.Filter) ([]relaySubscription, error) {
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	if !mr.connected || mr.relay == nil {
+		return nil, fmt.Errorf("relay %s is not connected", mr.url)
+	}
+
+	subs := make([]relaySubscription, 0, len(filters))
+	for _, filter := range filters {
+		sub, err := subscribeOnRelay(mr.relay, subscriptionCtx, filter)
+		recordedAuthUnavailable := false
+		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
+			if authErr := p.authenticateManagedRelayLocked(authCtx, mr); authErr == nil {
+				sub, err = subscribeOnRelay(mr.relay, subscriptionCtx, filter)
+			} else {
+				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
+				recordedAuthUnavailable = true
+			}
+		}
+		if err != nil {
+			if !recordedAuthUnavailable {
+				p.recordRelayError(mr.url, err.Error())
+			}
+			return nil, err
+		}
+		subs = append(subs, relaySubscription{relayURL: mr.url, sub: sub})
+	}
+	p.recordRelayConnectionState(mr.url, true)
+	return subs, nil
+}
+
+func (p *RelayPool) unregisterActiveSubscription(id uint64) {
+	p.mu.Lock()
+	delete(p.activeSubscriptions, id)
+	p.mu.Unlock()
+	p.pruneRetiredRelays()
+}
+
+func (p *RelayPool) pruneRetiredRelays() {
+	p.mu.Lock()
+	toClose := make([]*managedRelay, 0)
+	for url, relay := range p.retiredRelays {
+		inUse := false
+		for _, subscription := range p.activeSubscriptions {
+			if subscription.hasRelay(url) {
+				inUse = true
+				break
+			}
+		}
+		if !inUse {
+			delete(p.retiredRelays, url)
+			toClose = append(toClose, relay)
+		}
+	}
+	p.mu.Unlock()
+	for _, relay := range toClose {
+		closeManagedRelay(p, relay)
+	}
+}
+
+func closeManagedRelay(pool *RelayPool, mr *managedRelay) {
+	if mr == nil {
+		return
+	}
+	mr.mu.Lock()
+	if mr.relay != nil {
+		mr.relay.Close()
+	}
+	mr.connected = false
+	mr.lastErr = nil
+	pool.recordRelayConnectionState(mr.url, false)
+	mr.mu.Unlock()
 }
 
 func mergeSubscriptions(ctx context.Context, subs []*nostr.Subscription, buffer int) *MergedSubscription {
@@ -1338,20 +1737,33 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 	return p.authenticateManagedRelayLocked(ctx, &managedRelay{url: relayURL, relay: relay, connected: true})
 }
 
-// Close disconnects all relays and stops reconnection.
+// Close disconnects all relays, subscriptions, and reconnection work.
 func (p *RelayPool) Close() {
 	p.cancel()
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	active := make([]*activeMergedSubscription, 0, len(p.activeSubscriptions))
+	for _, subscription := range p.activeSubscriptions {
+		active = append(active, subscription)
+	}
+	p.mu.RUnlock()
+	for _, subscription := range active {
+		subscription.close()
+	}
 
-	for _, mr := range p.relays {
-		mr.mu.Lock()
-		if mr.relay != nil {
-			mr.relay.Close()
-		}
-		mr.connected = false
-		p.recordRelayConnectionState(mr.url, false)
-		mr.mu.Unlock()
+	p.mu.Lock()
+	relays := make([]*managedRelay, 0, len(p.relays)+len(p.retiredRelays))
+	for _, relay := range p.relays {
+		relays = append(relays, relay)
+	}
+	for _, relay := range p.retiredRelays {
+		relays = append(relays, relay)
+	}
+	p.relays = make(map[string]*managedRelay)
+	p.retiredRelays = make(map[string]*managedRelay)
+	p.mu.Unlock()
+
+	for _, relay := range relays {
+		closeManagedRelay(p, relay)
 	}
 }

@@ -45,7 +45,6 @@ func newRelayTopologyCoordinator(cfg relayTopologyCoordinatorConfig) *relayTopol
 }
 
 func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state controlplane.RelayPolicyState) error {
-	_ = ctx
 	if c == nil {
 		return nil
 	}
@@ -61,15 +60,15 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 	serviceRelays, reconfigureService := c.serviceRelaysForSnapshot(state, controlPlaneRelays)
 
 	if reconfigureControlPlane && c.controlPlanePool != nil {
-		result := c.controlPlanePool.ReconfigureRelayURLs(controlPlaneRelays)
+		result := c.controlPlanePool.ReconfigureRelayURLsContext(ctx, controlPlaneRelays)
 		c.logReconfigureResult("control_plane", result)
 	}
 	if reconfigureControlPlane && c.responsePool != nil {
-		result := c.responsePool.ReconfigureRelayURLs(controlPlaneRelays)
+		result := c.responsePool.ReconfigureRelayURLsContext(ctx, controlPlaneRelays)
 		c.logReconfigureResult("contextvm_response", result)
 	}
 	if reconfigureService && c.servicePool != nil {
-		result := c.servicePool.ReconfigureRelayURLs(serviceRelays)
+		result := c.servicePool.ReconfigureRelayURLsContext(ctx, serviceRelays)
 		c.logReconfigureResult("service_interop", result)
 	}
 	return nil
@@ -123,7 +122,20 @@ func (c *relayTopologyCoordinator) logReconfigureResult(poolName string, result 
 		c.logger.Debug("relay pool topology already converged", zap.String("pool", poolName), zap.Strings("relays", result.CurrentURLs))
 		return
 	}
-	c.logger.Info("relay pool topology reconfigured from canonical relay policy", zap.String("pool", poolName), zap.Strings("previous_relays", result.PreviousURLs), zap.Strings("current_relays", result.CurrentURLs), zap.Strings("added_relays", result.AddedURLs), zap.Strings("removed_relays", result.RemovedURLs))
+	fields := []zap.Field{
+		zap.String("pool", poolName),
+		zap.Strings("previous_relays", result.PreviousURLs),
+		zap.Strings("current_relays", result.CurrentURLs),
+		zap.Strings("added_relays", result.AddedURLs),
+		zap.Strings("removed_relays", result.RemovedURLs),
+		zap.Int("active_subscriptions", result.ActiveSubscriptions),
+		zap.Int("migrated_subscriptions", result.MigratedSubscriptions),
+	}
+	if len(result.MigrationErrors) > 0 {
+		c.logger.Warn("relay pool topology changed with active subscription migration errors", append(fields, zap.Strings("migration_errors", result.MigrationErrors))...)
+		return
+	}
+	c.logger.Info("relay pool topology reconfigured from canonical relay policy", fields...)
 }
 
 func relayPolicySnapshotHasRuntimeTopology(state controlplane.RelayPolicyState) bool {

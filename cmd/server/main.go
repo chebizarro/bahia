@@ -23,45 +23,90 @@ func main() {
 	}
 }
 
+type serverApplication interface {
+	RunContext(context.Context) error
+}
+
+type serverSignalSource struct {
+	root   context.Context
+	reload <-chan os.Signal
+	stop   func()
+}
+
+type serverDependencies struct {
+	loadConfig     func(string) (*config.Config, error)
+	newApplication func(*config.Config) (serverApplication, error)
+	newSignals     func() serverSignalSource
+	logf           func(string, ...any)
+}
+
 func run(configPath string) error {
-	cfg, err := config.Load(configPath)
+	return runWithDependencies(configPath, serverDependencies{
+		loadConfig: config.Load,
+		newApplication: func(cfg *config.Config) (serverApplication, error) {
+			return app.New(cfg)
+		},
+		newSignals: productionSignalSource,
+		logf:       log.Printf,
+	})
+}
+
+func productionSignalSource() serverSignalSource {
+	rootCtx, stopRoot := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	reload := make(chan os.Signal, 1)
+	signal.Notify(reload, syscall.SIGHUP)
+	return serverSignalSource{
+		root:   rootCtx,
+		reload: reload,
+		stop: func() {
+			signal.Stop(reload)
+			stopRoot()
+		},
+	}
+}
+
+func runWithDependencies(configPath string, deps serverDependencies) error {
+	cfg, err := deps.loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	application, err := app.New(cfg)
+	application, err := deps.newApplication(cfg)
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
 
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	reload := make(chan os.Signal, 1)
-	signal.Notify(reload, syscall.SIGHUP)
-	defer signal.Stop(reload)
+	signals := deps.newSignals()
+	if signals.stop != nil {
+		defer signals.stop()
+	}
+	logf := deps.logf
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 
 	for {
-		runCtx, cancel := context.WithCancel(rootCtx)
+		runCtx, cancel := context.WithCancel(signals.root)
 		done := make(chan error, 1)
-		go func(current *app.App) { done <- current.RunContext(runCtx) }(application)
+		go func(current serverApplication) { done <- current.RunContext(runCtx) }(application)
 
 	running:
 		for {
 			select {
-			case <-rootCtx.Done():
+			case <-signals.root.Done():
 				cancel()
 				return <-done
 			case err := <-done:
 				cancel()
 				return err
-			case <-reload:
-				candidateConfig, loadErr := config.Load(configPath)
+			case <-signals.reload:
+				candidateConfig, loadErr := deps.loadConfig(configPath)
 				if loadErr != nil {
-					log.Printf("config reload rejected; keeping current application: %v", loadErr)
+					logf("config reload rejected; keeping current application: %v", loadErr)
 					continue
 				}
-				candidate, initErr := app.New(candidateConfig)
+				candidate, initErr := deps.newApplication(candidateConfig)
 				if initErr != nil {
-					log.Printf("config reload initialization rejected; keeping current application: %v", initErr)
+					logf("config reload initialization rejected; keeping current application: %v", initErr)
 					continue
 				}
 				cancel()
@@ -69,7 +114,7 @@ func run(configPath string) error {
 					return runErr
 				}
 				application = candidate
-				log.Printf("config reload applied from %s", configPath)
+				logf("config reload applied from %s", configPath)
 				break running
 			}
 		}
