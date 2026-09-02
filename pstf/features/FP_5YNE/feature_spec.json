@@ -1,0 +1,19 @@
+{
+  "feature_id": "FP_5YNE",
+  "beads": ["fp-5yne", "fp-3eme"],
+  "source_decision": "fleet-planning/docs/designs/hygiene-observation-transport.md section 7.1",
+  "scope": "Standards-conformant NIP-59 transport for Bahia maintenance ContextVM requests and worker immediate responses.",
+  "intended_behavior": [
+    "Bahia publishes every maintenance/* command as a standards-conformant stored NIP-59 gift wrap around a canonical ContextVM 25910 rumor.",
+    "The serialized relay event does not expose absolute host filesystem paths, the Bahia signer pubkey, or the inner JSON-RPC payload.",
+    "A high-entropy nonce remains inside each encrypted maintenance rumor so public event-id correlation cannot be used to confirm guessed path payloads.",
+    "The request receipt identifies the rumor id used by the worker response e-tag and advertises kind 1059 for request and immediate response.",
+    "The worker dual-reads legacy traffic during ordered rollout, mirrors the received wrapper format, and can explicitly reject non-NIP-59 traffic after cutover.",
+    "Maintenance ACL authorization and embedded Tier-2 approval verification continue to operate on the authenticated unwrapped requester and unchanged params."
+  ],
+  "out_of_scope": [
+    "Wrapping unrelated Bahia ContextVM publishers.",
+    "Implementing the downstream HygieneObservationSource tracked by fp-20aa.",
+    "Encrypting canonical 30315 status or 4903 audit events; those projections must instead omit path-bearing details."
+  ]
+}

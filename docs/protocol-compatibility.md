@@ -60,6 +60,8 @@ ContextVM kind `25910` is the canonical mutation request/response envelope. Bahi
 
 Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`). The verified inner ContextVM event pubkey is the authorization subject after unwrap.
 
+The maintenance control leg is not optional encryption: Bahia writes conformant NIP-59 kind `1059` for every `maintenance/*` request, and workers answer conformant NIP-59 when the request arrived that way. Rollout is reader-first: workers temporarily dual-read plaintext, legacy direct encryption, and NIP-59 without downgrading wrapped responses; after all Bahia writers are upgraded, worker `require_nip59` is enabled and the legacy maintenance readers are retired.
+
 A ContextVM response is command acknowledgment only. Clients must follow canonical observables for progress, terminal state, audit, and convergence.
 
 The `environment/update` complete-set unit contract uses optimistic concurrency: when `deployment_units` is present, `expected_updated_at` is required. A stale revision returns JSON-RPC code `-32009` before database or canonical registry mutation. Clients reread and deliberately remerge before signing a retry; they must not fall back to an unguarded write.

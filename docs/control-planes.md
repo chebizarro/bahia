@@ -273,6 +273,8 @@ The notification bridge uses the internal event type `security.policy_breached` 
 
 Operator workflows are ContextVM JSON-RPC requests carried as kind `25910`, usually inside CEP-4/NIP-59 gift-wrap (`1059` or `21059`). They are not REST RPC and must be followed as event streams: publish the ContextVM request, subscribe for the correlated ContextVM response and canonical observables, process `30315` statuses and `4903` audit facts as progress/evidence, and treat canonical state convergence (`30900`/domain NIPs) plus explicit JSON-RPC errors as the durable truth. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep subscriptions open for realtime replies.
 
+`maintenance/*` is a stricter sub-protocol: Bahia publishes a conformant NIP-59 `1059`, the worker returns a conformant NIP-59 `1059`, and absolute host paths exist only inside the authenticated rumor payload. Public `30315`/`4903` projections use opaque request-event correlation and omit path-bearing details.
+
 CLI behavior:
 
 - `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use ContextVM methods such as `adoption/scan`, `adoption/import`, `service/deploy`, `service/restart`, and `service/stop`.

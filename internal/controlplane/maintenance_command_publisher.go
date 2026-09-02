@@ -121,16 +121,19 @@ func (p *MaintenanceCommandPublisher) publish(ctx context.Context, method, comma
 	if cmd.Confirm {
 		content["confirm"] = true
 	}
-	tags := nostr.Tags{{"command", command}, {"worker", workerPubKey}, {"p", workerPubKey}}
-	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, cmd.AgentID, tags, content, "maintenance command")
+	// The nonce stays inside the encrypted rumor. It prevents public audit/status
+	// references to the rumor id from becoming a dictionary oracle for guessed
+	// path payloads, including when a caller supplies a predictable idempotency key.
+	tags := nostr.Tags{{"command", command}, {"worker", workerPubKey}, {"p", workerPubKey}, {"privacy-nonce", uuid.NewString()}}
+	ev, published, dTag, err := publishContextVMCommandNIP59(ctx, p.publisher, p.signer, workerPubKey, method, dTag, cmd.AgentID, tags, content, "maintenance command")
 	if err != nil {
 		return nil, err
 	}
 	return &WorkerCommandReceipt{
 		RequestEventID:  ev.ID.Hex(),
 		RequestPubkey:   ev.PubKey.Hex(),
-		RequestKind:     KindContextVMMessage,
-		ResultKind:      KindCASControlState,
+		RequestKind:     KindContextVMGiftWrap,
+		ResultKind:      KindContextVMGiftWrap,
 		StateKind:       KindCASControlState,
 		DTag:            dTag,
 		PublishedRelays: published,

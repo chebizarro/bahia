@@ -5,6 +5,7 @@
 Bahia publishes signed Nostr events for control-plane intent, state, status, discovery, relay topology, and audit. The production contract is Nostr-native and ContextVM-first:
 
 - **Intent/mutation**: ContextVM JSON-RPC kind `25910`, usually encrypted with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`).
+- **Maintenance intent/result**: ContextVM `25910` inside standards-conformant NIP-59 kind `1059` in both directions; filesystem paths are forbidden from plaintext `30315`/`4903` projections.
 - **State**: canonical control-plane projections in kind `30900`, plus NIP-78 app-specific data in kind `30078`.
 - **Status**: NIP-38 operational status kind `30315`.
 - **Assistant transcript**: service-authored kind `30316` with a service-held symmetric-key AEAD envelope in `content` and key-reference/rotation tags.

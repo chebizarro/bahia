@@ -17,6 +17,8 @@ Nostr provides:
 
 Bahia clients now separate private mutation intent from public observable truth. Mutations are ContextVM JSON-RPC requests carried as kind `25910` messages, normally encrypted with ContextVM CEP-4/NIP-59 gift-wrap (`1059` or `21059`). Public reads subscribe to canonical observable/state kinds such as `30900`, `4903`, `30315`, `11316`-`11320`, `30002`, and `30078`.
 
+Maintenance commands are always carried as standards-conformant NIP-59 kind `1059`, and workers return the immediate ContextVM response the same way. Absolute host filesystem paths are visible only after an authorized recipient unwraps the rumor; public audit/status events retain opaque correlation without path details.
+
 ```json
 {
   "kind": 25910,

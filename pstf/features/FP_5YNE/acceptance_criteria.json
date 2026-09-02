@@ -1,0 +1,25 @@
+{
+  "feature_id": "FP_5YNE",
+  "criteria": [
+    {
+      "id": "AC-FP-5YNE-001",
+      "statement": "Bahia maintenance commands publish only a conformant NIP-59 kind-1059 outer event and preserve correlation on the canonical rumor.",
+      "verification": ["go test ./internal/controlplane -run TestMaintenanceCommandPublisher"]
+    },
+    {
+      "id": "AC-FP-5YNE-002",
+      "statement": "An absolute candidate path is absent from the serialized Bahia-to-worker wire event and recoverable only by the intended recipient.",
+      "verification": ["go test ./internal/controlplane -run TestMaintenanceCommandPublisherQuarantineCarriesPaths"]
+    },
+    {
+      "id": "AC-FP-5YNE-003",
+      "statement": "Cascadia mirrors NIP-59 and legacy wrapped requests without plaintext response fallback, and required mode rejects plaintext before driver dispatch.",
+      "verification": ["go test ./worker -run 'Test(Runtime(NIP59MaintenanceWire|AcceptBothMirrorsLegacy|RequireNIP59RejectsPlaintext)|MaintenancePublicFailureProjections)'"]
+    },
+    {
+      "id": "AC-FP-5YNE-004",
+      "statement": "Maintenance ACL and Tier-2 signed approval tests remain green with the transport change.",
+      "verification": ["go test ./worker/drivers/maintenance"]
+    }
+  ]
+}

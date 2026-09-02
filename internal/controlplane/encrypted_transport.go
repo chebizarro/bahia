@@ -598,9 +598,8 @@ func (t *EncryptedRequestTransport) unwrapContextVMEvent(ctx context.Context, ev
 	if event.Kind == KindContextVMGiftWrap {
 		return cascontextvm.Unwrap(ctx, t.responder.signer, event)
 	}
-	// cascadia-go v0.7.0 Wrap/Unwrap covers stored NIP-59 gift-wrap (1059).
-	// Bahia still accepts the local ephemeral 21059 policy surface until the lib
-	// grows an ephemeral wrapper option.
+	// cascadia-go Wrap/Unwrap covers the legacy stored direct-encryption
+	// envelope. Bahia still accepts the local ephemeral 21059 policy surface.
 	conversationKey, err := t.responder.conversationKey(event.PubKey.Hex())
 	if err != nil {
 		return nil, err

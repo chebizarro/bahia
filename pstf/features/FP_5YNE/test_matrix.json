@@ -1,0 +1,41 @@
+{
+  "feature_id": "FP_5YNE",
+  "tests": [
+    {
+      "test": "TestMaintenanceCommandPublisherPublishesIntentsWithCorrelation",
+      "criteria": ["AC-FP-5YNE-001"],
+      "type": "unit",
+      "notes": "Unwraps the published event with UnwrapNIP59 and pins rumor-id receipt correlation plus random outer authorship."
+    },
+    {
+      "test": "TestMaintenanceCommandPublisherQuarantineCarriesPaths",
+      "criteria": ["AC-FP-5YNE-002"],
+      "type": "wire privacy",
+      "notes": "Serializes the outer event and asserts the absolute path is absent before recipient unwrap."
+    },
+    {
+      "test": "TestRuntimeNIP59MaintenanceWireHidesPathsAndPreservesAuthorization",
+      "criteria": ["AC-FP-5YNE-002", "AC-FP-5YNE-003", "AC-FP-5YNE-004"],
+      "type": "cross-layer unit",
+      "notes": "Authenticates the rumor author through NIP-59, executes the ACL-authorized request, unwraps the response, and checks 25910, 4903, and 30315 wire events for path absence."
+    },
+    {
+      "test": "TestRuntimeAcceptBothMirrorsLegacyGiftWrapWithoutPlaintextFallback",
+      "criteria": ["AC-FP-5YNE-003"],
+      "type": "compatibility",
+      "notes": "Pins reader-first rollout compatibility for a legacy direct-encryption peer without permitting a plaintext response downgrade."
+    },
+    {
+      "test": "TestRuntimeRequireNIP59RejectsPlaintextBeforeDispatch",
+      "criteria": ["AC-FP-5YNE-003"],
+      "type": "negative security",
+      "notes": "Proves final cutover mode rejects a plaintext maintenance request before the driver runs and returns a path-free explicit error."
+    },
+    {
+      "test": "TestMaintenancePublicFailureProjectionsHidePaths",
+      "criteria": ["AC-FP-5YNE-002"],
+      "type": "negative wire privacy",
+      "notes": "Injects path-bearing audit target, correlation, progress, request id, and raw error inputs and proves 4903/30315 serialize without the path."
+    }
+  ]
+}

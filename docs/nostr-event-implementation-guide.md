@@ -57,6 +57,7 @@ Use ContextVM.
 - Content: JSON-RPC 2.0
 - Method: `<domain>/<operation>`
 - Sensitive payloads: wrap the ContextVM message with CEP-4/NIP-59 kind `1059`, or `21059` when ephemeral gift-wrap is supported.
+- Maintenance methods are stricter: `maintenance/*` requests and immediate responses use the standards-conformant NIP-59 rumor → seal → kind-`1059` construction. Plaintext `25910` and the older direct-encryption envelope are transition readers only, never maintenance writer fallbacks.
 - Correlate retries with a stable idempotency key.
 
 Examples:
@@ -296,7 +297,7 @@ Sensitive production traffic should encrypt that message as a NIP-59 gift wrap:
 }
 ```
 
-After unwrap, Bahia must verify the inner event signature and authorize the inner sender before executing.
+After conformant NIP-59 unwrap, Bahia must verify the seal and canonical unsigned rumor, then authorize the seal-authenticated rumor author before executing. A NIP-59 rumor is intentionally unsigned; treating its missing signature as an authorization bypass or failure is incorrect.
 
 ### NIP-38 status
 
