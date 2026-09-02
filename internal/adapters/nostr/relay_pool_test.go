@@ -442,7 +442,7 @@ func TestRelayPoolReconfigureRelayURLsMigratesAddedRelayIntoActiveSubscription(t
 		subs[relay.URL] = sub
 		return sub, nil
 	})
-	setConnectRelayForTest(t, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
 		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
 	})
 
@@ -480,7 +480,7 @@ func TestRelayPoolReconfigureRelayURLsAddRemoveDeduplicatesReplay(t *testing.T) 
 		subs[relay.URL] = sub
 		return sub, nil
 	})
-	setConnectRelayForTest(t, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
 		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
 	})
 
@@ -509,7 +509,7 @@ func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
 	markRelayConnectedForSubscribeTest(pool, "wss://old.example")
 	markRelayConnectedForSubscribeTest(pool, "wss://keep.example")
 	oldRelay := pool.relays["wss://old.example"].relay
-	setConnectRelayForTest(t, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
 		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
 	})
 
@@ -564,9 +564,9 @@ func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Co
 	t.Cleanup(func() { subscribeOnRelay = original })
 }
 
-func setConnectRelayForTest(t *testing.T, fn func(context.Context, string, gonostr.RelayOptions) (*gonostr.Relay, error)) {
+func setConnectRelayForTest(t *testing.T, pool *RelayPool, fn func(context.Context, string, gonostr.RelayOptions) (*gonostr.Relay, error)) {
 	t.Helper()
-	original := connectRelay
-	connectRelay = fn
-	t.Cleanup(func() { connectRelay = original })
+	original := pool.connectRelay
+	pool.connectRelay = fn
+	t.Cleanup(func() { pool.connectRelay = original })
 }

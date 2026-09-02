@@ -33,6 +33,7 @@ type RelayPool struct {
 	cancel              context.CancelFunc
 	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
 	authSigner          nostr.Signer
+	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
 }
 
 type managedRelay struct {
@@ -41,10 +42,6 @@ type managedRelay struct {
 	connected bool
 	lastErr   error
 	mu        sync.Mutex
-}
-
-var connectRelay = func(ctx context.Context, url string, opts nostr.RelayOptions) (*nostr.Relay, error) {
-	return nostr.RelayConnect(ctx, url, opts)
 }
 
 // RelayPoolOption configures a RelayPool.
@@ -90,6 +87,7 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		logger:              logger,
 		ctx:                 ctx,
 		cancel:              cancel,
+		connectRelay:        nostr.RelayConnect,
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
@@ -304,7 +302,7 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 	// Build relay options with AUTH handler if private key is configured.
 	opts := p.buildRelayOptions(mr.url)
 
-	relay, err := connectRelay(connectCtx, mr.url, opts)
+	relay, err := p.connectRelay(connectCtx, mr.url, opts)
 	if err != nil {
 		mr.connected = false
 		mr.lastErr = err
@@ -446,7 +444,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		opts := p.buildRelayOptions(mr.url)
-		relay, err := connectRelay(connectCtx, mr.url, opts)
+		relay, err := p.connectRelay(connectCtx, mr.url, opts)
 		if err != nil {
 			mr.connected = false
 			mr.lastErr = err
@@ -660,7 +658,7 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 			p.recordRelayReconnect(mr.url)
 			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			opts := p.buildRelayOptions(mr.url)
-			relay, err := connectRelay(connectCtx, mr.url, opts)
+			relay, err := p.connectRelay(connectCtx, mr.url, opts)
 			cancel()
 			if err != nil {
 				mr.connected = false
