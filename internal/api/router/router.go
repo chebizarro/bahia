@@ -434,7 +434,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Deprecated policy REST mutations are intentionally not mounted.
-			// Signer-first Nostr policy command kinds 5986-5989 are the supported replacement.
+			// Signer-first Nostr policy command kinds retired-kind-retired-kind are the supported replacement.
 
 			// Secrets (write)
 			if deps.Secrets != nil && deps.Encryptor != nil {

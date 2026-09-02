@@ -19,7 +19,7 @@ const (
 	HiveCIProcessingStateFailed          HiveCIProcessingState = "failed"
 )
 
-// HiveCIWorkflowRun represents parsed Hive-CI kind 5401 event data.
+// HiveCIWorkflowRun represents parsed Hive-CI kind retired-kind event data.
 type HiveCIWorkflowRun struct {
 	RunEventID      string                `json:"run_event_id"`
 	RepoCoordinate  string                `json:"repo_coordinate"`
@@ -36,7 +36,7 @@ type HiveCIWorkflowRun struct {
 	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
-// HiveCIWorkflowResult represents parsed Hive-CI kind 5402 event data.
+// HiveCIWorkflowResult represents parsed Hive-CI kind retired-kind event data.
 type HiveCIWorkflowResult struct {
 	ResultEventID   string                `json:"result_event_id"`
 	RunEventID      string                `json:"run_event_id"`
@@ -48,6 +48,8 @@ type HiveCIWorkflowResult struct {
 	ImageRepo       string                `json:"image_repo,omitempty"`
 	ImageTag        string                `json:"image_tag,omitempty"`
 	ImageDigest     string                `json:"image_digest,omitempty"`
+	PSTFGateName    string                `json:"pstf_gate_name,omitempty"`
+	PSTFGateStatus  string                `json:"pstf_gate_status,omitempty"`
 	PublisherPubkey string                `json:"publisher_pubkey"`
 	EventCreatedAt  time.Time             `json:"event_created_at"`
 	ProcessingState HiveCIProcessingState `json:"processing_state"`
@@ -102,6 +104,8 @@ type RepositoryCIResultSummary struct {
 	ImageRepo       string                `json:"image_repo,omitempty"`
 	ImageTag        string                `json:"image_tag,omitempty"`
 	ImageDigest     string                `json:"image_digest,omitempty"`
+	PSTFGateName    string                `json:"pstf_gate_name,omitempty"`
+	PSTFGateStatus  string                `json:"pstf_gate_status,omitempty"`
 	ProcessingState HiveCIProcessingState `json:"processing_state"`
 	ProcessingError string                `json:"processing_error,omitempty"`
 	RetryCount      int                   `json:"retry_count"`

@@ -30,6 +30,7 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 		DisplayName:    "Default",
 		RuntimeType:    domain.RuntimeTypeCompose,
 		NetworkProfile: networkProfile,
+		GitSource:      &domain.GitSourceBinding{RepositoryURL: "https://git.example/bahia.git", Branch: "main", CommitSHA: "abc123"},
 		ReconcileMode:  domain.ReconcileModeObserveOnly,
 		OwnershipMode:  domain.OwnershipModeBahiaManaged,
 		RuntimeConfig:  runtimeConfig,
@@ -59,6 +60,10 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 	require.Equal(t, "prod-docker", got.EndpointRef)
 	require.Equal(t, "/srv/bahia/compose/prod", got.ComposeDir)
 	require.Equal(t, "a", got.NetworkProfile["zone"])
+	require.NotNil(t, got.GitSource)
+	require.Equal(t, "https://git.example/bahia.git", got.GitSource.RepositoryURL)
+	require.Equal(t, "main", got.GitSource.Branch)
+	require.Equal(t, "abc123", got.GitSource.CommitSHA)
 	require.Equal(t, "/srv/bahia/compose/prod", got.RuntimeConfig["compose_dir"])
 	require.NoError(t, mock.ExpectationsWereMet())
 }

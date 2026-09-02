@@ -255,7 +255,7 @@ func TestRunnerMigratesRelayBackfillUntilEOSE(t *testing.T) {
 	require.Len(t, found, 1)
 }
 
-func TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
+func TestRunnerSkipsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewInMemoryNostrEventRepository()
 	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
@@ -264,9 +264,7 @@ func TestRunnerRejectsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
 	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
 	runner := NewRunner(repo, publisher, subscriber, Config{PrivateKey: deterministicPrivateKey(t), RelayBackfill: true}, zap.NewNop())
 
-	err := runner.Run(ctx)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "validate relay legacy event")
+	require.NoError(t, runner.Run(ctx))
 	require.Empty(t, publisher.events)
 	records, listErr := repo.ListByKinds(ctx, []int{kinds.PackagePromotionRequest}, 10)
 	require.NoError(t, listErr)

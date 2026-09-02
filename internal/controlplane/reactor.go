@@ -604,7 +604,7 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	}
 	eventID := event.ID.Hex()
 	eventKind := int(event.Kind)
-	if isLegacyProductionRuntimeKind(eventKind) {
+	if isLegacyProductionRuntimeKind(eventKind) && eventKind != KindArtifactRegister {
 		r.logger.Warn("dropping legacy control-plane event after migration boundary", "event_id", eventID, "kind", eventKind)
 		return
 	}
@@ -622,11 +622,32 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	switch {
 	case isHeartbeatObservationEvent(event):
 		go r.handleHeartbeatObservation(ctx, event)
+	case isContextVMMethod(event, ContextVMMethodServiceDeploy):
+		go r.handleDeployRequest(ctx, event)
+	case eventKind == KindArtifactRegister:
+		go r.handleArtifactRegister(ctx, event)
 	case isCanonicalRuntimeReplayKind(eventKind):
 		return
 	default:
 		r.logger.Warn("unexpected event kind", "kind", eventKind)
 	}
+}
+
+func isContextVMMethod(event *nostr.Event, method string) bool {
+	if event == nil || event.Kind != KindContextVMMessage {
+		return false
+	}
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return false
+	}
+	if tagValueNostr(event.Tags, "method") == method {
+		return true
+	}
+	var rpc struct {
+		Method string `json:"method"`
+	}
+	return json.Unmarshal([]byte(event.Content), &rpc) == nil && strings.TrimSpace(rpc.Method) == method
 }
 
 // handleDeployRequest processes a legacy deployment request in direct tests.
@@ -704,7 +725,8 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		r.publishError(ctx, event, "validation_error", fmt.Sprintf("service not found: %v", err))
 		return
 	}
-	if _, err := r.registry.GetEnvironment(ctx, req.EnvironmentID); err != nil {
+	env, err := r.registry.GetEnvironment(ctx, req.EnvironmentID)
+	if err != nil {
 		logger.Error("environment not found", "error", err)
 		r.publishError(ctx, event, "validation_error", fmt.Sprintf("environment not found: %v", err))
 		return
@@ -733,12 +755,6 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
-	if r.runtimeLifecycle == nil {
-		logger.Error("runtime lifecycle service is not configured")
-		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
-		return
-	}
-
 	// Create run tracker
 	run := &DeploymentRun{
 		ID:              uuid.New(),
@@ -758,6 +774,42 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 
 	// Publish status update
 	r.publishStatus(ctx, event, "creating_intent", "Creating deployment intent")
+
+	if req.DeploymentUnitID != nil || environmentDispatchesViaLoom(env) {
+		intent := &domain.DeploymentIntent{
+			ID:               uuid.New(),
+			ServiceID:        req.ServiceID,
+			EnvironmentID:    req.EnvironmentID,
+			DeploymentUnitID: req.DeploymentUnitID,
+			ArtifactID:       req.ArtifactID,
+			RequestedBy:      event.PubKey.Hex(),
+			SourceKind:       domain.SourceKindEventTriggered,
+			Metadata:         map[string]any{"nostr_event_id": event.ID.Hex()},
+		}
+		if err := r.registry.CreateDeploymentIntent(ctx, intent); err != nil {
+			logger.Error("failed to create deployment intent", "error", err)
+			run.Status = "failed"
+			run.Error = err.Error()
+			now := time.Now()
+			run.CompletedAt = &now
+			r.publishError(ctx, event, "intent_error", err.Error())
+			return
+		}
+		run.IntentID = &intent.ID
+		run.CurrentStep = "intent_created"
+		run.Status = "completed"
+		now := time.Now()
+		run.CompletedAt = &now
+		logger.Info("deployment intent created for workflow", "intent_id", intent.ID)
+		r.publishDeploymentResult(ctx, event, intent)
+		return
+	}
+
+	if r.runtimeLifecycle == nil {
+		logger.Error("runtime lifecycle service is not configured")
+		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
+		return
+	}
 
 	// Create deployment intent
 	desiredState, err := r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID, req.DeploymentUnitID)
@@ -2189,6 +2241,7 @@ func canonicalReactorSubscriptionKinds() []int {
 		kinds.ContextVMMessage,
 		kinds.ContextVMGiftWrap,
 		kinds.ContextVMEphemeralGiftWrap,
+		kinds.ArtifactRegister,
 	}
 }
 
@@ -2330,6 +2383,20 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		return nil, fmt.Errorf("invalid JSON content: %w", err)
 	}
+	if strings.TrimSpace(content.ServiceID) == "" && strings.TrimSpace(content.EnvironmentID) == "" && strings.TrimSpace(content.ArtifactID) == "" {
+		var rpc struct {
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(event.Content), &rpc); err != nil {
+			return nil, fmt.Errorf("invalid JSON-RPC deploy content: %w", err)
+		}
+		if len(rpc.Params) == 0 {
+			return nil, fmt.Errorf("missing JSON-RPC deploy params")
+		}
+		if err := json.Unmarshal(rpc.Params, &content); err != nil {
+			return nil, fmt.Errorf("invalid JSON-RPC deploy params: %w", err)
+		}
+	}
 
 	var err error
 	req.ServiceID, err = uuid.Parse(content.ServiceID)
@@ -2352,6 +2419,12 @@ func (r *Reactor) parseDeployRequest(event *nostr.Event) (*deployRequest, error)
 			return nil, fmt.Errorf("invalid deployment_unit_id: %w", parseErr)
 		}
 		req.DeploymentUnitID = &unitID
+	} else if raw := strings.TrimSpace(tagValueNostr(event.Tags, "deployment_unit")); raw != "" {
+		unitID, parseErr := uuid.Parse(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid deployment_unit tag: %w", parseErr)
+		}
+		req.DeploymentUnitID = &unitID
 	}
 
 	return &req, nil
@@ -2362,6 +2435,21 @@ type deployRequest struct {
 	EnvironmentID    uuid.UUID
 	DeploymentUnitID *uuid.UUID
 	ArtifactID       uuid.UUID
+}
+
+func environmentDispatchesViaLoom(env *domain.Environment) bool {
+	if env == nil || env.RuntimeConfig == nil {
+		return false
+	}
+	raw, ok := env.RuntimeConfig["dispatch_mode"]
+	if !ok {
+		raw, ok = env.RuntimeConfig["execution_backend"]
+	}
+	if !ok {
+		return false
+	}
+	mode, ok := raw.(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), "loom")
 }
 
 // --- Event Publishing ---

@@ -586,6 +586,82 @@ func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
 	}
 }
 
+func TestBridge_PSTFGreenGateAllowsPromotion(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.results["res-1"].PSTFGateName = "pstf-drift"
+	h.results["res-1"].PSTFGateStatus = "green"
+	envID := uuid.New()
+	h.policy = &domain.HiveCIPipelinePolicy{
+		ServiceID:     uuid.New(),
+		EnvironmentID: envID,
+		Metadata: map[string]any{
+			"auto_deploy_staging": true,
+			"require_pstf_green":  true,
+		},
+	}
+	b := newMockBuildRepo()
+	a := newMockArtifactRepo()
+	o := newMockOCIRepo()
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		MediaType: "application/vnd.oci.image.manifest.v1+json",
+		SizeBytes: 123,
+	}
+	i := newMockIntentRepo()
+	e := newMockEnvRepo()
+	e.byID[envID] = &domain.Environment{ID: envID, Name: "edge-01-staging"}
+	bridge := newBridgeForTest(h, b, a, i, e, o)
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+		t.Fatalf("ProcessResult error: %v", err)
+	}
+	if i.created != 1 {
+		t.Fatalf("expected one intent created, got %d", i.created)
+	}
+	if h.updated["res-1"] != domain.HiveCIProcessingStateProcessed {
+		t.Fatalf("expected processed result, got %q", h.updated["res-1"])
+	}
+}
+
+func TestBridge_FailedPSTFGateBlocksPromotion(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.results["res-1"].PSTFGateName = "pstf-drift"
+	h.results["res-1"].PSTFGateStatus = "red"
+	envID := uuid.New()
+	h.policy = &domain.HiveCIPipelinePolicy{
+		ServiceID:     uuid.New(),
+		EnvironmentID: envID,
+		Metadata: map[string]any{
+			"auto_deploy_staging": true,
+			"require_pstf_green":  true,
+		},
+	}
+	b := newMockBuildRepo()
+	a := newMockArtifactRepo()
+	o := newMockOCIRepo()
+	o.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		MediaType: "application/vnd.oci.image.manifest.v1+json",
+		SizeBytes: 123,
+	}
+	i := newMockIntentRepo()
+	e := newMockEnvRepo()
+	e.byID[envID] = &domain.Environment{ID: envID, Name: "edge-01-staging"}
+	bridge := newBridgeForTest(h, b, a, i, e, o)
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+		t.Fatalf("ProcessResult error: %v", err)
+	}
+	if i.created != 0 {
+		t.Fatalf("expected failed PSTF gate to block intent creation, got %d", i.created)
+	}
+	if h.updated["res-1"] != domain.HiveCIProcessingStateRejected {
+		t.Fatalf("expected rejected result, got %q", h.updated["res-1"])
+	}
+}
+
 func TestBridge_ProtectedEnvCreatesPendingIntent(t *testing.T) {
 	h := newMockHiveRepo()
 	seedRunResult(h, "success", "trusted-pub", "trusted-pub")

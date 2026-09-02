@@ -1241,7 +1241,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_policy",
-			Description: "Publish a signed PolicyCreate (kind 5986) request and return relay/follow correlation metadata",
+			Description: "Publish a signed PolicyCreate (kind retired-kind) request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1275,7 +1275,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_update_policy",
-			Description: "Publish a signed PolicyUpdate (kind 5987) request and return relay/follow correlation metadata",
+			Description: "Publish a signed PolicyUpdate (kind retired-kind) request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1313,7 +1313,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_delete_policy",
-			Description: "Publish a signed PolicyDelete (kind 5988) request and return relay/follow correlation metadata",
+			Description: "Publish a signed PolicyDelete (kind retired-kind) request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1331,7 +1331,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_evaluate_policy",
-			Description: "Publish a signed PolicyEvaluate (kind 5989) request and return relay/follow correlation metadata",
+			Description: "Publish a signed PolicyEvaluate (kind retired-kind) request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1549,12 +1549,12 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_tool_provision_approve",
-			Description: "Publish a signed ToolApprovalResponse (kind 7977) approval and return relay/follow correlation metadata",
+			Description: "Publish a signed ToolApprovalResponse (kind retired-kind) approval and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}, "reason": map[string]interface{}{"type": "string", "description": "Approval reason"}, "idempotency_key": map[string]interface{}{"type": "string", "description": "Optional Nostr d tag for idempotency/correlation"}}, "required": []string{"intent_id", "reason"}},
 		},
 		{
 			Name:        "bahia_tool_provision_reject",
-			Description: "Publish a signed ToolApprovalResponse (kind 7977) rejection and return relay/follow correlation metadata",
+			Description: "Publish a signed ToolApprovalResponse (kind retired-kind) rejection and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}, "reason": map[string]interface{}{"type": "string", "description": "Rejection reason"}, "idempotency_key": map[string]interface{}{"type": "string", "description": "Optional Nostr d tag for idempotency/correlation"}}, "required": []string{"intent_id", "reason"}},
 		},
 		{

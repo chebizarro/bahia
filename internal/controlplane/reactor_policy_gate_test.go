@@ -99,6 +99,271 @@ func TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState(t *te
 	assertReactorTag(t, capture.events[len(capture.events)-1].Tags, "desired_hash", desired.DesiredHash)
 }
 
+func TestHandleEventDispatchesContextVMServiceDeployRequest(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	artifactID := uuid.New()
+
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod", Protected: false}}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:abc"}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		&testBuildRepo{},
+		artifactRepo,
+		intentRepo,
+		runRepo,
+		&testObservationRepo{},
+		&testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}},
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	policyService := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	desired := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api@sha256:abc"}
+	desired.ComputeDesiredHash()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		desiredState: desired,
+		deployResp:   &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
+	}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, policyService, runtimeStub)
+
+	dTag := "service-deploy:contextvm-test"
+	event := &nostr.Event{
+		Kind:      KindContextVMMessage,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", dTag},
+			{"method", ContextVMMethodServiceDeploy},
+			{"contextvm", ContextVMWireVersion},
+			{"service", serviceID.String()},
+			{"environment", environmentID.String()},
+			{"artifact", artifactID.String()},
+		},
+		Content: fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"method":"service/deploy","params":{"service_id":"%s","environment_id":"%s","artifact_id":"%s","_meta":{"progressToken":%q}}}`, dTag, serviceID, environmentID, artifactID, dTag),
+	}
+	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
+		t.Fatalf("sign ContextVM deploy event: %v", err)
+	}
+
+	reactor.handleEvent(ctx, event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !runtimeStub.deployCalled && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !runtimeStub.deployCalled {
+		t.Fatal("canonical ContextVM service/deploy event did not invoke RuntimeLifecycleService.DeployWithStatus")
+	}
+	if got := len(intentRepo.intents); got != 1 {
+		t.Fatalf("deployment intents created = %d, want 1", got)
+	}
+	if got := len(runRepo.runs); got != 1 {
+		t.Fatalf("deployment runs created = %d, want 1", got)
+	}
+}
+
+func TestHandleEventContextVMServiceDeployWithDeploymentUnitCreatesIntentForWorkflow(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	artifactID := uuid.New()
+	deploymentUnitID := uuid.New()
+
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod", Protected: false}}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:abc"}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		&testBuildRepo{},
+		artifactRepo,
+		intentRepo,
+		runRepo,
+		&testObservationRepo{},
+		stateRepo,
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	policyService := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	runtimeStub := &stubRuntimeLifecycleOperatorService{}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, policyService, runtimeStub)
+
+	dTag := "service-deploy:contextvm-unit-test"
+	event := &nostr.Event{
+		Kind:      KindContextVMMessage,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", dTag},
+			{"method", ContextVMMethodServiceDeploy},
+			{"contextvm", ContextVMWireVersion},
+			{"service", serviceID.String()},
+			{"environment", environmentID.String()},
+			{"artifact", artifactID.String()},
+			{"deployment_unit", deploymentUnitID.String()},
+		},
+		Content: fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"method":"service/deploy","params":{"service_id":"%s","environment_id":"%s","artifact_id":"%s","deployment_unit_id":"%s","_meta":{"progressToken":%q}}}`, dTag, serviceID, environmentID, artifactID, deploymentUnitID, dTag),
+	}
+	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
+		t.Fatalf("sign ContextVM deploy event: %v", err)
+	}
+
+	reactor.handleEvent(ctx, event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(intentRepo.intents) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runtimeStub.deployCalled {
+		t.Fatal("explicit deployment-unit deploy should be handed to the workflow coordinator, not direct runtime")
+	}
+	if got := len(intentRepo.intents); got != 1 {
+		t.Fatalf("deployment intents created = %d, want 1", got)
+	}
+	var persisted *domain.DeploymentIntent
+	for _, intent := range intentRepo.intents {
+		persisted = intent
+	}
+	if persisted.DeploymentUnitID == nil || *persisted.DeploymentUnitID != deploymentUnitID {
+		t.Fatalf("deployment intent unit = %v, want %s", persisted.DeploymentUnitID, deploymentUnitID)
+	}
+	state := stateRepo.states[serviceID.String()+":"+environmentID.String()]
+	if state == nil || state.DeploymentUnitID == nil || *state.DeploymentUnitID != deploymentUnitID {
+		t.Fatalf("environment service state unit = %v, want %s", state, deploymentUnitID)
+	}
+	if got := len(runRepo.runs); got != 0 {
+		t.Fatalf("direct deployment runs created = %d, want 0", got)
+	}
+}
+
+func TestHandleEventContextVMServiceDeployWithLoomEnvironmentCreatesIntentForWorkflow(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	artifactID := uuid.New()
+
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod", Protected: false, RuntimeConfig: map[string]any{"dispatch_mode": "loom"}}}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:abc"}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		&testBuildRepo{},
+		artifactRepo,
+		intentRepo,
+		runRepo,
+		&testObservationRepo{},
+		&testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}},
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	policyService := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	runtimeStub := &stubRuntimeLifecycleOperatorService{}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, policyService, runtimeStub)
+
+	dTag := "service-deploy:contextvm-implicit-loom-test"
+	event := &nostr.Event{
+		Kind:      KindContextVMMessage,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", dTag},
+			{"method", ContextVMMethodServiceDeploy},
+			{"contextvm", ContextVMWireVersion},
+			{"service", serviceID.String()},
+			{"environment", environmentID.String()},
+			{"artifact", artifactID.String()},
+		},
+		Content: fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"method":"service/deploy","params":{"service_id":"%s","environment_id":"%s","artifact_id":"%s","_meta":{"progressToken":%q}}}`, dTag, serviceID, environmentID, artifactID, dTag),
+	}
+	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
+		t.Fatalf("sign ContextVM deploy event: %v", err)
+	}
+
+	reactor.handleEvent(ctx, event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(intentRepo.intents) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runtimeStub.deployCalled {
+		t.Fatal("implicit Loom environment deploy should be handed to the workflow coordinator, not direct runtime")
+	}
+	if got := len(intentRepo.intents); got != 1 {
+		t.Fatalf("deployment intents created = %d, want 1", got)
+	}
+	if got := len(runRepo.runs); got != 0 {
+		t.Fatalf("direct deployment runs created = %d, want 0", got)
+	}
+}
+
+type artifactRegistrationVerifier struct {
+	digest string
+}
+
+func (v artifactRegistrationVerifier) VerifyImage(context.Context, string, string) (*service.ImageVerification, error) {
+	return &service.ImageVerification{Exists: true, Digest: v.digest}, nil
+}
+
+func TestHandleEventDispatchesArtifactRegisterRequest(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	buildID := uuid.New()
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api", ArtifactRepo: "docker.io/library/busybox"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: uuid.New(), Name: "prod"}}
+	buildRepo := &testBuildRepo{build: &domain.Build{ID: buildID, ServiceID: serviceID, Status: domain.BuildStatusSucceeded}}
+	artifactRepo := &testArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}}
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		buildRepo,
+		artifactRepo,
+		&testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}},
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}},
+		&testObservationRepo{},
+		&testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}},
+		artifactRegistrationVerifier{digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		&events.NoopPublisher{},
+		zap.NewNop(),
+		service.WithManualArtifactRegistration(true),
+	)
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, nil)
+
+	event := &nostr.Event{
+		Kind:      KindArtifactRegister,
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{{"service", serviceID.String()}, {"build", buildID.String()}, {"digest", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		Content:   fmt.Sprintf(`{"build_id":"%s","service_id":"%s","image_repo":"docker.io/library/busybox","image_tag":"latest","image_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scan_status":"clean"}`, buildID, serviceID),
+	}
+	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
+		t.Fatalf("sign artifact register event: %v", err)
+	}
+
+	reactor.handleEvent(ctx, event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(artifactRepo.artifacts) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := len(artifactRepo.artifacts); got != 1 {
+		t.Fatalf("artifacts created = %d, want 1", got)
+	}
+}
+
 func TestHandleRollbackRequestExecutesSharedDesiredStateDeployPath(t *testing.T) {
 	ctx := context.Background()
 	serviceID := uuid.New()
@@ -710,10 +975,16 @@ func (r *testEnvironmentRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.En
 func (r *testEnvironmentRepo) Update(context.Context, *domain.Environment) error { return nil }
 func (r *testEnvironmentRepo) Delete(context.Context, uuid.UUID) error           { return nil }
 
-type testBuildRepo struct{}
+type testBuildRepo struct {
+	build *domain.Build
+}
 
 func (r *testBuildRepo) Create(context.Context, *domain.Build) error { return nil }
-func (r *testBuildRepo) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
+func (r *testBuildRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Build, error) {
+	if r.build != nil && r.build.ID == id {
+		cp := *r.build
+		return &cp, nil
+	}
 	return nil, nil
 }
 func (r *testBuildRepo) GetByCISystemRunID(context.Context, string, string) (*domain.Build, error) {

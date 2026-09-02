@@ -38,10 +38,10 @@ const (
 	kindSBOMAttestation         = 30078
 	kindLongFormContent         = 30023
 	kindLoomWorkerAdvertisement = cascadia.CAS_WORKER_AD
-	kindSoulAction              = 1950
-	kindSoulTemplate            = 31950
-	kindAgentSoul               = 31951
-	kindSoulDraft               = 31952
+	kindSoulAction              = cascadia.CAS_INTENT
+	kindSoulTemplate            = cascadia.CAS_CP_STATE
+	kindAgentSoul               = cascadia.CAS_CP_STATE
+	kindSoulDraft               = cascadia.CAS_CP_STATE
 	kindRuntimeCapability       = 30317
 )
 

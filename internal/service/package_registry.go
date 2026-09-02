@@ -135,6 +135,9 @@ func (s *PackageRegistryService) ValidateRepositorySpec(repo *domain.PackageRepo
 	if !packagebackend.SupportsFormat(backend.Capabilities(), repo.Format) {
 		return fmt.Errorf("backend %q does not support package format %q", repo.BackendRef, repo.Format)
 	}
+	if err := normalizePackageRepositoryMetadata(repo); err != nil {
+		return err
+	}
 	if existing != nil {
 		if existing.BackendRef != repo.BackendRef {
 			return fmt.Errorf("package repository backend_ref is immutable")
@@ -153,6 +156,76 @@ func (s *PackageRegistryService) ValidateRepositorySpec(repo *domain.PackageRepo
 		}
 	}
 	return nil
+}
+
+func normalizePackageRepositoryMetadata(repo *domain.PackageRepository) error {
+	if repo == nil || len(repo.Metadata) == 0 {
+		return nil
+	}
+	if repo.Format != domain.PackageRepositoryFormatGoModules {
+		return nil
+	}
+	raw, ok := repo.Metadata["go_vanity"]
+	if !ok {
+		return nil
+	}
+	vanity, err := normalizeGoVanityMetadata(raw)
+	if err != nil {
+		return err
+	}
+	repo.Metadata["go_vanity"] = map[string]any{
+		"module_prefix": vanity.ModulePrefix,
+		"vcs":           vanity.VCS,
+		"repo_root":     vanity.RepoRoot,
+		"meta_tag":      vanity.MetaTag,
+	}
+	return nil
+}
+
+func normalizeGoVanityMetadata(raw any) (domain.GoVanityMetadata, error) {
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		if stringFields, stringMapOK := raw.(map[string]string); stringMapOK {
+			fields = make(map[string]any, len(stringFields))
+			for key, value := range stringFields {
+				fields[key] = value
+			}
+		}
+	}
+	if fields == nil {
+		return domain.GoVanityMetadata{}, fmt.Errorf("go_vanity metadata must be an object")
+	}
+	vanity := domain.GoVanityMetadata{
+		ModulePrefix: strings.TrimSpace(stringFromMetadata(fields, "module_prefix")),
+		VCS:          strings.TrimSpace(stringFromMetadata(fields, "vcs")),
+		RepoRoot:     strings.TrimSpace(stringFromMetadata(fields, "repo_root")),
+	}
+	if vanity.VCS == "" {
+		vanity.VCS = "git"
+	}
+	if vanity.ModulePrefix == "" {
+		return domain.GoVanityMetadata{}, fmt.Errorf("go_vanity.module_prefix is required")
+	}
+	if vanity.RepoRoot == "" {
+		return domain.GoVanityMetadata{}, fmt.Errorf("go_vanity.repo_root is required")
+	}
+	if vanity.VCS != "git" {
+		return domain.GoVanityMetadata{}, fmt.Errorf("go_vanity.vcs %q is unsupported", vanity.VCS)
+	}
+	if _, err := url.ParseRequestURI(vanity.RepoRoot); err != nil {
+		return domain.GoVanityMetadata{}, fmt.Errorf("go_vanity.repo_root must be a URL: %w", err)
+	}
+	vanity.MetaTag = vanity.ModulePrefix + " " + vanity.VCS + " " + vanity.RepoRoot
+	return vanity, nil
+}
+
+func stringFromMetadata(fields map[string]any, key string) string {
+	if raw, ok := fields[key]; ok {
+		if value, stringOK := raw.(string); stringOK {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *PackageRegistryService) EnsureRepository(ctx context.Context, repo *domain.PackageRepository, existing *domain.PackageRepository) (*domain.PackageRepository, error) {

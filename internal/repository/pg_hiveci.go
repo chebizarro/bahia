@@ -92,15 +92,15 @@ func (r *PgHiveCIRepository) UpsertWorkflowResult(ctx context.Context, result do
 		_, err := tx.Exec(ctx, `
 		INSERT INTO hiveci_workflow_results
 			(result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,
-				error, image_repo, image_tag, image_digest, publisher_pubkey, processing_state, processing_error,
+				error, image_repo, image_tag, image_digest, pstf_gate_name, pstf_gate_status, publisher_pubkey, processing_state, processing_error,
 				retry_count, last_retry_at, event_created_at, created_at, updated_at)
 		VALUES
 			($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''),
-				$11, $12, NULLIF($13, ''), 0, NULL, $14, now(), now())
+				NULLIF($11, ''), NULLIF($12, ''), $13, $14, NULLIF($15, ''), 0, NULL, $16, now(), now())
 		ON CONFLICT (result_event_id) DO NOTHING
 	`, result.ResultEventID, result.RunEventID, result.Status, result.ExitCode, result.DurationSeconds,
 			result.LogURL, result.Error, result.ImageRepo, result.ImageTag, result.ImageDigest,
-			result.PublisherPubkey, string(state), result.ProcessingError, result.EventCreatedAt)
+			result.PSTFGateName, result.PSTFGateStatus, result.PublisherPubkey, string(state), result.ProcessingError, result.EventCreatedAt)
 		if err != nil {
 			return fmt.Errorf("upserting hiveci workflow result: %w", err)
 		}
@@ -159,7 +159,7 @@ func (r *PgHiveCIRepository) GetRunByEventID(ctx context.Context, eventID string
 func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowResult, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,
-		       error, image_repo, image_tag, image_digest, publisher_pubkey, processing_state, processing_error,
+		       error, image_repo, image_tag, image_digest, pstf_gate_name, pstf_gate_status, publisher_pubkey, processing_state, processing_error,
 		       retry_count, last_retry_at, event_created_at, created_at, updated_at
 		FROM hiveci_workflow_results
 		WHERE result_event_id = $1
@@ -171,6 +171,8 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 	var imageRepo sql.NullString
 	var imageTag sql.NullString
 	var imageDigest sql.NullString
+	var pstfGateName sql.NullString
+	var pstfGateStatus sql.NullString
 	var processingError sql.NullString
 	if err := row.Scan(
 		&result.ResultEventID,
@@ -183,6 +185,8 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 		&imageRepo,
 		&imageTag,
 		&imageDigest,
+		&pstfGateName,
+		&pstfGateStatus,
 		&result.PublisherPubkey,
 		&state,
 		&processingError,
@@ -201,6 +205,8 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 	result.ImageRepo = nullStringValue(imageRepo)
 	result.ImageTag = nullStringValue(imageTag)
 	result.ImageDigest = nullStringValue(imageDigest)
+	result.PSTFGateName = nullStringValue(pstfGateName)
+	result.PSTFGateStatus = nullStringValue(pstfGateStatus)
 	result.ProcessingState = domain.HiveCIProcessingState(state)
 	result.ProcessingError = nullStringValue(processingError)
 	return &result, nil
@@ -244,7 +250,7 @@ func (r *PgHiveCIRepository) GetLatestResultByRunEventID(ctx context.Context, ru
 func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,
-				error, image_repo, image_tag, image_digest, publisher_pubkey, processing_state, processing_error,
+				error, image_repo, image_tag, image_digest, pstf_gate_name, pstf_gate_status, publisher_pubkey, processing_state, processing_error,
 				retry_count, last_retry_at, event_created_at, created_at, updated_at
 		FROM hiveci_workflow_results
 		WHERE processing_state IN ('pending_result', 'pending_run', 'artifact_pending')
@@ -263,6 +269,8 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 		var imageRepo sql.NullString
 		var imageTag sql.NullString
 		var imageDigest sql.NullString
+		var pstfGateName sql.NullString
+		var pstfGateStatus sql.NullString
 		var processingError sql.NullString
 		if err := rows.Scan(
 			&res.ResultEventID,
@@ -275,6 +283,8 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 			&imageRepo,
 			&imageTag,
 			&imageDigest,
+			&pstfGateName,
+			&pstfGateStatus,
 			&res.PublisherPubkey,
 			&state,
 			&processingError,
@@ -290,6 +300,8 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 		res.ImageRepo = nullStringValue(imageRepo)
 		res.ImageTag = nullStringValue(imageTag)
 		res.ImageDigest = nullStringValue(imageDigest)
+		res.PSTFGateName = nullStringValue(pstfGateName)
+		res.PSTFGateStatus = nullStringValue(pstfGateStatus)
 		res.ProcessingState = domain.HiveCIProcessingState(state)
 		res.ProcessingError = nullStringValue(processingError)
 		results = append(results, res)
@@ -301,7 +313,7 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEventID string) ([]domain.HiveCIWorkflowResult, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT result_event_id, run_event_id, status, exit_code, duration_seconds, log_url,
-				error, image_repo, image_tag, image_digest, publisher_pubkey, processing_state, processing_error,
+				error, image_repo, image_tag, image_digest, pstf_gate_name, pstf_gate_status, publisher_pubkey, processing_state, processing_error,
 				retry_count, last_retry_at, event_created_at, created_at, updated_at
 		FROM hiveci_workflow_results
 		WHERE run_event_id = $1 AND processing_state = 'pending_run'
@@ -320,6 +332,8 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 		var imageRepo sql.NullString
 		var imageTag sql.NullString
 		var imageDigest sql.NullString
+		var pstfGateName sql.NullString
+		var pstfGateStatus sql.NullString
 		var processingError sql.NullString
 		if err := rows.Scan(
 			&res.ResultEventID,
@@ -332,6 +346,8 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 			&imageRepo,
 			&imageTag,
 			&imageDigest,
+			&pstfGateName,
+			&pstfGateStatus,
 			&res.PublisherPubkey,
 			&state,
 			&processingError,
@@ -347,6 +363,8 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 		res.ImageRepo = nullStringValue(imageRepo)
 		res.ImageTag = nullStringValue(imageTag)
 		res.ImageDigest = nullStringValue(imageDigest)
+		res.PSTFGateName = nullStringValue(pstfGateName)
+		res.PSTFGateStatus = nullStringValue(pstfGateStatus)
 		res.ProcessingState = domain.HiveCIProcessingState(state)
 		res.ProcessingError = nullStringValue(processingError)
 		results = append(results, res)
@@ -504,6 +522,8 @@ func (r *PgHiveCIRepository) LookupRepositoryCI(ctx context.Context, repoCoordin
 			res.image_repo,
 			res.image_tag,
 			res.image_digest,
+			res.pstf_gate_name,
+			res.pstf_gate_status,
 			res.processing_state AS result_processing_state,
 			res.processing_error,
 			res.retry_count,
@@ -551,6 +571,8 @@ func (r *PgHiveCIRepository) LookupRepositoryCI(ctx context.Context, repoCoordin
 				ImageRepo:       row.ImageRepo.String,
 				ImageTag:        row.ImageTag.String,
 				ImageDigest:     row.ImageDigest.String,
+				PSTFGateName:    row.PSTFGateName.String,
+				PSTFGateStatus:  row.PSTFGateStatus.String,
 				ProcessingState: domain.HiveCIProcessingState(row.ResultProcessingState.String),
 				ProcessingError: row.ProcessingError.String,
 				RetryCount:      int(row.RetryCount.Int64),
@@ -652,6 +674,8 @@ type runResultRow struct {
 	ImageRepo             sql.NullString
 	ImageTag              sql.NullString
 	ImageDigest           sql.NullString
+	PSTFGateName          sql.NullString
+	PSTFGateStatus        sql.NullString
 	ResultProcessingState sql.NullString
 	ProcessingError       sql.NullString
 	RetryCount            sql.NullInt64
@@ -693,6 +717,8 @@ func scanRepositoryCIRunResultRow(row interface{ Scan(...any) error }) (runResul
 		&rr.ImageRepo,
 		&rr.ImageTag,
 		&rr.ImageDigest,
+		&rr.PSTFGateName,
+		&rr.PSTFGateStatus,
 		&rr.ResultProcessingState,
 		&rr.ProcessingError,
 		&rr.RetryCount,

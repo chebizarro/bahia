@@ -24,7 +24,7 @@ func TestPackageRepositoryFormatsAreFirstClassValues(t *testing.T) {
 }
 
 func TestPackageBackendTypesAreRegisteredValues(t *testing.T) {
-	for _, backend := range []PackageBackendType{PackageBackendNexus, PackageBackendPulp, PackageBackendFilesystemMock} {
+	for _, backend := range []PackageBackendType{PackageBackendNexus, PackageBackendPulp, PackageBackendAthens, PackageBackendVerdaccio, PackageBackendFilesystemMock} {
 		if !backend.IsValid() {
 			t.Fatalf("expected backend %q to be valid", backend)
 		}

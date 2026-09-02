@@ -109,6 +109,8 @@ func TestPgHiveCIRepository_LookupRepositoryCIDedupesAndAssembles(t *testing.T) 
 		"image_repo",
 		"image_tag",
 		"image_digest",
+		"pstf_gate_name",
+		"pstf_gate_status",
 		"result_processing_state",
 		"processing_error",
 		"retry_count",
@@ -120,11 +122,11 @@ func TestPgHiveCIRepository_LookupRepositoryCIDedupesAndAssembles(t *testing.T) 
 		WillReturnRows(pgxmock.NewRows(runColumns).
 			AddRow(
 				"repo-a", "run-a", "sha-a", "main", ".github/workflows/ci.yml", "push", "alice", "pub-a", now, "pending_result",
-				"res-a", "success", 0, 42, "https://logs.example/a", "", "ghcr.io/acme/app", "main", "sha256:abc", "processed", "", 1, lastRetryAt, now.Add(time.Minute),
+				"res-a", "success", 0, 42, "https://logs.example/a", "", "ghcr.io/acme/app", "main", "sha256:abc", "pstf-drift", "green", "processed", "", 1, lastRetryAt, now.Add(time.Minute),
 			).
 			AddRow(
 				"repo-b", "run-b", "sha-b", "dev", ".github/workflows/test.yml", nil, nil, "pub-b", now.Add(-time.Hour), "pending_result",
-				nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+				nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			))
 
 	policyColumns := []string{
@@ -274,7 +276,7 @@ func TestPgHiveCIRepository_UpsertWorkflowResultRollsBackProjectionOnSecondWrite
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_results").
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results r").WithArgs("run-rollback").WillReturnError(errors.New("projection update failed"))
 	mock.ExpectRollback()
@@ -339,13 +341,13 @@ func TestPgHiveCIRepository_UpsertIdempotency(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_results").
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results r").WithArgs("run-1").WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO hiveci_workflow_results").
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 	mock.ExpectExec("UPDATE hiveci_workflow_results r").WithArgs("run-1").WillReturnResult(pgconn.NewCommandTag("UPDATE 0"))
 	mock.ExpectCommit()

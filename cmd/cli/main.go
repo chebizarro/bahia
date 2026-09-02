@@ -792,7 +792,7 @@ func policiesCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Publish a signed PolicyCreate request (kind 5986)",
+		Short: "Publish a signed PolicyCreate request (kind retired-kind)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, _ := cmd.Flags().GetString("name")
 			envIDRaw, _ := cmd.Flags().GetString("environment")

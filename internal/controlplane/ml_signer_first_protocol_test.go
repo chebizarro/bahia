@@ -136,9 +136,9 @@ func TestMLSignerFirstRequestSubscriptionsAreScopedCanonicalContextVM(t *testing
 		t.Fatalf("filters=%d, want one scoped ContextVM subscription", len(filters))
 	}
 	filter := filters[0]
-	wantKinds := []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}
+	wantKinds := []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap, KindArtifactRegister}
 	if !sameNostrKindSet(filter.Kinds, wantKinds) {
-		t.Fatalf("request subscription kinds=%v, want canonical ContextVM kinds %v", filter.Kinds, wantKinds)
+		t.Fatalf("request subscription kinds=%v, want canonical ContextVM kinds plus signed artifact registration %v", filter.Kinds, wantKinds)
 	}
 	for _, legacyKind := range []nostr.Kind{KindMLRecipeRunRequest, KindMLInferenceDeployRequest, KindMLModelImportRequest, KindMLInferenceDeployResult, KindMLModelImportResult} {
 		if containsNostrKind(filter.Kinds, legacyKind) {

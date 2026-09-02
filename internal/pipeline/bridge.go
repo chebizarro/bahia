@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -17,6 +18,8 @@ import (
 )
 
 var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+var errPromotionGateBlocked = errors.New("promotion gate blocked")
 
 type artifactRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
@@ -270,7 +273,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 	if err := b.registry.RegisterVerifiedArtifact(ctx, artifact, proof); err != nil {
 		return nil, fmt.Errorf("register verified artifact: %w", err)
 	}
-	if err := b.autoCreateStagingIntent(ctx, policy, run, result, artifact); err != nil {
+	if err := b.autoCreateStagingIntent(ctx, policy, run, result, artifact); errors.Is(err, errPromotionGateBlocked) {
+		return artifact, nil
+	} else if err != nil {
 		return nil, err
 	}
 	if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateProcessed); err != nil {
@@ -390,6 +395,17 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 	if !autoDeploy {
 		return nil
 	}
+	if requiresPSTFGreen(policy.Metadata) && !pstfGateGreen(result) {
+		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected); err != nil {
+			return fmt.Errorf("mark result rejected after failed PSTF gate: %w", err)
+		}
+		b.logger.Info("blocking promotion because PSTF gate is not green",
+			zap.String("result_event_id", result.ResultEventID),
+			zap.String("pstf_gate_name", result.PSTFGateName),
+			zap.String("pstf_gate_status", result.PSTFGateStatus),
+		)
+		return errPromotionGateBlocked
+	}
 	targetEnvName, _ := policy.Metadata["staging_environment"].(string)
 	var env *domain.Environment
 	var err error
@@ -430,4 +446,25 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 		return fmt.Errorf("create staging deployment intent: %w", err)
 	}
 	return nil
+}
+
+func requiresPSTFGreen(metadata map[string]any) bool {
+	for _, key := range []string{"require_pstf_green", "promotion_requires_pstf_green", "pstf_gate_required"} {
+		if value, ok := metadata[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+func pstfGateGreen(result *domain.HiveCIWorkflowResult) bool {
+	if result == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(result.PSTFGateStatus)) {
+	case "green", "passed", "pass", "success", "succeeded", "ok":
+		return true
+	default:
+		return false
+	}
 }

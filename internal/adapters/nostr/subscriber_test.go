@@ -155,8 +155,6 @@ func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.
 		kinds.ContextVMPromptsList,
 		KindRelaySetDiscovery,
 		KindNIP65RelayList,
-		KindHiveCIWorkflowRun,
-		KindHiveCIWorkflowResult,
 		KindLoomWorkerAdvertisement,
 		KindLoomJobStatusUpdate,
 		KindLoomJobResult,

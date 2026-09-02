@@ -84,7 +84,7 @@ func TestReactorFallsBackToNowWhenPlannerReturnsNil(t *testing.T) {
 func TestSubscriberAndReactorDefaultSubscriptionsDoNotOverlapOrIncludeLegacy(t *testing.T) {
 	reactorKinds := requestSubscriptionKinds()
 	for _, kind := range append(append([]int{}, reactorKinds...), nostradapter.DefaultInboundKinds...) {
-		if isLegacyProductionRuntimeKind(kind) {
+		if isLegacyProductionRuntimeKind(kind) && kind != KindArtifactRegister {
 			t.Fatalf("production default subscription still includes legacy runtime kind %d", kind)
 		}
 	}
