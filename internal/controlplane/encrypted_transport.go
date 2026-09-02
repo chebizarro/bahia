@@ -87,6 +87,7 @@ const (
 	ContextVMMethodToolsCall                  = "tools/call"
 
 	encryptedRequestReplayLookback = 2 * time.Minute
+	contextVMNIP59OuterLookback    = 12 * time.Hour
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
@@ -374,19 +375,16 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	if t.subscriber == nil {
 		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
-	since := nostr.Timestamp(time.Now().Add(-encryptedRequestReplayLookback).Unix())
-	filter := nostr.Filter{Kinds: []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: since}
-	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
-		filter.Tags = nostr.TagMap{tagRecipientPubkey: []string{servicePubkey}}
-	}
+	now := time.Now().UTC()
+	innerSince := nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix())
+	filters := contextVMSubscriptionFilters(t.responder.ServicePubkey(), now)
 	t.logger.Info("subscribing to ContextVM encrypted request events",
-		zap.Any("kinds", filter.Kinds),
-		zap.Time("since", time.Unix(int64(since), 0).UTC()),
-		zap.Duration("lookback", encryptedRequestReplayLookback),
-		zap.Strings("p_tags", filter.Tags["p"]),
+		zap.Any("filters", filters),
+		zap.Time("inner_since", time.Unix(int64(innerSince), 0).UTC()),
+		zap.Duration("nip59_outer_lookback", contextVMNIP59OuterLookback),
 	)
 	subscribe := func() (*nostrpool.MergedSubscription, error) {
-		return t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+		return t.subscriber.SubscribeAllWithEOSE(ctx, filters)
 	}
 	merged, err := subscribe()
 	if err != nil {
@@ -461,28 +459,57 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 				zap.Int("kind", int(ev.Kind)),
 				zap.String("pubkey", ev.PubKey.Hex()),
 			)
-			t.HandleEvent(ctx, ev)
+			t.handleEventSince(ctx, ev, innerSince)
 		}
 	}
 }
 
+func contextVMSubscriptionFilters(servicePubkey string, now time.Time) []nostr.Filter {
+	tags := nostr.TagMap(nil)
+	if servicePubkey != "" {
+		tags = nostr.TagMap{tagRecipientPubkey: []string{servicePubkey}}
+	}
+	return []nostr.Filter{
+		{
+			Kinds: []nostr.Kind{KindContextVMMessage, KindContextVMEphemeralWrap},
+			Tags:  tags,
+			Since: nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix()),
+		},
+		{
+			Kinds: []nostr.Kind{KindContextVMGiftWrap},
+			Tags:  tags,
+			// NIP-59 deliberately backdates the public outer event. Run gates
+			// the decrypted inner event to the normal replay window.
+			Since: nostr.Timestamp(now.Add(-contextVMNIP59OuterLookback).Unix()),
+		},
+	}
+}
+
 func (t *EncryptedRequestTransport) HandleEvent(ctx context.Context, event *nostr.Event) {
+	t.handleEventSince(ctx, event, 0)
+}
+
+func (t *EncryptedRequestTransport) handleEventSince(ctx context.Context, event *nostr.Event, innerSince nostr.Timestamp) {
 	if event == nil {
 		return
 	}
 	if event.Kind == KindContextVMMessage || event.Kind == KindContextVMGiftWrap || event.Kind == KindContextVMEphemeralWrap {
-		t.HandleContextVMEvent(ctx, event)
+		t.handleContextVMEventSince(ctx, event, innerSince)
 		return
 	}
 	// Legacy Bahia encrypted request/result events are no longer accepted by
 	// production runtime. ContextVM message and wrapper kinds above
 	// are the only active encrypted control-plane transport.
-	return
 }
 
 func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, outer *nostr.Event) {
+	t.handleContextVMEventSince(ctx, outer, 0)
+}
+
+func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Context, outer *nostr.Event, innerSince nostr.Timestamp) {
 	inner := outer
 	encrypted := outer.Kind == KindContextVMGiftWrap || outer.Kind == KindContextVMEphemeralWrap
+	envelopeFormat := cascontextvm.EnvelopeFormat("")
 	if encrypted {
 		if err := nostrpool.ValidateInboundEvent(outer, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 			t.logger.Warn("invalid ContextVM gift wrap event", zap.String("event_id", outer.ID.Hex()), zap.Error(err))
@@ -492,12 +519,13 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 			t.logger.Debug("ContextVM gift wrap not addressed to this service", zap.String("event_id", outer.ID.Hex()), zap.String("service_pubkey", t.responder.ServicePubkey()))
 			return
 		}
-		unwrapped, err := t.unwrapContextVMEvent(ctx, outer)
+		unwrapped, format, err := t.unwrapContextVMEvent(ctx, outer)
 		if err != nil {
 			t.logger.Warn("failed to unwrap ContextVM event", zap.String("event_id", outer.ID.Hex()), zap.Error(err))
 			return
 		}
 		inner = unwrapped
+		envelopeFormat = format
 		if !t.validContextVMWrapperPubkey(outer, inner) {
 			t.logger.Warn("invalid ContextVM gift wrap provenance", zap.String("event_id", outer.ID.Hex()), zap.String("wrapper_pubkey", outer.PubKey.Hex()), zap.String("inner_pubkey", inner.PubKey.Hex()))
 			return
@@ -507,7 +535,11 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 		t.logger.Debug("ContextVM wrapper did not contain a ContextVM message", zap.String("event_id", outer.ID.Hex()))
 		return
 	}
-	if err := nostrpool.ValidateInboundEvent(inner, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
+	if innerSince != 0 && inner.CreatedAt < innerSince {
+		t.logger.Debug("historical ContextVM inner event ignored", zap.String("event_id", inner.ID.Hex()), zap.Int64("created_at", int64(inner.CreatedAt)), zap.Int64("inner_since", int64(innerSince)))
+		return
+	}
+	if err := validateContextVMInnerEvent(inner, envelopeFormat, time.Now().UTC()); err != nil {
 		t.logger.Warn("invalid ContextVM event", zap.String("event_id", inner.ID.Hex()), zap.Error(err))
 		return
 	}
@@ -591,28 +623,49 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 }
 
-func (t *EncryptedRequestTransport) unwrapContextVMEvent(ctx context.Context, event *nostr.Event) (*nostr.Event, error) {
+func validateContextVMInnerEvent(event *nostr.Event, format cascontextvm.EnvelopeFormat, now time.Time) error {
+	if format != cascontextvm.EnvelopeFormatNIP59 {
+		return nostrpool.ValidateInboundEvent(event, now, nostrpool.InboundEventMaxFutureSkew)
+	}
+	// UnwrapAny already verified the outer signature, seal signature, rumor
+	// author binding, and rumor id. The rumor itself is intentionally unsigned.
+	if event.CreatedAt <= 0 {
+		return fmt.Errorf("created_at is required")
+	}
+	createdAt := event.CreatedAt.Time()
+	if createdAt.After(now.Add(nostrpool.InboundEventMaxFutureSkew)) {
+		return fmt.Errorf("created_at too far in future")
+	}
+	if createdAt.Before(now.Add(-nostrpool.InboundEventMaxPastAge)) {
+		return fmt.Errorf("created_at too far in past")
+	}
+	return nil
+}
+
+func (t *EncryptedRequestTransport) unwrapContextVMEvent(ctx context.Context, event *nostr.Event) (*nostr.Event, cascontextvm.EnvelopeFormat, error) {
 	if t.responder == nil {
-		return nil, fmt.Errorf("ContextVM responder is not configured")
+		return nil, "", fmt.Errorf("ContextVM responder is not configured")
 	}
 	if event.Kind == KindContextVMGiftWrap {
-		return cascontextvm.Unwrap(ctx, t.responder.signer, event)
+		// This shared ingress also receives worker JSON-RPC responses; fp-5l35
+		// owns response-role dispatch and fp-20aa owns maintenance consumption.
+		return cascontextvm.UnwrapAny(ctx, t.responder.signer, event)
 	}
 	// cascadia-go Wrap/Unwrap covers the legacy stored direct-encryption
 	// envelope. Bahia still accepts the local ephemeral 21059 policy surface.
 	conversationKey, err := t.responder.conversationKey(event.PubKey.Hex())
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	plaintext, err := nip44.Decrypt(event.Content, conversationKey)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt ContextVM gift wrap: %w", err)
+		return nil, "", fmt.Errorf("decrypt ContextVM gift wrap: %w", err)
 	}
 	var inner nostr.Event
 	if err := json.Unmarshal([]byte(plaintext), &inner); err != nil {
-		return nil, fmt.Errorf("decode ContextVM inner event: %w", err)
+		return nil, "", fmt.Errorf("decode ContextVM inner event: %w", err)
 	}
-	return &inner, nil
+	return &inner, cascontextvm.EnvelopeFormatLegacyDirect, nil
 }
 
 func (t *EncryptedRequestTransport) publishContextVMProgressAck(ctx context.Context, outer, request *nostr.Event, encrypted bool) {

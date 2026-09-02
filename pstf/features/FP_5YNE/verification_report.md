@@ -16,11 +16,27 @@ The formats are not wire-compatible, so rollout is reader-first rather than a fl
 
 Deploying the writer before the reader is not supported: the old worker decoder cannot parse the NIP-59 seal. The ordered rollout prevents that mixed-version pairing without weakening the final policy.
 
+The deployable worker pin for step 1 is Cascadia commit `5bc9efa` (or a later
+descendant). No current tag contains that commit. If fleet deployment policy
+requires a semver tag instead of an immutable source commit, cut and validate
+`v1.3.1` or later at a descendant of `5bc9efa` before deploying the Bahia
+writer. Bahia's Go-module pin to `cascadia-go v1.3.0` is separate and correct:
+it supplies the client-side `WrapEventNIP59`/`UnwrapAny` helpers already present
+in that release; Bahia does not obtain the `fleet-worker` binary through its Go
+module graph.
+
 NIP-59 randomizes the outer timestamp into the past. The updated worker uses a
 bounded 12-hour outer-event lookback, then drops decrypted rumors older than
 the subscription start before parsing, authorization, response publication, or
 driver dispatch. This prevents the relay filter from losing newly published
 wrappers without replaying historical commands.
+
+Bahia's shared ContextVM ingress now gives kind 1059 a separate 12-hour outer
+lookback, decrypts with `UnwrapAny`, validates conformant unsigned rumors at the
+seal/rumor boundary, and retains its existing two-minute inner-event replay
+window. Worker responses therefore reach JSON-RPC role dispatch. The response
+role bug remains intentionally owned by `fp-5l35`, and the maintenance result
+consumer remains intentionally owned by `fp-20aa`.
 
 ## Sibling channels
 
@@ -38,4 +54,4 @@ Run on 2026-09-02:
 - `bahia`: `go test ./... -count=1` — PASS on the final full rerun. An earlier run hit the existing concurrent-map fixture panic in `internal/service/mockStateRepo`; `go test ./internal/service -count=1` and `-count=10` both passed before the full rerun.
 - `bahia`: `go test ./internal/controlplane -run TestMaintenanceCommandPublisher -count=1` — PASS.
 - `bahia`: `go test -race ./internal/controlplane` — BLOCKED by the pinned `fiatjaf.com/nostr` `writeJSONString` unsafe-pointer provenance defect, tracked by `fp-z70q`. The failure occurs in the dependency's `event.go`, and was not suppressed.
-- `bahia`: `make lint` — repository baseline remains red on 155 pre-existing findings; no finding names a changed FP-5YNE implementation or test file.
+- `bahia`: `make lint` — repository baseline remains red on 155 pre-existing findings. A package-scoped rerun after the ingress follow-up reports only the two pre-existing unused helpers in `encrypted_transport.go`; no new finding is introduced by FP-5YNE.

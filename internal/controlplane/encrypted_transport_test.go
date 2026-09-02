@@ -375,6 +375,31 @@ func TestEncryptedRequestTransport_RunAuthenticatesAndResubscribesOnAuthRequired
 	}
 }
 
+func TestContextVMSubscriptionFiltersAllowBackdatedNIP59OuterEvents(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0).UTC()
+	filters := contextVMSubscriptionFilters("service-pubkey", now)
+	if len(filters) != 2 {
+		t.Fatalf("filter count = %d, want 2", len(filters))
+	}
+	if len(filters[0].Kinds) != 2 || filters[0].Kinds[0] != KindContextVMMessage || filters[0].Kinds[1] != KindContextVMEphemeralWrap {
+		t.Fatalf("unexpected direct/ephemeral filter kinds: %v", filters[0].Kinds)
+	}
+	if filters[0].Since != nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix()) {
+		t.Fatalf("direct filter since = %d", filters[0].Since)
+	}
+	if len(filters[1].Kinds) != 1 || filters[1].Kinds[0] != KindContextVMGiftWrap {
+		t.Fatalf("unexpected NIP-59 filter kinds: %v", filters[1].Kinds)
+	}
+	if filters[1].Since != nostr.Timestamp(now.Add(-contextVMNIP59OuterLookback).Unix()) {
+		t.Fatalf("NIP-59 filter since = %d", filters[1].Since)
+	}
+	for _, filter := range filters {
+		if got := filter.Tags[tagRecipientPubkey]; len(got) != 1 || got[0] != "service-pubkey" {
+			t.Fatalf("unexpected recipient filter: %v", got)
+		}
+	}
+}
+
 func TestEncryptedResponder_DecryptRequestContentRoundTrip(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	req := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
@@ -919,6 +944,67 @@ func TestContextVMTransport_AcceptsCascadiaStoredWrapperPubkey(t *testing.T) {
 	}
 	if len(publisher.events) != 2 {
 		t.Fatalf("expected stored wrapper progress ack plus response, got %d events", len(publisher.events))
+	}
+}
+
+func TestContextVMTransport_UnwrapsConformantNIP59WorkerResponse(t *testing.T) {
+	ctx := context.Background()
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	transport := NewEncryptedRequestTransport(nil, responder, nil, zap.NewNop())
+	workerSigner, err := NewPrivateKeySigner(testRequesterKey)
+	if err != nil {
+		t.Fatalf("worker signer: %v", err)
+	}
+	servicePubkey := responder.ServicePubkey()
+	secretPath := "/srv/fleet/worktrees/private-repository"
+	outer, rumor, err := cascontextvm.WrapEventNIP59(ctx, workerSigner, servicePubkey, &nostr.Event{
+		Kind:      KindContextVMMessage,
+		CreatedAt: nostr.Now(),
+		Tags:      nostr.Tags{{"p", servicePubkey}, {"e", strings.Repeat("a", 64)}},
+		Content:   `{"jsonrpc":"2.0","id":"scan-1","result":{"path":"` + secretPath + `"}}`,
+	}, cascontextvm.StoredGiftWrap)
+	if err != nil {
+		t.Fatalf("wrap worker response: %v", err)
+	}
+	inner, format, err := transport.unwrapContextVMEvent(ctx, outer)
+	if err != nil {
+		t.Fatalf("unwrap worker response: %v", err)
+	}
+	if format != cascontextvm.EnvelopeFormatNIP59 || inner.ID != rumor.ID || inner.PubKey != rumor.PubKey || !strings.Contains(inner.Content, secretPath) {
+		t.Fatalf("unexpected worker response rumor: format=%q inner=%+v", format, inner)
+	}
+	if inner.Sig != ([64]byte{}) {
+		t.Fatal("conformant NIP-59 rumor must remain unsigned")
+	}
+	if err := validateContextVMInnerEvent(inner, format, time.Now().UTC()); err != nil {
+		t.Fatalf("authenticated unsigned rumor rejected by ingress validation: %v", err)
+	}
+}
+
+func TestContextVMTransport_DropsHistoricalNIP59InnerBeforeRoleDispatch(t *testing.T) {
+	ctx := context.Background()
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	transport := NewEncryptedRequestTransport(nil, responder, nil, zap.NewNop())
+	workerSigner, err := NewPrivateKeySigner(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servicePubkey := responder.ServicePubkey()
+	outer, _, err := cascontextvm.WrapEventNIP59(ctx, workerSigner, servicePubkey, &nostr.Event{
+		Kind:      KindContextVMMessage,
+		CreatedAt: nostr.Now() - nostr.Timestamp((3*time.Minute)/time.Second),
+		Tags:      nostr.Tags{{"p", servicePubkey}},
+		Content:   `{"jsonrpc":"2.0","id":"old","result":{}}`,
+	}, cascontextvm.StoredGiftWrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	innerSince := nostr.Now() - nostr.Timestamp(encryptedRequestReplayLookback/time.Second)
+	transport.handleContextVMEventSince(ctx, outer, innerSince)
+	if len(publisher.events) != 0 {
+		t.Fatalf("historical NIP-59 response reached role dispatch: %d outbound events", len(publisher.events))
 	}
 }
 
