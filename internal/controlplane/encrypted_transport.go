@@ -126,6 +126,12 @@ type ContextVMJSONRPCResponse = cascontextvm.Response
 
 type ContextVMJSONRPCNotification = cascontextvm.Notification
 
+type contextVMJSONRPCRole struct {
+	Method string          `json:"method"`
+	Result json.RawMessage `json:"result"`
+	Error  json.RawMessage `json:"error"`
+}
+
 type ContextVMProgressParams struct {
 	RequestID string `json:"requestId"`
 	Status    string `json:"status"`
@@ -554,6 +560,10 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.logger.Debug("ContextVM event not routed to this service", zap.String("event_id", innerID), zap.String("service_pubkey", t.responder.ServicePubkey()))
 		return
 	}
+	if isContextVMJSONRPCResponse(inner.Content) {
+		t.logger.Debug("ContextVM response received", zap.String("event_id", innerID), zap.String("responder_pubkey", innerPubkey))
+		return
+	}
 	if !t.authorized(innerPubkey) {
 		t.logger.Warn("unauthorized ContextVM requester", zap.String("event_id", innerID), zap.String("requester_pubkey", innerPubkey))
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}})
@@ -621,6 +631,14 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 	}
 	t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
+}
+
+func isContextVMJSONRPCResponse(content string) bool {
+	var role contextVMJSONRPCRole
+	if err := json.Unmarshal([]byte(content), &role); err != nil {
+		return false
+	}
+	return strings.TrimSpace(role.Method) == "" && (role.Result != nil || role.Error != nil)
 }
 
 func validateContextVMInnerEvent(event *nostr.Event, format cascontextvm.EnvelopeFormat, now time.Time) error {

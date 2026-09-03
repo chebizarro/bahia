@@ -982,6 +982,55 @@ func TestContextVMTransport_UnwrapsConformantNIP59WorkerResponse(t *testing.T) {
 	}
 }
 
+func TestContextVMTransport_IgnoresNIP59WorkerResponses(t *testing.T) {
+	ctx := context.Background()
+	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	otherPubkey := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
+
+	for _, tc := range []struct {
+		name              string
+		content           string
+		authorizedPubkeys []string
+	}{
+		{
+			name:              "result before authorization",
+			content:           `{"jsonrpc":"2.0","id":"scan-1","result":{"candidates":[]}}`,
+			authorizedPubkeys: []string{otherPubkey},
+		},
+		{
+			name:              "error before request validation",
+			content:           `{"jsonrpc":"2.0","id":"scan-1","error":{"code":-32000,"message":"scan failed"}}`,
+			authorizedPubkeys: []string{workerPubkey},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			responder := newResponder(t, publisher)
+			transport := NewEncryptedRequestTransport(nil, responder, tc.authorizedPubkeys, zap.NewNop())
+			workerSigner, err := NewPrivateKeySigner(testRequesterKey)
+			if err != nil {
+				t.Fatalf("worker signer: %v", err)
+			}
+			servicePubkey := responder.ServicePubkey()
+			outer, _, err := cascontextvm.WrapEventNIP59(ctx, workerSigner, servicePubkey, &nostr.Event{
+				Kind:      KindContextVMMessage,
+				CreatedAt: nostr.Now(),
+				Tags:      nostr.Tags{{"p", servicePubkey}, {"e", strings.Repeat("a", 64)}},
+				Content:   tc.content,
+			}, cascontextvm.StoredGiftWrap)
+			if err != nil {
+				t.Fatalf("wrap worker response: %v", err)
+			}
+
+			transport.HandleEvent(ctx, outer)
+
+			if len(publisher.events) != 0 {
+				t.Fatalf("worker response provoked %d outbound events", len(publisher.events))
+			}
+		})
+	}
+}
+
 func TestContextVMTransport_DropsHistoricalNIP59InnerBeforeRoleDispatch(t *testing.T) {
 	ctx := context.Background()
 	publisher := &mockEncryptedPublisher{}

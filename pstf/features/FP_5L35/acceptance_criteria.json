@@ -1,0 +1,15 @@
+{
+  "feature_id": "FP_5L35",
+  "criteria": [
+    {
+      "id": "AC-FP-5L35-001",
+      "statement": "A routed NIP-59 ContextVM response with either result or error content provokes no outbound Bahia event, including when the responder is not request-authorized.",
+      "verification": ["go test ./internal/controlplane -run TestContextVMTransport_IgnoresNIP59WorkerResponses -count=1"]
+    },
+    {
+      "id": "AC-FP-5L35-002",
+      "statement": "Existing ContextVM request authorization, invalid-request handling, and wrapped request dispatch remain unchanged.",
+      "verification": ["go test ./internal/controlplane -count=1"]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "feature_id": "FP_5L35",
+  "beads": ["fp-5l35"],
+  "source_decision": "fleet-planning/docs/designs/hygiene-observation-transport.md section 2.7",
+  "scope": "Classify inbound ContextVM JSON-RPC responses before Bahia request authorization and dispatch.",
+  "intended_behavior": [
+    "A result or error response received on the shared ContextVM ingress produces no outbound Bahia event.",
+    "NIP-59 response rumors are authenticated, unwrapped, validated, deduplicated, and routing-checked before role classification.",
+    "JSON-RPC requests retain their existing authorization, validation, progress, dispatch, and response behavior."
+  ],
+  "out_of_scope": [
+    "Consuming maintenance responses as hygiene observations, tracked by fp-20aa.",
+    "Changing NIP-59 wrapping, unwrapping, subscription, or replay behavior.",
+    "Changing canonical maintenance result schemas."
+  ]
+}

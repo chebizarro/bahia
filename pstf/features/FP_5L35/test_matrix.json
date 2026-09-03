@@ -1,0 +1,23 @@
+{
+  "feature_id": "FP_5L35",
+  "tests": [
+    {
+      "test": "TestContextVMTransport_IgnoresNIP59WorkerResponses/result_before_authorization",
+      "criteria": ["AC-FP-5L35-001"],
+      "type": "negative protocol regression",
+      "notes": "Sends a conformant NIP-59 result response from a worker excluded by the request allowlist and proves role classification occurs before authorization without publishing an error."
+    },
+    {
+      "test": "TestContextVMTransport_IgnoresNIP59WorkerResponses/error_before_request_validation",
+      "criteria": ["AC-FP-5L35-001"],
+      "type": "negative protocol regression",
+      "notes": "Sends a conformant NIP-59 error response from an authorized worker and proves it is not reclassified as a malformed request."
+    },
+    {
+      "test": "internal/controlplane package suite",
+      "criteria": ["AC-FP-5L35-002"],
+      "type": "package regression",
+      "notes": "Retains request routing, authorization, JSON-RPC validation, handler dispatch, and wrapper behavior."
+    }
+  ]
+}
