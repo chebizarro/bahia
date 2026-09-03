@@ -86,7 +86,7 @@ func TestBootstrapperTimeoutFallsBackToLowerTier(t *testing.T) {
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
 		RequestedTier:   2,
-		SnapshotTimeout: time.Millisecond,
+		SnapshotTimeout: 50 * time.Millisecond,
 		CatchupTimeout:  50 * time.Millisecond,
 	})
 

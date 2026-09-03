@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean migrate docker docker-compose pstf-soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control
+.PHONY: build run test race lint clean migrate docker docker-compose pstf-soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control
 
 VERSION_BASE ?= 0.1.0
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "dev")
@@ -36,6 +36,11 @@ run-dev:
 # Test
 test:
 	go test ./... -v -count=1
+
+race:
+	# Exempt only fiatjaf.com/nostr's unsafe JSON serializer; imports such as
+	# keyer still compile that root package. Remove once upstream carries the fix.
+	CGO_ENABLED=1 go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0 ./... -count=1
 
 test-short:
 	go test ./... -short -count=1

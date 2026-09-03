@@ -127,8 +127,9 @@ func TestHandleEventDispatchesContextVMServiceDeployRequest(t *testing.T) {
 	desired := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api@sha256:abc"}
 	desired.ComputeDesiredHash()
 	runtimeStub := &stubRuntimeLifecycleOperatorService{
-		desiredState: desired,
-		deployResp:   &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
+		desiredState:  desired,
+		deployResp:    &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
+		deployStarted: make(chan struct{}, 1),
 	}
 	capture := &captureNostrPublisher{published: 1}
 	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}}, capture, registry, policyService, runtimeStub)
@@ -153,11 +154,9 @@ func TestHandleEventDispatchesContextVMServiceDeployRequest(t *testing.T) {
 
 	reactor.handleEvent(ctx, event)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !runtimeStub.deployCalled && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !runtimeStub.deployCalled {
+	select {
+	case <-runtimeStub.deployStarted:
+	case <-time.After(2 * time.Second):
 		t.Fatal("canonical ContextVM service/deploy event did not invoke RuntimeLifecycleService.DeployWithStatus")
 	}
 	if got := len(intentRepo.intents); got != 1 {
@@ -180,7 +179,10 @@ func TestHandleEventContextVMServiceDeployWithDeploymentUnitCreatesIntentForWork
 	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:abc"}}
 	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
 	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
-	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	stateRepo := &testEnvironmentServiceStateRepo{
+		states:   map[string]*domain.EnvironmentServiceState{},
+		upserted: make(chan struct{}, 1),
+	}
 	registry := service.NewRegistryService(
 		svcRepo,
 		envRepo,
@@ -220,9 +222,10 @@ func TestHandleEventContextVMServiceDeployWithDeploymentUnitCreatesIntentForWork
 
 	reactor.handleEvent(ctx, event)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for len(intentRepo.intents) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-stateRepo.upserted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for workflow deployment intent")
 	}
 	if runtimeStub.deployCalled {
 		t.Fatal("explicit deployment-unit deploy should be handed to the workflow coordinator, not direct runtime")
@@ -257,6 +260,10 @@ func TestHandleEventContextVMServiceDeployWithLoomEnvironmentCreatesIntentForWor
 	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:abc"}}
 	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
 	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	stateRepo := &testEnvironmentServiceStateRepo{
+		states:   map[string]*domain.EnvironmentServiceState{},
+		upserted: make(chan struct{}, 1),
+	}
 	registry := service.NewRegistryService(
 		svcRepo,
 		envRepo,
@@ -265,7 +272,7 @@ func TestHandleEventContextVMServiceDeployWithLoomEnvironmentCreatesIntentForWor
 		intentRepo,
 		runRepo,
 		&testObservationRepo{},
-		&testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}},
+		stateRepo,
 		nil,
 		&events.NoopPublisher{},
 		zap.NewNop(),
@@ -295,9 +302,10 @@ func TestHandleEventContextVMServiceDeployWithLoomEnvironmentCreatesIntentForWor
 
 	reactor.handleEvent(ctx, event)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for len(intentRepo.intents) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-stateRepo.upserted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for workflow deployment intent")
 	}
 	if runtimeStub.deployCalled {
 		t.Fatal("implicit Loom environment deploy should be handed to the workflow coordinator, not direct runtime")
@@ -325,7 +333,10 @@ func TestHandleEventDispatchesArtifactRegisterRequest(t *testing.T) {
 	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api", ArtifactRepo: "docker.io/library/busybox"}}
 	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: uuid.New(), Name: "prod"}}
 	buildRepo := &testBuildRepo{build: &domain.Build{ID: buildID, ServiceID: serviceID, Status: domain.BuildStatusSucceeded}}
-	artifactRepo := &testArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}}
+	artifactRepo := &testArtifactRepo{
+		artifacts: map[uuid.UUID]*domain.Artifact{},
+		created:   make(chan struct{}, 1),
+	}
 	registry := service.NewRegistryService(
 		svcRepo,
 		envRepo,
@@ -355,9 +366,10 @@ func TestHandleEventDispatchesArtifactRegisterRequest(t *testing.T) {
 
 	reactor.handleEvent(ctx, event)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for len(artifactRepo.artifacts) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-artifactRepo.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for artifact registration")
 	}
 	if got := len(artifactRepo.artifacts); got != 1 {
 		t.Fatalf("artifacts created = %d, want 1", got)
@@ -1000,6 +1012,7 @@ func (r *testBuildRepo) UpdateStatus(context.Context, uuid.UUID, domain.BuildSta
 type testArtifactRepo struct {
 	artifact  *domain.Artifact
 	artifacts map[uuid.UUID]*domain.Artifact
+	created   chan struct{}
 }
 
 func (r *testArtifactRepo) Create(_ context.Context, artifact *domain.Artifact) error {
@@ -1008,6 +1021,12 @@ func (r *testArtifactRepo) Create(_ context.Context, artifact *domain.Artifact) 
 	}
 	cp := *artifact
 	r.artifacts[artifact.ID] = &cp
+	if r.created != nil {
+		select {
+		case r.created <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 func (r *testArtifactRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Artifact, error) {
@@ -1141,14 +1160,21 @@ func (r *testObservationRepo) ListByServiceEnv(context.Context, uuid.UUID, uuid.
 }
 
 type testEnvironmentServiceStateRepo struct {
-	states  map[string]*domain.EnvironmentServiceState
-	upserts int
+	states   map[string]*domain.EnvironmentServiceState
+	upserts  int
+	upserted chan struct{}
 }
 
 func (r *testEnvironmentServiceStateRepo) Upsert(_ context.Context, state *domain.EnvironmentServiceState) error {
 	r.upserts++
 	cp := *state
 	r.states[state.ServiceID.String()+":"+state.EnvironmentID.String()] = &cp
+	if r.upserted != nil {
+		select {
+		case r.upserted <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 func (r *testEnvironmentServiceStateRepo) Get(_ context.Context, serviceID, envID uuid.UUID) (*domain.EnvironmentServiceState, error) {

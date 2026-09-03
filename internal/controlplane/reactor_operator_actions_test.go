@@ -34,6 +34,7 @@ type stubRuntimeLifecycleOperatorService struct {
 	restartErr       error
 	stopErr          error
 	deployCalled     bool
+	deployStarted    chan struct{}
 	restartCalled    bool
 	stopCalled       bool
 	emitSteps        bool
@@ -68,6 +69,12 @@ func (s *stubRuntimeLifecycleOperatorService) DeployWithStatus(ctx context.Conte
 	s.deployServiceID = serviceID
 	s.deployEnvID = envID
 	s.deployArtifact = artifactID
+	if s.deployStarted != nil {
+		select {
+		case s.deployStarted <- struct{}{}:
+		default:
+		}
+	}
 	if statusFn != nil && s.emitSteps {
 		for _, step := range []service.DeployStep{
 			service.DeployStepBuildingDesiredState,

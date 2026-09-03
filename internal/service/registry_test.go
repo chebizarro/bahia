@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -375,6 +376,7 @@ func (m *mockObsRepo) ListByServiceEnv(_ context.Context, serviceID, envID uuid.
 }
 
 type mockStateRepo struct {
+	mu        sync.RWMutex
 	states    map[string]*domain.EnvironmentServiceState // key: serviceID+envID
 	upsertErr error
 	getErr    error
@@ -389,19 +391,31 @@ func stateKey(serviceID, envID uuid.UUID) string {
 }
 
 func (m *mockStateRepo) Upsert(_ context.Context, state *domain.EnvironmentServiceState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.upsertErr != nil {
 		return m.upsertErr
 	}
-	m.states[stateKey(state.ServiceID, state.EnvironmentID)] = state
+	cp := *state
+	m.states[stateKey(state.ServiceID, state.EnvironmentID)] = &cp
 	return nil
 }
 func (m *mockStateRepo) Get(_ context.Context, serviceID, envID uuid.UUID) (*domain.EnvironmentServiceState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
-	return m.states[stateKey(serviceID, envID)], nil
+	state := m.states[stateKey(serviceID, envID)]
+	if state == nil {
+		return nil, nil
+	}
+	cp := *state
+	return &cp, nil
 }
 func (m *mockStateRepo) ListByEnvironment(_ context.Context, envID uuid.UUID) ([]domain.EnvironmentServiceState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {
 		if s.EnvironmentID == envID {
@@ -411,6 +425,8 @@ func (m *mockStateRepo) ListByEnvironment(_ context.Context, envID uuid.UUID) ([
 	return result, nil
 }
 func (m *mockStateRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.EnvironmentServiceState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {
 		if s.ServiceID == serviceID {
@@ -420,6 +436,8 @@ func (m *mockStateRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([
 	return result, nil
 }
 func (m *mockStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServiceState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {
 		if s.DriftStatus == domain.DriftStatusDrifted {
@@ -429,6 +447,8 @@ func (m *mockStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServ
 	return result, nil
 }
 func (m *mockStateRepo) ListDueForObservation(_ context.Context, dueBefore time.Time) ([]domain.EnvironmentServiceState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {
 		if s.LastReconciledAt == nil || !s.LastReconciledAt.After(dueBefore) {
@@ -438,6 +458,8 @@ func (m *mockStateRepo) ListDueForObservation(_ context.Context, dueBefore time.
 	return result, nil
 }
 func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {
 		result = append(result, *s)

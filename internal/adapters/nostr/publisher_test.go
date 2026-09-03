@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -170,9 +171,11 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 		t.Fatal("timed out waiting for rate-limited outbox attempt")
 	}
 	require.Equal(t, 2, fakePool.callCount())
-	rec, err := repo.GetByID(ctx, pending[0].ID)
-	require.NoError(t, err)
-	require.Contains(t, rec.LastPublishError, "rate-limited: slow down")
+	var rec *repository.NostrEventRecord
+	require.Eventually(t, func() bool {
+		rec, err = repo.GetByID(ctx, pending[0].ID)
+		return err == nil && rec != nil && strings.Contains(rec.LastPublishError, "rate-limited: slow down")
+	}, time.Second, time.Millisecond, "rate-limited result was not persisted")
 
 	select {
 	case <-fakePool.accepted:
