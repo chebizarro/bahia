@@ -126,11 +126,29 @@ type ContextVMJSONRPCResponse = cascontextvm.Response
 
 type ContextVMJSONRPCNotification = cascontextvm.Notification
 
-type contextVMJSONRPCRole struct {
-	Method string          `json:"method"`
-	Result json.RawMessage `json:"result"`
-	Error  json.RawMessage `json:"error"`
+// ContextVMResponseEnvelope is the lossless, authenticated response shape
+// delivered after the shared ContextVM ingress has validated the event,
+// unwrapped its envelope, applied replay/routing gates, and deduplicated it.
+// Result and Error remain raw so consumers can enforce their canonical schema
+// without a lossy map[string]any round trip.
+type ContextVMResponseEnvelope struct {
+	Event          *nostr.Event
+	EnvelopeFormat cascontextvm.EnvelopeFormat
+	ReceivedAt     time.Time
+	JSONRPC        string
+	ID             json.RawMessage
+	IDPresent      bool
+	MethodPresent  bool
+	Result         json.RawMessage
+	ResultPresent  bool
+	Error          json.RawMessage
+	ErrorPresent   bool
 }
+
+// ContextVMResponseHandler consumes a response after generic Nostr/NIP-59
+// validation. Handlers must fail closed locally; response processing never
+// emits a protocol response back onto the wire.
+type ContextVMResponseHandler func(context.Context, ContextVMResponseEnvelope)
 
 type ContextVMProgressParams struct {
 	RequestID string `json:"requestId"`
@@ -341,6 +359,9 @@ type EncryptedRequestTransport struct {
 	contextVMHandlers map[string]ContextVMHandler
 	contextVMDedup    *contextVMDedupCache
 	contextVMMu       sync.Mutex
+	responseMu        sync.RWMutex
+	responseHandlers  map[uint64]ContextVMResponseHandler
+	nextResponseID    uint64
 	dedup             *nostrpool.EventDeduplicator
 	logger            *zap.Logger
 }
@@ -356,8 +377,30 @@ func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, respond
 		handlers:          make(map[string]EncryptedRequestHandler),
 		contextVMHandlers: make(map[string]ContextVMHandler),
 		contextVMDedup:    newContextVMDedupCache(contextVMDedupDefaultLimit),
+		responseHandlers:  make(map[uint64]ContextVMResponseHandler),
 		dedup:             nostrpool.NewEventDeduplicator(10000),
 		logger:            logger.Named("encrypted-request-result-events"),
+	}
+}
+
+// RegisterContextVMResponseHandler adds a consumer to the authenticated
+// response path and returns an idempotent unregister function.
+func (t *EncryptedRequestTransport) RegisterContextVMResponseHandler(handler ContextVMResponseHandler) func() {
+	if t == nil || handler == nil {
+		return func() {}
+	}
+	t.responseMu.Lock()
+	t.nextResponseID++
+	id := t.nextResponseID
+	t.responseHandlers[id] = handler
+	t.responseMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.responseMu.Lock()
+			delete(t.responseHandlers, id)
+			t.responseMu.Unlock()
+		})
 	}
 }
 
@@ -560,8 +603,12 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.logger.Debug("ContextVM event not routed to this service", zap.String("event_id", innerID), zap.String("service_pubkey", t.responder.ServicePubkey()))
 		return
 	}
-	if isContextVMJSONRPCResponse(inner.Content) {
+	if response, ok := decodeContextVMJSONRPCResponse(inner.Content); ok {
 		t.logger.Debug("ContextVM response received", zap.String("event_id", innerID), zap.String("responder_pubkey", innerPubkey))
+		response.Event = inner
+		response.EnvelopeFormat = envelopeFormat
+		response.ReceivedAt = time.Now().UTC()
+		t.dispatchContextVMResponse(ctx, response)
 		return
 	}
 	if !t.authorized(innerPubkey) {
@@ -633,12 +680,50 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
 }
 
-func isContextVMJSONRPCResponse(content string) bool {
-	var role contextVMJSONRPCRole
-	if err := json.Unmarshal([]byte(content), &role); err != nil {
-		return false
+func decodeContextVMJSONRPCResponse(content string) (ContextVMResponseEnvelope, bool) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &fields); err != nil {
+		return ContextVMResponseEnvelope{}, false
 	}
-	return strings.TrimSpace(role.Method) == "" && (role.Result != nil || role.Error != nil)
+	methodRaw, methodPresent := fields["method"]
+	if methodPresent {
+		var method string
+		if err := json.Unmarshal(methodRaw, &method); err != nil || strings.TrimSpace(method) != "" {
+			return ContextVMResponseEnvelope{}, false
+		}
+	}
+	result, resultPresent := fields["result"]
+	rpcError, errorPresent := fields["error"]
+	if !resultPresent && !errorPresent {
+		return ContextVMResponseEnvelope{}, false
+	}
+	var jsonrpc string
+	if raw, ok := fields["jsonrpc"]; ok {
+		_ = json.Unmarshal(raw, &jsonrpc)
+	}
+	id, idPresent := fields["id"]
+	return ContextVMResponseEnvelope{
+		JSONRPC:       jsonrpc,
+		ID:            id,
+		IDPresent:     idPresent,
+		MethodPresent: methodPresent,
+		Result:        result,
+		ResultPresent: resultPresent,
+		Error:         rpcError,
+		ErrorPresent:  errorPresent,
+	}, true
+}
+
+func (t *EncryptedRequestTransport) dispatchContextVMResponse(ctx context.Context, response ContextVMResponseEnvelope) {
+	t.responseMu.RLock()
+	handlers := make([]ContextVMResponseHandler, 0, len(t.responseHandlers))
+	for _, handler := range t.responseHandlers {
+		handlers = append(handlers, handler)
+	}
+	t.responseMu.RUnlock()
+	for _, handler := range handlers {
+		handler(ctx, response)
+	}
 }
 
 func validateContextVMInnerEvent(event *nostr.Event, format cascontextvm.EnvelopeFormat, now time.Time) error {

@@ -1019,14 +1019,19 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Fleet hygiene (Swabbie, fp-jan): periodic dry-run scans + Tier-1
 	// convergence via the per-host maintenance driver.
+	var hygieneObservationSource *reconcile.ContextVMHygieneObservationSource
 	if cfg.Hygiene.Enabled {
 		if controlPlaneSigner == nil || controlPlanePool == nil || len(controlPlaneRelays) == 0 {
 			logger.Warn("hygiene reconciler enabled but control-plane Nostr publishing is not configured; skipping")
 		} else if hygienePolicy, err := loadHygienePolicy(cfg.Hygiene.PolicyPath); err != nil {
 			return nil, fmt.Errorf("load hygiene policy: %w", err)
 		} else {
-			maintenancePublisher := controlplane.NewMaintenanceCommandPublisher(controlPlanePool, controlPlaneSigner)
-			hygieneReconciler, err := reconcile.NewHygieneReconciler(hygienePolicy, cfg.Hygiene.Workers, maintenancePublisher, nil, telemetryProvider.GetMetrics(), cfg.Hygiene.Interval, logger)
+			hygieneObservationSource, err = reconcile.NewContextVMHygieneObservationSource(servicePubkey, logger)
+			if err != nil {
+				return nil, fmt.Errorf("hygiene observation source: %w", err)
+			}
+			maintenancePublisher := controlplane.NewMaintenanceCommandPublisher(controlPlanePool, controlPlaneSigner, hygieneObservationSource)
+			hygieneReconciler, err := reconcile.NewHygieneReconciler(hygienePolicy, cfg.Hygiene.Workers, maintenancePublisher, hygieneObservationSource, telemetryProvider.GetMetrics(), cfg.Hygiene.Interval, logger)
 			if err != nil {
 				return nil, fmt.Errorf("hygiene reconciler: %w", err)
 			}
@@ -1296,6 +1301,9 @@ func New(cfg *config.Config) (*App, error) {
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
+		if hygieneObservationSource != nil {
+			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
+		}
 		tenantRBAC := auth.NewRBAC(orgMemberRepo)
 		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
 			Payments:              paymentSvc,

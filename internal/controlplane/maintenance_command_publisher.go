@@ -38,10 +38,33 @@ const (
 type MaintenanceCommandPublisher struct {
 	publisher NostrEventPublisher
 	signer    canonicalnostr.Signer
+	observer  MaintenanceRequestObserver
 }
 
-func NewMaintenanceCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *MaintenanceCommandPublisher {
-	return &MaintenanceCommandPublisher{publisher: publisher, signer: signer}
+// MaintenanceRequestCorrelation is the exact pre-publication identity of a
+// scan or pressure request. RequestEventID names the canonical NIP-59 rumor,
+// not the random outer gift wrap.
+type MaintenanceRequestCorrelation struct {
+	Method         string
+	WorkerPubKey   string
+	RequestEventID string
+	RequestPubKey  string
+	DTag           string
+}
+
+// MaintenanceRequestObserver registers an outbound request before relay
+// publication. The returned cancellation function is called only when no
+// relay accepted the request.
+type MaintenanceRequestObserver interface {
+	RegisterMaintenanceRequest(MaintenanceRequestCorrelation) (cancel func(), err error)
+}
+
+func NewMaintenanceCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer, observers ...MaintenanceRequestObserver) *MaintenanceCommandPublisher {
+	var observer MaintenanceRequestObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	return &MaintenanceCommandPublisher{publisher: publisher, signer: signer, observer: observer}
 }
 
 // MaintenanceCommand is a maintenance/* request for one worker.
@@ -125,7 +148,19 @@ func (p *MaintenanceCommandPublisher) publish(ctx context.Context, method, comma
 	// references to the rumor id from becoming a dictionary oracle for guessed
 	// path payloads, including when a caller supplies a predictable idempotency key.
 	tags := nostr.Tags{{"command", command}, {"worker", workerPubKey}, {"p", workerPubKey}, {"privacy-nonce", uuid.NewString()}}
-	ev, published, dTag, err := publishContextVMCommandNIP59(ctx, p.publisher, p.signer, workerPubKey, method, dTag, cmd.AgentID, tags, content, "maintenance command")
+	var beforePublish func(*nostr.Event, string) (func(), error)
+	if p.observer != nil && (method == ContextVMMethodMaintenanceScan || method == ContextVMMethodMaintenancePressure) {
+		beforePublish = func(event *nostr.Event, finalizedDTag string) (func(), error) {
+			return p.observer.RegisterMaintenanceRequest(MaintenanceRequestCorrelation{
+				Method:         method,
+				WorkerPubKey:   workerPubKey,
+				RequestEventID: event.ID.Hex(),
+				RequestPubKey:  event.PubKey.Hex(),
+				DTag:           finalizedDTag,
+			})
+		}
+	}
+	ev, published, dTag, err := publishContextVMCommandNIP59(ctx, p.publisher, p.signer, workerPubKey, method, dTag, cmd.AgentID, tags, content, "maintenance command", beforePublish)
 	if err != nil {
 		return nil, err
 	}

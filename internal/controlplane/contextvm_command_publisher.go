@@ -31,7 +31,7 @@ func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher,
 	return ev, published, dTag, nil
 }
 
-func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, recipientPubkey, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (*nostr.Event, int, string, error) {
+func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, recipientPubkey, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string, beforePublish func(*nostr.Event, string) (func(), error)) (*nostr.Event, int, string, error) {
 	if publisher == nil {
 		return nil, 0, "", fmt.Errorf("%s publisher is not configured", label)
 	}
@@ -47,7 +47,23 @@ func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPubli
 	if err != nil {
 		return nil, 0, dTag, fmt.Errorf("wrap %s ContextVM request with NIP-59: %w", label, err)
 	}
+	cancelRegistration := func() {}
+	if beforePublish != nil {
+		cancelRegistration, err = beforePublish(rumor, dTag)
+		if err != nil {
+			return rumor, 0, dTag, fmt.Errorf("register %s ContextVM request correlation: %w", label, err)
+		}
+		if cancelRegistration == nil {
+			cancelRegistration = func() {}
+		}
+	}
 	published, err := publisher.Publish(ctx, *outer)
+	// Zero accepts are definitive non-delivery. When at least one relay may
+	// have accepted the event, retain the correlation even if another relay
+	// returned an error so an authentic response can still be consumed.
+	if published == 0 {
+		cancelRegistration()
+	}
 	if err != nil {
 		return rumor, published, dTag, fmt.Errorf("publish %s NIP-59 ContextVM request: %w", label, err)
 	}

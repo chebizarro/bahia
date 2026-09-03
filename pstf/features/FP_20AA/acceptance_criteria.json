@@ -1,0 +1,35 @@
+{
+  "feature_id": "FP_20AA",
+  "criteria": [
+    {
+      "id": "AC-FP-20AA-001",
+      "statement": "Production hygiene configuration constructs and wires a non-nil ContextVM response-backed HygieneObservationSource.",
+      "verification": ["internal/app/app.go composition review", "go test ./internal/app -count=1"]
+    },
+    {
+      "id": "AC-FP-20AA-002",
+      "statement": "A canonical NIP-59 scan response from the addressed worker, correlated by exact request rumor e tag and JSON-RPC id, produces a Tier-1 quarantine intent.",
+      "verification": ["go test ./internal/reconcile -run TestHygieneObservationProjectionTriggersCandidateQuarantine -count=1"]
+    },
+    {
+      "id": "AC-FP-20AA-003",
+      "statement": "A canonical NIP-59 pressure response above policy thresholds produces a garbage-collection intent.",
+      "verification": ["go test ./internal/reconcile -run TestHygieneObservationProjectionTriggersPressureGC -count=1"]
+    },
+    {
+      "id": "AC-FP-20AA-004",
+      "statement": "Responses from another authenticated pubkey, with wrong correlation, or outside the required NIP-59 transport cannot authorize hygiene actions and provoke no Bahia response event.",
+      "verification": ["go test ./internal/reconcile -run TestHygieneObservationRejectsForgedAndMismatchedResponses -count=1", "go test ./internal/controlplane -run TestContextVMTransport_DispatchesAuthenticatedNIP59ResponseWithoutResponderNoise -count=1"]
+    },
+    {
+      "id": "AC-FP-20AA-005",
+      "statement": "Truncated scan results never supply quarantine candidates while independent pressure results remain eligible for garbage collection.",
+      "verification": ["go test ./internal/reconcile -run TestHygieneObservationTruncatedScanSuppressesQuarantineButAllowsGC -count=1"]
+    },
+    {
+      "id": "AC-FP-20AA-006",
+      "statement": "Request registration is race-safe, bounded, expiring, and ordered so older responses cannot replace newer component state.",
+      "verification": ["go test ./internal/controlplane -run TestMaintenanceCommandPublisher -count=1", "go test ./internal/reconcile -run TestHygieneObservationSourceDoesNotRegressOnOutOfOrderResponses -count=1"]
+    }
+  ]
+}

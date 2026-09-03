@@ -59,6 +59,10 @@ The optional hygiene runner is configured with an enable flag, policy file, inte
 
 Tier-one automation may quarantine duplicate or cruft material and run garbage collection when enabled by policy. Relocation and purge remain operator-controlled tier-two actions; Bahia does not perform them automatically.
 
+Scan candidates and pressure measurements arrive as canonical JSON-RPC results in the worker's NIP-59-wrapped ContextVM kind-25910 response. Bahia accepts an observation only when the authenticated inner author is the worker targeted by the exact Bahia-authored request rumor and both the response `e` tag and JSON-RPC id match that request. Scan and pressure freshness are evaluated independently against the reconcile pass start time.
+
+Canonical scan results may declare `truncated=true` when the worker's bounded candidate cap elides findings. Bahia records the observation but suppresses all candidate quarantine from that partial list; an independently valid pressure observation may still trigger policy-authorized garbage collection.
+
 ## Metrics and alerts
 
 Fleet telemetry exports these operator-facing gauges:

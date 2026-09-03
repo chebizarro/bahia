@@ -1,0 +1,57 @@
+{
+  "feature_id": "FP_20AA",
+  "tests": [
+    {
+      "test": "TestHygieneObservationProjectionTriggersCandidateQuarantine",
+      "criteria": ["AC-FP-20AA-001", "AC-FP-20AA-002"],
+      "type": "deterministic NIP-59 integration",
+      "notes": "The fake relay unwraps Bahia's real request, synchronously returns the canonical worker response, and observes the resulting quarantine request."
+    },
+    {
+      "test": "TestHygieneObservationProjectionTriggersPressureGC",
+      "criteria": ["AC-FP-20AA-001", "AC-FP-20AA-003"],
+      "type": "deterministic NIP-59 integration"
+    },
+    {
+      "test": "TestHygieneObservationRejectsForgedAndMismatchedResponses",
+      "criteria": ["AC-FP-20AA-004"],
+      "type": "security negative matrix",
+      "notes": "Covers wrong authenticated responder, wrong request rumor e tag, wrong JSON-RPC id, and plaintext delivery."
+    },
+    {
+      "test": "TestContextVMTransport_DispatchesAuthenticatedNIP59ResponseWithoutResponderNoise",
+      "criteria": ["AC-FP-20AA-004"],
+      "type": "transport integration"
+    },
+    {
+      "test": "TestHygieneObservationTruncatedScanSuppressesQuarantineButAllowsGC",
+      "criteria": ["AC-FP-20AA-005"],
+      "type": "fail-closed integration"
+    },
+    {
+      "test": "TestMaintenanceCommandPublisherRegistersExactCorrelationBeforePublish",
+      "criteria": ["AC-FP-20AA-006"],
+      "type": "publisher ordering regression"
+    },
+    {
+      "test": "TestMaintenanceCommandPublisherCorrelationFailsClosedAndCancelsZeroAccepts",
+      "criteria": ["AC-FP-20AA-006"],
+      "type": "publisher failure matrix"
+    },
+    {
+      "test": "TestHygieneObservationSourceDoesNotRegressOnOutOfOrderResponses",
+      "criteria": ["AC-FP-20AA-006"],
+      "type": "state ordering and ownership regression"
+    },
+    {
+      "test": "TestHygieneObservationSourceBoundsAndExpiresPendingRequests",
+      "criteria": ["AC-FP-20AA-006"],
+      "type": "bounded-state regression"
+    },
+    {
+      "test": "TestHygieneReconcilerEvaluatesScanAndPressureFreshnessIndependently",
+      "criteria": ["AC-FP-20AA-002", "AC-FP-20AA-003"],
+      "type": "freshness safety matrix"
+    }
+  ]
+}

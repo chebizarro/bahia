@@ -80,6 +80,8 @@ fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026 h1:5XJN60vWCPP0bcVbhCsjhohi
 fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026/go.mod h1:b1EIUDnd133Ie8Pg8O/biaKdFyCMz28aD4n64g1GqvM=
 git.sharegap.net/cascadia/cascadia-go v1.3.0 h1:AqlQ19KYns16PSlsypnmosl9Egc90D0+k6Gt7KX6sEY=
 git.sharegap.net/cascadia/cascadia-go v1.3.0/go.mod h1:gv8EroD6JykPs/26C8VEHgJjdtOXnMmWzIamSvb4GeY=
+git.sharegap.net/cascadia/cascadia-go v1.4.0 h1:fqwWOVfMY8dNh367CF1qtFfeBlP5hfhA0J4KndFGKRA=
+git.sharegap.net/cascadia/cascadia-go v1.4.0/go.mod h1:Ij/trMEDsNmO1V0kganMtYdbNStFRaVSW54uHs2ADds=
 github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 h1:He8afgbRMd7mFxO99hRNu+6tazq8nFF9lIwo9JFroBk=
 github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6/go.mod h1:8o94RPi1/7XTJvwPpRSzSUedZrtlirdB3r9Z20bi2f8=
 github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c h1:udKWzYgxTojEKWjV8V+WSxDXJ4NFATAsZjh8iIbsQIg=

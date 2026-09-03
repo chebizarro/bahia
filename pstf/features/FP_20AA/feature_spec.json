@@ -1,0 +1,19 @@
+{
+  "feature_id": "FP_20AA",
+  "beads": ["fp-20aa"],
+  "source_decision": "fleet-planning/docs/designs/hygiene-observation-transport.md",
+  "scope": "Consume authenticated, request-correlated maintenance scan and pressure JSON-RPC results from NIP-59-wrapped ContextVM kind-25910 responses and wire them into fleet hygiene reconciliation.",
+  "intended_behavior": [
+    "Bahia registers exact scan and pressure rumor IDs before relay publication and accepts a result only from the worker addressed by that Bahia-authored request.",
+    "The existing ContextVM ingress delivers response-shaped messages to the observation source only after NIP-59 provenance, inner validation, routing, replay, and deduplication checks, without entering request authorization or emitting responder noise.",
+    "Canonical v1.4 scan and pressure bindings plus consumer-side invariants gate all cached observations.",
+    "Scan and pressure freshness are independent and remain anchored to the pre-scan reconcile pass timestamp.",
+    "A truncated scan records its total and timestamp but exposes no candidates for quarantine; independently valid pressure may still trigger garbage collection.",
+    "Production app composition passes the real source to both the maintenance publisher and hygiene reconciler and registers it with the shared encrypted transport."
+  ],
+  "out_of_scope": [
+    "Changing canonical result schemas or worker emission behavior.",
+    "Persisting request correlations or observations across Bahia restarts.",
+    "Changing Tier-2 relocate or purge approval behavior."
+  ]
+}

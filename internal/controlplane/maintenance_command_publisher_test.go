@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +11,37 @@ import (
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 )
+
+type recordingMaintenanceObserver struct {
+	correlations []MaintenanceRequestCorrelation
+	cancelled    int
+	err          error
+	registered   bool
+}
+
+func (o *recordingMaintenanceObserver) RegisterMaintenanceRequest(c MaintenanceRequestCorrelation) (func(), error) {
+	if o.err != nil {
+		return nil, o.err
+	}
+	o.registered = true
+	o.correlations = append(o.correlations, c)
+	return func() { o.cancelled++ }, nil
+}
+
+type maintenancePublishProbe struct {
+	observer  *recordingMaintenanceObserver
+	published int
+	calls     int
+	err       error
+}
+
+func (p *maintenancePublishProbe) Publish(_ context.Context, _ nostr.Event) (int, error) {
+	p.calls++
+	if !p.observer.registered {
+		return 0, errors.New("correlation was not registered before publish")
+	}
+	return p.published, p.err
+}
 
 func newMaintenanceWorkerSigner(t *testing.T) (casnostr.Signer, string) {
 	t.Helper()
@@ -149,4 +181,73 @@ func TestMaintenanceCommandPublisherPurgeRequiresConfirm(t *testing.T) {
 	if _, err := publisher.PublishPurge(ctx, MaintenanceCommand{WorkerPubKey: workerKey, Confirm: true, IdempotencyKey: "purge-1"}); err != nil {
 		t.Fatalf("publish purge: %v", err)
 	}
+}
+
+func TestMaintenanceCommandPublisherRegistersExactCorrelationBeforePublish(t *testing.T) {
+	ctx := context.Background()
+	observer := &recordingMaintenanceObserver{}
+	probe := &maintenancePublishProbe{observer: observer, published: 1}
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, workerKey := newMaintenanceWorkerSigner(t)
+	publisher := NewMaintenanceCommandPublisher(probe, signer, observer)
+
+	receipt, err := publisher.PublishScan(ctx, MaintenanceCommand{WorkerPubKey: workerKey, IdempotencyKey: "scan-correlation"})
+	if err != nil {
+		t.Fatalf("publish scan: %v", err)
+	}
+	if probe.calls != 1 || len(observer.correlations) != 1 || observer.cancelled != 0 {
+		t.Fatalf("publish/observer state: calls=%d correlations=%+v cancelled=%d", probe.calls, observer.correlations, observer.cancelled)
+	}
+	correlation := observer.correlations[0]
+	if correlation.Method != ContextVMMethodMaintenanceScan || correlation.WorkerPubKey != workerKey || correlation.RequestEventID != receipt.RequestEventID || correlation.RequestPubKey != receipt.RequestPubkey || correlation.DTag != receipt.DTag {
+		t.Fatalf("correlation and receipt diverged: correlation=%+v receipt=%+v", correlation, receipt)
+	}
+}
+
+func TestMaintenanceCommandPublisherCorrelationFailsClosedAndCancelsZeroAccepts(t *testing.T) {
+	ctx := context.Background()
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, workerKey := newMaintenanceWorkerSigner(t)
+
+	t.Run("registration failure prevents publish", func(t *testing.T) {
+		observer := &recordingMaintenanceObserver{err: errors.New("capacity exhausted")}
+		probe := &maintenancePublishProbe{observer: observer, published: 1}
+		publisher := NewMaintenanceCommandPublisher(probe, signer, observer)
+		if _, err := publisher.PublishScan(ctx, MaintenanceCommand{WorkerPubKey: workerKey, IdempotencyKey: "scan-rejected"}); err == nil || !strings.Contains(err.Error(), "capacity exhausted") {
+			t.Fatalf("registration error = %v", err)
+		}
+		if probe.calls != 0 {
+			t.Fatalf("untrackable request was published %d times", probe.calls)
+		}
+	})
+
+	t.Run("zero relay accepts cancels", func(t *testing.T) {
+		observer := &recordingMaintenanceObserver{}
+		probe := &maintenancePublishProbe{observer: observer, published: 0}
+		publisher := NewMaintenanceCommandPublisher(probe, signer, observer)
+		if _, err := publisher.PublishPressure(ctx, MaintenanceCommand{WorkerPubKey: workerKey, IdempotencyKey: "pressure-zero"}); err == nil || !strings.Contains(err.Error(), "no relay accepted") {
+			t.Fatalf("zero-accept error = %v", err)
+		}
+		if probe.calls != 1 || len(observer.correlations) != 1 || observer.cancelled != 1 {
+			t.Fatalf("zero-accept cleanup: calls=%d correlations=%+v cancelled=%d", probe.calls, observer.correlations, observer.cancelled)
+		}
+	})
+
+	t.Run("partial acceptance retains correlation", func(t *testing.T) {
+		observer := &recordingMaintenanceObserver{}
+		probe := &maintenancePublishProbe{observer: observer, published: 1, err: errors.New("second relay failed")}
+		publisher := NewMaintenanceCommandPublisher(probe, signer, observer)
+		if _, err := publisher.PublishScan(ctx, MaintenanceCommand{WorkerPubKey: workerKey, IdempotencyKey: "scan-partial"}); err == nil || !strings.Contains(err.Error(), "second relay failed") {
+			t.Fatalf("partial publish error = %v", err)
+		}
+		if probe.calls != 1 || len(observer.correlations) != 1 || observer.cancelled != 0 {
+			t.Fatalf("partial acceptance lost correlation: calls=%d correlations=%+v cancelled=%d", probe.calls, observer.correlations, observer.cancelled)
+		}
+	})
 }

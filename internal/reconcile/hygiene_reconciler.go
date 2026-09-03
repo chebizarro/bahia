@@ -41,16 +41,22 @@ type HygieneMountPressure struct {
 }
 
 // HygieneObservation is the latest known hygiene state for one worker,
-// assembled from the driver's scan/pressure result projections (30315).
+// assembled from correlated ContextVM responses on kind 25910. Scan and
+// pressure freshness are independent because their replies arrive separately.
 type HygieneObservation struct {
-	WorkerPubKey string
-	Candidates   []HygieneCandidate
-	Pressure     []HygieneMountPressure
-	ObservedAt   time.Time
+	WorkerPubKey       string
+	Candidates         []HygieneCandidate
+	Pressure           []HygieneMountPressure
+	ObservedAt         time.Time // diagnostic aggregate; never used for source-backed component freshness
+	ScanObservedAt     time.Time
+	PressureObservedAt time.Time
+	ScanTruncated      bool
+	TotalCandidates    int
 }
 
 // HygieneObservationSource yields the latest hygiene observation per worker.
-// Implementations read the driver's 30315 status projections; tests fake it.
+// Production reads authenticated, request-correlated kind-25910 responses;
+// tests may provide deterministic in-memory observations.
 type HygieneObservationSource interface {
 	Latest(ctx context.Context, workerPubKey string) (*HygieneObservation, error)
 }
@@ -199,15 +205,32 @@ func (r *HygieneReconciler) reconcileWorker(ctx context.Context, worker string, 
 	if obs == nil {
 		return nil
 	}
-	// Anchor freshness before the scan round-trip so worker latency cannot
-	// disqualify the previous pass's response while this pass is publishing.
+	// Anchor both independent freshness checks before the scan round-trip so
+	// worker latency cannot disqualify the previous pass's responses while this
+	// pass is publishing. Keep the one-interval policy established by fp-9pjq.
 	freshnessCutoff := passStartedAt.Add(-r.interval)
-	if !obs.ObservedAt.IsZero() && obs.ObservedAt.Before(freshnessCutoff) {
-		r.logger.Debug("hygiene observation stale; scan-only pass", zap.String("worker", worker), zap.Time("observed_at", obs.ObservedAt), zap.Time("freshness_cutoff", freshnessCutoff))
-		return nil
+	scanObservedAt := obs.ScanObservedAt
+	if scanObservedAt.IsZero() {
+		scanObservedAt = obs.ObservedAt
 	}
-	r.convergeCandidates(ctx, worker, obs.Candidates, result)
-	r.convergePressure(ctx, worker, obs.Pressure, result)
+	if scanObservedAt.IsZero() || !scanObservedAt.Before(freshnessCutoff) {
+		if obs.ScanTruncated {
+			r.logger.Warn("hygiene scan result truncated; candidate convergence suppressed", zap.String("worker", worker), zap.Int("total_candidates", obs.TotalCandidates))
+		} else {
+			r.convergeCandidates(ctx, worker, obs.Candidates, result)
+		}
+	} else {
+		r.logger.Debug("hygiene scan observation stale; candidate convergence suppressed", zap.String("worker", worker), zap.Time("observed_at", scanObservedAt), zap.Time("freshness_cutoff", freshnessCutoff))
+	}
+	pressureObservedAt := obs.PressureObservedAt
+	if pressureObservedAt.IsZero() {
+		pressureObservedAt = obs.ObservedAt
+	}
+	if pressureObservedAt.IsZero() || !pressureObservedAt.Before(freshnessCutoff) {
+		r.convergePressure(ctx, worker, obs.Pressure, result)
+	} else {
+		r.logger.Debug("hygiene pressure observation stale; gc convergence suppressed", zap.String("worker", worker), zap.Time("observed_at", pressureObservedAt), zap.Time("freshness_cutoff", freshnessCutoff))
+	}
 	return nil
 }
 

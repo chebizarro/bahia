@@ -1031,6 +1031,62 @@ func TestContextVMTransport_IgnoresNIP59WorkerResponses(t *testing.T) {
 	}
 }
 
+func TestContextVMTransport_DispatchesAuthenticatedNIP59ResponseWithoutResponderNoise(t *testing.T) {
+	ctx := context.Background()
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	otherPubkey := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
+	transport := NewEncryptedRequestTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
+
+	var received []ContextVMResponseEnvelope
+	unregister := transport.RegisterContextVMResponseHandler(func(_ context.Context, response ContextVMResponseEnvelope) {
+		received = append(received, response)
+	})
+	workerSigner, err := NewPrivateKeySigner(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servicePubkey := responder.ServicePubkey()
+	requestID := strings.Repeat("a", 64)
+	result := `{"candidates":[],"scanned_at":"2026-09-02T12:00:00Z","total_candidates":0}`
+	wrap := func(id string) *nostr.Event {
+		outer, _, err := cascontextvm.WrapEventNIP59(ctx, workerSigner, servicePubkey, &nostr.Event{
+			Kind: KindContextVMMessage, CreatedAt: nostr.Now(),
+			Tags:    nostr.Tags{{"p", servicePubkey}, {"e", requestID}},
+			Content: `{"jsonrpc":"2.0","id":` + fmt.Sprintf("%q", id) + `,"result":` + result + `}`,
+		}, cascontextvm.StoredGiftWrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outer
+	}
+
+	transport.HandleEvent(ctx, wrap("scan-1"))
+	if len(received) != 1 {
+		t.Fatalf("response handler calls = %d, want 1", len(received))
+	}
+	got := received[0]
+	if got.EnvelopeFormat != cascontextvm.EnvelopeFormatNIP59 || got.Event == nil || got.Event.PubKey.Hex() != testNostrPubKeyHexFromPrivateKey(t, testRequesterKey) {
+		t.Fatalf("response provenance lost: %+v", got)
+	}
+	if got.JSONRPC != "2.0" || string(got.ID) != `"scan-1"` || !got.IDPresent || got.MethodPresent || !got.ResultPresent || got.ErrorPresent || string(got.Result) != result {
+		t.Fatalf("lossless response decode = %+v", got)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("worker response provoked %d outbound events", len(publisher.events))
+	}
+
+	unregister()
+	unregister()
+	transport.HandleEvent(ctx, wrap("scan-2"))
+	if len(received) != 1 {
+		t.Fatalf("unregistered handler calls = %d, want 1", len(received))
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("unclaimed worker response provoked %d outbound events", len(publisher.events))
+	}
+}
+
 func TestContextVMTransport_DropsHistoricalNIP59InnerBeforeRoleDispatch(t *testing.T) {
 	ctx := context.Background()
 	publisher := &mockEncryptedPublisher{}

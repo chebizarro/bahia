@@ -288,6 +288,52 @@ func TestHygieneReconcilerFreshnessUsesPassStartBoundary(t *testing.T) {
 	}
 }
 
+func TestHygieneReconcilerEvaluatesScanAndPressureFreshnessIndependently(t *testing.T) {
+	const worker = "worker-a"
+	passStartedAt := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	interval := time.Minute
+	for _, tc := range []struct {
+		name           string
+		scanObserved   time.Time
+		pressureAt     time.Time
+		wantQuarantine bool
+		wantGC         bool
+	}{
+		{name: "stale scan fresh pressure", scanObserved: passStartedAt.Add(-interval - time.Nanosecond), pressureAt: passStartedAt, wantGC: true},
+		{name: "fresh scan stale pressure", scanObserved: passStartedAt, pressureAt: passStartedAt.Add(-interval - time.Nanosecond), wantQuarantine: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			publisher := &fakeMaintenancePublisher{}
+			source := &fakeObservationSource{observations: map[string]*HygieneObservation{
+				worker: {
+					WorkerPubKey:       worker,
+					Candidates:         []HygieneCandidate{{Path: "/home/agents/work/cruft", Class: domain.HygieneClassCruft}},
+					Pressure:           []HygieneMountPressure{{Path: "/", UsedPct: 99, TotalInodes: 100, FreeInodes: 50}},
+					ScanObservedAt:     tc.scanObserved,
+					PressureObservedAt: tc.pressureAt,
+				},
+			}}
+			rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{worker}, publisher, source, nil, interval, zap.NewNop())
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec.now = func() time.Time { return passStartedAt }
+			if _, err := rec.ReconcileOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			gotQuarantine := false
+			gotGC := false
+			for _, call := range publisher.calls {
+				gotQuarantine = gotQuarantine || strings.HasPrefix(call, "maintenance/quarantine:")
+				gotGC = gotGC || strings.HasPrefix(call, "maintenance/gc:")
+			}
+			if gotQuarantine != tc.wantQuarantine || gotGC != tc.wantGC {
+				t.Fatalf("actions quarantine=%v gc=%v, want quarantine=%v gc=%v; calls=%v", gotQuarantine, gotGC, tc.wantQuarantine, tc.wantGC, publisher.calls)
+			}
+		})
+	}
+}
+
 func TestHygienePolicyValidation(t *testing.T) {
 	if err := (domain.HygienePolicy{}).WithDefaults().Validate(); err == nil {
 		t.Fatal("empty policy must fail validation")
