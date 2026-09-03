@@ -636,6 +636,17 @@ func readJSONObjectFile(path string) (map[string]any, error) {
 	return value, nil
 }
 
+func readManagedRuntimeConfigFile(path string) (*domain.ManagedRuntimeConfig, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	var value domain.ManagedRuntimeConfig
+	if err := decodeJSONFile(path, &value, true); err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
 func readDeploymentUnitFile(path string) (client.DeploymentUnitRequest, error) {
 	var unit client.DeploymentUnitRequest
 	if err := decodeJSONFile(path, &unit, true); err != nil {

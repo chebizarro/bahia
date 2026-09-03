@@ -8,6 +8,7 @@ import (
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // ServiceCommandPublisher emits canonical service deployment command events.
@@ -21,14 +22,30 @@ func NewServiceCommandPublisher(publisher NostrEventPublisher, signer canonicaln
 }
 
 type ServiceCreateCommand struct {
-	Name           string
-	RepoURL        string
-	Repository     any
-	ArtifactRepo   string
-	DefaultBranch  string
-	RuntimeType    string
-	IdempotencyKey string
-	AgentID        string
+	Name                 string
+	OrgID                uuid.UUID
+	RepoURL              string
+	Repository           any
+	ArtifactRepo         string
+	DefaultBranch        string
+	RuntimeType          string
+	ManagedRuntimeConfig *domain.ManagedRuntimeConfig
+	IdempotencyKey       string
+	AgentID              string
+}
+
+type ServiceUpdateCommand struct {
+	ID                       uuid.UUID
+	Name                     *string
+	RepoURL                  *string
+	Repository               any
+	ArtifactRepo             *string
+	DefaultBranch            *string
+	RuntimeType              *string
+	ManagedRuntimeConfig     *domain.ManagedRuntimeConfig
+	AdoptedPublicEnvironment map[string]string
+	IdempotencyKey           string
+	AgentID                  string
 }
 
 type ServiceDeployCommand struct {
@@ -86,6 +103,9 @@ func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Contex
 		return nil, fmt.Errorf("name is required")
 	}
 	content := map[string]any{"name": name}
+	if cmd.OrgID != uuid.Nil {
+		content["org_id"] = cmd.OrgID.String()
+	}
 	if cmd.RepoURL != "" {
 		content["repo_url"] = cmd.RepoURL
 	}
@@ -101,10 +121,52 @@ func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Contex
 	if cmd.RuntimeType != "" {
 		content["runtime_type"] = cmd.RuntimeType
 	}
+	if cmd.ManagedRuntimeConfig != nil {
+		content["managed_runtime_config"] = domain.NormalizeManagedRuntimeConfig(cmd.ManagedRuntimeConfig)
+	}
 	tags := nostr.Tags{{"service", name}}
 	receipt, err := p.publish(ctx, ContextVMMethodServiceCreate, tags, content, cmd.IdempotencyKey, cmd.AgentID)
 	if receipt != nil {
 		receipt.ServiceName = name
+		receipt.RegistryKind = KindCASControlState
+		receipt.StateKind = KindCASControlState
+	}
+	return receipt, err
+}
+
+func (p *ServiceCommandPublisher) PublishServiceUpdateRequest(ctx context.Context, cmd ServiceUpdateCommand) (*ServiceCommandReceipt, error) {
+	if cmd.ID == uuid.Nil {
+		return nil, fmt.Errorf("service_id is required")
+	}
+	content := map[string]any{"id": cmd.ID.String()}
+	if cmd.Name != nil {
+		content["name"] = strings.TrimSpace(*cmd.Name)
+	}
+	if cmd.RepoURL != nil {
+		content["repo_url"] = strings.TrimSpace(*cmd.RepoURL)
+	}
+	if cmd.Repository != nil {
+		content["repository"] = cmd.Repository
+	}
+	if cmd.ArtifactRepo != nil {
+		content["artifact_repo"] = strings.TrimSpace(*cmd.ArtifactRepo)
+	}
+	if cmd.DefaultBranch != nil {
+		content["default_branch"] = strings.TrimSpace(*cmd.DefaultBranch)
+	}
+	if cmd.RuntimeType != nil {
+		content["runtime_type"] = strings.TrimSpace(*cmd.RuntimeType)
+	}
+	if cmd.ManagedRuntimeConfig != nil {
+		content["managed_runtime_config"] = domain.NormalizeManagedRuntimeConfig(cmd.ManagedRuntimeConfig)
+	}
+	if len(cmd.AdoptedPublicEnvironment) > 0 {
+		content["adopted_public_environment"] = cmd.AdoptedPublicEnvironment
+	}
+	tags := nostr.Tags{{"service", cmd.ID.String()}}
+	receipt, err := p.publish(ctx, ContextVMMethodServiceUpdate, tags, content, cmd.IdempotencyKey, cmd.AgentID)
+	if receipt != nil {
+		receipt.ServiceID = cmd.ID.String()
 		receipt.RegistryKind = KindCASControlState
 		receipt.StateKind = KindCASControlState
 	}

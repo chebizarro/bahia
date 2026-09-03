@@ -438,6 +438,7 @@ func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryServi
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceCreate, map[string]any{
 		"org_id": orgID.String(), "name": "payments-api", "artifact_repo": "registry.example/payments", "repository": map[string]any{"source": "github", "clone_url": "https://git.example/payments"}, "default_branch": "release", "runtime_type": "compose",
+		"managed_runtime_config": map[string]any{"schema_version": "1", "service_name": "payments-api", "ports": []string{"127.0.0.1:18080:8080"}, "restart_policy": "unless-stopped", "pull_policy": "if-not-present"},
 	}))
 
 	if len(registry.createdServices) != 1 {
@@ -446,6 +447,9 @@ func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryServi
 	created := registry.createdServices[0]
 	if created.OrgID != orgID || created.Name != "payments-api" || created.ArtifactRepo != "registry.example/payments" || created.RuntimeType != domain.RuntimeTypeCompose || created.RepoURL != "https://git.example/payments" || created.DefaultBranch != "release" {
 		t.Fatalf("unexpected created service: %#v", created)
+	}
+	if created.RuntimeConfig == nil || created.RuntimeConfig.Managed == nil || created.RuntimeConfig.Managed.ServiceName != "payments-api" {
+		t.Fatalf("managed runtime config was not persisted: %#v", created.RuntimeConfig)
 	}
 	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["service_id"] == "" || payload["status"] != "created" {
