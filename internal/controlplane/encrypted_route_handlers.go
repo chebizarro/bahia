@@ -274,6 +274,25 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 		DefaultBranch: defaultBranch,
 		RuntimeType:   runtimeType,
 	}
+	if payload.ManagedRuntimeConfig != nil {
+		if svc.RuntimeType != domain.RuntimeTypeCompose {
+			return nil, fmt.Errorf("managed runtime configuration requires runtime_type compose")
+		}
+		managed := domain.NormalizeManagedRuntimeConfig(payload.ManagedRuntimeConfig)
+		if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
+			return nil, fmt.Errorf("invalid managed runtime configuration: %w", err)
+		}
+		if len(managed.SecretRefs) > 0 && h.secrets == nil {
+			return nil, fmt.Errorf("secret repository is required to validate managed secret references")
+		}
+		for _, ref := range managed.SecretRefs {
+			secret, err := h.secrets.GetByID(ctx, ref.SecretID)
+			if err != nil || secret == nil || secret.ServiceID != svc.ID {
+				return nil, fmt.Errorf("managed runtime configuration contains an unavailable secret reference")
+			}
+		}
+		svc.RuntimeConfig = &domain.ServiceRuntimeConfig{Managed: managed}
+	}
 	if err := h.registry.CreateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("failed to create service: %w", err)
 	}

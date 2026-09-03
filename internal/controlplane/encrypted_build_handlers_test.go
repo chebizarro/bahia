@@ -160,6 +160,78 @@ func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing
 	}
 }
 
+func TestBuildRequestUsesRegisteredServiceRepositoryCoordinate(t *testing.T) {
+	serviceID := uuid.New()
+	credentialID := uuid.New()
+	payload := ArcanaBuildRequest{
+		ServiceID:               serviceID,
+		GitRef:                  "refs/heads/main",
+		RepositoryCredentialRef: credentialID,
+		ArtifactRepo:            "harbor.sharegap.net/cascadia/astillero",
+		BuildArgs:               map[string]string{},
+	}
+	orgID := uuid.New()
+	starter := &buildTestStarter{}
+	registry := &buildTestRegistry{}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Starter:  starter,
+		Registry: registry,
+		Services: buildTestServices{service: &domain.Service{
+			ID: serviceID, OrgID: orgID, ArtifactRepo: payload.ArtifactRepo,
+			Repository: &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
+		}},
+		Secrets: buildTestCredentials{secret: &domain.ServiceSecret{ID: credentialID, ServiceID: serviceID, Name: "git-repository"}},
+		RBAC:    auth.NewRBAC(buildTestMembers{}),
+	})
+	params, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = handler.RequestBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{},
+		RPC:   ContextVMJSONRPCRequest{Params: params},
+	})
+	if err != nil {
+		t.Fatalf("RequestBuild() error = %v", err)
+	}
+	if starter.request.RepositoryCoordinate != "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero" {
+		t.Fatalf("repository coordinate = %q", starter.request.RepositoryCoordinate)
+	}
+	if registry.build == nil || registry.build.Metadata["repository_coordinate"] != starter.request.RepositoryCoordinate {
+		t.Fatalf("registered build metadata = %#v", registry.build)
+	}
+}
+
+func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testing.T) {
+	serviceID := uuid.New()
+	credentialID := uuid.New()
+	payload := ArcanaBuildRequest{
+		ServiceID:               serviceID,
+		GitRef:                  "refs/heads/main",
+		RepositoryCredentialRef: credentialID,
+		ArtifactRepo:            "harbor.sharegap.net/cascadia/astillero",
+		BuildArgs:               map[string]string{"VITE_BLOSSOM_URL": "https://blossom.example"},
+	}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Starter:  &buildTestStarter{},
+		Registry: &buildTestRegistry{},
+		Services: buildTestServices{service: &domain.Service{
+			ID: serviceID, OrgID: uuid.New(), ArtifactRepo: payload.ArtifactRepo,
+			Repository: &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
+		}},
+		Secrets: buildTestCredentials{secret: &domain.ServiceSecret{ID: credentialID, ServiceID: serviceID, Name: "git-repository"}},
+		RBAC:    auth.NewRBAC(buildTestMembers{}),
+	})
+	params, _ := json.Marshal(payload)
+	_, err := handler.RequestBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{},
+		RPC:   ContextVMJSONRPCRequest{Params: params},
+	})
+	if err == nil || !strings.Contains(err.Error(), "approved public build argument allowlist") {
+		t.Fatalf("generic build args error = %v", err)
+	}
+}
+
 type buildResultTestLoader struct{ build *domain.Build }
 
 func (f buildResultTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {

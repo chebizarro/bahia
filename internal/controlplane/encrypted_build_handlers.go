@@ -20,7 +20,11 @@ const (
 	ArcanaRepositoryURL        = "https://github.com/chebizarro/living-library-forge"
 )
 
-var fullGitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+var (
+	fullGitSHA           = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+	buildArgNamePattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+	repositoryURLPattern = regexp.MustCompile(`(?i)(?:^|[:/])([^/:]+)/([^/]+?)(?:\.git)?/?$`)
+)
 
 var ArcanaPublicBuildArgNames = []string{
 	"VITE_ARCANA_READ_RELAYS",
@@ -140,7 +144,7 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("decode build/request params: %w", err)
 	}
-	if err := validateArcanaBuildRequest(payload); err != nil {
+	if err := validateBuildRequest(payload); err != nil {
 		return nil, err
 	}
 	if h == nil || h.starter == nil {
@@ -155,11 +159,15 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	if err != nil {
 		return nil, err
 	}
-	if !isArcanaService(svc) {
-		return nil, fmt.Errorf("service repository must be %s", ArcanaRepositoryCoordinate)
-	}
 	if strings.TrimSpace(svc.ArtifactRepo) != payload.ArtifactRepo {
 		return nil, fmt.Errorf("artifact_repo must match the service artifact repository")
+	}
+	if err := validateServiceBuildArgs(svc, payload.BuildArgs); err != nil {
+		return nil, err
+	}
+	repositoryCoordinate, err := serviceRepositoryCoordinate(svc)
+	if err != nil {
+		return nil, err
 	}
 
 	secret, err := h.secrets.GetByID(ctx, payload.RepositoryCredentialRef)
@@ -182,7 +190,7 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	}
 	result, err := h.starter.StartHiveCIBuild(ctx, HiveCIBuildStartRequest{
 		BuildID: buildID, ServiceID: payload.ServiceID,
-		RepositoryCoordinate: ArcanaRepositoryCoordinate,
+		RepositoryCoordinate: repositoryCoordinate,
 		GitRef:               payload.GitRef, CredentialRef: payload.RepositoryCredentialRef,
 		ArtifactRepo: payload.ArtifactRepo, BuildArgs: cloneStringMap(payload.BuildArgs),
 		RequesterPubkey: requesterPubkey, SourceEventID: sourceEventID,
@@ -203,7 +211,7 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 		CISystem: domain.CISystemHiveCI, CIRunID: strings.TrimSpace(result.CIRunID),
 		Status: domain.BuildStatusQueued, SourceEventID: sourceEventID,
 		Metadata: map[string]any{
-			"repository_coordinate": ArcanaRepositoryCoordinate,
+			"repository_coordinate": repositoryCoordinate,
 			"artifact_repo":         payload.ArtifactRepo,
 			"build_args":            cloneStringMap(payload.BuildArgs),
 			"evidence":              map[string]any{"request_event_id": sourceEventID},
@@ -267,7 +275,7 @@ func (h *EncryptedBuildHandlers) RegisterBuildResult(ctx context.Context, reques
 	}, nil
 }
 
-func validateArcanaBuildRequest(payload ArcanaBuildRequest) error {
+func validateBuildRequest(payload ArcanaBuildRequest) error {
 	if payload.ServiceID == uuid.Nil {
 		return fmt.Errorf("service_id is required")
 	}
@@ -284,21 +292,79 @@ func validateArcanaBuildRequest(payload ArcanaBuildRequest) error {
 	if strings.TrimSpace(payload.ArtifactRepo) == "" {
 		return fmt.Errorf("artifact_repo is required")
 	}
-	if len(payload.BuildArgs) > len(arcanaPublicBuildArgs) {
+	return validateGenericBuildArgs(payload.BuildArgs)
+}
+
+func validateArcanaBuildRequest(payload ArcanaBuildRequest) error {
+	if err := validateBuildRequest(payload); err != nil {
+		return err
+	}
+	return validateServiceBuildArgs(&domain.Service{Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate}}, payload.BuildArgs)
+}
+
+func validateGenericBuildArgs(buildArgs map[string]string) error {
+	if len(buildArgs) > 64 {
 		return fmt.Errorf("build_args contains too many values")
 	}
-	for key, value := range payload.BuildArgs {
-		if _, ok := arcanaPublicBuildArgs[key]; !ok {
-			return fmt.Errorf("build arg %q is not an approved public Arcana Vite setting", key)
+	for key, value := range buildArgs {
+		if !buildArgNamePattern.MatchString(key) {
+			return fmt.Errorf("build arg %q is invalid", key)
 		}
 		if len(value) > 2048 || strings.ContainsRune(value, '\x00') {
 			return fmt.Errorf("build arg %q contains an invalid value", key)
 		}
 	}
-	if mode := strings.TrimSpace(payload.BuildArgs["VITE_ARCANA_SIGNER_MODE"]); mode != "" && mode != "nip07" && mode != "nip46" {
+	return nil
+}
+
+func validateServiceBuildArgs(svc *domain.Service, buildArgs map[string]string) error {
+	if len(buildArgs) == 0 {
+		return nil
+	}
+	if !isArcanaService(svc) {
+		return fmt.Errorf("build_args are only available for services with an approved public build argument allowlist")
+	}
+	for key := range buildArgs {
+		if _, ok := arcanaPublicBuildArgs[key]; !ok {
+			return fmt.Errorf("build arg %q is not an approved public Arcana Vite setting", key)
+		}
+	}
+	if mode := strings.TrimSpace(buildArgs["VITE_ARCANA_SIGNER_MODE"]); mode != "" && mode != "nip07" && mode != "nip46" {
 		return fmt.Errorf("VITE_ARCANA_SIGNER_MODE must be nip07 or nip46")
 	}
 	return nil
+}
+
+func serviceRepositoryCoordinate(svc *domain.Service) (string, error) {
+	if svc == nil {
+		return "", fmt.Errorf("service is required")
+	}
+	if svc.Repository != nil {
+		if coordinate := strings.TrimSpace(svc.Repository.RepoCoordinate); coordinate != "" {
+			return coordinate, nil
+		}
+	}
+	if coordinate := repositoryCoordinateFromURL(svc.RepoURL); coordinate != "" {
+		return coordinate, nil
+	}
+	return "", fmt.Errorf("service repository coordinate is required for HiveCI build routing")
+}
+
+func repositoryCoordinateFromURL(rawURL string) string {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return ""
+	}
+	matches := repositoryURLPattern.FindStringSubmatch(value)
+	if len(matches) != 3 {
+		return ""
+	}
+	owner := strings.TrimSpace(matches[1])
+	repo := strings.TrimSuffix(strings.TrimSpace(matches[2]), ".git")
+	if owner == "" || repo == "" {
+		return ""
+	}
+	return owner + "/" + repo
 }
 
 func isArcanaService(svc *domain.Service) bool {

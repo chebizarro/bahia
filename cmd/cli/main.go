@@ -74,6 +74,7 @@ func newRootCommand() *cobra.Command {
 		servicesCommands(),
 		environmentsCommands(),
 		stateCommands(),
+		artifactsCommands(),
 		deployCommands(),
 		adoptCommands(),
 		workersCommands(),
@@ -160,22 +161,146 @@ func servicesCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new service (deprecated: signer-first Nostr only)",
+		Short: "Create a new service through signer-first Nostr control plane",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return signerFirstMutationUnavailable("service/create")
+			name, _ := cmd.Flags().GetString("name")
+			orgID, _ := cmd.Flags().GetString("org")
+			repoURL, _ := cmd.Flags().GetString("repo-url")
+			repoSource, _ := cmd.Flags().GetString("repo-source")
+			repoCoordinate, _ := cmd.Flags().GetString("repo-coordinate")
+			cloneURL, _ := cmd.Flags().GetString("clone-url")
+			webURL, _ := cmd.Flags().GetString("web-url")
+			ciProvider, _ := cmd.Flags().GetString("ci-provider")
+			ciWorkflow, _ := cmd.Flags().GetString("ci-workflow")
+			artifactRepo, _ := cmd.Flags().GetString("artifact-repo")
+			defaultBranch, _ := cmd.Flags().GetString("default-branch")
+			runtimeType, _ := cmd.Flags().GetString("runtime-type")
+			runtimeConfigFile, _ := cmd.Flags().GetString("managed-runtime-config-file")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+			managed, err := readManagedRuntimeConfigFile(runtimeConfigFile)
+			if err != nil {
+				return err
+			}
+			var repository *client.RepositoryRefRequest
+			if repoSource != "" || repoCoordinate != "" || cloneURL != "" || webURL != "" || ciProvider != "" || ciWorkflow != "" {
+				repository = &client.RepositoryRefRequest{
+					Source:         repoSource,
+					RepoCoordinate: repoCoordinate,
+					CloneURL:       firstNonEmpty(cloneURL, repoURL),
+					WebURL:         webURL,
+				}
+				if ciProvider != "" || ciWorkflow != "" {
+					repository.CI = &client.ServiceCIConfigRequest{Provider: ciProvider, WorkflowPath: ciWorkflow}
+				}
+			}
+			result, err := runServiceCreateNostr(cmd, client.CreateServiceNostrRequest{
+				OrgID: orgID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
+				DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed, IdempotencyKey: idempotencyKey,
+			})
+			if err != nil {
+				return err
+			}
+			return outputSingle(result)
 		},
 	}
 	createCmd.Flags().String("name", "", "Service name")
+	createCmd.Flags().String("org", "", "Organization ID (optional)")
+	createCmd.Flags().String("repo-url", "", "Repository clone URL")
+	createCmd.Flags().String("repo-source", "", "Repository source, for example gitea or github")
+	createCmd.Flags().String("repo-coordinate", "", "Repository coordinate for build routing, for example owner/repo")
+	createCmd.Flags().String("clone-url", "", "Repository clone URL for structured repository metadata")
+	createCmd.Flags().String("web-url", "", "Repository web URL")
+	createCmd.Flags().String("ci-provider", "", "CI provider, for example hiveci")
+	createCmd.Flags().String("ci-workflow", "", "CI workflow path")
 	createCmd.Flags().String("artifact-repo", "", "Artifact repository")
+	createCmd.Flags().String("default-branch", "main", "Default branch")
 	createCmd.Flags().String("runtime-type", string(domain.RuntimeTypeCompose), "Runtime type: docker, compose, kubernetes")
+	createCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
+	createCmd.Flags().String("idempotency-key", "", "Explicit idempotency key for the signed request")
 	_ = createCmd.MarkFlagRequired("name")
 	_ = createCmd.MarkFlagRequired("artifact-repo")
 
+	updateCmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update a service through signer-first Nostr control plane",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceID, _ := cmd.Flags().GetString("service")
+			name := optionalChangedStringFlag(cmd, "name")
+			repoURL := optionalChangedStringFlag(cmd, "repo-url")
+			repoSource, _ := cmd.Flags().GetString("repo-source")
+			repoCoordinate, _ := cmd.Flags().GetString("repo-coordinate")
+			cloneURL, _ := cmd.Flags().GetString("clone-url")
+			webURL, _ := cmd.Flags().GetString("web-url")
+			ciProvider, _ := cmd.Flags().GetString("ci-provider")
+			ciWorkflow, _ := cmd.Flags().GetString("ci-workflow")
+			artifactRepo := optionalChangedStringFlag(cmd, "artifact-repo")
+			defaultBranch := optionalChangedStringFlag(cmd, "default-branch")
+			runtimeType := optionalChangedStringFlag(cmd, "runtime-type")
+			runtimeConfigFile, _ := cmd.Flags().GetString("managed-runtime-config-file")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+			managed, err := readManagedRuntimeConfigFile(runtimeConfigFile)
+			if err != nil {
+				return err
+			}
+			var repository *client.RepositoryRefRequest
+			if cmd.Flags().Changed("repo-source") || cmd.Flags().Changed("repo-coordinate") || cmd.Flags().Changed("clone-url") || cmd.Flags().Changed("web-url") || cmd.Flags().Changed("ci-provider") || cmd.Flags().Changed("ci-workflow") {
+				repository = &client.RepositoryRefRequest{
+					Source:         repoSource,
+					RepoCoordinate: repoCoordinate,
+					CloneURL:       firstNonEmpty(cloneURL, optionalStringValue(repoURL)),
+					WebURL:         webURL,
+				}
+				if cmd.Flags().Changed("ci-provider") || cmd.Flags().Changed("ci-workflow") {
+					repository.CI = &client.ServiceCIConfigRequest{Provider: ciProvider, WorkflowPath: ciWorkflow}
+				}
+			}
+			result, err := runServiceUpdateNostr(cmd, client.UpdateServiceNostrRequest{
+				ID: serviceID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
+				DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed, IdempotencyKey: idempotencyKey,
+			})
+			if err != nil {
+				return err
+			}
+			return outputSingle(result)
+		},
+	}
+	updateCmd.Flags().String("service", "", "Service ID")
+	updateCmd.Flags().String("name", "", "Service name")
+	updateCmd.Flags().String("repo-url", "", "Repository clone URL")
+	updateCmd.Flags().String("repo-source", "", "Repository source, for example gitea or github")
+	updateCmd.Flags().String("repo-coordinate", "", "Repository coordinate for build routing, for example owner/repo")
+	updateCmd.Flags().String("clone-url", "", "Repository clone URL for structured repository metadata")
+	updateCmd.Flags().String("web-url", "", "Repository web URL")
+	updateCmd.Flags().String("ci-provider", "", "CI provider, for example hiveci")
+	updateCmd.Flags().String("ci-workflow", "", "CI workflow path")
+	updateCmd.Flags().String("artifact-repo", "", "Artifact repository")
+	updateCmd.Flags().String("default-branch", "", "Default branch")
+	updateCmd.Flags().String("runtime-type", "", "Runtime type: docker, compose, kubernetes")
+	updateCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
+	updateCmd.Flags().String("idempotency-key", "", "Explicit idempotency key for the signed request")
+	_ = updateCmd.MarkFlagRequired("service")
+
 	actionsCmd := serviceActionsCommands()
 
-	cmd.AddCommand(listCmd, getCmd, createCmd, actionsCmd)
+	cmd.AddCommand(listCmd, getCmd, createCmd, updateCmd, actionsCmd)
 	return cmd
+}
+
+func optionalChangedStringFlag(cmd *cobra.Command, name string) *string {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	value, _ := cmd.Flags().GetString(name)
+	return &value
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func serviceActionsCommands() *cobra.Command {

@@ -38,14 +38,15 @@ type GitSourceRequest struct {
 
 // CreateServiceRequest represents a request to register a new service.
 type CreateServiceRequest struct {
-	OrgID          uuid.UUID             `json:"org_id"`
-	Name           string                `json:"name"`
-	RepoURL        string                `json:"repo_url,omitempty"`
-	Repository     *RepositoryRefRequest `json:"repository,omitempty"`
-	ArtifactRepo   string                `json:"artifact_repo"`
-	DefaultBranch  string                `json:"default_branch,omitempty"`
-	RuntimeType    string                `json:"runtime_type,omitempty"`
-	IdempotencyKey string                `json:"idempotency_key,omitempty"`
+	OrgID                uuid.UUID                    `json:"org_id"`
+	Name                 string                       `json:"name"`
+	RepoURL              string                       `json:"repo_url,omitempty"`
+	Repository           *RepositoryRefRequest        `json:"repository,omitempty"`
+	ArtifactRepo         string                       `json:"artifact_repo"`
+	DefaultBranch        string                       `json:"default_branch,omitempty"`
+	RuntimeType          string                       `json:"runtime_type,omitempty"`
+	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
+	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
 }
 
 // UpdateServiceRequest represents a request to update a service.

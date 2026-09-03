@@ -18,6 +18,9 @@ import (
 
 type cliOperatorClient interface {
 	Close()
+	CreateServiceNostr(context.Context, client.CreateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
+	UpdateServiceNostr(context.Context, client.UpdateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
+	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
@@ -81,6 +84,33 @@ var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (
 		return nil, "", nil, err
 	}
 	return &cliNIP46Signer{client: signetClient, pubkey: pubkey}, pubkey, signetClient.Close, nil
+}
+
+func runServiceCreateNostr(cmd *cobra.Command, req client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.CreateServiceNostr(cmd.Context(), req, operatorStatusCallback(cmd, "service create"))
+}
+
+func runServiceUpdateNostr(cmd *cobra.Command, req client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.UpdateServiceNostr(cmd.Context(), req, operatorStatusCallback(cmd, "service update"))
+}
+
+func runArtifactRegisterNostr(cmd *cobra.Command, req client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.RegisterArtifactNostr(cmd.Context(), req, operatorStatusCallback(cmd, "artifact register"))
 }
 
 func runEnvironmentCreateNostr(cmd *cobra.Command, req client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {

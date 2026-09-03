@@ -511,9 +511,156 @@ func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestServicesCreateCommandPublishesSignerFirstManagedService(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+
+	configPath := writeTempFile(t, `{
+		"schema_version":"1",
+		"service_name":"astillero",
+		"ports":["127.0.0.1:18088:8080"],
+		"restart_policy":"unless-stopped",
+		"pull_policy":"if-not-present"
+	}`)
+
+	var captured client.CreateServiceNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{serviceCreate: func(req client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error) {
+			captured = req
+			return &client.ServiceCommandResult{Status: "created", ServiceID: "svc-1"}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(servicesCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	root.SetArgs([]string{
+		"services", "create",
+		"--name", "astillero",
+		"--artifact-repo", "harbor.sharegap.net/cascadia/astillero",
+		"--repo-url", "https://git.sharegap.net/chebizar-coinos.io-336e0b4c237a0c000c1e/astillero.git",
+		"--repo-source", "gitea",
+		"--repo-coordinate", "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero",
+		"--ci-provider", "hiveci",
+		"--default-branch", "main",
+		"--managed-runtime-config-file", configPath,
+		"--idempotency-key", "service:create:astillero",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute services create: %v", err)
+	}
+	if captured.Name != "astillero" ||
+		captured.ArtifactRepo != "harbor.sharegap.net/cascadia/astillero" ||
+		captured.Repository == nil ||
+		captured.Repository.RepoCoordinate != "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero" ||
+		captured.Repository.CI == nil ||
+		captured.Repository.CI.Provider != "hiveci" ||
+		captured.ManagedRuntimeConfig == nil ||
+		captured.ManagedRuntimeConfig.ServiceName != "astillero" ||
+		captured.IdempotencyKey != "service:create:astillero" {
+		t.Fatalf("captured service create = %#v", captured)
+	}
+}
+
+func TestServicesUpdateCommandPublishesOnlyChangedFields(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+
+	var captured client.UpdateServiceNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{serviceUpdate: func(req client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error) {
+			captured = req
+			return &client.ServiceCommandResult{Status: "updated", ServiceID: req.ID}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(servicesCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	root.SetArgs([]string{
+		"services", "update",
+		"--service", "11111111-1111-1111-1111-111111111111",
+		"--artifact-repo", "harbor.sharegap.net/cascadia/astillero",
+		"--idempotency-key", "service:update:astillero",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute services update: %v", err)
+	}
+	if captured.ID != "11111111-1111-1111-1111-111111111111" ||
+		captured.ArtifactRepo == nil ||
+		*captured.ArtifactRepo != "harbor.sharegap.net/cascadia/astillero" ||
+		captured.Name != nil ||
+		captured.RuntimeType != nil ||
+		captured.IdempotencyKey != "service:update:astillero" {
+		t.Fatalf("captured service update = %#v", captured)
+	}
+}
+
+func TestArtifactsRegisterCommandPublishesSignerFirstContextVMRequest(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+
+	var captured client.RegisterArtifactNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{artifactRegister: func(req client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error) {
+			captured = req
+			return &client.ArtifactCommandResult{Status: "registered", ArtifactID: "artifact-1"}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(artifactsCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	root.SetArgs([]string{
+		"artifacts", "register",
+		"--build", "11111111-1111-1111-1111-111111111111",
+		"--service", "22222222-2222-2222-2222-222222222222",
+		"--image-repo", "harbor.sharegap.net/cascadia/astillero",
+		"--image-tag", "7bb3076",
+		"--image-digest", digest,
+		"--idempotency-key", "artifact:register:astillero",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute artifacts register: %v", err)
+	}
+	if captured.BuildID != "11111111-1111-1111-1111-111111111111" ||
+		captured.ServiceID != "22222222-2222-2222-2222-222222222222" ||
+		captured.ImageRepo != "harbor.sharegap.net/cascadia/astillero" ||
+		captured.ImageTag != "7bb3076" ||
+		captured.ImageDigest != digest ||
+		captured.IdempotencyKey != "artifact:register:astillero" {
+		t.Fatalf("captured artifact register = %#v", captured)
+	}
+}
+
+func writeTempFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "input.json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	return path
+}
+
 type fakeCLIOperatorClient struct {
 	restartErr         error
 	policyCreate       func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
+	serviceCreate      func(client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error)
+	serviceUpdate      func(client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error)
+	artifactRegister   func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
 	environmentCreate  func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	environmentUpdate  func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	deploymentIntent   func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
@@ -521,6 +668,24 @@ type fakeCLIOperatorClient struct {
 }
 
 func (f fakeCLIOperatorClient) Close() {}
+func (f fakeCLIOperatorClient) CreateServiceNostr(_ context.Context, req client.CreateServiceNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error) {
+	if f.serviceCreate != nil {
+		return f.serviceCreate(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) UpdateServiceNostr(_ context.Context, req client.UpdateServiceNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error) {
+	if f.serviceUpdate != nil {
+		return f.serviceUpdate(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) RegisterArtifactNostr(_ context.Context, req client.RegisterArtifactNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error) {
+	if f.artifactRegister != nil {
+		return f.artifactRegister(req)
+	}
+	return nil, errors.New("not implemented")
+}
 func (f fakeCLIOperatorClient) CreateEnvironmentNostr(_ context.Context, req client.CreateEnvironmentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error) {
 	if f.environmentCreate != nil {
 		return f.environmentCreate(req)

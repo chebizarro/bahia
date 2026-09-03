@@ -122,6 +122,8 @@ type MLCommandPublisher interface {
 
 // ServiceCommandPublisher emits canonical Nostr request events for assistant-safe service tools.
 type ServiceCommandPublisher interface {
+	PublishServiceCreateRequest(ctx context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error)
+	PublishServiceUpdateRequest(ctx context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error)
 	PublishDeployRequest(ctx context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error)
 	PublishRollbackRequest(ctx context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error)
 	PublishDeploymentApprovalRequest(ctx context.Context, cmd controlplane.ServiceApprovalCommand) (*controlplane.ServiceCommandReceipt, error)
@@ -269,10 +271,14 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_service",
-			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method service/create instead",
+			Description: "Publish a signer-first ContextVM/Nostr service/create request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"org_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Organization UUID (optional; defaults by policy)",
+					},
 					"name": map[string]interface{}{
 						"type":        "string",
 						"description": "Unique name for the service",
@@ -285,11 +291,31 @@ func (s *Server) GetTools() []Tool {
 						"type":        "string",
 						"description": "Source code repository URL (optional)",
 					},
+					"repository": map[string]interface{}{
+						"type":        "object",
+						"description": "Structured repository metadata including repo_coordinate, clone_url, and ci workflow",
+					},
+					"default_branch": map[string]interface{}{
+						"type":        "string",
+						"description": "Default source branch",
+					},
 					"runtime_type": map[string]interface{}{
 						"type":        "string",
 						"description": "Target runtime type",
 						"enum":        []string{"docker", "compose", "kubernetes", "podman", "vm-firecracker", "vm-qemu"},
 						"default":     "docker",
+					},
+					"managed_runtime_config": map[string]interface{}{
+						"type":        "object",
+						"description": "Managed runtime configuration for Bahia-owned Docker Compose deployment",
+					},
+					"idempotency_key": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional idempotency key",
+					},
+					"agent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calling agent identifier for audit tags",
 					},
 				},
 				"required": []string{"name", "artifact_repo"},
@@ -297,7 +323,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_update_service",
-			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method service/update instead",
+			Description: "Publish a signer-first ContextVM/Nostr service/update request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -313,6 +339,10 @@ func (s *Server) GetTools() []Tool {
 						"type":        "string",
 						"description": "New source code repository URL (optional)",
 					},
+					"repository": map[string]interface{}{
+						"type":        "object",
+						"description": "Structured repository metadata including repo_coordinate, clone_url, and ci workflow",
+					},
 					"artifact_repo": map[string]interface{}{
 						"type":        "string",
 						"description": "New container image repository path (optional)",
@@ -325,6 +355,18 @@ func (s *Server) GetTools() []Tool {
 						"type":        "string",
 						"description": "New runtime type (optional)",
 						"enum":        []string{"docker", "compose", "kubernetes", "podman", "vm-firecracker", "vm-qemu"},
+					},
+					"managed_runtime_config": map[string]interface{}{
+						"type":        "object",
+						"description": "Managed runtime configuration for Bahia-owned Docker Compose deployment",
+					},
+					"idempotency_key": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional idempotency key",
+					},
+					"agent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calling agent identifier for audit tags",
 					},
 				},
 				"required": []string{"service_id"},
@@ -2156,7 +2198,45 @@ func (s *Server) handleGetService(ctx context.Context, args map[string]interface
 }
 
 func (s *Server) handleCreateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return signerFirstMCPMutationUnavailable("bahia_create_service", "service/create"), nil
+	name, _ := args["name"].(string)
+	artifactRepo, _ := args["artifact_repo"].(string)
+	repoURL, _ := args["repo_url"].(string)
+	runtimeType, _ := args["runtime_type"].(string)
+	defaultBranch, _ := args["default_branch"].(string)
+	agentID, _ := args["agent_id"].(string)
+	var orgID uuid.UUID
+	if org, _ := args["org_id"].(string); strings.TrimSpace(org) != "" {
+		parsed, err := uuid.Parse(org)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid org_id: %v", err)), nil
+		}
+		orgID = parsed
+	}
+	var managed *domain.ManagedRuntimeConfig
+	if raw, ok := args["managed_runtime_config"]; ok && raw != nil {
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
+		}
+		var decoded domain.ManagedRuntimeConfig
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
+		}
+		managed = &decoded
+	}
+	repository := args["repository"]
+	if s.serviceCommands == nil {
+		return signerFirstMCPMutationUnavailable("bahia_create_service", "service/create"), nil
+	}
+	receipt, err := s.serviceCommands.PublishServiceCreateRequest(ctx, controlplane.ServiceCreateCommand{
+		Name: name, OrgID: orgID, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
+		DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed,
+		IdempotencyKey: mcpIdempotencyKey(args, "service-create", name, artifactRepo), AgentID: agentID,
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish service create request: %v", err)), nil
+	}
+	return jsonResult(serviceCommandReceiptToMap(receipt))
 }
 
 func (s *Server) handleListEnvironments(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2206,7 +2286,40 @@ func (s *Server) handleCreateEnvironment(ctx context.Context, args map[string]in
 }
 
 func (s *Server) handleUpdateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return signerFirstMCPMutationUnavailable("bahia_update_service", "service/update"), nil
+	serviceID, err := parseRequiredUUIDArg(args, "service_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	name := optionalStringPointerArg(args, "name")
+	repoURL := optionalStringPointerArg(args, "repo_url")
+	artifactRepo := optionalStringPointerArg(args, "artifact_repo")
+	defaultBranch := optionalStringPointerArg(args, "default_branch")
+	runtimeType := optionalStringPointerArg(args, "runtime_type")
+	agentID, _ := args["agent_id"].(string)
+	var managed *domain.ManagedRuntimeConfig
+	if raw, ok := args["managed_runtime_config"]; ok && raw != nil {
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
+		}
+		var decoded domain.ManagedRuntimeConfig
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
+		}
+		managed = &decoded
+	}
+	if s.serviceCommands == nil {
+		return signerFirstMCPMutationUnavailable("bahia_update_service", "service/update"), nil
+	}
+	receipt, err := s.serviceCommands.PublishServiceUpdateRequest(ctx, controlplane.ServiceUpdateCommand{
+		ID: serviceID, Name: name, RepoURL: repoURL, Repository: args["repository"], ArtifactRepo: artifactRepo,
+		DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed,
+		IdempotencyKey: mcpIdempotencyKey(args, "service-update", serviceID.String()), AgentID: agentID,
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish service update request: %v", err)), nil
+	}
+	return jsonResult(serviceCommandReceiptToMap(receipt))
 }
 
 func (s *Server) handleUpdateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -4179,6 +4292,14 @@ func mcpIdempotencyKey(args map[string]interface{}, prefix string, parts ...stri
 		_, _ = h.Write([]byte(part))
 	}
 	return prefix + ":" + hex.EncodeToString(h.Sum(nil))[:24]
+}
+
+func optionalStringPointerArg(args map[string]interface{}, name string) *string {
+	value, ok := args[name].(string)
+	if !ok {
+		return nil
+	}
+	return &value
 }
 
 func llmCommandReceiptToMap(status string, receipt *controlplane.LLMCommandReceipt) map[string]interface{} {

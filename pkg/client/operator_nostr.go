@@ -284,6 +284,84 @@ type DeploymentUnitRequest struct {
 	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
 }
 
+// RepositoryRefRequest is signer-first structured source repository metadata.
+type RepositoryRefRequest struct {
+	Source         string                  `json:"source,omitempty"`
+	RepoCoordinate string                  `json:"repo_coordinate,omitempty"`
+	CloneURL       string                  `json:"clone_url,omitempty"`
+	WebURL         string                  `json:"web_url,omitempty"`
+	RelayURLs      []string                `json:"relay_urls,omitempty"`
+	CI             *ServiceCIConfigRequest `json:"ci,omitempty"`
+}
+
+// ServiceCIConfigRequest describes the build workflow attached to a service repository.
+type ServiceCIConfigRequest struct {
+	Provider     string `json:"provider,omitempty"`
+	WorkflowPath string `json:"workflow_path,omitempty"`
+}
+
+// CreateServiceNostrRequest is the signer-first service/create payload.
+type CreateServiceNostrRequest struct {
+	OrgID                string                       `json:"org_id,omitempty"`
+	Name                 string                       `json:"name"`
+	RepoURL              string                       `json:"repo_url,omitempty"`
+	Repository           *RepositoryRefRequest        `json:"repository,omitempty"`
+	ArtifactRepo         string                       `json:"artifact_repo"`
+	DefaultBranch        string                       `json:"default_branch,omitempty"`
+	RuntimeType          string                       `json:"runtime_type,omitempty"`
+	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
+	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
+}
+
+// UpdateServiceNostrRequest is the signer-first service/update payload.
+type UpdateServiceNostrRequest struct {
+	ID                       string                       `json:"id"`
+	Name                     *string                      `json:"name,omitempty"`
+	RepoURL                  *string                      `json:"repo_url,omitempty"`
+	Repository               *RepositoryRefRequest        `json:"repository,omitempty"`
+	ArtifactRepo             *string                      `json:"artifact_repo,omitempty"`
+	DefaultBranch            *string                      `json:"default_branch,omitempty"`
+	RuntimeType              *string                      `json:"runtime_type,omitempty"`
+	ManagedRuntimeConfig     *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
+	AdoptedPublicEnvironment map[string]string            `json:"adopted_public_environment,omitempty"`
+	IdempotencyKey           string                       `json:"idempotency_key,omitempty"`
+}
+
+// ServiceCommandResult is the terminal acknowledgment for signer-first service mutations.
+type ServiceCommandResult struct {
+	Status         string          `json:"status,omitempty"`
+	Service        *domain.Service `json:"service,omitempty"`
+	ServiceID      string          `json:"service_id,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	Message        string          `json:"message,omitempty"`
+}
+
+// RegisterArtifactNostrRequest is the signer-first artifact/register payload.
+type RegisterArtifactNostrRequest struct {
+	BuildID           string         `json:"build_id"`
+	ServiceID         string         `json:"service_id"`
+	ImageRepo         string         `json:"image_repo"`
+	ImageTag          string         `json:"image_tag"`
+	ImageDigest       string         `json:"image_digest"`
+	ManifestMediaType string         `json:"manifest_media_type,omitempty"`
+	SizeBytes         *int64         `json:"size_bytes,omitempty"`
+	SBOMURL           string         `json:"sbom_url,omitempty"`
+	SignatureRef      string         `json:"signature_ref,omitempty"`
+	ScanStatus        string         `json:"scan_status,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	IdempotencyKey    string         `json:"idempotency_key,omitempty"`
+}
+
+// ArtifactCommandResult is the terminal acknowledgment for signer-first artifact registration.
+type ArtifactCommandResult struct {
+	Status     string           `json:"status,omitempty"`
+	Artifact   *domain.Artifact `json:"artifact,omitempty"`
+	ArtifactID string           `json:"artifact_id,omitempty"`
+	BuildID    string           `json:"build_id,omitempty"`
+	ServiceID  string           `json:"service_id,omitempty"`
+	Message    string           `json:"message,omitempty"`
+}
+
 // CreateEnvironmentNostrRequest is the signer-first environment/create payload.
 type CreateEnvironmentNostrRequest struct {
 	OrgID              string                       `json:"org_id,omitempty"`
@@ -372,6 +450,124 @@ func (c *OperatorControlPlaneClient) PublishPolicyCreateNostr(ctx context.Contex
 		return nil, &ControlPlaneRequestError{Phase: "publish PolicyCreate request", RequestAccepted: false, Cause: err}
 	}
 	return receipt, nil
+}
+
+// CreateServiceNostr publishes a signer-first service/create mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) CreateServiceNostr(ctx context.Context, req CreateServiceNostrRequest, onStatus func(OperatorStatusEvent)) (*ServiceCommandResult, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.ArtifactRepo = strings.TrimSpace(req.ArtifactRepo)
+	req.RuntimeType = strings.TrimSpace(req.RuntimeType)
+	req.DefaultBranch = strings.TrimSpace(req.DefaultBranch)
+	req.RepoURL = strings.TrimSpace(req.RepoURL)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.Name == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: fmt.Errorf("name is required")}
+	}
+	if req.ArtifactRepo == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: fmt.Errorf("artifact_repo is required")}
+	}
+	tags := nostr.Tags{{"service", req.Name}}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodServiceCreate,
+		Tags:    tags,
+		Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result ServiceCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode service create result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "created"
+	}
+	if result.ServiceID == "" && result.Service != nil {
+		result.ServiceID = result.Service.ID.String()
+	}
+	return &result, nil
+}
+
+// UpdateServiceNostr publishes a signer-first service/update mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) UpdateServiceNostr(ctx context.Context, req UpdateServiceNostrRequest, onStatus func(OperatorStatusEvent)) (*ServiceCommandResult, error) {
+	req.ID = strings.TrimSpace(req.ID)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.ID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate service update request", RequestAccepted: false, Cause: fmt.Errorf("id is required")}
+	}
+	tags := nostr.Tags{{"service", req.ID}}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodServiceUpdate,
+		Tags:    tags,
+		Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result ServiceCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode service update result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "updated"
+	}
+	if result.ServiceID == "" {
+		result.ServiceID = req.ID
+	}
+	return &result, nil
+}
+
+// RegisterArtifactNostr publishes a signer-first artifact/register mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) RegisterArtifactNostr(ctx context.Context, req RegisterArtifactNostrRequest, onStatus func(OperatorStatusEvent)) (*ArtifactCommandResult, error) {
+	req.BuildID = strings.TrimSpace(req.BuildID)
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.ImageRepo = strings.TrimSpace(req.ImageRepo)
+	req.ImageTag = strings.TrimSpace(req.ImageTag)
+	req.ImageDigest = strings.TrimSpace(req.ImageDigest)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"build_id", req.BuildID},
+		{"service_id", req.ServiceID},
+		{"image_repo", req.ImageRepo},
+		{"image_tag", req.ImageTag},
+		{"image_digest", req.ImageDigest},
+	} {
+		if field.value == "" {
+			return nil, &ControlPlaneRequestError{Phase: "validate artifact register request", RequestAccepted: false, Cause: fmt.Errorf("%s is required", field.name)}
+		}
+	}
+	tags := nostr.Tags{{"service", req.ServiceID}, {"build", req.BuildID}, {"digest", req.ImageDigest}}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodArtifactRegister,
+		Tags:    tags,
+		Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result ArtifactCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode artifact register result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "registered"
+	}
+	if result.ArtifactID == "" && result.Artifact != nil {
+		result.ArtifactID = result.Artifact.ID.String()
+	}
+	return &result, nil
 }
 
 // CreateEnvironmentNostr publishes a signer-first environment/create mutation and awaits its correlated acknowledgment.
