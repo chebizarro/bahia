@@ -84,8 +84,8 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 	if err != nil {
 		return nil, err
 	}
-	if svc.RuntimeType != domain.RuntimeTypeCompose {
-		return nil, fmt.Errorf("desired-state wizard requires a Compose service")
+	if !supportsManagedRuntimeConfig(svc.RuntimeType) {
+		return nil, fmt.Errorf("desired-state wizard requires a managed runtime service")
 	}
 	managed := domain.NormalizeManagedRuntimeConfig(params.ManagedRuntimeConfig)
 	if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
@@ -395,8 +395,8 @@ func validateManagedDeployReviewHash(svc *domain.Service, expectedHash string) e
 	if svc != nil && svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil && expectedHash == "" {
 		return fmt.Errorf("expected_desired_state_hash is required for managed deploys")
 	}
-	if expectedHash != "" && (svc == nil || svc.RuntimeType != domain.RuntimeTypeCompose) {
-		return fmt.Errorf("reviewed desired-state deploy requires a Compose service")
+	if expectedHash != "" && (svc == nil || !supportsManagedRuntimeConfig(svc.RuntimeType)) {
+		return fmt.Errorf("reviewed desired-state deploy requires a managed runtime service")
 	}
 	return nil
 }

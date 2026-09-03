@@ -227,6 +227,7 @@ func servicesCommands() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
+			orgID := optionalChangedStringFlag(cmd, "org")
 			name := optionalChangedStringFlag(cmd, "name")
 			repoURL := optionalChangedStringFlag(cmd, "repo-url")
 			repoSource, _ := cmd.Flags().GetString("repo-source")
@@ -257,7 +258,7 @@ func servicesCommands() *cobra.Command {
 				}
 			}
 			result, err := runServiceUpdateNostr(cmd, client.UpdateServiceNostrRequest{
-				ID: serviceID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
+				ID: serviceID, OrgID: orgID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
 				DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed, IdempotencyKey: idempotencyKey,
 			})
 			if err != nil {
@@ -267,6 +268,7 @@ func servicesCommands() *cobra.Command {
 		},
 	}
 	updateCmd.Flags().String("service", "", "Service ID")
+	updateCmd.Flags().String("org", "", "Organization ID")
 	updateCmd.Flags().String("name", "", "Service name")
 	updateCmd.Flags().String("repo-url", "", "Repository clone URL")
 	updateCmd.Flags().String("repo-source", "", "Repository source, for example gitea or github")

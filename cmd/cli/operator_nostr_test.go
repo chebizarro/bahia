@@ -588,6 +588,7 @@ func TestServicesUpdateCommandPublishesOnlyChangedFields(t *testing.T) {
 	root.SetArgs([]string{
 		"services", "update",
 		"--service", "11111111-1111-1111-1111-111111111111",
+		"--org", "22222222-2222-2222-2222-222222222222",
 		"--artifact-repo", "harbor.sharegap.net/cascadia/astillero",
 		"--idempotency-key", "service:update:astillero",
 	})
@@ -595,6 +596,8 @@ func TestServicesUpdateCommandPublishesOnlyChangedFields(t *testing.T) {
 		t.Fatalf("execute services update: %v", err)
 	}
 	if captured.ID != "11111111-1111-1111-1111-111111111111" ||
+		captured.OrgID == nil ||
+		*captured.OrgID != "22222222-2222-2222-2222-222222222222" ||
 		captured.ArtifactRepo == nil ||
 		*captured.ArtifactRepo != "harbor.sharegap.net/cascadia/astillero" ||
 		captured.Name != nil ||

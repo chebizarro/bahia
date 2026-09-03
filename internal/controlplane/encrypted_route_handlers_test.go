@@ -457,6 +457,26 @@ func TestEncryptedRouteHandlers_CreateServiceContextVMMethodCreatesRegistryServi
 	}
 }
 
+func TestEncryptedRouteHandlers_CreateServiceAllowsManagedDockerRuntimeConfig(t *testing.T) {
+	orgID := uuid.New()
+	registry := &fakeEncryptedRegistryMutations{}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})
+	transport, _ := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceCreate, map[string]any{
+		"org_id": orgID.String(), "name": "astillero", "artifact_repo": "harbor.sharegap.net/cascadia/astillero", "runtime_type": "docker",
+		"managed_runtime_config": map[string]any{"schema_version": "1", "service_name": "astillero", "ports": []string{"192.168.40.104:18088:8080"}, "restart_policy": "unless-stopped", "pull_policy": "if-not-present"},
+	}))
+
+	if len(registry.createdServices) != 1 {
+		t.Fatalf("created services = %d, want 1", len(registry.createdServices))
+	}
+	created := registry.createdServices[0]
+	if created.RuntimeType != domain.RuntimeTypeDocker || created.RuntimeConfig == nil || created.RuntimeConfig.Managed == nil {
+		t.Fatalf("managed docker service was not persisted: %#v", created)
+	}
+}
+
 func TestEncryptedRouteHandlers_RegisterArtifactContextVMMethodMutatesRegistry(t *testing.T) {
 	orgID := uuid.New()
 	serviceID := uuid.New()
@@ -560,6 +580,39 @@ func TestEncryptedRouteHandlers_UpdateAndDeleteServiceContextVMMethodsMutateRegi
 	payload = routeResultPayload(t, publisher.events[len(publisher.events)-1])
 	if payload["service_id"] != serviceID.String() || payload["status"] != "deleted" {
 		t.Fatalf("unexpected delete response: %#v", payload)
+	}
+}
+
+func TestEncryptedRouteHandlers_UpdateServiceClaimsUnresolvedOrg(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	serviceRecord := &domain.Service{
+		ID:            serviceID,
+		Name:          "astillero",
+		ArtifactRepo:  "harbor.sharegap.net/cascadia/astillero",
+		DefaultBranch: "main",
+		RuntimeType:   domain.RuntimeTypeDocker,
+	}
+	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: serviceRecord}}
+	registry := &fakeEncryptedRegistryMutations{createdServices: []*domain.Service{serviceRecord}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Registry: registry,
+		Services: services,
+		RBAC:     encryptedAdminRBAC(t, orgID),
+		Logger:   zap.NewNop(),
+	})
+	transport, publisher := encryptedRouteTransport(t, h)
+
+	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodServiceUpdate, map[string]any{
+		"id": serviceID.String(), "org_id": orgID.String(),
+	}))
+
+	if len(registry.createdServices) != 1 || registry.createdServices[0].OrgID != orgID {
+		t.Fatalf("service org was not claimed: %#v", registry.createdServices)
+	}
+	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
+	if payload["service_id"] != serviceID.String() || payload["status"] != "updated" {
+		t.Fatalf("unexpected update response: %#v", payload)
 	}
 }
 
