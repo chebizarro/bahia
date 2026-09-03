@@ -1,0 +1,20 @@
+{
+  "feature_id": "FP_9PJQ",
+  "criteria": [
+    {
+      "id": "AC-FP-9PJQ-001",
+      "statement": "An observation at the previous-pass freshness boundary remains eligible after scan and pressure publication latency.",
+      "verification": ["go test ./internal/reconcile -run TestHygieneReconcilerFreshnessUsesPassStartBoundary/previous_pass_boundary_accepted -count=1"]
+    },
+    {
+      "id": "AC-FP-9PJQ-002",
+      "statement": "An observation older than the pass-start freshness boundary remains scan-only and produces no hygiene action.",
+      "verification": ["go test ./internal/reconcile -run TestHygieneReconcilerFreshnessUsesPassStartBoundary/older_observation_rejected -count=1"]
+    },
+    {
+      "id": "AC-FP-9PJQ-003",
+      "statement": "Existing hygiene scan, candidate, pressure, and policy behavior remains unchanged.",
+      "verification": ["go test ./internal/reconcile -count=1"]
+    }
+  ]
+}

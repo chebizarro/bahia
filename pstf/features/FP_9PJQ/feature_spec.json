@@ -1,0 +1,16 @@
+{
+  "feature_id": "FP_9PJQ",
+  "beads": ["fp-9pjq"],
+  "source_decision": "fleet-planning/docs/designs/hygiene-observation-transport.md section 8.3.4",
+  "scope": "Make hygiene observation freshness independent of the current scan round-trip duration.",
+  "intended_behavior": [
+    "Freshness is evaluated against one timestamp captured before the worker scan and pressure publications begin.",
+    "An observation exactly one reconcile interval old at pass start is accepted even when the current scan round-trip consumes time.",
+    "An observation older than one reconcile interval at pass start is rejected as stale."
+  ],
+  "out_of_scope": [
+    "Implementing or wiring the HygieneObservationSource tracked by fp-20aa.",
+    "Changing hygiene domain policy or canonical result schemas.",
+    "Waiting synchronously for a worker response or widening the freshness interval."
+  ]
+}

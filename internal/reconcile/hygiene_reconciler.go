@@ -94,6 +94,7 @@ type HygieneReconciler struct {
 	source    HygieneObservationSource
 	metrics   HygieneMetrics
 	interval  time.Duration
+	now       func() time.Time
 	logger    *zap.Logger
 }
 
@@ -130,6 +131,7 @@ func NewHygieneReconciler(
 		source:    source,
 		metrics:   metrics,
 		interval:  interval,
+		now:       time.Now,
 		logger:    logger,
 	}, nil
 }
@@ -172,6 +174,7 @@ func (r *HygieneReconciler) ReconcileOnce(ctx context.Context) (HygieneReconcile
 }
 
 func (r *HygieneReconciler) reconcileWorker(ctx context.Context, worker string, result *HygieneReconcileResult) error {
+	passStartedAt := r.now().UTC()
 	// Dry-run first, always: every pass starts with a scan + pressure
 	// request so decisions are made on fresh, non-mutating observations.
 	if _, err := r.publisher.PublishScan(ctx, controlplane.MaintenanceCommand{WorkerPubKey: worker, Reason: "hygiene reconcile: periodic dry-run scan"}); err != nil {
@@ -196,11 +199,11 @@ func (r *HygieneReconciler) reconcileWorker(ctx context.Context, worker string, 
 	if obs == nil {
 		return nil
 	}
-	// Freshness guard: never converge on an observation older than one
-	// reconcile interval — acting on stale scan results is how a janitor
-	// quarantines something the operator already dealt with.
-	if !obs.ObservedAt.IsZero() && time.Since(obs.ObservedAt) > r.interval {
-		r.logger.Debug("hygiene observation stale; scan-only pass", zap.String("worker", worker), zap.Time("observed_at", obs.ObservedAt))
+	// Anchor freshness before the scan round-trip so worker latency cannot
+	// disqualify the previous pass's response while this pass is publishing.
+	freshnessCutoff := passStartedAt.Add(-r.interval)
+	if !obs.ObservedAt.IsZero() && obs.ObservedAt.Before(freshnessCutoff) {
+		r.logger.Debug("hygiene observation stale; scan-only pass", zap.String("worker", worker), zap.Time("observed_at", obs.ObservedAt), zap.Time("freshness_cutoff", freshnessCutoff))
 		return nil
 	}
 	r.convergeCandidates(ctx, worker, obs.Candidates, result)

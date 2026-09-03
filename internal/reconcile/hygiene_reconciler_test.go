@@ -13,7 +13,8 @@ import (
 )
 
 type fakeMaintenancePublisher struct {
-	calls []string // method:worker[:paths]
+	calls        []string // method:worker[:paths]
+	afterPublish func(method string)
 }
 
 func (f *fakeMaintenancePublisher) record(method string, cmd controlplane.MaintenanceCommand) (*controlplane.WorkerCommandReceipt, error) {
@@ -22,6 +23,9 @@ func (f *fakeMaintenancePublisher) record(method string, cmd controlplane.Mainte
 		entry += ":" + strings.Join(cmd.Paths, ",")
 	}
 	f.calls = append(f.calls, entry)
+	if f.afterPublish != nil {
+		f.afterPublish(method)
+	}
 	return &controlplane.WorkerCommandReceipt{Command: method, WorkerPubKey: cmd.WorkerPubKey}, nil
 }
 
@@ -221,6 +225,66 @@ func TestHygieneReconcilerRespectsAutoFlagsAndDisabledPolicy(t *testing.T) {
 	}
 	if len(publisher2.calls) != 0 {
 		t.Fatalf("disabled policy must be inert: %v", publisher2.calls)
+	}
+}
+
+func TestHygieneReconcilerFreshnessUsesPassStartBoundary(t *testing.T) {
+	const worker = "worker-a"
+	interval := time.Minute
+	passStartedAt := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name           string
+		observedAt     time.Time
+		wantQuarantine bool
+	}{
+		{
+			name:           "previous pass boundary accepted",
+			observedAt:     passStartedAt.Add(-interval),
+			wantQuarantine: true,
+		},
+		{
+			name:           "older observation rejected",
+			observedAt:     passStartedAt.Add(-interval - time.Nanosecond),
+			wantQuarantine: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			currentTime := passStartedAt
+			publisher := &fakeMaintenancePublisher{afterPublish: func(method string) {
+				if method == "maintenance/scan" || method == "maintenance/pressure" {
+					currentTime = currentTime.Add(15 * time.Second)
+				}
+			}}
+			source := &fakeObservationSource{observations: map[string]*HygieneObservation{
+				worker: {
+					WorkerPubKey: worker,
+					Candidates:   []HygieneCandidate{{Path: "/home/agents/work/cruft", Class: domain.HygieneClassCruft}},
+					ObservedAt:   tc.observedAt,
+				},
+			}}
+			rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{worker}, publisher, source, nil, interval, zap.NewNop())
+			if err != nil {
+				t.Fatalf("new reconciler: %v", err)
+			}
+			rec.now = func() time.Time { return currentTime }
+
+			if _, err := rec.ReconcileOnce(context.Background()); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if elapsed := currentTime.Sub(passStartedAt); elapsed != 30*time.Second {
+				t.Fatalf("simulated scan round-trip = %v, want 30s", elapsed)
+			}
+			gotQuarantine := false
+			for _, call := range publisher.calls {
+				if strings.HasPrefix(call, "maintenance/quarantine:") {
+					gotQuarantine = true
+				}
+			}
+			if gotQuarantine != tc.wantQuarantine {
+				t.Fatalf("quarantine issued = %v, want %v; calls=%v", gotQuarantine, tc.wantQuarantine, publisher.calls)
+			}
+		})
 	}
 }
 

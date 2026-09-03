@@ -1,0 +1,23 @@
+{
+  "feature_id": "FP_9PJQ",
+  "tests": [
+    {
+      "test": "TestHygieneReconcilerFreshnessUsesPassStartBoundary/previous_pass_boundary_accepted",
+      "criteria": ["AC-FP-9PJQ-001"],
+      "type": "deterministic boundary regression",
+      "notes": "Injects a fixed clock, advances it by 30 seconds during scan and pressure publication, and proves the exact previous-pass boundary still converges."
+    },
+    {
+      "test": "TestHygieneReconcilerFreshnessUsesPassStartBoundary/older_observation_rejected",
+      "criteria": ["AC-FP-9PJQ-002"],
+      "type": "deterministic negative boundary",
+      "notes": "Uses the same simulated round-trip but moves the observation one nanosecond before the cutoff and proves no quarantine is issued."
+    },
+    {
+      "test": "internal/reconcile package suite",
+      "criteria": ["AC-FP-9PJQ-003"],
+      "type": "package regression",
+      "notes": "Retains scan issuance, Tier-1 convergence, pressure handling, policy flags, and validation coverage."
+    }
+  ]
+}
