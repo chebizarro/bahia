@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
@@ -140,7 +141,7 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 	unit := deploymentUnitFlags{prefix: "unit-"}
 	var orgID, name, strategy, reconcileMode string
 	var protected bool
-	var selectorFile, runtimeConfigFile, unitsFile string
+	var selectorFile, runtimeConfigFile, unitsFile, expectedUpdatedAt string
 
 	cmd := &cobra.Command{
 		Use:   "update [id]",
@@ -181,6 +182,26 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 			units, err := requestedUnits(cmd, unitsFile, &unit)
 			if err != nil {
 				return err
+			}
+			if units != nil && strings.TrimSpace(unitsFile) != "" && cmd.Flags().Changed("expected-updated-at") {
+				revision, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(expectedUpdatedAt))
+				if parseErr != nil {
+					return fmt.Errorf("parse expected-updated-at: %w", parseErr)
+				}
+				req.DeploymentUnits = units
+				req.ExpectedUpdatedAt = &revision
+				if targetingChanged {
+					targetingRequest, targetingErr := targeting.request(cmd, nil)
+					if targetingErr != nil {
+						return targetingErr
+					}
+					req.Targeting = targetingRequest
+				}
+				result, updateErr := runEnvironmentUpdateNostr(cmd, req)
+				if updateErr != nil {
+					return updateErr
+				}
+				return outputSingle(result)
 			}
 			if units == nil {
 				if targetingChanged {
@@ -251,6 +272,7 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&selectorFile, "loom-worker-selector-file", "", "Read loom_worker_selector JSON object from this file")
 	cmd.Flags().StringVar(&runtimeConfigFile, "runtime-config-file", "", "Read environment runtime_config JSON object from this file")
 	cmd.Flags().StringVar(&unitsFile, "units-file", "", "Read the complete deployment_units JSON array from this file")
+	cmd.Flags().StringVar(&expectedUpdatedAt, "expected-updated-at", "", "Environment updated_at revision for signer-first complete deployment_units updates")
 	targeting.bind(cmd)
 	unit.bind(cmd)
 	return cmd
