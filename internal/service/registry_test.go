@@ -979,6 +979,58 @@ func TestCompleteDeploymentRunPreservesHealthyInSyncObservation(t *testing.T) {
 	}
 }
 
+func TestCreateDeploymentIntentPreservesObservationLinkage(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	artifact := seedArtifact(t, registry, svc, "sha256:linkage")
+
+	observationID := uuid.New()
+	lastRunID := uuid.New()
+	reconciledAt := time.Now().Add(-time.Minute).UTC()
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		DriftStatus:          domain.DriftStatusInSync,
+		CurrentObservationID: &observationID,
+		LastSuccessfulRunID:  &lastRunID,
+		LastReconciledAt:     &reconciledAt,
+		ReconcileFailureMetadata: map[string]any{
+			"reason": "previous transient failure",
+		},
+		ReconcileConsecutiveFailures: 2,
+	}
+
+	di := &domain.DeploymentIntent{
+		ServiceID:      svc.ID,
+		EnvironmentID:  env.ID,
+		ArtifactID:     artifact.ID,
+		RequestedBy:    "test",
+		SourceKind:     domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, di); err != nil {
+		t.Fatalf("failed to create intent: %v", err)
+	}
+
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state == nil {
+		t.Fatal("environment service state row is missing after intent creation")
+	}
+	if state.DesiredIntentID == nil || *state.DesiredIntentID != di.ID ||
+		state.DesiredArtifactID == nil || *state.DesiredArtifactID != artifact.ID ||
+		state.DriftStatus != domain.DriftStatusDeploying {
+		t.Fatalf("intent creation did not update desired linkage: %#v", state)
+	}
+	if state.CurrentObservationID == nil || *state.CurrentObservationID != observationID ||
+		state.LastSuccessfulRunID == nil || *state.LastSuccessfulRunID != lastRunID ||
+		state.LastReconciledAt == nil || !state.LastReconciledAt.Equal(reconciledAt) {
+		t.Fatalf("intent creation erased observation/run linkage: %#v", state)
+	}
+	if state.ReconcileFailureMetadata == nil || state.ReconcileConsecutiveFailures != 2 {
+		t.Fatalf("intent creation erased reconcile health fields: %#v", state)
+	}
+}
+
 func TestRecordObservationStartingDoesNotClaimInSync(t *testing.T) {
 	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
 	ctx := context.Background()

@@ -1004,19 +1004,21 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		return err
 	}
 
-	// Update the environment service state desired artifact.
-	state := &domain.EnvironmentServiceState{
-		ServiceID:           di.ServiceID,
-		EnvironmentID:       di.EnvironmentID,
-		DeploymentUnitID:    deploymentUnitIDForRunIntent(nil, di),
-		DesiredArtifactID:   &di.ArtifactID,
-		DesiredIntentID:     &di.ID,
-		DesiredRuntimeState: di.DesiredState,
-		DesiredHash:         di.DesiredHash,
-		DriftStatus:         domain.DriftStatusDeploying,
+	// Update the environment service state desired linkage, preserving
+	// observation/run/health fields the new intent has not touched (the
+	// repository Upsert replaces every column).
+	state, stateErr := s.loadOrInitEnvironmentServiceState(ctx, di.ServiceID, di.EnvironmentID)
+	if stateErr == nil {
+		state.DeploymentUnitID = deploymentUnitIDForRunIntent(nil, di)
+		state.DesiredArtifactID = &di.ArtifactID
+		state.DesiredIntentID = &di.ID
+		state.DesiredRuntimeState = di.DesiredState
+		state.DesiredHash = di.DesiredHash
+		state.DriftStatus = domain.DriftStatusDeploying
+		stateErr = s.state.Upsert(ctx, state)
 	}
-	if err := s.state.Upsert(ctx, state); err != nil {
-		s.logger.Error("failed to update environment service state", zap.Error(err))
+	if stateErr != nil {
+		s.logger.Error("failed to update environment service state", zap.Error(stateErr))
 	} else {
 		s.publisher.Publish(ctx, events.Event{
 			Type:     events.EventEnvironmentServiceStateChanged,
@@ -1072,6 +1074,26 @@ func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, 
 	return s.intents.ListByServiceEnv(ctx, serviceID, envID, limit, offset)
 }
 
+// loadOrInitEnvironmentServiceState returns the current environment service
+// state row for load-mutate-store updates, or a fresh row when none exists.
+// Callers must go through this (or an equivalent Get) before Upsert, because
+// the repository Upsert replaces every column and would otherwise erase
+// observation/run/health linkage.
+func (s *RegistryService) loadOrInitEnvironmentServiceState(ctx context.Context, serviceID, environmentID uuid.UUID) (*domain.EnvironmentServiceState, error) {
+	state, err := s.state.Get(ctx, serviceID, environmentID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+	if state == nil {
+		state = &domain.EnvironmentServiceState{
+			ServiceID:     serviceID,
+			EnvironmentID: environmentID,
+			DriftStatus:   domain.DriftStatusUnknown,
+		}
+	}
+	return state, nil
+}
+
 // RestoreEnvironmentServiceStateToDeployedIntent repairs the desired-state read
 // model after a route-only deployment fails before becoming the deployed intent.
 func (s *RegistryService) RestoreEnvironmentServiceStateToDeployedIntent(ctx context.Context, intent *domain.DeploymentIntent) error {
@@ -1080,15 +1102,9 @@ func (s *RegistryService) RestoreEnvironmentServiceStateToDeployedIntent(ctx con
 	}
 	artifactID := intent.ArtifactID
 	intentID := intent.ID
-	state, err := s.state.Get(ctx, intent.ServiceID, intent.EnvironmentID)
+	state, err := s.loadOrInitEnvironmentServiceState(ctx, intent.ServiceID, intent.EnvironmentID)
 	if err != nil {
 		return fmt.Errorf("loading environment service state for restoration to deployed intent %s: %w", intent.ID, err)
-	}
-	if state == nil {
-		state = &domain.EnvironmentServiceState{
-			ServiceID:     intent.ServiceID,
-			EnvironmentID: intent.EnvironmentID,
-		}
 	}
 	// Restore only the desired-state linkage; preserve observation, run, and
 	// reconcile health fields the failed route attach never touched.
