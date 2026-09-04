@@ -1377,9 +1377,7 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport)
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient)
-		if dnsOperator != nil {
-			controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator)
-		}
+		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
@@ -2487,15 +2485,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 		backendConfig := cfg.Backends[ref]
 		switch strings.TrimSpace(backendConfig.Type) {
 		case string(domain.DNSBackendTypeFilesystem):
-			rootDir := strings.TrimSpace(backendConfig.RootDir)
-			if err := os.MkdirAll(rootDir, 0o755); err != nil {
-				return nil, nil, fmt.Errorf("preparing DNS filesystem backend %q root %q: %w", ref, rootDir, err)
-			}
-			backend := dnsAdapter.NewFilesystemBackend(rootDir)
-			if err := backend.Health(ctx); err != nil {
-				return nil, nil, fmt.Errorf("checking DNS filesystem backend %q: %w", ref, err)
-			}
-			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
+			return nil, nil, fmt.Errorf("configuring DNS filesystem backend %q: filesystem backends are rejected during config validation because no operational activator is wired", ref)
 		case string(domain.DNSBackendTypeCoreDNS):
 			backend, err := dnsAdapter.NewCoreDNSBackend(dnsAdapter.CoreDNSConfig{EtcdEndpoints: backendConfig.EtcdEndpoints, EtcdPrefix: backendConfig.EtcdPrefix, DialTimeout: backendConfig.EtcdDialTimeout})
 			if err != nil {

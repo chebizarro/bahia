@@ -21,6 +21,11 @@ type AutoRemediationDeployer interface {
 	AutoRemediateDesiredState(ctx context.Context, serviceID, envID uuid.UUID, statusFn runtimeService.DeployStatusCallback) (*domain.RuntimeObservation, error)
 }
 
+type runtimeResolver interface {
+	runtime.RuntimeResolver
+	runtime.DeploymentUnitRuntimeResolver
+}
+
 // Reconciler compares desired state with observed runtime state.
 type Reconciler struct {
 	services     repository.ServiceRepository
@@ -29,7 +34,7 @@ type Reconciler struct {
 	units        repository.DeploymentUnitRepository
 	observations repository.RuntimeObservationRepository
 	state        repository.EnvironmentServiceStateRepository
-	resolver     runtime.RuntimeResolver
+	resolver     runtimeResolver
 	publisher    events.Publisher
 	interval     time.Duration
 	logger       *zap.Logger
@@ -55,7 +60,7 @@ func NewReconciler(
 	units repository.DeploymentUnitRepository,
 	observations repository.RuntimeObservationRepository,
 	state repository.EnvironmentServiceStateRepository,
-	resolver runtime.RuntimeResolver,
+	resolver runtimeResolver,
 	publisher events.Publisher,
 	interval time.Duration,
 	logger *zap.Logger,
@@ -123,12 +128,31 @@ func (r *Reconciler) reconcileAll(ctx context.Context) {
 	})
 }
 
-func (r *Reconciler) reconcileMode(ctx context.Context, env *domain.Environment, deploymentUnitID *uuid.UUID) (domain.ReconcileMode, error) {
-	if deploymentUnitID != nil && *deploymentUnitID != uuid.Nil && r.units != nil {
-		unit, err := r.units.GetByID(ctx, *deploymentUnitID)
-		if err != nil || unit == nil {
-			return "", err
-		}
+func (r *Reconciler) loadDeploymentUnit(ctx context.Context, deploymentUnitID *uuid.UUID) (*domain.DeploymentUnit, error) {
+	if deploymentUnitID == nil || *deploymentUnitID == uuid.Nil {
+		return nil, nil
+	}
+	if r.units == nil {
+		r.logger.Warn("deployment unit repository unavailable; falling back to legacy runtime resolution",
+			zap.String("deployment_unit_id", deploymentUnitID.String()),
+		)
+		return nil, nil
+	}
+	unit, err := r.units.GetByID(ctx, *deploymentUnitID)
+	if err != nil {
+		return nil, err
+	}
+	if unit == nil {
+		r.logger.Warn("deployment unit not found; falling back to legacy runtime resolution",
+			zap.String("deployment_unit_id", deploymentUnitID.String()),
+		)
+		return nil, nil
+	}
+	return unit, nil
+}
+
+func (r *Reconciler) reconcileMode(env *domain.Environment, unit *domain.DeploymentUnit) (domain.ReconcileMode, error) {
+	if unit != nil {
 		domain.NormalizeDeploymentUnitTargeting(unit)
 		if err := domain.ValidateReconcileMode(unit.ReconcileMode); err != nil {
 			return "", err
@@ -163,7 +187,11 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		return err
 	}
 
-	mode, err := r.reconcileMode(ctx, env, currentState.DeploymentUnitID)
+	unit, err := r.loadDeploymentUnit(ctx, currentState.DeploymentUnitID)
+	if err != nil {
+		return err
+	}
+	mode, err := r.reconcileMode(env, unit)
 	if err != nil {
 		return err
 	}
@@ -171,7 +199,12 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		return nil
 	}
 
-	rt, err := r.resolver.Resolve(svc, env)
+	var rt runtime.Runtime
+	if unit != nil {
+		rt, err = r.resolver.ResolveDeploymentUnit(svc, env, unit)
+	} else {
+		rt, err = r.resolver.Resolve(svc, env)
+	}
 	if err != nil {
 		r.logger.Warn("failed to resolve runtime",
 			zap.String("service", svc.Name),

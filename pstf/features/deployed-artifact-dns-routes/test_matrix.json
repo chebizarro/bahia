@@ -1,0 +1,9 @@
+{
+  "mappings": [
+    {"criterion": "AC1", "tests": ["internal/adapters/routing/cloudflare_test.go: ownership-marker length/determinism/distinctness tests, payload comment assertions, compensation delete/restore selection tests"]},
+    {"criterion": "AC2", "tests": ["internal/domain/public_route_test.go (unchanged, still green)", "internal/service/public_route_test.go (unchanged, still green)"]},
+    {"criterion": "AC3", "tests": ["internal/controlplane/contextvm_handlers_registration_test.go: disabled-DNS registration + error-message tests", "internal/controlplane/dns_contextvm_handlers_test.go (enabled path, unchanged)"]},
+    {"criterion": "AC4", "tests": ["internal/config/config_test.go: filesystem backend rejection test"]},
+    {"criterion": "AC5", "tests": ["internal/reconcile/reconciler_test.go: explicit-unit resolution, implicit legacy fallback, transient-error cycle skip, not-found fallback tests"]}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "feature_id": "deployed-artifact-dns-routes",
+  "title": "Deployed-artifact DNS/HTTPS route fixes: Cloudflare ownership marker, DNS ContextVM availability, unit-aware reconcile runtime",
+  "nostrig_task": "bahia-deployed-artifact-dns-routes-20260904",
+  "beads": ["bahia-vhlxh", "bahia-r89ab", "bahia-arnb3"],
+  "intended_behavior": [
+    "Cloudflare DNS record comments are a deterministic bounded ownership marker 'bahia:<sha256hex(source_coordinate)>' (70 chars, provider limit 100); the signed plan's source_coordinate and desired-state hash are unchanged.",
+    "dns/* ContextVM methods are always registered; when dns.enabled is false they return JSON-RPC -32000 'DNS orchestration is not enabled; set dns.enabled and configure a backend' instead of method-not-found.",
+    "dns.backends type 'filesystem' is rejected at config validation (no operational activator is wired) instead of failing startup health obscurely.",
+    "Scheduled reconcile resolves runtime through the explicit deployment unit (unit runtime type authoritative), eliminating false runtime-type conflicts for services whose metadata differs from their unit; transient unit-load errors skip the cycle, deleted units fall back to legacy resolution with a warning."
+  ]
+}

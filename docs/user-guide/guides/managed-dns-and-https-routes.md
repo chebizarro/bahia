@@ -13,7 +13,7 @@ Replace the example UUIDs and image coordinate with values from your environment
 
 ## 1. Configure managed DNS and edge routing
 
-Bahia's internal service projection requires a writable DNS backend. This example uses dnsmasq, whose backend writes a managed configuration file and runs the configured reload command after an atomic update. Do not use the filesystem backend as an operational LAN backend unless a separate activator consumes its output; otherwise backend health does not prove that DNS changes are active.
+Bahia's internal service projection requires a writable DNS backend. This example uses dnsmasq, the deployable internal-LAN backend for mapping `edge-01-production` services into `sharegap.net`; it writes a managed configuration file and runs the configured reload command after an atomic update. The filesystem backend is not deployable because Bahia does not wire the operational activator its snapshots require. Choose dnsmasq, CoreDNS, PowerDNS, or FIPS instead.
 
 ```yaml
 direct_runtime_actions:
@@ -62,6 +62,8 @@ edge_routing:
 ```
 
 `api_token_ref` is an opaque SecretRef UUID. Store the Cloudflare API token through Bahia's secret-management path; never put the token itself in this file. `allowed_org_ids` limits which organizations may claim the zone. Each origin allowlists one deployment unit, host, and set of ports; `route-attach` is rejected when a request falls outside those boundaries. A protected zone also requires a protected environment.
+
+The `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are registered even before DNS is configured. If `dns.enabled` is false or no DNS runtime is configured, each returns JSON-RPC `-32000` with `DNS orchestration is not enabled; set dns.enabled and configure a backend`. This fail-closed response distinguishes missing configuration from an unavailable method.
 
 After editing the server configuration, send `SIGHUP` to the Bahia server process. The server reloads and validates the candidate configuration, constructs a replacement application, stops the current application only after replacement initialization succeeds, and then starts the replacement. DNS and edge-routing changes therefore become active through **whole-application reconstruction**, not in-place mutation. An invalid candidate leaves the current application running.
 

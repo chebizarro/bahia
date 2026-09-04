@@ -12,6 +12,7 @@ import (
 	runtimeService "github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type mockObservationRepo struct {
@@ -51,6 +52,7 @@ func (m *mockObservationRepo) ListByServiceEnv(_ context.Context, serviceID, env
 
 type mockDeploymentUnitRepo struct {
 	units map[uuid.UUID]*domain.DeploymentUnit
+	err   error
 }
 
 func (m *mockDeploymentUnitRepo) Create(_ context.Context, unit *domain.DeploymentUnit) error {
@@ -59,6 +61,9 @@ func (m *mockDeploymentUnitRepo) Create(_ context.Context, unit *domain.Deployme
 }
 
 func (m *mockDeploymentUnitRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentUnit, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return m.units[id], nil
 }
 
@@ -86,10 +91,26 @@ func (m *mockDeploymentUnitRepo) ResolveDefault(_ context.Context, env *domain.E
 }
 
 type mockRuntimeResolver struct {
-	rt runtime.Runtime
+	rt                  runtime.Runtime
+	deploymentUnitRT    runtime.Runtime
+	legacyErr           error
+	deploymentUnitErr   error
+	legacyCalls         int
+	deploymentUnitCalls int
+	resolvedUnit        *domain.DeploymentUnit
 }
 
-func (m mockRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtime.Runtime, error) {
+func (m *mockRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtime.Runtime, error) {
+	m.legacyCalls++
+	return m.rt, m.legacyErr
+}
+
+func (m *mockRuntimeResolver) ResolveDeploymentUnit(_ *domain.Service, _ *domain.Environment, unit *domain.DeploymentUnit) (runtime.Runtime, error) {
+	m.deploymentUnitCalls++
+	m.resolvedUnit = unit
+	if m.deploymentUnitRT != nil || m.deploymentUnitErr != nil {
+		return m.deploymentUnitRT, m.deploymentUnitErr
+	}
 	return m.rt, nil
 }
 
@@ -114,7 +135,7 @@ func TestReconcilerObserveOnlyRecordsDriftWithoutRemediation(t *testing.T) {
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		obsRepo,
 		stateRepo,
-		mockRuntimeResolver{rt: rt},
+		&mockRuntimeResolver{rt: rt},
 		pub,
 		time.Minute,
 		zap.NewNop(),
@@ -167,7 +188,7 @@ func TestReconcilerApprovalRequiredMarksRemediationNeededWithoutInternalDeploy(t
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		obsRepo,
 		stateRepo,
-		mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -200,7 +221,7 @@ func TestReconcilerAutoApplyUsesSharedDesiredStateHelper(t *testing.T) {
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		&mockObservationRepo{},
 		stateRepo,
-		mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -237,7 +258,7 @@ func TestReconcilerAutoApplyRestoresStoppedDesiredService(t *testing.T) {
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		&mockObservationRepo{},
 		stateRepo,
-		mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:desired", observeHealth: domain.HealthStatusStopped}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:desired", observeHealth: domain.HealthStatusStopped}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -268,7 +289,7 @@ func TestReconcilerAutoApplyFailureKeepsDesiredStateAndBacksOff(t *testing.T) {
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		&mockObservationRepo{},
 		stateRepo,
-		mockRuntimeResolver{rt: &mockRuntime{observeNormHash: "sha256:observed-state"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeNormHash: "sha256:observed-state"}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -283,6 +304,156 @@ func TestReconcilerAutoApplyFailureKeepsDesiredStateAndBacksOff(t *testing.T) {
 	require.NotNil(t, updated.ReconcileBackoffUntil)
 	require.Equal(t, 1, updated.ReconcileConsecutiveFailures)
 	require.Equal(t, "auto_apply_failed", updated.ReconcileFailureMetadata["reason"])
+}
+
+func TestReconcilerExplicitDeploymentUnitUsesUnitRuntime(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	unitID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	state := &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID, DeploymentUnitID: &unitID}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateKey: state}}
+	obsRepo := &mockObservationRepo{}
+	unitRT := &mockRuntime{observeDigest: "sha256:unit-runtime"}
+	resolver := &mockRuntimeResolver{
+		rt:               &mockRuntime{observeDigest: "sha256:legacy-runtime"},
+		deploymentUnitRT: unitRT,
+		legacyErr:        fmt.Errorf("runtime type conflict"),
+	}
+	unit := &domain.DeploymentUnit{
+		ID:            unitID,
+		EnvironmentID: envID,
+		Key:           "default-docker",
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "astillero", RuntimeType: domain.RuntimeTypeCompose}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unitID: unit}},
+		obsRepo,
+		stateRepo,
+		resolver,
+		&mockPublisher{},
+		time.Minute,
+		zap.NewNop(),
+	)
+
+	require.NoError(t, reconciler.reconcileOne(ctx, state))
+	require.Zero(t, resolver.legacyCalls)
+	require.Equal(t, 1, resolver.deploymentUnitCalls)
+	require.Same(t, unit, resolver.resolvedUnit)
+	require.Len(t, obsRepo.observations, 1)
+	require.Equal(t, "sha256:unit-runtime", obsRepo.observations[0].ObservedImageDigest)
+}
+
+func TestReconcilerImplicitPlacementUsesLegacyRuntime(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	state := &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateKey: state}}
+	obsRepo := &mockObservationRepo{}
+	resolver := &mockRuntimeResolver{
+		rt:               &mockRuntime{observeDigest: "sha256:legacy-runtime"},
+		deploymentUnitRT: &mockRuntime{observeDigest: "sha256:unit-runtime"},
+	}
+
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
+		obsRepo,
+		stateRepo,
+		resolver,
+		&mockPublisher{},
+		time.Minute,
+		zap.NewNop(),
+	)
+
+	require.NoError(t, reconciler.reconcileOne(ctx, state))
+	require.Equal(t, 1, resolver.legacyCalls)
+	require.Zero(t, resolver.deploymentUnitCalls)
+	require.Len(t, obsRepo.observations, 1)
+	require.Equal(t, "sha256:legacy-runtime", obsRepo.observations[0].ObservedImageDigest)
+}
+
+func TestReconcilerDeploymentUnitLoadErrorSkipsCycle(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	unitID := uuid.New()
+	artifactID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	state := &domain.EnvironmentServiceState{
+		ServiceID:         serviceID,
+		EnvironmentID:     envID,
+		DeploymentUnitID:  &unitID,
+		DesiredArtifactID: &artifactID,
+	}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateKey: state}}
+	obsRepo := &mockObservationRepo{}
+	resolver := &mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:legacy-runtime"}}
+	deployer := &mockAutoRemediationDeployer{}
+
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}, err: fmt.Errorf("unit store unavailable")},
+		obsRepo,
+		stateRepo,
+		resolver,
+		&mockPublisher{},
+		time.Minute,
+		zap.NewNop(),
+		WithAutoRemediationDeployer(deployer),
+	)
+
+	require.EqualError(t, reconciler.reconcileOne(ctx, state), "unit store unavailable")
+	require.Zero(t, resolver.legacyCalls)
+	require.Zero(t, resolver.deploymentUnitCalls)
+	require.Zero(t, deployer.calls)
+	require.Empty(t, obsRepo.observations)
+	require.Nil(t, state.LastReconciledAt)
+}
+
+func TestReconcilerDeploymentUnitNotFoundFallsBackToLegacyRuntime(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	unitID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	state := &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID, DeploymentUnitID: &unitID}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateKey: state}}
+	obsRepo := &mockObservationRepo{}
+	resolver := &mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:legacy-runtime"}}
+	core, logs := observer.New(zap.WarnLevel)
+
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
+		obsRepo,
+		stateRepo,
+		resolver,
+		&mockPublisher{},
+		time.Minute,
+		zap.New(core),
+	)
+
+	require.NoError(t, reconciler.reconcileOne(ctx, state))
+	require.Equal(t, 1, resolver.legacyCalls)
+	require.Zero(t, resolver.deploymentUnitCalls)
+	require.Len(t, obsRepo.observations, 1)
+	require.Equal(t, 1, logs.FilterMessage("deployment unit not found; falling back to legacy runtime resolution").Len())
 }
 
 func TestReconcilerSkipsDisabledDeploymentUnit(t *testing.T) {
@@ -305,7 +476,7 @@ func TestReconcilerSkipsDisabledDeploymentUnit(t *testing.T) {
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unitID: {ID: unitID, EnvironmentID: envID, Key: "blue", RuntimeType: domain.RuntimeTypeDocker, ReconcileMode: domain.ReconcileModeDisabled, OwnershipMode: domain.OwnershipModeBahiaManaged}}},
 		obsRepo,
 		stateRepo,
-		mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),

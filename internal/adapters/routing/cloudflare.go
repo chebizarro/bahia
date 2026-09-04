@@ -3,6 +3,8 @@ package routing
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +91,11 @@ type cfDNSRecord struct {
 	Comment string `json:"comment"`
 }
 
+func cloudflareOwnershipMarker(sourceCoordinate string) string {
+	sum := sha256.Sum256([]byte(sourceCoordinate))
+	return "bahia:" + hex.EncodeToString(sum[:])
+}
+
 func (b *CloudflareBackend) Check(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
 	if err := b.validatePlan(plan); err != nil {
 		return err
@@ -97,7 +104,9 @@ func (b *CloudflareBackend) Check(ctx context.Context, plan *domain.DesiredPubli
 	if err != nil {
 		return err
 	}
-	ownership := plan.DNS.SourceCoordinate
+	ownership := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
+	// Do not match the raw coordinate as a legacy marker: Cloudflare rejected every
+	// pre-fix apply because those 123-character comments exceeded its 100-character limit.
 	owned := false
 	for _, record := range records {
 		if record.Comment == ownership {
@@ -269,10 +278,11 @@ func (b *CloudflareBackend) listDNS(ctx context.Context, plan *domain.DesiredPub
 }
 
 func (b *CloudflareBackend) upsertDNS(ctx context.Context, plan *domain.DesiredPublicRoutePlan, current []cfDNSRecord) error {
-	payload := cfDNSRecord{Type: plan.DNS.Type, Name: plan.Hostname, Content: plan.DNS.Value, TTL: plan.DNS.TTL, Proxied: plan.DNS.Proxied, Comment: plan.DNS.SourceCoordinate}
+	ownership := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
+	payload := cfDNSRecord{Type: plan.DNS.Type, Name: plan.Hostname, Content: plan.DNS.Value, TTL: plan.DNS.TTL, Proxied: plan.DNS.Proxied, Comment: ownership}
 	zoneID := b.cfg.ZoneIDs[plan.Zone]
 	for _, record := range current {
-		if record.Comment == plan.DNS.SourceCoordinate {
+		if record.Comment == ownership {
 			return b.do(ctx, http.MethodPut, fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, record.ID), payload, nil)
 		}
 	}
@@ -285,15 +295,16 @@ func (b *CloudflareBackend) restoreDNS(ctx context.Context, plan *domain.Desired
 		return err
 	}
 	zoneID := b.cfg.ZoneIDs[plan.Zone]
+	ownership := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
 	for _, record := range current {
-		if record.Comment == plan.DNS.SourceCoordinate {
+		if record.Comment == ownership {
 			if err := b.do(ctx, http.MethodDelete, fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, record.ID), nil, nil); err != nil {
 				return err
 			}
 		}
 	}
 	for _, record := range previous {
-		if record.Comment == plan.DNS.SourceCoordinate {
+		if record.Comment == ownership {
 			record.ID = ""
 			if err := b.do(ctx, http.MethodPost, fmt.Sprintf("/zones/%s/dns_records", zoneID), record, nil); err != nil {
 				return err

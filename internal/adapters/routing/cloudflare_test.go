@@ -47,6 +47,68 @@ func writeCFResult(t *testing.T, w http.ResponseWriter, result any) {
 	}
 }
 
+func TestCloudflareOwnershipMarker(t *testing.T) {
+	coordinate := "public-route:00000000-0000-0000-0000-000000000000:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222"
+	const want = "bahia:0450fab315a18e05bc63cdc13b68e009fde56407db0c9ebd8ea82700bae21917"
+
+	got := cloudflareOwnershipMarker(coordinate)
+	if got != want {
+		t.Fatalf("cloudflareOwnershipMarker() = %q, want %q", got, want)
+	}
+	if len(got) > 100 {
+		t.Fatalf("marker length = %d, exceeds Cloudflare limit", len(got))
+	}
+	if repeated := cloudflareOwnershipMarker(coordinate); repeated != got {
+		t.Fatalf("marker is not deterministic: %q != %q", repeated, got)
+	}
+	if different := cloudflareOwnershipMarker(coordinate + "-different"); different == got {
+		t.Fatalf("distinct coordinates produced the same marker %q", got)
+	}
+}
+
+func TestCloudflareUpsertDNSUsesOwnershipMarker(t *testing.T) {
+	plan := cloudflareTestPlan()
+	marker := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
+
+	for _, tc := range []struct {
+		name       string
+		current    []cfDNSRecord
+		wantMethod string
+		wantPath   string
+	}{
+		{name: "create", wantMethod: http.MethodPost, wantPath: "/zones/zone/dns_records"},
+		{name: "update", current: []cfDNSRecord{{ID: "owned", Comment: marker}}, wantMethod: http.MethodPut, wantPath: "/zones/zone/dns_records/owned"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tc.wantMethod || r.URL.Path != tc.wantPath {
+					t.Fatalf("request = %s %s, want %s %s", r.Method, r.URL.Path, tc.wantMethod, tc.wantPath)
+				}
+				var record cfDNSRecord
+				if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+					t.Fatalf("decode DNS record: %v", err)
+				}
+				if record.Comment != marker {
+					t.Fatalf("payload comment = %q, want %q", record.Comment, marker)
+				}
+				writeCFResult(t, w, record)
+			}))
+			defer server.Close()
+
+			backend, err := NewCloudflareBackend(CloudflareConfig{
+				APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+				TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
+			}, server.Client())
+			if err != nil {
+				t.Fatalf("NewCloudflareBackend: %v", err)
+			}
+			if err := backend.upsertDNS(context.Background(), plan, tc.current); err != nil {
+				t.Fatalf("upsertDNS: %v", err)
+			}
+		})
+	}
+}
+
 func TestUpsertIngressKeepsCatchAllLast(t *testing.T) {
 	got := upsertIngress([]map[string]any{
 		{"hostname": "one.example.com", "service": "http://one:80"},
@@ -90,12 +152,37 @@ func TestCloudflareCheckRejectsUnmanagedDNSCollision(t *testing.T) {
 	}
 }
 
+func TestCloudflareCheckTreatsRawCoordinateAsUnmanagedCollision(t *testing.T) {
+	plan := cloudflareTestPlan()
+	if len(plan.DNS.SourceCoordinate) != 123 {
+		t.Fatalf("test coordinate length = %d, want 123", len(plan.DNS.SourceCoordinate))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/dns_records") {
+			t.Fatalf("unexpected API request: %s %s", r.Method, r.URL.Path)
+		}
+		writeCFResult(t, w, []cfDNSRecord{{ID: "raw-coordinate", Comment: plan.DNS.SourceCoordinate}})
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudflareBackend(CloudflareConfig{
+		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
+	}, server.Client())
+	if err != nil {
+		t.Fatalf("NewCloudflareBackend: %v", err)
+	}
+	if err := backend.Check(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "unmanaged DNS") {
+		t.Fatalf("Check error = %v, want unmanaged DNS collision", err)
+	}
+}
+
 func TestCloudflareCheckAllowsOwnedRouteOriginUpdate(t *testing.T) {
 	plan := cloudflareTestPlan()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/dns_records"):
-			writeCFResult(t, w, []cfDNSRecord{{ID: "owned", Comment: plan.DNS.SourceCoordinate}})
+			writeCFResult(t, w, []cfDNSRecord{{ID: "owned", Comment: cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)}})
 		case strings.Contains(r.URL.Path, "/configurations"):
 			result := cfTunnelResult{Config: map[string]any{"ingress": []map[string]any{{"hostname": plan.Hostname, "service": "http://old-origin:8080"}, {"service": "http_status:404"}}}}
 			writeCFResult(t, w, result)
@@ -117,6 +204,56 @@ func TestCloudflareCheckAllowsOwnedRouteOriginUpdate(t *testing.T) {
 	}
 }
 
+func TestCloudflareRestoreDNSSelectsOwnershipMarker(t *testing.T) {
+	plan := cloudflareTestPlan()
+	marker := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
+	deletes, restores := 0, 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/dns_records"):
+			writeCFResult(t, w, []cfDNSRecord{
+				{ID: "foreign", Comment: plan.DNS.SourceCoordinate},
+				{ID: "current-owned", Comment: marker},
+			})
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/dns_records/current-owned"):
+			deletes++
+			writeCFResult(t, w, map[string]any{})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dns_records"):
+			var record cfDNSRecord
+			if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+				t.Fatalf("decode restored DNS record: %v", err)
+			}
+			if record.ID != "" || record.Content != "previous.example.net" || record.Comment != marker {
+				t.Fatalf("restored record = %#v", record)
+			}
+			restores++
+			writeCFResult(t, w, record)
+		default:
+			t.Fatalf("unexpected API request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudflareBackend(CloudflareConfig{
+		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
+	}, server.Client())
+	if err != nil {
+		t.Fatalf("NewCloudflareBackend: %v", err)
+	}
+	previous := []cfDNSRecord{
+		{ID: "previous-owned", Type: "CNAME", Name: plan.Hostname, Content: "previous.example.net", TTL: 1, Proxied: true, Comment: marker},
+		{ID: "previous-foreign", Comment: plan.DNS.SourceCoordinate},
+	}
+	if err := backend.restoreDNS(context.Background(), plan, previous); err != nil {
+		t.Fatalf("restoreDNS: %v", err)
+	}
+	if deletes != 1 || restores != 1 {
+		t.Fatalf("restore operations = deletes:%d restores:%d, want 1 each", deletes, restores)
+	}
+}
+
 func TestCloudflareApplyRetainsTunnelWhenDNSCompensationFails(t *testing.T) {
 	plan := cloudflareTestPlan()
 	published := false
@@ -131,7 +268,7 @@ func TestCloudflareApplyRetainsTunnelWhenDNSCompensationFails(t *testing.T) {
 			writeCFResult(t, w, map[string]any{})
 		case strings.HasSuffix(r.URL.Path, "/dns_records") && r.Method == http.MethodGet:
 			if published {
-				writeCFResult(t, w, []cfDNSRecord{{ID: "created", Name: plan.Hostname, Comment: plan.DNS.SourceCoordinate}})
+				writeCFResult(t, w, []cfDNSRecord{{ID: "created", Name: plan.Hostname, Comment: cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)}})
 			} else {
 				writeCFResult(t, w, []cfDNSRecord{})
 			}
@@ -205,6 +342,9 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 			var record cfDNSRecord
 			if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
 				t.Fatalf("decode DNS: %v", err)
+			}
+			if record.Comment != cloudflareOwnershipMarker(plan.DNS.SourceCoordinate) {
+				t.Fatalf("published comment = %q", record.Comment)
 			}
 			record.ID = "created"
 			currentDNS = []cfDNSRecord{record}
