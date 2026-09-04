@@ -223,7 +223,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
 	}
 	if intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
-		return fmt.Errorf("signed public routes require a Bahia-managed Compose deployment unit")
+		return fmt.Errorf("signed public routes require a Bahia-managed direct-runtime deployment unit")
 	}
 	if c.loom == nil {
 		return fmt.Errorf("loom client is not configured")
@@ -551,8 +551,8 @@ func (c *Coordinator) executeRouteOnlyDeployment(
 	if unit == nil {
 		return fmt.Errorf("deployment unit is required for route-only execution")
 	}
-	if unit.OwnershipMode != domain.OwnershipModeBahiaManaged || unit.RuntimeType != domain.RuntimeTypeCompose {
-		return fmt.Errorf("route-only execution requires a Bahia-managed Compose deployment unit")
+	if unit.OwnershipMode != domain.OwnershipModeBahiaManaged || (unit.RuntimeType != domain.RuntimeTypeCompose && unit.RuntimeType != domain.RuntimeTypeDocker) {
+		return fmt.Errorf("route-only execution requires a Bahia-managed direct-runtime deployment unit")
 	}
 	if intent.DesiredState == nil || intent.DesiredState.PublicRoute == nil {
 		return fmt.Errorf("route-only execution requires a signed public route plan")
