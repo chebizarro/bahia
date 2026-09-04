@@ -71,7 +71,11 @@ Inner ContextVM request:
 
 `service/route-attach` uses the same kind and correlation rules. Its params are `service_id`, `environment_id`, optional `deployment_unit_id`, `public_route` (`hostname`, `upstream_scheme`, `upstream_port`, `health_path`, `tls`), and optional `idempotency_key`. The acknowledgment identifies the created deployment intent; deployment run and state observables carry the signed route plan and `routing` phase. The coordinator does not reconverge the artifact for this method.
 
-When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey. Bahia's native encrypted `service/*` and `deployment/*` handlers consume the verified inner event.
+When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey. Bahia's native encrypted `service/create`, `environment/create`, `environment/update`, `service/deploy`, and runtime-action handlers process the inner ContextVM request and publish the correlated response through the same wrapper family. The operator CLI enables this path with `--encrypted`; plain `25910` remains the default.
+
+The client subscribes before each publish and waits for relay EOSE before sending the ephemeral request. Encrypted reply subscriptions use kinds `{1059, 21059}`, `#p=<operator-pubkey>`, and `#e=<outer-request-id>` with no author filter. The decrypted inner response must be a valid signed `25910` event from the configured service pubkey and must reference the inner request id.
+
+Result waits are bounded per attempt (`--result-timeout`, default `30s`). After timeout the client re-arms the subscription and republishes the same logical request up to `--result-retries` times (default `2`). Plain retries reuse the signed event; encrypted retries may create a new outer wrapper but retain the same inner `d` tag. Bahia caches completed responses in memory and PostgreSQL for 24 hours and republishes the cached terminal response for a duplicate requester/method/progress-token tuple without executing the handler again. Use `--encrypted` to select the NIP-59/NIP-44 path; it requires the service pubkey.
 
 CLI operators may sign with a local identity key or NIP-46. NIP-46 mode requires `--nostr-bunker-file` plus `--nostr-client-key-file`; add repeatable `--nostr-bunker-relay` when the bunker URI does not contain a relay. NIP-46 signs both the ContextVM request and any NIP-42 relay AUTH challenge, and it must not be mixed with local identity-key flags.
 

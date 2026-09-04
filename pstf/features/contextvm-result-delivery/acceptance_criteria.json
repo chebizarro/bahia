@@ -1,0 +1,33 @@
+{
+  "feature_id": "contextvm-result-delivery",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "Services update, deployments preview/deploy/route-attach, and DNS commands use a pre-publish EOSE activation barrier, a bounded per-attempt result timeout, and configurable idempotent result retries."
+    },
+    {
+      "id": "AC-2",
+      "statement": "A signed plain ContextVM request and response complete through the client and server transports together on local and public relay identities."
+    },
+    {
+      "id": "AC-3",
+      "statement": "When relay A fails to establish a reply subscription and the terminal result is available only through subscribed relay B, the client still receives the result and accounts only for established subscriptions."
+    },
+    {
+      "id": "AC-4",
+      "statement": "If a completed deployment preview response is lost, the client timeout republishes the same idempotent logical request and Bahia replays the cached desired_state_hash response without invoking the handler twice."
+    },
+    {
+      "id": "AC-5",
+      "statement": "Encrypted mode uses real local-key NIP-44/NIP-59 request and response crypto with outer-wrapper and signed-inner correlation validation."
+    },
+    {
+      "id": "AC-6",
+      "statement": "Terminal responses are retried on server publication failure, duplicate idempotent requests replay responses persisted for 24 hours, and multi-relay partial publication success does not retry."
+    },
+    {
+      "id": "AC-7",
+      "statement": "Failures expose request method, event id, d-tag, configured/subscribed/failed relays, publish count, attempt count, and per-relay publish outcomes for correlation with server handler and publication logs."
+    }
+  ]
+}

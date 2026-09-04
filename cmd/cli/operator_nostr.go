@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type cliOperatorClient interface {
@@ -40,8 +43,8 @@ type cliOperatorClient interface {
 	PublishPolicyCreateNostr(context.Context, controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 }
 
-var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-	return client.NewOperatorControlPlaneClient(cfg)
+var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig, options ...client.OperatorControlPlaneOption) (cliOperatorClient, error) {
+	return client.NewOperatorControlPlaneClient(cfg, options...)
 }
 
 var discoverOperatorRelaysForCLI = func(ctx context.Context, cfg client.OperatorRelayDiscoveryConfig) ([]string, error) {
@@ -69,6 +72,20 @@ func (s *cliNIP46Signer) SignEvent(ctx context.Context, event *canonicalnostr.Ev
 		return fmt.Errorf("NIP-46 signer is not configured")
 	}
 	return s.client.Sign(ctx, event)
+}
+
+func (s *cliNIP46Signer) Encrypt(ctx context.Context, plaintext string, recipient canonicalnostr.PubKey) (string, error) {
+	if s == nil || s.client == nil {
+		return "", fmt.Errorf("NIP-46 signer is not configured")
+	}
+	return s.client.NIP44Encrypt(ctx, recipient, plaintext)
+}
+
+func (s *cliNIP46Signer) Decrypt(ctx context.Context, ciphertext string, sender canonicalnostr.PubKey) (string, error) {
+	if s == nil || s.client == nil {
+		return "", fmt.Errorf("NIP-46 signer is not configured")
+	}
+	return s.client.NIP44Decrypt(ctx, sender, ciphertext)
 }
 
 var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (canonicalnostr.Signer, string, func() error, error) {
@@ -309,7 +326,13 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	if err != nil {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator relays", RequestAccepted: false, Cause: err}
 	}
-	cfg := client.OperatorControlPlaneConfig{Relays: relays, ServicePubkey: resolveOperatorServicePubkey(cmd)}
+	cfg := client.OperatorControlPlaneConfig{
+		Relays:        relays,
+		ServicePubkey: resolveOperatorServicePubkey(cmd),
+		Encrypted:     operatorEncrypted,
+		ResultTimeout: operatorResultTimeout,
+		ResultRetries: &operatorResultRetries,
+	}
 	if bunkerURI != "" {
 		signer, pubkey, closeSigner, signerErr := newCLINIP46Signer(cmd.Context(), bunkerURI, clientKey)
 		if signerErr != nil {
@@ -321,7 +344,7 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	} else {
 		cfg.PrivateKey = key
 	}
-	op, err := newCLIOperatorClient(cfg)
+	op, err := newCLIOperatorClient(cfg, client.WithOperatorLogger(newCLIOperatorLogger(cmd.ErrOrStderr())))
 	if err != nil {
 		if cfg.CloseSigner != nil {
 			_ = cfg.CloseSigner()
@@ -329,6 +352,15 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 		return nil, &client.ControlPlaneRequestError{Phase: "configure operator Nostr client", RequestAccepted: false, Cause: err}
 	}
 	return op, nil
+}
+
+func newCLIOperatorLogger(stderr io.Writer) *zap.Logger {
+	if stderr == nil {
+		return zap.NewNop()
+	}
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.TimeKey = ""
+	return zap.New(zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(stderr), zap.WarnLevel))
 }
 
 func resolveNIP46OperatorInput(cmd *cobra.Command) (string, string, error) {

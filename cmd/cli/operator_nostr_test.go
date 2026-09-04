@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -33,6 +34,11 @@ func TestRootCommandExposesOperatorFlags(t *testing.T) {
 	}
 	if flag := cmd.PersistentFlags().Lookup("http-fallback"); flag == nil {
 		t.Fatal("root command missing --http-fallback")
+	}
+	for _, name := range []string{"encrypted", "result-timeout", "result-retries"} {
+		if flag := cmd.PersistentFlags().Lookup(name); flag == nil {
+			t.Fatalf("root command missing --%s", name)
+		}
 	}
 	if flag := cmd.PersistentFlags().Lookup("nostr-bunker-file"); flag == nil {
 		t.Fatal("root command missing --nostr-bunker-file")
@@ -172,6 +178,10 @@ func TestPolicyCreateUsesSignerFirstOperatorClient(t *testing.T) {
 	cmd.SetContext(context.Background())
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", key)
 	operatorRelays = []string{"wss://relay.example"}
+	operatorServicePubkey = nostr.Generate().Public().Hex()
+	operatorEncrypted = true
+	operatorResultTimeout = 9 * time.Second
+	operatorResultRetries = 0
 	if err := cmd.Root().PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
 		t.Fatalf("set relay: %v", err)
 	}
@@ -179,6 +189,9 @@ func TestPolicyCreateUsesSignerFirstOperatorClient(t *testing.T) {
 	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
 		if cfg.PrivateKey != key {
 			t.Fatalf("PrivateKey = %q, want configured key", cfg.PrivateKey)
+		}
+		if !cfg.Encrypted || cfg.ServicePubkey != operatorServicePubkey || cfg.ResultTimeout != 9*time.Second || cfg.ResultRetries == nil || *cfg.ResultRetries != 0 {
+			t.Fatalf("operator delivery config = %#v", cfg)
 		}
 		return fakeCLIOperatorClient{policyCreate: func(cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
 			captured = &cmd
@@ -869,6 +882,9 @@ func newOperatorFlagTestCommand(t *testing.T) *cobra.Command {
 	root.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", "", "")
 	root.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "")
 	root.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", false, "")
+	root.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "")
+	root.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "")
+	root.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "")
 	root.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "")
 	root.PersistentFlags().StringVar(&nostrBunkerFile, "nostr-bunker-file", "", "")
 	root.PersistentFlags().StringArrayVar(&nostrBunkerRelays, "nostr-bunker-relay", nil, "")
@@ -880,7 +896,9 @@ func newOperatorFlagTestCommand(t *testing.T) *cobra.Command {
 
 func replaceOperatorFactory(factory func(client.OperatorControlPlaneConfig) (cliOperatorClient, error)) func() {
 	previous := newCLIOperatorClient
-	newCLIOperatorClient = factory
+	newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig, _ ...client.OperatorControlPlaneOption) (cliOperatorClient, error) {
+		return factory(cfg)
+	}
 	return func() { newCLIOperatorClient = previous }
 }
 
@@ -904,6 +922,9 @@ func resetOperatorGlobals(t *testing.T) {
 	operatorServicePubkey = ""
 	operatorTrustedServicePubkeys = nil
 	operatorHTTPFallback = false
+	operatorEncrypted = false
+	operatorResultTimeout = client.DefaultOperatorResultTimeout
+	operatorResultRetries = client.DefaultOperatorResultRetries
 	t.Setenv("BAHIA_NOSTR_RELAYS", "")
 	t.Setenv("BAHIA_NOSTR_BOOTSTRAP_RELAYS", "")
 	t.Setenv("BAHIA_NOSTR_SERVICE_PUBKEY", "")
@@ -930,5 +951,8 @@ func resetOperatorGlobals(t *testing.T) {
 		operatorServicePubkey = ""
 		operatorTrustedServicePubkeys = nil
 		operatorHTTPFallback = false
+		operatorEncrypted = false
+		operatorResultTimeout = client.DefaultOperatorResultTimeout
+		operatorResultRetries = client.DefaultOperatorResultRetries
 	})
 }

@@ -89,6 +89,9 @@ const (
 
 	encryptedRequestReplayLookback = 2 * time.Minute
 	contextVMNIP59OuterLookback    = 12 * time.Hour
+	contextVMResponseDefaultTTL    = 24 * time.Hour
+	contextVMResponseStoreTimeout  = 5 * time.Second
+	contextVMResultMaxInFlight     = 128
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
@@ -353,35 +356,75 @@ func (c *contextVMDedupCache) len() int {
 // them to operation handlers. It never publishes sensitive payloads as public
 // sidecar projections.
 type EncryptedRequestTransport struct {
-	subscriber        EncryptedRequestSubscriber
-	responder         *EncryptedResponder
-	authorizedPubkeys []string
-	handlers          map[string]EncryptedRequestHandler
-	contextVMHandlers map[string]ContextVMHandler
-	contextVMDedup    *contextVMDedupCache
-	contextVMMu       sync.Mutex
-	responseMu        sync.RWMutex
-	responseHandlers  map[uint64]ContextVMResponseHandler
-	nextResponseID    uint64
-	dedup             *nostrpool.EventDeduplicator
-	logger            *zap.Logger
+	subscriber             EncryptedRequestSubscriber
+	responder              *EncryptedResponder
+	authorizedPubkeys      []string
+	handlers               map[string]EncryptedRequestHandler
+	contextVMHandlers      map[string]ContextVMHandler
+	contextVMDedup         *contextVMDedupCache
+	contextVMResponseStore repository.ContextVMResponseStore
+	contextVMResponseTTL   time.Duration
+	contextVMResultRetry   contextVMResultRetryConfig
+	contextVMRetrySlots    chan struct{}
+	contextVMRetryMu       sync.RWMutex
+	contextVMRetryBase     context.Context
+	contextVMMu            sync.Mutex
+	responseMu             sync.RWMutex
+	responseHandlers       map[uint64]ContextVMResponseHandler
+	nextResponseID         uint64
+	dedup                  *nostrpool.EventDeduplicator
+	logger                 *zap.Logger
 }
 
-func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, responder *EncryptedResponder, authorizedPubkeys []string, logger *zap.Logger) *EncryptedRequestTransport {
+type EncryptedRequestTransportOption func(*EncryptedRequestTransport)
+
+func WithContextVMResponseStore(store repository.ContextVMResponseStore, ttl time.Duration) EncryptedRequestTransportOption {
+	return func(transport *EncryptedRequestTransport) {
+		transport.contextVMResponseStore = store
+		if ttl > 0 {
+			transport.contextVMResponseTTL = ttl
+		}
+	}
+}
+
+func WithContextVMResultRetry(timeout, initialBackoff, maxBackoff time.Duration) EncryptedRequestTransportOption {
+	return func(transport *EncryptedRequestTransport) {
+		if timeout > 0 {
+			transport.contextVMResultRetry.timeout = timeout
+		}
+		if initialBackoff > 0 {
+			transport.contextVMResultRetry.initialBackoff = initialBackoff
+		}
+		if maxBackoff > 0 {
+			transport.contextVMResultRetry.maxBackoff = maxBackoff
+		}
+	}
+}
+
+func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, responder *EncryptedResponder, authorizedPubkeys []string, logger *zap.Logger, opts ...EncryptedRequestTransportOption) *EncryptedRequestTransport {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &EncryptedRequestTransport{
-		subscriber:        subscriber,
-		responder:         responder,
-		authorizedPubkeys: append([]string(nil), authorizedPubkeys...),
-		handlers:          make(map[string]EncryptedRequestHandler),
-		contextVMHandlers: make(map[string]ContextVMHandler),
-		contextVMDedup:    newContextVMDedupCache(contextVMDedupDefaultLimit),
-		responseHandlers:  make(map[uint64]ContextVMResponseHandler),
-		dedup:             nostrpool.NewEventDeduplicator(10000),
-		logger:            logger.Named("encrypted-request-result-events"),
+	transport := &EncryptedRequestTransport{
+		subscriber:           subscriber,
+		responder:            responder,
+		authorizedPubkeys:    append([]string(nil), authorizedPubkeys...),
+		handlers:             make(map[string]EncryptedRequestHandler),
+		contextVMHandlers:    make(map[string]ContextVMHandler),
+		contextVMDedup:       newContextVMDedupCache(contextVMDedupDefaultLimit),
+		contextVMResponseTTL: contextVMResponseDefaultTTL,
+		contextVMResultRetry: defaultContextVMResultRetryConfig(),
+		contextVMRetrySlots:  make(chan struct{}, contextVMResultMaxInFlight),
+		responseHandlers:     make(map[uint64]ContextVMResponseHandler),
+		dedup:                nostrpool.NewEventDeduplicator(10000),
+		logger:               logger.Named("encrypted-request-result-events"),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(transport)
+		}
+	}
+	return transport
 }
 
 // RegisterContextVMResponseHandler adds a consumer to the authenticated
@@ -425,6 +468,12 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	if t.subscriber == nil {
 		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
+	retryBase, cancelRetries := context.WithCancel(ctx)
+	t.setContextVMRetryBase(retryBase)
+	defer func() {
+		cancelRetries()
+		t.clearContextVMRetryBase(retryBase)
+	}()
 	now := time.Now().UTC()
 	innerSince := nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix())
 	filters := contextVMSubscriptionFilters(t.responder.ServicePubkey(), now)
@@ -595,16 +644,16 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 	}
 	innerID := inner.ID.Hex()
 	innerPubkey := inner.PubKey.Hex()
-	if t.dedup.IsDuplicate(innerID) {
-		t.logger.Debug("duplicate ContextVM event ignored", zap.String("event_id", innerID))
-		return
-	}
-	t.dedup.MarkSeen(innerID)
 	if !t.matchesContextVMRouting(inner) {
 		t.logger.Debug("ContextVM event not routed to this service", zap.String("event_id", innerID), zap.String("service_pubkey", t.responder.ServicePubkey()))
 		return
 	}
 	if response, ok := decodeContextVMJSONRPCResponse(inner.Content); ok {
+		if t.dedup.IsDuplicate(innerID) {
+			t.logger.Debug("duplicate ContextVM response ignored", zap.String("event_id", innerID))
+			return
+		}
+		t.dedup.MarkSeen(innerID)
 		t.logger.Debug("ContextVM response received", zap.String("event_id", innerID), zap.String("responder_pubkey", innerPubkey))
 		response.Event = inner
 		response.EnvelopeFormat = envelopeFormat
@@ -614,36 +663,45 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 	}
 	if !t.authorized(innerPubkey) {
 		t.logger.Warn("unauthorized ContextVM requester", zap.String("event_id", innerID), zap.String("requester_pubkey", innerPubkey))
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}})
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}}, "unauthorized")
 		return
 	}
 	var rpc ContextVMJSONRPCRequest
 	if err := json.Unmarshal([]byte(inner.Content), &rpc); err != nil {
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(nil, cascontextvm.ParseErrorCode, "parse error"))
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(nil, cascontextvm.ParseErrorCode, "parse error"), "parse-error")
 		return
 	}
 	if rpc.JSONRPC != cascontextvm.JSONRPCVersion || strings.TrimSpace(rpc.Method) == "" {
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request"))
+		method := strings.TrimSpace(rpc.Method)
+		if method == "" {
+			method = "invalid-request"
+		}
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request"), method)
 		return
 	}
 	progressToken, err := contextVMIdempotencyKey(rpc.Params)
 	if err != nil {
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, err.Error()))
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, err.Error()), rpc.Method)
 		return
 	}
 	if progressToken != "" {
-		if cached, ok := t.cachedContextVMResponse(innerPubkey, rpc.Method, progressToken); ok {
+		if cached, ok := t.cachedContextVMResponse(ctx, innerPubkey, rpc.Method, progressToken); ok {
 			cached.ID = cascontextvm.NewResponse(rpc.ID, nil).ID
-			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached)
+			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached, rpc.Method)
 			return
 		}
 	}
+	if t.dedup.IsDuplicate(innerID) {
+		t.logger.Debug("duplicate ContextVM request ignored while its first execution is still in flight", zap.String("event_id", innerID))
+		return
+	}
+	t.dedup.MarkSeen(innerID)
 	handler := t.contextVMHandlers[rpc.Method]
 	if handler == nil {
 		t.logger.Warn("ContextVM method not found", zap.String("event_id", innerID), zap.String("method", rpc.Method))
 		response := cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.MethodNotFoundCode, "method not found")
 		t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, response, rpc.Method)
 		return
 	}
 	t.logger.Info("dispatching ContextVM request", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey", innerPubkey))
@@ -678,7 +736,7 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		response.Error = &JSONRPCError{Code: code, Message: err.Error()}
 	}
 	t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
-	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
+	t.publishContextVMResponse(ctx, outer, inner, encrypted, response, rpc.Method)
 }
 
 func decodeContextVMJSONRPCResponse(content string) (ContextVMResponseEnvelope, bool) {
@@ -788,35 +846,89 @@ func (t *EncryptedRequestTransport) publishContextVMProgressAck(ctx context.Cont
 	t.publishContextVMPayload(ctx, outer, request, encrypted, notification, "progress ack")
 }
 
-func (t *EncryptedRequestTransport) publishContextVMResponse(ctx context.Context, outer, request *nostr.Event, encrypted bool, response ContextVMJSONRPCResponse) {
-	t.publishContextVMPayload(ctx, outer, request, encrypted, response, "response")
+func (t *EncryptedRequestTransport) publishContextVMResponse(_ context.Context, outer, request *nostr.Event, encrypted bool, response ContextVMJSONRPCResponse, method string) {
+	requestID := request.ID.Hex()
+	requestPubkey := request.PubKey.Hex()
+	retryCtx, cancel := context.WithTimeout(t.contextVMRetryContext(), t.contextVMResultRetry.timeout)
+	publishEvent, err := t.buildContextVMPublishEvent(retryCtx, outer, request, encrypted, response)
+	if err != nil {
+		cancel()
+		t.logContextVMResultPublishFailure(requestID, method, requestPubkey, err)
+		return
+	}
+
+	published, outcomes, err := publishContextVMResultAttempt(retryCtx, t.responder.publisher, *publishEvent)
+	if published > 0 {
+		cancel()
+		return
+	}
+	failure := newContextVMResultPublishFailure(1, outcomes, err)
+
+	select {
+	case t.contextVMRetrySlots <- struct{}{}:
+		go func() {
+			defer cancel()
+			defer func() { <-t.contextVMRetrySlots }()
+			if err := continueContextVMResultRetry(retryCtx, t.responder.publisher, *publishEvent, t.contextVMResultRetry, failure); err != nil {
+				t.logContextVMResultPublishFailure(requestID, method, requestPubkey, err)
+			}
+		}()
+	default:
+		cancel()
+		failure.cause = fmt.Errorf("background retry capacity exhausted: %w", failure.cause)
+		t.logContextVMResultPublishFailure(requestID, method, requestPubkey, failure)
+	}
+}
+
+func (t *EncryptedRequestTransport) logContextVMResultPublishFailure(requestID, method, requestPubkey string, err error) {
+	fields := []zap.Field{
+		zap.String("event_id", requestID),
+		zap.String("method", method),
+		zap.String("recipient_pubkey_prefix", pubkeyPrefix(requestPubkey)),
+		zap.Error(err),
+	}
+	var failure *contextVMResultPublishFailure
+	if errors.As(err, &failure) {
+		fields = append(fields, zap.Int("attempts", failure.attempts), zap.Strings("relay_outcomes", failure.outcomes))
+	}
+	t.logger.Error("terminal ContextVM response publication failed", fields...)
+}
+
+func (t *EncryptedRequestTransport) contextVMRetryContext() context.Context {
+	t.contextVMRetryMu.RLock()
+	defer t.contextVMRetryMu.RUnlock()
+	if t.contextVMRetryBase != nil {
+		return t.contextVMRetryBase
+	}
+	// Direct HandleEvent callers have no transport lifecycle; the per-response
+	// timeout remains the hard bound for their detached retry goroutine.
+	return context.Background()
+}
+
+func (t *EncryptedRequestTransport) setContextVMRetryBase(ctx context.Context) {
+	t.contextVMRetryMu.Lock()
+	t.contextVMRetryBase = ctx
+	t.contextVMRetryMu.Unlock()
+}
+
+func (t *EncryptedRequestTransport) clearContextVMRetryBase(ctx context.Context) {
+	t.contextVMRetryMu.Lock()
+	if t.contextVMRetryBase == ctx {
+		t.contextVMRetryBase = nil
+	}
+	t.contextVMRetryMu.Unlock()
 }
 
 func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context, outer, request *nostr.Event, encrypted bool, payload any, label string) {
 	requestID := request.ID.Hex()
-	requestPubkey := request.PubKey.Hex()
 	if t.responder == nil || t.responder.publisher == nil {
 		t.logger.Warn("ContextVM responder unavailable", zap.String("event_id", requestID))
 		return
 	}
-	content, err := json.Marshal(payload)
+	publishEvent, err := t.buildContextVMPublishEvent(ctx, outer, request, encrypted, payload)
 	if err != nil {
-		t.logger.Error("marshal ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
+		t.logger.Error("prepare ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
 		return
-	}
-	responseEvent := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, requestID, "", "reply"}, {tagRecipientPubkey, requestPubkey}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
-	if err := SignGoNostrEvent(ctx, t.responder.signer, responseEvent); err != nil {
-		t.logger.Error("sign ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
-		return
-	}
-	publishEvent := responseEvent
-	if encrypted {
-		wrapped, err := t.wrapContextVMResponse(ctx, outer, request, payload)
-		if err != nil {
-			t.logger.Error("wrap ContextVM "+label+" failed", zap.String("event_id", requestID), zap.Error(err))
-			return
-		}
-		publishEvent = wrapped
 	}
 	published, err := t.responder.publisher.Publish(ctx, *publishEvent)
 	if err != nil {
@@ -826,6 +938,31 @@ func (t *EncryptedRequestTransport) publishContextVMPayload(ctx context.Context,
 	if published == 0 {
 		t.logger.Error("publish ContextVM "+label+" failed", zap.String("event_id", requestID), zap.String("error", "no relay accepted event"))
 	}
+}
+
+func (t *EncryptedRequestTransport) buildContextVMPublishEvent(ctx context.Context, outer, request *nostr.Event, encrypted bool, payload any) (*nostr.Event, error) {
+	if t.responder == nil || t.responder.publisher == nil {
+		return nil, fmt.Errorf("ContextVM responder is not configured")
+	}
+	if encrypted {
+		return t.wrapContextVMResponse(ctx, outer, request, payload)
+	}
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ContextVM payload: %w", err)
+	}
+	responseEvent := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, request.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
+	if err := SignGoNostrEvent(ctx, t.responder.signer, responseEvent); err != nil {
+		return nil, fmt.Errorf("sign ContextVM payload: %w", err)
+	}
+	return responseEvent, nil
+}
+
+func pubkeyPrefix(pubkey string) string {
+	if len(pubkey) > 8 {
+		return pubkey[:8]
+	}
+	return pubkey
 }
 
 func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, outer, request *nostr.Event, payload any) (*nostr.Event, error) {
@@ -894,14 +1031,36 @@ func contextVMCacheKey(pubkey, method, progressToken string) string {
 	return strings.Join([]string{pubkey, method, progressToken}, "\x00")
 }
 
-func (t *EncryptedRequestTransport) cachedContextVMResponse(pubkey, method, progressToken string) (ContextVMJSONRPCResponse, bool) {
+func (t *EncryptedRequestTransport) cachedContextVMResponse(ctx context.Context, pubkey, method, progressToken string) (ContextVMJSONRPCResponse, bool) {
 	if progressToken == "" {
 		return ContextVMJSONRPCResponse{}, false
 	}
+	key := contextVMCacheKey(pubkey, method, progressToken)
 	t.contextVMMu.Lock()
-	defer t.contextVMMu.Unlock()
-	response, ok := t.contextVMDedup.get(contextVMCacheKey(pubkey, method, progressToken))
-	return response, ok
+	response, ok := t.contextVMDedup.get(key)
+	t.contextVMMu.Unlock()
+	if ok || t.contextVMResponseStore == nil {
+		return response, ok
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, contextVMResponseStoreTimeout)
+	record, err := t.contextVMResponseStore.Get(lookupCtx, pubkey, method, progressToken, time.Now().UTC().Add(-t.contextVMResponseTTL))
+	cancel()
+	if err != nil {
+		t.logger.Warn("load persisted ContextVM response failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
+		return ContextVMJSONRPCResponse{}, false
+	}
+	if record == nil {
+		return ContextVMJSONRPCResponse{}, false
+	}
+	if err := json.Unmarshal(record.Response, &response); err != nil {
+		t.logger.Error("decode persisted ContextVM response failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
+		return ContextVMJSONRPCResponse{}, false
+	}
+	t.contextVMMu.Lock()
+	t.contextVMDedup.put(key, response)
+	t.contextVMMu.Unlock()
+	return response, true
 }
 
 func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, method, progressToken string, response ContextVMJSONRPCResponse) {
@@ -909,8 +1068,28 @@ func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, method, progr
 		return
 	}
 	t.contextVMMu.Lock()
-	defer t.contextVMMu.Unlock()
 	t.contextVMDedup.put(contextVMCacheKey(pubkey, method, progressToken), response)
+	t.contextVMMu.Unlock()
+	if t.contextVMResponseStore == nil {
+		return
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.logger.Error("marshal ContextVM response for persistence failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
+		return
+	}
+	storeCtx, cancel := context.WithTimeout(context.Background(), contextVMResponseStoreTimeout)
+	err = t.contextVMResponseStore.Put(storeCtx, repository.ContextVMResponseRecord{
+		RequesterPubkey: pubkey,
+		Method:          method,
+		ProgressToken:   progressToken,
+		Response:        encoded,
+		CreatedAt:       time.Now().UTC(),
+	})
+	cancel()
+	if err != nil {
+		t.logger.Warn("persist ContextVM response failed; in-memory replay remains available", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
+	}
 }
 
 func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) bool {

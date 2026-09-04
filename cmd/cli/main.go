@@ -34,6 +34,9 @@ var (
 	operatorServicePubkey         string
 	operatorTrustedServicePubkeys []string
 	operatorHTTPFallback          bool
+	operatorEncrypted             bool
+	operatorResultTimeout         time.Duration
+	operatorResultRetries         int
 )
 
 func main() {
@@ -67,6 +70,9 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
 	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request")
+	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
+	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a ContextVM result per publish attempt")
+	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
 
 	// Add all command groups
 	rootCmd.AddCommand(

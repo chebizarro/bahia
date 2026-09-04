@@ -1,0 +1,22 @@
+{
+  "feature_id": "contextvm-result-delivery",
+  "bead": "bahia-xwpsw",
+  "title": "Reliable ContextVM terminal result delivery",
+  "observed_behavior": "ContextVM terminal responses are ephemeral relay events, so a handler can complete while the client misses the first response publication.",
+  "intended_behavior": "Signer-first operator commands establish a reply subscription before publish, wait a bounded time, and retry the same idempotent logical request so Bahia can replay a cached terminal response without re-executing the handler.",
+  "scope": [
+    "services update result delivery",
+    "deployments preview, deploy, and route-attach result delivery",
+    "DNS mutation result delivery",
+    "plain and NIP-59/NIP-44 encrypted transport",
+    "local, public, and partial dual-relay topologies",
+    "client and server correlation diagnostics"
+  ],
+  "delivery_contract": {
+    "result_timeout_default": "30s per publish attempt",
+    "result_retries_default": 2,
+    "idempotency_key": "stable inner d tag and _meta.progressToken",
+    "server_cache_ttl": "24h",
+    "terminal_truth": "ContextVM result is an acknowledgment; durable workflow truth remains in canonical observables"
+  }
+}
