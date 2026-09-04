@@ -511,6 +511,38 @@ func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestDeploymentsRouteAttachCommandBuildsSignedRouteRequest(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	var captured client.RouteAttachRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{routeAttach: func(req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
+			captured = req
+			return &client.DeploymentCommandResult{Status: "approved", IntentID: "intent-1"}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(deployCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{
+		"deployments", "route-attach", "--service", "service-1", "--environment", "environment-1",
+		"--deployment-unit", "unit-1", "--hostname", "api.example.com", "--upstream-port", "8080",
+		"--health-path", "/healthz", "--idempotency-key", "route:1",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute route-attach: %v", err)
+	}
+	if captured.ServiceID != "service-1" || captured.EnvironmentID != "environment-1" || captured.DeploymentUnitID != "unit-1" ||
+		captured.PublicRoute.Hostname != "api.example.com" || captured.PublicRoute.UpstreamScheme != "http" || captured.PublicRoute.UpstreamPort != 8080 ||
+		captured.PublicRoute.HealthPath != "/healthz" || captured.PublicRoute.TLS != "managed" || captured.IdempotencyKey != "route:1" {
+		t.Fatalf("captured route attach = %#v", captured)
+	}
+}
+
 func TestServicesCreateCommandPublishesSignerFirstManagedService(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
@@ -661,9 +693,14 @@ type fakeCLIOperatorClient struct {
 	serviceCreate      func(client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error)
 	serviceUpdate      func(client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error)
 	artifactRegister   func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
+	dnsZoneCreate      func(client.DNSZoneCreateRequest) (*client.DNSCommandResult, error)
+	dnsPolicyApply     func(client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error)
+	dnsRecordSet       func(client.DNSRecordSetRequest) (*client.DNSCommandResult, error)
+	dnsDriftRemediate  func(client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error)
 	environmentCreate  func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	environmentUpdate  func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	deploymentIntent   func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
+	routeAttach        func(client.RouteAttachRequest) (*client.DeploymentCommandResult, error)
 	deploymentApproval func(client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error)
 }
 
@@ -683,6 +720,30 @@ func (f fakeCLIOperatorClient) UpdateServiceNostr(_ context.Context, req client.
 func (f fakeCLIOperatorClient) RegisterArtifactNostr(_ context.Context, req client.RegisterArtifactNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error) {
 	if f.artifactRegister != nil {
 		return f.artifactRegister(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) DNSZoneCreate(_ context.Context, req client.DNSZoneCreateRequest, _ func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error) {
+	if f.dnsZoneCreate != nil {
+		return f.dnsZoneCreate(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) DNSPolicyApply(_ context.Context, req client.DNSPolicyApplyRequest, _ func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error) {
+	if f.dnsPolicyApply != nil {
+		return f.dnsPolicyApply(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) DNSRecordSet(_ context.Context, req client.DNSRecordSetRequest, _ func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error) {
+	if f.dnsRecordSet != nil {
+		return f.dnsRecordSet(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) DNSDriftRemediate(_ context.Context, req client.DNSDriftRemediateRequest, _ func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error) {
+	if f.dnsDriftRemediate != nil {
+		return f.dnsDriftRemediate(req)
 	}
 	return nil, errors.New("not implemented")
 }
@@ -707,6 +768,12 @@ func (f fakeCLIOperatorClient) CreateDeploymentIntentNostr(context.Context, stri
 func (f fakeCLIOperatorClient) CreateDeploymentIntentWithRequestNostr(_ context.Context, req client.DeploymentIntentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
 	if f.deploymentIntent != nil {
 		return f.deploymentIntent(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) RouteAttach(_ context.Context, req client.RouteAttachRequest, _ func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
+	if f.routeAttach != nil {
+		return f.routeAttach(req)
 	}
 	return nil, errors.New("not implemented")
 }

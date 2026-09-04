@@ -13,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -362,6 +363,59 @@ type ArtifactCommandResult struct {
 	Message    string           `json:"message,omitempty"`
 }
 
+// DNSZoneCreateRequest is the signer-first dns/zone-create payload.
+type DNSZoneCreateRequest struct {
+	Name       string                `json:"name"`
+	Visibility domain.ZoneVisibility `json:"visibility"`
+	BackendRef string                `json:"backend_ref"`
+	TTL        int                   `json:"ttl"`
+}
+
+// DNSPolicyApplyRequest is the signer-first dns/policy-apply payload.
+type DNSPolicyApplyRequest struct {
+	ID            uuid.UUID              `json:"id"`
+	Name          string                 `json:"name"`
+	ZoneID        *uuid.UUID             `json:"zone_id,omitempty"`
+	EnvironmentID *uuid.UUID             `json:"environment_id,omitempty"`
+	Rules         []domain.DNSPolicyRule `json:"rules"`
+	Enabled       bool                   `json:"enabled"`
+	Metadata      map[string]any         `json:"metadata,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
+}
+
+// DNSRecordSetRequest is the signer-first dns/record-set payload. Operator
+// attribution and creation metadata are derived by the server from the signed event.
+type DNSRecordSetRequest struct {
+	ZoneName   string               `json:"zone_name"`
+	RecordName string               `json:"record_name"`
+	RecordType domain.DNSRecordType `json:"record_type"`
+	Value      string               `json:"value"`
+	TTL        int                  `json:"ttl"`
+	Reason     string               `json:"reason"`
+	ExpiresAt  *time.Time           `json:"expires_at,omitempty"`
+}
+
+// DNSDriftRemediateRequest is the signer-first dns/drift-remediate payload.
+// An empty zone requests reconciliation of all configured zones.
+type DNSDriftRemediateRequest struct {
+	Zone string `json:"zone,omitempty"`
+}
+
+// DNSCommandResult is the terminal acknowledgment for signer-first DNS mutations.
+type DNSCommandResult struct {
+	Action     string `json:"action,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Step       string `json:"step,omitempty"`
+	Message    string `json:"message,omitempty"`
+	RecordedAt string `json:"recorded_at,omitempty"`
+	Zone       string `json:"zone,omitempty"`
+	Policy     string `json:"policy,omitempty"`
+	PolicyID   string `json:"policy_id,omitempty"`
+	RuleCount  int    `json:"rule_count,omitempty"`
+	OverrideID string `json:"override_id,omitempty"`
+}
+
 // CreateEnvironmentNostrRequest is the signer-first environment/create payload.
 type CreateEnvironmentNostrRequest struct {
 	OrgID              string                       `json:"org_id,omitempty"`
@@ -399,6 +453,15 @@ type EnvironmentCommandResult struct {
 	Message         string                  `json:"message,omitempty"`
 }
 
+// RouteAttachRequest is the signer-first service/route-attach payload.
+type RouteAttachRequest struct {
+	ServiceID        string                    `json:"service_id"`
+	EnvironmentID    string                    `json:"environment_id"`
+	DeploymentUnitID string                    `json:"deployment_unit_id,omitempty"`
+	PublicRoute      domain.PublicRouteRequest `json:"public_route"`
+	IdempotencyKey   string                    `json:"idempotency_key,omitempty"`
+}
+
 // RollbackDeploymentNostrRequest is the explicit signer-first rollback target.
 // Requester attribution is derived from the signed event, never caller payload.
 type RollbackDeploymentNostrRequest struct {
@@ -430,13 +493,15 @@ type DeploymentApprovalNostrRequest struct {
 
 // DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
 type DeploymentCommandResult struct {
-	Status           string `json:"status,omitempty"`
-	IntentID         string `json:"intent_id,omitempty"`
-	ServiceID        string `json:"service_id,omitempty"`
-	EnvironmentID    string `json:"environment_id,omitempty"`
-	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
-	ArtifactID       string `json:"artifact_id,omitempty"`
-	Message          string `json:"message,omitempty"`
+	Status           string                         `json:"status,omitempty"`
+	IntentID         string                         `json:"intent_id,omitempty"`
+	ServiceID        string                         `json:"service_id,omitempty"`
+	EnvironmentID    string                         `json:"environment_id,omitempty"`
+	DeploymentUnitID string                         `json:"deployment_unit_id,omitempty"`
+	ArtifactID       string                         `json:"artifact_id,omitempty"`
+	DesiredStateHash string                         `json:"desired_state_hash,omitempty"`
+	PublicRoute      *domain.DesiredPublicRoutePlan `json:"public_route,omitempty"`
+	Message          string                         `json:"message,omitempty"`
 }
 
 // PublishPolicyCreateNostr publishes a signed public PolicyCreate request and returns relay/follow correlation metadata.
@@ -570,6 +635,71 @@ func (c *OperatorControlPlaneClient) RegisterArtifactNostr(ctx context.Context, 
 	return &result, nil
 }
 
+// DNSZoneCreate publishes a signer-first dns/zone-create mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) DNSZoneCreate(ctx context.Context, req DNSZoneCreateRequest, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
+	zone := domain.DNSZone{Name: req.Name, Visibility: req.Visibility, BackendRef: req.BackendRef, TTL: req.TTL}
+	if err := domain.ValidateDNSZone(&zone); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate DNS zone-create request", RequestAccepted: false, Cause: err}
+	}
+	req.Name, req.BackendRef = zone.Name, zone.BackendRef
+	return c.publishDNSCommand(ctx, controlplane.ContextVMMethodDNSZoneCreate, nostr.Tags{{"zone", req.Name}}, req, onStatus)
+}
+
+// DNSPolicyApply publishes a signer-first dns/policy-apply mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) DNSPolicyApply(ctx context.Context, req DNSPolicyApplyRequest, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
+	policy := domain.DNSPolicy{
+		ID: req.ID, Name: req.Name, ZoneID: req.ZoneID, EnvironmentID: req.EnvironmentID,
+		Rules: req.Rules, Enabled: req.Enabled, Metadata: req.Metadata, CreatedAt: req.CreatedAt, UpdatedAt: req.UpdatedAt,
+	}
+	if err := domain.ValidateDNSPolicy(&policy); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate DNS policy-apply request", RequestAccepted: false, Cause: err}
+	}
+	req.Name = policy.Name
+	return c.publishDNSCommand(ctx, controlplane.ContextVMMethodDNSPolicyApply, nostr.Tags{{"policy", req.Name}}, req, onStatus)
+}
+
+// DNSRecordSet publishes a signer-first dns/record-set mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) DNSRecordSet(ctx context.Context, req DNSRecordSetRequest, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
+	req.ZoneName = strings.TrimSpace(req.ZoneName)
+	req.RecordName = strings.TrimSpace(req.RecordName)
+	req.Value = strings.TrimSpace(req.Value)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.ZoneName == "" || req.RecordName == "" || req.Value == "" || req.Reason == "" || !req.RecordType.IsValid() || req.TTL <= 0 {
+		return nil, &ControlPlaneRequestError{Phase: "validate DNS record-set request", RequestAccepted: false, Cause: fmt.Errorf("zone_name, record_name, valid record_type, value, ttl > 0, and reason are required")}
+	}
+	return c.publishDNSCommand(ctx, controlplane.ContextVMMethodDNSRecordSet, nostr.Tags{{"zone", req.ZoneName}, {"record", req.RecordName}}, req, onStatus)
+}
+
+// DNSDriftRemediate publishes a signer-first dns/drift-remediate mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) DNSDriftRemediate(ctx context.Context, req DNSDriftRemediateRequest, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
+	req.Zone = strings.TrimSpace(req.Zone)
+	tags := nostr.Tags{}
+	if req.Zone != "" {
+		tags = append(tags, nostr.Tag{"zone", req.Zone})
+	}
+	return c.publishDNSCommand(ctx, controlplane.ContextVMMethodDNSDriftRemediate, tags, req, onStatus)
+}
+
+func (c *OperatorControlPlaneClient) publishDNSCommand(ctx context.Context, method string, tags nostr.Tags, payload any, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: method, Tags: tags, Payload: payload}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result DNSCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode %s result: %w", method, err)
+	}
+	status := strings.TrimSpace(result.Status)
+	if status != "success" {
+		message := strings.TrimSpace(result.Message)
+		if message == "" {
+			message = "DNS mutation returned no failure message"
+		}
+		return nil, fmt.Errorf("%s failed with status %q: %s", method, status, message)
+	}
+	return &result, nil
+}
+
 // CreateEnvironmentNostr publishes a signer-first environment/create mutation and awaits its correlated acknowledgment.
 func (c *OperatorControlPlaneClient) CreateEnvironmentNostr(ctx context.Context, req CreateEnvironmentNostrRequest, onStatus func(OperatorStatusEvent)) (*EnvironmentCommandResult, error) {
 	req.Name = strings.TrimSpace(req.Name)
@@ -696,6 +826,53 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentWithRequestNostr(ctx 
 	}
 	if result.ArtifactID == "" {
 		result.ArtifactID = req.ArtifactID
+	}
+	return &result, nil
+}
+
+// RouteAttach publishes a signer-first service/route-attach intent for the current deployed artifact.
+func (c *OperatorControlPlaneClient) RouteAttach(ctx context.Context, req RouteAttachRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
+	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.ServiceID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate route attach request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
+	}
+	if req.EnvironmentID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate route attach request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
+	}
+	normalized, err := domain.NormalizePublicRouteRequest(req.PublicRoute)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate route attach request", RequestAccepted: false, Cause: err}
+	}
+	req.PublicRoute = normalized
+	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"hostname", req.PublicRoute.Hostname}}
+	if req.DeploymentUnitID != "" {
+		tags = append(tags, nostr.Tag{"deployment_unit", req.DeploymentUnitID})
+	}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceRouteAttach, Tags: tags, Payload: req}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result DeploymentCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode route attach result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "submitted"
+	}
+	if result.ServiceID == "" {
+		result.ServiceID = req.ServiceID
+	}
+	if result.EnvironmentID == "" {
+		result.EnvironmentID = req.EnvironmentID
+	}
+	if result.DeploymentUnitID == "" {
+		result.DeploymentUnitID = req.DeploymentUnitID
 	}
 	return &result, nil
 }

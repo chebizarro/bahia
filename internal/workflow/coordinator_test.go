@@ -37,7 +37,12 @@ func (m *stubServiceRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Servi
 func (m *stubServiceRepo) GetByName(_ context.Context, _ string) (*domain.Service, error) {
 	return m.svc, nil
 }
-func (m *stubServiceRepo) List(_ context.Context) ([]domain.Service, error) { return nil, nil }
+func (m *stubServiceRepo) List(_ context.Context) ([]domain.Service, error) {
+	if m.svc == nil {
+		return nil, nil
+	}
+	return []domain.Service{*m.svc}, nil
+}
 func (m *stubServiceRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Service, error) {
 	return nil, nil
 }
@@ -59,7 +64,12 @@ func (m *stubEnvRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Environme
 func (m *stubEnvRepo) GetByName(_ context.Context, _ string) (*domain.Environment, error) {
 	return m.env, nil
 }
-func (m *stubEnvRepo) List(_ context.Context) ([]domain.Environment, error) { return nil, nil }
+func (m *stubEnvRepo) List(_ context.Context) ([]domain.Environment, error) {
+	if m.env == nil {
+		return nil, nil
+	}
+	return []domain.Environment{*m.env}, nil
+}
 func (m *stubEnvRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Environment, error) {
 	return nil, nil
 }
@@ -347,7 +357,13 @@ func (m *stubStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([
 	return nil, nil
 }
 func (m *stubStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	states := make([]domain.EnvironmentServiceState, 0, len(m.states))
+	for _, state := range m.states {
+		states = append(states, *state)
+	}
+	return states, nil
 }
 
 type stubDeploymentUnitRepo struct {
@@ -1599,6 +1615,100 @@ func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *tes
 			t.Fatalf("expected run to preserve deployment unit identity, got %#v", run.DeploymentUnitID)
 		}
 	}
+}
+
+func TestExecuteDeployment_RouteOnlySkipsArtifactConvergence(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "max-compose", RuntimeType: domain.RuntimeTypeCompose,
+		EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown", ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	routes := &stubPublicRouteLifecycle{}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	plan := &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"}
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "api", PublicRoute: plan,
+	}
+	desired.ComputeDesiredHash()
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered, DesiredState: desired, DesiredHash: desired.DesiredHash,
+		Metadata: map[string]any{"contextvm_method": "service/route-attach"},
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordExecuteRouteOnly(registry, unitRepo, lifecycle, routes, intent.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("route-only execution converged the artifact %d times", lifecycle.calls)
+	}
+	if routes.calls != 1 || routes.plan != plan {
+		t.Fatalf("route apply calls=%d plan=%#v", routes.calls, routes.plan)
+	}
+	for _, run := range runRepo.runs {
+		if run.LoomJobID != "runtime:route-only" || run.Status != domain.RunStatusSucceeded {
+			t.Fatalf("route-only run = %#v", run)
+		}
+		phases := metadataPhases(run.ApplyMetadata["phases"])
+		if len(phases) != 1 || phases[0]["step"] != "routing" || phases[0]["status"] != "completed" {
+			t.Fatalf("route-only phases = %#v", phases)
+		}
+	}
+}
+
+func TestExecuteDeployment_RouteOnlyFailurePreservesProviderCompensation(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{ID: uuid.New(), EnvironmentID: env.ID, Key: "max-compose", RuntimeType: domain.RuntimeTypeCompose, OwnershipMode: domain.OwnershipModeBahiaManaged}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	routes := &stubPublicRouteLifecycle{err: fmt.Errorf("TLS verification failed; previous public route restored")}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "api", PublicRoute: &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"},
+	}
+	desired.ComputeDesiredHash()
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered, DesiredState: desired, DesiredHash: desired.DesiredHash,
+		Metadata: map[string]any{"contextvm_method": "service/route-attach"},
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	err := coordExecuteRouteOnly(registry, unitRepo, lifecycle, routes, intent.ID)
+	if err == nil || !strings.Contains(err.Error(), "previous public route restored") {
+		t.Fatalf("compensated route error = %v", err)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("failed route-only execution converged/restored the artifact %d times", lifecycle.calls)
+	}
+	for _, run := range runRepo.runs {
+		if run.Status != domain.RunStatusFailed {
+			t.Fatalf("route-only failure run = %#v", run)
+		}
+		phases := metadataPhases(run.ApplyMetadata["phases"])
+		if len(phases) != 1 || phases[0]["step"] != "routing" || phases[0]["status"] != "failed" {
+			t.Fatalf("route-only failure phases = %#v", phases)
+		}
+	}
+}
+
+func coordExecuteRouteOnly(registry *service.RegistryService, units repository.DeploymentUnitRepository, lifecycle deploymentRuntimeLifecycle, routes publicRouteLifecycle, intentID uuid.UUID) error {
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(units, lifecycle), WithPublicRoutes(routes))
+	return coord.ExecuteDeployment(context.Background(), intentID)
 }
 
 func TestExecuteDeployment_PublicRouteFailureRestoresPreviousApplication(t *testing.T) {

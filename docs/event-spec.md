@@ -72,6 +72,8 @@ A non-encrypted ContextVM request is a signed Nostr event with JSON-RPC content:
 }
 ```
 
+Route-only attachment uses method `service/route-attach` with `service_id`, `environment_id`, optional `deployment_unit_id`, and a `public_route` object containing `hostname`, `upstream_scheme`, `upstream_port`, `health_path`, and `tls`. The handler copies the current deployed desired state, adds the planned route, recomputes its signed hash, and creates a normal deployment intent. Its run exposes only the `routing` phase; the artifact/container is not reconverged.
+
 Sensitive requests use the same inner event encrypted into a random-key gift-wrap event:
 
 ```json

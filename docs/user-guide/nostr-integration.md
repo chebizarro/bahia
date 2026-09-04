@@ -27,7 +27,9 @@ Maintenance commands are always carried as standards-conformant NIP-59 kind `105
 }
 ```
 
-Complete-set deployment-unit changes use `environment/update` with both `deployment_units` and `expected_updated_at` from the latest environment read. Stale revisions return ContextVM code `-32009` without mutating database or canonical registry state; clients reread, remerge, and sign a new bounded retry rather than sending an unguarded replacement.
+Complete-set deployment-unit changes use `environment/update` with both `deployment_units` and `expected_updated_at` from the latest environment read. Stale revisions fail with a stable conflict response so operators can re-read and retry without overwriting concurrent changes.
+
+To add managed HTTPS to an existing deployment, use `service/route-attach` with the service, environment, deployment unit, and provider-neutral `public_route` request. Bahia plans and hashes the route into a new desired-state intent, applies only the `routing` phase, and reports durable progress through the same deployment state, run, status, and audit observables as `service/deploy`. Protected-environment approval remains unchanged.
 
 ### Event Categories
 
@@ -331,7 +333,7 @@ ContextVM kind `11316` is the canonical capability bootstrap. New clients use `1
 
 ContextVM commands use JSON-RPC request/response for private intent acknowledgment, then public canonical events for observable progress and state:
 
-1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `worker/cordon`, `package/promote`, `dns/zone-create`, or `backup/run`.
+1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/route-attach`, `worker/cordon`, `package/promote`, `dns/zone-create`, or `backup/run`.
 2. Encrypt and route it through ContextVM (`25910` inside CEP-4/NIP-59 `1059` or `21059` where supported), tagged to the Bahia service pubkey.
 3. Subscribe for the correlated ContextVM response and for observable state/audit/status kinds (`30900`, `4903`, `30315`, plus `30316` assistant transcript ciphertext for assistant flows and domain-specific standard NIPs) before publishing when possible.
 4. Publish and require at least one relay `OK` with `accepted=true`.

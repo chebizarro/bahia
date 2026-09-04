@@ -21,10 +21,15 @@ type cliOperatorClient interface {
 	CreateServiceNostr(context.Context, client.CreateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
 	UpdateServiceNostr(context.Context, client.UpdateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
 	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
+	DNSZoneCreate(context.Context, client.DNSZoneCreateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
+	DNSPolicyApply(context.Context, client.DNSPolicyApplyRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
+	DNSRecordSet(context.Context, client.DNSRecordSetRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
+	DNSDriftRemediate(context.Context, client.DNSDriftRemediateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	CreateDeploymentIntentWithRequestNostr(context.Context, client.DeploymentIntentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
+	RouteAttach(context.Context, client.RouteAttachRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	ApproveDeploymentNostr(context.Context, client.DeploymentApprovalNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
@@ -113,6 +118,42 @@ func runArtifactRegisterNostr(cmd *cobra.Command, req client.RegisterArtifactNos
 	return op.RegisterArtifactNostr(cmd.Context(), req, operatorStatusCallback(cmd, "artifact register"))
 }
 
+func runDNSZoneCreate(cmd *cobra.Command, req client.DNSZoneCreateRequest) (*client.DNSCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.DNSZoneCreate(cmd.Context(), req, operatorStatusCallback(cmd, "dns zone-create"))
+}
+
+func runDNSPolicyApply(cmd *cobra.Command, req client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.DNSPolicyApply(cmd.Context(), req, operatorStatusCallback(cmd, "dns policy-apply"))
+}
+
+func runDNSRecordSet(cmd *cobra.Command, req client.DNSRecordSetRequest) (*client.DNSCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.DNSRecordSet(cmd.Context(), req, operatorStatusCallback(cmd, "dns record-set"))
+}
+
+func runDNSDriftRemediate(cmd *cobra.Command, req client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.DNSDriftRemediate(cmd.Context(), req, operatorStatusCallback(cmd, "dns drift-remediate"))
+}
+
 func runEnvironmentCreateNostr(cmd *cobra.Command, req client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
@@ -138,6 +179,15 @@ func runDeploymentIntentNostr(cmd *cobra.Command, req client.DeploymentIntentNos
 	}
 	defer op.Close()
 	return op.CreateDeploymentIntentWithRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "deploy"))
+}
+
+func runRouteAttachNostr(cmd *cobra.Command, req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.RouteAttach(cmd.Context(), req, operatorStatusCallback(cmd, "route attach"))
 }
 
 func runRollbackIntentNostr(cmd *cobra.Command, req client.RollbackDeploymentNostrRequest) (*client.DeploymentCommandResult, error) {

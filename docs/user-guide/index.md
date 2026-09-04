@@ -66,6 +66,9 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Security](features/security.md) | OSV vulnerability scanning dashboard |
 | [Payments](features/payments.md) | Cost estimation and payment history |
 
+### Operator Guides
+- [Managed DNS and HTTPS Routes](guides/managed-dns-and-https-routes.md) — Deploy a service, project internal DNS, and attach a managed public HTTPS route
+
 ### Integration & Reference
 - [Nostr Integration](nostr-integration.md) — How Nostr powers the control plane
 - [MCP Tools Reference](mcp-tools.md) — Tools available for AI agents

@@ -66,6 +66,7 @@ Examples:
 |---|---|
 | Preview managed service desired state | `service/deploy-preview` |
 | Deploy service | `service/deploy` |
+| Attach a public route to the current deployed service without artifact convergence | `service/route-attach` |
 | Restart service | `service/restart` |
 | Roll back service | `service/rollback` |
 | Create DNS zone | `dns/zone-create` |

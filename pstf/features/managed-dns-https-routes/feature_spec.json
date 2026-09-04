@@ -1,0 +1,24 @@
+{
+  "feature_id": "managed-dns-https-routes",
+  "beads": ["bahia-l1o46", "bahia-3kbce"],
+  "external_ledger_item": "bahia-managed-https-dns-routes-20260903",
+  "title": "Signer-first managed internal DNS and external HTTPS routes",
+  "intended_behavior": [
+    "An operator creates or updates a service and deploys an artifact through signed ContextVM commands.",
+    "Healthy in-sync services are projected into the DNS zone mapped from their environment and reconciled by an operational backend.",
+    "An operator can attach a managed HTTPS route to an existing deployed service without reconverging its artifact.",
+    "The route is covered by the signed desired-state hash, policy approval is honored, and provider failure restores previous route state.",
+    "Apex DNS overrides use the managed zone apex without duplicating the zone suffix.",
+    "Operator documentation provides validated dnsmasq and Cloudflare Tunnel configuration with placeholder SecretRef UUIDs and honest SIGHUP reconstruction semantics."
+  ],
+  "scope": [
+    "internal/reconcile/dns_reconciler.go",
+    "internal/reconcile/dns_reconciler_test.go",
+    "internal/workflow/managed_dns_https_routes_e2e_test.go",
+    "docs/user-guide/guides/managed-dns-and-https-routes.md",
+    "docs/user-guide/index.md",
+    "docs/user-guide/features/dns.md",
+    "docs/user-guide/features/services.md"
+  ],
+  "deferred": []
+}

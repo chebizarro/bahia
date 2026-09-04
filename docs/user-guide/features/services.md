@@ -157,7 +157,9 @@ The Deploy wizard has a separate **Public route** step. Enable Bahia-managed HTT
 
 Bahia rejects hostnames outside configured zones, organizations not authorized for a zone, unmanaged DNS or Tunnel collisions, ports that are not both configured and exposed, TLS passthrough, and protected-zone use from an unprotected environment. Protected zones continue through deployment approval before any app or route mutation.
 
-The production provider uses the Cloudflare API for the fleet's remote-managed Tunnel and proxied DNS. It does not edit connector files, nginx, or Cloudflare configuration with shell commands. The application is applied and observed healthy first; Bahia then updates Tunnel ingress, publishes DNS, and requires an HTTPS 2xx response at the requested health path. Route/TLS failure restores the prior provider state and, when available, the prior application desired state.
+The production provider uses the Cloudflare API for the fleet's remote-managed Tunnel and proxied DNS. It does not edit connector files, nginx, or Cloudflare configuration files on disk. The planned route is non-secret desired state and participates in the signed desired-state hash. Application health is verified before publication; provider mutations are snapshot-backed and compensated on failure, and HTTPS must return a 2xx response before the deployment succeeds.
+
+For an already deployed service, `service/route-attach` creates a new signed intent from the current desired service specification, adds the planned route, and executes only the routing/HTTPS verification phase. It does not rebuild or reconverge the artifact or container. Protected environments still require deployment approval, and all zone, organization, origin, and port allowlists are enforced before an intent is created. See [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md) for the complete signer-first operator flow and an operational dnsmasq configuration.
 
 Configure the backend with server-side values under `edge_routing`:
 

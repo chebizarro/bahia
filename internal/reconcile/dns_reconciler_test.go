@@ -217,6 +217,83 @@ func TestDNSReconcilerSyncZoneNotCalledWhenDiffEmpty(t *testing.T) {
 	}
 }
 
+func TestDNSOverrideNames(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordName string
+		wantName   string
+		wantFQDN   string
+	}{
+		{name: "subdomain", recordName: "api", wantName: "api", wantFQDN: "api.sharegap.net"},
+		{name: "fqdn form", recordName: "api.sharegap.net", wantName: "api", wantFQDN: "api.sharegap.net"},
+		{name: "apex zone name", recordName: "sharegap.net", wantName: "@", wantFQDN: "sharegap.net"},
+		{name: "apex marker", recordName: "@", wantName: "@", wantFQDN: "sharegap.net"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotFQDN := dnsOverrideNames("sharegap.net", tt.recordName)
+			if gotName != tt.wantName || gotFQDN != tt.wantFQDN {
+				t.Fatalf("dnsOverrideNames(%q) = (%q, %q), want (%q, %q)", tt.recordName, gotName, gotFQDN, tt.wantName, tt.wantFQDN)
+			}
+		})
+	}
+}
+
+func TestDNSReconcilerAppliesPersistedRecordOverride(t *testing.T) {
+	ctx := context.Background()
+	projector, zone, _ := testReconcilerProjector()
+	backend := &fakeDNSBackend{}
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}, 0, nil)
+	override := domain.DNSRecordOverride{ID: uuid.New(), ZoneName: zone.Name, RecordName: "api", RecordType: domain.DNSRecordTypeA, Value: "10.0.0.99", TTL: 30}
+	reconciler.SetPersistenceSources(nil, staticDNSOverrideSource{overrides: []domain.DNSRecordOverride{override}})
+
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce returned error: %v", err)
+	}
+	want := []domain.DNSRecord{{Zone: zone.Name, Name: "api", FQDN: "api.prod.example", Type: domain.DNSRecordTypeA, Value: override.Value, TTL: override.TTL, SourceCoordinate: "manual_override:" + override.ID.String()}}
+	assertRecordsEqual(t, backend.syncedRecords(), want)
+}
+
+func TestDNSReconcilerSubscriptionsTriggerOnServiceConvergenceEvents(t *testing.T) {
+	reconciler := NewDNSReconciler(nil, nil, nil, time.Hour, nil)
+	publisher := newSubscriptionDNSPublisher()
+	reconciler.SetupSubscriptions(publisher)
+
+	for _, eventType := range []events.EventType{events.EventDeploymentRunCompleted, events.EventEnvironmentServiceStateChanged, events.EventRuntimeObservation} {
+		handler := publisher.handlers[eventType]
+		if handler == nil {
+			t.Fatalf("no DNS reconcile subscription for %s", eventType)
+		}
+		handler(context.Background(), events.Event{Type: eventType})
+		select {
+		case <-reconciler.triggerCh:
+		default:
+			t.Fatalf("event %s did not trigger DNS reconcile", eventType)
+		}
+	}
+}
+
+type staticDNSOverrideSource struct {
+	overrides []domain.DNSRecordOverride
+}
+
+func (s staticDNSOverrideSource) ListByZone(context.Context, string) ([]domain.DNSRecordOverride, error) {
+	return append([]domain.DNSRecordOverride(nil), s.overrides...), nil
+}
+
+type subscriptionDNSPublisher struct {
+	handlers map[events.EventType]events.Handler
+}
+
+func newSubscriptionDNSPublisher() *subscriptionDNSPublisher {
+	return &subscriptionDNSPublisher{handlers: map[events.EventType]events.Handler{}}
+}
+
+func (p *subscriptionDNSPublisher) Publish(context.Context, events.Event) {}
+func (p *subscriptionDNSPublisher) Subscribe(eventType events.EventType, handler events.Handler) {
+	p.handlers[eventType] = handler
+}
+
 func testReconcilerProjector() (*DNSProjector, domain.DNSZone, []domain.DNSRecord) {
 	envID := uuid.New()
 	serviceID := uuid.New()

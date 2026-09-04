@@ -178,7 +178,7 @@ The app is idempotent and can run on every startup. Non-dry-run migration requir
 
 Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecycle invariants:
 
-1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/restart`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, or `ml/recipe-run`.
+1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/route-attach`, `service/restart`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, or `security/scan`.
 2. Publish the request as ContextVM kind `25910`, usually wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`) when encrypted transport is available.
 3. Require relay `OK` with `accepted=true` for the signed Nostr event. A JSON-RPC acknowledgment is only command receipt, not proof of long-running completion.
 4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext for assistant flows, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
@@ -311,7 +311,9 @@ Adoption requests use ContextVM methods `adoption/scan` and `adoption/import`. T
 
 Direct-runtime deploy/restart/stop use ContextVM methods `service/deploy`, `service/restart`, and `service/stop`. Historical `5963` service-action events and `6963`/`7962` status/result events are migration inventory only and are not production runtime subscriptions.
 
-Deploy actions that reach the desired-state runtime path expose additive metadata through the existing ContextVM response and canonical observables. Status progression uses the existing `30315` status channel with `step` values `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`; rollback may add rollback-specific pre-apply steps before the shared desired-state sequence. Terminal ContextVM responses and service/deployment state projections may include `desired_hash`, `renderer`, `target`, runtime target/apply summaries, environment or unit revision metadata, and `observation_id` when available. These fields are optional and backward-compatible; old clients can ignore them, and clients must not require legacy `7961`/`7962` or `31961`/`31967`/`31968` live subscriptions.
+Deploy actions that reach the desired-state runtime path expose additive metadata through the existing ContextVM response and canonical observables. Status progress includes desired-state build, image pull, create/start, and health observation phases; terminal results may include the desired hash and observation identifier.
+
+`service/route-attach` targets an existing deployed service and deployment unit. It creates the same signed desired-state intent/read-model lineage as deploy, but its coordinator run contains only the `routing` phase. That phase applies the existing provider lifecycle, including managed HTTPS verification and snapshot compensation, without artifact or container convergence.
 
 Desired-state metadata is sanitized. Public relay content may include hashes, renderer names, stable target keys, IDs, and redacted secret refs, but must not include resolved secret values, generated Compose env-file contents, raw Docker host URLs supplied by callers, Docker TLS material, bearer credentials, or NIP-98 credentials. Runtime endpoint details remain server-managed aliases such as `endpoint_ref`.
 

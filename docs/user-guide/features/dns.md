@@ -65,7 +65,17 @@ Navigate to **DNS** in the sidebar:
 
 ### CLI and MCP
 
-The current CLI does not register a `bahia dns` group. Use the web UI for zones and policies. In an embedding that explicitly configures external MCP authorization, `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and the `bahia_assistant_dns_*` tools are available as listed in the [MCP reference](../mcp-tools.md).
+The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments:
+
+```bash
+bahia dns zone-create --name prod.example --visibility external --backend-ref powerdns-prod --ttl 300
+bahia dns policy-apply --file dns-policy.json
+bahia dns record-set --zone prod.example --name api --type A --value 192.0.2.10 --ttl 60 --reason "incident pin"
+bahia dns drift-remediate --zone prod.example
+bahia dns drift-remediate
+```
+
+For external MCP embeddings with authorization configured, `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and the `bahia_assistant_dns_*` tools remain available as listed in the [MCP reference](../mcp-tools.md).
 
 ## MCP Resources
 
@@ -92,7 +102,7 @@ Agents can query these resources for service discovery.
 
 ### Zones, policies, and overrides
 
-Use the DNS web mutation flows or the registered assistant tools:
+Use the signer-first CLI commands above, the DNS web mutation flows, or the registered assistant tools:
 
 - `bahia_assistant_dns_zone_create`
 - `bahia_assistant_dns_policy_apply`
@@ -101,6 +111,8 @@ Use the DNS web mutation flows or the registered assistant tools:
 Each publishes the corresponding signed Nostr request and returns correlation metadata.
 
 ## Endpoint Projection
+
+For an operational LAN configuration using dnsmasq, environment-to-zone mapping, and managed external HTTPS routing, follow [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md). DNS configuration changes take effect on `SIGHUP` through whole-application reconstruction, not in-place backend mutation.
 
 Bahia automatically projects endpoints from:
 - **Services** — Healthy service deployments
@@ -195,7 +207,7 @@ DNS drift is detected when:
 
 ### Drift remediation
 
-Use `bahia_assistant_dns_drift_remediate` and follow its correlation metadata to the status/result projection.
+Use `bahia dns drift-remediate [--zone <zone>]` for the CLI path. MCP clients can use `bahia_assistant_dns_drift_remediate` and follow its correlation metadata to the status/result projection.
 
 ## Best Practices
 
@@ -227,6 +239,7 @@ Use `bahia_assistant_dns_drift_remediate` and follow its correlation metadata to
 
 ## Related
 
+- [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md) — Signer-first deployment, automatic internal DNS, and managed public HTTPS
 - [Services](services.md) — Endpoint sources
 - [Workers](workers.md) — Worker endpoints
 - [LLM Routes](llm-routes.md) — LLM endpoints

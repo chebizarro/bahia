@@ -56,7 +56,7 @@ For the canonical control-plane contract, prefer:
 
 ### 1. ContextVM over Nostr
 
-ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy-preview`, `service/deploy`, `worker/cordon`, `dns/zone-create`, `backup/run`, `ml/recipe-run`, `adoption/import`, Security methods such as `security/scan` and `security/rescan`, and Soul Factory methods `soul-factory/provision` and `soul-factory/action`.
+ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy-preview`, `service/deploy`, `service/route-attach`, `service/rollback`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, and `security/scan`. `service/route-attach` reuses deployment intent/run/state observables while executing only the routing and HTTPS verification phase for the current deployed artifact.
 
 Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`). The verified inner ContextVM event pubkey is the authorization subject after unwrap.
 

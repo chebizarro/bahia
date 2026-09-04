@@ -32,7 +32,7 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 
 | Domain | Example methods |
 |--------|-----------------|
-| `service` | `deploy`, `rollback`, `restart`, `stop`, `update`, `delete` |
+| `service` | `deploy`, `route-attach`, `rollback`, `restart`, `stop`, `update`, `delete` |
 | `environment` | `create`, `update`, `delete` |
 | `artifact` | `register` |
 | `policy` | `create`, `update`, `delete`, `evaluate` |
@@ -69,7 +69,9 @@ Inner ContextVM request:
 }
 ```
 
-When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey. Bahia's native encrypted `service/deploy` handler requires UUID `service_id`, `environment_id`, and `artifact_id`, evaluates deployment policy, creates the intent and desired-state snapshot, and executes immediately only when the intent is approved.
+`service/route-attach` uses the same kind and correlation rules. Its params are `service_id`, `environment_id`, optional `deployment_unit_id`, `public_route` (`hostname`, `upstream_scheme`, `upstream_port`, `health_path`, `tls`), and optional `idempotency_key`. The acknowledgment identifies the created deployment intent; deployment run and state observables carry the signed route plan and `routing` phase. The coordinator does not reconverge the artifact for this method.
+
+When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey. Bahia's native encrypted `service/*` and `deployment/*` handlers consume the verified inner event.
 
 CLI operators may sign with a local identity key or NIP-46. NIP-46 mode requires `--nostr-bunker-file` plus `--nostr-client-key-file`; add repeatable `--nostr-bunker-relay` when the bunker URI does not contain a relay. NIP-46 signs both the ContextVM request and any NIP-42 relay AUTH challenge, and it must not be mixed with local identity-key flags.
 

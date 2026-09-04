@@ -1,0 +1,12 @@
+{
+  "feature_id": "managed-dns-https-routes",
+  "tests": [
+    {"name":"DNS apex override normalization","command":"go test ./internal/reconcile -run TestDNSOverrideNames","criteria":["AC6"]},
+    {"name":"Astillero-shaped deploy, DNS projection, route attachment, apply, and compensation flow","command":"go test ./internal/workflow -run TestManagedDNSAndHTTPSRouteFlow","criteria":["AC3","AC4","AC5"]},
+    {"name":"Cloudflare provider compensation","command":"go test ./internal/adapters/routing -run 'TestCloudflareApply'","criteria":["AC5"]},
+    {"name":"Touched Go packages","command":"go vet ./internal/reconcile ./internal/controlplane ./internal/workflow ./internal/adapters/routing","criteria":["AC3","AC4","AC5","AC6"]},
+    {"name":"Repository build","command":"go build ./...","criteria":["AC3","AC4","AC5","AC6"]},
+    {"name":"Repository test suite","command":"go test ./...","criteria":["AC3","AC4","AC5","AC6"]},
+    {"name":"Operator documentation review","command":"Review docs/user-guide/guides/managed-dns-and-https-routes.md against internal/config/config.go and cmd/server/main.go","criteria":["AC1","AC2","AC7"]}
+  ]
+}

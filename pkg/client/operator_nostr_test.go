@@ -7,11 +7,168 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+func TestOperatorDNSRequestConstruction(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		run    func(context.Context, *OperatorControlPlaneClient) (*DNSCommandResult, error)
+		assert func(*testing.T, contextVMRPCRequest)
+	}{
+		{
+			name: "zone create", method: controlplane.ContextVMMethodDNSZoneCreate,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*DNSCommandResult, error) {
+				return c.DNSZoneCreate(ctx, DNSZoneCreateRequest{Name: "prod.example", Visibility: "external", BackendRef: "powerdns-prod", TTL: 300}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				if rpc.Params["name"] != "prod.example" || rpc.Params["visibility"] != "external" || rpc.Params["backend_ref"] != "powerdns-prod" || rpc.Params["ttl"] != float64(300) {
+					t.Fatalf("zone params = %#v", rpc.Params)
+				}
+			},
+		},
+		{
+			name: "policy apply", method: controlplane.ContextVMMethodDNSPolicyApply,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*DNSCommandResult, error) {
+				return c.DNSPolicyApply(ctx, DNSPolicyApplyRequest{Name: "edge-routing", Enabled: true, Rules: []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityEdge}}}}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				rules, _ := rpc.Params["rules"].([]any)
+				if rpc.Params["name"] != "edge-routing" || rpc.Params["enabled"] != true || len(rules) != 1 {
+					t.Fatalf("policy params = %#v", rpc.Params)
+				}
+			},
+		},
+		{
+			name: "record set", method: controlplane.ContextVMMethodDNSRecordSet,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*DNSCommandResult, error) {
+				expires := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+				return c.DNSRecordSet(ctx, DNSRecordSetRequest{ZoneName: "prod.example", RecordName: "api", RecordType: domain.DNSRecordTypeA, Value: "192.0.2.10", TTL: 60, Reason: "incident pin", ExpiresAt: &expires}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				if rpc.Params["zone_name"] != "prod.example" || rpc.Params["record_name"] != "api" || rpc.Params["record_type"] != "A" || rpc.Params["value"] != "192.0.2.10" || rpc.Params["ttl"] != float64(60) || rpc.Params["reason"] != "incident pin" || rpc.Params["expires_at"] != "2026-09-04T12:00:00Z" {
+					t.Fatalf("record params = %#v", rpc.Params)
+				}
+				if _, exists := rpc.Params["operator_pubkey"]; exists {
+					t.Fatalf("record params contain server-derived operator_pubkey: %#v", rpc.Params)
+				}
+			},
+		},
+		{
+			name: "drift zone", method: controlplane.ContextVMMethodDNSDriftRemediate,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*DNSCommandResult, error) {
+				return c.DNSDriftRemediate(ctx, DNSDriftRemediateRequest{Zone: "prod.example"}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				if rpc.Params["zone"] != "prod.example" {
+					t.Fatalf("drift params = %#v", rpc.Params)
+				}
+			},
+		},
+		{
+			name: "drift all", method: controlplane.ContextVMMethodDNSDriftRemediate,
+			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*DNSCommandResult, error) {
+				return c.DNSDriftRemediate(ctx, DNSDriftRemediateRequest{}, nil)
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest) {
+				if _, exists := rpc.Params["zone"]; exists {
+					t.Fatalf("all-zone drift params = %#v", rpc.Params)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newFakeOperatorTransport()
+			client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+			replyKey := nostr.Generate().Hex()
+			transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+				transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"action": test.method, "status": "success", "step": "completed"})
+				return 1, nil
+			}
+			result, err := test.run(context.Background(), client)
+			if err != nil {
+				t.Fatalf("DNS mutation error = %v", err)
+			}
+			if result.Status != "success" {
+				t.Fatalf("result = %#v", result)
+			}
+			published := transport.onlyPublished(t)
+			rpc := decodePublishedContextVMRequest(t, published)
+			if rpc.Method != test.method {
+				t.Fatalf("method = %q, want %q", rpc.Method, test.method)
+			}
+			test.assert(t, rpc)
+			assertTagValue(t, published.Tags, "method", test.method)
+		})
+	}
+}
+
+func TestOperatorDNSFailureStatusesReturnErrors(t *testing.T) {
+	for _, status := range []string{"error", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			transport := newFakeOperatorTransport()
+			client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+			replyKey := nostr.Generate().Hex()
+			transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+				transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{
+					"action": "record-set", "status": status, "step": "reconcile_failed", "message": "unknown DNS zone prod.example",
+				})
+				return 1, nil
+			}
+
+			result, err := client.DNSRecordSet(context.Background(), DNSRecordSetRequest{
+				ZoneName: "prod.example", RecordName: "api", RecordType: domain.DNSRecordTypeA,
+				Value: "192.0.2.10", TTL: 60, Reason: "incident pin",
+			}, nil)
+			if err == nil || !strings.Contains(err.Error(), `dns/record-set failed with status "`+status+`"`) || !strings.Contains(err.Error(), "unknown DNS zone prod.example") {
+				t.Fatalf("error = %v, want status and server message", err)
+			}
+			if result != nil {
+				t.Fatalf("result = %#v, want nil on failure status", result)
+			}
+		})
+	}
+}
+
+func TestOperatorRouteAttachRequestConstruction(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	replyKey := nostr.Generate().Hex()
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"status": "approved", "intent_id": "intent-1", "desired_state_hash": "sha256:route"})
+		return 1, nil
+	}
+	result, err := client.RouteAttach(context.Background(), RouteAttachRequest{
+		ServiceID: "service-1", EnvironmentID: "environment-1", DeploymentUnitID: "unit-1",
+		PublicRoute:    domain.PublicRouteRequest{Hostname: "API.Example.COM.", UpstreamScheme: "http", UpstreamPort: 8080, HealthPath: "/healthz", TLS: "managed"},
+		IdempotencyKey: "route:attach:1",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RouteAttach() error = %v", err)
+	}
+	if result.IntentID != "intent-1" || result.DesiredStateHash != "sha256:route" {
+		t.Fatalf("result = %#v", result)
+	}
+	published := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.Method != controlplane.ContextVMMethodServiceRouteAttach {
+		t.Fatalf("method = %q", rpc.Method)
+	}
+	route, _ := rpc.Params["public_route"].(map[string]any)
+	if rpc.Params["service_id"] != "service-1" || rpc.Params["environment_id"] != "environment-1" || rpc.Params["deployment_unit_id"] != "unit-1" || route["hostname"] != "api.example.com" || route["upstream_port"] != float64(8080) {
+		t.Fatalf("route attach params = %#v", rpc.Params)
+	}
+	assertTagValue(t, published.Tags, "hostname", "api.example.com")
+	assertTagValue(t, published.Tags, "d", "route:attach:1")
+}
 
 func TestOperatorEnvironmentCreateUpdateRequestConstruction(t *testing.T) {
 	tests := []struct {
