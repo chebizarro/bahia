@@ -1,0 +1,44 @@
+{
+  "feature_id": "signed-environment-units",
+  "mappings": [
+    {
+      "acceptance_criteria": ["AC1"],
+      "tests": [
+        "cmd/cli: TestEnvironmentUnitsListUsesSignedReadOnly",
+        "cmd/cli: TestEnvironmentUnitCreateSetsNonDefaultKeyAtomically",
+        "cmd/cli: TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation"
+      ],
+      "command": "go test ./cmd/cli -run 'TestEnvironmentUnitsListUsesSignedReadOnly|TestEnvironmentUnitCreateSetsNonDefaultKeyAtomically|TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation'",
+      "result": "passed"
+    },
+    {
+      "acceptance_criteria": ["AC2"],
+      "tests": [
+        "internal/controlplane: TestEncryptedRouteHandlers_GetEnvironmentDetailsAuthorizesAndReturnsResolvedDetails",
+        "pkg/client: TestOperatorGetEnvironmentDetailsNostrRequestAndDecode"
+      ],
+      "command": "go test ./internal/controlplane ./pkg/client -run 'TestEncryptedRouteHandlers_GetEnvironmentDetailsAuthorizesAndReturnsResolvedDetails|TestOperatorGetEnvironmentDetailsNostrRequestAndDecode'",
+      "result": "passed"
+    },
+    {
+      "acceptance_criteria": ["AC3", "AC5"],
+      "tests": [
+        "internal/controlplane: TestGenericAppSignerFirstEnvironmentUnitOnboardingFlow",
+        "cmd/cli: TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation"
+      ],
+      "command": "go test ./internal/controlplane ./cmd/cli -run 'TestGenericAppSignerFirstEnvironmentUnitOnboardingFlow|TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation'",
+      "result": "passed"
+    },
+    {
+      "acceptance_criteria": ["AC4"],
+      "tests": [
+        "cmd/cli: TestEnvironmentUnitUpdateRetriesConflictWithFreshCompleteSet",
+        "cmd/cli: TestEnvironmentCompleteSetUpdateStopsAfterBoundedConflicts",
+        "pkg/client: TestOperatorContextVMEnvironmentConflictIsTyped",
+        "internal/controlplane: TestEncryptedRouteHandlers_UpdateEnvironmentRequiresRevisionForCompleteUnitSet"
+      ],
+      "command": "go test ./cmd/cli ./pkg/client ./internal/controlplane -run 'TestEnvironmentUnitUpdateRetriesConflictWithFreshCompleteSet|TestEnvironmentCompleteSetUpdateStopsAfterBoundedConflicts|TestOperatorContextVMEnvironmentConflictIsTyped|TestEncryptedRouteHandlers_UpdateEnvironmentRequiresRevisionForCompleteUnitSet'",
+      "result": "passed"
+    }
+  ]
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -39,6 +40,7 @@ const (
 	ContextVMMethodServiceUpdate           = "service/update"
 	ContextVMMethodServiceDelete           = "service/delete"
 	ContextVMMethodEnvironmentCreate       = "environment/create"
+	ContextVMMethodEnvironmentGetDetails   = "environment/get-details"
 	ContextVMMethodEnvironmentUpdate       = "environment/update"
 	ContextVMMethodEnvironmentDelete       = "environment/delete"
 	ContextVMMethodArtifactRegister        = "artifact/register"
@@ -78,33 +80,35 @@ type RegistryMutationBackend interface {
 }
 
 type EncryptedRouteHandlersConfig struct {
-	Secrets      repository.SecretRepository
-	Encryptor    *secrets.Encryptor
-	Runs         repository.DeploymentRunRepository
-	RunLogs      RunLogFetcher
-	Artifacts    repository.ArtifactRepository
-	Signatures   repository.ArtifactSignatureRepository
-	SignVerifier SignatureVerifier
-	Services     repository.ServiceRepository
-	Intents      repository.DeploymentIntentRepository
-	Registry     RegistryMutationBackend
-	RBAC         *auth.RBAC
-	Logger       *zap.Logger
+	Secrets         repository.SecretRepository
+	Encryptor       *secrets.Encryptor
+	Runs            repository.DeploymentRunRepository
+	RunLogs         RunLogFetcher
+	Artifacts       repository.ArtifactRepository
+	Signatures      repository.ArtifactSignatureRepository
+	SignVerifier    SignatureVerifier
+	Services        repository.ServiceRepository
+	Intents         repository.DeploymentIntentRepository
+	Registry        RegistryMutationBackend
+	DeploymentUnits readmodel.EnvironmentDeploymentUnitReader
+	RBAC            *auth.RBAC
+	Logger          *zap.Logger
 }
 
 type EncryptedRouteHandlers struct {
-	secrets      repository.SecretRepository
-	encryptor    *secrets.Encryptor
-	runs         repository.DeploymentRunRepository
-	runLogs      RunLogFetcher
-	artifacts    repository.ArtifactRepository
-	signatures   repository.ArtifactSignatureRepository
-	signVerifier SignatureVerifier
-	services     repository.ServiceRepository
-	intents      repository.DeploymentIntentRepository
-	registry     RegistryMutationBackend
-	rbac         *auth.RBAC
-	logger       *zap.Logger
+	secrets         repository.SecretRepository
+	encryptor       *secrets.Encryptor
+	runs            repository.DeploymentRunRepository
+	runLogs         RunLogFetcher
+	artifacts       repository.ArtifactRepository
+	signatures      repository.ArtifactSignatureRepository
+	signVerifier    SignatureVerifier
+	services        repository.ServiceRepository
+	intents         repository.DeploymentIntentRepository
+	registry        RegistryMutationBackend
+	deploymentUnits readmodel.EnvironmentDeploymentUnitReader
+	rbac            *auth.RBAC
+	logger          *zap.Logger
 }
 
 // NewEncryptedRouteHandlers adapts sensitive route-only actions onto encrypted
@@ -116,18 +120,19 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		logger = zap.NewNop()
 	}
 	return &EncryptedRouteHandlers{
-		secrets:      cfg.Secrets,
-		encryptor:    cfg.Encryptor,
-		runs:         cfg.Runs,
-		runLogs:      cfg.RunLogs,
-		artifacts:    cfg.Artifacts,
-		signatures:   cfg.Signatures,
-		signVerifier: cfg.SignVerifier,
-		services:     cfg.Services,
-		intents:      cfg.Intents,
-		registry:     cfg.Registry,
-		rbac:         cfg.RBAC,
-		logger:       logger.Named("encrypted-route-handlers"),
+		secrets:         cfg.Secrets,
+		encryptor:       cfg.Encryptor,
+		runs:            cfg.Runs,
+		runLogs:         cfg.RunLogs,
+		artifacts:       cfg.Artifacts,
+		signatures:      cfg.Signatures,
+		signVerifier:    cfg.SignVerifier,
+		services:        cfg.Services,
+		intents:         cfg.Intents,
+		registry:        cfg.Registry,
+		deploymentUnits: cfg.DeploymentUnits,
+		rbac:            cfg.RBAC,
+		logger:          logger.Named("encrypted-route-handlers"),
 	}
 }
 
@@ -146,6 +151,7 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	transport.RegisterContextVMHandler(ContextVMMethodServiceUpdate, h.UpdateService)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceDelete, h.DeleteService)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentCreate, h.CreateEnvironment)
+	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentGetDetails, h.GetEnvironmentDetails)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegister, h.RegisterArtifact)
@@ -211,6 +217,10 @@ type encryptedEnvironmentCreatePayload struct {
 	ReconcileMode      string                           `json:"reconcile_mode,omitempty"`
 	DeployStrategy     string                           `json:"deploy_strategy,omitempty"`
 	Protected          bool                             `json:"protected,omitempty"`
+}
+
+type encryptedEnvironmentGetDetailsPayload struct {
+	ID string `json:"id"`
 }
 
 type encryptedEnvironmentUpdatePayload struct {
@@ -551,6 +561,27 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 	return map[string]any{"status": "created", "environment": env, "environment_id": env.ID.String(), "deployment_units": units}, nil
 }
 
+func (h *EncryptedRouteHandlers) GetEnvironmentDetails(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload encryptedEnvironmentGetDetailsPayload
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	id, err := parseEncryptedUUID(payload.ID, "environment ID")
+	if err != nil {
+		return nil, err
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	env, err := authorizer.authorizeEnvironment(ctx, request.Event, id, domain.PermReadEnvironments)
+	if err != nil {
+		return nil, err
+	}
+	response, err := readmodel.EnvironmentResponse(ctx, env, h.deploymentUnits)
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil {
 		return nil, fmt.Errorf("environment registry mutation handling is not configured")
@@ -738,6 +769,7 @@ func deploymentUnitsFromRequests(env *domain.Environment, requests []dto.Deploym
 			ComposeDir:     strings.TrimSpace(request.ComposeDir),
 			Namespace:      strings.TrimSpace(request.Namespace),
 			NetworkProfile: request.NetworkProfile,
+			GitSource:      gitSourceBindingFromRequest(request.GitSource),
 			ReconcileMode:  domain.ReconcileMode(strings.TrimSpace(request.ReconcileMode)),
 			OwnershipMode:  domain.OwnershipMode(strings.TrimSpace(request.OwnershipMode)),
 			RuntimeConfig:  request.RuntimeConfig,
@@ -764,6 +796,18 @@ func deploymentUnitsFromRequests(env *domain.Environment, requests []dto.Deploym
 		}
 	}
 	return units, nil
+}
+
+func gitSourceBindingFromRequest(request *dto.GitSourceRequest) *domain.GitSourceBinding {
+	if request == nil {
+		return nil
+	}
+	return &domain.GitSourceBinding{
+		RepositoryURL: strings.TrimSpace(request.RepositoryURL),
+		Ref:           strings.TrimSpace(request.Ref),
+		Branch:        strings.TrimSpace(request.Branch),
+		CommitSHA:     strings.TrimSpace(request.CommitSHA),
+	}
 }
 
 func (h *EncryptedRouteHandlers) authorizeEnvironmentOrg(ctx context.Context, request ContextVMRequest, orgID uuid.UUID) error {

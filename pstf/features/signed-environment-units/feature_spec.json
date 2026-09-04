@@ -1,0 +1,33 @@
+{
+  "feature_id": "signed-environment-units",
+  "title": "Signer-first environment deployment-unit management",
+  "source_task": "nostrig:bahia-signed-environment-units-20260904",
+  "bead": "bahia-sicjd",
+  "observed_behavior_before": [
+    "Environment unit helpers depended on the REST environment detail read, which could fail with a missing Authorization response even though mutations were signed ContextVM requests.",
+    "Complete-set unit replacement made client-side preservation and conflict handling part of the safety boundary."
+  ],
+  "intended_behavior": [
+    "Environment unit list, create, and update read through the signed environment/get-details ContextVM method and never fall back to REST.",
+    "Authorized signed reads return environment targeting, updated_at, and explicit or resolved implicit deployment units.",
+    "Complete-set updates preserve pre-existing units by Key, including git_source, and enforce expected_updated_at with bounded reread-remerge retries.",
+    "A Bahia-managed Compose unit added to an edge-01-docker-shaped environment can be selected by deploy preview, deploy intent, and route-attach planning."
+  ],
+  "files_touched": [
+    "cmd/cli/environments.go",
+    "cmd/cli/environments_test.go",
+    "internal/controlplane/encrypted_route_handlers.go",
+    "internal/controlplane/encrypted_route_handlers_test.go",
+    "internal/controlplane/encrypted_service_handlers_test.go",
+    "internal/readmodel/environment.go",
+    "pkg/client/operator_nostr.go",
+    "pkg/client/operator_nostr_test.go",
+    "docs/user-guide/features/environments.md",
+    "docs/user-guide/cli-reference.md",
+    "docs/nostr-commands.md",
+    "docs/nostr-event-implementation-guide.md",
+    "docs/event-spec.md",
+    "docs/control-planes.md",
+    "docs/user-guide/nostr-integration.md"
+  ]
+}

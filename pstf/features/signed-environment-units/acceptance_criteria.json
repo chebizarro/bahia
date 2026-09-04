@@ -1,0 +1,25 @@
+{
+  "feature_id": "signed-environment-units",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Environment unit list, create, and update use signed environment/get-details reads and perform no REST request or HTTP fallback."
+    },
+    {
+      "id": "AC2",
+      "statement": "environment/get-details authorizes environments:read for the signer and returns environment targeting, updated_at, and explicit or resolved implicit deployment units in a signed ContextVM result."
+    },
+    {
+      "id": "AC3",
+      "statement": "Adding a Bahia-managed Compose unit with a complete-set environment update preserves every pre-existing unit by Key, including git_source."
+    },
+    {
+      "id": "AC4",
+      "statement": "Complete-set updates send expected_updated_at; a -32009 conflict triggers a fresh signed read and merge, succeeds within three attempts when contention clears, and reports a clear error after three conflicts."
+    },
+    {
+      "id": "AC5",
+      "statement": "A generic app can add a new Bahia-managed Compose unit to one edge-01-docker-shaped environment, target that unit in deploy preview and deploy intent creation, and create a route-attach intent whose plan targets the same unit."
+    }
+  ]
+}

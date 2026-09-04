@@ -29,6 +29,7 @@ type cliOperatorClient interface {
 	DNSRecordSet(context.Context, client.DNSRecordSetRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSDriftRemediate(context.Context, client.DNSDriftRemediateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
+	GetEnvironmentDetailsNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.EnvironmentDetails, error)
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
 	PreviewDeploymentNostr(context.Context, client.DeploymentPreviewNostrRequest, func(client.OperatorStatusEvent)) (map[string]any, error)
@@ -181,12 +182,29 @@ func runEnvironmentCreateNostr(cmd *cobra.Command, req client.CreateEnvironmentN
 	return op.CreateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment create"))
 }
 
+func runEnvironmentGetDetailsNostr(cmd *cobra.Command, environmentID string) (*client.EnvironmentDetails, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return runEnvironmentGetDetailsNostrWithClient(cmd, op, environmentID)
+}
+
+func runEnvironmentGetDetailsNostrWithClient(cmd *cobra.Command, op cliOperatorClient, environmentID string) (*client.EnvironmentDetails, error) {
+	return op.GetEnvironmentDetailsNostr(cmd.Context(), environmentID, operatorStatusCallback(cmd, "environment get-details"))
+}
+
 func runEnvironmentUpdateNostr(cmd *cobra.Command, req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
 		return nil, err
 	}
 	defer op.Close()
+	return runEnvironmentUpdateNostrWithClient(cmd, op, req)
+}
+
+func runEnvironmentUpdateNostrWithClient(cmd *cobra.Command, op cliOperatorClient, req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
 	return op.UpdateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment update"))
 }
 

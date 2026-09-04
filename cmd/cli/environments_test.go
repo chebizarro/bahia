@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,30 +64,102 @@ func TestEnvironmentCreateCommandPublishesSignerFirstPayload(t *testing.T) {
 	}
 }
 
+func TestEnvironmentTargetingOnlyUpdateUsesOneSignedClientAndNoHTTP(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	envID := "5ab7a568-b765-4e78-af52-305b16b1e262"
+
+	httpRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpRequests++
+		t.Fatalf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	apiClient = client.New(server.URL)
+
+	clientBuilds := 0
+	clientCloses := 0
+	signedReads := 0
+	var captured client.UpdateEnvironmentNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		clientBuilds++
+		return fakeCLIOperatorClient{
+			closeClient: func() { clientCloses++ },
+			environmentGetDetails: func(id string) (*client.EnvironmentDetails, error) {
+				signedReads++
+				if id != envID {
+					t.Fatalf("signed read environment id = %q", id)
+				}
+				return &client.EnvironmentDetails{Environment: domain.Environment{Targeting: domain.EnvironmentTargeting{
+					DefaultUnitKey:       "default",
+					FailureDomainLabels:  map[string]string{"region": "west"},
+					SecretScopeMode:      domain.SecretScopeModeEnvironment,
+					DefaultReconcileMode: domain.ReconcileModeObserveOnly,
+				}}}, nil
+			},
+			environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+				captured = req
+				return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
+			},
+		}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(newEnvironmentUpdateCommand())
+	_ = root.PersistentFlags().Set("relay", "wss://relay.example")
+	root.SetArgs([]string{"update", envID, "--default-unit-key", "max"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute targeting-only environment update: %v", err)
+	}
+	if httpRequests != 0 || signedReads != 1 || clientBuilds != 1 || clientCloses != 1 {
+		t.Fatalf("HTTP requests=%d signed reads=%d client builds=%d closes=%d, want 0, 1, 1, 1", httpRequests, signedReads, clientBuilds, clientCloses)
+	}
+	if captured.Targeting == nil || captured.Targeting.DefaultUnitKey != "max" || captured.Targeting.FailureDomainLabels["region"] != "west" || captured.Targeting.SecretScopeMode != "environment" || captured.Targeting.DefaultReconcileMode != "observe_only" {
+		t.Fatalf("targeting update = %#v", captured.Targeting)
+	}
+	if captured.DeploymentUnits != nil || captured.ExpectedUpdatedAt != nil {
+		t.Fatalf("targeting-only update unexpectedly included complete-set fields: %#v", captured)
+	}
+}
+
 func TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
 	envID := "5ab7a568-b765-4e78-af52-305b16b1e262"
 
-	requests := 0
+	httpRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/environments/"+envID {
-			t.Fatalf("unexpected HTTP mutation/read path: %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"data":{"id":"%s","name":"production","targeting":{"default_unit_key":"a","default_reconcile_mode":"observe_only"},"deploy_strategy":"replace","updated_at":"2026-08-02T08:00:00Z","deployment_units":[{"id":"c31244aa-073e-40a9-b2ec-adb1847a163c","environment_id":"%s","key":"a","runtime_type":"compose","endpoint_ref":"old","compose_dir":"/srv/a","ownership_mode":"bahia_managed","reconcile_mode":"observe_only","runtime_config":{"execution_mode":"cli"}},{"id":"63790fa1-1652-48ef-b349-a765d223b716","environment_id":"%s","key":"b","runtime_type":"docker","endpoint_ref":"b","ownership_mode":"external","reconcile_mode":"disabled"}]}}`, envID, envID, envID)
+		httpRequests++
+		t.Fatalf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 	apiClient = client.New(server.URL)
 
 	var captured client.UpdateEnvironmentNostrRequest
+	signedReads := 0
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-			captured = req
-			return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
-		}}, nil
+		return fakeCLIOperatorClient{
+			environmentGetDetails: func(id string) (*client.EnvironmentDetails, error) {
+				signedReads++
+				if id != envID {
+					t.Fatalf("signed read environment id = %q", id)
+				}
+				return &client.EnvironmentDetails{
+					Environment: domain.Environment{Name: "production", Targeting: domain.EnvironmentTargeting{DefaultUnitKey: "a", DefaultReconcileMode: domain.ReconcileModeObserveOnly}, DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC)},
+					DeploymentUnits: []domain.DeploymentUnit{
+						{Key: "a", RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "old", ComposeDir: "/srv/a", OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeObserveOnly, RuntimeConfig: map[string]any{"execution_mode": "cli"}},
+						{Key: "b", RuntimeType: domain.RuntimeTypeDocker, EndpointRef: "b", OwnershipMode: domain.OwnershipModeExternal, ReconcileMode: domain.ReconcileModeDisabled, GitSource: &domain.GitSourceBinding{RepositoryURL: "https://git.example/b.git", Ref: "refs/heads/main", Branch: "main", CommitSHA: "abc123"}},
+					},
+				}, nil
+			},
+			environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+				captured = req
+				return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
+			},
+		}, nil
 	})
 	defer restoreFactory()
 
@@ -102,8 +173,8 @@ func TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation(t *testi
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute unit update: %v", err)
 	}
-	if requests != 1 {
-		t.Fatalf("read requests = %d, want 1", requests)
+	if signedReads != 1 || httpRequests != 0 {
+		t.Fatalf("signed reads=%d HTTP requests=%d, want 1 and 0", signedReads, httpRequests)
 	}
 	if captured.ExpectedUpdatedAt == nil || captured.ExpectedUpdatedAt.Format(time.RFC3339) != "2026-08-02T08:00:00Z" {
 		t.Fatalf("expected_updated_at = %v", captured.ExpectedUpdatedAt)
@@ -127,6 +198,9 @@ func TestEnvironmentUnitUpdateReadMergesCompleteSetBeforeSignedMutation(t *testi
 	if preserved == nil || preserved.EndpointRef != "b" || preserved.OwnershipMode != "external" {
 		t.Fatalf("preserved unit = %#v", preserved)
 	}
+	if preserved.GitSource == nil || preserved.GitSource.RepositoryURL != "https://git.example/b.git" || preserved.GitSource.Ref != "refs/heads/main" || preserved.GitSource.Branch != "main" || preserved.GitSource.CommitSHA != "abc123" {
+		t.Fatalf("preserved git_source = %#v", preserved.GitSource)
+	}
 }
 
 func TestEnvironmentUnitUpdateRetriesConflictWithFreshCompleteSet(t *testing.T) {
@@ -136,29 +210,37 @@ func TestEnvironmentUnitUpdateRetriesConflictWithFreshCompleteSet(t *testing.T) 
 	envID := "5ab7a568-b765-4e78-af52-305b16b1e262"
 
 	reads := 0
+	httpRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reads++
-		w.Header().Set("Content-Type", "application/json")
-		units := `[{"key":"a","runtime_type":"compose","endpoint_ref":"old","compose_dir":"/srv/a","ownership_mode":"bahia_managed","reconcile_mode":"observe_only"}]`
-		revision := "2026-08-02T08:00:00Z"
-		if reads > 1 {
-			units = `[{"key":"a","runtime_type":"compose","endpoint_ref":"old","compose_dir":"/srv/a","ownership_mode":"bahia_managed","reconcile_mode":"observe_only"},{"key":"b","runtime_type":"docker","endpoint_ref":"b","ownership_mode":"external","reconcile_mode":"disabled"}]`
-			revision = "2026-08-02T08:00:01Z"
-		}
-		_, _ = fmt.Fprintf(w, `{"data":{"id":"%s","name":"production","targeting":{"default_unit_key":"a","default_reconcile_mode":"observe_only"},"deploy_strategy":"replace","updated_at":"%s","deployment_units":%s}}`, envID, revision, units)
+		httpRequests++
+		t.Fatalf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 	apiClient = client.New(server.URL)
 
 	var captured []client.UpdateEnvironmentNostrRequest
+	clientBuilds := 0
+	clientCloses := 0
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-			captured = append(captured, req)
-			if len(captured) == 1 {
-				return nil, client.ErrEnvironmentRevisionConflict
-			}
-			return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
-		}}, nil
+		clientBuilds++
+		return fakeCLIOperatorClient{
+			closeClient: func() { clientCloses++ },
+			environmentGetDetails: func(string) (*client.EnvironmentDetails, error) {
+				reads++
+				units := []domain.DeploymentUnit{{Key: "a", RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "old", ComposeDir: "/srv/a", OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeObserveOnly}}
+				if reads > 1 {
+					units = append(units, domain.DeploymentUnit{Key: "b", RuntimeType: domain.RuntimeTypeDocker, EndpointRef: "b", OwnershipMode: domain.OwnershipModeExternal, ReconcileMode: domain.ReconcileModeDisabled})
+				}
+				return &client.EnvironmentDetails{Environment: domain.Environment{Targeting: domain.EnvironmentTargeting{DefaultUnitKey: "a", DefaultReconcileMode: domain.ReconcileModeObserveOnly}, UpdatedAt: time.Date(2026, 8, 2, 8, 0, reads-1, 0, time.UTC)}, DeploymentUnits: units}, nil
+			},
+			environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+				captured = append(captured, req)
+				if len(captured) == 1 {
+					return nil, client.ErrEnvironmentRevisionConflict
+				}
+				return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
+			},
+		}, nil
 	})
 	defer restoreFactory()
 
@@ -169,8 +251,8 @@ func TestEnvironmentUnitUpdateRetriesConflictWithFreshCompleteSet(t *testing.T) 
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute unit update: %v", err)
 	}
-	if reads != 2 || len(captured) != 2 {
-		t.Fatalf("reads=%d mutations=%d, want 2 each", reads, len(captured))
+	if reads != 2 || len(captured) != 2 || httpRequests != 0 || clientBuilds != 1 || clientCloses != 1 {
+		t.Fatalf("signed reads=%d mutations=%d HTTP requests=%d client builds=%d closes=%d, want 2, 2, 0, 1, 1", reads, len(captured), httpRequests, clientBuilds, clientCloses)
 	}
 	if captured[0].ExpectedUpdatedAt == nil || captured[1].ExpectedUpdatedAt == nil ||
 		!captured[1].ExpectedUpdatedAt.After(*captured[0].ExpectedUpdatedAt) {
@@ -184,25 +266,74 @@ func TestEnvironmentUnitUpdateRetriesConflictWithFreshCompleteSet(t *testing.T) 
 	}
 }
 
+func TestEnvironmentUnitsListUsesSignedReadOnly(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	envID := "5ab7a568-b765-4e78-af52-305b16b1e262"
+
+	httpRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpRequests++
+		t.Fatalf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	apiClient = client.New(server.URL)
+
+	signedReads := 0
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{environmentGetDetails: func(id string) (*client.EnvironmentDetails, error) {
+			signedReads++
+			if id != envID {
+				t.Fatalf("signed read environment id = %q", id)
+			}
+			return &client.EnvironmentDetails{DeploymentUnits: []domain.DeploymentUnit{{Key: "default", RuntimeType: domain.RuntimeTypeDocker, Implicit: true}}}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(newEnvironmentUnitsListCommand())
+	_ = root.PersistentFlags().Set("relay", "wss://relay.example")
+	root.SetArgs([]string{"list", envID})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute units list: %v", err)
+	}
+	if signedReads != 1 || httpRequests != 0 {
+		t.Fatalf("signed reads=%d HTTP requests=%d, want 1 and 0", signedReads, httpRequests)
+	}
+}
+
 func TestEnvironmentUnitCreateSetsNonDefaultKeyAtomically(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
 	envID := "5ab7a568-b765-4e78-af52-305b16b1e262"
 
+	httpRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"data":{"id":"%s","name":"production","targeting":{"default_unit_key":"%s","secret_scope_mode":"environment","default_reconcile_mode":"observe_only"},"deploy_strategy":"replace","updated_at":"2026-08-02T08:00:00Z","deployment_units":[{"environment_id":"%s","key":"default","runtime_type":"docker","ownership_mode":"bahia_managed","reconcile_mode":"observe_only","implicit":true}]}}`, envID, domain.DefaultDeploymentUnitKey, envID)
+		httpRequests++
+		t.Fatalf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 	apiClient = client.New(server.URL)
 
 	var captured client.UpdateEnvironmentNostrRequest
+	signedReads := 0
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-			captured = req
-			return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
-		}}, nil
+		return fakeCLIOperatorClient{
+			environmentGetDetails: func(string) (*client.EnvironmentDetails, error) {
+				signedReads++
+				return &client.EnvironmentDetails{
+					Environment:     domain.Environment{Name: "production", Targeting: domain.EnvironmentTargeting{DefaultUnitKey: domain.DefaultDeploymentUnitKey, SecretScopeMode: domain.SecretScopeModeEnvironment, DefaultReconcileMode: domain.ReconcileModeObserveOnly}, DeployStrategy: domain.DeployStrategyReplace, UpdatedAt: time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC)},
+					DeploymentUnits: []domain.DeploymentUnit{{Key: domain.DefaultDeploymentUnitKey, RuntimeType: domain.RuntimeTypeDocker, OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeObserveOnly, Implicit: true}},
+				}, nil
+			},
+			environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+				captured = req
+				return &client.EnvironmentCommandResult{Status: "updated", EnvironmentID: envID}, nil
+			},
+		}, nil
 	})
 	defer restoreFactory()
 
@@ -219,6 +350,9 @@ func TestEnvironmentUnitCreateSetsNonDefaultKeyAtomically(t *testing.T) {
 	})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute unit create: %v", err)
+	}
+	if signedReads != 1 || httpRequests != 0 {
+		t.Fatalf("signed reads=%d HTTP requests=%d, want 1 and 0", signedReads, httpRequests)
 	}
 	if captured.Targeting == nil || captured.Targeting.DefaultUnitKey != "max" {
 		t.Fatalf("targeting = %#v", captured.Targeting)
@@ -246,20 +380,33 @@ func TestEnvironmentCompleteSetUpdateStopsAfterBoundedConflicts(t *testing.T) {
 	envID := "5ab7a568-b765-4e78-af52-305b16b1e262"
 
 	reads := 0
+	httpRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reads++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"data":{"id":"%s","name":"production","targeting":{"default_unit_key":"default","default_reconcile_mode":"observe_only"},"deploy_strategy":"replace","updated_at":"2026-08-02T08:00:0%dZ","deployment_units":[{"key":"default","runtime_type":"docker","ownership_mode":"bahia_managed","reconcile_mode":"observe_only"}]}}`, envID, reads)
+		httpRequests++
+		t.Fatalf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 	apiClient = client.New(server.URL)
 
 	mutations := 0
+	clientBuilds := 0
+	clientCloses := 0
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{environmentUpdate: func(req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-			mutations++
-			return nil, client.ErrEnvironmentRevisionConflict
-		}}, nil
+		clientBuilds++
+		return fakeCLIOperatorClient{
+			closeClient: func() { clientCloses++ },
+			environmentGetDetails: func(string) (*client.EnvironmentDetails, error) {
+				reads++
+				return &client.EnvironmentDetails{
+					Environment:     domain.Environment{Targeting: domain.EnvironmentTargeting{DefaultUnitKey: domain.DefaultDeploymentUnitKey, DefaultReconcileMode: domain.ReconcileModeObserveOnly}, UpdatedAt: time.Date(2026, 8, 2, 8, 0, reads, 0, time.UTC)},
+					DeploymentUnits: []domain.DeploymentUnit{{Key: domain.DefaultDeploymentUnitKey, RuntimeType: domain.RuntimeTypeDocker, OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeObserveOnly}},
+				}, nil
+			},
+			environmentUpdate: func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
+				mutations++
+				return nil, client.ErrEnvironmentRevisionConflict
+			},
+		}, nil
 	})
 	defer restoreFactory()
 
@@ -271,8 +418,8 @@ func TestEnvironmentCompleteSetUpdateStopsAfterBoundedConflicts(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "after 3 attempts") {
 		t.Fatalf("error = %v, want bounded conflict", err)
 	}
-	if reads != environmentCompleteSetUpdateMaxAttempts || mutations != environmentCompleteSetUpdateMaxAttempts {
-		t.Fatalf("reads=%d mutations=%d, want %d", reads, mutations, environmentCompleteSetUpdateMaxAttempts)
+	if reads != environmentCompleteSetUpdateMaxAttempts || mutations != environmentCompleteSetUpdateMaxAttempts || httpRequests != 0 || clientBuilds != 1 || clientCloses != 1 {
+		t.Fatalf("signed reads=%d mutations=%d HTTP requests=%d client builds=%d closes=%d, want %d, %d, 0, 1, 1", reads, mutations, httpRequests, clientBuilds, clientCloses, environmentCompleteSetUpdateMaxAttempts, environmentCompleteSetUpdateMaxAttempts)
 	}
 }
 

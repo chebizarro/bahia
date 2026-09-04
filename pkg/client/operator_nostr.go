@@ -401,9 +401,18 @@ type DeploymentUnitRequest struct {
 	ComposeDir     string            `json:"compose_dir,omitempty"`
 	Namespace      string            `json:"namespace,omitempty"`
 	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	GitSource      *GitSourceRequest `json:"git_source,omitempty"`
 	OwnershipMode  string            `json:"ownership_mode,omitempty"`
 	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
 	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+}
+
+// GitSourceRequest identifies the git checkout backing a deployment unit.
+type GitSourceRequest struct {
+	RepositoryURL string `json:"repository_url,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
 }
 
 // RepositoryRefRequest is signer-first structured source repository metadata.
@@ -862,6 +871,27 @@ func (c *OperatorControlPlaneClient) CreateEnvironmentNostr(ctx context.Context,
 	}
 	if result.EnvironmentID == "" && result.Environment != nil {
 		result.EnvironmentID = result.Environment.ID.String()
+	}
+	return &result, nil
+}
+
+// GetEnvironmentDetailsNostr publishes a signer-first environment/get-details read and awaits its correlated result.
+func (c *OperatorControlPlaneClient) GetEnvironmentDetailsNostr(ctx context.Context, environmentID string, onStatus func(OperatorStatusEvent)) (*EnvironmentDetails, error) {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate environment get-details request", RequestAccepted: false, Cause: fmt.Errorf("id is required")}
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodEnvironmentGetDetails,
+		Tags:    nostr.Tags{{"environment", environmentID}},
+		Payload: map[string]string{"id": environmentID},
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result EnvironmentDetails
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode environment get-details result: %w", err)
 	}
 	return &result, nil
 }

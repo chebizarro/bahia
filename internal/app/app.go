@@ -1343,18 +1343,19 @@ func New(cfg *config.Config) (*App, error) {
 			registryMutations = relayFirstRegistry
 		}
 		controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
-			Secrets:      secretRepo,
-			Encryptor:    secretEncryptor,
-			Runs:         runRepo,
-			RunLogs:      runLogService,
-			Artifacts:    artifactRepo,
-			Signatures:   sigRepo,
-			SignVerifier: signVerifier,
-			Services:     serviceRepo,
-			Intents:      intentRepo,
-			Registry:     registryMutations,
-			RBAC:         tenantRBAC,
-			Logger:       logger,
+			Secrets:         secretRepo,
+			Encryptor:       secretEncryptor,
+			Runs:            runRepo,
+			RunLogs:         runLogService,
+			Artifacts:       artifactRepo,
+			Signatures:      sigRepo,
+			SignVerifier:    signVerifier,
+			Services:        serviceRepo,
+			Intents:         intentRepo,
+			Registry:        registryMutations,
+			DeploymentUnits: deploymentUnitRepo,
+			RBAC:            tenantRBAC,
+			Logger:          logger,
 		}).Register(encryptedRequestTransport)
 		// The build request contract is registered even while the fleet Gitea
 		// mirror initiator is unavailable, so browsers receive a signed,
