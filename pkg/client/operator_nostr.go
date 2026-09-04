@@ -485,6 +485,17 @@ type DeploymentIntentNostrRequest struct {
 	IdempotencyKey           string `json:"idempotency_key,omitempty"`
 }
 
+// DeploymentPreviewNostrRequest builds a reviewed managed desired-state hash
+// for a subsequent signer-first deployment request.
+type DeploymentPreviewNostrRequest struct {
+	ServiceID            string         `json:"service_id"`
+	EnvironmentID        string         `json:"environment_id"`
+	DeploymentUnitID     string         `json:"deployment_unit_id,omitempty"`
+	ArtifactID           string         `json:"artifact_id"`
+	ManagedRuntimeConfig map[string]any `json:"managed_runtime_config"`
+	IdempotencyKey       string         `json:"idempotency_key,omitempty"`
+}
+
 // DeploymentApprovalNostrRequest is the signer-first approval/rejection target.
 type DeploymentApprovalNostrRequest struct {
 	IntentID       string `json:"intent_id"`
@@ -773,6 +784,52 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Con
 		ArtifactID:    artifactID,
 		RequestedBy:   requestedBy,
 	}, onStatus)
+}
+
+// PreviewDeploymentNostr publishes signer-first service/deploy-preview and
+// returns the reviewed desired-state preview payload.
+func (c *OperatorControlPlaneClient) PreviewDeploymentNostr(ctx context.Context, req DeploymentPreviewNostrRequest, onStatus func(OperatorStatusEvent)) (map[string]any, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
+	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
+	req.ArtifactID = strings.TrimSpace(req.ArtifactID)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.ServiceID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment preview request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
+	}
+	if req.EnvironmentID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment preview request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
+	}
+	if req.ArtifactID == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment preview request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is required")}
+	}
+	if len(req.ManagedRuntimeConfig) == 0 {
+		return nil, &ControlPlaneRequestError{Phase: "validate deployment preview request", RequestAccepted: false, Cause: fmt.Errorf("managed_runtime_config is required")}
+	}
+	payload := map[string]any{
+		"service_id":             req.ServiceID,
+		"environment_id":         req.EnvironmentID,
+		"artifact_id":            req.ArtifactID,
+		"managed_runtime_config": req.ManagedRuntimeConfig,
+	}
+	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.ArtifactID}}
+	if req.DeploymentUnitID != "" {
+		payload["deployment_unit_id"] = req.DeploymentUnitID
+		tags = append(tags, nostr.Tag{"deployment-unit", req.DeploymentUnitID})
+	}
+	if req.IdempotencyKey != "" {
+		payload["idempotency_key"] = req.IdempotencyKey
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeployPreview, Tags: tags, Payload: payload}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode deployment preview result: %w", err)
+	}
+	return result, nil
 }
 
 // CreateDeploymentIntentWithRequestNostr publishes a signer-first service/deploy intent with explicit correlation options.

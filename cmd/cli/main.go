@@ -430,6 +430,54 @@ func stateCommands() *cobra.Command {
 // --- Deploy Commands ---
 
 func deployCommands() *cobra.Command {
+	previewCmd := &cobra.Command{
+		Use:   "preview",
+		Short: "Preview a managed desired state",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceID, _ := cmd.Flags().GetString("service")
+			envID, _ := cmd.Flags().GetString("environment")
+			deploymentUnitID, _ := cmd.Flags().GetString("deployment-unit")
+			artifactID, _ := cmd.Flags().GetString("artifact")
+			runtimeConfigFile, _ := cmd.Flags().GetString("managed-runtime-config-file")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+			runtimeConfig, err := readJSONObjectFile(runtimeConfigFile)
+			if err != nil {
+				return err
+			}
+			result, err := runDeploymentPreviewNostr(cmd, client.DeploymentPreviewNostrRequest{
+				ServiceID:            serviceID,
+				EnvironmentID:        envID,
+				DeploymentUnitID:     deploymentUnitID,
+				ArtifactID:           artifactID,
+				ManagedRuntimeConfig: runtimeConfig,
+				IdempotencyKey:       idempotencyKey,
+			})
+			if err != nil {
+				return err
+			}
+			if outputFormat != "table" {
+				return outputSingle(result)
+			}
+			hash, _ := result["desired_state_hash"].(string)
+			if hash != "" {
+				fmt.Printf("✓ Deployment preview ready: %s\n", hash)
+			} else {
+				fmt.Println("✓ Deployment preview ready")
+			}
+			return nil
+		},
+	}
+	previewCmd.Flags().String("service", "", "Service ID")
+	previewCmd.Flags().String("environment", "", "Environment ID")
+	previewCmd.Flags().String("deployment-unit", "", "Deployment unit ID for explicit-unit deployments")
+	previewCmd.Flags().String("artifact", "", "Artifact ID")
+	previewCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
+	previewCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	_ = previewCmd.MarkFlagRequired("service")
+	_ = previewCmd.MarkFlagRequired("environment")
+	_ = previewCmd.MarkFlagRequired("artifact")
+	_ = previewCmd.MarkFlagRequired("managed-runtime-config-file")
+
 	deployCmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Create a deployment intent",
@@ -608,6 +656,7 @@ func deployCommands() *cobra.Command {
 		},
 	}
 	deploymentsCmd.AddCommand(
+		previewCmd,
 		deployCmd,
 		routeAttachCmd,
 		rollbackCmd,
