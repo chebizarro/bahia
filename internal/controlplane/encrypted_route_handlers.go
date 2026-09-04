@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
@@ -231,6 +232,47 @@ type encryptedEnvironmentDeletePayload struct {
 	Force bool   `json:"force,omitempty"`
 }
 
+func supportsManagedRuntimeConfig(runtimeType domain.RuntimeType) bool {
+	switch runtimeType {
+	case domain.RuntimeTypeDocker, domain.RuntimeTypeCompose:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *EncryptedRouteHandlers) authorizeServiceUpdate(ctx context.Context, authorizer encryptedTenantAuthorizer, event *nostr.Event, payload dto.UpdateServiceRequest) (*domain.Service, error) {
+	if payload.ID == uuid.Nil {
+		return nil, fmt.Errorf("service_id is required")
+	}
+	if h.services == nil {
+		return nil, fmt.Errorf("service repository is not configured")
+	}
+	svc, err := h.services.GetByID(ctx, payload.ID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return nil, fmt.Errorf("service not found")
+		}
+		return nil, fmt.Errorf("failed to fetch service")
+	}
+	if svc == nil {
+		return nil, fmt.Errorf("service not found")
+	}
+	if svc.OrgID != uuid.Nil {
+		if err := authorizer.authorizeOrg(ctx, event, svc.OrgID, domain.PermWriteServices); err != nil {
+			return nil, err
+		}
+		return svc, nil
+	}
+	if payload.OrgID == nil || *payload.OrgID == uuid.Nil {
+		return nil, fmt.Errorf("organization is required")
+	}
+	if err := authorizer.authorizeOrg(ctx, event, *payload.OrgID, domain.PermWriteServices); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
 func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil {
 		return nil, fmt.Errorf("service registry mutation handling is not configured")
@@ -275,8 +317,8 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 		RuntimeType:   runtimeType,
 	}
 	if payload.ManagedRuntimeConfig != nil {
-		if svc.RuntimeType != domain.RuntimeTypeCompose {
-			return nil, fmt.Errorf("managed runtime configuration requires runtime_type compose")
+		if !supportsManagedRuntimeConfig(svc.RuntimeType) {
+			return nil, fmt.Errorf("managed runtime configuration requires a managed runtime_type")
 		}
 		managed := domain.NormalizeManagedRuntimeConfig(payload.ManagedRuntimeConfig)
 		if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {
@@ -308,9 +350,18 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 		return nil, err
 	}
 	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
-	svc, err := authorizer.authorizeService(ctx, request.Event, payload.ID, domain.PermWriteServices)
+	svc, err := h.authorizeServiceUpdate(ctx, authorizer, request.Event, payload)
 	if err != nil {
 		return nil, err
+	}
+	if payload.OrgID != nil {
+		if *payload.OrgID == uuid.Nil {
+			return nil, fmt.Errorf("org_id must not be nil")
+		}
+		if svc.OrgID != uuid.Nil && svc.OrgID != *payload.OrgID {
+			return nil, fmt.Errorf("cannot move service to a different organization")
+		}
+		svc.OrgID = *payload.OrgID
 	}
 	if payload.Name != nil {
 		name := strings.TrimSpace(*payload.Name)
@@ -352,12 +403,12 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 		}
 		svc.RuntimeType = runtimeType
 	}
-	if svc.RuntimeType != domain.RuntimeTypeCompose && svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil && payload.ManagedRuntimeConfig == nil {
-		return nil, fmt.Errorf("cannot change a service with managed runtime configuration away from compose")
+	if !supportsManagedRuntimeConfig(svc.RuntimeType) && svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil && payload.ManagedRuntimeConfig == nil {
+		return nil, fmt.Errorf("cannot change a service with managed runtime configuration to an unmanaged runtime_type")
 	}
 	if payload.ManagedRuntimeConfig != nil {
-		if svc.RuntimeType != domain.RuntimeTypeCompose {
-			return nil, fmt.Errorf("managed runtime configuration requires runtime_type compose")
+		if !supportsManagedRuntimeConfig(svc.RuntimeType) {
+			return nil, fmt.Errorf("managed runtime configuration requires a managed runtime_type")
 		}
 		managed := domain.NormalizeManagedRuntimeConfig(payload.ManagedRuntimeConfig)
 		if err := domain.ValidateManagedRuntimeConfig(managed); err != nil {

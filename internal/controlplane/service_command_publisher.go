@@ -36,6 +36,7 @@ type ServiceCreateCommand struct {
 
 type ServiceUpdateCommand struct {
 	ID                       uuid.UUID
+	OrgID                    *uuid.UUID
 	Name                     *string
 	RepoURL                  *string
 	Repository               any
@@ -139,6 +140,9 @@ func (p *ServiceCommandPublisher) PublishServiceUpdateRequest(ctx context.Contex
 		return nil, fmt.Errorf("service_id is required")
 	}
 	content := map[string]any{"id": cmd.ID.String()}
+	if cmd.OrgID != nil {
+		content["org_id"] = cmd.OrgID.String()
+	}
 	if cmd.Name != nil {
 		content["name"] = strings.TrimSpace(*cmd.Name)
 	}

@@ -317,6 +317,7 @@ type CreateServiceNostrRequest struct {
 // UpdateServiceNostrRequest is the signer-first service/update payload.
 type UpdateServiceNostrRequest struct {
 	ID                       string                       `json:"id"`
+	OrgID                    *string                      `json:"org_id,omitempty"`
 	Name                     *string                      `json:"name,omitempty"`
 	RepoURL                  *string                      `json:"repo_url,omitempty"`
 	Repository               *RepositoryRefRequest        `json:"repository,omitempty"`
@@ -572,6 +573,10 @@ func (c *OperatorControlPlaneClient) CreateServiceNostr(ctx context.Context, req
 func (c *OperatorControlPlaneClient) UpdateServiceNostr(ctx context.Context, req UpdateServiceNostrRequest, onStatus func(OperatorStatusEvent)) (*ServiceCommandResult, error) {
 	req.ID = strings.TrimSpace(req.ID)
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.OrgID != nil {
+		trimmed := strings.TrimSpace(*req.OrgID)
+		req.OrgID = &trimmed
+	}
 	if req.ID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate service update request", RequestAccepted: false, Cause: fmt.Errorf("id is required")}
 	}

@@ -307,7 +307,7 @@ func (s *Server) GetTools() []Tool {
 					},
 					"managed_runtime_config": map[string]interface{}{
 						"type":        "object",
-						"description": "Managed runtime configuration for Bahia-owned Docker Compose deployment",
+						"description": "Managed runtime configuration for Bahia-owned deployment",
 					},
 					"idempotency_key": map[string]interface{}{
 						"type":        "string",
@@ -330,6 +330,10 @@ func (s *Server) GetTools() []Tool {
 					"service_id": map[string]interface{}{
 						"type":        "string",
 						"description": "Service UUID to update",
+					},
+					"org_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Organization UUID to assign to an unresolved service",
 					},
 					"name": map[string]interface{}{
 						"type":        "string",
@@ -358,7 +362,7 @@ func (s *Server) GetTools() []Tool {
 					},
 					"managed_runtime_config": map[string]interface{}{
 						"type":        "object",
-						"description": "Managed runtime configuration for Bahia-owned Docker Compose deployment",
+						"description": "Managed runtime configuration for Bahia-owned deployment",
 					},
 					"idempotency_key": map[string]interface{}{
 						"type":        "string",
@@ -2290,6 +2294,14 @@ func (s *Server) handleUpdateService(ctx context.Context, args map[string]interf
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
+	var orgID *uuid.UUID
+	if raw, ok := args["org_id"]; ok && raw != nil {
+		parsed, err := parseRequiredUUIDArg(args, "org_id")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		orgID = &parsed
+	}
 	name := optionalStringPointerArg(args, "name")
 	repoURL := optionalStringPointerArg(args, "repo_url")
 	artifactRepo := optionalStringPointerArg(args, "artifact_repo")
@@ -2312,7 +2324,7 @@ func (s *Server) handleUpdateService(ctx context.Context, args map[string]interf
 		return signerFirstMCPMutationUnavailable("bahia_update_service", "service/update"), nil
 	}
 	receipt, err := s.serviceCommands.PublishServiceUpdateRequest(ctx, controlplane.ServiceUpdateCommand{
-		ID: serviceID, Name: name, RepoURL: repoURL, Repository: args["repository"], ArtifactRepo: artifactRepo,
+		ID: serviceID, OrgID: orgID, Name: name, RepoURL: repoURL, Repository: args["repository"], ArtifactRepo: artifactRepo,
 		DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed,
 		IdempotencyKey: mcpIdempotencyKey(args, "service-update", serviceID.String()), AgentID: agentID,
 	})

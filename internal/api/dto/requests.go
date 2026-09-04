@@ -52,6 +52,7 @@ type CreateServiceRequest struct {
 // UpdateServiceRequest represents a request to update a service.
 type UpdateServiceRequest struct {
 	ID                       uuid.UUID                    `json:"id"`
+	OrgID                    *uuid.UUID                   `json:"org_id,omitempty"`
 	Name                     *string                      `json:"name,omitempty"`
 	RepoURL                  *string                      `json:"repo_url,omitempty"`
 	Repository               *RepositoryRefRequest        `json:"repository,omitempty"`
