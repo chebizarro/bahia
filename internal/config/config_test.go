@@ -2487,7 +2487,7 @@ func TestDNSValidationEnabled(t *testing.T) {
 		cfg := Defaults()
 		cfg.DNS.Enabled = true
 		cfg.DNS.Backends = map[string]DNSBackendConfig{
-			"fs": {Type: "filesystem", RootDir: t.TempDir()},
+			"fs": {Type: "fips", HostsPath: "/etc/fips/hosts"},
 		}
 		cfg.DNS.Zones = []DNSZoneConfig{
 			{Name: "prod.cascadia", Visibility: "internal", Backend: "fs", TTL: 300},
@@ -2544,11 +2544,12 @@ func TestDNSValidationEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("filesystem requires root dir", func(t *testing.T) {
+	t.Run("filesystem backend is not deployable", func(t *testing.T) {
 		cfg := validDNSConfig()
-		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "filesystem"}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "root_dir") {
-			t.Fatalf("expected root_dir error, got %v", err)
+		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "filesystem", RootDir: t.TempDir()}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "no operational activator is wired") || !strings.Contains(err.Error(), "choose dnsmasq, coredns, powerdns, or fips") {
+			t.Fatalf("expected actionable filesystem backend rejection, got %v", err)
 		}
 	})
 

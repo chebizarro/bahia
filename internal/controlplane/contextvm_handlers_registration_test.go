@@ -126,7 +126,7 @@ func TestDNSContextVMHandlersDispatchWebMethods(t *testing.T) {
 			operator := &fakeDNSContextVMOperator{zones: map[string]bool{"prod.example": true}}
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-			RegisterDNSContextVMHandlers(transport, operator)
+			RegisterDNSContextVMHandlers(transport, operator, true)
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
 			if len(publisher.events) != 2 {
@@ -140,6 +140,31 @@ func TestDNSContextVMHandlersDispatchWebMethods(t *testing.T) {
 				if payload["status"] != "success" || len(operator.reconciledZones) != 1 {
 					t.Fatalf("expected successful zone reconcile, payload=%#v reconciled=%v", payload, operator.reconciledZones)
 				}
+			}
+		})
+	}
+}
+
+func TestDNSContextVMHandlersReturnConfigurationErrorWhenDisabled(t *testing.T) {
+	methods := []string{
+		ContextVMMethodDNSZoneCreate,
+		ContextVMMethodDNSPolicyApply,
+		ContextVMMethodDNSRecordSet,
+		ContextVMMethodDNSDriftRemediate,
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+			RegisterDNSContextVMHandlers(transport, nil, false)
+
+			transport.HandleEvent(context.Background(), makeRouteRequest(t, method, map[string]any{"unexpected": true}))
+			if len(publisher.events) != 2 {
+				t.Fatalf("published events = %d, want progress ack + response", len(publisher.events))
+			}
+			response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+			if response.Error == nil || response.Error.Code != -32000 || response.Error.Message != dnsOrchestrationDisabledMessage {
+				t.Fatalf("disabled DNS response = %+v, want -32000 %q", response, dnsOrchestrationDisabledMessage)
 			}
 		})
 	}

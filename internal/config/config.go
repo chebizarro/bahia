@@ -2077,9 +2077,7 @@ func (c *Config) validateDNS() error {
 		backend.HostsPath = strings.TrimSpace(backend.HostsPath)
 		switch backend.Type {
 		case "filesystem":
-			if backend.RootDir == "" {
-				return fmt.Errorf("config validation failed: dns.backends.%s.root_dir is required for filesystem", name)
-			}
+			return fmt.Errorf("config validation failed: dns.backends.%s.type %q is not deployable because no operational activator is wired; choose dnsmasq, coredns, powerdns, or fips", name, backend.Type)
 		case "coredns":
 			normalizedEndpoints := normalizeStringList(backend.EtcdEndpoints)
 			if len(normalizedEndpoints) == 0 {

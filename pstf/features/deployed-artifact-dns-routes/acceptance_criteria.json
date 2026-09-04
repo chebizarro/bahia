@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "AC1", "text": "Cloudflare route apply never sends a DNS record comment exceeding 100 characters; ownership check, create/update selection, rollback deletion, and restore selection all use the identical derived marker."},
+    {"id": "AC2", "text": "Signed DesiredPublicRoutePlan.DNS.SourceCoordinate and the desired-state hash are unchanged by the marker fix."},
+    {"id": "AC3", "text": "With dns.enabled=false, signed dns/zone-create|policy-apply|record-set|drift-remediate return the config-needed error, not method-not-found; enabled behavior is unchanged."},
+    {"id": "AC4", "text": "dns.enabled=true with a filesystem backend fails config validation with an actionable message; it cannot reach startup health failure."},
+    {"id": "AC5", "text": "A compose-typed service deployed on an explicit Docker unit reconciles and observes without a runtime-type conflict; implicit placement uses the legacy resolver unchanged; transient unit-repo errors skip the cycle without auto-remediation."}
+  ]
+}

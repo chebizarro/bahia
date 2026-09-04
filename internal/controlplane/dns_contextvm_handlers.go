@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,21 +12,33 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+const dnsOrchestrationDisabledMessage = "DNS orchestration is not enabled; set dns.enabled and configure a backend"
+
 // RegisterDNSContextVMHandlers bridges encrypted ContextVM DNS methods from the
 // browser to the app-owned DNS reconciliation and persistence boundary.
-func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator DNSControlPlaneOperator) {
-	if transport == nil || operator == nil {
+func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator DNSControlPlaneOperator, enabled bool) {
+	if transport == nil {
 		return
 	}
-	h := dnsContextVMHandlers{operator: operator}
-	transport.RegisterContextVMHandler(ContextVMMethodDNSZoneCreate, h.zoneCreate)
-	transport.RegisterContextVMHandler(ContextVMMethodDNSPolicyApply, h.policyApply)
-	transport.RegisterContextVMHandler(ContextVMMethodDNSRecordSet, h.recordSet)
-	transport.RegisterContextVMHandler(ContextVMMethodDNSDriftRemediate, h.driftRemediate)
+	h := dnsContextVMHandlers{operator: operator, enabled: enabled}
+	transport.RegisterContextVMHandler(ContextVMMethodDNSZoneCreate, h.whenEnabled(h.zoneCreate))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSPolicyApply, h.whenEnabled(h.policyApply))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSRecordSet, h.whenEnabled(h.recordSet))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSDriftRemediate, h.whenEnabled(h.driftRemediate))
 }
 
 type dnsContextVMHandlers struct {
 	operator DNSControlPlaneOperator
+	enabled  bool
+}
+
+func (h dnsContextVMHandlers) whenEnabled(next ContextVMHandler) ContextVMHandler {
+	return func(ctx context.Context, request ContextVMRequest) (any, error) {
+		if !h.enabled || h.operator == nil {
+			return nil, errors.New(dnsOrchestrationDisabledMessage)
+		}
+		return next(ctx, request)
+	}
 }
 
 func (h dnsContextVMHandlers) zoneCreate(ctx context.Context, request ContextVMRequest) (any, error) {

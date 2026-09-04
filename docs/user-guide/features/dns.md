@@ -65,7 +65,7 @@ Navigate to **DNS** in the sidebar:
 
 ### CLI and MCP
 
-The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments:
+The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments. The corresponding `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are always registered. When DNS orchestration is disabled or has no configured runtime, they return JSON-RPC `-32000` with the exact message `DNS orchestration is not enabled; set dns.enabled and configure a backend` instead of method-not-found.
 
 ```bash
 bahia dns zone-create --name prod.example --visibility external --backend-ref powerdns-prod --ttl 300
@@ -112,7 +112,7 @@ Each publishes the corresponding signed Nostr request and returns correlation me
 
 ## Endpoint Projection
 
-For an operational LAN configuration using dnsmasq, environment-to-zone mapping, and managed external HTTPS routing, follow [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md). DNS configuration changes take effect on `SIGHUP` through whole-application reconstruction, not in-place backend mutation.
+For an operational LAN configuration using dnsmasq, environment-to-zone mapping, and managed external HTTPS routing, follow [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md). The dnsmasq backend is the deployable internal-LAN exemplar for mapping `edge-01-production` services into `sharegap.net`. The filesystem backend is not deployable because Bahia does not wire an operational activator for its snapshots; choose dnsmasq, CoreDNS, PowerDNS, or FIPS instead. DNS configuration changes take effect on `SIGHUP` through whole-application reconstruction, not in-place backend mutation.
 
 Bahia automatically projects endpoints from:
 - **Services** — Healthy service deployments
