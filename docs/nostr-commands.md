@@ -26,14 +26,14 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 
 Kind `31953` is state, not a command: trusted operators replace the complete `soulfactory-fleet-config/v1` OpenClaw template, and provisioning reactors consume the latest trusted snapshot. Publishing clients must sign it and require at least one relay `OK accepted`.
 
-## ContextVM Mutation Methods
+## ContextVM Methods
 
 ContextVM methods use the `<domain>/<operation>` convention. The relay indexes the transport; Bahia interprets the JSON-RPC method and params after signature verification and, when encrypted, after unwrap.
 
 | Domain | Example methods |
 |--------|-----------------|
 | `service` | `deploy`, `route-attach`, `rollback`, `restart`, `stop`, `update`, `delete` |
-| `environment` | `create`, `update`, `delete` |
+| `environment` | `create`, `get-details`, `update`, `delete` |
 | `artifact` | `register` |
 | `policy` | `create`, `update`, `delete`, `evaluate` |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
@@ -45,6 +45,8 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 | `ci` | `workflow-run`, `cancel`, `retry` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
+
+`environment/get-details` accepts `{"id":"<environment-uuid>"}`, authorizes the signed requester for `environments:read` in the owning organization, and returns the environment (including targeting and `updated_at`) plus its explicit or resolved implicit `deployment_units`.
 
 When `environment/update` includes `deployment_units`, the array is the authoritative complete explicit set and `expected_updated_at` is required. Bahia checks that revision under an environment row lock. A stale request returns JSON-RPC code `-32009` without database or canonical registry mutation; callers reread and deliberately remerge before publishing a newly signed retry.
 

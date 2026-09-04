@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -76,40 +76,5 @@ func (h *EnvironmentHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EnvironmentHandler) environmentResponse(r *http.Request, env *domain.Environment) (*dto.EnvironmentResponse, error) {
-	if env == nil {
-		return nil, fmt.Errorf("environment is nil")
-	}
-	var units []domain.DeploymentUnit
-	if h.units != nil {
-		var err error
-		units, err = h.units.ListByEnvironment(r.Context(), env.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list deployment units for environment %s: %w", env.ID, err)
-		}
-	}
-	if len(units) == 0 {
-		var (
-			implicit *domain.DeploymentUnit
-			err      error
-		)
-		if h.units != nil {
-			implicit, err = h.units.ResolveDefault(r.Context(), env)
-		} else {
-			envCopy := *env
-			domain.NormalizeEnvironmentTargeting(&envCopy)
-			if envCopy.Targeting.DefaultUnitKey != domain.DefaultDeploymentUnitKey {
-				err = fmt.Errorf("configured default deployment unit %q cannot be resolved without a deployment unit repository: %w", envCopy.Targeting.DefaultUnitKey, repository.ErrConflict)
-			} else {
-				implicit, err = domain.NewImplicitDefaultDeploymentUnit(&envCopy)
-			}
-		}
-		if err != nil {
-			return nil, fmt.Errorf("resolve default deployment unit for environment %s: %w", env.ID, err)
-		}
-		if implicit == nil {
-			return nil, fmt.Errorf("default deployment unit was not found for environment %s", env.ID)
-		}
-		units = []domain.DeploymentUnit{*implicit}
-	}
-	return &dto.EnvironmentResponse{Environment: *env, DeploymentUnits: units}, nil
+	return readmodel.EnvironmentResponse(r.Context(), env, h.units)
 }

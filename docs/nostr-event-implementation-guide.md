@@ -82,9 +82,12 @@ Examples:
 | Request Security scan | `security/scan` |
 | Request Security rescan | `security/rescan` |
 | Create/update environment | `environment/create`, `environment/update` |
+| Read authorized environment details | `environment/get-details` |
 | Read Security findings or schedules | `security/findings-list`, `security/schedules-list` |
 
-For `environment/update`, a supplied `deployment_units` array is authoritative and requires `expected_updated_at` from the latest read. The service checks it while holding the environment row lock and returns JSON-RPC code `-32009` on stale input before database or canonical registry mutation. Only retry after a fresh read, deliberate remerge, and new signature.
+`environment/get-details` accepts `id`, requires `environments:read` for the signed requester in the owning organization, and returns the environment plus its explicit or resolved implicit deployment units in the signed ContextVM result.
+
+For `environment/update`, a supplied `deployment_units` array is authoritative and requires `expected_updated_at` from the latest read. The service checks it while holding the environment row lock; a stale write fails with JSON-RPC code `-32009` and does not mutate the database or canonical registry projection. Only retry after a fresh signed read, deliberate remerge, and new signature.
 
 Do not create request/status/result kind triplets for new operations.
 

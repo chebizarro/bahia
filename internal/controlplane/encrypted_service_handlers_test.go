@@ -182,6 +182,191 @@ func validRouteAttachRequest() domain.PublicRouteRequest {
 	return domain.PublicRouteRequest{Hostname: "api.example.com", UpstreamScheme: "http", UpstreamPort: 8080, HealthPath: "/healthz", TLS: "managed"}
 }
 
+func TestGenericAppSignerFirstEnvironmentUnitOnboardingFlow(t *testing.T) {
+	ctx := context.Background()
+	orgID, serviceID, environmentID, artifactID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	revision := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	oldUnitID := uuid.New()
+	oldGitSource := &domain.GitSourceBinding{
+		RepositoryURL: "https://git.example/existing.git",
+		Ref:           "refs/heads/main",
+		Branch:        "main",
+		CommitSHA:     "abc123",
+	}
+	environment := &domain.Environment{
+		ID: environmentID, OrgID: orgID, Name: "edge-01-docker", UpdatedAt: revision,
+		RuntimeConfig:  map[string]any{"type": "docker", "host_alias": "edge-01-docker", "management_mode": "direct_runtime"},
+		DeployStrategy: domain.DeployStrategyReplace,
+	}
+	environmentRegistry := &fakeEncryptedRegistryMutations{
+		environments: map[uuid.UUID]*domain.Environment{environmentID: environment},
+		deploymentUnits: map[uuid.UUID][]*domain.DeploymentUnit{environmentID: {{
+			ID: oldUnitID, EnvironmentID: environmentID, Key: "existing-docker", RuntimeType: domain.RuntimeTypeDocker,
+			EndpointRef: "edge-01-docker", OwnershipMode: domain.OwnershipModeExternal,
+			ReconcileMode: domain.ReconcileModeObserveOnly, GitSource: oldGitSource,
+		}}},
+	}
+	environmentHandlers := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Registry: environmentRegistry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop(),
+	})
+	updateParams, err := json.Marshal(map[string]any{
+		"id": environmentID.String(), "expected_updated_at": revision.Format(time.RFC3339Nano),
+		"targeting": map[string]any{"default_unit_key": "generic-app-compose"},
+		"deployment_units": []map[string]any{
+			{
+				"key": "existing-docker", "runtime_type": "docker",
+				"endpoint_ref": "edge-01-docker", "ownership_mode": "external", "reconcile_mode": "observe_only",
+				"git_source": map[string]any{"repository_url": oldGitSource.RepositoryURL, "ref": oldGitSource.Ref, "branch": oldGitSource.Branch, "commit_sha": oldGitSource.CommitSHA},
+			},
+			{
+				"key": "generic-app-compose", "runtime_type": "compose", "endpoint_ref": "edge-01-docker",
+				"compose_dir": "/srv/bahia/generic-app", "ownership_mode": "bahia_managed", "reconcile_mode": "auto_apply",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := environmentHandlers.UpdateEnvironment(ctx, ContextVMRequest{
+		Event: encryptedRequesterEvent(t),
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodEnvironmentUpdate, Params: updateParams},
+	}); err != nil {
+		t.Fatalf("environment/update: %v", err)
+	}
+
+	var oldUnit, newUnit *domain.DeploymentUnit
+	for _, unit := range environmentRegistry.deploymentUnits[environmentID] {
+		switch unit.Key {
+		case "existing-docker":
+			oldUnit = unit
+		case "generic-app-compose":
+			newUnit = unit
+		}
+	}
+	if oldUnit == nil || newUnit == nil || newUnit.ID == uuid.Nil {
+		t.Fatalf("updated deployment units = %#v", environmentRegistry.deploymentUnits[environmentID])
+	}
+	if oldUnit.GitSource == nil || oldUnit.GitSource.RepositoryURL != oldGitSource.RepositoryURL || oldUnit.GitSource.Ref != oldGitSource.Ref || oldUnit.GitSource.Branch != oldGitSource.Branch || oldUnit.GitSource.CommitSHA != oldGitSource.CommitSHA {
+		t.Fatalf("pre-existing unit was not preserved by key with git_source: %#v", oldUnit)
+	}
+	if newUnit.RuntimeType != domain.RuntimeTypeCompose || newUnit.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		t.Fatalf("new generic-app unit = %#v", newUnit)
+	}
+
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion, ServiceName: "generic-app",
+		Ports: []string{"127.0.0.1:18080:8080"}, RestartPolicy: "unless-stopped",
+	}
+	svcRepo := &testServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "generic-app", RuntimeType: domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed},
+	}}
+	envRepo := &testEnvironmentRepo{environment: environmentRegistry.environments[environmentID]}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{
+		ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example/generic-app", ImageTag: "v1", ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &testBuildRepo{}, artifactRepo, intentRepo,
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}, &testObservationRepo{}, stateRepo, nil,
+		&events.NoopPublisher{}, zap.NewNop(),
+	)
+	unitRepo := &routeAttachDeploymentUnitRepo{unit: newUnit}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, nil, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	planner, err := service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{
+		Provider: "cloudflare_tunnel", TunnelRef: "tunnel-1", DNSTarget: "tunnel.example.net", ConfigHash: "sha256:config",
+		Zones:   []service.PublicRouteZone{{Name: "example.com", BackendRef: "cloudflare", AllowedOrgIDs: []uuid.UUID{orgID}, TTL: 300}},
+		Origins: []service.PublicRouteOrigin{{DeploymentUnitID: newUnit.ID, Host: "127.0.0.1", AllowedPorts: []int{18080}}},
+	}, routing.StaticResolver{"cloudflare": routeAttachBackend{}})
+	if err != nil {
+		t.Fatalf("configure public route planner: %v", err)
+	}
+	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	handlers := &encryptedServiceHandlers{
+		registry: registry, runtimeLifecycle: lifecycle, policy: policy, publicRoutes: planner, deploymentUnits: unitRepo,
+		authorizer: encryptedTenantAuthorizer{services: svcRepo, environments: registry, rbac: encryptedAdminRBAC(t, orgID)}, logger: zap.NewNop(),
+	}
+	requestEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
+	previewParams, err := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &newUnit.ID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: previewParams},
+	})
+	if err != nil {
+		t.Fatalf("service/deploy-preview: %v", err)
+	}
+	preview := previewResult.(map[string]any)
+	previewState := preview["desired_state"].(*domain.DesiredServiceSpec)
+	if previewState.DeploymentUnitID == nil || *previewState.DeploymentUnitID != newUnit.ID || previewState.DeploymentUnitKey != newUnit.Key {
+		t.Fatalf("preview target = %#v", previewState)
+	}
+
+	deployParams, err := json.Marshal(dto.ServiceDeployRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &newUnit.ID,
+		ArtifactID: artifactID, ExpectedDesiredStateHash: previewState.DesiredHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployResult, err := handlers.deploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeploy, Params: deployParams},
+	})
+	if err != nil {
+		t.Fatalf("service/deploy: %v", err)
+	}
+	deployPayload := deployResult.(map[string]any)
+	intentID, err := uuid.Parse(deployPayload["intent_id"].(string))
+	if err != nil {
+		t.Fatalf("parse deploy intent id: %v", err)
+	}
+	deployIntent := intentRepo.intents[intentID]
+	if deployIntent == nil || deployIntent.DeploymentUnitID == nil || *deployIntent.DeploymentUnitID != newUnit.ID || deployIntent.DesiredState.DeploymentUnitKey != newUnit.Key {
+		t.Fatalf("deploy intent target = %#v", deployIntent)
+	}
+	if err := intentRepo.UpdateStatus(ctx, intentID, domain.IntentStatusDeployed); err != nil {
+		t.Fatalf("mark deploy intent deployed: %v", err)
+	}
+
+	routeParams, err := json.Marshal(dto.ServiceRouteAttachRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &newUnit.ID,
+		PublicRoute: &domain.PublicRouteRequest{Hostname: "generic-app.example.com", UpstreamScheme: "http", UpstreamPort: 18080, HealthPath: "/healthz", TLS: "managed"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeResult, err := handlers.routeAttach(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceRouteAttach, Params: routeParams},
+	})
+	if err != nil {
+		t.Fatalf("service/route-attach: %v", err)
+	}
+	routePayload := routeResult.(map[string]any)
+	if routePayload["deployment_unit_id"] == nil || *(routePayload["deployment_unit_id"].(*uuid.UUID)) != newUnit.ID {
+		t.Fatalf("route attachment target = %#v", routePayload["deployment_unit_id"])
+	}
+	var routeIntent *domain.DeploymentIntent
+	for _, intent := range intentRepo.intents {
+		if intent.Metadata["contextvm_method"] == ContextVMMethodServiceRouteAttach {
+			routeIntent = intent
+		}
+	}
+	if routeIntent == nil || routeIntent.DesiredState == nil || routeIntent.DesiredState.PublicRoute == nil || routeIntent.DesiredState.PublicRoute.Hostname != "generic-app.example.com" {
+		t.Fatalf("route attachment intent = %#v", routeIntent)
+	}
+}
+
 func TestRouteAttachCreatesSignedIntentFromCurrentDesiredState(t *testing.T) {
 	fixture := newRouteAttachFixture(t, false, false)
 	result, err := fixture.handlers.routeAttach(context.Background(), fixture.request(t, fixture.serviceID, validRouteAttachRequest()))

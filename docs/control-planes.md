@@ -54,7 +54,7 @@ Client mutation publication should use ContextVM JSON-RPC methods rather than Ba
 | Domain | Methods |
 |--------|---------|
 | `service` | `deploy`, `rollback`, `scale`, `restart`, `stop`, `update`, `delete` |
-| `environment` | `create`, `update`, `delete` |
+| `environment` | `create`, `get-details`, `update`, `delete` |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update` |
 | `package` | `publish`, `promote`, `yank`, `deprecate`, `drift-detect` |
 | `dns` | `zone-create`, `zone-delete`, `record-set`, `policy-apply`, `drift-remediate` |
@@ -78,7 +78,9 @@ Example ContextVM request:
 }
 ```
 
-For `environment/update`, `deployment_units` is an authoritative complete set. Such requests must carry `expected_updated_at` from the latest environment read. Bahia checks the revision while holding the environment row lock and returns JSON-RPC code `-32009` on conflict before any database or canonical registry mutation; clients must reread and deliberately remerge before signing a retry.
+`environment/get-details` is the authorized signer-first read for unit management. It accepts `id`, checks `environments:read` in the owning organization, and returns the environment, targeting, `updated_at`, and explicit or resolved implicit `deployment_units` in the signed ContextVM result.
+
+For `environment/update`, `deployment_units` is an authoritative complete set. Such requests must carry `expected_updated_at` from the latest environment read. Bahia validates that revision under the environment row lock and returns JSON-RPC code `-32009` on conflict before any database or canonical registry mutation. Callers must reread, deliberately remerge, and publish a newly signed retry.
 
 The production cutover is complete: CLI/web/client mutations use the ContextVM method surface, and legacy Bahia request-kind publication is not a production runtime path. Legacy kind constants and fixtures may remain only for startup migration, historical conversion, and tests that prove old events fail closed or migrate to canonical events.
 

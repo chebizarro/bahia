@@ -13,6 +13,7 @@ import (
 	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/nip44"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
+	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -191,6 +192,7 @@ func TestOperatorEnvironmentCreateUpdateRequestConstruction(t *testing.T) {
 					ComposeDir:    "/srv/bahia/gastown",
 					OwnershipMode: "bahia_managed",
 					ReconcileMode: "auto_apply",
+					GitSource:     &GitSourceRequest{RepositoryURL: "https://git.example/gastown.git", Ref: "refs/heads/main", Branch: "main", CommitSHA: "abc123"},
 					RuntimeConfig: map[string]any{"execution_mode": "sdk"},
 				}}
 				return c.CreateEnvironmentNostr(ctx, CreateEnvironmentNostrRequest{
@@ -219,6 +221,10 @@ func TestOperatorEnvironmentCreateUpdateRequestConstruction(t *testing.T) {
 				runtimeConfig, _ := unit["runtime_config"].(map[string]any)
 				if unit["runtime_type"] != "compose" || unit["endpoint_ref"] != "max" || runtimeConfig["execution_mode"] != "sdk" {
 					t.Fatalf("unit = %#v", unit)
+				}
+				gitSource, _ := unit["git_source"].(map[string]any)
+				if gitSource["repository_url"] != "https://git.example/gastown.git" || gitSource["ref"] != "refs/heads/main" || gitSource["branch"] != "main" || gitSource["commit_sha"] != "abc123" {
+					t.Fatalf("git_source = %#v", gitSource)
 				}
 			},
 		},
@@ -278,6 +284,39 @@ func TestOperatorEnvironmentCreateUpdateRequestConstruction(t *testing.T) {
 			assertTagValue(t, published.Tags, "method", test.method)
 		})
 	}
+}
+
+func TestOperatorGetEnvironmentDetailsNostrRequestAndDecode(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	c := newTestOperatorClient(t, requestKey, transport)
+	envID := uuid.NewString()
+	unitID := uuid.NewString()
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{
+			"id":               envID,
+			"name":             "production",
+			"targeting":        map[string]any{"default_unit_key": "max"},
+			"updated_at":       "2026-09-04T12:00:00Z",
+			"deployment_units": []map[string]any{{"id": unitID, "environment_id": envID, "key": "max", "runtime_type": "compose"}},
+		})
+		return 1, nil
+	}
+
+	result, err := c.GetEnvironmentDetailsNostr(context.Background(), envID, nil)
+	if err != nil {
+		t.Fatalf("GetEnvironmentDetailsNostr() error = %v", err)
+	}
+	if result.ID.String() != envID || result.Name != "production" || result.Targeting.DefaultUnitKey != "max" || result.UpdatedAt.Format(time.RFC3339) != "2026-09-04T12:00:00Z" || len(result.DeploymentUnits) != 1 || result.DeploymentUnits[0].ID.String() != unitID {
+		t.Fatalf("decoded result = %#v", result)
+	}
+	published := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.Method != controlplane.ContextVMMethodEnvironmentGetDetails || rpc.Params["id"] != envID {
+		t.Fatalf("request = %#v", rpc)
+	}
+	assertTagValue(t, published.Tags, "environment", envID)
 }
 
 func TestOperatorEnvironmentMutationsValidateRequiredFieldsBeforePublish(t *testing.T) {

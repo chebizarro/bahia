@@ -134,7 +134,7 @@ bahia environments get <environment-id>
 bahia environments create --name production --units-file units.json
 bahia environments update <environment-id> --units-file units.json
 
-# Manage one unit through read-merge, complete-set signed updates
+# Manage one unit through signed read-merge, complete-set signed updates
 bahia environments units list <environment-id>
 bahia environments units create <environment-id> --file unit.json --default-unit-key max
 bahia environments units update <environment-id> max --file unit.json --default-unit-key max
@@ -203,7 +203,7 @@ If the canonical environment revision changes while a target draft is open, Bahi
 
 ### Nostr
 
-Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The CLI retries a stale complete-set write by rereading and remerging up to three signed attempts; it then reports the conflict.
+Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The `environments units` CLI commands obtain the environment, targeting, `updated_at`, and resolved units through the authorized signed `environment/get-details` method; no REST authorization is required and there is no automatic HTTP fallback. The CLI retries a stale complete-set write by rereading through that signed method and remerging up to three attempts; it then reports the conflict.
 
 ## Deleting Environments
 

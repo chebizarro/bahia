@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
+	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -173,6 +174,22 @@ func (r *fakeEncryptedIntentRepo) UpdateApproval(context.Context, uuid.UUID, dom
 }
 func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.DesiredServiceSpec, string) error {
 	return nil
+}
+
+type fakeEncryptedDeploymentUnitReader struct {
+	units []domain.DeploymentUnit
+	err   error
+}
+
+func (r fakeEncryptedDeploymentUnitReader) ListByEnvironment(context.Context, uuid.UUID) ([]domain.DeploymentUnit, error) {
+	return r.units, r.err
+}
+
+func (r fakeEncryptedDeploymentUnitReader) ResolveDefault(_ context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return domain.NewImplicitDefaultDeploymentUnit(env)
 }
 
 type fakeEncryptedRegistryMutations struct {
@@ -676,8 +693,14 @@ func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodPersistsRichCont
 			"endpoint_ref":    "max",
 			"compose_dir":     "/srv/bahia/gastown",
 			"network_profile": map[string]string{"zone": "home"},
-			"ownership_mode":  "bahia_managed",
-			"runtime_config":  map[string]any{"execution_mode": "sdk"},
+			"git_source": map[string]string{
+				"repository_url": "https://git.example/gastown.git",
+				"ref":            "refs/heads/main",
+				"branch":         "main",
+				"commit_sha":     "abc123",
+			},
+			"ownership_mode": "bahia_managed",
+			"runtime_config": map[string]any{"execution_mode": "sdk"},
 		}},
 	}))
 
@@ -701,6 +724,9 @@ func TestEncryptedRouteHandlers_CreateEnvironmentContextVMMethodPersistsRichCont
 	unit := units[0]
 	if unit.RuntimeType != domain.RuntimeTypeCompose || unit.EndpointRef != "max" || unit.ComposeDir != "/srv/bahia/gastown" {
 		t.Fatalf("unexpected deployment unit: %#v", unit)
+	}
+	if unit.GitSource == nil || unit.GitSource.RepositoryURL != "https://git.example/gastown.git" || unit.GitSource.Ref != "refs/heads/main" || unit.GitSource.Branch != "main" || unit.GitSource.CommitSHA != "abc123" {
+		t.Fatalf("unexpected deployment unit git source: %#v", unit.GitSource)
 	}
 	if unit.ReconcileMode != domain.ReconcileModeAutoApply || unit.OwnershipMode != domain.OwnershipModeBahiaManaged || unit.RuntimeConfig["execution_mode"] != "sdk" {
 		t.Fatalf("unexpected deployment unit policy: %#v", unit)
@@ -750,6 +776,53 @@ func TestEncryptedRouteHandlers_CreateEnvironmentRejectsDeploymentUnitSchemaViol
 	}
 	if len(registry.environments) != 0 {
 		t.Fatalf("invalid requests mutated registry: %#v", registry.environments)
+	}
+}
+
+func TestEncryptedRouteHandlers_GetEnvironmentDetailsAuthorizesAndReturnsResolvedDetails(t *testing.T) {
+	envID := uuid.New()
+	orgID := uuid.New()
+	revision := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	env := &domain.Environment{ID: envID, OrgID: orgID, Name: "prod", UpdatedAt: revision, Targeting: domain.EnvironmentTargeting{DefaultUnitKey: "max"}}
+	unit := domain.DeploymentUnit{ID: uuid.New(), EnvironmentID: envID, Key: "max", RuntimeType: domain.RuntimeTypeCompose}
+	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{envID: env}}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Registry:        registry,
+		DeploymentUnits: fakeEncryptedDeploymentUnitReader{units: []domain.DeploymentUnit{unit}},
+		RBAC:            encryptedAdminRBAC(t, orgID),
+		Logger:          zap.NewNop(),
+	})
+
+	result, err := h.GetEnvironmentDetails(context.Background(), ContextVMRequest{
+		Event: encryptedRequesterEvent(t),
+		RPC:   ContextVMJSONRPCRequest{Params: json.RawMessage(`{"id":"` + envID.String() + `"}`)},
+	})
+	if err != nil {
+		t.Fatalf("GetEnvironmentDetails() error = %v", err)
+	}
+	response, ok := result.(*dto.EnvironmentResponse)
+	if !ok {
+		t.Fatalf("result type = %T, want *dto.EnvironmentResponse", result)
+	}
+	if response.ID != envID || !response.UpdatedAt.Equal(revision) || response.Targeting.DefaultUnitKey != "max" || len(response.DeploymentUnits) != 1 || response.DeploymentUnits[0].ID != unit.ID {
+		t.Fatalf("environment details = %#v", response)
+	}
+
+	unauthorized := &nostr.Event{PubKey: nostr.Generate().Public()}
+	_, err = h.GetEnvironmentDetails(context.Background(), ContextVMRequest{
+		Event: unauthorized,
+		RPC:   ContextVMJSONRPCRequest{Params: json.RawMessage(`{"id":"` + envID.String() + `"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("unauthorized error = %v, want access denied", err)
+	}
+
+	_, err = h.GetEnvironmentDetails(context.Background(), ContextVMRequest{
+		Event: encryptedRequesterEvent(t),
+		RPC:   ContextVMJSONRPCRequest{Params: json.RawMessage(`{"id":"` + uuid.NewString() + `"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment not found") {
+		t.Fatalf("unknown environment error = %v, want environment not found", err)
 	}
 }
 

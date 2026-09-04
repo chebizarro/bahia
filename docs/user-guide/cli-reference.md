@@ -111,7 +111,7 @@ bahia services actions stop --service svc-123 --environment env-456
 
 ### Environments
 
-Environment mutations publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers use the environment read model and publish the complete explicit unit set; they do not call REST mutation endpoints.
+Environment mutations publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers obtain the environment read model through signed `environment/get-details` and publish the complete explicit unit set; they do not call REST for reads or mutations, and do not silently fall back to HTTP.
 
 ```bash
 # Read environments (GET responses include deployment_units)
@@ -130,7 +130,7 @@ bahia environments units create <environment-id> --file unit.json --default-unit
 bahia environments units update <environment-id> max --file unit.json --default-unit-key max
 ```
 
-Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI rereads and deliberately remerges at most three signed attempts before surfacing the conflict. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
+Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI rereads through `environment/get-details` and deliberately remerges at most three signed attempts before surfacing the conflict. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
 
 ### Deployments
 

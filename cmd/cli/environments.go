@@ -205,7 +205,12 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 			}
 			if units == nil {
 				if targetingChanged {
-					details, loadErr := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
+					op, buildErr := buildCLIOperatorClient(cmd)
+					if buildErr != nil {
+						return buildErr
+					}
+					defer op.Close()
+					details, loadErr := runEnvironmentGetDetailsNostrWithClient(cmd, op, args[0])
 					if loadErr != nil {
 						return loadErr
 					}
@@ -213,6 +218,11 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 					if err != nil {
 						return err
 					}
+					result, updateErr := runEnvironmentUpdateNostrWithClient(cmd, op, req)
+					if updateErr != nil {
+						return updateErr
+					}
+					return outputSingle(result)
 				}
 				result, updateErr := runEnvironmentUpdateNostr(cmd, req)
 				if updateErr != nil {
@@ -290,7 +300,7 @@ func newEnvironmentUnitsListCommand() *cobra.Command {
 		Short: "List explicit deployment units or the resolved implicit default",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
+			env, err := runEnvironmentGetDetailsNostr(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -429,8 +439,13 @@ func runEnvironmentCompleteSetUpdateWithRetry(
 	environmentID string,
 	build func(*client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error),
 ) (*client.EnvironmentCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
 	for attempt := 1; attempt <= environmentCompleteSetUpdateMaxAttempts; attempt++ {
-		details, err := apiClient.GetEnvironmentDetails(cmd.Context(), environmentID)
+		details, err := runEnvironmentGetDetailsNostrWithClient(cmd, op, environmentID)
 		if err != nil {
 			return nil, err
 		}
@@ -444,7 +459,7 @@ func runEnvironmentCompleteSetUpdateWithRetry(
 		revision := details.UpdatedAt
 		req.ID = environmentID
 		req.ExpectedUpdatedAt = &revision
-		result, err := runEnvironmentUpdateNostr(cmd, req)
+		result, err := runEnvironmentUpdateNostrWithClient(cmd, op, req)
 		if err == nil {
 			return result, nil
 		}
@@ -729,9 +744,22 @@ func deploymentUnitRequestFromDomain(unit domain.DeploymentUnit) client.Deployme
 		ComposeDir:     unit.ComposeDir,
 		Namespace:      unit.Namespace,
 		NetworkProfile: unit.NetworkProfile,
+		GitSource:      gitSourceRequestFromDomain(unit.GitSource),
 		OwnershipMode:  string(unit.OwnershipMode),
 		ReconcileMode:  string(unit.ReconcileMode),
 		RuntimeConfig:  unit.RuntimeConfig,
+	}
+}
+
+func gitSourceRequestFromDomain(source *domain.GitSourceBinding) *client.GitSourceRequest {
+	if source == nil {
+		return nil
+	}
+	return &client.GitSourceRequest{
+		RepositoryURL: source.RepositoryURL,
+		Ref:           source.Ref,
+		Branch:        source.Branch,
+		CommitSHA:     source.CommitSHA,
 	}
 }
 

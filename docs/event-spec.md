@@ -94,7 +94,7 @@ Methods follow `<domain>/<operation>`:
 | Domain | Example methods |
 |--------|-----------------|
 | `service` | `deploy`, `rollback`, `restart`, `stop`, `update`, `delete` |
-| `environment` | `create`, `update`, `delete` |
+| `environment` | `create`, `get-details`, `update`, `delete` |
 | `artifact` | `register` |
 | `policy` | `create`, `update`, `delete`, `evaluate` |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
@@ -107,7 +107,9 @@ Methods follow `<domain>/<operation>`:
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
 
-Complete-set `environment/update` intent includes `deployment_units` plus required `expected_updated_at` from the latest environment read. Bahia checks the revision while locking the environment row; stale input returns JSON-RPC code `-32009` without a database or canonical registry mutation. Retrying requires a fresh read, deliberate remerge, and newly signed request.
+`environment/get-details` uses params `{"id":"<environment-uuid>"}`. After verifying the signer and `environments:read` authorization in the owning organization, Bahia returns the environment (including targeting and `updated_at`) plus its explicit or resolved implicit `deployment_units` in the signed ContextVM result.
+
+Complete-set `environment/update` intent includes `deployment_units` plus required `expected_updated_at` from the latest environment read. Bahia checks the revision under the environment row lock and returns JSON-RPC code `-32009` on conflict before any database or canonical registry mutation; clients must reread, deliberately remerge, and sign a fresh retry.
 
 `soul-factory/provision` and `soul-factory/action` are the canonical mutation entry points for new Soul Factory clients. During the staged migration Bahia adapts each verified request into the existing event-driven Soul Factory reactor, retaining the original `25910` event id for correlation. The response acknowledges acceptance only. Provisioning progress and terminal outcomes produce canonical `30900` state (`d=soul-factory:provisioning:<request-event-id>`, schema `bahia.state.soul-factory-provisioning.v1`) plus append-only `4903` audit facts. Action projection remains staged.
 
