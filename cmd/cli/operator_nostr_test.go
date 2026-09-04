@@ -496,6 +496,7 @@ func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
 		"--service", "11111111-1111-1111-1111-111111111111",
 		"--environment", "22222222-2222-2222-2222-222222222222",
 		"--artifact", "33333333-3333-3333-3333-333333333333",
+		"--expected-desired-state-hash", "sha256:reviewed",
 		"--requested-by", "ignored-by-server",
 		"--idempotency-key", "deploy:test",
 	})
@@ -505,6 +506,7 @@ func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
 	if captured.ServiceID != "11111111-1111-1111-1111-111111111111" ||
 		captured.EnvironmentID != "22222222-2222-2222-2222-222222222222" ||
 		captured.ArtifactID != "33333333-3333-3333-3333-333333333333" ||
+		captured.ExpectedDesiredStateHash != "sha256:reviewed" ||
 		captured.RequestedBy != "ignored-by-server" ||
 		captured.IdempotencyKey != "deploy:test" {
 		t.Fatalf("captured deployment intent = %#v", captured)

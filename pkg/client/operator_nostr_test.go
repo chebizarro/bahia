@@ -303,7 +303,7 @@ func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
 
 	result, err := client.CreateDeploymentIntentWithRequestNostr(context.Background(), DeploymentIntentNostrRequest{
 		ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentUnitID: "unit-1", ArtifactID: "artifact-1",
-		RequestedBy: "ignored", IdempotencyKey: "deploy-retry-1",
+		ExpectedDesiredStateHash: "sha256:reviewed", RequestedBy: "ignored", IdempotencyKey: "deploy-retry-1",
 	}, nil)
 	if err != nil {
 		t.Fatalf("CreateDeploymentIntentNostr() error = %v", err)
@@ -325,8 +325,14 @@ func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
 	if got, _ := rpc.Params["deployment_unit_id"].(string); got != "unit-1" {
 		t.Fatalf("deployment_unit_id = %q, want unit-1", got)
 	}
+	if got, _ := rpc.Params["expected_desired_state_hash"].(string); got != "sha256:reviewed" {
+		t.Fatalf("expected_desired_state_hash = %q, want sha256:reviewed", got)
+	}
 	if got := firstTagValue(published.Tags, "deployment-unit"); got != "unit-1" {
 		t.Fatalf("deployment-unit tag = %q, want unit-1", got)
+	}
+	if got := firstTagValue(published.Tags, "desired-hash"); got != "sha256:reviewed" {
+		t.Fatalf("desired-hash tag = %q, want sha256:reviewed", got)
 	}
 	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != "deploy-retry-1" {
 		t.Fatalf("progress token = %#v, want deploy-retry-1", rpc.Params["_meta"])

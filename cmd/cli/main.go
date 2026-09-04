@@ -438,16 +438,18 @@ func deployCommands() *cobra.Command {
 			envID, _ := cmd.Flags().GetString("environment")
 			deploymentUnitID, _ := cmd.Flags().GetString("deployment-unit")
 			artifactID, _ := cmd.Flags().GetString("artifact")
+			expectedDesiredStateHash, _ := cmd.Flags().GetString("expected-desired-state-hash")
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
 			result, err := runDeploymentIntentNostr(cmd, client.DeploymentIntentNostrRequest{
-				ServiceID:        serviceID,
-				EnvironmentID:    envID,
-				DeploymentUnitID: deploymentUnitID,
-				ArtifactID:       artifactID,
-				RequestedBy:      requestedBy,
-				IdempotencyKey:   idempotencyKey,
+				ServiceID:                serviceID,
+				EnvironmentID:            envID,
+				DeploymentUnitID:         deploymentUnitID,
+				ArtifactID:               artifactID,
+				ExpectedDesiredStateHash: expectedDesiredStateHash,
+				RequestedBy:              requestedBy,
+				IdempotencyKey:           idempotencyKey,
 			})
 			if err != nil {
 				return err
@@ -467,6 +469,7 @@ func deployCommands() *cobra.Command {
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("deployment-unit", "", "Deployment unit ID for explicit-unit deployments")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
+	deployCmd.Flags().String("expected-desired-state-hash", "", "Expected managed desired-state hash from a reviewed deploy preview")
 	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
 	deployCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
 	_ = deployCmd.MarkFlagRequired("service")

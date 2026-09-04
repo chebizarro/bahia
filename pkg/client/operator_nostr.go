@@ -476,12 +476,13 @@ type RollbackDeploymentNostrRequest struct {
 // DeploymentIntentNostrRequest is the signer-first deployment intent target.
 // Requester attribution is derived from the signed event, never caller payload.
 type DeploymentIntentNostrRequest struct {
-	ServiceID        string `json:"service_id"`
-	EnvironmentID    string `json:"environment_id"`
-	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
-	ArtifactID       string `json:"artifact_id"`
-	RequestedBy      string `json:"-"`
-	IdempotencyKey   string `json:"idempotency_key,omitempty"`
+	ServiceID                string `json:"service_id"`
+	EnvironmentID            string `json:"environment_id"`
+	DeploymentUnitID         string `json:"deployment_unit_id,omitempty"`
+	ArtifactID               string `json:"artifact_id"`
+	ExpectedDesiredStateHash string `json:"expected_desired_state_hash,omitempty"`
+	RequestedBy              string `json:"-"`
+	IdempotencyKey           string `json:"idempotency_key,omitempty"`
 }
 
 // DeploymentApprovalNostrRequest is the signer-first approval/rejection target.
@@ -780,6 +781,7 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentWithRequestNostr(ctx 
 	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
 	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
 	req.ArtifactID = strings.TrimSpace(req.ArtifactID)
+	req.ExpectedDesiredStateHash = strings.TrimSpace(req.ExpectedDesiredStateHash)
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.ServiceID == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
@@ -799,6 +801,10 @@ func (c *OperatorControlPlaneClient) CreateDeploymentIntentWithRequestNostr(ctx 
 	if req.DeploymentUnitID != "" {
 		payload["deployment_unit_id"] = req.DeploymentUnitID
 		tags = append(tags, nostr.Tag{"deployment-unit", req.DeploymentUnitID})
+	}
+	if req.ExpectedDesiredStateHash != "" {
+		payload["expected_desired_state_hash"] = req.ExpectedDesiredStateHash
+		tags = append(tags, nostr.Tag{"desired-hash", req.ExpectedDesiredStateHash})
 	}
 	if req.IdempotencyKey != "" {
 		payload["idempotency_key"] = req.IdempotencyKey
