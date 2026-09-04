@@ -132,11 +132,30 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 			zap.String("container_id", existing.ID),
 			zap.String("existing_hash", existingHash),
 		)
+		removeID := existing.ID
 		if err := control.StopContainer(ctx, existing.ID); err != nil {
-			return nil, fmt.Errorf("docker apply: stopping container %s: %w", existing.ID, err)
+			current, observeErr := control.FindManagedContainer(ctx, spec)
+			if observeErr != nil {
+				return nil, fmt.Errorf("docker apply: stopping container %s: %w", existing.ID, err)
+			}
+			if current != nil && !isContainerStoppedAfterStopError(current.State) {
+				return nil, fmt.Errorf("docker apply: stopping container %s: %w", existing.ID, err)
+			}
+			if current != nil {
+				removeID = current.ID
+			} else {
+				removeID = ""
+			}
+			warnings = append(warnings, fmt.Sprintf("docker stop returned an error after the container stopped; continuing remove/create: %v", err))
+			logger.Warn("docker stop returned error after container stopped; continuing",
+				zap.String("container_id", existing.ID),
+				zap.Error(err),
+			)
 		}
-		if err := control.RemoveContainer(ctx, existing.ID); err != nil {
-			return nil, fmt.Errorf("docker apply: removing container %s: %w", existing.ID, err)
+		if removeID != "" {
+			if err := control.RemoveContainer(ctx, removeID); err != nil {
+				return nil, fmt.Errorf("docker apply: removing container %s: %w", removeID, err)
+			}
 		}
 	}
 
@@ -174,6 +193,15 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 // SupportsDesiredState returns true — the Docker adapter supports desired-state
 // convergence.
 func (o *DockerObserver) SupportsDesiredState() bool { return true }
+
+func isContainerStoppedAfterStopError(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "exited", "dead", "removing":
+		return true
+	default:
+		return false
+	}
+}
 
 // attachAdditionalNetworks connects a container to networks listed in the
 // spec's DockerExtension that are not the primary network mode. Returns
