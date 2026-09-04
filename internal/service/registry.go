@@ -1080,16 +1080,24 @@ func (s *RegistryService) RestoreEnvironmentServiceStateToDeployedIntent(ctx con
 	}
 	artifactID := intent.ArtifactID
 	intentID := intent.ID
-	state := &domain.EnvironmentServiceState{
-		ServiceID:           intent.ServiceID,
-		EnvironmentID:       intent.EnvironmentID,
-		DeploymentUnitID:    deploymentUnitIDForRunIntent(nil, intent),
-		DesiredArtifactID:   &artifactID,
-		DesiredIntentID:     &intentID,
-		DesiredRuntimeState: intent.DesiredState,
-		DesiredHash:         intent.DesiredHash,
-		DriftStatus:         domain.DriftStatusInSync,
+	state, err := s.state.Get(ctx, intent.ServiceID, intent.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("loading environment service state for restoration to deployed intent %s: %w", intent.ID, err)
 	}
+	if state == nil {
+		state = &domain.EnvironmentServiceState{
+			ServiceID:     intent.ServiceID,
+			EnvironmentID: intent.EnvironmentID,
+		}
+	}
+	// Restore only the desired-state linkage; preserve observation, run, and
+	// reconcile health fields the failed route attach never touched.
+	state.DeploymentUnitID = deploymentUnitIDForRunIntent(nil, intent)
+	state.DesiredArtifactID = &artifactID
+	state.DesiredIntentID = &intentID
+	state.DesiredRuntimeState = intent.DesiredState
+	state.DesiredHash = intent.DesiredHash
+	state.DriftStatus = domain.DriftStatusInSync
 	if err := s.state.Upsert(ctx, state); err != nil {
 		return fmt.Errorf("restoring environment service state to deployed intent %s: %w", intent.ID, err)
 	}

@@ -1702,7 +1702,22 @@ func TestExecuteDeployment_RouteOnlyFailurePreservesProviderCompensation(t *test
 	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
 		t.Fatal(err)
 	}
-	err := coordExecuteRouteOnly(registry, unitRepo, lifecycle, routes, intent.ID)
+	// Seed observation/health linkage recorded while the service was healthy;
+	// a failed route attach must not erase it during state restoration.
+	observationID := uuid.New()
+	lastRunID := uuid.New()
+	reconciledAt := time.Now().Add(-30 * time.Second).UTC()
+	seeded, err := registry.GetEnvironmentServiceState(ctx, svc.ID, env.ID)
+	if err != nil || seeded == nil {
+		t.Fatalf("load seeded state: %#v err=%v", seeded, err)
+	}
+	seeded.CurrentObservationID = &observationID
+	seeded.LastSuccessfulRunID = &lastRunID
+	seeded.LastReconciledAt = &reconciledAt
+	if err := stateRepo.Upsert(ctx, seeded); err != nil {
+		t.Fatal(err)
+	}
+	err = coordExecuteRouteOnly(registry, unitRepo, lifecycle, routes, intent.ID)
 	if err == nil || !strings.Contains(err.Error(), "previous public route restored") {
 		t.Fatalf("compensated route error = %v", err)
 	}
@@ -1727,6 +1742,11 @@ func TestExecuteDeployment_RouteOnlyFailurePreservesProviderCompensation(t *test
 		state.DesiredRuntimeState != previousDesired || state.DesiredHash != previousDesired.DesiredHash ||
 		state.DriftStatus != domain.DriftStatusInSync {
 		t.Fatalf("route-only failure did not restore prior in-sync state: %#v", state)
+	}
+	if state.CurrentObservationID == nil || *state.CurrentObservationID != observationID ||
+		state.LastSuccessfulRunID == nil || *state.LastSuccessfulRunID != lastRunID ||
+		state.LastReconciledAt == nil || !state.LastReconciledAt.Equal(reconciledAt) {
+		t.Fatalf("route-only failure restoration erased observation/health linkage: %#v", state)
 	}
 }
 
