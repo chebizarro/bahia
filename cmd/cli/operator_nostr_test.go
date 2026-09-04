@@ -513,6 +513,47 @@ func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestDeploymentsPreviewCommandBuildsSignedPreviewRequest(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	configPath := filepath.Join(t.TempDir(), "runtime.json")
+	if err := os.WriteFile(configPath, []byte(`{"command":["/app/server"],"ports":[{"container_port":8080}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var captured client.DeploymentPreviewNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{deploymentPreview: func(req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
+			captured = req
+			return map[string]any{"desired_state_hash": "sha256:previewed"}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(deployCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{
+		"deployments", "preview",
+		"--service", "service-1",
+		"--environment", "env-1",
+		"--deployment-unit", "unit-1",
+		"--artifact", "artifact-1",
+		"--managed-runtime-config-file", configPath,
+		"--idempotency-key", "preview:test",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute deployments preview: %v", err)
+	}
+	if captured.ServiceID != "service-1" || captured.EnvironmentID != "env-1" || captured.DeploymentUnitID != "unit-1" || captured.ArtifactID != "artifact-1" || captured.IdempotencyKey != "preview:test" {
+		t.Fatalf("captured deployment preview = %#v", captured)
+	}
+	if got, _ := captured.ManagedRuntimeConfig["command"].([]any); len(got) != 1 || got[0] != "/app/server" {
+		t.Fatalf("managed config command = %#v", captured.ManagedRuntimeConfig["command"])
+	}
+}
+
 func TestDeploymentsRouteAttachCommandBuildsSignedRouteRequest(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
@@ -702,6 +743,7 @@ type fakeCLIOperatorClient struct {
 	environmentCreate  func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	environmentUpdate  func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	deploymentIntent   func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
+	deploymentPreview  func(client.DeploymentPreviewNostrRequest) (map[string]any, error)
 	routeAttach        func(client.RouteAttachRequest) (*client.DeploymentCommandResult, error)
 	deploymentApproval func(client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error)
 }
@@ -770,6 +812,12 @@ func (f fakeCLIOperatorClient) CreateDeploymentIntentNostr(context.Context, stri
 func (f fakeCLIOperatorClient) CreateDeploymentIntentWithRequestNostr(_ context.Context, req client.DeploymentIntentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
 	if f.deploymentIntent != nil {
 		return f.deploymentIntent(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) PreviewDeploymentNostr(_ context.Context, req client.DeploymentPreviewNostrRequest, _ func(client.OperatorStatusEvent)) (map[string]any, error) {
+	if f.deploymentPreview != nil {
+		return f.deploymentPreview(req)
 	}
 	return nil, errors.New("not implemented")
 }

@@ -28,6 +28,7 @@ type cliOperatorClient interface {
 	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error)
+	PreviewDeploymentNostr(context.Context, client.DeploymentPreviewNostrRequest, func(client.OperatorStatusEvent)) (map[string]any, error)
 	CreateDeploymentIntentWithRequestNostr(context.Context, client.DeploymentIntentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RouteAttach(context.Context, client.RouteAttachRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
@@ -179,6 +180,15 @@ func runDeploymentIntentNostr(cmd *cobra.Command, req client.DeploymentIntentNos
 	}
 	defer op.Close()
 	return op.CreateDeploymentIntentWithRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "deploy"))
+}
+
+func runDeploymentPreviewNostr(cmd *cobra.Command, req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.PreviewDeploymentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "deploy preview"))
 }
 
 func runRouteAttachNostr(cmd *cobra.Command, req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
