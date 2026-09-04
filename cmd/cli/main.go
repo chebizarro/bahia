@@ -75,6 +75,7 @@ func newRootCommand() *cobra.Command {
 		environmentsCommands(),
 		stateCommands(),
 		artifactsCommands(),
+		dnsCommands(),
 		deployCommands(),
 		adoptCommands(),
 		workersCommands(),
@@ -472,6 +473,53 @@ func deployCommands() *cobra.Command {
 	_ = deployCmd.MarkFlagRequired("environment")
 	_ = deployCmd.MarkFlagRequired("artifact")
 
+	routeAttachCmd := &cobra.Command{
+		Use:   "route-attach",
+		Short: "Attach a signed public route without redeploying the service artifact",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceID, _ := cmd.Flags().GetString("service")
+			envID, _ := cmd.Flags().GetString("environment")
+			unitID, _ := cmd.Flags().GetString("deployment-unit")
+			hostname, _ := cmd.Flags().GetString("hostname")
+			upstreamScheme, _ := cmd.Flags().GetString("upstream-scheme")
+			upstreamPort, _ := cmd.Flags().GetInt("upstream-port")
+			healthPath, _ := cmd.Flags().GetString("health-path")
+			tlsMode, _ := cmd.Flags().GetString("tls")
+			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRouteAttachNostr(cmd, client.RouteAttachRequest{
+				ServiceID:        serviceID,
+				EnvironmentID:    envID,
+				DeploymentUnitID: unitID,
+				PublicRoute: domain.PublicRouteRequest{
+					Hostname: hostname, UpstreamScheme: upstreamScheme, UpstreamPort: upstreamPort,
+					HealthPath: healthPath, TLS: tlsMode,
+				},
+				IdempotencyKey: idempotencyKey,
+			})
+			if err != nil {
+				return err
+			}
+			if outputFormat != "table" {
+				return outputSingle(result)
+			}
+			fmt.Printf("✓ Public route attachment submitted: %s (status: %s)\n", result.IntentID, firstNonEmpty(result.Status, "submitted"))
+			return nil
+		},
+	}
+	routeAttachCmd.Flags().String("service", "", "Existing deployed service ID")
+	routeAttachCmd.Flags().String("environment", "", "Environment ID")
+	routeAttachCmd.Flags().String("deployment-unit", "", "Deployment unit ID")
+	routeAttachCmd.Flags().String("hostname", "", "Managed public hostname")
+	routeAttachCmd.Flags().String("upstream-scheme", "http", "Upstream scheme (http)")
+	routeAttachCmd.Flags().Int("upstream-port", 0, "Existing service upstream port")
+	routeAttachCmd.Flags().String("health-path", "", "HTTPS verification health path")
+	routeAttachCmd.Flags().String("tls", "managed", "TLS mode (managed)")
+	routeAttachCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	for _, flag := range []string{"service", "environment", "deployment-unit", "hostname", "upstream-port", "health-path"} {
+		_ = routeAttachCmd.MarkFlagRequired(flag)
+	}
+
 	rollbackCmd := &cobra.Command{
 		Use:   "rollback",
 		Short: "Roll back a deployment",
@@ -558,6 +606,7 @@ func deployCommands() *cobra.Command {
 	}
 	deploymentsCmd.AddCommand(
 		deployCmd,
+		routeAttachCmd,
 		rollbackCmd,
 		approvalCommand("approve", "approve", "Approve a pending deployment intent"),
 		approvalCommand("reject", "reject", "Reject a pending deployment intent"),

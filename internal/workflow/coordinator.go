@@ -126,6 +126,9 @@ func (c *Coordinator) RecoverNonTerminalRuns(ctx context.Context) error {
 		case strings.TrimSpace(run.LoomJobID) == "runtime:direct":
 			c.startDirectRuntimeRecovery(&run)
 			recovered++
+		case strings.TrimSpace(run.LoomJobID) == "runtime:route-only":
+			c.startRouteOnlyRecovery(&run)
+			recovered++
 		case c.loom != nil && isLoomDeploymentJob(run.LoomJobID):
 			c.startCompletionAwait(&run)
 			recovered++
@@ -212,6 +215,9 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	unit, err := c.resolveDeploymentUnit(ctx, intent, env)
 	if err != nil {
 		return fmt.Errorf("resolving deployment unit: %w", err)
+	}
+	if isRouteOnlyIntent(intent) {
+		return c.executeRouteOnlyDeployment(ctx, intent, svc, env, unit)
 	}
 	if unit != nil && !deploymentUnitDispatchesViaLoom(unit) {
 		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
@@ -527,6 +533,117 @@ func (c *Coordinator) resolveDeploymentUnit(
 	return &resolved, nil
 }
 
+func isRouteOnlyIntent(intent *domain.DeploymentIntent) bool {
+	if intent == nil || intent.Metadata == nil {
+		return false
+	}
+	method, _ := intent.Metadata["contextvm_method"].(string)
+	return strings.TrimSpace(method) == "service/route-attach"
+}
+
+func (c *Coordinator) executeRouteOnlyDeployment(
+	ctx context.Context,
+	intent *domain.DeploymentIntent,
+	svc *domain.Service,
+	env *domain.Environment,
+	unit *domain.DeploymentUnit,
+) error {
+	if unit == nil {
+		return fmt.Errorf("deployment unit is required for route-only execution")
+	}
+	if unit.OwnershipMode != domain.OwnershipModeBahiaManaged || unit.RuntimeType != domain.RuntimeTypeCompose {
+		return fmt.Errorf("route-only execution requires a Bahia-managed Compose deployment unit")
+	}
+	if intent.DesiredState == nil || intent.DesiredState.PublicRoute == nil {
+		return fmt.Errorf("route-only execution requires a signed public route plan")
+	}
+	if c.publicRoutes == nil {
+		return fmt.Errorf("public route lifecycle is required for route-only execution")
+	}
+	now := time.Now().UTC()
+	unitID := unit.ID
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intent.ID,
+		DeploymentUnitID:   &unitID,
+		LoomJobID:          "runtime:route-only",
+		Status:             domain.RunStatusQueued,
+		StartedAt:          &now,
+		Metadata: map[string]any{
+			"execution_mode":      "route-only",
+			"runtime_type":        string(unit.RuntimeType),
+			"deployment_unit_key": unit.Key,
+			"endpoint_ref":        unit.EndpointRef,
+		},
+		ApplyMetadata: map[string]any{
+			"desired_hash":                 intent.DesiredHash,
+			"desired_state_schema_version": intent.DesiredState.SchemaVersion,
+			"deployment_unit_key":          unit.Key,
+			"endpoint_ref":                 unit.EndpointRef,
+			"phase_sequence":               0,
+			"phases":                       []map[string]any{},
+		},
+	}
+	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
+		return fmt.Errorf("creating route-only deployment run: %w", err)
+	}
+	c.logger.Info("executing route-only public route attachment",
+		zap.String("intent_id", intent.ID.String()),
+		zap.String("run_id", run.ID.String()),
+		zap.String("service", svc.Name),
+		zap.String("environment", env.Name),
+		zap.String("deployment_unit", unit.Key),
+	)
+	return c.applyRouteOnlyRun(ctx, run, intent)
+}
+
+func (c *Coordinator) applyRouteOnlyRun(ctx context.Context, run *domain.DeploymentRun, intent *domain.DeploymentIntent) error {
+	if run == nil || intent == nil || intent.DesiredState == nil || intent.DesiredState.PublicRoute == nil {
+		return fmt.Errorf("run and signed route-only desired state are required")
+	}
+	if run.ApplyMetadata == nil {
+		run.ApplyMetadata = map[string]any{}
+	}
+	previous, routeErr := c.latestDeployedIntent(ctx, intent)
+	if routeErr != nil {
+		routeErr = fmt.Errorf("load previous deployed intent for route-only state restoration: %w", routeErr)
+	} else if strings.TrimSpace(intent.DesiredState.DesiredHash) != strings.TrimSpace(intent.DesiredHash) {
+		routeErr = fmt.Errorf("persisted desired state hash does not match signed deployment intent hash")
+	} else if c.publicRoutes == nil {
+		routeErr = fmt.Errorf("public route lifecycle is required for route-only execution")
+	} else {
+		c.recordDirectRunPhase(ctx, run, "routing", "running")
+		if err := c.publicRoutes.Apply(ctx, intent.DesiredState.PublicRoute); err != nil {
+			routeErr = fmt.Errorf("public route apply failed: %w", err)
+		}
+	}
+	if routeErr != nil && errors.Is(routeErr, context.Canceled) {
+		return routeErr
+	}
+	if routeErr != nil && previous != nil {
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := c.registry.RestoreEnvironmentServiceStateToDeployedIntent(restoreCtx, previous); err != nil {
+			routeErr = fmt.Errorf("%w; restore previous deployed state: %v", routeErr, err)
+		}
+		restoreCancel()
+	}
+	completeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if routeErr != nil {
+		code, message := safeDeploymentFailure(routeErr)
+		c.finishDirectRunProgress(completeCtx, run, nil, code, message)
+		exitCode := 1
+		if err := c.registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusFailed, &exitCode); err != nil {
+			c.logger.Error("failed to mark route-only deployment as failed", zap.String("run_id", run.ID.String()), zap.Error(err))
+		}
+		return fmt.Errorf("route-only deploy failed: %w", routeErr)
+	}
+	c.finishDirectRunProgress(completeCtx, run, nil, "", "")
+	if err := c.registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		return fmt.Errorf("completing route-only deployment run: %w", err)
+	}
+	return nil
+}
+
 func (c *Coordinator) executeDirectRuntimeDeployment(
 	ctx context.Context,
 	intent *domain.DeploymentIntent,
@@ -704,6 +821,14 @@ func (c *Coordinator) restorePreviousApplication(intent *domain.DeploymentIntent
 }
 
 func (c *Coordinator) latestDeployedDesiredState(ctx context.Context, current *domain.DeploymentIntent) (*domain.DesiredServiceSpec, error) {
+	latest, err := c.latestDeployedIntent(ctx, current)
+	if err != nil || latest == nil {
+		return nil, err
+	}
+	return latest.DesiredState, nil
+}
+
+func (c *Coordinator) latestDeployedIntent(ctx context.Context, current *domain.DeploymentIntent) (*domain.DeploymentIntent, error) {
 	if current == nil {
 		return nil, nil
 	}
@@ -724,10 +849,7 @@ func (c *Coordinator) latestDeployedDesiredState(ctx context.Context, current *d
 			latest = candidate
 		}
 	}
-	if latest == nil {
-		return nil, nil
-	}
-	return latest.DesiredState, nil
+	return latest, nil
 }
 
 func deploymentUnitIDsEqual(left, right *uuid.UUID) bool {
@@ -821,6 +943,25 @@ func metadataPhases(value any) []map[string]any {
 	default:
 		return []map[string]any{}
 	}
+}
+
+func (c *Coordinator) startRouteOnlyRecovery(run *domain.DeploymentRun) {
+	if run == nil {
+		return
+	}
+	runCopy := *run
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		intent, err := c.registry.GetDeploymentIntent(c.ctx, runCopy.DeploymentIntentID)
+		if err != nil || intent == nil {
+			c.logger.Error("recover route-only run: load intent failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+			return
+		}
+		if err := c.applyRouteOnlyRun(c.ctx, &runCopy, intent); err != nil && !errors.Is(err, context.Canceled) {
+			c.logger.Error("recover route-only run failed", zap.String("run_id", runCopy.ID.String()), zap.Error(err))
+		}
+	}()
 }
 
 func (c *Coordinator) startDirectRuntimeRecovery(run *domain.DeploymentRun) {

@@ -180,6 +180,9 @@ func New(cfg *config.Config) (*App, error) {
 	var orgMemberRepo repository.OrgMemberRepository
 	var orgInviteRepo repository.OrgInviteRepository
 	var relayPolicyProjectionRepo repository.RelayPolicyProjectionRepository
+	var dnsZoneRepo repository.DNSZoneRepository
+	var dnsPolicyRepo repository.DNSPolicyRepository
+	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
 
 	if dbAvailable {
 		serviceRepo = repository.NewPgServiceRepository(pool)
@@ -204,6 +207,9 @@ func New(cfg *config.Config) (*App, error) {
 		orgRepo = repository.NewPgOrganizationRepository(pool)
 		orgMemberRepo = repository.NewPgOrgMemberRepository(pool)
 		orgInviteRepo = repository.NewPgOrgInviteRepository(pool)
+		dnsZoneRepo = repository.NewPgDNSZoneRepository(pool)
+		dnsPolicyRepo = repository.NewPgDNSPolicyRepository(pool)
+		dnsRecordOverrideRepo = repository.NewPgDNSRecordOverrideRepository(pool)
 		if pool != nil {
 			relayPolicyProjectionRepo = repository.NewPgRelayPolicyProjectionRepository(pool)
 		}
@@ -660,11 +666,6 @@ func New(cfg *config.Config) (*App, error) {
 	// Policy service.
 	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
 
-	// DNS persistence repositories are optional until concrete PostgreSQL adapters are available.
-	var dnsZoneRepo repository.DNSZoneRepository
-	var dnsPolicyRepo repository.DNSPolicyRepository
-	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
-
 	var dnsProjector *reconcile.DNSProjector
 	var dnsZones []domain.DNSZone
 	var dnsResolver *dnsAdapter.StaticResolver
@@ -674,18 +675,32 @@ func New(cfg *config.Config) (*App, error) {
 		if err != nil {
 			return nil, err
 		}
+		if dnsZoneRepo != nil {
+			for i := range dnsZones {
+				if err := dnsZoneRepo.Create(ctx, &dnsZones[i]); err != nil {
+					return nil, fmt.Errorf("persisting configured DNS zone %q: %w", dnsZones[i].Name, err)
+				}
+			}
+			persistedZones, err := dnsZoneRepo.List(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("loading persisted DNS zones: %w", err)
+			}
+			dnsZones = persistedZones
+		}
 		dnsProjector = reconcile.NewDNSProjector(serviceRepo, envRepo, stateRepo, obsRepo, llmRegistry, mlRegistry, workerRepo, cfg.DNS, logger)
 		dnsProjector.SetContinuityStatusReader(continuityDNSStatusReader{reader: continuityStatusStore})
+		if policySource, ok := dnsPolicyRepo.(reconcile.DNSPolicySource); ok {
+			dnsProjector.SetPolicySource(policySource)
+		}
 		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
 		dnsReconciler.SetPublisher(publisher)
-		if subscriber, ok := any(dnsReconciler).(interface{ SetupSubscriptions(events.Publisher) }); ok {
-			subscriber.SetupSubscriptions(publisher)
-		}
+		dnsReconciler.SetPersistenceSources(dnsZoneRepo, dnsRecordOverrideRepo)
+		dnsReconciler.SetupSubscriptions(publisher)
 		var dnsPersistence controlplane.DNSPersistenceOperator
 		if dnsZoneRepo != nil && dnsRecordOverrideRepo != nil {
 			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
 		}
-		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsPersistence)
+		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
 		bgManager.RegisterWithOptions(dnsReconciler, RunnerTier(Tier3))
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
@@ -1372,6 +1387,7 @@ func New(cfg *config.Config) (*App, error) {
 			Policy:           policySvc,
 			PublicRoutes:     publicRoutePlanner,
 			Services:         serviceRepo,
+			DeploymentUnits:  deploymentUnitRepo,
 			RBAC:             tenantRBAC,
 			Logger:           logger,
 		})
@@ -2267,17 +2283,23 @@ func (s configDNSBackendProjectionSource) ListDNSBackendStates(ctx context.Conte
 
 type dnsControlPlaneOperator struct {
 	reconciler *reconcile.DNSReconciler
+	zonesMu    sync.RWMutex
 	zones      map[string]struct{}
+	backends   map[string]struct{}
 }
 
-func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone, persistence controlplane.DNSPersistenceOperator) controlplane.DNSControlPlaneOperator {
+func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone, backendRefs []string, persistence controlplane.DNSPersistenceOperator, policies repository.DNSPolicyRepository) controlplane.DNSControlPlaneOperator {
 	zoneSet := make(map[string]struct{}, len(zones))
 	for _, zone := range zones {
 		zoneSet[strings.TrimSpace(zone.Name)] = struct{}{}
 	}
-	operator := &dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet}
+	backendSet := make(map[string]struct{}, len(backendRefs))
+	for _, ref := range backendRefs {
+		backendSet[strings.TrimSpace(ref)] = struct{}{}
+	}
+	operator := &dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet, backends: backendSet}
 	if persistence != nil {
-		return &dnsPersistentControlPlaneOperator{dnsControlPlaneOperator: operator, persistence: persistence}
+		return &dnsPersistentControlPlaneOperator{dnsControlPlaneOperator: operator, persistence: persistence, policies: policies}
 	}
 	return operator
 }
@@ -2301,19 +2323,33 @@ func (o *dnsControlPlaneOperator) ReconcileZone(ctx context.Context, zoneName st
 }
 
 func (o *dnsControlPlaneOperator) HasZone(zoneName string) bool {
+	o.zonesMu.RLock()
+	defer o.zonesMu.RUnlock()
 	_, ok := o.zones[strings.TrimSpace(zoneName)]
+	return ok
+}
+
+func (o *dnsControlPlaneOperator) HasBackend(ref string) bool {
+	_, ok := o.backends[strings.TrimSpace(ref)]
 	return ok
 }
 
 type dnsPersistentControlPlaneOperator struct {
 	*dnsControlPlaneOperator
 	persistence controlplane.DNSPersistenceOperator
+	policies    repository.DNSPolicyRepository
+}
+
+func (o *dnsPersistentControlPlaneOperator) DNSPolicyRepository() repository.DNSPolicyRepository {
+	return o.policies
 }
 
 func (o *dnsPersistentControlPlaneOperator) CreateZone(ctx context.Context, zone domain.DNSZone) error {
 	if err := o.persistence.CreateZone(ctx, zone); err != nil {
 		return err
 	}
+	o.zonesMu.Lock()
+	defer o.zonesMu.Unlock()
 	if o.zones == nil {
 		o.zones = map[string]struct{}{}
 	}

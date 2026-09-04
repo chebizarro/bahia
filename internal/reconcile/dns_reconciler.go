@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,17 +34,29 @@ type DNSBackendResolver interface {
 	Resolve(ref string) (DNSBackend, bool)
 }
 
+// DNSZoneSource exposes persisted zones to reconciliation.
+type DNSZoneSource interface {
+	List(ctx context.Context) ([]domain.DNSZone, error)
+}
+
+// DNSRecordOverrideSource exposes active manual record pins to reconciliation.
+type DNSRecordOverrideSource interface {
+	ListByZone(ctx context.Context, zoneName string) ([]domain.DNSRecordOverride, error)
+}
+
 // DNSReconciler compares projected DNS records with backend snapshots and syncs drift.
 type DNSReconciler struct {
-	projector *DNSProjector
-	zones     []domain.DNSZone
-	resolver  DNSBackendResolver
-	interval  time.Duration
-	logger    *zap.Logger
-	publisher events.Publisher
-	triggerCh chan struct{}
-	debounce  time.Duration
-	runMu     sync.Mutex
+	projector      *DNSProjector
+	zones          []domain.DNSZone
+	resolver       DNSBackendResolver
+	interval       time.Duration
+	logger         *zap.Logger
+	publisher      events.Publisher
+	zoneSource     DNSZoneSource
+	overrideSource DNSRecordOverrideSource
+	triggerCh      chan struct{}
+	debounce       time.Duration
+	runMu          sync.Mutex
 }
 
 func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver DNSBackendResolver, interval time.Duration, logger *zap.Logger, publisher ...events.Publisher) *DNSReconciler {
@@ -64,6 +77,23 @@ func (r *DNSReconciler) Name() string { return "dns-reconciler" }
 
 func (r *DNSReconciler) SetPublisher(publisher events.Publisher) {
 	r.publisher = publisher
+}
+
+func (r *DNSReconciler) SetPersistenceSources(zones DNSZoneSource, overrides DNSRecordOverrideSource) {
+	r.zoneSource = zones
+	r.overrideSource = overrides
+}
+
+// SetupSubscriptions reacts to authoritative service convergence events instead
+// of waiting for the periodic safety reconcile.
+func (r *DNSReconciler) SetupSubscriptions(publisher events.Publisher) {
+	if publisher == nil {
+		return
+	}
+	trigger := func(context.Context, events.Event) { r.TriggerReconcile() }
+	publisher.Subscribe(events.EventDeploymentRunCompleted, trigger)
+	publisher.Subscribe(events.EventEnvironmentServiceStateChanged, trigger)
+	publisher.Subscribe(events.EventRuntimeObservation, trigger)
 }
 
 func (r *DNSReconciler) TriggerReconcile() {
@@ -119,15 +149,26 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	zones, err := r.reconcileZones(ctx)
+	if err != nil {
+		return err
+	}
 	changed := 0
 	unchanged := 0
-	for _, zone := range r.zones {
+	for _, zone := range zones {
 		backend, ok := r.resolver.Resolve(zone.BackendRef)
 		if !ok {
 			r.logger.Warn("DNS backend not found", zap.String("zone", zone.Name), zap.String("backend_ref", zone.BackendRef))
 			continue
 		}
 		desired := cloneDNSRecords(recordsByZone[zone.Name])
+		if r.overrideSource != nil {
+			overrides, err := r.overrideSource.ListByZone(ctx, zone.Name)
+			if err != nil {
+				return err
+			}
+			desired = applyDNSRecordOverrides(zone, desired, overrides)
+		}
 		sortDNSRecords(desired)
 		actual, err := backend.ListRecords(ctx, zone)
 		if err != nil {
@@ -157,6 +198,68 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 	}
 	r.logger.Info("DNS reconcile completed", zap.Int("changed_zones", changed), zap.Int("unchanged_zones", unchanged))
 	return nil
+}
+
+func (r *DNSReconciler) reconcileZones(ctx context.Context) ([]domain.DNSZone, error) {
+	zonesByName := make(map[string]domain.DNSZone, len(r.zones))
+	for _, zone := range r.zones {
+		zonesByName[zone.Name] = zone
+	}
+	if r.zoneSource != nil {
+		persisted, err := r.zoneSource.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, zone := range persisted {
+			zonesByName[zone.Name] = zone
+		}
+	}
+	zones := make([]domain.DNSZone, 0, len(zonesByName))
+	for _, zone := range zonesByName {
+		zones = append(zones, zone)
+	}
+	sort.Slice(zones, func(i, j int) bool { return zones[i].Name < zones[j].Name })
+	return zones, nil
+}
+
+func applyDNSRecordOverrides(zone domain.DNSZone, records []domain.DNSRecord, overrides []domain.DNSRecordOverride) []domain.DNSRecord {
+	overriddenSets := make(map[string]struct{}, len(overrides))
+	for _, override := range overrides {
+		_, fqdn := dnsOverrideNames(zone.Name, override.RecordName)
+		overriddenSets[fqdn+"\x00"+string(override.RecordType)] = struct{}{}
+	}
+	filtered := records[:0]
+	for _, record := range records {
+		if _, overridden := overriddenSets[record.FQDN+"\x00"+string(record.Type)]; overridden {
+			continue
+		}
+		filtered = append(filtered, record)
+	}
+	records = filtered
+	for _, override := range overrides {
+		name, fqdn := dnsOverrideNames(zone.Name, override.RecordName)
+		records = append(records, domain.DNSRecord{
+			Zone:             zone.Name,
+			Name:             name,
+			FQDN:             fqdn,
+			Type:             override.RecordType,
+			Value:            override.Value,
+			TTL:              override.TTL,
+			SourceCoordinate: "manual_override:" + override.ID.String(),
+		})
+	}
+	return records
+}
+
+func dnsOverrideNames(zoneName, recordName string) (string, string) {
+	zoneName = strings.TrimSpace(zoneName)
+	name := strings.TrimSpace(recordName)
+	if name == "@" || name == zoneName {
+		return "@", zoneName
+	}
+	zoneSuffix := "." + zoneName
+	name = strings.TrimSuffix(name, zoneSuffix)
+	return name, strings.TrimSuffix(name+zoneSuffix, ".")
 }
 
 func cloneDNSRecords(records []domain.DNSRecord) []domain.DNSRecord {

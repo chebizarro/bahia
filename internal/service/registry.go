@@ -1072,6 +1072,48 @@ func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, 
 	return s.intents.ListByServiceEnv(ctx, serviceID, envID, limit, offset)
 }
 
+// RestoreEnvironmentServiceStateToDeployedIntent repairs the desired-state read
+// model after a route-only deployment fails before becoming the deployed intent.
+func (s *RegistryService) RestoreEnvironmentServiceStateToDeployedIntent(ctx context.Context, intent *domain.DeploymentIntent) error {
+	if intent == nil || intent.Status != domain.IntentStatusDeployed || intent.DesiredState == nil {
+		return fmt.Errorf("a deployed intent with desired state is required for state restoration")
+	}
+	artifactID := intent.ArtifactID
+	intentID := intent.ID
+	state, err := s.state.Get(ctx, intent.ServiceID, intent.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("loading environment service state for restoration to deployed intent %s: %w", intent.ID, err)
+	}
+	if state == nil {
+		state = &domain.EnvironmentServiceState{
+			ServiceID:     intent.ServiceID,
+			EnvironmentID: intent.EnvironmentID,
+		}
+	}
+	// Restore only the desired-state linkage; preserve observation, run, and
+	// reconcile health fields the failed route attach never touched.
+	state.DeploymentUnitID = deploymentUnitIDForRunIntent(nil, intent)
+	state.DesiredArtifactID = &artifactID
+	state.DesiredIntentID = &intentID
+	state.DesiredRuntimeState = intent.DesiredState
+	state.DesiredHash = intent.DesiredHash
+	state.DriftStatus = domain.DriftStatusInSync
+	if err := s.state.Upsert(ctx, state); err != nil {
+		return fmt.Errorf("restoring environment service state to deployed intent %s: %w", intent.ID, err)
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID:     intent.ServiceID.String(),
+			EnvironmentID: intent.EnvironmentID.String(),
+			ArtifactID:    intent.ArtifactID.String(),
+			IntentID:      intent.ID.String(),
+		},
+	})
+	return nil
+}
+
 type deploymentIntentDecisionTransitioner interface {
 	TransitionDecision(context.Context, uuid.UUID, domain.ApprovalStatus, domain.DeploymentIntentStatus) (bool, error)
 }

@@ -15,6 +15,7 @@ import (
 
 type recordingDNSOperator struct {
 	zones        map[string]bool
+	backends     map[string]bool
 	reconcileAll int
 	reconciled   []string
 	policyRepo   *recordingDNSPolicyRepository
@@ -32,6 +33,13 @@ func (o *recordingDNSOperator) ReconcileZone(_ context.Context, zoneName string)
 
 func (o *recordingDNSOperator) HasZone(zoneName string) bool {
 	return o.zones[zoneName]
+}
+
+func (o *recordingDNSOperator) HasBackend(ref string) bool {
+	if o.backends == nil {
+		return true
+	}
+	return o.backends[ref]
 }
 
 func (o *recordingDNSOperator) DNSPolicyRepository() repository.DNSPolicyRepository {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,7 @@ type EncryptedServiceHandlersConfig struct {
 	Policy           *service.PolicyService
 	PublicRoutes     *service.PublicRoutePlanner
 	Services         repository.ServiceRepository
+	DeploymentUnits  repository.DeploymentUnitRepository
 	RBAC             *auth.RBAC
 	Logger           *zap.Logger
 }
@@ -31,6 +33,7 @@ type encryptedServiceHandlers struct {
 	runtimeLifecycle *service.RuntimeLifecycleService
 	policy           *service.PolicyService
 	publicRoutes     *service.PublicRoutePlanner
+	deploymentUnits  repository.DeploymentUnitRepository
 	authorizer       encryptedTenantAuthorizer
 	logger           *zap.Logger
 }
@@ -46,6 +49,7 @@ func RegisterServiceContextVMHandlers(transport *EncryptedRequestTransport, cfg 
 		runtimeLifecycle: cfg.RuntimeLifecycle,
 		policy:           cfg.Policy,
 		publicRoutes:     cfg.PublicRoutes,
+		deploymentUnits:  cfg.DeploymentUnits,
 		authorizer:       encryptedTenantAuthorizer{services: cfg.Services, environments: cfg.Registry, rbac: cfg.RBAC},
 		logger:           cfg.Logger,
 	}
@@ -54,6 +58,7 @@ func RegisterServiceContextVMHandlers(transport *EncryptedRequestTransport, cfg 
 	}
 	transport.RegisterContextVMHandler(ContextVMMethodServiceDeployPreview, h.previewDeploy)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, h.deploy)
+	transport.RegisterContextVMHandler(ContextVMMethodServiceRouteAttach, h.routeAttach)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, h.rollback)
 	transport.RegisterContextVMHandler(ContextVMMethodApprovalApprove, h.approve)
 	transport.RegisterContextVMHandler(ContextVMMethodApprovalReject, h.reject)
@@ -132,6 +137,14 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 }
 
 func (h *encryptedServiceHandlers) latestDeployedDesiredState(ctx context.Context, serviceID, environmentID uuid.UUID, unitID *uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	intent, err := h.latestDeployedIntent(ctx, serviceID, environmentID, unitID)
+	if err != nil || intent == nil {
+		return nil, err
+	}
+	return intent.DesiredState, nil
+}
+
+func (h *encryptedServiceHandlers) latestDeployedIntent(ctx context.Context, serviceID, environmentID uuid.UUID, unitID *uuid.UUID) (*domain.DeploymentIntent, error) {
 	intents, err := h.registry.ListDeploymentIntents(ctx, serviceID, environmentID, 50, 0)
 	if err != nil {
 		return nil, err
@@ -144,7 +157,7 @@ func (h *encryptedServiceHandlers) latestDeployedDesiredState(ctx context.Contex
 		if !optionalUUIDsEqual(intent.DeploymentUnitID, unitID) {
 			continue
 		}
-		return intent.DesiredState, nil
+		return intent, nil
 	}
 	return nil, nil
 }
@@ -263,6 +276,216 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		"idempotency_key":    effectiveIdempotencyKey(request, params.IdempotencyKey),
 		"message":            message,
 	}, nil
+}
+
+func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil || h.policy == nil || h.publicRoutes == nil {
+		return nil, fmt.Errorf("service deployment control plane is not configured")
+	}
+	var params dto.ServiceRouteAttachRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
+		return nil, fmt.Errorf("decode service/route-attach params: %w", err)
+	}
+	if params.ServiceID == uuid.Nil || params.EnvironmentID == uuid.Nil || params.PublicRoute == nil {
+		return nil, fmt.Errorf("service_id, environment_id, and public_route are required")
+	}
+	if params.DeploymentUnitID != nil && *params.DeploymentUnitID == uuid.Nil {
+		return nil, fmt.Errorf("deployment_unit_id must not be nil")
+	}
+	svc, env, err := h.authorizer.authorizeServiceEnvironment(
+		ctx,
+		request.Event,
+		params.ServiceID,
+		params.EnvironmentID,
+		domain.PermWriteDeployments,
+		domain.PermWriteDeployments,
+	)
+	if err != nil {
+		return nil, err
+	}
+	current, err := h.latestDeployedIntent(ctx, params.ServiceID, params.EnvironmentID, params.DeploymentUnitID)
+	if err != nil {
+		return nil, fmt.Errorf("load current deployed service: %w", err)
+	}
+	if current == nil || current.DesiredState == nil {
+		return nil, fmt.Errorf("no deployed desired state exists for the service, environment, and deployment unit")
+	}
+	desiredState, err := cloneDesiredServiceSpec(current.DesiredState)
+	if err != nil {
+		return nil, fmt.Errorf("clone current desired state: %w", err)
+	}
+	if _, err := h.resolveRouteAttachDeploymentUnit(ctx, current, env); err != nil {
+		return nil, err
+	}
+	plan, _, err := h.publicRoutes.Plan(ctx, svc, env, desiredState, *params.PublicRoute)
+	if err != nil {
+		return nil, fmt.Errorf("plan public route: %w", err)
+	}
+	desiredState.PublicRoute = plan
+	desiredState.ComputeDesiredHash()
+
+	evaluation, err := h.policy.Evaluate(ctx, current.ArtifactID, params.EnvironmentID)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate deployment policy: %w", err)
+	}
+	if evaluation != nil && (!evaluation.Allowed || evaluation.Blockers > 0) {
+		return nil, fmt.Errorf("route attachment blocked by policy: %s", summarizePolicyBlockReason(evaluation))
+	}
+	requestedBy := ""
+	metadata := map[string]any{"contextvm_method": ContextVMMethodServiceRouteAttach}
+	if request.Event != nil {
+		requestedBy = strings.TrimSpace(request.Event.PubKey.Hex())
+		if request.Event.ID.Hex() != "" {
+			metadata["nostr_event_id"] = request.Event.ID.Hex()
+		}
+	}
+	if requestedBy == "" {
+		return nil, fmt.Errorf("requester pubkey is required")
+	}
+	artifact, err := h.registry.GetArtifact(ctx, current.ArtifactID)
+	if err != nil {
+		return nil, fmt.Errorf("get current deployment artifact: %w", err)
+	}
+	if artifact == nil || artifact.ServiceID != params.ServiceID {
+		return nil, fmt.Errorf("current deployment artifact not found for service")
+	}
+	metadata["artifact_digest"] = artifact.ImageDigest
+	if current.Metadata != nil {
+		if target, ok := current.Metadata["deployment_target"]; ok {
+			metadata["deployment_target"] = target
+		}
+	}
+	policy := map[string]any{"decision": "allow", "allowed": true, "warnings": 0, "blockers": 0}
+	if evaluation != nil {
+		policy["allowed"] = evaluation.Allowed
+		policy["warnings"] = evaluation.Warnings
+		policy["blockers"] = evaluation.Blockers
+	}
+	metadata["policy"] = policy
+	intent := &domain.DeploymentIntent{
+		ID:               uuid.New(),
+		ServiceID:        params.ServiceID,
+		EnvironmentID:    params.EnvironmentID,
+		DeploymentUnitID: desiredState.DeploymentUnitID,
+		ArtifactID:       current.ArtifactID,
+		RequestedBy:      requestedBy,
+		SourceKind:       domain.SourceKindEventTriggered,
+		ApprovalMetadata: map[string]any{"policy": policy},
+		Metadata:         metadata,
+		DesiredState:     desiredState,
+		DesiredHash:      desiredState.DesiredHash,
+	}
+	if err := h.registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		return nil, fmt.Errorf("create route attachment deployment intent: %w", err)
+	}
+	message := "route attachment approved and queued"
+	if intent.Status != domain.IntentStatusApproved {
+		message = "route attachment intent created; approval required"
+	}
+	return map[string]any{
+		"status":             string(intent.Status),
+		"intent_id":          intent.ID.String(),
+		"service_id":         params.ServiceID.String(),
+		"environment_id":     params.EnvironmentID.String(),
+		"artifact_id":        current.ArtifactID.String(),
+		"artifact_digest":    artifact.ImageDigest,
+		"deployment_unit_id": desiredState.DeploymentUnitID,
+		"deployment_target":  metadata["deployment_target"],
+		"desired_state_hash": desiredState.DesiredHash,
+		"public_route":       desiredState.PublicRoute,
+		"idempotency_key":    effectiveIdempotencyKey(request, params.IdempotencyKey),
+		"message":            message,
+	}, nil
+}
+
+func (h *encryptedServiceHandlers) resolveRouteAttachDeploymentUnit(ctx context.Context, intent *domain.DeploymentIntent, env *domain.Environment) (*domain.DeploymentUnit, error) {
+	if intent == nil || env == nil {
+		return nil, fmt.Errorf("route attachment requires a deployed intent and environment")
+	}
+	var unitID *uuid.UUID
+	if intent.DeploymentUnitID != nil && *intent.DeploymentUnitID != uuid.Nil {
+		id := *intent.DeploymentUnitID
+		unitID = &id
+	}
+	if desired := intent.DesiredState; desired != nil && desired.DeploymentUnitID != nil && *desired.DeploymentUnitID != uuid.Nil {
+		if unitID != nil && *unitID != *desired.DeploymentUnitID {
+			return nil, fmt.Errorf("route attachment deployment unit %s does not match desired-state unit %s", *unitID, *desired.DeploymentUnitID)
+		}
+		id := *desired.DeploymentUnitID
+		unitID = &id
+	}
+	if unitID == nil {
+		return nil, fmt.Errorf("route attachment requires an explicit deployment unit")
+	}
+	if h.deploymentUnits == nil {
+		return nil, fmt.Errorf("route attachment requires the deployment unit repository")
+	}
+	unit, err := h.deploymentUnits.GetByID(ctx, *unitID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve route attachment deployment unit %s: %w", *unitID, err)
+	}
+	if unit == nil {
+		return nil, fmt.Errorf("route attachment deployment unit %s not found", *unitID)
+	}
+	if unit.EnvironmentID != env.ID {
+		return nil, fmt.Errorf("route attachment deployment unit %q belongs to environment %s, not %s", unit.Key, unit.EnvironmentID, env.ID)
+	}
+	resolved := *unit
+	domain.NormalizeDeploymentUnitTargeting(&resolved)
+	if err := domain.ValidateDeploymentUnit(&resolved); err != nil {
+		return nil, fmt.Errorf("invalid route attachment deployment unit %q: %w", resolved.Key, err)
+	}
+	if desired := intent.DesiredState; desired != nil {
+		if desired.DeploymentUnitID == nil && resolved.ID != uuid.Nil {
+			return nil, fmt.Errorf("route attachment desired-state implicit deployment unit became explicit unit %s", resolved.ID)
+		}
+		if desired.DeploymentUnitKey != "" && desired.DeploymentUnitKey != resolved.Key {
+			return nil, fmt.Errorf("route attachment desired-state unit key %q does not match resolved unit %q", desired.DeploymentUnitKey, resolved.Key)
+		}
+		if desired.UnitRuntimeType != "" && desired.UnitRuntimeType != resolved.RuntimeType {
+			return nil, fmt.Errorf("route attachment desired-state runtime type %q does not match resolved unit %q type %q", desired.UnitRuntimeType, resolved.Key, resolved.RuntimeType)
+		}
+	}
+	if resolved.OwnershipMode != domain.OwnershipModeBahiaManaged {
+		return nil, fmt.Errorf("route attachment requires a Bahia-managed deployment unit; unit %q ownership is %q", resolved.Key, resolved.OwnershipMode)
+	}
+	if resolved.RuntimeType != domain.RuntimeTypeCompose {
+		return nil, fmt.Errorf("route attachment requires a Compose deployment unit; unit %q runtime is %q", resolved.Key, resolved.RuntimeType)
+	}
+	if deploymentUnitDispatchesViaLoom(resolved.RuntimeConfig) {
+		return nil, fmt.Errorf("route attachment requires direct runtime dispatch; deployment unit %q dispatches via Loom", resolved.Key)
+	}
+	return &resolved, nil
+}
+
+func deploymentUnitDispatchesViaLoom(runtimeConfig map[string]any) bool {
+	if runtimeConfig == nil {
+		return false
+	}
+	raw, ok := runtimeConfig["dispatch_mode"]
+	if !ok {
+		raw, ok = runtimeConfig["execution_backend"]
+	}
+	if !ok {
+		return false
+	}
+	mode, ok := raw.(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), "loom")
+}
+
+func cloneDesiredServiceSpec(source *domain.DesiredServiceSpec) (*domain.DesiredServiceSpec, error) {
+	if source == nil {
+		return nil, fmt.Errorf("desired service spec is required")
+	}
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		return nil, err
+	}
+	var cloned domain.DesiredServiceSpec
+	if err := json.Unmarshal(encoded, &cloned); err != nil {
+		return nil, err
+	}
+	return &cloned, nil
 }
 
 func (h *encryptedServiceHandlers) rollback(ctx context.Context, request ContextVMRequest) (any, error) {

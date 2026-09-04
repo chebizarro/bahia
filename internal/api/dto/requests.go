@@ -159,6 +159,16 @@ type ServiceDeployRequest struct {
 	IdempotencyKey           string                     `json:"idempotency_key,omitempty"`
 }
 
+// ServiceRouteAttachRequest adds a signed public route to the current deployed
+// desired state without requesting artifact convergence.
+type ServiceRouteAttachRequest struct {
+	ServiceID        uuid.UUID                  `json:"service_id"`
+	EnvironmentID    uuid.UUID                  `json:"environment_id"`
+	DeploymentUnitID *uuid.UUID                 `json:"deployment_unit_id,omitempty"`
+	PublicRoute      *domain.PublicRouteRequest `json:"public_route"`
+	IdempotencyKey   string                     `json:"idempotency_key,omitempty"`
+}
+
 // ServiceRollbackRequest creates a fresh, policy-checked deployment intent for
 // an explicit previously healthy artifact.
 type ServiceRollbackRequest struct {

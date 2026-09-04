@@ -66,6 +66,7 @@ The current top-level CLI command groups are:
 - `services`
 - `environments`
 - `state`
+- `dns`
 - `deployments`
 - `adopt`
 - `workers`
@@ -131,6 +132,11 @@ Omitting `--units-file` leaves the unit set unchanged on update. Supplying a fil
 # Submit signer-first deployment intent
 bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
 
+# Attach managed HTTPS/DNS routing to the current deployed artifact without redeploying it
+bahia deployments route-attach --service svc-123 --environment env-456 \
+  --deployment-unit unit-789 --hostname api.example.com \
+  --upstream-port 8080 --health-path /healthz
+
 # Submit signer-first rollback intent
 bahia deployments rollback --service svc-123 --environment env-456 --deployment-unit unit-789 --target-artifact artifact-prev --supersedes-intent intent-current
 ```
@@ -146,6 +152,51 @@ bahia state list --service payment-api
 # Show drifted services
 bahia state drifted
 bahia state drifted --environment production
+```
+
+### DNS
+
+DNS mutations publish signed ContextVM kind `25910` requests and await their correlated acknowledgments. Configure an operator signer and relay using the global Nostr options described above.
+
+```bash
+# Create and reconcile a managed zone
+bahia dns zone-create \
+  --name prod.example \
+  --visibility external \
+  --backend-ref powerdns-prod \
+  --ttl 300
+
+# Apply a nested DNS policy document
+bahia dns policy-apply --file dns-policy.json
+
+# Pin a record, optionally until an RFC3339 timestamp
+bahia dns record-set \
+  --zone prod.example \
+  --name api \
+  --type A \
+  --value 192.0.2.10 \
+  --ttl 60 \
+  --reason "incident pin" \
+  --expires-at 2026-09-04T12:00:00Z
+
+# Reconcile one zone or all configured zones
+bahia dns drift-remediate --zone prod.example
+bahia dns drift-remediate
+```
+
+`dns-policy.json` uses the DNS policy schema, including nested `match` and `action` objects. Unknown fields and invalid policies are rejected before publication:
+
+```json
+{
+  "name": "edge-routing",
+  "rules": [
+    {
+      "match": {"environment": "prod"},
+      "action": {"visibility": "edge", "ttl_override": 60}
+    }
+  ],
+  "enabled": true
+}
 ```
 
 ### Workers

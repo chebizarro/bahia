@@ -705,7 +705,7 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 }
 
 func TestRegisterServiceContextVMHandlers_RegistersDeployMethods(t *testing.T) {
-	for _, method := range []string{ContextVMMethodServiceDeployPreview, ContextVMMethodServiceDeploy, ContextVMMethodServiceRollback} {
+	for _, method := range []string{ContextVMMethodServiceDeployPreview, ContextVMMethodServiceDeploy, ContextVMMethodServiceRouteAttach, ContextVMMethodServiceRollback} {
 		t.Run(method, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			responder := newResponder(t, publisher)

@@ -1,0 +1,12 @@
+{
+  "feature_id": "managed-dns-https-routes",
+  "criteria": [
+    {"id":"AC1","statement":"The operator guide documents one signer-first create or update, deploy, automatic internal DNS, route-attach, approval, and health-verification flow for Astillero and equivalent Bahia-managed HTTP services.","verification":["docs/user-guide/guides/managed-dns-and-https-routes.md","docs/user-guide/index.md"]},
+    {"id":"AC2","statement":"The guide provides validation-compatible dnsmasq and Cloudflare Tunnel configuration using placeholder SecretRef UUIDs and states that SIGHUP reload reconstructs the whole application.","verification":["docs/user-guide/guides/managed-dns-and-https-routes.md","internal/config/config.go","cmd/server/main.go"]},
+    {"id":"AC3","statement":"A healthy deployed service in edge-01-production projects an A or CNAME record in sharegap.net through the DNS reconciler.","verification":["internal/workflow/managed_dns_https_routes_e2e_test.go"]},
+    {"id":"AC4","statement":"Route attachment to an existing deployed service produces a route-only intent whose signed desired-state hash includes the route and preserves the deployed artifact.","verification":["internal/workflow/managed_dns_https_routes_e2e_test.go","internal/controlplane/encrypted_service_handlers_test.go"]},
+    {"id":"AC5","statement":"Route-only execution succeeds through the routing lifecycle, and routing failure reports compensated restoration without artifact convergence.","verification":["internal/workflow/managed_dns_https_routes_e2e_test.go","internal/workflow/coordinator_test.go","internal/adapters/routing/cloudflare_test.go"]},
+    {"id":"AC6","statement":"DNS override names representing the zone apex as either @ or the zone name resolve to the apex without a duplicated suffix.","verification":["internal/reconcile/dns_reconciler_test.go"]},
+    {"id":"AC7","statement":"The documented workflow forbids direct SQL, manual runtime or proxy edits, manual Cloudflare dashboard changes, and real credential material; the final URL uses HTTPS without a port.","verification":["docs/user-guide/guides/managed-dns-and-https-routes.md"]}
+  ]
+}

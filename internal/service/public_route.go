@@ -162,17 +162,20 @@ func intAllowed(port int, ports []int) bool {
 }
 
 func desiredExposesPort(desired *domain.DesiredServiceSpec, target int) bool {
-	if desired.Healthcheck != nil && desired.Healthcheck.Port == target {
-		return true
-	}
 	for _, raw := range desired.Ports {
 		raw = strings.TrimSpace(strings.SplitN(raw, "/", 2)[0])
 		parts := strings.Split(raw, ":")
-		candidate := parts[len(parts)-1]
-		if len(parts) >= 2 && net.ParseIP(strings.Trim(parts[0], "[]")) != nil {
-			candidate = parts[len(parts)-1]
+		var published string
+		switch len(parts) {
+		case 2: // host:container
+			published = parts[0]
+		case 3: // ip:host:container
+			published = parts[1]
+		default:
+			// A bare container port has no host-side listener for the edge origin.
+			continue
 		}
-		port, err := strconv.Atoi(candidate)
+		port, err := strconv.Atoi(strings.TrimSpace(published))
 		if err == nil && port == target {
 			return true
 		}
