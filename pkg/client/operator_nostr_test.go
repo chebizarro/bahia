@@ -997,6 +997,31 @@ func TestOperatorPublishWaitsForSubscriptionEOSE(t *testing.T) {
 	}
 }
 
+func TestOperatorPublishProceedsAfterActivationTimeoutWithActiveRelay(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	transport.operatorEOSE = make(chan struct{})
+	transport.autoActivate = false
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.activationTimeout = 10 * time.Millisecond
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil || result == nil || result.Action != "restart" {
+		t.Fatalf("result=%#v error=%v, want request success after bounded activation wait", result, err)
+	}
+	transport.mu.Lock()
+	calls := append([]string(nil), transport.calls...)
+	transport.mu.Unlock()
+	if len(calls) != 2 || calls[0] != "subscribe" || calls[1] != "publish" {
+		t.Fatalf("calls = %#v, want subscribe then publish", calls)
+	}
+}
+
 func TestOperatorActivationAuthClosedRelayRecoversWhileHealthyRelayRemains(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()

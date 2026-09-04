@@ -1499,6 +1499,9 @@ func (c *OperatorControlPlaneClient) waitForOperatorSubscriptionActivation(ctx c
 			if len(eosed) > 0 {
 				return current, nil
 			}
+			if len(active) > 0 {
+				return current, nil
+			}
 			return current, fmt.Errorf("no subscribed relay reached EOSE before activation deadline: %w", activationCtx.Err())
 		case _, ok := <-current.EndOfStoredEvents:
 			if !ok {
