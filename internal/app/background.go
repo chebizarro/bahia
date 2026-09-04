@@ -220,6 +220,57 @@ func (r *OSVVulnerabilityCacheCleanupRunner) Run(ctx context.Context) error {
 	}
 }
 
+const defaultContextVMResponseRetention = 24 * time.Hour
+
+type ContextVMResponsePruner interface {
+	DeleteCreatedBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+type ContextVMResponseCleanupRunner struct {
+	pruner    ContextVMResponsePruner
+	retention time.Duration
+	interval  time.Duration
+	logger    *zap.Logger
+}
+
+func NewContextVMResponseCleanupRunner(pruner ContextVMResponsePruner, retention, interval time.Duration, logger *zap.Logger) *ContextVMResponseCleanupRunner {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	if retention <= 0 {
+		retention = 24 * time.Hour
+	}
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	return &ContextVMResponseCleanupRunner{pruner: pruner, retention: retention, interval: interval, logger: logger}
+}
+
+func (r *ContextVMResponseCleanupRunner) Name() string { return "contextvm-response-cleanup" }
+
+func (r *ContextVMResponseCleanupRunner) Run(ctx context.Context) error {
+	if r.pruner == nil {
+		return nil
+	}
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			count, err := r.pruner.DeleteCreatedBefore(ctx, time.Now().UTC().Add(-r.retention))
+			if err != nil {
+				r.logger.Warn("ContextVM response cleanup failed", zap.Error(err))
+				continue
+			}
+			if count > 0 {
+				r.logger.Info("deleted expired ContextVM responses", zap.Int64("count", count))
+			}
+		}
+	}
+}
+
 type backgroundRunnerRegistration struct {
 	runner   BackgroundRunner
 	required bool

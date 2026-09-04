@@ -183,6 +183,7 @@ func New(cfg *config.Config) (*App, error) {
 	var dnsZoneRepo repository.DNSZoneRepository
 	var dnsPolicyRepo repository.DNSPolicyRepository
 	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
+	var contextVMResponseStore repository.ContextVMResponseStore
 
 	if dbAvailable {
 		serviceRepo = repository.NewPgServiceRepository(pool)
@@ -210,6 +211,7 @@ func New(cfg *config.Config) (*App, error) {
 		dnsZoneRepo = repository.NewPgDNSZoneRepository(pool)
 		dnsPolicyRepo = repository.NewPgDNSPolicyRepository(pool)
 		dnsRecordOverrideRepo = repository.NewPgDNSRecordOverrideRepository(pool)
+		contextVMResponseStore = repository.NewPgContextVMResponseStore(pool)
 		if pool != nil {
 			relayPolicyProjectionRepo = repository.NewPgRelayPolicyProjectionRepository(pool)
 		}
@@ -436,6 +438,9 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	if securityRepo != nil {
 		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger), RunnerTier(Tier3))
+	}
+	if contextVMResponseStore != nil {
+		bgManager.RegisterWithOptions(NewContextVMResponseCleanupRunner(contextVMResponseStore, defaultContextVMResponseRetention, time.Hour, logger), RunnerTier(Tier2), RunnerRequired(false))
 	}
 	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 		if staleRunSource, ok := runRepo.(workflow.DeploymentRunHealthSource); ok {
@@ -1315,7 +1320,11 @@ func New(cfg *config.Config) (*App, error) {
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
-		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
+		transportOptions := []controlplane.EncryptedRequestTransportOption{}
+		if contextVMResponseStore != nil {
+			transportOptions = append(transportOptions, controlplane.WithContextVMResponseStore(contextVMResponseStore, defaultContextVMResponseRetention))
+		}
+		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger, transportOptions...)
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
 		}

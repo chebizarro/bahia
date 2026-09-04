@@ -48,7 +48,13 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 ## Nostr-native transport
 
-Signer-first CLI mutations use ContextVM JSON-RPC methods over Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) when encrypted transport is available. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
+Signer-first CLI mutations use ContextVM JSON-RPC methods over Nostr kind `25910`. Plain transport remains the default. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
+
+Before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
+
+### Troubleshooting: CLI times out but server logs handler completed
+
+A handler-completed log means the mutation ran, not that the ephemeral response reached a subscribed relay. The CLI automatically re-subscribes and republishes the same logical request after each result timeout; Bahia answers the duplicate from its response cache. If all attempts fail, use the CLI error fields `method`, `request_event_id`, `d`, `configured_relays`, `subscribed_relays`, `failed_subscriptions`, `published_relays`, `attempts`, and `publish_results` to correlate the request with server logs and per-relay acceptance or subscription failures. Do not submit a new idempotency key until that evidence is checked.
 
 Operator relay resolution is deterministic and ordered:
 
@@ -391,6 +397,9 @@ bahia services get svc-123 -o yaml
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
 | `--http-fallback` | Allow explicit HTTP compatibility fallback before any relay accepts the request |
+| `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
+| `--result-timeout` | Maximum wait for a ContextVM result per publish attempt (default `30s`) |
+| `--result-retries` | Idempotent re-publishes after a result timeout (default `2`) |
 | `-o, --output` | Output format (`table`, `json`, `yaml`) |
 | `--help` | Show help |
 

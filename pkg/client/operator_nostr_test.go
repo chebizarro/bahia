@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
+	"fiatjaf.com/nostr/nip44"
+	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -810,6 +813,7 @@ func TestOperatorReplyAuthClosedAuthenticatesAndResubscribesWithoutRepublish(t *
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.relays = []string{"wss://auth.example"}
+	transport.relayURLs = append([]string(nil), client.relays...)
 	var published nostr.Event
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
 		published = ev
@@ -848,6 +852,7 @@ func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testi
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.relays = []string{"wss://auth.example", "wss://open.example"}
+	transport.relayURLs = append([]string(nil), client.relays...)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
 		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
 		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
@@ -868,6 +873,7 @@ func TestOperatorReplyClosedAllRelaysAfterPublishIsPostAcceptanceFailure(t *test
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	client.relays = []string{"wss://auth.example", "wss://closed.example"}
+	transport.relayURLs = append([]string(nil), client.relays...)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
 		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
 		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://closed.example", Reason: "closed: maintenance"}
@@ -916,11 +922,366 @@ func TestOperatorAdoptionRejectsDockerHostBeforePublish(t *testing.T) {
 	}
 }
 
+func TestOperatorPublishWaitsForSubscriptionEOSE(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	transport.operatorEOSE = make(chan struct{})
+	transport.autoActivate = false
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.activationTimeout = time.Second
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+
+	type outcome struct {
+		result *RuntimeActionResult
+		err    error
+	}
+	resultCh := make(chan outcome, 1)
+	go func() {
+		result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+		resultCh <- outcome{result: result, err: err}
+	}()
+	<-transport.subscribeNotify
+	transport.mu.Lock()
+	publishedBeforeEOSE := len(transport.published)
+	transport.mu.Unlock()
+	if publishedBeforeEOSE != 0 {
+		t.Fatalf("published before EOSE = %d, want 0", publishedBeforeEOSE)
+	}
+	transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://relay.example"}
+	out := <-resultCh
+	if out.err != nil || out.result == nil || out.result.Action != "restart" {
+		t.Fatalf("result=%#v error=%v", out.result, out.err)
+	}
+}
+
+func TestOperatorActivationAuthClosedRelayRecoversWhileHealthyRelayRemains(t *testing.T) {
+	requestKey := nostr.Generate().Hex()
+	replyKey := nostr.Generate().Hex()
+	transport := newFakeOperatorTransport()
+	transport.autoActivate = false
+	transport.relayURLs = []string{"wss://auth.example", "wss://healthy.example"}
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.relays = append([]string(nil), transport.relayURLs...)
+	client.activationTimeout = time.Second
+
+	transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
+	transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://healthy.example"}
+	transport.authFn = func(_ context.Context, relayURL string) error {
+		transport.mu.Lock()
+		transport.calls = append(transport.calls, "auth")
+		transport.mu.Unlock()
+		if relayURL != "wss://auth.example" {
+			t.Fatalf("AuthenticateRelay relay = %q, want auth relay", relayURL)
+		}
+		transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://auth.example"}
+		transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://healthy.example"}
+		return nil
+	}
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil || result == nil || result.Action != "restart" {
+		t.Fatalf("result=%#v error=%v, want request success after activation AUTH recovery", result, err)
+	}
+	transport.mu.Lock()
+	calls := append([]string(nil), transport.calls...)
+	transport.mu.Unlock()
+	if len(calls) != 4 || calls[0] != "subscribe" || calls[1] != "auth" || calls[2] != "subscribe" || calls[3] != "publish" {
+		t.Fatalf("calls = %#v, want subscribe, auth, subscribe, publish", calls)
+	}
+}
+
+func TestOperatorActivationFailsWhenAllRelaysCloseBeforeEOSE(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	transport.autoActivate = false
+	transport.relayURLs = []string{"wss://one.example", "wss://two.example"}
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	client.relays = append([]string(nil), transport.relayURLs...)
+	client.activationTimeout = time.Second
+	transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://one.example", Reason: "closed: maintenance"}
+	transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://two.example", Reason: "closed: unavailable"}
+
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var requestErr *ControlPlaneRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	for _, want := range []string{"all reply subscriptions closed before EOSE", "wss://one.example (closed: maintenance)", "wss://two.example (closed: unavailable)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want %q", err, want)
+		}
+	}
+	if requestErr.RequestAccepted || len(transport.published) != 0 {
+		t.Fatalf("accepted=%v published=%d, want clean pre-publish activation failure", requestErr.RequestAccepted, len(transport.published))
+	}
+}
+
+func TestOperatorZeroSubscribedRelaysFailsBeforePublish(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	transport.relayURLs = nil
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var requestErr *ControlPlaneRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	if requestErr.RequestAccepted || len(transport.published) != 0 {
+		t.Fatalf("accepted=%v published=%d, want pre-publish failure", requestErr.RequestAccepted, len(transport.published))
+	}
+	for _, want := range []string{"configured_relays=wss://relay.example", "failed_subscriptions=wss://relay.example", "attempts=1"} {
+		if !strings.Contains(requestErr.Error(), want) {
+			t.Fatalf("error = %q, want %q", requestErr.Error(), want)
+		}
+	}
+}
+
+func TestOperatorPendingRelaysUsesEstablishedSubscriptions(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	transport.relayURLs = []string{"wss://subscribed.example"}
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	client.relays = []string{"wss://subscribed.example", "wss://failed.example"}
+	transport.publishFn = func(_ context.Context, _ nostr.Event) (int, error) {
+		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://subscribed.example", Reason: "closed: maintenance"}
+		return 1, nil
+	}
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var requestErr *ControlPlaneRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	if !strings.Contains(err.Error(), "reply subscription closed before result from all relays") || !strings.Contains(err.Error(), "failed_subscriptions=wss://failed.example") {
+		t.Fatalf("error = %v, want subscribed-set closure and failed subscription diagnostics", err)
+	}
+}
+
+func TestOperatorResultTimeoutRepublishesSameRequest(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	client.resultTimeout = time.Millisecond
+	client.resultRetries = 1
+	replyKey := nostr.Generate().Hex()
+	var first nostr.Event
+	calls := 0
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		calls++
+		if calls == 1 {
+			first = event
+		} else {
+			if event.ID != first.ID || firstTagValue(event.Tags, "d") != firstTagValue(first.Tags, "d") {
+				t.Fatalf("retry changed logical request: first=%s retry=%s", first.ID.Hex(), event.ID.Hex())
+			}
+			transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		}
+		return 1, nil
+	}
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil || result == nil || calls != 2 {
+		t.Fatalf("result=%#v error=%v publish_calls=%d, want replay success on second attempt", result, err, calls)
+	}
+}
+
+func TestOperatorEncryptedRetryAcceptsReplyCorrelatedToFirstWrapper(t *testing.T) {
+	operatorSecret := nostr.Generate()
+	serviceSecret := nostr.Generate()
+	operatorKeyer := keyer.NewPlainKeySigner(operatorSecret)
+	serviceKeyer := keyer.NewPlainKeySigner(serviceSecret)
+	transport := newFakeOperatorTransport()
+	client := &OperatorControlPlaneClient{
+		relays: []string{"wss://relay.example"}, signer: operatorKeyer, keyer: operatorKeyer,
+		pubkey: operatorSecret.Public().Hex(), servicePubkey: serviceSecret.Public().Hex(),
+		transport: transport, encrypted: true, resultTimeout: time.Millisecond, resultRetries: 1,
+	}
+
+	var firstOuter, firstInner nostr.Event
+	publishCalls := 0
+	transport.publishFn = func(ctx context.Context, outer nostr.Event) (int, error) {
+		publishCalls++
+		inner, err := cascontextvm.UnwrapNIP59(ctx, serviceKeyer, &outer)
+		if err != nil {
+			t.Fatalf("unwrap encrypted request attempt %d: %v", publishCalls, err)
+		}
+		if publishCalls == 1 {
+			firstOuter = outer
+			firstInner = *inner
+			return 1, nil
+		}
+		if inner.ID != firstInner.ID || firstTagValue(inner.Tags, "d") != firstTagValue(firstInner.Tags, "d") {
+			t.Fatalf("retry changed inner logical request: first=%s retry=%s", firstInner.ID.Hex(), inner.ID.Hex())
+		}
+		if outer.ID == firstOuter.ID {
+			t.Fatal("encrypted retry reused outer wrapper; want fresh wrapper")
+		}
+		transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), firstOuter, firstInner, serviceSecret, false, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil || result == nil || result.Action != "restart" || publishCalls != 2 {
+		t.Fatalf("result=%#v error=%v publish_calls=%d, want first-wrapper reply during second await", result, err, publishCalls)
+	}
+	transport.mu.Lock()
+	filters := append([]nostr.Filter(nil), transport.filters...)
+	published := append([]nostr.Event(nil), transport.published...)
+	transport.mu.Unlock()
+	if len(filters) != 2 || len(published) != 2 {
+		t.Fatalf("filters=%d published=%d, want two attempts", len(filters), len(published))
+	}
+	gotIDs := filters[1].Tags["e"]
+	wantIDs := map[string]bool{published[0].ID.Hex(): false, published[1].ID.Hex(): false}
+	for _, id := range gotIDs {
+		if _, expected := wantIDs[id]; expected {
+			wantIDs[id] = true
+		}
+	}
+	if len(gotIDs) != 2 || !wantIDs[published[0].ID.Hex()] || !wantIDs[published[1].ID.Hex()] {
+		t.Fatalf("second-attempt filter #e = %#v, want both wrapper ids %#v", gotIDs, []string{published[0].ID.Hex(), published[1].ID.Hex()})
+	}
+}
+
+func TestOperatorEncryptedRoundTripLocalAndRemoteSigner(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		name := "local"
+		if remote {
+			name = "remote"
+		}
+		t.Run(name, func(t *testing.T) {
+			operatorSecret := nostr.Generate()
+			operatorKeyer := keyer.NewPlainKeySigner(operatorSecret)
+			var signer nostr.Keyer = operatorKeyer
+			var recorded *recordingOperatorKeyer
+			if remote {
+				recorded = &recordingOperatorKeyer{Keyer: operatorKeyer}
+				signer = recorded
+			}
+			serviceSecret := nostr.Generate()
+			serviceKeyer := keyer.NewPlainKeySigner(serviceSecret)
+			transport := newFakeOperatorTransport()
+			client := &OperatorControlPlaneClient{
+				relays: []string{"wss://relay.example"}, signer: signer, keyer: signer,
+				pubkey: operatorSecret.Public().Hex(), servicePubkey: serviceSecret.Public().Hex(),
+				transport: transport, encrypted: true, resultTimeout: time.Second,
+			}
+			transport.publishFn = func(ctx context.Context, outer nostr.Event) (int, error) {
+				if outer.Kind != nostr.Kind(controlplane.KindContextVMGiftWrap) {
+					t.Fatalf("outer kind = %d", outer.Kind)
+				}
+				inner, err := cascontextvm.UnwrapNIP59(ctx, serviceKeyer, &outer)
+				if err != nil {
+					t.Fatalf("unwrap encrypted request: %v", err)
+				}
+				transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), outer, *inner, serviceSecret, false, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+				return 1, nil
+			}
+			result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+			if err != nil || result == nil || result.Action != "restart" {
+				t.Fatalf("result=%#v error=%v", result, err)
+			}
+			filter := transport.onlyFilter(t)
+			if len(filter.Authors) != 0 || len(filter.Kinds) != 2 {
+				t.Fatalf("encrypted reply filter = %#v, want two wrapper kinds and no author filter", filter)
+			}
+			if recorded != nil && (recorded.encryptCalls == 0 || recorded.decryptCalls == 0) {
+				t.Fatalf("remote signer crypto calls encrypt=%d decrypt=%d", recorded.encryptCalls, recorded.decryptCalls)
+			}
+		})
+	}
+}
+
+func TestOperatorEncryptedReplyRejectsWrongOuterCorrelationAndInvalidInnerProvenance(t *testing.T) {
+	operatorSecret := nostr.Generate()
+	serviceSecret := nostr.Generate()
+	attackerSecret := nostr.Generate()
+	transport := newFakeOperatorTransport()
+	localKeyer := keyer.NewPlainKeySigner(operatorSecret)
+	client := &OperatorControlPlaneClient{
+		relays: []string{"wss://relay.example"}, signer: localKeyer, keyer: localKeyer,
+		pubkey: operatorSecret.Public().Hex(), servicePubkey: serviceSecret.Public().Hex(),
+		transport: transport, encrypted: true, resultTimeout: time.Second,
+	}
+	serviceKeyer := keyer.NewPlainKeySigner(serviceSecret)
+	transport.publishFn = func(ctx context.Context, outer nostr.Event) (int, error) {
+		inner, err := cascontextvm.UnwrapNIP59(ctx, serviceKeyer, &outer)
+		if err != nil {
+			t.Fatalf("unwrap encrypted request: %v", err)
+		}
+		wrongOuter := outer
+		wrongOuter.ID = nostr.ID{}
+		transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), wrongOuter, *inner, serviceSecret, false, map[string]any{"ignored": "wrong outer correlation"})
+		transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), outer, *inner, attackerSecret, false, map[string]any{"ignored": "forged inner author"})
+		transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), outer, *inner, serviceSecret, true, map[string]any{"ignored": "invalid inner signature"})
+		transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), outer, *inner, serviceSecret, false, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	if err != nil || result == nil || result.Action != "restart" {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+}
+
+type recordingOperatorKeyer struct {
+	nostr.Keyer
+	encryptCalls int
+	decryptCalls int
+}
+
+func (s *recordingOperatorKeyer) Encrypt(ctx context.Context, plaintext string, recipient nostr.PubKey) (string, error) {
+	s.encryptCalls++
+	return s.Keyer.Encrypt(ctx, plaintext, recipient)
+}
+
+func (s *recordingOperatorKeyer) Decrypt(ctx context.Context, ciphertext string, sender nostr.PubKey) (string, error) {
+	s.decryptCalls++
+	return s.Keyer.Decrypt(ctx, ciphertext, sender)
+}
+
+func wrappedContextVMResult(t *testing.T, operatorPubkey nostr.PubKey, outerRequest, innerRequest nostr.Event, responseSecret nostr.SecretKey, tamperSignature bool, result any) *nostr.Event {
+	t.Helper()
+	wrapperSecret := nostr.Generate()
+	response := signedOperatorReply(t, responseSecret.Hex(), controlplane.KindContextVMMessage,
+		nostr.Tags{{"e", innerRequest.ID.Hex(), "", "reply"}, {"p", operatorPubkey.Hex()}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}},
+		contextVMResponseContent(t, innerRequest, result))
+	if tamperSignature {
+		response.Content += " "
+	}
+	plaintext, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal encrypted inner response: %v", err)
+	}
+	conversationKey, err := nip44.GenerateConversationKey(operatorPubkey, wrapperSecret)
+	if err != nil {
+		t.Fatalf("derive encrypted response key: %v", err)
+	}
+	ciphertext, err := nip44.Encrypt(string(plaintext), conversationKey)
+	if err != nil {
+		t.Fatalf("encrypt response: %v", err)
+	}
+	outer := &nostr.Event{
+		Kind: nostr.Kind(controlplane.KindContextVMGiftWrap), CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{{"e", outerRequest.ID.Hex(), "", "reply"}, {"p", operatorPubkey.Hex()}}, Content: ciphertext,
+	}
+	if err := outer.Sign(wrapperSecret); err != nil {
+		t.Fatalf("sign encrypted response wrapper: %v", err)
+	}
+	return outer
+}
+
 type fakeOperatorTransport struct {
 	mu               sync.Mutex
 	events           chan *nostr.Event
 	eose             chan struct{}
+	operatorEOSE     chan struct{}
+	relayEOSE        chan nostrpool.RelayEOSE
 	closedEvents     chan nostrpool.RelayClosed
+	relayURLs        []string
+	autoActivate     bool
+	subscribeNotify  chan struct{}
 	publishFn        func(context.Context, nostr.Event) (int, error)
 	publishResultsFn func(context.Context, nostr.Event) ([]nostrpool.PublishResult, error)
 	authFn           func(context.Context, string) error
@@ -932,7 +1293,18 @@ type fakeOperatorTransport struct {
 }
 
 func newFakeOperatorTransport() *fakeOperatorTransport {
-	return &fakeOperatorTransport{events: make(chan *nostr.Event, 32), eose: make(chan struct{}), closedEvents: make(chan nostrpool.RelayClosed, 8)}
+	operatorEOSE := make(chan struct{})
+	close(operatorEOSE)
+	return &fakeOperatorTransport{
+		events:          make(chan *nostr.Event, 32),
+		eose:            make(chan struct{}),
+		operatorEOSE:    operatorEOSE,
+		relayEOSE:       make(chan nostrpool.RelayEOSE, 8),
+		closedEvents:    make(chan nostrpool.RelayClosed, 8),
+		relayURLs:       []string{"wss://relay.example"},
+		autoActivate:    true,
+		subscribeNotify: make(chan struct{}, 8),
+	}
 }
 
 func (f *fakeOperatorTransport) Publish(ctx context.Context, ev nostr.Event) (int, error) {
@@ -984,7 +1356,41 @@ func (f *fakeOperatorTransport) SubscribeAllWithEOSE(ctx context.Context, filter
 	if err != nil {
 		return nil, err
 	}
-	return &nostrpool.MergedSubscription{Events: f.events, EndOfStoredEvents: f.eose, Closed: f.closedEvents}, nil
+	return &nostrpool.MergedSubscription{
+		Events:            f.events,
+		EndOfStoredEvents: f.eose,
+		RelayEOSE:         f.relayEOSE,
+		Closed:            f.closedEvents,
+	}, nil
+}
+
+func (f *fakeOperatorTransport) SubscribeOperator(ctx context.Context, filters []nostr.Filter) (*operatorSubscription, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "subscribe")
+	f.filters = append(f.filters, filters...)
+	err := f.subscribeErr
+	relayURLs := append([]string(nil), f.relayURLs...)
+	autoActivate := f.autoActivate
+	notify := f.subscribeNotify
+	f.mu.Unlock()
+	if notify != nil {
+		notify <- struct{}{}
+	}
+	if autoActivate {
+		for _, relayURL := range relayURLs {
+			f.relayEOSE <- nostrpool.RelayEOSE{RelayURL: relayURL}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &operatorSubscription{
+		Events:            f.events,
+		EndOfStoredEvents: f.operatorEOSE,
+		RelayEOSE:         f.relayEOSE,
+		Closed:            f.closedEvents,
+		relayURLs:         relayURLs,
+	}, nil
 }
 
 func (f *fakeOperatorTransport) Close() {
@@ -1033,12 +1439,10 @@ func newTestOperatorClient(t *testing.T, privateKey string, transport operatorRe
 	if err != nil {
 		t.Fatalf("NormalizeNostrPrivateKey() error = %v", err)
 	}
-	signer, err := controlplane.NewPrivateKeySigner(normalized)
-	if err != nil {
-		t.Fatalf("NewPrivateKeySigner() error = %v", err)
-	}
-	pubkey := mustOperatorTestPubKey(t, normalized)
-	return &OperatorControlPlaneClient{relays: []string{"wss://relay.example"}, privateKey: normalized, signer: signer, pubkey: pubkey, transport: transport}
+	secret := mustOperatorTestSecret(t, normalized)
+	localKeyer := keyer.NewPlainKeySigner(secret)
+	pubkey := secret.Public().Hex()
+	return &OperatorControlPlaneClient{relays: []string{"wss://relay.example"}, privateKey: normalized, signer: localKeyer, keyer: localKeyer, pubkey: pubkey, transport: transport}
 }
 
 func decodePublishedContextVMRequest(t *testing.T, event nostr.Event) contextVMRPCRequest {

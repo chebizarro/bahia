@@ -1,0 +1,65 @@
+{
+  "feature_id": "contextvm-result-delivery",
+  "tests": [
+    {
+      "criterion": "AC-1",
+      "coverage": [
+        "cmd/cli: TestRootCommandExposesOperatorFlags",
+        "pkg/client: TestOperatorPublishWaitsForSubscriptionEOSE",
+        "pkg/client: TestOperatorResultTimeoutRepublishesSameRequest",
+        "pkg/client: TestContextVMResultDeliveryE2EPlainRoundTrip",
+        "pkg/client: TestOperatorDeploymentIntentUsesExplicitIdempotencyKey",
+        "pkg/client: TestOperatorRouteAttachRequestConstruction",
+        "pkg/client: TestOperatorDNSRequestConstruction"
+      ]
+    },
+    {
+      "criterion": "AC-2",
+      "coverage": [
+        "pkg/client: TestContextVMResultDeliveryE2EPlainRoundTrip",
+        "pkg/client: TestContextVMResultDeliveryE2EEncryptedRoundTrip"
+      ]
+    },
+    {
+      "criterion": "AC-3",
+      "coverage": [
+        "pkg/client: TestContextVMResultDeliveryE2EDualRelaySubscriptionPartialFailure",
+        "pkg/client: TestOperatorPendingRelaysUsesEstablishedSubscriptions"
+      ]
+    },
+    {
+      "criterion": "AC-4",
+      "coverage": [
+        "pkg/client: TestContextVMResultDeliveryE2ERetryReplaysCachedDesiredStateHash",
+        "internal/controlplane: TestContextVMTransport_IdempotencyCachesProgressToken"
+      ]
+    },
+    {
+      "criterion": "AC-5",
+      "coverage": [
+        "pkg/client: TestContextVMResultDeliveryE2EEncryptedRoundTrip",
+        "pkg/client: TestOperatorEncryptedRoundTripLocalAndRemoteSigner",
+        "pkg/client: TestOperatorEncryptedReplyRejectsWrongOuterCorrelationAndInvalidInnerProvenance",
+        "internal/controlplane: TestContextVMTransport_EncryptedGiftWrapAuthorizesInnerSenderNotWrapper"
+      ]
+    },
+    {
+      "criterion": "AC-6",
+      "coverage": [
+        "internal/controlplane: TestContextVMTransport_RetriesPublishErrorUntilDelivered",
+        "internal/controlplane: TestContextVMTransport_ExhaustedRetryLogsAndCachedResponseReplays",
+        "internal/controlplane: TestContextVMTransport_PersistedResponseReplaysAfterRestart",
+        "internal/controlplane: TestContextVMTransport_MultiRelayPartialFailureSucceedsWithoutRetry",
+        "internal/repository: TestPgContextVMResponseStorePutGetAndDelete"
+      ]
+    },
+    {
+      "criterion": "AC-7",
+      "coverage": [
+        "pkg/client: TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort",
+        "pkg/client: TestOperatorZeroSubscribedRelaysFailsBeforePublish",
+        "pkg/client: TestOperatorPendingRelaysUsesEstablishedSubscriptions"
+      ]
+    }
+  ]
+}

@@ -13,7 +13,10 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const (
@@ -32,6 +35,152 @@ func (m *mockEncryptedPublisher) Publish(_ context.Context, ev nostr.Event) (int
 	defer m.mu.Unlock()
 	m.events = append(m.events, ev)
 	return 1, nil
+}
+
+type scriptedPublishOutcome struct {
+	published int
+	err       error
+}
+
+type scriptedEncryptedPublisher struct {
+	mu       sync.Mutex
+	events   []nostr.Event
+	outcomes []scriptedPublishOutcome
+	called   chan int
+	calls    int
+}
+
+func (p *scriptedEncryptedPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	p.calls++
+	if p.called != nil {
+		p.called <- p.calls
+	}
+	if len(p.outcomes) == 0 {
+		return 1, nil
+	}
+	outcome := p.outcomes[0]
+	p.outcomes = p.outcomes[1:]
+	return outcome.published, outcome.err
+}
+
+type toggledEncryptedPublisher struct {
+	mu     sync.Mutex
+	fail   bool
+	events []nostr.Event
+	calls  int
+}
+
+func (p *toggledEncryptedPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	p.calls++
+	if p.fail {
+		return 0, fmt.Errorf("relay unavailable")
+	}
+	return 1, nil
+}
+
+func (p *toggledEncryptedPublisher) setFail(fail bool) {
+	p.mu.Lock()
+	p.fail = fail
+	p.mu.Unlock()
+}
+
+type partialDetailedPublisher struct {
+	mu            sync.Mutex
+	events        []nostr.Event
+	detailedCalls int
+}
+
+func (p *partialDetailedPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	return 1, nil
+}
+
+func (p *partialDetailedPublisher) PublishWithResults(_ context.Context, event nostr.Event) ([]nostrpool.PublishResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	p.detailedCalls++
+	return []nostrpool.PublishResult{
+		{RelayURL: "wss://rejected.example", Reason: "rate-limited: slow down"},
+		{RelayURL: "wss://accepted.example", Accepted: true},
+	}, nil
+}
+
+type memoryContextVMResponseStore struct {
+	mu      sync.Mutex
+	records map[string]repository.ContextVMResponseRecord
+}
+
+func newMemoryContextVMResponseStore() *memoryContextVMResponseStore {
+	return &memoryContextVMResponseStore{records: make(map[string]repository.ContextVMResponseRecord)}
+}
+
+func (s *memoryContextVMResponseStore) Put(_ context.Context, record repository.ContextVMResponseRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record.Response = append([]byte(nil), record.Response...)
+	s.records[contextVMCacheKey(record.RequesterPubkey, record.Method, record.ProgressToken)] = record
+	return nil
+}
+
+func (s *memoryContextVMResponseStore) Get(_ context.Context, pubkey, method, token string, createdAfter time.Time) (*repository.ContextVMResponseRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.records[contextVMCacheKey(pubkey, method, token)]
+	if !ok || record.CreatedAt.Before(createdAfter) {
+		return nil, nil
+	}
+	record.Response = append([]byte(nil), record.Response...)
+	return &record, nil
+}
+
+func (s *memoryContextVMResponseStore) DeleteCreatedBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var deleted int64
+	for key, record := range s.records {
+		if record.CreatedAt.Before(cutoff) {
+			delete(s.records, key)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+type loopLivenessPublisher struct {
+	secondPublished chan struct{}
+	secondOnce      sync.Once
+}
+
+func (p *loopLivenessPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(event.Content), &fields); err != nil {
+		return 0, err
+	}
+	if _, progress := fields["method"]; progress {
+		return 1, nil
+	}
+	var response ContextVMJSONRPCResponse
+	if err := json.Unmarshal([]byte(event.Content), &response); err != nil {
+		return 0, err
+	}
+	switch string(response.ID) {
+	case `"first"`:
+		return 0, fmt.Errorf("relay set unavailable for first response")
+	case `"second"`:
+		p.secondOnce.Do(func() { close(p.secondPublished) })
+		return 1, nil
+	default:
+		return 1, nil
+	}
 }
 
 type blockingEncryptedPublisher struct {
@@ -53,7 +202,7 @@ func (p *blockingEncryptedPublisher) Publish(ctx context.Context, _ nostr.Event)
 	}
 }
 
-func newResponder(t *testing.T, publisher *mockEncryptedPublisher) *EncryptedResponder {
+func newResponder(t *testing.T, publisher NostrEventPublisher) *EncryptedResponder {
 	t.Helper()
 	signer, err := NewPrivateKeySigner(testServiceKey)
 	if err != nil {
@@ -303,6 +452,20 @@ func receiveEncryptedSubscription(t *testing.T, ch <-chan *scriptedEncryptedSubs
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for subscription")
 		return nil
+	}
+}
+
+func waitForPublishCall(t *testing.T, ch <-chan int, want int) {
+	t.Helper()
+	for {
+		select {
+		case call := <-ch:
+			if call >= want {
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for publish call %d", want)
+		}
 	}
 }
 
@@ -819,6 +982,218 @@ func TestContextVMTransport_IdempotencyCachesProgressToken(t *testing.T) {
 	assertContextVMProgressAck(t, publisher.events[0], first)
 	if got := contextVMResponse(t, publisher.events[2]); string(got.ID) != "2" || got.Error != nil {
 		t.Fatalf("cached response = %+v", got)
+	}
+}
+
+func TestContextVMTransport_FailedTerminalRetryDoesNotBlockSubscriptionLoop(t *testing.T) {
+	subscriber := newScriptedEncryptedRequestSubscriber()
+	publisher := &loopLivenessPublisher{secondPublished: make(chan struct{})}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(500*time.Millisecond, 250*time.Millisecond, 250*time.Millisecond))
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"accepted": true}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- transport.Run(ctx) }()
+	subscription := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"first","method":"service/deploy","params":{"_meta":{"progressToken":"first"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"second","method":"service/deploy","params":{"_meta":{"progressToken":"second"}}}`)
+
+	subscription.events <- first
+	subscription.events <- second
+	select {
+	case <-publisher.secondPublished:
+	case <-time.After(100 * time.Millisecond):
+		cancel()
+		t.Fatal("second request was blocked behind first response retry")
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(time.Second):
+		t.Fatal("transport did not stop after lifecycle cancellation")
+	}
+}
+
+func TestContextVMTransport_RetriesPublishErrorUntilDelivered(t *testing.T) {
+	publisher := &scriptedEncryptedPublisher{called: make(chan int, 4), outcomes: []scriptedPublishOutcome{
+		{published: 1},
+		{err: fmt.Errorf("temporary relay transport failure")},
+		{published: 1},
+	}}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
+	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"delivered": true}, nil
+	})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry-error","method":"service/deploy","params":{"_meta":{"progressToken":"retry-error"}}}`)
+
+	transport.HandleEvent(context.Background(), event)
+	waitForPublishCall(t, publisher.called, 3)
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if publisher.calls != 3 {
+		t.Fatalf("publish calls = %d, want progress plus two terminal attempts", publisher.calls)
+	}
+	if publisher.events[1].ID != publisher.events[2].ID {
+		t.Fatal("terminal retry must republish the same signed event")
+	}
+	response := contextVMResponse(t, publisher.events[2])
+	if response.Error != nil || string(response.ID) != `"retry-error"` {
+		t.Fatalf("unexpected delivered response: %+v", response)
+	}
+}
+
+func TestContextVMTransport_RetriesZeroAcceptedUntilDelivered(t *testing.T) {
+	publisher := &scriptedEncryptedPublisher{called: make(chan int, 4), outcomes: []scriptedPublishOutcome{
+		{published: 1},
+		{published: 0},
+		{published: 1},
+	}}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
+	transport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"delivered": true}, nil
+	})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry-zero","method":"package/promote","params":{"_meta":{"progressToken":"retry-zero"}}}`)
+
+	transport.HandleEvent(context.Background(), event)
+	waitForPublishCall(t, publisher.called, 3)
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if publisher.calls != 3 {
+		t.Fatalf("publish calls = %d, want progress plus two terminal attempts", publisher.calls)
+	}
+}
+
+func TestContextVMTransport_ExhaustedRetryLogsAndCachedResponseReplays(t *testing.T) {
+	publisher := &toggledEncryptedPublisher{fail: true}
+	core, logs := observer.New(zap.ErrorLevel)
+	exhausted := make(chan struct{})
+	var exhaustedOnce sync.Once
+	logger := zap.New(core, zap.Hooks(func(entry zapcore.Entry) error {
+		if entry.Message == "terminal ContextVM response publication failed" {
+			exhaustedOnce.Do(func() { close(exhausted) })
+		}
+		return nil
+	}))
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, logger, WithContextVMResultRetry(8*time.Millisecond, time.Millisecond, time.Millisecond))
+	handlerCalls := 0
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, func(context.Context, ContextVMRequest) (any, error) {
+		handlerCalls++
+		return map[string]any{"cordoned": true}, nil
+	})
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"worker/cordon","params":{"_meta":{"progressToken":"cordon-retry"}}}`)
+	transport.HandleEvent(context.Background(), first)
+	select {
+	case <-exhausted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for exhausted terminal retry log")
+	}
+
+	entries := logs.FilterMessage("terminal ContextVM response publication failed").All()
+	if len(entries) != 1 {
+		t.Fatalf("terminal failure logs = %d, want 1", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["event_id"] != first.ID.Hex() || fields["method"] != ContextVMMethodWorkerCordon || fields["recipient_pubkey_prefix"] != requesterPubkey[:8] {
+		t.Fatalf("terminal failure fields = %#v", fields)
+	}
+	if _, ok := fields["relay_outcomes"]; !ok {
+		t.Fatalf("terminal failure missing relay outcomes: %#v", fields)
+	}
+
+	publisher.setFail(false)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"worker/cordon","params":{"_meta":{"progressToken":"cordon-retry"}}}`)
+	transport.HandleEvent(context.Background(), second)
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls = %d, want cached replay without redispatch", handlerCalls)
+	}
+	publisher.mu.Lock()
+	last := publisher.events[len(publisher.events)-1]
+	publisher.mu.Unlock()
+	if got := contextVMResponse(t, last); string(got.ID) != "2" || got.Error != nil {
+		t.Fatalf("cached response = %+v", got)
+	}
+}
+
+func TestContextVMTransport_PersistedResponseReplaysAfterRestart(t *testing.T) {
+	store := newMemoryContextVMResponseStore()
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	firstPublisher := &mockEncryptedPublisher{}
+	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, firstPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	firstCalls := 0
+	firstTransport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+		firstCalls++
+		return map[string]any{"run_id": "run-1"}, nil
+	})
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"before-restart","method":"backup/run","params":{"_meta":{"progressToken":"backup-restart"}}}`)
+	firstTransport.HandleEvent(context.Background(), first)
+
+	secondPublisher := &mockEncryptedPublisher{}
+	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, secondPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	secondCalls := 0
+	secondTransport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+		secondCalls++
+		return nil, nil
+	})
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"after-restart","method":"backup/run","params":{"_meta":{"progressToken":"backup-restart"}}}`)
+	secondTransport.HandleEvent(context.Background(), second)
+
+	if firstCalls != 1 || secondCalls != 0 {
+		t.Fatalf("handler calls before=%d after=%d, want 1 and 0", firstCalls, secondCalls)
+	}
+	if len(secondPublisher.events) != 1 {
+		t.Fatalf("restart replay events = %d, want one terminal response", len(secondPublisher.events))
+	}
+	response := contextVMResponse(t, secondPublisher.events[0])
+	if string(response.ID) != `"after-restart"` || response.Error != nil {
+		t.Fatalf("persisted response replay = %+v", response)
+	}
+	result, ok := response.Result.(map[string]any)
+	if !ok || result["run_id"] != "run-1" {
+		t.Fatalf("persisted result = %#v", response.Result)
+	}
+}
+
+func TestContextVMTransport_LargeTerminalPayloadUnchanged(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
+	large := strings.Repeat("contextvm-result-", 16384)
+	transport.RegisterContextVMHandler(ContextVMMethodToolsCall, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"payload": large}, nil
+	})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"large","method":"tools/call","params":{}}`)
+
+	transport.HandleEvent(context.Background(), event)
+
+	response := contextVMResponse(t, publisher.events[1])
+	result, ok := response.Result.(map[string]any)
+	if !ok || result["payload"] != large {
+		t.Fatalf("large payload changed: got length %d, want %d", len(fmt.Sprint(result["payload"])), len(large))
+	}
+}
+
+func TestContextVMTransport_MultiRelayPartialFailureSucceedsWithoutRetry(t *testing.T) {
+	publisher := &partialDetailedPublisher{}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
+	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"rolled_back": true}, nil
+	})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"partial","method":"service/rollback","params":{}}`)
+
+	transport.HandleEvent(context.Background(), event)
+
+	if publisher.detailedCalls != 1 {
+		t.Fatalf("terminal detailed publish calls = %d, want 1", publisher.detailedCalls)
 	}
 }
 

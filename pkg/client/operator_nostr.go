@@ -13,11 +13,19 @@ import (
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
+	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
+)
+
+const (
+	DefaultOperatorResultTimeout = 30 * time.Second
+	DefaultOperatorResultRetries = 2
+	operatorActivationTimeout    = 3 * time.Second
 )
 
 // OperatorControlPlaneConfig configures the signer-first operator Nostr client.
@@ -28,6 +36,26 @@ type OperatorControlPlaneConfig struct {
 	Pubkey        string
 	CloseSigner   func() error
 	ServicePubkey string // optional 64-character Bahia ContextVM service pubkey for #p/authors routing
+	Encrypted     bool
+	ResultTimeout time.Duration
+	ResultRetries *int
+}
+
+// OperatorControlPlaneOption customizes optional client integrations.
+type OperatorControlPlaneOption func(*operatorControlPlaneOptions)
+
+type operatorControlPlaneOptions struct {
+	logger *zap.Logger
+}
+
+// WithOperatorLogger surfaces relay warnings through the supplied logger.
+// The library default remains quiet.
+func WithOperatorLogger(logger *zap.Logger) OperatorControlPlaneOption {
+	return func(options *operatorControlPlaneOptions) {
+		if logger != nil {
+			options.logger = logger
+		}
+	}
 }
 
 // OperatorStatusEvent is a correlated non-terminal operator progress event.
@@ -46,14 +74,18 @@ type OperatorStatusEvent struct {
 // by any relay before the error occurred. Callers may use RequestAccepted=false
 // to decide whether an explicit compatibility fallback is safe.
 type ControlPlaneRequestError struct {
-	Phase           string
-	RequestAccepted bool
-	PublishedRelays int
-	RequestEventID  string
-	RequestDTag     string
-	RequestMethod   string
-	PublishResults  []OperatorPublishResult
-	Cause           error
+	Phase               string
+	RequestAccepted     bool
+	PublishedRelays     int
+	ConfiguredRelays    []string
+	SubscribedRelays    []string
+	FailedSubscriptions []string
+	RequestEventID      string
+	RequestDTag         string
+	RequestMethod       string
+	AttemptsMade        int
+	PublishResults      []OperatorPublishResult
+	Cause               error
 }
 
 func (e *ControlPlaneRequestError) Error() string {
@@ -96,6 +128,21 @@ func (e *ControlPlaneRequestError) diagnosticDetails() string {
 	if e.RequestDTag != "" {
 		parts = append(parts, "d="+e.RequestDTag)
 	}
+	if len(e.ConfiguredRelays) > 0 {
+		parts = append(parts, "configured_relays="+strings.Join(e.ConfiguredRelays, ","))
+	}
+	if len(e.SubscribedRelays) > 0 {
+		parts = append(parts, "subscribed_relays="+strings.Join(e.SubscribedRelays, ","))
+	}
+	if len(e.FailedSubscriptions) > 0 {
+		parts = append(parts, "failed_subscriptions="+strings.Join(e.FailedSubscriptions, ","))
+	}
+	if e.AttemptsMade > 0 || e.PublishedRelays > 0 {
+		parts = append(parts, fmt.Sprintf("published_relays=%d", e.PublishedRelays))
+	}
+	if e.AttemptsMade > 0 {
+		parts = append(parts, fmt.Sprintf("attempts=%d", e.AttemptsMade))
+	}
 	if len(e.PublishResults) > 0 {
 		parts = append(parts, "publish_results="+formatOperatorPublishResults(e.PublishResults))
 	}
@@ -132,10 +179,32 @@ func (e *ContextVMRemoteError) Is(target error) bool {
 	return target == ErrEnvironmentRevisionConflict && e != nil && e.Code == controlplane.ContextVMEnvironmentConflictErrorCode
 }
 
+type operatorSubscription struct {
+	Events            <-chan *nostr.Event
+	EndOfStoredEvents <-chan struct{}
+	RelayEOSE         <-chan nostrpool.RelayEOSE
+	Closed            <-chan nostrpool.RelayClosed
+	relayURLs         []string
+	closeFn           func()
+}
+
+func (s *operatorSubscription) RelayURLs() []string {
+	if s == nil {
+		return nil
+	}
+	return append([]string(nil), s.relayURLs...)
+}
+
+func (s *operatorSubscription) Close() {
+	if s != nil && s.closeFn != nil {
+		s.closeFn()
+	}
+}
+
 type operatorRelayTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
 	PublishWithResults(context.Context, nostr.Event) ([]nostrpool.PublishResult, error)
-	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrpool.MergedSubscription, error)
+	SubscribeOperator(context.Context, []nostr.Filter) (*operatorSubscription, error)
 	AuthenticateRelay(context.Context, string) error
 	Close()
 }
@@ -176,6 +245,21 @@ func (t *relayPoolOperatorTransport) SubscribeAllWithEOSE(ctx context.Context, f
 	return t.pool.SubscribeAllWithEOSE(ctx, filters)
 }
 
+func (t *relayPoolOperatorTransport) SubscribeOperator(ctx context.Context, filters []nostr.Filter) (*operatorSubscription, error) {
+	merged, err := t.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	return &operatorSubscription{
+		Events:            merged.Events,
+		EndOfStoredEvents: merged.EndOfStoredEvents,
+		RelayEOSE:         merged.RelayEOSE,
+		Closed:            merged.Closed,
+		relayURLs:         merged.RelayURLs(),
+		closeFn:           merged.Close,
+	}, nil
+}
+
 func (t *relayPoolOperatorTransport) AuthenticateRelay(ctx context.Context, relayURL string) error {
 	t.ensureConnected(ctx)
 	return t.pool.AuthenticateRelay(ctx, relayURL)
@@ -190,19 +274,31 @@ func (t *relayPoolOperatorTransport) Close() {
 // OperatorControlPlaneClient publishes signed ContextVM JSON-RPC operator
 // requests and waits for correlated ContextVM replies over Nostr subscriptions.
 type OperatorControlPlaneClient struct {
-	relays        []string
-	privateKey    string
-	signer        canonicalnostr.Signer
-	pubkey        string
-	transport     operatorRelayTransport
-	servicePubkey string
-	closeSigner   func() error
+	relays            []string
+	privateKey        string
+	signer            canonicalnostr.Signer
+	keyer             canonicalnostr.Keyer
+	pubkey            string
+	transport         operatorRelayTransport
+	servicePubkey     string
+	closeSigner       func() error
+	encrypted         bool
+	resultTimeout     time.Duration
+	resultRetries     int
+	activationTimeout time.Duration
 }
 
 // NewOperatorControlPlaneClient builds a signer-first operator control-plane client.
-func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorControlPlaneClient, error) {
+func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig, clientOptions ...OperatorControlPlaneOption) (*OperatorControlPlaneClient, error) {
+	options := operatorControlPlaneOptions{logger: zap.NewNop()}
+	for _, apply := range clientOptions {
+		if apply != nil {
+			apply(&options)
+		}
+	}
 	privateKey := strings.TrimSpace(cfg.PrivateKey)
 	signer := cfg.Signer
+	var encryptionKeyer canonicalnostr.Keyer
 	pubkey := strings.TrimSpace(cfg.Pubkey)
 	var poolOptions []nostrpool.RelayPoolOption
 	if signer != nil {
@@ -212,6 +308,13 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 		if len(pubkey) != 64 {
 			return nil, fmt.Errorf("operator signer pubkey must be a 64-character hex pubkey")
 		}
+		if cfg.Encrypted {
+			var ok bool
+			encryptionKeyer, ok = signer.(canonicalnostr.Keyer)
+			if !ok {
+				return nil, fmt.Errorf("encrypted operator requests require a signer with NIP-44 encrypt and decrypt support")
+			}
+		}
 		poolOptions = append(poolOptions, nostrpool.WithAuthSigner(signer))
 	} else {
 		var err error
@@ -219,17 +322,13 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 		if err != nil {
 			return nil, err
 		}
-		signer, err = controlplane.NewPrivateKeySigner(privateKey)
-		if err != nil {
-			return nil, err
-		}
-		if signer == nil {
-			return nil, fmt.Errorf("operator signer is required")
-		}
 		secret, err := nostr.SecretKeyFromHex(privateKey)
 		if err != nil {
 			return nil, fmt.Errorf("parse Nostr private key: %w", err)
 		}
+		localKeyer := keyer.NewPlainKeySigner(secret)
+		signer = localKeyer
+		encryptionKeyer = localKeyer
 		pubkey = secret.Public().Hex()
 		poolOptions = append(poolOptions, nostrpool.WithPrivateKey(privateKey))
 	}
@@ -237,19 +336,41 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("at least one operator relay is required")
 	}
-	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), poolOptions...)
+	pool := nostrpool.NewRelayPool(relays, options.logger, poolOptions...)
 	servicePubkey := strings.TrimSpace(cfg.ServicePubkey)
 	if servicePubkey != "" && len(servicePubkey) != 64 {
 		return nil, fmt.Errorf("service pubkey must be a 64-character hex pubkey")
 	}
+	if cfg.Encrypted && servicePubkey == "" {
+		return nil, fmt.Errorf("encrypted operator requests require ServicePubkey")
+	}
+	resultTimeout := cfg.ResultTimeout
+	if resultTimeout == 0 {
+		resultTimeout = DefaultOperatorResultTimeout
+	}
+	if resultTimeout < 0 {
+		return nil, fmt.Errorf("operator result timeout must be positive")
+	}
+	resultRetries := DefaultOperatorResultRetries
+	if cfg.ResultRetries != nil {
+		resultRetries = *cfg.ResultRetries
+	}
+	if resultRetries < 0 {
+		return nil, fmt.Errorf("operator result retries cannot be negative")
+	}
 	return &OperatorControlPlaneClient{
-		relays:        relays,
-		privateKey:    privateKey,
-		signer:        signer,
-		pubkey:        pubkey,
-		transport:     &relayPoolOperatorTransport{pool: pool},
-		servicePubkey: servicePubkey,
-		closeSigner:   cfg.CloseSigner,
+		relays:            relays,
+		privateKey:        privateKey,
+		signer:            signer,
+		keyer:             encryptionKeyer,
+		pubkey:            pubkey,
+		transport:         &relayPoolOperatorTransport{pool: pool},
+		servicePubkey:     servicePubkey,
+		closeSigner:       cfg.CloseSigner,
+		encrypted:         cfg.Encrypted,
+		resultTimeout:     resultTimeout,
+		resultRetries:     resultRetries,
+		activationTimeout: operatorActivationTimeout,
 	}, nil
 }
 
@@ -1174,11 +1295,14 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	if method == "" {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method is required")}
 	}
+	if c.encrypted && (c.keyer == nil || c.servicePubkey == "") {
+		return nil, &ControlPlaneRequestError{Phase: "configure encrypted operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("encrypted operator requests require ServicePubkey and NIP-44 signer support")}
+	}
 	payloadContent, err := json.Marshal(req.Payload)
 	if err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
 	}
-	tags := req.Tags
+	tags := append(nostr.Tags(nil), req.Tags...)
 	requestID := firstTagValue(tags, "d")
 	if requestID == "" {
 		requestID = deterministicOperatorIdempotencyKey(method, tags, payloadContent)
@@ -1197,63 +1321,241 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	if err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: err}
 	}
-	event := &nostr.Event{Kind: nostr.Kind(controlplane.KindContextVMMessage), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := controlplane.SignGoNostrEvent(ctx, c.signer, event); err != nil {
+	inner := &nostr.Event{Kind: nostr.Kind(controlplane.KindContextVMMessage), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := controlplane.SignGoNostrEvent(ctx, c.signer, inner); err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "sign operator ContextVM request", RequestAccepted: false, Cause: err}
 	}
 
-	filter := nostr.Filter{
-		Kinds: []nostr.Kind{nostr.Kind(controlplane.KindContextVMMessage)},
-		Tags:  nostr.TagMap{"e": []string{event.ID.Hex()}, "p": []string{c.pubkey}},
+	attempts := c.resultRetries + 1
+	if attempts < 1 {
+		attempts = 1
 	}
-	if c.servicePubkey != "" {
-		serviceAuthor, err := nostr.PubKeyFromHex(c.servicePubkey)
-		if err != nil {
-			return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: fmt.Errorf("parse service pubkey: %w", err)}
-		}
-		filter.Authors = []nostr.PubKey{serviceAuthor}
+	resultTimeout := c.resultTimeout
+	if resultTimeout <= 0 {
+		resultTimeout = DefaultOperatorResultTimeout
 	}
-	filters := []nostr.Filter{filter}
-	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
-	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: err}
+	activationTimeout := c.activationTimeout
+	if activationTimeout <= 0 {
+		activationTimeout = operatorActivationTimeout
 	}
-
-	published, publishResults, err := c.publishOperatorEvent(ctx, *event)
-	requestError := func(phase string, accepted bool, cause error) *ControlPlaneRequestError {
+	var (
+		everAccepted    bool
+		publishedRelays int
+		publishResults  []OperatorPublishResult
+		subscribed      []string
+		failed          []string
+		requestEventID  = inner.ID.Hex()
+		outerRequestIDs []string
+	)
+	requestError := func(phase string, attempt int, cause error) *ControlPlaneRequestError {
 		return &ControlPlaneRequestError{
-			Phase:           phase,
-			RequestAccepted: accepted,
-			PublishedRelays: published,
-			RequestEventID:  event.ID.Hex(),
-			RequestDTag:     requestID,
-			RequestMethod:   method,
-			PublishResults:  publishResults,
-			Cause:           cause,
+			Phase:               phase,
+			RequestAccepted:     everAccepted,
+			PublishedRelays:     publishedRelays,
+			ConfiguredRelays:    append([]string(nil), c.relays...),
+			SubscribedRelays:    append([]string(nil), subscribed...),
+			FailedSubscriptions: append([]string(nil), failed...),
+			RequestEventID:      requestEventID,
+			RequestDTag:         requestID,
+			RequestMethod:       method,
+			AttemptsMade:        attempt,
+			PublishResults:      append([]OperatorPublishResult(nil), publishResults...),
+			Cause:               cause,
 		}
-	}
-	if published == 0 {
-		if err == nil {
-			err = fmt.Errorf("request was not accepted by any relay")
-		}
-		return nil, requestError("publish operator ContextVM request", false, err)
 	}
 
-	seen := map[string]struct{}{}
-	eose := sub.EndOfStoredEvents
-	closed := sub.Closed
-	pendingRelays := append([]string(nil), c.relays...)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		publishEvent, filters, attemptOuterIDs, prepareErr := c.prepareOperatorAttempt(ctx, inner, outerRequestIDs)
+		if prepareErr != nil {
+			phase := "prepare operator ContextVM request"
+			if c.encrypted {
+				phase = "wrap encrypted operator ContextVM request"
+			}
+			return nil, requestError(phase, attempt, prepareErr)
+		}
+		outerRequestIDs = attemptOuterIDs
+		requestEventID = publishEvent.ID.Hex()
+		sub, subErr := c.transport.SubscribeOperator(ctx, filters)
+		if subErr != nil {
+			subscribed = nil
+			failed = append([]string(nil), c.relays...)
+			return nil, requestError("subscribe for operator ContextVM replies", attempt, subErr)
+		}
+		subscribed = sub.RelayURLs()
+		failed = operatorFailedSubscriptions(c.relays, subscribed)
+		if len(subscribed) == 0 {
+			sub.Close()
+			return nil, requestError("subscribe for operator ContextVM replies", attempt, fmt.Errorf("no configured relay established a reply subscription"))
+		}
+		activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, sub, filters, activationTimeout)
+		if activationErr != nil {
+			activatedSub.Close()
+			return nil, requestError("activate operator ContextVM reply subscription", attempt, activationErr)
+		}
+		sub = activatedSub
+		subscribed = sub.RelayURLs()
+		failed = operatorFailedSubscriptions(c.relays, subscribed)
+
+		published, attemptResults, publishErr := c.publishOperatorEvent(ctx, *publishEvent)
+		publishedRelays = published
+		publishResults = append(publishResults, attemptResults...)
+		if published == 0 {
+			sub.Close()
+			if publishErr == nil {
+				publishErr = fmt.Errorf("request was not accepted by any relay")
+			}
+			return nil, requestError("publish operator ContextVM request", attempt, publishErr)
+		}
+		everAccepted = true
+
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, resultTimeout)
+		result, awaitErr := c.awaitOperatorResult(attemptCtx, sub, filters, inner, outerRequestIDs, requestID, onStatus)
+		cancelAttempt()
+		sub.Close()
+		if awaitErr == nil {
+			return result, nil
+		}
+		if errors.Is(awaitErr, context.DeadlineExceeded) && ctx.Err() == nil && attempt < attempts {
+			continue
+		}
+		return nil, requestError("await operator ContextVM result", attempt, awaitErr)
+	}
+	return nil, requestError("await operator ContextVM result", attempts, fmt.Errorf("result retry attempts exhausted"))
+}
+
+func (c *OperatorControlPlaneClient) prepareOperatorAttempt(ctx context.Context, inner *nostr.Event, priorOuterIDs []string) (*nostr.Event, []nostr.Filter, []string, error) {
+	if !c.encrypted {
+		filter := nostr.Filter{
+			Kinds: []nostr.Kind{nostr.Kind(controlplane.KindContextVMMessage)},
+			Tags:  nostr.TagMap{"e": []string{inner.ID.Hex()}, "p": []string{c.pubkey}},
+		}
+		if c.servicePubkey != "" {
+			serviceAuthor, err := nostr.PubKeyFromHex(c.servicePubkey)
+			if err != nil {
+				return nil, nil, priorOuterIDs, fmt.Errorf("parse service pubkey: %w", err)
+			}
+			filter.Authors = []nostr.PubKey{serviceAuthor}
+		}
+		return inner, []nostr.Filter{filter}, priorOuterIDs, nil
+	}
+	outer, rumor, err := cascontextvm.WrapEventNIP59(ctx, c.keyer, c.servicePubkey, inner, cascontextvm.StoredGiftWrap)
+	if err != nil {
+		return nil, nil, priorOuterIDs, err
+	}
+	if rumor.ID != inner.ID {
+		return nil, nil, priorOuterIDs, fmt.Errorf("NIP-59 wrapper changed inner request correlation id")
+	}
+	outerIDs := append(append([]string(nil), priorOuterIDs...), outer.ID.Hex())
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{nostr.Kind(controlplane.KindContextVMGiftWrap), nostr.Kind(controlplane.KindContextVMEphemeralWrap)},
+		Tags:  nostr.TagMap{"e": outerIDs, "p": []string{c.pubkey}},
+	}
+	return outer, []nostr.Filter{filter}, outerIDs, nil
+}
+
+func (c *OperatorControlPlaneClient) waitForOperatorSubscriptionActivation(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, timeout time.Duration) (*operatorSubscription, error) {
+	activationCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	current := sub
+	active := operatorRelaySet(current.RelayURLs())
+	eosed := map[string]struct{}{}
 	closedRelays := map[string]string{}
 	authAttempted := map[string]struct{}{}
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, requestError("await operator ContextVM result", true, ctx.Err())
-		case <-eose:
-			eose = nil
-		case relayClosed, ok := <-closed:
+			return current, ctx.Err()
+		case <-activationCtx.Done():
+			if len(eosed) > 0 {
+				return current, nil
+			}
+			return current, fmt.Errorf("no subscribed relay reached EOSE before activation deadline: %w", activationCtx.Err())
+		case _, ok := <-current.EndOfStoredEvents:
 			if !ok {
-				closed = nil
+				current.EndOfStoredEvents = nil
+			}
+		case info, ok := <-current.RelayEOSE:
+			if !ok {
+				current.RelayEOSE = nil
+				continue
+			}
+			if _, subscribed := active[info.RelayURL]; subscribed {
+				eosed[info.RelayURL] = struct{}{}
+			}
+			if len(active) > 0 && len(eosed) >= len(active) {
+				return current, nil
+			}
+		case relayClosed, ok := <-current.Closed:
+			if !ok {
+				current.Closed = nil
+				continue
+			}
+			relayURL := strings.TrimSpace(relayClosed.RelayURL)
+			reason := strings.TrimSpace(relayClosed.Reason)
+			if reason == "" {
+				reason = "subscription closed"
+			}
+			if relayURL == "" {
+				return current, fmt.Errorf("reply subscription closed before EOSE: %s", reason)
+			}
+			if _, subscribed := active[relayURL]; !subscribed {
+				continue
+			}
+			closedRelays[relayURL] = reason
+			if nostrpool.IsAuthRequiredReason(reason) {
+				if _, attempted := authAttempted[relayURL]; !attempted {
+					authAttempted[relayURL] = struct{}{}
+					if authErr := c.transport.AuthenticateRelay(activationCtx, relayURL); authErr == nil {
+						resub, subErr := c.transport.SubscribeOperator(activationCtx, filters)
+						if subErr == nil && len(resub.RelayURLs()) > 0 {
+							current.Close()
+							current = resub
+							active = operatorRelaySet(current.RelayURLs())
+							eosed = map[string]struct{}{}
+							closedRelays = map[string]string{}
+							continue
+						}
+						if resub != nil {
+							resub.Close()
+						}
+					}
+				}
+			}
+			delete(active, relayURL)
+			delete(eosed, relayURL)
+			current.relayURLs = removeRelayURL(current.relayURLs, relayURL)
+			if len(active) == 0 {
+				return current, fmt.Errorf("all reply subscriptions closed before EOSE: %s", formatOperatorClosedRelays(closedRelays))
+			}
+			if len(eosed) >= len(active) {
+				return current, nil
+			}
+		}
+	}
+}
+
+func operatorRelaySet(relays []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(relays))
+	for _, relay := range relays {
+		if relay = strings.TrimSpace(relay); relay != "" {
+			set[relay] = struct{}{}
+		}
+	}
+	return set
+}
+
+func (c *OperatorControlPlaneClient) awaitOperatorResult(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, inner *nostr.Event, outerRequestIDs []string, requestID string, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
+	seen := map[string]struct{}{}
+	pendingRelays := sub.RelayURLs()
+	closedRelays := map[string]string{}
+	authAttempted := map[string]struct{}{}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case relayClosed, ok := <-sub.Closed:
+			if !ok {
+				sub.Closed = nil
 				continue
 			}
 			reason := strings.TrimSpace(relayClosed.Reason)
@@ -1261,21 +1563,33 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				reason = "subscription closed"
 			}
 			if relayClosed.RelayURL == "" {
-				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before terminal result: %s", reason))
+				return nil, fmt.Errorf("reply subscription closed before terminal result: %s", reason)
 			}
 			if nostrpool.IsAuthRequiredReason(reason) {
 				if _, attempted := authAttempted[relayClosed.RelayURL]; !attempted {
 					authAttempted[relayClosed.RelayURL] = struct{}{}
 					if authErr := c.transport.AuthenticateRelay(ctx, relayClosed.RelayURL); authErr == nil {
 						sub.Close()
-						resub, subErr := c.transport.SubscribeAllWithEOSE(ctx, filters)
+						resub, subErr := c.transport.SubscribeOperator(ctx, filters)
 						if subErr != nil {
-							return nil, requestError("await operator ContextVM result", true, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr))
+							return nil, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr)
 						}
-						sub = resub
-						eose = sub.EndOfStoredEvents
-						closed = sub.Closed
-						pendingRelays = append([]string(nil), c.relays...)
+						if len(resub.RelayURLs()) == 0 {
+							resub.Close()
+							return nil, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: no relay established a subscription")
+						}
+						activationTimeout := c.activationTimeout
+						if activationTimeout <= 0 {
+							activationTimeout = operatorActivationTimeout
+						}
+						activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, resub, filters, activationTimeout)
+						if activationErr != nil {
+							activatedSub.Close()
+							return nil, fmt.Errorf("activate reply subscription after NIP-42 AUTH: %w", activationErr)
+						}
+						defer activatedSub.Close()
+						sub = activatedSub
+						pendingRelays = sub.RelayURLs()
 						closedRelays = map[string]string{}
 						continue
 					}
@@ -1284,25 +1598,23 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			closedRelays[relayClosed.RelayURL] = reason
 			pendingRelays = removeRelayURL(pendingRelays, relayClosed.RelayURL)
 			if len(pendingRelays) == 0 {
-				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays)))
+				return nil, fmt.Errorf("reply subscription closed before result from all relays: %s", formatOperatorClosedRelays(closedRelays))
 			}
 		case reply, ok := <-sub.Events:
 			if !ok {
-				return nil, requestError("await operator ContextVM result", true, fmt.Errorf("reply subscription closed before terminal result"))
+				return nil, fmt.Errorf("reply subscription closed before terminal result")
 			}
-			if reply == nil || reply.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !validSignedEvent(reply) || !correlatesTo(reply, event.ID.Hex(), c.pubkey) {
+			validated := c.validateOperatorReply(ctx, reply, inner, outerRequestIDs)
+			if validated == nil {
 				continue
 			}
-			if c.servicePubkey != "" && reply.PubKey.Hex() != c.servicePubkey {
-				continue
-			}
-			replyID := reply.ID.Hex()
+			replyID := validated.ID.Hex()
 			if _, duplicate := seen[replyID]; duplicate {
 				continue
 			}
 			seen[replyID] = struct{}{}
 			var rpc contextVMRPCResponse
-			if err := json.Unmarshal([]byte(reply.Content), &rpc); err != nil || rpc.JSONRPC != "2.0" || !contextVMResponseIDMatches(rpc.ID, requestID) {
+			if err := json.Unmarshal([]byte(validated.Content), &rpc); err != nil || rpc.JSONRPC != "2.0" || !contextVMResponseIDMatches(rpc.ID, requestID) {
 				continue
 			}
 			if rpc.Error != nil {
@@ -1310,14 +1622,14 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
 				}
-				return nil, requestError("await operator ContextVM result", true, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message})
+				return nil, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message}
 			}
 			if rpc.Result == nil {
 				continue
 			}
-			synthetic := *reply
+			synthetic := *validated
 			synthetic.Content = string(*rpc.Result)
-			synthetic.Tags = append(nostr.Tags{}, reply.Tags...)
+			synthetic.Tags = append(nostr.Tags{}, validated.Tags...)
 			annotateContextVMResultTags(&synthetic)
 			if onStatus != nil && contextVMResultIsProgress(synthetic.Content) {
 				onStatus(statusEventFromNostr(&synthetic))
@@ -1327,6 +1639,50 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			return &synthetic, nil
 		}
 	}
+}
+
+func (c *OperatorControlPlaneClient) validateOperatorReply(ctx context.Context, reply, inner *nostr.Event, outerRequestIDs []string) *nostr.Event {
+	if reply == nil || !validSignedEvent(reply) {
+		return nil
+	}
+	if !c.encrypted {
+		if reply.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !correlatesTo(reply, inner.ID.Hex(), c.pubkey) {
+			return nil
+		}
+		if c.servicePubkey != "" && reply.PubKey.Hex() != c.servicePubkey {
+			return nil
+		}
+		return reply
+	}
+	if (reply.Kind != nostr.Kind(controlplane.KindContextVMGiftWrap) && reply.Kind != nostr.Kind(controlplane.KindContextVMEphemeralWrap)) || !correlatesToAny(reply, outerRequestIDs, c.pubkey) {
+		return nil
+	}
+	plaintext, err := c.keyer.Decrypt(ctx, reply.Content, reply.PubKey)
+	if err != nil {
+		return nil
+	}
+	var response nostr.Event
+	if err := json.Unmarshal([]byte(plaintext), &response); err != nil {
+		return nil
+	}
+	if response.Kind != nostr.Kind(controlplane.KindContextVMMessage) || !validSignedEvent(&response) || response.PubKey.Hex() != c.servicePubkey || !correlatesTo(&response, inner.ID.Hex(), c.pubkey) {
+		return nil
+	}
+	return &response
+}
+
+func operatorFailedSubscriptions(configured, subscribed []string) []string {
+	active := make(map[string]struct{}, len(subscribed))
+	for _, relay := range subscribed {
+		active[relay] = struct{}{}
+	}
+	failed := make([]string, 0, len(configured))
+	for _, relay := range configured {
+		if _, ok := active[relay]; !ok {
+			failed = append(failed, relay)
+		}
+	}
+	return failed
 }
 
 func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, []OperatorPublishResult, error) {
@@ -1547,6 +1903,18 @@ func validSignedEvent(event *nostr.Event) bool {
 
 func correlatesTo(event *nostr.Event, requestID, pubkey string) bool {
 	return tagHasValue(event.Tags, "e", requestID) && tagHasValue(event.Tags, "p", pubkey)
+}
+
+func correlatesToAny(event *nostr.Event, requestIDs []string, pubkey string) bool {
+	if event == nil || !tagHasValue(event.Tags, "p", pubkey) {
+		return false
+	}
+	for _, requestID := range requestIDs {
+		if tagHasValue(event.Tags, "e", requestID) {
+			return true
+		}
+	}
+	return false
 }
 
 func statusEventFromNostr(event *nostr.Event) OperatorStatusEvent {

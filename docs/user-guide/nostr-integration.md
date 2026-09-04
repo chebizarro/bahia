@@ -27,6 +27,10 @@ Maintenance commands are always carried as standards-conformant NIP-59 kind `105
 }
 ```
 
+Operator clients establish the correlated reply subscription before publishing and use per-relay EOSE as the activation barrier. Only relays that actually established subscriptions participate in reply-closure accounting. A result wait is bounded per attempt by `--result-timeout` (default `30s`); timeout causes a fresh subscription and an idempotent re-publish with the same inner `d` tag, up to `--result-retries` retries (default `2`), so Bahia can replay its cached response. `--encrypted` selects NIP-59/NIP-44 transport and requires the service pubkey.
+
+Encrypted operator mode sends a standards-conformant NIP-59 kind `1059` wrapper addressed to the configured Bahia service pubkey. Reply filters select kinds `1059` and `21059` by `#p=<operator-pubkey>` and `#e=<outer-request-id>` without an author filter because wrappers use fresh random keys. After NIP-44 decryption, clients accept only a valid signed inner kind `25910` response authored by the expected service pubkey whose inner `e` tag references the inner request id.
+
 Complete-set deployment-unit changes use `environment/update` with both `deployment_units` and `expected_updated_at` from the latest environment read. Stale revisions fail with a stable conflict response so operators can re-read and retry without overwriting concurrent changes.
 
 To add managed HTTPS to an existing deployment, use `service/route-attach` with the service, environment, deployment unit, and provider-neutral `public_route` request. Bahia plans and hashes the route into a new desired-state intent, applies only the `routing` phase, and reports durable progress through the same deployment state, run, status, and audit observables as `service/deploy`. Protected-environment approval remains unchanged.
@@ -611,6 +615,8 @@ Policy breach notifications use the existing notification dispatcher with event 
 ## Durability, replay, and retention
 
 Bahia persists signed outbound events before publishing them when the event repository implements the outbox interface. A failed relay publish remains pending and the publisher retries unpublished records in batches of 100 with backoff; success updates the durable publish state. Monitor `bahia_nostr_outbox_depth` together with relay reconnect, re-request, and closed-reason metrics.
+
+Terminal ContextVM responses use a separate idempotency cache keyed by requester pubkey, method, and progress token. Completed responses are cached in memory and persisted in PostgreSQL for 24 hours. A duplicate request within that window republishes the cached JSON-RPC response without re-running the handler; this recovers a completed command when its first ephemeral response was lost.
 
 The sidecar stores accepted non-ephemeral events in SQLite with WAL and full synchronous writes, so retained relay history survives process and container restarts until its retention window expires. Replaceable events retain only the newest event for their replaceable key. Live ephemeral kinds `25910` and `21059` are broadcast rather than stored by the relay.
 
