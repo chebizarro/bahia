@@ -38,6 +38,9 @@ func (h dnsContextVMHandlers) zoneCreate(ctx context.Context, request ContextVMR
 		if err := domain.ValidateDNSZone(&zone); err != nil {
 			return dnsResult(dnsActionZoneCreate, "error", "validation_error", err.Error(), map[string]any{"zone": zone.Name}), nil
 		}
+		if err := validateDNSZoneBackend(h.operator, zone); err != nil {
+			return dnsResult(dnsActionZoneCreate, "error", "unknown_backend", err.Error(), map[string]any{"zone": zone.Name, "backend_ref": zone.BackendRef}), nil
+		}
 		if err := persistence.CreateZone(ctx, zone); err != nil {
 			return dnsResult(dnsActionZoneCreate, "error", "persist_failed", err.Error(), map[string]any{"zone": zone.Name}), nil
 		}

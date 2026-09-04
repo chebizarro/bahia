@@ -9,6 +9,47 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+func TestDNSContextVMZoneCreateRejectsUnknownBackendBeforePersistence(t *testing.T) {
+	operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
+	params, err := json.Marshal(domain.DNSZone{Name: "new.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "missing", TTL: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (dnsContextVMHandlers{operator: operator}).zoneCreate(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+	if err != nil {
+		t.Fatalf("zoneCreate returned error: %v", err)
+	}
+	if len(operator.zonesCreated) != 0 {
+		t.Fatalf("persisted zones = %#v, want none", operator.zonesCreated)
+	}
+	if len(operator.reconciled) != 0 {
+		t.Fatalf("reconciled zones = %#v, want none", operator.reconciled)
+	}
+	assertContextVMDNSField(t, result, "status", "error")
+	assertContextVMDNSField(t, result, "step", "unknown_backend")
+}
+
+func TestDNSContextVMZoneCreatePersistsKnownBackend(t *testing.T) {
+	operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
+	params, err := json.Marshal(domain.DNSZone{Name: "new.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "primary", TTL: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (dnsContextVMHandlers{operator: operator}).zoneCreate(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+	if err != nil {
+		t.Fatalf("zoneCreate returned error: %v", err)
+	}
+	if len(operator.zonesCreated) != 1 || operator.zonesCreated[0].BackendRef != "primary" {
+		t.Fatalf("persisted zones = %#v", operator.zonesCreated)
+	}
+	if len(operator.reconciled) != 1 || operator.reconciled[0] != "new.example" {
+		t.Fatalf("reconciled zones = %#v", operator.reconciled)
+	}
+	assertContextVMDNSField(t, result, "status", "success")
+}
+
 func TestDNSContextVMPolicyApplyPersistsAndReconciles(t *testing.T) {
 	policyRepo := &recordingDNSPolicyRepository{}
 	operator := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}, policyRepo: policyRepo}
@@ -55,11 +96,16 @@ func TestDNSContextVMRecordSetPersistsAndReconciles(t *testing.T) {
 
 func assertContextVMDNSStatus(t *testing.T, result any, want string) {
 	t.Helper()
+	assertContextVMDNSField(t, result, "status", want)
+}
+
+func assertContextVMDNSField(t *testing.T, result any, field string, want any) {
+	t.Helper()
 	payload, ok := result.(map[string]any)
 	if !ok {
 		t.Fatalf("result type = %T, want map[string]any", result)
 	}
-	if payload["status"] != want {
-		t.Fatalf("status = %#v, want %q; result=%#v", payload["status"], want, payload)
+	if payload[field] != want {
+		t.Fatalf("%s = %#v, want %#v; result=%#v", field, payload[field], want, payload)
 	}
 }

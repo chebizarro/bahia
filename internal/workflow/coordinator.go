@@ -603,8 +603,10 @@ func (c *Coordinator) applyRouteOnlyRun(ctx context.Context, run *domain.Deploym
 	if run.ApplyMetadata == nil {
 		run.ApplyMetadata = map[string]any{}
 	}
-	var routeErr error
-	if strings.TrimSpace(intent.DesiredState.DesiredHash) != strings.TrimSpace(intent.DesiredHash) {
+	previous, routeErr := c.latestDeployedIntent(ctx, intent)
+	if routeErr != nil {
+		routeErr = fmt.Errorf("load previous deployed intent for route-only state restoration: %w", routeErr)
+	} else if strings.TrimSpace(intent.DesiredState.DesiredHash) != strings.TrimSpace(intent.DesiredHash) {
 		routeErr = fmt.Errorf("persisted desired state hash does not match signed deployment intent hash")
 	} else if c.publicRoutes == nil {
 		routeErr = fmt.Errorf("public route lifecycle is required for route-only execution")
@@ -616,6 +618,13 @@ func (c *Coordinator) applyRouteOnlyRun(ctx context.Context, run *domain.Deploym
 	}
 	if routeErr != nil && errors.Is(routeErr, context.Canceled) {
 		return routeErr
+	}
+	if routeErr != nil && previous != nil {
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := c.registry.RestoreEnvironmentServiceStateToDeployedIntent(restoreCtx, previous); err != nil {
+			routeErr = fmt.Errorf("%w; restore previous deployed state: %v", routeErr, err)
+		}
+		restoreCancel()
 	}
 	completeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -812,6 +821,14 @@ func (c *Coordinator) restorePreviousApplication(intent *domain.DeploymentIntent
 }
 
 func (c *Coordinator) latestDeployedDesiredState(ctx context.Context, current *domain.DeploymentIntent) (*domain.DesiredServiceSpec, error) {
+	latest, err := c.latestDeployedIntent(ctx, current)
+	if err != nil || latest == nil {
+		return nil, err
+	}
+	return latest.DesiredState, nil
+}
+
+func (c *Coordinator) latestDeployedIntent(ctx context.Context, current *domain.DeploymentIntent) (*domain.DeploymentIntent, error) {
 	if current == nil {
 		return nil, nil
 	}
@@ -832,10 +849,7 @@ func (c *Coordinator) latestDeployedDesiredState(ctx context.Context, current *d
 			latest = candidate
 		}
 	}
-	if latest == nil {
-		return nil, nil
-	}
-	return latest.DesiredState, nil
+	return latest, nil
 }
 
 func deploymentUnitIDsEqual(left, right *uuid.UUID) bool {

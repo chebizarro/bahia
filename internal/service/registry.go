@@ -1072,6 +1072,40 @@ func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, 
 	return s.intents.ListByServiceEnv(ctx, serviceID, envID, limit, offset)
 }
 
+// RestoreEnvironmentServiceStateToDeployedIntent repairs the desired-state read
+// model after a route-only deployment fails before becoming the deployed intent.
+func (s *RegistryService) RestoreEnvironmentServiceStateToDeployedIntent(ctx context.Context, intent *domain.DeploymentIntent) error {
+	if intent == nil || intent.Status != domain.IntentStatusDeployed || intent.DesiredState == nil {
+		return fmt.Errorf("a deployed intent with desired state is required for state restoration")
+	}
+	artifactID := intent.ArtifactID
+	intentID := intent.ID
+	state := &domain.EnvironmentServiceState{
+		ServiceID:           intent.ServiceID,
+		EnvironmentID:       intent.EnvironmentID,
+		DeploymentUnitID:    deploymentUnitIDForRunIntent(nil, intent),
+		DesiredArtifactID:   &artifactID,
+		DesiredIntentID:     &intentID,
+		DesiredRuntimeState: intent.DesiredState,
+		DesiredHash:         intent.DesiredHash,
+		DriftStatus:         domain.DriftStatusInSync,
+	}
+	if err := s.state.Upsert(ctx, state); err != nil {
+		return fmt.Errorf("restoring environment service state to deployed intent %s: %w", intent.ID, err)
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID:     intent.ServiceID.String(),
+			EnvironmentID: intent.EnvironmentID.String(),
+			ArtifactID:    intent.ArtifactID.String(),
+			IntentID:      intent.ID.String(),
+		},
+	})
+	return nil
+}
+
 type deploymentIntentDecisionTransitioner interface {
 	TransitionDecision(context.Context, uuid.UUID, domain.ApprovalStatus, domain.DeploymentIntentStatus) (bool, error)
 }

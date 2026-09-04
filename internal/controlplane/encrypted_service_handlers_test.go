@@ -128,7 +128,7 @@ func newRouteAttachFixture(t *testing.T, envProtected, zoneProtected bool) *rout
 	desired := &domain.DesiredServiceSpec{
 		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: serviceID, EnvironmentID: environmentID,
 		DeploymentUnitID: &unitID, DeploymentUnitKey: "prod-compose", UnitRuntimeType: domain.RuntimeTypeCompose,
-		ArtifactID: artifactID, StableServiceKey: "api", Ports: []string{"127.0.0.1:18080:8080"},
+		ArtifactID: artifactID, StableServiceKey: "api", Ports: []string{"127.0.0.1:8080:8080"},
 	}
 	originalHash := desired.ComputeDesiredHash()
 	current := &domain.DeploymentIntent{

@@ -1674,6 +1674,20 @@ func TestExecuteDeployment_RouteOnlyFailurePreservesProviderCompensation(t *test
 	lifecycle := &stubDeploymentRuntimeLifecycle{}
 	routes := &stubPublicRouteLifecycle{err: fmt.Errorf("TLS verification failed; previous public route restored")}
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	previousDesired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "api",
+	}
+	previousDesired.ComputeDesiredHash()
+	previousIntent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual, Status: domain.IntentStatusDeployed,
+		DesiredState: previousDesired, DesiredHash: previousDesired.DesiredHash, CreatedAt: time.Now().Add(-time.Minute),
+	}
+	if err := registry.CreateDeploymentIntent(ctx, previousIntent); err != nil {
+		t.Fatal(err)
+	}
 	desired := &domain.DesiredServiceSpec{
 		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
 		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
@@ -1703,6 +1717,16 @@ func TestExecuteDeployment_RouteOnlyFailurePreservesProviderCompensation(t *test
 		if len(phases) != 1 || phases[0]["step"] != "routing" || phases[0]["status"] != "failed" {
 			t.Fatalf("route-only failure phases = %#v", phases)
 		}
+	}
+	state, err := registry.GetEnvironmentServiceState(ctx, svc.ID, env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != previousIntent.ID ||
+		state.DesiredArtifactID == nil || *state.DesiredArtifactID != previousIntent.ArtifactID ||
+		state.DesiredRuntimeState != previousDesired || state.DesiredHash != previousDesired.DesiredHash ||
+		state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("route-only failure did not restore prior in-sync state: %#v", state)
 	}
 }
 

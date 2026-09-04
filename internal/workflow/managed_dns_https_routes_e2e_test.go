@@ -33,7 +33,7 @@ func TestManagedDNSAndHTTPSRouteFlow(t *testing.T) {
 	deployedState := &domain.DesiredServiceSpec{
 		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
 		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
-		ArtifactID: art.ID, StableServiceKey: "astillero", Ports: []string{"127.0.0.1:18088:18088"},
+		ArtifactID: art.ID, StableServiceKey: "astillero", Ports: []string{"192.168.40.104:18088:8080"},
 	}
 	deployedState.ComputeDesiredHash()
 	deployIntent := &domain.DeploymentIntent{

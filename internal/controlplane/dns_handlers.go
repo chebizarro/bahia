@@ -44,6 +44,20 @@ type DNSPolicyRepositoryProvider interface {
 	DNSPolicyRepository() repository.DNSPolicyRepository
 }
 
+// DNSBackendProvider exposes the configured backend references accepted by
+// durable zone creation.
+type DNSBackendProvider interface {
+	HasBackend(ref string) bool
+}
+
+func validateDNSZoneBackend(operator DNSControlPlaneOperator, zone domain.DNSZone) error {
+	provider, ok := operator.(DNSBackendProvider)
+	if !ok || !provider.HasBackend(zone.BackendRef) {
+		return fmt.Errorf("DNS backend %q is not configured", zone.BackendRef)
+	}
+	return nil
+}
+
 func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 	switch event.Kind {
 	case KindDNSDriftRemediateRequest:
@@ -109,6 +123,10 @@ func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 		}
 		if err := domain.ValidateDNSZone(&zone); err != nil {
 			_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "validation_error", err.Error(), map[string]any{"zone": zone.Name})
+			return
+		}
+		if err := validateDNSZoneBackend(r.dnsOperator, zone); err != nil {
+			_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "unknown_backend", err.Error(), map[string]any{"zone": zone.Name, "backend_ref": zone.BackendRef})
 			return
 		}
 		if err := persistence.CreateZone(ctx, zone); err != nil {

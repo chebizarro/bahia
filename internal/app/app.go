@@ -700,7 +700,7 @@ func New(cfg *config.Config) (*App, error) {
 		if dnsZoneRepo != nil && dnsRecordOverrideRepo != nil {
 			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
 		}
-		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsPersistence, dnsPolicyRepo)
+		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
 		bgManager.RegisterWithOptions(dnsReconciler, RunnerTier(Tier3))
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
@@ -2285,14 +2285,19 @@ type dnsControlPlaneOperator struct {
 	reconciler *reconcile.DNSReconciler
 	zonesMu    sync.RWMutex
 	zones      map[string]struct{}
+	backends   map[string]struct{}
 }
 
-func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone, persistence controlplane.DNSPersistenceOperator, policies repository.DNSPolicyRepository) controlplane.DNSControlPlaneOperator {
+func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone, backendRefs []string, persistence controlplane.DNSPersistenceOperator, policies repository.DNSPolicyRepository) controlplane.DNSControlPlaneOperator {
 	zoneSet := make(map[string]struct{}, len(zones))
 	for _, zone := range zones {
 		zoneSet[strings.TrimSpace(zone.Name)] = struct{}{}
 	}
-	operator := &dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet}
+	backendSet := make(map[string]struct{}, len(backendRefs))
+	for _, ref := range backendRefs {
+		backendSet[strings.TrimSpace(ref)] = struct{}{}
+	}
+	operator := &dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet, backends: backendSet}
 	if persistence != nil {
 		return &dnsPersistentControlPlaneOperator{dnsControlPlaneOperator: operator, persistence: persistence, policies: policies}
 	}
@@ -2321,6 +2326,11 @@ func (o *dnsControlPlaneOperator) HasZone(zoneName string) bool {
 	o.zonesMu.RLock()
 	defer o.zonesMu.RUnlock()
 	_, ok := o.zones[strings.TrimSpace(zoneName)]
+	return ok
+}
+
+func (o *dnsControlPlaneOperator) HasBackend(ref string) bool {
+	_, ok := o.backends[strings.TrimSpace(ref)]
 	return ok
 }
 

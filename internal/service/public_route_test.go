@@ -108,6 +108,57 @@ func TestPublicRoutePlannerPolicyAndCollisionValidation(t *testing.T) {
 	}
 }
 
+func TestDesiredExposesPortUsesPublishedHostPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		ports       []string
+		healthcheck *domain.HealthcheckConfig
+		target      int
+		want        bool
+	}{
+		{name: "ip host container", ports: []string{"192.168.40.10:19090:9090"}, target: 19090, want: true},
+		{name: "host container", ports: []string{"19090:9090"}, target: 19090, want: true},
+		{name: "bare container port", ports: []string{"9090"}, target: 9090, want: false},
+		{name: "Astillero published host port", ports: []string{"192.168.40.104:18088:8080"}, target: 18088, want: true},
+		{name: "Astillero container port", ports: []string{"192.168.40.104:18088:8080"}, target: 8080, want: false},
+		{
+			name:        "container healthcheck port does not prove host reachability",
+			healthcheck: &domain.HealthcheckConfig{Port: 8080},
+			target:      8080,
+			want:        false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			desired := &domain.DesiredServiceSpec{Ports: test.ports, Healthcheck: test.healthcheck}
+			if got := desiredExposesPort(desired, test.target); got != test.want {
+				t.Fatalf("desiredExposesPort(%v, %d) = %t, want %t", test.ports, test.target, got, test.want)
+			}
+		})
+	}
+}
+
+func TestPublicRoutePlannerAstilleroUsesPublishedHostPort(t *testing.T) {
+	planner, _, svc, env, desired := publicRouteFixture(t)
+	desired.Ports = []string{"192.168.40.104:18088:8080"}
+	planner.cfg.Origins[0].AllowedPorts = []int{18088, 8080}
+
+	request := routeRequest()
+	request.UpstreamPort = 18088
+	plan, _, err := planner.Plan(context.Background(), svc, env, desired, request)
+	if err != nil {
+		t.Fatalf("published host port rejected: %v", err)
+	}
+	if plan.Tunnel.OriginURL != "http://edge-01.internal:18088" {
+		t.Fatalf("origin URL = %q", plan.Tunnel.OriginURL)
+	}
+
+	request.UpstreamPort = 8080
+	if _, _, err := planner.Plan(context.Background(), svc, env, desired, request); err == nil || !strings.Contains(err.Error(), "not exposed") {
+		t.Fatalf("container-only port error = %v", err)
+	}
+}
+
 func TestPublicRoutePlannerApplyFailsClosedOnConfigurationChange(t *testing.T) {
 	planner, backend, svc, env, desired := publicRouteFixture(t)
 	plan, _, err := planner.Plan(context.Background(), svc, env, desired, routeRequest())
