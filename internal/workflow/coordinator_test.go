@@ -1618,50 +1618,54 @@ func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *tes
 }
 
 func TestExecuteDeployment_RouteOnlySkipsArtifactConvergence(t *testing.T) {
-	ctx := context.Background()
-	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
-	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
-	unit := &domain.DeploymentUnit{
-		ID: uuid.New(), EnvironmentID: env.ID, Key: "max-compose", RuntimeType: domain.RuntimeTypeCompose,
-		EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown", ReconcileMode: domain.ReconcileModeAutoApply,
-		OwnershipMode: domain.OwnershipModeBahiaManaged,
-	}
-	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
-	lifecycle := &stubDeploymentRuntimeLifecycle{}
-	routes := &stubPublicRouteLifecycle{}
-	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	plan := &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"}
-	desired := &domain.DesiredServiceSpec{
-		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
-		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
-		ArtifactID: art.ID, StableServiceKey: "api", PublicRoute: plan,
-	}
-	desired.ComputeDesiredHash()
-	intent := &domain.DeploymentIntent{
-		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
-		RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered, DesiredState: desired, DesiredHash: desired.DesiredHash,
-		Metadata: map[string]any{"contextvm_method": "service/route-attach"},
-	}
-	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
-		t.Fatal(err)
-	}
-	if err := coordExecuteRouteOnly(registry, unitRepo, lifecycle, routes, intent.ID); err != nil {
-		t.Fatalf("ExecuteDeployment() error = %v", err)
-	}
-	if lifecycle.calls != 0 {
-		t.Fatalf("route-only execution converged the artifact %d times", lifecycle.calls)
-	}
-	if routes.calls != 1 || routes.plan != plan {
-		t.Fatalf("route apply calls=%d plan=%#v", routes.calls, routes.plan)
-	}
-	for _, run := range runRepo.runs {
-		if run.LoomJobID != "runtime:route-only" || run.Status != domain.RunStatusSucceeded {
-			t.Fatalf("route-only run = %#v", run)
-		}
-		phases := metadataPhases(run.ApplyMetadata["phases"])
-		if len(phases) != 1 || phases[0]["step"] != "routing" || phases[0]["status"] != "completed" {
-			t.Fatalf("route-only phases = %#v", phases)
-		}
+	for _, runtimeType := range []domain.RuntimeType{domain.RuntimeTypeCompose, domain.RuntimeTypeDocker} {
+		t.Run(string(runtimeType), func(t *testing.T) {
+			ctx := context.Background()
+			svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+			svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+			unit := &domain.DeploymentUnit{
+				ID: uuid.New(), EnvironmentID: env.ID, Key: "max-" + string(runtimeType), RuntimeType: runtimeType,
+				EndpointRef: "max-managed", ComposeDir: "/srv/bahia/gastown", ReconcileMode: domain.ReconcileModeAutoApply,
+				OwnershipMode: domain.OwnershipModeBahiaManaged,
+			}
+			unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+			lifecycle := &stubDeploymentRuntimeLifecycle{}
+			routes := &stubPublicRouteLifecycle{}
+			registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+			plan := &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"}
+			desired := &domain.DesiredServiceSpec{
+				SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+				DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+				ArtifactID: art.ID, StableServiceKey: "api", PublicRoute: plan,
+			}
+			desired.ComputeDesiredHash()
+			intent := &domain.DeploymentIntent{
+				ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+				RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered, DesiredState: desired, DesiredHash: desired.DesiredHash,
+				Metadata: map[string]any{"contextvm_method": "service/route-attach"},
+			}
+			if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+				t.Fatal(err)
+			}
+			if err := coordExecuteRouteOnly(registry, unitRepo, lifecycle, routes, intent.ID); err != nil {
+				t.Fatalf("ExecuteDeployment() error = %v", err)
+			}
+			if lifecycle.calls != 0 {
+				t.Fatalf("route-only execution converged the artifact %d times", lifecycle.calls)
+			}
+			if routes.calls != 1 || routes.plan != plan {
+				t.Fatalf("route apply calls=%d plan=%#v", routes.calls, routes.plan)
+			}
+			for _, run := range runRepo.runs {
+				if run.LoomJobID != "runtime:route-only" || run.Status != domain.RunStatusSucceeded {
+					t.Fatalf("route-only run = %#v", run)
+				}
+				phases := metadataPhases(run.ApplyMetadata["phases"])
+				if len(phases) != 1 || phases[0]["step"] != "routing" || phases[0]["status"] != "completed" {
+					t.Fatalf("route-only phases = %#v", phases)
+				}
+			}
+		})
 	}
 }
 

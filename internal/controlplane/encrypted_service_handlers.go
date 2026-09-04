@@ -449,8 +449,8 @@ func (h *encryptedServiceHandlers) resolveRouteAttachDeploymentUnit(ctx context.
 	if resolved.OwnershipMode != domain.OwnershipModeBahiaManaged {
 		return nil, fmt.Errorf("route attachment requires a Bahia-managed deployment unit; unit %q ownership is %q", resolved.Key, resolved.OwnershipMode)
 	}
-	if resolved.RuntimeType != domain.RuntimeTypeCompose {
-		return nil, fmt.Errorf("route attachment requires a Compose deployment unit; unit %q runtime is %q", resolved.Key, resolved.RuntimeType)
+	if resolved.RuntimeType != domain.RuntimeTypeCompose && resolved.RuntimeType != domain.RuntimeTypeDocker {
+		return nil, fmt.Errorf("route attachment requires a direct-runtime Compose or Docker deployment unit; unit %q runtime is %q", resolved.Key, resolved.RuntimeType)
 	}
 	if deploymentUnitDispatchesViaLoom(resolved.RuntimeConfig) {
 		return nil, fmt.Errorf("route attachment requires direct runtime dispatch; deployment unit %q dispatches via Loom", resolved.Key)

@@ -397,6 +397,21 @@ func TestRouteAttachCreatesSignedIntentFromCurrentDesiredState(t *testing.T) {
 	}
 }
 
+func TestRouteAttachAllowsDockerDeploymentUnits(t *testing.T) {
+	fixture := newRouteAttachFixture(t, false, false)
+	fixture.unitRepo.unit.RuntimeType = domain.RuntimeTypeDocker
+	fixture.current.DesiredState.UnitRuntimeType = domain.RuntimeTypeDocker
+
+	result, err := fixture.handlers.routeAttach(context.Background(), fixture.request(t, fixture.serviceID, validRouteAttachRequest()))
+	if err != nil {
+		t.Fatalf("routeAttach() error = %v", err)
+	}
+	payload, ok := result.(map[string]any)
+	if !ok || payload["status"] != string(domain.IntentStatusApproved) {
+		t.Fatalf("routeAttach result = %#v", result)
+	}
+}
+
 func TestRouteAttachRejectsIneligibleDeploymentUnitsBeforeCreatingIntent(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -432,13 +447,13 @@ func TestRouteAttachRejectsIneligibleDeploymentUnitsBeforeCreatingIntent(t *test
 			wantError: "requires a Bahia-managed deployment unit",
 		},
 		{
-			name: "non-Compose deployment unit",
+			name: "non-direct-runtime deployment unit",
 			configure: func(f *routeAttachFixture) {
-				f.unitRepo.unit.RuntimeType = domain.RuntimeTypeDocker
-				f.current.DesiredState.UnitRuntimeType = domain.RuntimeTypeDocker
+				f.unitRepo.unit.RuntimeType = domain.RuntimeTypeK8s
+				f.current.DesiredState.UnitRuntimeType = domain.RuntimeTypeK8s
 			},
 			unitID:    func(f *routeAttachFixture) *uuid.UUID { return &f.unitID },
-			wantError: "requires a Compose deployment unit",
+			wantError: "requires a direct-runtime Compose or Docker deployment unit",
 		},
 		{
 			name: "Loom-dispatched deployment unit",
