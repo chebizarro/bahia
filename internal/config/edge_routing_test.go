@@ -35,6 +35,43 @@ func TestValidateEdgeRoutingCanonicalizesSafeConfiguration(t *testing.T) {
 	}
 }
 
+func TestValidateEdgeRoutingVerifyResolver(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "public resolver", value: "1.1.1.1:53", want: "1.1.1.1:53"},
+		{name: "system resolver", value: "system", want: "system"},
+		{name: "empty uses public default", value: "", want: "1.1.1.1:53"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validEdgeRoutingConfig()
+			cfg.EdgeRouting.VerifyResolver = tt.value
+			if err := cfg.validateEdgeRouting(); err != nil {
+				t.Fatalf("validateEdgeRouting: %v", err)
+			}
+			if cfg.EdgeRouting.VerifyResolver != tt.want {
+				t.Fatalf("VerifyResolver = %q, want %q", cfg.EdgeRouting.VerifyResolver, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateEdgeRoutingRejectsInvalidVerifyResolver(t *testing.T) {
+	for _, resolver := range []string{"nonsense", "1.1.1.1"} {
+		t.Run(resolver, func(t *testing.T) {
+			cfg := validEdgeRoutingConfig()
+			cfg.EdgeRouting.VerifyResolver = resolver
+			err := cfg.validateEdgeRouting()
+			if err == nil || !strings.Contains(err.Error(), "verify_resolver") {
+				t.Fatalf("error = %v, want verify_resolver validation error", err)
+			}
+		})
+	}
+}
+
 func TestValidateEdgeRoutingFailsClosed(t *testing.T) {
 	tests := []struct {
 		name string

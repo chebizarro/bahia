@@ -47,6 +47,7 @@ edge_routing:
   account_id: YOUR_CLOUDFLARE_ACCOUNT_ID
   tunnel_id: YOUR_CLOUDFLARE_TUNNEL_ID
   verify_timeout: 30s
+  verify_resolver: 1.1.1.1:53
   zones:
     - name: sharegap.net
       zone_id: YOUR_CLOUDFLARE_ZONE_ID
@@ -62,6 +63,8 @@ edge_routing:
 ```
 
 `api_token_ref` is an opaque SecretRef UUID. Store the Cloudflare API token through Bahia's secret-management path; never put the token itself in this file. `allowed_org_ids` limits which organizations may claim the zone. Each origin allowlists one deployment unit, host, and set of ports; `route-attach` is rejected when a request falls outside those boundaries. A protected zone also requires a protected environment.
+
+`verify_resolver` defaults to the public resolver `1.1.1.1:53`. This is intentional on edge-01: its split-horizon system DNS can resolve the public hostname directly to the LAN origin, which would bypass Cloudflare and could let verification pass even when the public record is absent. Bahia first resolves the hostname through the configured public resolver and then uses that same resolver for the HTTPS connection, while retaining the public hostname for TLS SNI and certificate verification. Set `verify_resolver: system` only when host-resolver behavior is explicitly desired.
 
 The `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are registered even before DNS is configured. If `dns.enabled` is false or no DNS runtime is configured, each returns JSON-RPC `-32000` with `DNS orchestration is not enabled; set dns.enabled and configure a backend`. This fail-closed response distinguishes missing configuration from an unavailable method.
 
@@ -157,7 +160,7 @@ bahia deployments approve \
   --idempotency-key approve:astillero:route
 ```
 
-Bahia updates the managed Cloudflare Tunnel ingress and DNS record and verifies the HTTPS health path. If verification fails, the routing backend compensates by restoring the previous public route state and the route-only run fails.
+Bahia updates the managed Cloudflare Tunnel ingress and DNS record and verifies the HTTPS health path. Public DNS resolution and the HTTPS request retry with bounded backoff only until `verify_timeout`; a missing public record is reported separately from an edge HTTP failure. If verification fails, the routing backend compensates by restoring the previous public route state and the route-only run fails. These verification changes affect only how the health check resolves the hostname; compensation and rollback semantics are unchanged.
 
 ## 6. Verify the result
 

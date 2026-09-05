@@ -2580,7 +2580,7 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		}
 		origins = append(origins, service.PublicRouteOrigin{DeploymentUnitID: id, Host: o.Host, AllowedPorts: append([]int(nil), o.AllowedPorts...)})
 	}
-	backend, err := routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout}, nil)
+	backend, err := routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout, VerifyResolverAddr: cfg.VerifyResolver}, nil)
 	if err != nil {
 		return nil, err
 	}
