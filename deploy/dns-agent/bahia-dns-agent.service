@@ -1,0 +1,40 @@
+# systemd unit for bahia-dns-agent (Ubuntu/Debian resolver hosts).
+# Install: cp bahia-dns-agent-linux-<arch> /usr/local/bin/bahia-dns-agent
+#          cp bahia-dns-agent.service /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now bahia-dns-agent
+#
+# The agent supervises its own relay subscription with capped exponential
+# backoff; Restart=on-failure only covers process crashes and fatal
+# configuration errors.
+
+[Unit]
+Description=Bahia DNS agent (signed remote dnsmasq include manager)
+Documentation=https://github.com/openagentsinc/bahia/tree/master/cmd/bahia-dns-agent
+After=network-online.target dnsmasq.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/bahia-dns-agent \
+  --private-key-file /etc/bahia/dns-agent.key \
+  --relays wss://relay.example.net \
+  --authorized-pubkey <bahia-service-pubkey-hex> \
+  --include-dir /etc/dnsmasq.d \
+  --allowed-zones example.internal \
+  --state-file /var/lib/bahia-dns-agent/state.json \
+  --require-encryption \
+  --health-addr 127.0.0.1:8953
+Restart=on-failure
+RestartSec=5s
+StateDirectory=bahia-dns-agent
+
+# Hardening: the agent only needs to write its include files, its state file,
+# and run the dnsmasq reload command.
+NoNewPrivileges=false
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/etc/dnsmasq.d /var/lib/bahia-dns-agent
+
+[Install]
+WantedBy=multi-user.target

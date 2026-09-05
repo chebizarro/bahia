@@ -16,6 +16,7 @@ const (
 	DNSBackendTypeCoreDNS        DNSBackendType = "coredns"
 	DNSBackendTypePowerDNS       DNSBackendType = "powerdns"
 	DNSBackendTypeDNSMasq        DNSBackendType = "dnsmasq"
+	DNSBackendTypeDnsmasqAgent   DNSBackendType = "dnsmasq_agent"
 	DNSBackendTypeFIPS           DNSBackendType = "fips"
 	DNSBackendTypeConsul         DNSBackendType = "consul"
 	DNSBackendTypeEtcd           DNSBackendType = "etcd"
@@ -164,7 +165,7 @@ type DNSRecordOverride struct {
 
 func (t DNSBackendType) IsValid() bool {
 	switch t {
-	case DNSBackendTypeFilesystem, DNSBackendTypeCoreDNS, DNSBackendTypePowerDNS, DNSBackendTypeDNSMasq, DNSBackendTypeFIPS, DNSBackendTypeConsul, DNSBackendTypeEtcd, DNSBackendTypeK8sExternalDNS:
+	case DNSBackendTypeFilesystem, DNSBackendTypeCoreDNS, DNSBackendTypePowerDNS, DNSBackendTypeDNSMasq, DNSBackendTypeDnsmasqAgent, DNSBackendTypeFIPS, DNSBackendTypeConsul, DNSBackendTypeEtcd, DNSBackendTypeK8sExternalDNS:
 		return true
 	default:
 		return false

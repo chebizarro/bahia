@@ -1,0 +1,33 @@
+#!/bin/sh /etc/rc.common
+# OpenWrt procd init script for bahia-dns-agent.
+# Install: cp bahia-dns-agent-linux-mips-softfloat /usr/sbin/bahia-dns-agent
+#          cp bahia-dns-agent.init /etc/init.d/bahia-dns-agent
+#          chmod +x /etc/init.d/bahia-dns-agent
+#          /etc/init.d/bahia-dns-agent enable && /etc/init.d/bahia-dns-agent start
+#
+# The key file must be readable only by root:
+#   chmod 600 /etc/bahia/dns-agent.key
+
+START=95
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/sbin/bahia-dns-agent
+
+start_service() {
+	procd_open_instance
+	procd_set_param command "$PROG" \
+		--private-key-file /etc/bahia/dns-agent.key \
+		--relays wss://relay.example.net \
+		--authorized-pubkey "<bahia-service-pubkey-hex>" \
+		--include-dir /tmp/dnsmasq.d \
+		--allowed-zones example.internal \
+		--reload-command "/etc/init.d/dnsmasq reload" \
+		--state-file /etc/bahia/dns-agent-state.json \
+		--require-encryption
+	# The agent restarts its own relay subscription with backoff; procd
+	# respawn only covers process exit.
+	procd_set_param respawn 3600 5 0
+	procd_set_param stderr 1
+	procd_close_instance
+}

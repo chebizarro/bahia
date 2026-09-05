@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -84,6 +85,7 @@ type App struct {
 	Background                *BackgroundManager
 	toolCoordinator           *service.ToolProvisioningCoordinator
 	relayPools                []*nostrAdapter.RelayPool
+	dnsBackendClosers         []io.Closer
 	ModePolicy                *ModePolicy
 	Health                    *HealthProvider
 	RelayFirstRegistry        *service.RelayFirstRegistry
@@ -701,8 +703,9 @@ func New(cfg *config.Config) (*App, error) {
 	var dnsZones []domain.DNSZone
 	var dnsResolver *dnsAdapter.StaticResolver
 	var dnsOperator controlplane.DNSControlPlaneOperator
+	var dnsBackendClosers []io.Closer
 	if cfg.DNS.Enabled {
-		dnsZones, dnsResolver, err = buildDNSRuntime(ctx, cfg.DNS, logger)
+		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -772,6 +775,9 @@ func New(cfg *config.Config) (*App, error) {
 			nostrAdapter.WithDNSZoneProjectionSource(staticDNSZoneProjectionSource{zones: dnsZones}),
 			nostrAdapter.WithDNSBackendProjectionSource(configDNSBackendProjectionSource{backends: cfg.DNS.Backends, zones: dnsZones, resolver: dnsResolver}),
 		)
+	}
+	if dnsPolicyRepo != nil {
+		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSPolicyProjectionSource(dnsPolicyRepositoryProjectionSource{repo: dnsPolicyRepo}))
 	}
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
@@ -1642,6 +1648,7 @@ func New(cfg *config.Config) (*App, error) {
 		Background:                bgManager,
 		toolCoordinator:           toolCoordinator,
 		relayPools:                []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
+		dnsBackendClosers:         dnsBackendClosers,
 		ModePolicy:                policy,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
@@ -2303,6 +2310,14 @@ func (a *App) RunContext(ctx context.Context) error {
 		_ = a.Telemetry.Shutdown(shutdownCtx)
 	}
 
+	// Close DNS backends that own remote transports (e.g. the dnsmasq agent's
+	// ContextVM relay pool) so reload-built Apps do not leak goroutines/websockets.
+	for _, closer := range a.dnsBackendClosers {
+		if err := closer.Close(); err != nil {
+			a.Logger.Warn("DNS backend close failed", zap.Error(err))
+		}
+	}
+
 	// Close Nostr relay connections.
 	closeRelayPools(a.relayPools...)
 
@@ -2385,6 +2400,14 @@ func (a assistantDNSRegistryAdapter) ListDNSPolicies(ctx context.Context) ([]dom
 		return nil, nil
 	}
 	return a.policies.List(ctx)
+}
+
+type dnsPolicyRepositoryProjectionSource struct {
+	repo repository.DNSPolicyRepository
+}
+
+func (s dnsPolicyRepositoryProjectionSource) ListEnabledDNSPolicies(ctx context.Context) ([]domain.DNSPolicy, error) {
+	return s.repo.ListEnabled(ctx)
 }
 
 type configDNSBackendProjectionSource struct {
@@ -2593,7 +2616,22 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 	return service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{Provider: cfg.Provider, TunnelRef: cfg.TunnelID, DNSTarget: cfg.TunnelID + ".cfargotunnel.com", Zones: zones, Origins: origins, ConfigHash: configHash}, routingAdapter.StaticResolver{cfg.BackendRef: backend})
 }
 
-func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, error) {
+// buildDNSRuntime returns the configured zones and backend resolver plus the
+// closers for backends that own remote transports; the caller must close them
+// on shutdown. On error, any already-created backends are closed before return.
+func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRelays []string, signer nostr.Signer, senderPubkey string, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, []io.Closer, error) {
+	var closers []io.Closer
+	succeeded := false
+	defer func() {
+		if succeeded {
+			return
+		}
+		for _, closer := range closers {
+			if err := closer.Close(); err != nil && logger != nil {
+				logger.Warn("DNS backend close failed during failed startup", zap.Error(err))
+			}
+		}
+	}()
 	zones := make([]domain.DNSZone, 0, len(cfg.Zones))
 	for _, zoneConfig := range cfg.Zones {
 		ttl := zoneConfig.TTL
@@ -2607,7 +2645,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 			TTL:        ttl,
 		}
 		if err := domain.ValidateDNSZone(&zone); err != nil {
-			return nil, nil, fmt.Errorf("configuring DNS zone %q: %w", zoneConfig.Name, err)
+			return nil, nil, nil, fmt.Errorf("configuring DNS zone %q: %w", zoneConfig.Name, err)
 		}
 		zones = append(zones, zone)
 	}
@@ -2622,54 +2660,79 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 		backendConfig := cfg.Backends[ref]
 		switch strings.TrimSpace(backendConfig.Type) {
 		case string(domain.DNSBackendTypeFilesystem):
-			return nil, nil, fmt.Errorf("configuring DNS filesystem backend %q: filesystem backends are rejected during config validation because no operational activator is wired", ref)
+			return nil, nil, nil, fmt.Errorf("configuring DNS filesystem backend %q: filesystem backends are rejected during config validation because no operational activator is wired", ref)
 		case string(domain.DNSBackendTypeCoreDNS):
 			backend, err := dnsAdapter.NewCoreDNSBackend(dnsAdapter.CoreDNSConfig{EtcdEndpoints: backendConfig.EtcdEndpoints, EtcdPrefix: backendConfig.EtcdPrefix, DialTimeout: backendConfig.EtcdDialTimeout})
 			if err != nil {
-				return nil, nil, fmt.Errorf("configuring DNS CoreDNS backend %q: %w", ref, err)
+				return nil, nil, nil, fmt.Errorf("configuring DNS CoreDNS backend %q: %w", ref, err)
 			}
 			if err := backend.Health(ctx); err != nil {
-				return nil, nil, fmt.Errorf("checking DNS CoreDNS backend %q: %w", ref, err)
+				return nil, nil, nil, fmt.Errorf("checking DNS CoreDNS backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		case string(domain.DNSBackendTypePowerDNS):
 			backend, err := dnsAdapter.NewPowerDNSBackend(dnsAdapter.PowerDNSConfig{APIURL: backendConfig.PowerDNSAPIURL, APIKey: backendConfig.PowerDNSAPIKey, ServerID: backendConfig.PowerDNSServerID, AllowInsecureHTTP: backendConfig.PowerDNSAllowInsecureHTTP})
 			if err != nil {
-				return nil, nil, fmt.Errorf("configuring DNS PowerDNS backend %q: %w", ref, err)
+				return nil, nil, nil, fmt.Errorf("configuring DNS PowerDNS backend %q: %w", ref, err)
 			}
 			if err := backend.Health(ctx); err != nil {
-				return nil, nil, fmt.Errorf("checking DNS PowerDNS backend %q: %w", ref, err)
+				return nil, nil, nil, fmt.Errorf("checking DNS PowerDNS backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		case string(domain.DNSBackendTypeDNSMasq):
 			backend := dnsAdapter.NewDnsmasqBackend(dnsAdapter.DnsmasqConfig{ConfigDir: backendConfig.DnsmasqConfigDir, ReloadCommand: backendConfig.DnsmasqReloadCommand, FilePrefix: backendConfig.DnsmasqFilePrefix})
 			if err := backend.Health(ctx); err != nil {
-				return nil, nil, fmt.Errorf("checking DNS dnsmasq backend %q: %w", ref, err)
+				return nil, nil, nil, fmt.Errorf("checking DNS dnsmasq backend %q: %w", ref, err)
+			}
+			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
+		case string(domain.DNSBackendTypeDnsmasqAgent):
+			relays := backendConfig.AgentRelays
+			if len(relays) == 0 {
+				relays = controlPlaneRelays
+			}
+			backend, err := dnsAdapter.NewRelayDnsmasqAgentBackend(dnsAdapter.DnsmasqAgentConfig{
+				Relays:        relays,
+				Signer:        signer,
+				SenderPubkey:  senderPubkey,
+				AgentPubkey:   backendConfig.AgentPubkey,
+				Encrypted:     backendConfig.AgentEncrypted,
+				ResultTimeout: backendConfig.AgentTimeout,
+				ResultRetries: backendConfig.AgentRetries,
+			}, logger)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("configuring DNS dnsmasq agent backend %q: %w", ref, err)
+			}
+			closers = append(closers, backend)
+			// Keep the same startup health contract as every operational DNS backend:
+			// enabled DNS must not start with an unreachable or unhealthy authority.
+			if err := backend.Health(ctx); err != nil {
+				return nil, nil, nil, fmt.Errorf("checking DNS dnsmasq agent backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		case string(domain.DNSBackendTypeFIPS):
 			backend := dnsAdapter.NewFIPSBackend(backendConfig.HostsPath, logger)
 			if err := backend.Health(ctx); err != nil {
-				return nil, nil, fmt.Errorf("checking DNS FIPS backend %q: %w", ref, err)
+				return nil, nil, nil, fmt.Errorf("checking DNS FIPS backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		default:
-			return nil, nil, fmt.Errorf("configuring DNS backend %q: unsupported type %q", ref, backendConfig.Type)
+			return nil, nil, nil, fmt.Errorf("configuring DNS backend %q: unsupported type %q", ref, backendConfig.Type)
 		}
 	}
 	resolver, err := dnsAdapter.NewStaticResolver(registrations...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("configuring DNS backend resolver: %w", err)
+		return nil, nil, nil, fmt.Errorf("configuring DNS backend resolver: %w", err)
 	}
 	for _, zone := range zones {
 		if _, ok := resolver.Resolve(zone.BackendRef); !ok {
-			return nil, nil, fmt.Errorf("configuring DNS zone %q: backend %q is not registered", zone.Name, zone.BackendRef)
+			return nil, nil, nil, fmt.Errorf("configuring DNS zone %q: backend %q is not registered", zone.Name, zone.BackendRef)
 		}
 	}
 	if logger != nil {
 		logger.Info("DNS runtime configured", zap.Int("zones", len(zones)), zap.Strings("backends", resolver.Refs()))
 	}
-	return zones, resolver, nil
+	succeeded = true
+	return zones, resolver, closers, nil
 }
 
 func controlPlaneRelayURLs(cfg config.NostrConfig) []string {

@@ -1,0 +1,49 @@
+{
+  "feature_id": "core01-dnsmasq-agent",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Bahia has a real internal dns: backend for the LAN resolver path: the dnsmasq_agent backend drives an authoritative dnsmasq include on the resolver host through the bahia.dnsagent.v1 ContextVM wire contract.",
+      "tests": [
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDnsmasqAgentBackendEndToEndAstilleroFlow",
+        "internal/adapters/dns/dnsmasq_agent_test.go: TestDnsmasqAgentHealth",
+        "internal/adapters/dns/dnsmasq_agent_test.go: TestDnsmasqAgentSyncZoneUsesMonotonicSerialsAndDecodesResult"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "A control-plane operation creates and updates a managed internal record: the projected Astillero record (astillero.sharegap.net -> 192.168.40.104) converges onto the remote resolver through the periodic DNS reconcile path, and record updates replace the managed include content.",
+      "tests": [
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDNSReconcilerConvergesRemoteAgentInclude",
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDnsmasqAgentBackendPreservesForeignIncludeFiles (update path: second sync with changed value)",
+        "internal/workflow/managed_dns_https_routes_e2e_test.go: TestManagedDNSAndHTTPSRouteFlow"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "dig answers are traceable to Bahia state: the include file written on the agent side is byte-exactly the render of Bahia's desired record set, ListRecords round-trips it, and dns-agent/health reports the applied serial.",
+      "tests": [
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDnsmasqAgentBackendEndToEndAstilleroFlow",
+        "OPERATOR: dig @192.168.40.1 astillero.sharegap.net per docs/runbooks/core01-dnsmasq-agent.md section 7"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "Existing manually managed records on the resolver are preserved: foreign include files (sharegap-splitdns.conf) are byte-identical across syncs, and failed reloads roll the Bahia include back without corrupting resolver state.",
+      "tests": [
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDnsmasqAgentBackendPreservesForeignIncludeFiles",
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDnsmasqAgentBackendReloadFailureRollsBackAndRecovers",
+        "internal/dnsagent/engine/engine_test.go: TestApplyZoneLeavesOtherFilesUntouched",
+        "OPERATOR: before/after dig of all manual names per docs/runbooks/core01-dnsmasq-agent.md section 5"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "The agent fails closed: zones outside the allowlist are rejected with a clear error that surfaces through the Bahia-side backend, and no include file is created for them.",
+      "tests": [
+        "internal/adapters/dns/dnsmasq_agent_e2e_test.go: TestDnsmasqAgentBackendAllowlistRejectionSurfaces",
+        "internal/dnsagent/agent/agent_test.go: TestAllowlistAndSchemaRejections"
+      ]
+    }
+  ]
+}
