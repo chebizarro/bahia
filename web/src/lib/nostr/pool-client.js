@@ -25,13 +25,16 @@ export class PoolBackedClient {
   }
 
   createPool() {
-    return this.poolFactory({ enableReconnect: true });
+    // Bahia manages reconnect/backoff at the application layer. Letting
+    // nostr-tools reconnect underneath the app can create a browser socket
+    // storm when a relay closes or rate-limits a WebSocket handshake.
+    return this.poolFactory({ enableReconnect: false });
   }
 
   configurePool() {
     if (!this.pool) return;
     this.pool.trackRelays = true;
-    this.pool.enableReconnect = true;
+    this.pool.enableReconnect = false;
     this.pool.onRelayConnectionSuccess = (url) => this.markRelayStatus(url, 'connected');
     this.pool.onRelayConnectionFailure = (url) => this.markRelayStatus(url, 'error');
   }
