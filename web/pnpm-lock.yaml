@@ -24,8 +24,8 @@ importers:
         specifier: ^18.0.5
         version: 18.0.5
       nostr-tools:
-        specifier: 2.23.3
-        version: 2.23.3(typescript@5.9.3)
+        specifier: 2.25.2
+        version: 2.25.2(typescript@5.9.3)
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -1070,8 +1070,8 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
-  nostr-tools@2.23.3:
-    resolution: {integrity: sha512-AALyt9k8xPdF4UV2mlLJ2mgCn4kpTB0DZ8t2r6wjdUh6anfx2cTVBsHUlo9U0EY/cKC5wcNyiMAmRJV5OVEalA==}
+  nostr-tools@2.25.2:
+    resolution: {integrity: sha512-7JAx+brEPmqGz1yzaK9MOxvis/Nl1B38j9hVsBSRDMRmxk5XSc0+5LlPEYbzeiUyk41RURBDcfuMzmaT754HAg==}
     peerDependencies:
       typescript: '>=5.0.0'
     peerDependenciesMeta:
@@ -1693,7 +1693,7 @@ snapshots:
       diff: 8.0.4
       file-type: 20.5.0
       isomorphic-git: 1.37.6
-      nostr-tools: 2.23.3(typescript@5.9.3)
+      nostr-tools: 2.25.2(typescript@5.9.3)
       parse-diff: 0.11.1
       parse-patch: 0.1.4
       zod: 4.4.2
@@ -2367,7 +2367,7 @@ snapshots:
 
   nanoid@3.3.11: {}
 
-  nostr-tools@2.23.3(typescript@5.9.3):
+  nostr-tools@2.25.2(typescript@5.9.3):
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
