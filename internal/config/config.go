@@ -182,6 +182,12 @@ type DNSBackendConfig struct {
 	DnsmasqConfigDir          string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
 	DnsmasqReloadCommand      string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command"`
 	DnsmasqFilePrefix         string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix"`
+	AgentPubkey               string        `koanf:"agent_pubkey" yaml:"agent_pubkey"`
+	AgentRelays               []string      `koanf:"agent_relays" yaml:"agent_relays"`
+	AgentEncrypted            bool          `koanf:"agent_encrypted" yaml:"agent_encrypted"`
+	AgentTimeout              time.Duration `koanf:"agent_timeout" yaml:"agent_timeout"`
+	AgentRetries              *int          `koanf:"agent_retries" yaml:"agent_retries"`
+	agentEncryptedConfigured  bool
 	HostsPath                 string        `koanf:"hosts_path" yaml:"hosts_path"`
 }
 
@@ -816,13 +822,13 @@ type HiveCIInitiatorConfig struct {
 
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
-	Enabled                         bool                 `koanf:"enabled"`
-	TrustedCIPubkeys                []string             `koanf:"trusted_ci_pubkeys"`
-	TrustedReleaseAttestors         []string             `koanf:"trusted_release_attestors"`
-	AutoRegisterBuilds              bool                 `koanf:"auto_register_builds"`
-	AllowManualArtifactRegistration bool                 `koanf:"allow_manual_artifact_registration"`
-	RetryInterval                   time.Duration        `koanf:"retry_interval"`
-	MaxRetries                      int                  `koanf:"max_retries"`
+	Enabled                         bool                  `koanf:"enabled"`
+	TrustedCIPubkeys                []string              `koanf:"trusted_ci_pubkeys"`
+	TrustedReleaseAttestors         []string              `koanf:"trusted_release_attestors"`
+	AutoRegisterBuilds              bool                  `koanf:"auto_register_builds"`
+	AllowManualArtifactRegistration bool                  `koanf:"allow_manual_artifact_registration"`
+	RetryInterval                   time.Duration         `koanf:"retry_interval"`
+	MaxRetries                      int                   `koanf:"max_retries"`
 	Policies                        []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
 	Initiator                       HiveCIInitiatorConfig `koanf:"initiator" yaml:"initiator"`
 }
@@ -1191,6 +1197,10 @@ func Load(configPath string) (*Config, error) {
 	}
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+	for ref, backend := range cfg.DNS.Backends {
+		backend.agentEncryptedConfigured = k.Exists("dns.backends." + ref + ".agent_encrypted")
+		cfg.DNS.Backends[ref] = backend
 	}
 	applyAssistantFlatCompat(k, cfg)
 	if err := cfg.validate(); err != nil {
@@ -2199,6 +2209,8 @@ func (c *Config) validateDNS() error {
 		backend.DnsmasqConfigDir = strings.TrimSpace(backend.DnsmasqConfigDir)
 		backend.DnsmasqReloadCommand = strings.TrimSpace(backend.DnsmasqReloadCommand)
 		backend.DnsmasqFilePrefix = strings.TrimSpace(backend.DnsmasqFilePrefix)
+		backend.AgentPubkey = strings.TrimSpace(backend.AgentPubkey)
+		backend.AgentRelays = normalizeRelayList(backend.AgentRelays)
 		backend.HostsPath = strings.TrimSpace(backend.HostsPath)
 		switch backend.Type {
 		case "filesystem":
@@ -2250,6 +2262,30 @@ func (c *Config) validateDNS() error {
 			}
 			if backend.DnsmasqFilePrefix == "" {
 				backend.DnsmasqFilePrefix = "bahia-"
+			}
+		case "dnsmasq_agent":
+			decodedPubkey, err := hex.DecodeString(backend.AgentPubkey)
+			if err != nil || len(decodedPubkey) != 32 {
+				return fmt.Errorf("config validation failed: dns.backends.%s.agent_pubkey must be a 64-character hex pubkey", name)
+			}
+			for i, relay := range backend.AgentRelays {
+				if err := validateWebsocketRelayURL(relay); err != nil {
+					return fmt.Errorf("config validation failed: dns.backends.%s.agent_relays[%d]: %w", name, i, err)
+				}
+			}
+			if backend.AgentTimeout < 0 {
+				return fmt.Errorf("config validation failed: dns.backends.%s.agent_timeout must not be negative", name)
+			}
+			if backend.AgentTimeout == 0 {
+				backend.AgentTimeout = 15 * time.Second
+			}
+			if backend.AgentRetries != nil && *backend.AgentRetries < 0 {
+				return fmt.Errorf("config validation failed: dns.backends.%s.agent_retries cannot be negative", name)
+			}
+			// Remote DNS agent requests are encrypted unless the operator explicitly
+			// configures agent_encrypted=false in the loaded configuration.
+			if !backend.agentEncryptedConfigured {
+				backend.AgentEncrypted = true
 			}
 		case "fips":
 			if backend.HostsPath == "" {

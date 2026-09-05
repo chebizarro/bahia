@@ -1,0 +1,26 @@
+{
+  "feature_id": "core01-dnsmasq-agent",
+  "title": "Remote dnsmasq authority on core-01 via relay-backed DNS agent",
+  "nostrig_task": "bahia-core01-dnsmasq-backend-20260905",
+  "intent": "Give Bahia a real internal dns: backend for the LAN resolver path when the resolver (core-01, 192.168.40.1) is a different host than Bahia (edge-01), so control-plane operations create and update managed internal records that are traceable via dig to Bahia state while existing manual records are preserved.",
+  "observed_repository_evidence": [
+    "internal/dnsagent/protocol/protocol.go defines the bahia.dnsagent.v1 ContextVM JSON-RPC contract (dns-agent/health, dns-agent/list, dns-agent/sync).",
+    "internal/dnsagent/engine/engine.go atomically manages only bahia-* include files, restores exact prior bytes and mode on failed validation or reload, and never touches foreign files in the include dir.",
+    "internal/dnsagent/agent/agent.go enforces the zone allowlist, monotonic per-zone serials with durable state, and idempotent equal-serial syncs behind controlplane ContextVMHandler signatures.",
+    "internal/adapters/dns/dnsmasq_agent.go implements the Bahia-side dnsmasq_agent Backend over an injected ContextVM requester; pkg/client/contextvm_request.go is the production relay transport.",
+    "internal/app/app.go wires backend type dnsmasq_agent from config (agent_pubkey, agent_relays, agent_encrypted, agent_timeout, agent_retries) with a fail-closed startup health check.",
+    "internal/reconcile/dns_reconciler.go + dns_projector.go project healthy service observations through environment_zones into zone record sets and sync drift through the resolved backend."
+  ],
+  "implemented_behavior": [
+    "internal/adapters/dns/dnsmasq_agent_e2e_test.go wires the DnsmasqAgentBackend to the agent core fully in-process through a shim that serializes every request and response through the exact ContextVM JSON-RPC wire JSON, proving wire compatibility without relays.",
+    "The Astillero-shaped flow (zone sharegap.net internal, A astillero.sharegap.net -> 192.168.40.104) is asserted byte-exactly against the written dnsmasq include file, round-tripped through ListRecords, and reflected in dns-agent/health last_apply_serial.",
+    "Foreign include files (sharegap-splitdns.conf analog) are byte-identical after repeated syncs; failed dnsmasq reloads roll back to prior include bytes without advancing the serial and recover on the next successful sync; allowlist rejections surface as clear backend errors.",
+    "reconcile.DNSReconciler.ReconcileOnce converges the remote include file through the static-resolver bridge and is idempotent on the second pass (no rewrite, no extra reload).",
+    "docs/runbooks/core01-dnsmasq-agent.md documents operator deployment on core-01, key handling (file only), migration preserving /etc/dnsmasq.d/sharegap-splitdns.conf, rollback, and the portability matrix; docs/user-guide/features/dns.md and docs/user-guide/guides/managed-dns-and-https-routes.md document the dnsmasq_agent backend."
+  ],
+  "out_of_scope": [
+    "Live deployment on core-01 and dig verification against 192.168.40.1 are operator/Track B steps recorded in the runbook.",
+    "linux/mips agent builds remain blocked by modernc.org/sqlite (beads bahia-1m1ef).",
+    "Relay-transport integration (pkg/client) is covered by its own unit tests, not re-tested here."
+  ]
+}

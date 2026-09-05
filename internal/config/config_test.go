@@ -2508,6 +2508,52 @@ func TestDNSValidationDisabledSkipsDNSRules(t *testing.T) {
 	}
 }
 
+func TestDNSMasqAgentValidation(t *testing.T) {
+	newConfig := func(backend DNSBackendConfig) *Config {
+		cfg := Defaults()
+		cfg.DNS.Enabled = true
+		cfg.DNS.Backends = map[string]DNSBackendConfig{"remote": backend}
+		cfg.DNS.Zones = []DNSZoneConfig{{Name: "prod.cascadia", Visibility: "internal", Backend: "remote", TTL: 300}}
+		cfg.DNS.Projection.EnvironmentZones = map[string]string{"prod": "prod.cascadia"}
+		cfg.DNS.Projection.WorkerZone = "prod.cascadia"
+		return cfg
+	}
+	validPubkey := strings.Repeat("ab", 32)
+	tests := []struct {
+		name    string
+		backend DNSBackendConfig
+		wantErr string
+	}{
+		{name: "valid agent config without local dnsmasq fields", backend: DNSBackendConfig{Type: "dnsmasq_agent", AgentPubkey: validPubkey, AgentRelays: []string{"wss://relay.example"}}},
+		{name: "missing pubkey", backend: DNSBackendConfig{Type: "dnsmasq_agent"}, wantErr: "agent_pubkey"},
+		{name: "bad hex pubkey", backend: DNSBackendConfig{Type: "dnsmasq_agent", AgentPubkey: strings.Repeat("zz", 32)}, wantErr: "64-character hex"},
+		{name: "bad relay URL rejected", backend: DNSBackendConfig{Type: "dnsmasq_agent", AgentPubkey: validPubkey, AgentRelays: []string{"http://not-a-relay.example"}}, wantErr: "agent_relays"},
+		{name: "negative timeout rejected", backend: DNSBackendConfig{Type: "dnsmasq_agent", AgentPubkey: validPubkey, AgentTimeout: -time.Second}, wantErr: "agent_timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newConfig(tt.backend)
+			err := cfg.validate()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("validation error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("valid dnsmasq agent config rejected: %v", err)
+			}
+			got := cfg.DNS.Backends["remote"]
+			if !got.AgentEncrypted {
+				t.Fatal("agent_encrypted did not default to true")
+			}
+			if got.AgentTimeout != 15*time.Second {
+				t.Fatalf("agent_timeout = %s, want 15s", got.AgentTimeout)
+			}
+		})
+	}
+}
+
 func TestDNSValidationEnabled(t *testing.T) {
 	validDNSConfig := func() *Config {
 		cfg := Defaults()

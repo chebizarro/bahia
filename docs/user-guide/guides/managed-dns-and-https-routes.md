@@ -62,6 +62,21 @@ edge_routing:
         - 18088
 ```
 
+When the dnsmasq resolver runs on a **different host** than Bahia — the edge-01/core-01 topology, where core-01 (`192.168.40.1`) is the LAN resolver — use the `dnsmasq_agent` backend instead of `dnsmasq`. Bahia then sends signed ContextVM kind `25910` requests (schema `bahia.dnsagent.v1`) over the configured relays to a `bahia-dns-agent` process on the resolver host; that agent owns only the `bahia-*` include files, applies them atomically under a monotonic serial, and rolls back automatically when a dnsmasq reload fails. Existing manually managed include files on the resolver are never touched.
+
+```yaml
+  backends:
+    lan-dnsmasq:
+      type: dnsmasq_agent
+      agent_pubkey: AGENT_PUBKEY_HEX            # the bahia-dns-agent identity on core-01
+      agent_relays:
+        - wss://relay.sharegap.net              # defaults to control-plane relays when omitted
+      agent_encrypted: true
+      agent_timeout: 30s
+```
+
+Deployment of the agent itself (key generation, allowlist, reload command, migration from manual records, rollback) is covered by the [core-01 dnsmasq agent runbook](../../runbooks/core01-dnsmasq-agent.md). The rest of this guide is identical for both backends.
+
 `api_token_ref` is an opaque SecretRef UUID. Store the Cloudflare API token through Bahia's secret-management path; never put the token itself in this file. `allowed_org_ids` limits which organizations may claim the zone. Each origin allowlists one deployment unit, host, and set of ports; `route-attach` is rejected when a request falls outside those boundaries. A protected zone also requires a protected environment.
 
 `verify_resolver` defaults to the public resolver `1.1.1.1:53`. This is intentional on edge-01: its split-horizon system DNS can resolve the public hostname directly to the LAN origin, which would bypass Cloudflare and could let verification pass even when the public record is absent. Bahia first resolves the hostname through the configured public resolver and then uses that same resolver for the HTTPS connection, while retaining the public hostname for TLS SNI and certificate verification. Set `verify_resolver: system` only when host-resolver behavior is explicitly desired.

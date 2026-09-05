@@ -1,0 +1,31 @@
+{
+  "feature_id": "core01-dnsmasq-agent",
+  "test_matrix": [
+    {
+      "test": "go test ./internal/adapters/dns/ -run 'TestDnsmasqAgentBackend|TestDNSReconcilerConverges' -count=1",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passing"
+    },
+    {
+      "test": "go test ./internal/dnsagent/... ./pkg/client/... -count=1",
+      "criteria": ["AC1", "AC4", "AC5"],
+      "status": "passing"
+    },
+    {
+      "test": "go test ./internal/workflow/ -run TestManagedDNSAndHTTPSRouteFlow -count=1",
+      "criteria": ["AC2"],
+      "status": "passing"
+    },
+    {
+      "test": "go build ./... && go vet ./... && go test ./... -count=1",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passing"
+    },
+    {
+      "test": "OPERATOR: dig @192.168.40.1 astillero.sharegap.net and each manual sharegap-splitdns.conf name before/after enabling the backend (docs/runbooks/core01-dnsmasq-agent.md sections 5 and 7)",
+      "criteria": ["AC3", "AC4"],
+      "status": "operator-path",
+      "notes": "Live core-01 verification cannot run in-repo; the runbook records the exact commands and expected traceability."
+    }
+  ]
+}

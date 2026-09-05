@@ -179,35 +179,65 @@ func (e *ContextVMRemoteError) Is(target error) bool {
 	return target == ErrEnvironmentRevisionConflict && e != nil && e.Code == controlplane.ContextVMEnvironmentConflictErrorCode
 }
 
-type operatorSubscription struct {
+// ContextVMPublishResult is one relay's publish acknowledgement.
+type ContextVMPublishResult = nostrpool.PublishResult
+
+// ContextVMRelayEOSE reports that one relay completed stored-event delivery.
+type ContextVMRelayEOSE = nostrpool.RelayEOSE
+
+// ContextVMRelayClosed reports that one relay closed a request subscription.
+type ContextVMRelayClosed = nostrpool.RelayClosed
+
+// ContextVMSubscription exposes the event and relay lifecycle channels required
+// by ContextVMRelayTransport implementations.
+type ContextVMSubscription struct {
 	Events            <-chan *nostr.Event
 	EndOfStoredEvents <-chan struct{}
-	RelayEOSE         <-chan nostrpool.RelayEOSE
-	Closed            <-chan nostrpool.RelayClosed
+	RelayEOSE         <-chan ContextVMRelayEOSE
+	Closed            <-chan ContextVMRelayClosed
 	relayURLs         []string
 	closeFn           func()
 }
 
-func (s *operatorSubscription) RelayURLs() []string {
+// NewContextVMSubscription adapts an existing relay subscription for use by a
+// ContextVMRequestClient.
+func NewContextVMSubscription(events <-chan *nostr.Event, endOfStoredEvents <-chan struct{}, relayEOSE <-chan ContextVMRelayEOSE, closed <-chan ContextVMRelayClosed, relayURLs []string, closeFn func()) *ContextVMSubscription {
+	return &ContextVMSubscription{
+		Events:            events,
+		EndOfStoredEvents: endOfStoredEvents,
+		RelayEOSE:         relayEOSE,
+		Closed:            closed,
+		relayURLs:         append([]string(nil), relayURLs...),
+		closeFn:           closeFn,
+	}
+}
+
+type operatorSubscription = ContextVMSubscription
+
+func (s *ContextVMSubscription) RelayURLs() []string {
 	if s == nil {
 		return nil
 	}
 	return append([]string(nil), s.relayURLs...)
 }
 
-func (s *operatorSubscription) Close() {
+func (s *ContextVMSubscription) Close() {
 	if s != nil && s.closeFn != nil {
 		s.closeFn()
 	}
 }
 
-type operatorRelayTransport interface {
+// ContextVMRelayTransport is the relay surface used by ContextVMRequestClient.
+// Injected transports remain owned by the caller and are not closed by the client.
+type ContextVMRelayTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
-	PublishWithResults(context.Context, nostr.Event) ([]nostrpool.PublishResult, error)
-	SubscribeOperator(context.Context, []nostr.Filter) (*operatorSubscription, error)
+	PublishWithResults(context.Context, nostr.Event) ([]ContextVMPublishResult, error)
+	SubscribeOperator(context.Context, []nostr.Filter) (*ContextVMSubscription, error)
 	AuthenticateRelay(context.Context, string) error
 	Close()
 }
+
+type operatorRelayTransport = ContextVMRelayTransport
 
 type relayPoolOperatorTransport struct {
 	pool      *nostrpool.RelayPool
@@ -1318,142 +1348,25 @@ type contextVMRPCResponse struct {
 }
 
 func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req operatorRequest, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
-	if c == nil || c.transport == nil || c.signer == nil || c.pubkey == "" {
+	if c == nil {
 		return nil, &ControlPlaneRequestError{Phase: "configure operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("operator control-plane client is not configured")}
 	}
-	method := strings.TrimSpace(req.Method)
-	if method == "" {
-		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method is required")}
+	core := &ContextVMRequestClient{
+		relays:            c.relays,
+		signer:            c.signer,
+		keyer:             c.keyer,
+		pubkey:            c.pubkey,
+		transport:         c.transport,
+		servicePubkey:     c.servicePubkey,
+		encrypted:         c.encrypted,
+		resultTimeout:     c.resultTimeout,
+		resultRetries:     c.resultRetries,
+		activationTimeout: c.activationTimeout,
 	}
-	if c.encrypted && (c.keyer == nil || c.servicePubkey == "") {
-		return nil, &ControlPlaneRequestError{Phase: "configure encrypted operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("encrypted operator requests require ServicePubkey and NIP-44 signer support")}
-	}
-	payloadContent, err := json.Marshal(req.Payload)
-	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
-	}
-	tags := append(nostr.Tags(nil), req.Tags...)
-	requestID := firstTagValue(tags, "d")
-	if requestID == "" {
-		requestID = deterministicOperatorIdempotencyKey(method, tags, payloadContent)
-		tags = append(nostr.Tags{{"d", requestID}}, tags...)
-	}
-	params, err := contextVMParams(req.Payload, requestID)
-	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
-	}
-	tags = append(tags, nostr.Tag{"method", method}, nostr.Tag{controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion})
-	if c.servicePubkey != "" {
-		tags = append(tags, nostr.Tag{"p", c.servicePubkey})
-	}
-	rpc := contextVMRPCRequest{JSONRPC: "2.0", ID: requestID, Method: method, Params: params}
-	content, err := json.Marshal(rpc)
-	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: err}
-	}
-	inner := &nostr.Event{Kind: nostr.Kind(controlplane.KindContextVMMessage), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := controlplane.SignGoNostrEvent(ctx, c.signer, inner); err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "sign operator ContextVM request", RequestAccepted: false, Cause: err}
-	}
-
-	attempts := c.resultRetries + 1
-	if attempts < 1 {
-		attempts = 1
-	}
-	resultTimeout := c.resultTimeout
-	if resultTimeout <= 0 {
-		resultTimeout = DefaultOperatorResultTimeout
-	}
-	activationTimeout := c.activationTimeout
-	if activationTimeout <= 0 {
-		activationTimeout = operatorActivationTimeout
-	}
-	var (
-		everAccepted    bool
-		publishedRelays int
-		publishResults  []OperatorPublishResult
-		subscribed      []string
-		failed          []string
-		requestEventID  = inner.ID.Hex()
-		outerRequestIDs []string
-	)
-	requestError := func(phase string, attempt int, cause error) *ControlPlaneRequestError {
-		return &ControlPlaneRequestError{
-			Phase:               phase,
-			RequestAccepted:     everAccepted,
-			PublishedRelays:     publishedRelays,
-			ConfiguredRelays:    append([]string(nil), c.relays...),
-			SubscribedRelays:    append([]string(nil), subscribed...),
-			FailedSubscriptions: append([]string(nil), failed...),
-			RequestEventID:      requestEventID,
-			RequestDTag:         requestID,
-			RequestMethod:       method,
-			AttemptsMade:        attempt,
-			PublishResults:      append([]OperatorPublishResult(nil), publishResults...),
-			Cause:               cause,
-		}
-	}
-
-	for attempt := 1; attempt <= attempts; attempt++ {
-		publishEvent, filters, attemptOuterIDs, prepareErr := c.prepareOperatorAttempt(ctx, inner, outerRequestIDs)
-		if prepareErr != nil {
-			phase := "prepare operator ContextVM request"
-			if c.encrypted {
-				phase = "wrap encrypted operator ContextVM request"
-			}
-			return nil, requestError(phase, attempt, prepareErr)
-		}
-		outerRequestIDs = attemptOuterIDs
-		requestEventID = publishEvent.ID.Hex()
-		sub, subErr := c.transport.SubscribeOperator(ctx, filters)
-		if subErr != nil {
-			subscribed = nil
-			failed = append([]string(nil), c.relays...)
-			return nil, requestError("subscribe for operator ContextVM replies", attempt, subErr)
-		}
-		subscribed = sub.RelayURLs()
-		failed = operatorFailedSubscriptions(c.relays, subscribed)
-		if len(subscribed) == 0 {
-			sub.Close()
-			return nil, requestError("subscribe for operator ContextVM replies", attempt, fmt.Errorf("no configured relay established a reply subscription"))
-		}
-		activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, sub, filters, activationTimeout)
-		if activationErr != nil {
-			activatedSub.Close()
-			return nil, requestError("activate operator ContextVM reply subscription", attempt, activationErr)
-		}
-		sub = activatedSub
-		subscribed = sub.RelayURLs()
-		failed = operatorFailedSubscriptions(c.relays, subscribed)
-
-		published, attemptResults, publishErr := c.publishOperatorEvent(ctx, *publishEvent)
-		publishedRelays = published
-		publishResults = append(publishResults, attemptResults...)
-		if published == 0 {
-			sub.Close()
-			if publishErr == nil {
-				publishErr = fmt.Errorf("request was not accepted by any relay")
-			}
-			return nil, requestError("publish operator ContextVM request", attempt, publishErr)
-		}
-		everAccepted = true
-
-		attemptCtx, cancelAttempt := context.WithTimeout(ctx, resultTimeout)
-		result, awaitErr := c.awaitOperatorResult(attemptCtx, sub, filters, inner, outerRequestIDs, requestID, onStatus)
-		cancelAttempt()
-		sub.Close()
-		if awaitErr == nil {
-			return result, nil
-		}
-		if errors.Is(awaitErr, context.DeadlineExceeded) && ctx.Err() == nil && attempt < attempts {
-			continue
-		}
-		return nil, requestError("await operator ContextVM result", attempt, awaitErr)
-	}
-	return nil, requestError("await operator ContextVM result", attempts, fmt.Errorf("result retry attempts exhausted"))
+	return core.Request(ctx, req.Method, req.Payload, req.Tags, onStatus)
 }
 
-func (c *OperatorControlPlaneClient) prepareOperatorAttempt(ctx context.Context, inner *nostr.Event, priorOuterIDs []string) (*nostr.Event, []nostr.Filter, []string, error) {
+func (c *ContextVMRequestClient) prepareOperatorAttempt(ctx context.Context, inner *nostr.Event, priorOuterIDs []string) (*nostr.Event, []nostr.Filter, []string, error) {
 	if !c.encrypted {
 		filter := nostr.Filter{
 			Kinds: []nostr.Kind{nostr.Kind(controlplane.KindContextVMMessage)},
@@ -1483,7 +1396,7 @@ func (c *OperatorControlPlaneClient) prepareOperatorAttempt(ctx context.Context,
 	return outer, []nostr.Filter{filter}, outerIDs, nil
 }
 
-func (c *OperatorControlPlaneClient) waitForOperatorSubscriptionActivation(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, timeout time.Duration) (*operatorSubscription, error) {
+func (c *ContextVMRequestClient) waitForOperatorSubscriptionActivation(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, timeout time.Duration) (*operatorSubscription, error) {
 	activationCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	current := sub
@@ -1577,7 +1490,7 @@ func operatorRelaySet(relays []string) map[string]struct{} {
 	return set
 }
 
-func (c *OperatorControlPlaneClient) awaitOperatorResult(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, inner *nostr.Event, outerRequestIDs []string, requestID string, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
+func (c *ContextVMRequestClient) awaitOperatorResult(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, inner *nostr.Event, outerRequestIDs []string, requestID string, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
 	seen := map[string]struct{}{}
 	pendingRelays := sub.RelayURLs()
 	closedRelays := map[string]string{}
@@ -1674,7 +1587,7 @@ func (c *OperatorControlPlaneClient) awaitOperatorResult(ctx context.Context, su
 	}
 }
 
-func (c *OperatorControlPlaneClient) validateOperatorReply(ctx context.Context, reply, inner *nostr.Event, outerRequestIDs []string) *nostr.Event {
+func (c *ContextVMRequestClient) validateOperatorReply(ctx context.Context, reply, inner *nostr.Event, outerRequestIDs []string) *nostr.Event {
 	if reply == nil || !validSignedEvent(reply) {
 		return nil
 	}
@@ -1718,7 +1631,7 @@ func operatorFailedSubscriptions(configured, subscribed []string) []string {
 	return failed
 }
 
-func (c *OperatorControlPlaneClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, []OperatorPublishResult, error) {
+func (c *ContextVMRequestClient) publishOperatorEvent(ctx context.Context, event nostr.Event) (int, []OperatorPublishResult, error) {
 	results, err := c.transport.PublishWithResults(ctx, event)
 	diagnostics := operatorPublishDiagnostics(results)
 	if len(results) == 0 {
